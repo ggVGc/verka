@@ -60,8 +60,11 @@ only the llaundry MCP tools are available to it (`--allowedTools
 mcp__llaundry__*`, `--permission-mode dontAsk`). The agent reads/writes code
 through `node_files`, runs `go test`/`go build` through `run_verification` and
 `run_build`, and loops until every task under the description has a passing
-verification and a passing build. A checked-in system prompt at
-`internal/orchestrator/prompts/system.md` describes the workflow.
+verification and a passing build. The agent clarifies the brief with you and
+asks for explicit approval of the task list via the `ask_user` MCP tool
+*before* creating any task nodes. A checked-in system prompt at
+`internal/orchestrator/prompts/system.md` describes the five-phase workflow
+(clarify → propose-and-confirm → implement → verify → build).
 
 ```
 cd /tmp/my-project

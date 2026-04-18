@@ -166,6 +166,52 @@ func TestMCPHappyPath(t *testing.T) {
 	call(t, sess, "unlink", map[string]any{"src": implID, "dst": descID, "kind": "depends_on"})
 }
 
+func TestAskUser(t *testing.T) {
+	// Override the TTY implementation so the test doesn't need a terminal.
+	var gotQuestion string
+	var gotOptions []string
+	prev := promptUser
+	defer func() { promptUser = prev }()
+	promptUser = func(q string, opts []string) (string, error) {
+		gotQuestion = q
+		gotOptions = opts
+		return "approve", nil
+	}
+
+	sess, cleanup := connectTest(t)
+	defer cleanup()
+
+	out := call(t, sess, "ask_user", map[string]any{
+		"question": "Do you approve this plan?",
+		"options":  []string{"approve", "revise"},
+	})
+	if out["answer"] != "approve" {
+		t.Fatalf("answer = %v, want approve", out["answer"])
+	}
+	if gotQuestion != "Do you approve this plan?" {
+		t.Errorf("promptUser question = %q, want %q", gotQuestion, "Do you approve this plan?")
+	}
+	if len(gotOptions) != 2 || gotOptions[0] != "approve" || gotOptions[1] != "revise" {
+		t.Errorf("promptUser options = %v, want [approve revise]", gotOptions)
+	}
+}
+
+func TestAskUserRejectsEmptyQuestion(t *testing.T) {
+	sess, cleanup := connectTest(t)
+	defer cleanup()
+	argsB, _ := json.Marshal(map[string]any{"question": "   "})
+	res, err := sess.CallTool(context.Background(), &mcpsdk.CallToolParams{
+		Name:      "ask_user",
+		Arguments: json.RawMessage(argsB),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.IsError {
+		t.Fatal("expected error on empty question")
+	}
+}
+
 func TestMCPRejectsPathEscape(t *testing.T) {
 	sess, cleanup := connectTest(t)
 	defer cleanup()

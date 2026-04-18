@@ -55,8 +55,16 @@ func TestBuildPlanWithDescriptionID(t *testing.T) {
 	if !strings.Contains(p.SystemPrompt, "llaundry orchestrator") {
 		t.Error("system prompt missing role framing")
 	}
-	if !strings.Contains(p.SystemPrompt, "run_verification") {
-		t.Error("system prompt missing run_verification mention")
+	for _, want := range []string{
+		"run_verification",
+		"ask_user",
+		"Phase 1 — Clarify",
+		"Phase 2 — Propose and confirm tasks",
+		"Only after explicit approval",
+	} {
+		if !strings.Contains(p.SystemPrompt, want) {
+			t.Errorf("system prompt missing %q", want)
+		}
 	}
 }
 

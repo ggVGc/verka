@@ -76,6 +76,10 @@ func registerTools(srv *mcpsdk.Server, h *handlers) {
 		Name:        "attach_run_result",
 		Description: "Record the result of an externally executed run (e.g., from CI) against a verification or build node. Creates input snapshots from the node's current dependencies.",
 	}, h.attachRunResult)
+	mcpsdk.AddTool(srv, &mcpsdk.Tool{
+		Name:        "ask_user",
+		Description: "Ask the human user a question and block until they answer. Use this to clarify an ambiguous brief and to get explicit approval before creating task nodes. Returns the user's free-form text answer.",
+	}, h.askUser)
 }
 
 // --- 1. create_node ---

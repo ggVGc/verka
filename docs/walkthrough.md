@@ -95,6 +95,20 @@ and writes code through `node_files`, runs verifications and builds through
 `run_verification` / `run_build`, and loops until every task has a passing
 verify + build.
 
+The agent runs in five phases:
+
+1. **Clarify** — calls `ask_user` to drill down on the brief (goal, shape,
+   I/O, success criteria, non-goals, constraints).
+2. **Propose + confirm** — drafts a task list, shows it to you via
+   `ask_user`, and only materialises it into task nodes after you approve.
+3. **Implement** — writes source via `node_files`.
+4. **Verify** — `run_verification`; on failure, creates a superseding impl
+   and retries up to 3 times before escalating via `ask_user`.
+5. **Build** — `run_build`; same retry/escalate rules as verify.
+
+Phases 1 and 2 are human-gated: the agent cannot create a task node until
+you type `approve` (or whatever reply the agent asks for).
+
 ```
 llaundry init
 echo "build a CLI that reverses its argv[1]" | llaundry run
