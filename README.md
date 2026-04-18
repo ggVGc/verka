@@ -57,8 +57,10 @@ llaundry run [desc-id]         # spawn an LLM agent that drives the graph via MC
 
 `llaundry run` spawns an LLM agent (default: `claude`) with no built-in tools —
 only the llaundry MCP tools are available to it (`--allowedTools
-mcp__llaundry__*`, `--permission-mode dontAsk`). The agent reads/writes code
-through `node_files`, runs `go test`/`go build` through `run_verification` and
+mcp__llaundry__*`, `--permission-mode dontAsk`). Authentication is delegated to
+the agent binary itself (whatever `claude` uses interactively — OAuth login or
+`ANTHROPIC_API_KEY` — works here). The agent reads/writes code through
+`node_files`, runs `go test`/`go build` through `run_verification` and
 `run_build`, and loops until every task under the description has a passing
 verification and a passing build. The agent clarifies the brief with you and
 asks for explicit approval of the task list via the `ask_user` MCP tool

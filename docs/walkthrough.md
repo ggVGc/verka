@@ -93,7 +93,8 @@ D1 [description/draft] {"text":"reverse a string CLI"}
 the llaundry MCP tools — no filesystem, no shell, no web. The agent reads
 and writes code through `node_files`, runs verifications and builds through
 `run_verification` / `run_build`, and loops until every task has a passing
-verify + build.
+verify + build. Auth is delegated to the agent binary, so whatever `claude`
+uses interactively (OAuth login or `ANTHROPIC_API_KEY`) works here too.
 
 The agent runs in five phases:
 

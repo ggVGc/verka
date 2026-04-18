@@ -20,7 +20,8 @@ func TestBuildPlanWithDescriptionID(t *testing.T) {
 
 	joined := strings.Join(p.Argv, " ")
 	for _, want := range []string{
-		"--bare",
+		"--strict-mcp-config",
+		"--setting-sources ",
 		"--allowedTools mcp__llaundry__*",
 		"--permission-mode dontAsk",
 		"--output-format stream-json",

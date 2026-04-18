@@ -299,7 +299,7 @@ func (h *handlers) listNodes(ctx context.Context, req *mcpsdk.CallToolRequest, i
 
 type updateNodeContentArgs struct {
 	ID      string `json:"id"`
-	Content any    `json:"content"`
+	Content any    `json:"content" jsonschema:"new JSON content payload for the node"`
 }
 type updateNodeContentResult struct {
 	ContentHash string `json:"content_hash"`

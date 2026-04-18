@@ -57,9 +57,10 @@ func BuildPlan(cfg Config) (*Plan, error) {
 		fmt.Sprintf("orchestrator-%d.ndjson", time.Now().UnixNano()))
 
 	argv := []string{
-		"--bare",
 		"-p", user,
 		"--mcp-config", string(mcpCfg),
+		"--strict-mcp-config",
+		"--setting-sources", "",
 		"--allowedTools", "mcp__llaundry__*",
 		"--permission-mode", "dontAsk",
 		"--output-format", "stream-json",
