@@ -87,6 +87,38 @@ D1 [description/draft] {"text":"reverse a string CLI"}
         └── B1 [build/passed] {}
 ```
 
+## Autonomous mode
+
+`llaundry run` spawns an LLM agent (default `claude`) configured with ONLY
+the llaundry MCP tools — no filesystem, no shell, no web. The agent reads
+and writes code through `node_files`, runs verifications and builds through
+`run_verification` / `run_build`, and loops until every task has a passing
+verify + build.
+
+```
+llaundry init
+echo "build a CLI that reverses its argv[1]" | llaundry run
+llaundry graph
+```
+
+Pin the run to an existing description instead:
+
+```
+llaundry run D1
+```
+
+Useful flags:
+
+- `--dry-run` — print the full `claude` invocation without spawning it.
+- `--agent-binary` — swap out `claude` for a compatible agent CLI.
+- `--system-prompt <file>` — override the embedded workflow prompt at
+  `internal/orchestrator/prompts/system.md`.
+- `--max-turns` / `--timeout` — bound the run.
+
+The raw stream-json output from the agent is tee'd to
+`.llaundry/logs/orchestrator-<ts>.ndjson` for post-mortem; a condensed
+tool-call log is streamed to stdout as the run progresses.
+
 ## Layout reference
 
 ```

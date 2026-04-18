@@ -15,6 +15,7 @@ Usage:
   llaundry mcp                   Run MCP server over stdio
   llaundry show <id>             Print a node's details
   llaundry graph [root-id]       Print an ASCII graph rooted at a description
+  llaundry run [desc-id]         Drive the graph autonomously via an LLM agent
 
 Run "llaundry <command> -h" for command-specific flags.
 `
@@ -39,6 +40,8 @@ func main() {
 		err = cmdShow(ctx, args)
 	case "graph":
 		err = cmdGraph(ctx, args)
+	case "run":
+		err = cmdRun(ctx, args)
 	case "-h", "--help", "help":
 		fmt.Print(usage)
 		return

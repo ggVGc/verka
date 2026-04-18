@@ -44,3 +44,45 @@ Hierarchical LLM coding
   - It should use the llaundry MCP to create an artifact based on the metadata in the implementation node
   - If build succeeds, the build node is marked as completed, and the main artifact as well as any necessary metadata about using it is added to the node.
   - If the build fails, information about the failure is added to the metadata, and the node is marked as failed.
+
+# Usage
+
+```
+llaundry init                  # create ./.llaundry/ with db + nodes + logs dirs
+llaundry mcp                   # stdio MCP server (register in your LLM host)
+llaundry show <id>             # node details (type/status/hash/edges/files/latest run)
+llaundry graph [root-id]       # ASCII tree rooted at a description (or all roots)
+llaundry run [desc-id]         # spawn an LLM agent that drives the graph via MCP
+```
+
+`llaundry run` spawns an LLM agent (default: `claude`) with no built-in tools —
+only the llaundry MCP tools are available to it (`--allowedTools
+mcp__llaundry__*`, `--permission-mode dontAsk`). The agent reads/writes code
+through `node_files`, runs `go test`/`go build` through `run_verification` and
+`run_build`, and loops until every task under the description has a passing
+verification and a passing build. A checked-in system prompt at
+`internal/orchestrator/prompts/system.md` describes the workflow.
+
+```
+cd /tmp/my-project
+llaundry init
+echo "build a CLI that reverses its argv[1]" | llaundry run
+llaundry graph
+```
+
+Inspect the planned invocation without launching the agent:
+
+```
+llaundry run --dry-run --prompt "build a CLI that reverses its argv[1]"
+```
+
+Flags:
+
+```
+  --agent-binary string   LLM agent binary to spawn (default "claude")
+  --system-prompt string  override the embedded system prompt
+  --prompt string         user brief (or pipe it on stdin)
+  --max-turns int         cap on agent turns (default 50)
+  --timeout duration      overall wall-clock budget (default 30m)
+  --dry-run               print the planned command and exit
+```
