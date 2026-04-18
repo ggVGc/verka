@@ -1,0 +1,101 @@
+# llaundry v1 walkthrough
+
+This file documents the happy-path flow an LLM host (Claude Code, etc.) is
+expected to drive through `llaundry`'s MCP server. It is the contract the
+integration test in `internal/mcp/run_tools_test.go` exercises programmatically.
+
+## Setup
+
+```
+cd /path/to/your/project
+llaundry init           # creates ./.llaundry/ with db.sqlite and nodes/ logs/
+```
+
+Register the MCP server in your host's MCP configuration, e.g.:
+
+```json
+{ "command": "llaundry", "args": ["mcp"] }
+```
+
+## Tool flow
+
+### 1. Capture the user request
+```
+create_node(type="description", content={"text": "reverse a string CLI"})
+  → id=D1
+```
+
+### 2. Plan tasks
+```
+create_node(type="task", parent=D1, content={"title":"impl reverse"})
+  → id=T1
+```
+
+### 3. Implementation
+```
+create_node(type="implementation", depends_on=[T1], content={}) → id=I1
+get_workspace_path(I1)                                            → {source_dir: ...}
+# write files directly using the host's native filesystem tools
+rehash(I1)                                                        → updated content_hash
+```
+Alternative for small files: `node_files(I1, op="write", path="...", content="...")`
+(size-limited to 256 KB — beyond that use `get_workspace_path`).
+
+### 4. Verification
+```
+create_node(type="verification", depends_on=[I1], content={}) → V1
+run_verification(V1)                                          → {exit_code:0, status:"passed"}
+```
+If verification fails, spawn a new implementor that creates a successor:
+```
+create_node(type="implementation", depends_on=[T1], content={})  → I2
+link(I2, I1, "supersedes")
+```
+
+### 5. Build
+```
+create_node(type="build", depends_on=[I1], content={}) → B1
+run_build(B1)                                          → {exit_code:0, artifact_rel:"reverse"}
+```
+Default: `go build -o <build>/artifact/ ./...` run inside the implementation's
+source dir. For multi-implementation builds provide `cmd` explicitly.
+
+### 6. Staleness
+Any change to an input node's content recomputes its `content_hash`; the next
+`list_nodes(stale:true)` call returns every verification/build whose last run
+observed a different hash.
+```
+update_node_content(I1, {"note":"tweaked"})
+list_nodes(stale:true)                         → [V1, B1]
+```
+
+## CLI inspection
+
+- `llaundry show <id>` — prints type, status (with STALE flag), content hash,
+  content preview, edges, files, latest run, and on-disk workspace path.
+- `llaundry graph [root-id]` — ASCII tree. Without an argument, prints every
+  description root.
+
+Example (after the flow above):
+
+```
+$ llaundry graph D1
+D1 [description/draft] {"text":"reverse a string CLI"}
+└── T1 [task/ready] {"title":"impl reverse"}
+    └── I1 [implementation/ready] {"note":"tweaked"}
+        ├── V1 [verification/passed] {}
+        └── B1 [build/passed] {}
+```
+
+## Layout reference
+
+```
+.llaundry/
+  db.sqlite            (+ -wal, -shm)
+  nodes/<ulid>/
+    source/            user-written source files
+    build/go.work      generated for build nodes
+    artifact/          output of build runs
+  logs/<run_id>.stdout
+  logs/<run_id>.stderr
+```
