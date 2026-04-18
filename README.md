@@ -35,8 +35,12 @@ Hierarchical LLM coding
 - The planning agent finished, and a new implementor agent is launched. It is handed the ID of the description node, and proceeds to work on each associated task:
   - Implementation consists of producing code in Go
   - When implementation is finished, metadata about which files were produced is added to the implementation node and it is marked completed.
-  - A verification node is created, pointing to the implementation node. The agent then uses the llaundry MCP to run verification on the generated sources:
-    - If successful, the verification node is marked as complete
-  - A build node is created, pointing to the implementation node.
-- Each time a build node is created, a builder agent can be launched to process it:
-  - It should use the llaundry MCP to build the 
+  - A verification node is created, pointing to the implementation node. The implementation agent is closed and a verification agent is launched. The verification agent uses the llaundry MCP to run verification on the generated sources:
+    - If successful, the verification node is marked as complete, storing the output returned from the verification step in the llaundry MCP.
+    - If failed, the implementation agent double checks that the test is correct, based on the task nodes related to the associated implementation node. If the tests are valid, but verification still fails, the output from verification step in MCP server is stored in the verification node and the associated implementation node is marked as failed. The verification agent is closed. And a new implementation agent is launched to fix the implementation, based on the metadata in verification node, and the associated tasks.
+    - Repeat until verification succeeds 
+  - When implementation is verified, a build node is created, pointing to the implementation node.
+- A builder agent is launched to process the build node:
+  - It should use the llaundry MCP to create an artifact based on the metadata in the implementation node
+  - If build succeeds, the build node is marked as completed, and the main artifact as well as any necessary metadata about using it is added to the node.
+  - If the build fails, information about the failure is added to the metadata, and the node is marked as failed.
