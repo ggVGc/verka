@@ -16,6 +16,9 @@ Usage:
   llaundry show <id>             Print a node's details
   llaundry graph [root-id]       Print an ASCII graph rooted at a description
   llaundry run [desc-id]         Drive the graph autonomously via an LLM agent
+  llaundry artifacts             List every passed build and its artifact path
+  llaundry exec <build-id> [args...]
+                                 Exec the artifact produced by a passed build
 
 Run "llaundry <command> -h" for command-specific flags.
 `
@@ -42,6 +45,10 @@ func main() {
 		err = cmdGraph(ctx, args)
 	case "run":
 		err = cmdRun(ctx, args)
+	case "artifacts":
+		err = cmdArtifacts(ctx, args)
+	case "exec":
+		err = cmdExec(ctx, args)
 	case "-h", "--help", "help":
 		fmt.Print(usage)
 		return

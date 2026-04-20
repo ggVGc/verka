@@ -66,11 +66,11 @@ func registerTools(srv *mcpsdk.Server, h *handlers) {
 	}, h.rehash)
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name:        "run_verification",
-		Description: "Run a verification node's test command (default: go test ./...) against its dependency source. Captures stdout/stderr to logs, records input snapshots, updates node status.",
+		Description: "Run `go test ./...` inside the verification's first implementation-dependency source dir. Captures stdout/stderr to logs, records input snapshots, updates node status.",
 	}, h.runVerification)
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name:        "run_build",
-		Description: "Run a build node's build command (default: go build -o ../artifact/ ./...) after assembling a go.work over its depends_on implementations. Captures artifacts into the artifact/ directory.",
+		Description: "Run `go build -o <artifact>/ ./...` after assembling a go.work over its depends_on implementations. Captures artifacts into the artifact/ directory.",
 	}, h.runBuild)
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name:        "attach_run_result",

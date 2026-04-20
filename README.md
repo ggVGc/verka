@@ -19,11 +19,6 @@ Hierarchical LLM coding
 
 # Further improvements:
 - Each node should store a hash of all the files and artifacts it produces, and there should be some mechanism of verifying that only the referenced files are used by other nodes.
-- Initially all work is done in Go. Later this can be expanded so that:
-  - Implementation nodes can be requested to have some specific implementation strategy:
-    - This could also allow multiple implementations of the same source task for comparison
-  - Build nodes can use the information from the implementation nodes do run different build chains:
-    - The output artifacts will then need more metadata relating to the produced artifact, and what is required to execute it
 
 # Example session
 - User makes a request to implement a feature
@@ -53,6 +48,9 @@ llaundry mcp                   # stdio MCP server (register in your LLM host)
 llaundry show <id>             # node details (type/status/hash/edges/files/latest run)
 llaundry graph [root-id]       # ASCII tree rooted at a description (or all roots)
 llaundry run [desc-id]         # spawn an LLM agent that drives the graph via MCP
+llaundry artifacts             # list every passed build and its artifact path
+llaundry exec <build-id> [args...]
+                               # exec the artifact produced by a passed build
 ```
 
 `llaundry run` spawns an LLM agent (default: `claude`) with no built-in tools —

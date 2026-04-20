@@ -16,9 +16,8 @@ import (
 // --- 11. run_verification ---
 
 type runVerificationArgs struct {
-	ID      string   `json:"id"`
-	Cmd     []string `json:"cmd,omitempty" jsonschema:"optional command override; default: go test ./..."`
-	Timeout int      `json:"timeout_seconds,omitempty" jsonschema:"hard time limit for the run in seconds (default: 300)"`
+	ID      string `json:"id"`
+	Timeout int    `json:"timeout_seconds,omitempty" jsonschema:"hard time limit for the run in seconds (default: 300)"`
 }
 
 type runResultView struct {
@@ -70,10 +69,7 @@ func (h *handlers) runVerification(ctx context.Context, req *mcpsdk.CallToolRequ
 		return errf("verification %s: no implementation or build input found among dependencies", in.ID), runResultView{}, nil
 	}
 
-	cmd := in.Cmd
-	if len(cmd) == 0 {
-		cmd = runner.DefaultVerifyCmd()
-	}
+	cmd := runner.DefaultVerifyCmd()
 
 	_ = s.SetStatus(ctx, in.ID, model.StatusRunning, "")
 	runID, err := s.StartRun(ctx, in.ID, model.RunVerification)
@@ -130,9 +126,8 @@ func (h *handlers) runVerification(ctx context.Context, req *mcpsdk.CallToolRequ
 // --- 12. run_build ---
 
 type runBuildArgs struct {
-	ID      string   `json:"id"`
-	Cmd     []string `json:"cmd,omitempty" jsonschema:"optional command override; default: go build -o ../artifact/ ./..."`
-	Timeout int      `json:"timeout_seconds,omitempty" jsonschema:"hard time limit for the run in seconds (default: 600)"`
+	ID      string `json:"id"`
+	Timeout int    `json:"timeout_seconds,omitempty" jsonschema:"hard time limit for the run in seconds (default: 600)"`
 }
 
 func (h *handlers) runBuild(ctx context.Context, req *mcpsdk.CallToolRequest, in runBuildArgs) (*mcpsdk.CallToolResult, runResultView, error) {
@@ -144,9 +139,8 @@ func (h *handlers) runBuild(ctx context.Context, req *mcpsdk.CallToolRequest, in
 	if n.Type != model.TypeBuild {
 		return errf("node %s is %s, not build", in.ID, n.Type), runResultView{}, nil
 	}
-	// AssembleBuild generates a go.work for provenance and future multi-impl
-	// builds, but v1 runs `go build` inside the single implementation's source
-	// directory for simplicity. Multi-impl builds require a custom command.
+	// AssembleBuild generates a go.work for provenance, but `go build` runs
+	// inside the single implementation's source directory.
 	if _, err := h.ws.AssembleBuild(ctx, in.ID); err != nil {
 		return errf("assemble: %v", err), runResultView{}, nil
 	}
@@ -166,20 +160,11 @@ func (h *handlers) runBuild(ctx context.Context, req *mcpsdk.CallToolRequest, in
 			implDeps = append(implDeps, d)
 		}
 	}
-	if len(implDeps) == 0 {
-		return errf("build %s has no implementation dependencies", in.ID), runResultView{}, nil
+	if len(implDeps) != 1 {
+		return errf("build %s: exactly one implementation dependency required (got %d)", in.ID, len(implDeps)), runResultView{}, nil
 	}
-	var cwd string
-	cmd := in.Cmd
-	if len(cmd) == 0 {
-		if len(implDeps) > 1 {
-			return errf("v1: default build command supports exactly one implementation dep; pass a custom cmd for multi-impl builds"), runResultView{}, nil
-		}
-		cwd = h.ws.SourceDir(implDeps[0])
-		cmd = []string{"go", "build", "-o", artifactDir + "/", "./..."}
-	} else {
-		cwd = h.ws.BuildDir(in.ID)
-	}
+	cwd := h.ws.SourceDir(implDeps[0])
+	cmd := runner.DefaultBuildCmd(artifactDir)
 
 	_ = s.SetStatus(ctx, in.ID, model.StatusRunning, "")
 	runID, err := s.StartRun(ctx, in.ID, model.RunBuild)

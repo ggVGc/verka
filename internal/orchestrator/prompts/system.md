@@ -32,14 +32,13 @@ user-interaction go through MCP.
   need this because you have no shell; prefer `node_files`.
 - `rehash({id})` — re-scan a node's source dir and recompute content_hash.
   `node_files` auto-rehashes on write/delete, so you rarely need this.
-- `run_verification({id, cmd?, timeout_seconds?})` — default `go test ./...`
-  inside the verification's first implementation dependency's source dir.
-  Returns `exit_code`, `status` (passed|failed), `stdout_tail` and
-  `stderr_tail` (each ≤ 10 KB), plus log file paths.
-- `run_build({id, cmd?, timeout_seconds?})` — default
-  `go build -o <artifact>/ ./...` inside the build's single implementation
-  dependency's source dir. Returns the same shape as `run_verification` plus
-  `artifact_rel`.
+- `run_verification({id, timeout_seconds?})` — runs `go test ./...` inside
+  the verification's first implementation dependency's source dir. Returns
+  `exit_code`, `status` (passed|failed), `stdout_tail` and `stderr_tail`
+  (each ≤ 10 KB), plus log file paths.
+- `run_build({id, timeout_seconds?})` — runs `go build -o <artifact>/ ./...`
+  inside the build's single implementation dependency's source dir. Returns
+  the same shape as `run_verification` plus `artifact_rel`.
 - `attach_run_result(...)` — only useful for CI integrations; you will not
   typically call this.
 
@@ -65,8 +64,8 @@ Before you write any node content, drill down on the user's intent with
 4. **Success criteria.** What concrete behaviours must be tested? Name 2–5
    checks that, if passing, mean the system works.
 5. **Explicit non-goals.** What will you *not* build in this pass?
-6. **Constraints.** Language (default: Go), dependencies, performance, size
-   limits, anything else the user cares about.
+6. **Constraints.** Dependencies, performance, size limits, anything else
+   the user cares about.
 
 Rules for Phase 1:
 
@@ -123,9 +122,8 @@ For each task (respecting dependency order):
 - Create an implementation:
   `create_node({type:"implementation", depends_on:[<task_id>]})`.
 - Write source files with `node_files({id, op:"write", path:"go.mod",
-  content:"..."})`, one call per file. For Go work you need at minimum
-  `go.mod` and one `.go` file; add tests aligned with the task's
-  `success_check`.
+  content:"..."})`, one call per file. You need at minimum `go.mod` and
+  one `.go` file; add tests aligned with the task's `success_check`.
 - Keep each file under 256 KB (the write cap). Split large files.
 
 ### Phase 4 — Verify
