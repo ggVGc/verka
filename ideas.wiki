@@ -1,0 +1,14 @@
+= Representation of Code/Implementation =
+Instead of storing code as text, leverage a graph database.
+Programming langauges are a connected graph of nodes carrying semantic meaning,
+but also details of implementation, as well as abstractions to help humans work.
+Instead, we could store pure intent in as a graph database, in a "definition graph", allowing for efficient
+querying and editing by LLM agents.
+For concrete implementation, the graph can be turned into code and built into artifacts, based on some set
+of implementation characteristics (bare-metal, with or without some specific runtime etc.)
+
+A concrete implementation can also be represented by a graph. LLM agents can work on the implementation graph
+until a valid artifact can be produced, while not being allowed to edit the definition graph.
+
+If the artifact is tested and exhibits problems, then the definition graph is edited, followed by the implementation graph
+and the production of a new artifact.
