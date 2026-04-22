@@ -1,3 +1,14 @@
+= Core philosophy =
+The main driver behind this is making LLM assisted development verifiable.
+It is essentially the same ting we've always done, but structured in a way that should make
+followup-work, fixes and verification more structured, making it easier for humans to get an overview,
+and for LLM agents to work with.
+
+= Use git as the graph =
+Git is fundamentally an acyclic graph, where each hash is a snapshot.
+We could model the nodes of llaundry within the git graph and benefit from all the associated git tooling.
+
+
 = Representation of Code/Implementation =
 Instead of storing code as text, leverage a graph database.
 Programming langauges are a connected graph of nodes carrying semantic meaning,
