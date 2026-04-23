@@ -1,8 +1,15 @@
+
 = Core philosophy =
 The main driver behind this is making LLM assisted development verifiable.
 It is essentially the same ting we've always done, but structured in a way that should make
 followup-work, fixes and verification more structured, making it easier for humans to get an overview,
 and for LLM agents to work with.
+
+I feel this should be something like "git for LLM development". It should be a tool where each step
+could be executed by a human or a machine, and noted as such.
+Outputs and intermediate results should be possible to diff and review with clear indication of
+author (human or machine). Something like git blame, where the path leads back towards implementation discussions and initial specification.
+
 
 - Iplementation work can also produce information nodes (documentation, for example):
   - Other nodes can depend on those
