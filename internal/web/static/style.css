@@ -1,0 +1,41 @@
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 13px; color: #1a1a1a; }
+#app { display: grid; grid-template-columns: 320px 1fr; height: 100vh; }
+
+#sidebar {
+  overflow-y: auto;
+  border-right: 1px solid #ddd;
+  background: #fafafa;
+  padding: 12px;
+}
+#sidebar header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+#sidebar h1 { font-size: 18px; margin: 0; letter-spacing: -0.01em; }
+#refresh { background: none; border: 1px solid #ccc; border-radius: 4px; cursor: pointer; padding: 2px 8px; font-size: 16px; }
+#refresh:hover { background: #eee; }
+
+.filters { display: flex; flex-direction: column; gap: 3px; margin-bottom: 12px; padding: 8px; background: #fff; border: 1px solid #e4e4e4; border-radius: 4px; }
+.filters label { cursor: pointer; user-select: none; }
+.filters.edgekinds label { opacity: 0.85; font-size: 12px; }
+
+.search input { width: 100%; padding: 6px 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px; margin-bottom: 12px; }
+
+.legend { background: #fff; border: 1px solid #e4e4e4; border-radius: 4px; padding: 8px; margin-bottom: 12px; }
+.legend h3 { margin: 0 0 6px; font-size: 11px; text-transform: uppercase; color: #666; letter-spacing: 0.05em; }
+.chip { display: inline-block; padding: 2px 8px; border-radius: 10px; margin: 2px 4px 2px 0; font-size: 11px; color: #fff; }
+.chip.s-draft   { background: #9ca3af; }
+.chip.s-ready   { background: #3b82f6; }
+.chip.s-running { background: #eab308; color: #222; }
+.chip.s-passed  { background: #10b981; }
+.chip.s-failed  { background: #ef4444; }
+.chip.stale     { background: #fff; color: #b45309; border: 1px dashed #b45309; }
+
+#details { background: #fff; border: 1px solid #e4e4e4; border-radius: 4px; padding: 10px; }
+#details .hint { color: #999; font-style: italic; margin: 0; }
+#details h2 { margin: 0 0 6px; font-size: 13px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; }
+#details .meta { color: #666; font-size: 12px; margin-bottom: 8px; }
+#details pre { background: #f4f4f4; padding: 6px; border-radius: 3px; overflow-x: auto; font-size: 11px; max-height: 200px; }
+#details .section-title { font-size: 11px; text-transform: uppercase; color: #666; letter-spacing: 0.05em; margin-top: 10px; }
+#details ul { margin: 4px 0; padding-left: 16px; font-size: 12px; }
+#details a { color: #2563eb; cursor: pointer; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+#graph { height: 100vh; background: #fff; }

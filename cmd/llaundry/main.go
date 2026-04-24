@@ -15,6 +15,7 @@ Usage:
   llaundry mcp                   Run MCP server over stdio
   llaundry show <id>             Print a node's details
   llaundry graph [root-id]       Print an ASCII graph rooted at a description
+  llaundry serve                 Serve an interactive web visualization of the graph
   llaundry run [desc-id]         Drive the graph autonomously via an LLM agent
   llaundry artifacts             List every passed build and its artifact path
   llaundry exec <build-id> [args...]
@@ -43,6 +44,8 @@ func main() {
 		err = cmdShow(ctx, args)
 	case "graph":
 		err = cmdGraph(ctx, args)
+	case "serve":
+		err = cmdServe(ctx, args)
 	case "run":
 		err = cmdRun(ctx, args)
 	case "artifacts":
