@@ -17,6 +17,18 @@ author (human or machine). Something like git blame, where the path leads back t
     It then does not depend directly on the implementation, but specifically on the documented information in that node.
 
 
+= Workflows =
+== Initial feature ==
+...
+== Fixes ==
+The user identifies some issue. Should be able to ask an agent which nodes are related to this issue.
+Should get pointed to some initial description and associated implementations, and easily find where a new verification can be added.
+Can do a few things:
+  - Write a new automated verification, trigger the graph so it builds, runs, fails, and then let agent work the graph until other nodes are updated and implementation has been fixed (not touching the new verification node)
+  - Add a node for manual verification, marked as failed. Trigger graph for new implementation, then when asked by the agent to do the manual verification, check again, and mark as complete if issue is fixed.
+  - Add a new description node instructing an agent to add a verification node (and then run it). Run the graph, agents produce implementations of verification and runs until graph is all green again.
+
+
 
 
 = Use git as the graph =
