@@ -20,6 +20,8 @@ access to any other context than the planned implementation steps and the files 
     It then does not depend directly on the implementation, but specifically on the documented information in that node.
 
 
+
+
 = Workflows =
 == Initial feature ==
 ...
@@ -56,4 +58,16 @@ until a valid artifact can be produced, while not being allowed to edit the defi
 
 If the artifact is tested and exhibits problems, then the definition graph is edited, followed by the implementation graph
 and the production of a new artifact.
+
+
+= Implementation language =
+
+Probably related project.
+A language where the main constituents are:
+  - Data types
+    - Focus on what one wants to be able to do with the data, not the concrete representation
+    - Example: "List of users, fast reads"
+  - Modules and interfaces between them
+  - Mutable state holders (inspired by OTP)
+
 
