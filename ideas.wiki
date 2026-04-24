@@ -10,6 +10,9 @@ could be executed by a human or a machine, and noted as such.
 Outputs and intermediate results should be possible to diff and review with clear indication of
 author (human or machine). Something like git blame, where the path leads back towards implementation discussions and initial specification.
 
+It is also a way of controlling context going into each step. For example, implementation should maybe not have
+access to any other context than the planned implementation steps and the files that were identified as sources or targets by the planning stage.
+
 
 - Iplementation work can also produce information nodes (documentation, for example):
   - Other nodes can depend on those

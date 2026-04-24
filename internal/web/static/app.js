@@ -165,39 +165,60 @@
 
   function renderDetails(n) {
     const parts = [];
-    parts.push(`<h2>${n.id}</h2>`);
-    parts.push(`<div class="meta">
-      <span class="chip s-${n.status}">${n.status}</span>
-      <strong>${n.type}</strong>${n.stale ? ' <span class="chip stale">stale</span>' : ''}
+    parts.push(`<div class="node-header">
+      <h2>${escapeHTML(n.id)}</h2>
+      <button class="close" title="Close" data-close>&times;</button>
     </div>`);
-    parts.push(`<div class="meta">hash: <code>${n.content_hash.slice(0, 16)}…</code></div>`);
-    parts.push(`<div class="meta">created: ${new Date(n.created_at).toLocaleString()}</div>`);
-    parts.push(`<div class="meta">updated: ${new Date(n.updated_at).toLocaleString()}</div>`);
 
-    if (n.content && n.content !== 'null') {
-      let pretty = n.content;
-      try { pretty = JSON.stringify(JSON.parse(n.content), null, 2); } catch (_) {}
-      parts.push(`<div class="section-title">content</div><pre>${escapeHTML(pretty)}</pre>`);
+    parts.push(`<div class="badges">
+      <strong>${escapeHTML(n.type)}</strong>
+      <span class="chip s-${n.status}">${n.status}</span>
+      ${n.stale ? '<span class="chip stale">stale</span>' : ''}
+    </div>`);
+
+    parts.push('<ul class="kv-list">');
+    parts.push(`<li><span class="k">hash</span><span class="v">${escapeHTML(n.content_hash)}</span></li>`);
+    parts.push(`<li><span class="k">created</span><span class="v">${new Date(n.created_at).toLocaleString()}</span></li>`);
+    parts.push(`<li><span class="k">updated</span><span class="v">${new Date(n.updated_at).toLocaleString()}</span></li>`);
+    parts.push('</ul>');
+
+    if (n.content !== null && n.content !== undefined) {
+      let parsed = n.content;
+      if (typeof n.content === 'string') {
+        try { parsed = JSON.parse(n.content); } catch (_) {}
+      }
+      parts.push('<div class="section-title">content</div>');
+      parts.push(renderContent(parsed));
     }
+
     if (n.files && n.files.length) {
-      parts.push('<div class="section-title">files</div><ul>');
-      for (const f of n.files) parts.push(`<li><code>${escapeHTML(f.rel_path)}</code> <span style="color:#999">${f.size}B</span></li>`);
-      parts.push('</ul>');
-    }
-    if (n.edges && n.edges.length) {
-      parts.push('<div class="section-title">edges</div><ul>');
-      for (const e of n.edges) {
-        const other = e.src === n.id ? e.dst : e.src;
-        const dir = e.src === n.id ? '→' : '←';
-        parts.push(`<li>${dir} <a data-jump="${other}">${shorten(other)}</a> <span style="color:#999">${e.kind}</span></li>`);
+      parts.push('<div class="section-title">files</div><ul class="items">');
+      for (const f of n.files) {
+        parts.push(`<li><code>${escapeHTML(f.rel_path)}</code><span class="kind">${f.size} B</span></li>`);
       }
       parts.push('</ul>');
     }
+
+    if (n.edges && n.edges.length) {
+      parts.push('<div class="section-title">edges</div><ul class="items">');
+      for (const e of n.edges) {
+        const other = e.src === n.id ? e.dst : e.src;
+        const dir = e.src === n.id ? '→' : '←';
+        parts.push(`<li><span class="dir">${dir}</span><a class="ref" data-jump="${escapeHTML(other)}">${shorten(other)}</a><span class="kind">${escapeHTML(e.kind)}</span></li>`);
+      }
+      parts.push('</ul>');
+    }
+
     if (n.latest_run) {
       const r = n.latest_run;
       parts.push('<div class="section-title">latest run</div>');
-      parts.push(`<div class="meta">kind: ${r.kind}, exit: ${r.exit_code ?? '-'}, started: ${new Date(r.started_at).toLocaleString()}</div>`);
-      if (r.artifact_rel) parts.push(`<div class="meta">artifact: <code>${escapeHTML(r.artifact_rel)}</code></div>`);
+      parts.push('<ul class="kv-list">');
+      parts.push(`<li><span class="k">kind</span><span class="v">${escapeHTML(r.kind)}</span></li>`);
+      parts.push(`<li><span class="k">exit</span><span class="v">${r.exit_code ?? '—'}</span></li>`);
+      parts.push(`<li><span class="k">started</span><span class="v">${new Date(r.started_at).toLocaleString()}</span></li>`);
+      if (r.finished_at) parts.push(`<li><span class="k">finished</span><span class="v">${new Date(r.finished_at).toLocaleString()}</span></li>`);
+      if (r.artifact_rel) parts.push(`<li><span class="k">artifact</span><span class="v">${escapeHTML(r.artifact_rel)}</span></li>`);
+      parts.push('</ul>');
     }
 
     detailsEl.innerHTML = parts.join('');
@@ -209,6 +230,80 @@
         showNode(id);
       });
     });
+    const closeBtn = detailsEl.querySelector('[data-close]');
+    if (closeBtn) closeBtn.addEventListener('click', () => {
+      detailsEl.innerHTML = '<p class="hint">click a node to inspect</p>';
+    });
+  }
+
+  function renderContent(c) {
+    if (c === null || c === undefined) return '';
+    return `<div class="json-root">${renderJSON(c, 0)}</div>`;
+  }
+
+  function humanKey(k) {
+    return String(k)
+      .replace(/[_-]+/g, ' ')
+      .replace(/\b\w/g, ch => ch.toUpperCase());
+  }
+
+  function renderJSON(v, depth) {
+    if (v === null) return '<span class="j-null">null</span>';
+    if (v === undefined) return '';
+    const t = typeof v;
+    if (t === 'string') {
+      if (v.includes('\n') || v.length > 60) {
+        return `<div class="j-string-long">${escapeHTML(v)}</div>`;
+      }
+      return `<span class="j-string">${escapeHTML(v)}</span>`;
+    }
+    if (t === 'number') return `<span class="j-num">${v}</span>`;
+    if (t === 'boolean') return `<span class="j-bool">${v}</span>`;
+    if (Array.isArray(v)) return renderArray(v, depth);
+    if (t === 'object') return renderObject(v, depth);
+    return escapeHTML(String(v));
+  }
+
+  function isPrimitive(v) {
+    return v === null || v === undefined || ['string', 'number', 'boolean'].includes(typeof v);
+  }
+
+  function renderArray(arr, depth) {
+    if (arr.length === 0) return '<span class="j-empty">(empty)</span>';
+    if (arr.every(isPrimitive)) {
+      const items = arr.map(v => `<li>${renderJSON(v, depth + 1)}</li>`).join('');
+      return `<ul class="j-array-flat">${items}</ul>`;
+    }
+    const items = arr.map((v, i) => `
+      <li class="j-array-item">
+        <div class="j-array-index">${i}</div>
+        <div class="j-array-body">${renderJSON(v, depth + 1)}</div>
+      </li>`).join('');
+    return `<ol class="j-array">${items}</ol>`;
+  }
+
+  function renderObject(obj, depth) {
+    const keys = Object.keys(obj);
+    if (keys.length === 0) return '<span class="j-empty">{}</span>';
+
+    // For nested objects where all values are primitive, use compact key-value table.
+    if (depth > 0 && keys.every(k => isPrimitive(obj[k]))) {
+      const rows = keys.map(k => `
+        <li>
+          <span class="k">${escapeHTML(humanKey(k))}</span>
+          <span class="v">${renderJSON(obj[k], depth + 1)}</span>
+        </li>`).join('');
+      return `<ul class="kv-list compact">${rows}</ul>`;
+    }
+
+    // Otherwise: each key gets a header, value rendered recursively.
+    const Hdepth = Math.min(3 + depth, 6);
+    const sections = keys.map(k => {
+      const v = obj[k];
+      const header = `<h${Hdepth} class="j-key">${escapeHTML(humanKey(k))}</h${Hdepth}>`;
+      return `<section class="j-field">${header}<div class="j-value">${renderJSON(v, depth + 1)}</div></section>`;
+    }).join('');
+    return sections;
   }
 
   function escapeHTML(s) {
