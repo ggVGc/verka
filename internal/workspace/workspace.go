@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/ggvgc/llaundry/internal/codeanalysis"
 	"github.com/ggvgc/llaundry/internal/model"
 	"github.com/ggvgc/llaundry/internal/store"
 )
@@ -23,9 +24,10 @@ const (
 // Workspace owns the on-disk layout and the backing store for a single project
 // root. Open() returns one of these; keep it for the process lifetime.
 type Workspace struct {
-	root    string // absolute path to project root
-	rootDir string // absolute path to .llaundry/
-	store   *store.SQLite
+	root      string // absolute path to project root
+	rootDir   string // absolute path to .llaundry/
+	store     *store.SQLite
+	analyzers []codeanalysis.Analyzer
 }
 
 // Init creates the .llaundry/ directory and database in dir if missing, and
@@ -68,7 +70,7 @@ func Open(dir string) (*Workspace, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Workspace{root: absRoot, rootDir: wsDir, store: s}, nil
+	return &Workspace{root: absRoot, rootDir: wsDir, store: s, analyzers: codeanalysis.DefaultAnalyzers()}, nil
 }
 
 func (w *Workspace) Close() error { return w.store.Close() }
@@ -147,5 +149,82 @@ func (w *Workspace) Rehash(ctx context.Context, nodeID string) (string, error) {
 	if err := w.store.ReplaceFiles(ctx, nodeID, files); err != nil {
 		return "", err
 	}
-	return w.store.RecomputeAndStoreHash(ctx, nodeID, "file_change")
+	hash, err := w.store.RecomputeAndStoreHash(ctx, nodeID, "file_change")
+	if err != nil {
+		return "", err
+	}
+	n, nerr := w.store.GetNode(ctx, nodeID)
+	if nerr == nil && n.Type == model.TypeImplementation {
+		w.updateSymbolIndex(ctx, nodeID)
+	}
+	return hash, nil
+}
+
+func (w *Workspace) updateSymbolIndex(ctx context.Context, nodeID string) {
+	pkgs, err := codeanalysis.RunAll(ctx, w.analyzers, w.SourceDir(nodeID))
+	if err != nil || len(pkgs) == 0 {
+		_ = w.store.ReplaceNodePackages(ctx, nodeID, nil)
+		_ = w.store.ReplaceNodeImports(ctx, nodeID, nil)
+		return
+	}
+
+	var nodePkgs []model.NodePackage
+	allImports := make(map[string]struct{})
+	for _, p := range pkgs {
+		nodePkgs = append(nodePkgs, model.NodePackage{
+			PackagePath: p.ImportPath,
+			ModulePath:  p.Module,
+		})
+		for _, imp := range p.Imports {
+			allImports[imp] = struct{}{}
+		}
+	}
+	_ = w.store.ReplaceNodePackages(ctx, nodeID, nodePkgs)
+
+	imports := make([]string, 0, len(allImports))
+	for imp := range allImports {
+		imports = append(imports, imp)
+	}
+	_ = w.store.ReplaceNodeImports(ctx, nodeID, imports)
+
+	w.syncCodeEdges(ctx, nodeID)
+}
+
+func (w *Workspace) syncCodeEdges(ctx context.Context, nodeID string) {
+	deps, err := w.store.ImplDependencies(ctx, nodeID)
+	if err != nil {
+		return
+	}
+
+	existing, err := w.store.Neighbors(ctx, nodeID, model.EdgeCodeDependsOn, model.DirOutgoing)
+	if err != nil {
+		return
+	}
+	existingSet := make(map[string]struct{}, len(existing))
+	for _, id := range existing {
+		existingSet[id] = struct{}{}
+	}
+
+	wantSet := make(map[string]struct{}, len(deps))
+	for _, d := range deps {
+		wantSet[d.ID] = struct{}{}
+		if _, ok := existingSet[d.ID]; !ok {
+			_ = w.store.Link(ctx, nodeID, d.ID, model.EdgeCodeDependsOn)
+		}
+	}
+
+	for _, id := range existing {
+		if _, ok := wantSet[id]; !ok {
+			_ = w.store.Unlink(ctx, nodeID, id, model.EdgeCodeDependsOn)
+		}
+	}
+
+	snapshots := make(map[string]string, len(deps))
+	for _, d := range deps {
+		n, err := w.store.GetNode(ctx, d.ID)
+		if err == nil {
+			snapshots[d.ID] = n.ContentHash
+		}
+	}
+	_ = w.store.ReplaceCodeDepSnapshots(ctx, nodeID, snapshots)
 }

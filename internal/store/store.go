@@ -42,5 +42,19 @@ type Store interface {
 
 	StaleNodes(ctx context.Context) ([]string, error)
 
+	ReplaceNodePackages(ctx context.Context, nodeID string, pkgs []model.NodePackage) error
+	ReplaceNodeImports(ctx context.Context, nodeID string, imports []string) error
+	AffectedImplementations(ctx context.Context, nodeID string) ([]AffectedNode, error)
+	ImplDependencies(ctx context.Context, nodeID string) ([]AffectedNode, error)
+	NodePackages(ctx context.Context, nodeID string) ([]string, error)
+	NodeImports(ctx context.Context, nodeID string) ([]string, error)
+	ReplaceCodeDepSnapshots(ctx context.Context, nodeID string, deps map[string]string) error
+	StaleImplementations(ctx context.Context) ([]string, error)
+
 	Close() error
+}
+
+type AffectedNode struct {
+	ID         string `json:"id"`
+	ViaPackage string `json:"via_package"`
 }

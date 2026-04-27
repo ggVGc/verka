@@ -51,11 +51,12 @@ const (
 	EdgeBuilds           EdgeKind = "builds"
 	EdgeConsumesArtifact EdgeKind = "consumes_artifact"
 	EdgeSupersedes       EdgeKind = "supersedes"
+	EdgeCodeDependsOn    EdgeKind = "code_depends_on"
 )
 
 func (k EdgeKind) Valid() bool {
 	switch k {
-	case EdgeChild, EdgeDependsOn, EdgeVerifies, EdgeBuilds, EdgeConsumesArtifact, EdgeSupersedes:
+	case EdgeChild, EdgeDependsOn, EdgeVerifies, EdgeBuilds, EdgeConsumesArtifact, EdgeSupersedes, EdgeCodeDependsOn:
 		return true
 	}
 	return false
@@ -98,6 +99,11 @@ type FileRecord struct {
 	Size    int64    `json:"size"`
 	MtimeNs int64    `json:"mtime_ns"`
 	Role    FileRole `json:"role"`
+}
+
+type NodePackage struct {
+	PackagePath string `json:"package_path"`
+	ModulePath  string `json:"module_path"`
 }
 
 type InputSnapshot struct {

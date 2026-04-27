@@ -84,6 +84,10 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 	for _, id := range staleIDs {
 		staleSet[id] = true
 	}
+	staleImplIDs, _ := st.StaleImplementations(ctx)
+	for _, id := range staleImplIDs {
+		staleSet[id] = true
+	}
 
 	resp := apiGraphResp{Nodes: make([]apiNode, 0, len(nodes))}
 	for _, n := range nodes {
@@ -167,6 +171,16 @@ func (s *Server) handleNode(w http.ResponseWriter, r *http.Request) {
 			if sid == id {
 				stale = true
 				break
+			}
+		}
+	}
+	if !stale {
+		if staleImplIDs, err := st.StaleImplementations(ctx); err == nil {
+			for _, sid := range staleImplIDs {
+				if sid == id {
+					stale = true
+					break
+				}
 			}
 		}
 	}

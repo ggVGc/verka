@@ -46,7 +46,7 @@ func registerTools(srv *mcpsdk.Server, h *handlers) {
 	}, h.setStatus)
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name:        "link",
-		Description: "Add a graph edge from src to dst with a given kind (child|depends_on|verifies|builds|consumes_artifact|supersedes).",
+		Description: "Add a graph edge from src to dst with a given kind (child|depends_on|verifies|builds|consumes_artifact|supersedes|code_depends_on).",
 	}, h.link)
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name:        "unlink",
@@ -76,6 +76,10 @@ func registerTools(srv *mcpsdk.Server, h *handlers) {
 		Name:        "attach_run_result",
 		Description: "Record the result of an externally executed run (e.g., from CI) against a verification or build node. Creates input snapshots from the node's current dependencies.",
 	}, h.attachRunResult)
+	mcpsdk.AddTool(srv, &mcpsdk.Tool{
+		Name:        "impact_analysis",
+		Description: "Analyze code-level dependencies for an implementation node. Returns: what Go packages it provides, what it imports, which other implementations would be affected if it changes, and which implementations it depends on. Triggers a rehash to ensure the symbol index is current.",
+	}, h.impactAnalysis)
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name:        "ask_user",
 		Description: "Ask the human user a question and block until they answer. Use this to clarify an ambiguous brief and to get explicit approval before creating task nodes. Returns the user's free-form text answer.",
@@ -198,6 +202,15 @@ func (h *handlers) getNode(ctx context.Context, req *mcpsdk.CallToolRequest, in 
 		if s == n.ID {
 			isStale = true
 			break
+		}
+	}
+	if !isStale {
+		staleImpls, _ := h.store().StaleImplementations(ctx)
+		for _, s := range staleImpls {
+			if s == n.ID {
+				isStale = true
+				break
+			}
 		}
 	}
 	var contentAny any
@@ -485,6 +498,7 @@ type rehashArgs struct {
 type rehashResult struct {
 	ContentHash string             `json:"content_hash"`
 	Files       []model.FileRecord `json:"files"`
+	Affected    []string           `json:"affected,omitempty"`
 }
 
 func (h *handlers) rehash(ctx context.Context, req *mcpsdk.CallToolRequest, in rehashArgs) (*mcpsdk.CallToolResult, rehashResult, error) {
@@ -494,6 +508,11 @@ func (h *handlers) rehash(ctx context.Context, req *mcpsdk.CallToolRequest, in r
 	}
 	files, _ := h.store().ListFiles(ctx, in.ID)
 	res := rehashResult{ContentHash: hash, Files: files}
+	if affected, err := h.store().AffectedImplementations(ctx, in.ID); err == nil {
+		for _, a := range affected {
+			res.Affected = append(res.Affected, a.ID)
+		}
+	}
 	return ok(res), res, nil
 }
 

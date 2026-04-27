@@ -117,6 +117,16 @@ func (s *SQLite) ListNodes(ctx context.Context, f NodeFilter) ([]*model.Node, er
 		if err != nil {
 			return nil, err
 		}
+		implIDs, _ := s.StaleImplementations(ctx)
+		seen := make(map[string]struct{}, len(ids))
+		for _, id := range ids {
+			seen[id] = struct{}{}
+		}
+		for _, id := range implIDs {
+			if _, ok := seen[id]; !ok {
+				ids = append(ids, id)
+			}
+		}
 		return s.nodesByIDs(ctx, ids, f)
 	}
 	if f.Parent != "" {
@@ -259,6 +269,9 @@ func (s *SQLite) DeleteNode(ctx context.Context, id string) error {
 		`DELETE FROM node_revisions WHERE node_id=?`,
 		`DELETE FROM input_snapshots WHERE observer_node=? OR input_node=?`,
 		`DELETE FROM runs WHERE node_id=?`,
+		`DELETE FROM node_packages WHERE node_id=?`,
+		`DELETE FROM node_imports WHERE node_id=?`,
+		`DELETE FROM code_dep_snapshots WHERE node_id=? OR dep_node_id=?`,
 		`DELETE FROM nodes WHERE id=?`,
 	} {
 		var args []any
@@ -508,6 +521,172 @@ func (s *SQLite) StaleNodes(ctx context.Context) ([]string, error) {
 		WHERE i.content_hash <> s.observed_hash
 		  AND n.type IN ('verification','build')
 		ORDER BY n.id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+// --- code-level dependency tracking ---
+
+func (s *SQLite) ReplaceNodePackages(ctx context.Context, nodeID string, pkgs []model.NodePackage) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM node_packages WHERE node_id=?`, nodeID); err != nil {
+		return err
+	}
+	for _, p := range pkgs {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO node_packages(node_id,package_path,module_path) VALUES(?,?,?)`,
+			nodeID, p.PackagePath, p.ModulePath,
+		); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *SQLite) ReplaceNodeImports(ctx context.Context, nodeID string, imports []string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM node_imports WHERE node_id=?`, nodeID); err != nil {
+		return err
+	}
+	for _, imp := range imports {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO node_imports(node_id,package_path) VALUES(?,?)`,
+			nodeID, imp,
+		); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *SQLite) AffectedImplementations(ctx context.Context, nodeID string) ([]AffectedNode, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT DISTINCT ni.node_id, np.package_path
+		FROM node_packages np
+		JOIN node_imports ni ON ni.package_path = np.package_path
+		WHERE np.node_id = ?
+		  AND ni.node_id <> ?
+		ORDER BY ni.node_id`, nodeID, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []AffectedNode
+	for rows.Next() {
+		var a AffectedNode
+		if err := rows.Scan(&a.ID, &a.ViaPackage); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLite) ImplDependencies(ctx context.Context, nodeID string) ([]AffectedNode, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT DISTINCT np.node_id, ni.package_path
+		FROM node_imports ni
+		JOIN node_packages np ON np.package_path = ni.package_path
+		WHERE ni.node_id = ?
+		  AND np.node_id <> ?
+		ORDER BY np.node_id`, nodeID, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []AffectedNode
+	for rows.Next() {
+		var a AffectedNode
+		if err := rows.Scan(&a.ID, &a.ViaPackage); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLite) NodePackages(ctx context.Context, nodeID string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT package_path FROM node_packages WHERE node_id=? ORDER BY package_path`, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLite) NodeImports(ctx context.Context, nodeID string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT package_path FROM node_imports WHERE node_id=? ORDER BY package_path`, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLite) ReplaceCodeDepSnapshots(ctx context.Context, nodeID string, deps map[string]string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM code_dep_snapshots WHERE node_id=?`, nodeID); err != nil {
+		return err
+	}
+	for depID, hash := range deps {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO code_dep_snapshots(node_id,dep_node_id,observed_hash) VALUES(?,?,?)`,
+			nodeID, depID, hash,
+		); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *SQLite) StaleImplementations(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT DISTINCT cs.node_id
+		FROM code_dep_snapshots cs
+		JOIN nodes n ON n.id = cs.dep_node_id
+		WHERE n.content_hash <> cs.observed_hash
+		ORDER BY cs.node_id`)
 	if err != nil {
 		return nil, err
 	}

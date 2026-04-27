@@ -23,6 +23,7 @@
     builds:            { color: '#f97316', dashes: [4, 4], arrows: 'to' },
     consumes_artifact: { color: '#64748b', dashes: [2, 3], arrows: 'to' },
     supersedes:        { color: '#ef4444', dashes: [6, 4], arrows: 'to' },
+    code_depends_on:   { color: '#a855f7', dashes: [2, 4], arrows: 'to' },
   };
 
   let rawNodes = [];

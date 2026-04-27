@@ -24,7 +24,7 @@ user-interaction go through MCP.
   affect content_hash.
 - `link({src, dst, kind})` / `unlink({src, dst, kind})` — edge kinds:
   `child`, `depends_on`, `verifies`, `builds`, `consumes_artifact`,
-  `supersedes`.
+  `supersedes`, `code_depends_on`.
 - `node_files({id, op, path?, content?})` — file I/O under a node's source
   directory. `op` is one of `list`, `read`, `write`, `delete`. Writes are
   capped at 256 KB and auto-rehash the node.
@@ -41,6 +41,11 @@ user-interaction go through MCP.
   the same shape as `run_verification` plus `artifact_rel`.
 - `attach_run_result(...)` — only useful for CI integrations; you will not
   typically call this.
+- `impact_analysis({id})` — for an implementation node, returns the Go
+  packages it provides, what it imports, which other implementations would be
+  affected if it changes, and which implementations it depends on. Triggers a
+  rehash to ensure the symbol index is current. Use this to understand
+  code-level dependencies between implementations.
 
 ## Workflow contract
 
