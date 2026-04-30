@@ -19,6 +19,12 @@ access to any other context than the planned implementation steps and the files 
   - For example, a backend can document how an endpoint works, and another node can depend on that information.
     It then does not depend directly on the implementation, but specifically on the documented information in that node.
 
+- Prompts and discussions are more important than the output result:
+  - Verifications are second most important
+  - With prompt graph and verifications we can regenerate implementations as much as we want:
+    - For different runtimes
+    - When new models come out
+    - etc.
 
 
 
