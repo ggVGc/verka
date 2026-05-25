@@ -27,6 +27,10 @@ access to any other context than the planned implementation steps and the files 
     - etc.
 
 
+= Data modelling =
+08:02:24      ggVGc | cakebox: my core point of the question is related to that I think the start of good software is good data modelling, and my theory is that if the human does data modelling then the       │
+                    | claude can do a better job at doing implementation of logic                                                                                                                                │
+
 
 = Workflows =
 == Initial feature ==
