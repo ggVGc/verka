@@ -2,7 +2,7 @@
 = A really minimal viable product =
   * Nodes themselves are stored in git. That way, edits to them is immutable.
   * User submits a request with whatever context, which gets store in a node.
-    - For example from a file inside vim: "Simplify implementation of this function"
+    - For example from a file inside vim. "Simplify implementation of this function"
   * The node stores references to all the context given for the request, as well as a stable hash of all the content.
   * Somehing can then act on the node (probably a coding agent):
     - TODO
@@ -99,3 +99,6 @@ A language where the main constituents are:
   - Mutable state holders (inspired by OTP)
 
 
+
+= Platform =
+-=At some future time, when there is such a thing as a "llaundry repo", there could be a collaborative platform like GH, but for llaundry.
