@@ -1,4 +1,12 @@
 
+  = A really minimal viable product =
+  * Nodes themselves are stored in git. That way, edits to them is immutable.
+  * User submits a request with whatever context, which gets store in a node.
+    - For example from a file inside vim: "Simplify implementation of this function"
+  * The node stores references to all the context given for the request, as well as a stable hash of all the content.
+  * Somehing can then act on the node (probably a coding agent):
+    - TODO
+
 = Core philosophy =
 The main driver behind this is making LLM assisted development verifiable.
 It is essentially the same ting we've always done, but structured in a way that should make
@@ -52,7 +60,7 @@ We could model the nodes of llaundry within the git graph and benefit from all t
 
 
 = Representation of Code/Implementation =
-Note: This ideas is orthogonal to the core of llaundry, I think.
+Note: This idea is orthogonal to the core of llaundry, I think.
       The graph language can be an implementation category supported byh the build and verification tools in the llaundry MCP.
 
 Instead of storing code as text, leverage a graph database.
