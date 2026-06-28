@@ -44,6 +44,8 @@ access to any other context than the planned implementation steps and the files 
     - When new models come out
     - etc.
 
+- If any code is manually edited, that should invalidate some node/nodes
+- A common workflow can be that a test is edited, the llaundry graph is partially invalidated, agents are triggered to make tests pass by editing code/specs of the nodes that were invalidated, eventually leading to the graph being consistent again.
 
 = Data modelling =
 08:02:24      ggVGc | cakebox: my core point of the question is related to that I think the start of good software is good data modelling, and my theory is that if the human does data modelling then the       │
