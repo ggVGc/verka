@@ -2,3 +2,4 @@
 /llaundry.exe
 *.test
 *.out
+/target

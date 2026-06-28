@@ -1,0 +1,17 @@
+[package]
+name = "llaundry"
+version = "0.1.0"
+edition = "2021"
+description = "A content-addressed, immutable graph database for LLM-assisted development"
+
+[[bin]]
+name = "llaundry"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive", "env"] }
+serde = { version = "1", features = ["derive"] }
+sha2 = "0.10"
+toml = "0.8"
+ulid = "1"
