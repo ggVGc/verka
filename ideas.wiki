@@ -7,6 +7,11 @@
   * Somehing can then act on the node (probably a coding agent):
     - TODO
 
+
+My wish is for a system where work definition and implementation live as one,
+wich a shared interconnected diffable history.
+Initial ideas, discussion/refinement, implementation, review with comments: All in one historical graph.
+
 = Core philosophy =
 The output code is no longer the story. The prompt history is the story.
 Theoretically, the code can be recreated from prompt history, as long as it also includes all context that went in, in a verifiable way (through hashes).
