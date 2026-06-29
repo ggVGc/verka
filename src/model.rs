@@ -2,10 +2,10 @@
 //!
 //! There are exactly three kinds of records in the store:
 //!
-//!   * [`Meta`]        — the immutable, content-addressed definition of a node version.
+//!   * [`Meta`] — the immutable, content-addressed definition of a node version.
 //!   * [`StatusEvent`] — an immutable entry in a node's append-only status log.
-//!   * a *ref*         — a one-line text file mapping a logical id to its current
-//!                       version hash. It has no struct: it is just a hash string.
+//!   * a *ref* — a one-line text file mapping a logical id to its current version
+//!     hash. It has no struct: it is just a hash string.
 //!
 //! `Meta` is the only thing that gets hashed. Status and refs deliberately live
 //! outside the hash so that a status change or a "what is current" pointer move
@@ -103,6 +103,14 @@ pub struct Meta {
     /// Hash of the previous version, or `None` for the first version.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent: Option<String>,
+    /// The git commit that captured the files this node produced. `None` until the
+    /// node is completed. A commit hash *is* a content hash of the diff, so this is
+    /// the node's "output hash" — and it is part of the node's own identity hash.
+    /// Staleness is then "have those files changed since this commit?", answered by
+    /// `git diff` (which also yields the explicit reason). Declared before `edges`
+    /// because TOML requires scalar keys to precede arrays-of-tables.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_commit: Option<String>,
     #[serde(default)]
     pub edges: Vec<Edge>,
 }

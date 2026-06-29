@@ -2,6 +2,7 @@
 //!
 //! See DESIGN.md for the model and the reasoning behind it.
 
+mod git;
 mod model;
 mod store;
 
@@ -81,6 +82,21 @@ enum Cmd {
         author: Author,
     },
 
+    /// Complete a node by committing the output files it produced.
+    /// Commits the named files with git, stores that commit hash on a new version,
+    /// commits the store change, and marks the node `done`.
+    Complete {
+        id: String,
+        /// A produced file, relative to the project root (repeatable).
+        #[arg(long = "output", short = 'o', required = true)]
+        outputs: Vec<PathBuf>,
+        /// Message for the output commit (defaults to the node's type and title).
+        #[arg(long, short = 'm')]
+        message: Option<String>,
+        #[arg(long, value_enum, default_value = "machine")]
+        author: Author,
+    },
+
     /// Append a status event (open, in_progress, done, failed, blocked, ...).
     #[command(alias = "status")]
     SetStatus {
@@ -139,6 +155,7 @@ fn main() -> Result<()> {
                 title,
                 author,
                 parent: None,
+                output_commit: None,
                 edges,
             };
             let hash = store.put_object(&meta, &body)?;
@@ -204,6 +221,48 @@ fn main() -> Result<()> {
             println!("{id}  {}", short(&hash));
         }
 
+        Cmd::Complete {
+            id,
+            outputs,
+            message,
+            author,
+        } => {
+            let store = Store::open(store)?;
+            let base = store.project_root();
+            let current = store.get_ref(&id)?;
+            let (mut meta, body) = store.get_object(&current)?;
+
+            // 1. Commit the produced files; the commit hash is the output hash.
+            let paths: Vec<String> = outputs
+                .iter()
+                .map(|p| p.to_string_lossy().into_owned())
+                .collect();
+            let message =
+                message.unwrap_or_else(|| format!("{}: {}", meta.node_type.as_str(), meta.title));
+            let commit = git::commit_paths(&base, &paths, &message)?;
+
+            // 2. Record the commit on a new node version and mark it done.
+            meta.output_commit = Some(commit.clone());
+            meta.parent = Some(current);
+            meta.author = author;
+            let hash = store.put_object(&meta, &body)?;
+            store.set_ref(&id, &hash)?;
+            store.append_status(
+                &id,
+                &StatusEvent {
+                    at: now_millis(),
+                    status: "done".into(),
+                    author,
+                    version: hash.clone(),
+                },
+            )?;
+
+            // 3. Commit the store change.
+            git::commit_path(&base, &store.store_name(), &format!("llaundry: complete {id}"))?;
+
+            println!("{id}  {}  (output {})", short(&hash), short(&commit));
+        }
+
         Cmd::SetStatus {
             id,
             status,
@@ -242,17 +301,17 @@ fn main() -> Result<()> {
             if !meta.edges.is_empty() {
                 println!("edges:");
                 for e in &meta.edges {
-                    let stale = match store.get_ref(&e.to) {
-                        Ok(current) => current != e.pin,
-                        Err(_) => false,
-                    };
-                    println!(
-                        "  {:<12} -> {} @ {}{}",
-                        e.rel,
-                        e.to,
-                        short(&e.pin),
-                        if stale { "  (STALE)" } else { "" }
-                    );
+                    println!("  {:<12} -> {} @ {}", e.rel, e.to, short(&e.pin));
+                }
+            }
+            if let Some(commit) = &meta.output_commit {
+                println!("output:  commit {}", short(commit));
+            }
+            let reasons = staleness(&store, &meta);
+            if !reasons.is_empty() {
+                println!("stale:");
+                for r in &reasons {
+                    println!("  {r}");
                 }
             }
             let body = body.trim_end();
@@ -302,18 +361,12 @@ fn main() -> Result<()> {
             for id in store.list_refs()? {
                 let hash = store.get_ref(&id)?;
                 let (meta, _) = store.get_object(&hash)?;
-                for e in &meta.edges {
-                    if let Ok(current) = store.get_ref(&e.to) {
-                        if current != e.pin {
-                            found = true;
-                            println!(
-                                "{id}: {} -> {} is stale (pinned {}, now {})",
-                                e.rel,
-                                e.to,
-                                short(&e.pin),
-                                short(&current)
-                            );
-                        }
+                let reasons = staleness(&store, &meta);
+                if !reasons.is_empty() {
+                    found = true;
+                    println!("{id}:");
+                    for r in &reasons {
+                        println!("  {r}");
                     }
                 }
             }
@@ -323,6 +376,43 @@ fn main() -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Collect explicit reasons a node version is stale, if any.
+///
+/// Two independent sources of staleness:
+///   * an edge whose target has moved past the pinned version (or vanished), and
+///   * an output file that has changed since the node's output commit (per git).
+fn staleness(store: &Store, meta: &Meta) -> Vec<String> {
+    let mut reasons = Vec::new();
+
+    for e in &meta.edges {
+        match store.get_ref(&e.to) {
+            Ok(current) if current != e.pin => reasons.push(format!(
+                "{} -> {}: target moved (pinned {}, now {})",
+                e.rel,
+                e.to,
+                short(&e.pin),
+                short(&current)
+            )),
+            Ok(_) => {}
+            Err(_) => reasons.push(format!("{} -> {}: target missing", e.rel, e.to)),
+        }
+    }
+
+    if let Some(commit) = &meta.output_commit {
+        match git::output_drift(&store.project_root(), commit) {
+            Ok(Some(drift)) => reasons.push(format!(
+                "output changed since {}:\n      {}",
+                short(commit),
+                drift.replace('\n', "\n      ")
+            )),
+            Ok(None) => {}
+            Err(e) => reasons.push(format!("output check failed ({}): {e}", short(commit))),
+        }
+    }
+
+    reasons
 }
 
 /// Resolve a target's current version hash and build an edge pinned to it.

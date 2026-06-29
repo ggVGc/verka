@@ -152,6 +152,26 @@ impl Store {
             Err(_) => Ok(StatusLog::default()),
         }
     }
+
+    // --- git integration points ---------------------------------------------
+
+    /// The project root that git operations and output paths resolve against: the
+    /// directory containing the store (e.g. the parent of `.llaundry/`).
+    pub fn project_root(&self) -> PathBuf {
+        match self.root.parent() {
+            Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+            _ => PathBuf::from("."),
+        }
+    }
+
+    /// The store directory relative to the project root, for use as a git
+    /// pathspec when committing store changes (e.g. `.llaundry`).
+    pub fn store_name(&self) -> String {
+        self.root
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| self.root.to_string_lossy().into_owned())
+    }
 }
 
 fn hex(bytes: &[u8]) -> String {

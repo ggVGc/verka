@@ -123,6 +123,31 @@ dependent is **stale**: it was built against a definition that has since changed
 This is the mechanism behind the "edit a test -> graph partially invalidated ->
 agents rework the affected nodes" workflow.
 
+### 2.8 Produced outputs are a git commit, not a hash we compute
+
+When a node is completed by producing files (e.g. source code), we do **not** hash
+those files ourselves — that would duplicate what git already does. Instead:
+
+1. The produced files are **committed with git**. That commit captures the exact
+   diff, and its hash *is* a content hash of the change.
+2. That **commit hash is stored on the node** as its output reference (and, being
+   part of `meta.toml`, becomes part of the node's own identity hash).
+3. The store change (the new node version) is then committed too.
+
+This gives the same two properties as before, but for free from git:
+
+* **A verifiable claim**: "this version produced exactly the diff in commit `C`,"
+  captured alongside the prompt and context that produced it.
+* **Drift detection**: staleness is simply *"have any of the files that commit `C`
+  touched changed since `C`?"* — answered by `git diff C`, which also yields the
+  **explicit reason** (a real `name-status` / diff), strictly better than a
+  hash-mismatch. Same staleness machinery as edges (§2.7), delegated to git.
+
+This is the cleanest expression of the project's principle (§2.3, §2.4): git owns
+content integrity and diffs; llaundry only records *which commit* is the output and
+*which node* it belongs to — the semantics git cannot express. The trade-off is
+that `complete` now requires a git repository (see §4).
+
 ---
 
 ## 3. On-disk layout
@@ -158,6 +183,7 @@ type = "task"
 title = "Parse the config file"
 author = "human"
 parent = "9f1c..."          # previous version hash; omitted on the first version
+output_commit = "86cb1a1..." # git commit capturing this version's outputs; omitted until completed
 
 [[edges]]
 to = "desc-01J8XQ2A..."
@@ -170,7 +196,8 @@ rel = "depends_on"
 pin = "1b2c..."
 ```
 
-`body.md` is free-form Markdown.
+`body.md` is free-form Markdown. Scalar keys (including `output_commit`) precede
+the `[[edges]]` array-of-tables, as TOML requires.
 
 **Hash.** `hash = sha256(meta.toml bytes || 0x00 || body.md bytes)`, hex-encoded.
 It is computed over the exact bytes written, and is never stored inside the record.
@@ -178,8 +205,8 @@ A given (meta, body) pair therefore always lands at the same path — writes are
 idempotent, and identical content is deduplicated automatically.
 
 **Identity includes everything definitional**: `logical_id`, `type`, `title`,
-`parent`, `edges`, and the body. Change any of them and you get a new hash, i.e. a
-new version. `parent` links versions into a history chain.
+`parent`, `output_commit`, `edges`, and the body. Change any of them and you get a
+new hash, i.e. a new version. `parent` links versions into a history chain.
 
 ### 3.2 Ref: `refs/<logical-id>`
 
@@ -229,6 +256,10 @@ That semantic layer is the product; everything storage-shaped is delegated to gi
 Concretely: commit the `.llaundry/` directory like any other source. Because each
 node lives in its own immutable file, history and merges are clean by construction.
 
+The `complete` command goes one step further and *drives* git: it commits the
+produced files and stores the commit hash on the node (§2.8). So `complete`
+requires a git repository (with a configured identity); the other commands do not.
+
 ---
 
 ## 5. The CLI
@@ -242,11 +273,12 @@ overridden with `--store <dir>` or the `LLAUNDRY_DIR` environment variable.
 | `add` | Create a new node; prints its logical id. |
 | `link <from> <to>` | Add a typed edge (a new version of `<from>`). |
 | `edit <id>` | Produce a new version of a node. |
+| `complete <id> -o <file>...` | Commit the produced files with git; store that commit on the node; mark it `done`. |
 | `set-status <id> <status>` | Append a status event (alias: `status`). |
-| `show <id>` | Show current version, edges (with staleness), and status. |
+| `show <id>` | Show current version, edges, outputs, and any staleness reasons. |
 | `list` | List every node with its current status. |
 | `log <id>` | Walk a node's version history (newest first). |
-| `stale` | Report nodes whose edges point at outdated target versions. |
+| `stale` | Report nodes that are stale, with explicit reasons. |
 
 ### Examples
 
@@ -270,6 +302,14 @@ llaundry show "$T2"
 llaundry set-status "$T1" done
 llaundry edit "$T1" --title "Define and validate config schema"
 llaundry stale          # -> T2's depends_on edge is now stale
+
+# Implement T2: write the file, then complete it. `complete` git-commits the file
+# and stores that commit on the node. Editing the file later makes T2 stale, and
+# the reason is a real git diff.
+echo 'fn parse() {}' > src/config.rs
+llaundry complete "$T2" -o src/config.rs
+echo "// hand-edit" >> src/config.rs
+llaundry stale          # -> T2: output changed since <commit>: M  src/config.rs
 ```
 
 ### What each command does to the store
@@ -277,12 +317,15 @@ llaundry stale          # -> T2's depends_on edge is now stale
 * **add** — writes one object, creates one ref, appends an `open` status event.
   `--depends-on` / `--derived-from` add edges pinned to the targets' current
   versions.
-* **link / edit** — these are *edits*: they read the current version, change it,
-  write a **new** object, and move the ref. The previous version stays on disk
-  forever (it is the history).
+* **link / edit / complete** — these are *edits*: they read the current version,
+  change it, write a **new** object, and move the ref. The previous version stays
+  on disk forever (it is the history). `complete` additionally git-commits the
+  named files (the output commit), stores that commit on the node, appends a
+  `done` status event, and commits the store change.
 * **set-status** — appends one immutable event; touches no object and no ref.
 * **show / list / log / stale** — read-only; they rebuild what they need by
-  scanning, holding no persisted index.
+  scanning, holding no persisted index. `stale` checks both edge pins (against
+  target refs) and outputs (via `git diff` against each node's output commit).
 
 ---
 
@@ -293,7 +336,16 @@ llaundry stale          # -> T2's depends_on edge is now stale
   persisted index — would be an in-memory cache in a long-running process.
 * **Executing builds and verifications.** Nodes can be *typed* `build` /
   `verification`, but running them is not implemented.
+* **Pinning consumed *inputs*.** Outputs are pinned to a commit (§2.8); the
+  symmetric idea — recording which commit the context files a node *read* were at
+  — is not yet implemented, but would work the same way.
+* **Transitive staleness.** Only a node's own edges and outputs are checked; a
+  dependent is not auto-flagged because something upstream of *its* target moved.
+* **Output commit policy.** `complete` makes a partial commit of exactly the named
+  files plus a separate commit for the store. It does not squash, sign, or let you
+  reuse an existing commit; those are easy future options.
 * **Object sharding** (`objects/ab/cdef...`) and an `fsck`/verify command that
   re-derives and checks every hash.
-* **Adopting git's own object ids as the node hash** (§2.4), and `sha256`
-  object-format repos. The current scheme keeps the tool self-contained.
+* **Adopting git's own object ids as the *node* hash** (§2.4). Outputs already
+  delegate to git (§2.8); node identity and edge pins still use our own `sha256`,
+  so those parts of the tool work without git. Unifying them is a separate call.
