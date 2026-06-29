@@ -260,6 +260,14 @@ The `complete` command goes one step further and *drives* git: it commits the
 produced files and stores the commit hash on the node (§2.8). So `complete`
 requires a git repository (with a configured identity); the other commands do not.
 
+To keep that git dependency from leaking into tests, all git interaction goes
+through a small `Vcs` trait (`capture`, `commit_store`, `drift`). The real
+implementation (`GitVcs`) shells out to `git`; `complete` and the staleness check
+take `&dyn Vcs`. Unit tests inject an in-memory `FakeVcs`, so the store, hashing,
+edge staleness, output staleness, and the `complete` flow are all exercised with
+**no git binary, no repository, and no configured identity** — fast, deterministic,
+self-standing. A separate (optional) integration test can exercise real `GitVcs`.
+
 ---
 
 ## 5. The CLI

@@ -5,6 +5,7 @@
 mod git;
 mod model;
 mod store;
+mod vcs;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -14,6 +15,7 @@ use ulid::Ulid;
 
 use model::{Author, Edge, Meta, NodeType, StatusEvent};
 use store::Store;
+use vcs::Vcs;
 
 #[derive(Parser)]
 #[command(
@@ -228,38 +230,12 @@ fn main() -> Result<()> {
             author,
         } => {
             let store = Store::open(store)?;
-            let base = store.project_root();
-            let current = store.get_ref(&id)?;
-            let (mut meta, body) = store.get_object(&current)?;
-
-            // 1. Commit the produced files; the commit hash is the output hash.
+            let vcs = git::GitVcs::new(store.project_root());
             let paths: Vec<String> = outputs
                 .iter()
                 .map(|p| p.to_string_lossy().into_owned())
                 .collect();
-            let message =
-                message.unwrap_or_else(|| format!("{}: {}", meta.node_type.as_str(), meta.title));
-            let commit = git::commit_paths(&base, &paths, &message)?;
-
-            // 2. Record the commit on a new node version and mark it done.
-            meta.output_commit = Some(commit.clone());
-            meta.parent = Some(current);
-            meta.author = author;
-            let hash = store.put_object(&meta, &body)?;
-            store.set_ref(&id, &hash)?;
-            store.append_status(
-                &id,
-                &StatusEvent {
-                    at: now_millis(),
-                    status: "done".into(),
-                    author,
-                    version: hash.clone(),
-                },
-            )?;
-
-            // 3. Commit the store change.
-            git::commit_path(&base, &store.store_name(), &format!("llaundry: complete {id}"))?;
-
+            let (hash, commit) = complete(&store, &vcs, &id, &paths, message, author)?;
             println!("{id}  {}  (output {})", short(&hash), short(&commit));
         }
 
@@ -284,6 +260,7 @@ fn main() -> Result<()> {
 
         Cmd::Show { id } => {
             let store = Store::open(store)?;
+            let vcs = git::GitVcs::new(store.project_root());
             let hash = store.get_ref(&id)?;
             let (meta, body) = store.get_object(&hash)?;
             let log = store.status_log(&id)?;
@@ -307,7 +284,7 @@ fn main() -> Result<()> {
             if let Some(commit) = &meta.output_commit {
                 println!("output:  commit {}", short(commit));
             }
-            let reasons = staleness(&store, &meta);
+            let reasons = staleness(&store, &vcs, &meta);
             if !reasons.is_empty() {
                 println!("stale:");
                 for r in &reasons {
@@ -357,11 +334,12 @@ fn main() -> Result<()> {
 
         Cmd::Stale => {
             let store = Store::open(store)?;
+            let vcs = git::GitVcs::new(store.project_root());
             let mut found = false;
             for id in store.list_refs()? {
                 let hash = store.get_ref(&id)?;
                 let (meta, _) = store.get_object(&hash)?;
-                let reasons = staleness(&store, &meta);
+                let reasons = staleness(&store, &vcs, &meta);
                 if !reasons.is_empty() {
                     found = true;
                     println!("{id}:");
@@ -378,12 +356,52 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+/// Complete a node: capture the produced files via `vcs`, record the resulting
+/// output id on a new immutable version, mark it `done`, and persist the store
+/// change. Returns `(new version hash, output id)`.
+///
+/// Takes `&dyn Vcs` rather than touching git directly, so it is unit-testable with
+/// an in-memory fake.
+fn complete(
+    store: &Store,
+    vcs: &dyn Vcs,
+    id: &str,
+    paths: &[String],
+    message: Option<String>,
+    author: Author,
+) -> Result<(String, String)> {
+    let current = store.get_ref(id)?;
+    let (mut meta, body) = store.get_object(&current)?;
+
+    let message =
+        message.unwrap_or_else(|| format!("{}: {}", meta.node_type.as_str(), meta.title));
+    let commit = vcs.capture(paths, &message)?;
+
+    meta.output_commit = Some(commit.clone());
+    meta.parent = Some(current);
+    meta.author = author;
+    let hash = store.put_object(&meta, &body)?;
+    store.set_ref(id, &hash)?;
+    store.append_status(
+        id,
+        &StatusEvent {
+            at: now_millis(),
+            status: "done".into(),
+            author,
+            version: hash.clone(),
+        },
+    )?;
+
+    vcs.commit_store(&store.store_name(), &format!("llaundry: complete {id}"))?;
+    Ok((hash, commit))
+}
+
 /// Collect explicit reasons a node version is stale, if any.
 ///
 /// Two independent sources of staleness:
 ///   * an edge whose target has moved past the pinned version (or vanished), and
-///   * an output file that has changed since the node's output commit (per git).
-fn staleness(store: &Store, meta: &Meta) -> Vec<String> {
+///   * an output that has changed since the node's output capture (via `vcs`).
+fn staleness(store: &Store, vcs: &dyn Vcs, meta: &Meta) -> Vec<String> {
     let mut reasons = Vec::new();
 
     for e in &meta.edges {
@@ -401,7 +419,7 @@ fn staleness(store: &Store, meta: &Meta) -> Vec<String> {
     }
 
     if let Some(commit) = &meta.output_commit {
-        match git::output_drift(&store.project_root(), commit) {
+        match vcs.drift(commit) {
             Ok(Some(drift)) => reasons.push(format!(
                 "output changed since {}:\n      {}",
                 short(commit),
@@ -447,4 +465,172 @@ fn now_millis() -> i64 {
 /// First 12 characters of a hash, for compact display.
 fn short(hash: &str) -> &str {
     &hash[..hash.len().min(12)]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::vcs::FakeVcs;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    /// A temp directory removed on drop, so tests are self-contained.
+    struct TempDir(PathBuf);
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// A fresh, initialised store under a unique temp directory.
+    fn temp_store() -> (TempDir, Store) {
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("llaundry-test-{}-{n}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let store = Store::init(root.join(".llaundry")).unwrap();
+        (TempDir(root), store)
+    }
+
+    /// Write a node version with a given logical id; returns its hash.
+    fn put_node(store: &Store, id: &str, edges: Vec<Edge>, output_commit: Option<String>) -> String {
+        let meta = Meta {
+            schema: 1,
+            logical_id: id.to_string(),
+            node_type: NodeType::Task,
+            title: "title".into(),
+            author: Author::Human,
+            parent: None,
+            output_commit,
+            edges,
+        };
+        let hash = store.put_object(&meta, "body").unwrap();
+        store.set_ref(id, &hash).unwrap();
+        hash
+    }
+
+    #[test]
+    fn objects_roundtrip_and_dedup() {
+        let (_t, store) = temp_store();
+        let meta = Meta {
+            schema: 1,
+            logical_id: "task-1".into(),
+            node_type: NodeType::Task,
+            title: "hello".into(),
+            author: Author::Human,
+            parent: None,
+            output_commit: None,
+            edges: vec![],
+        };
+        let h1 = store.put_object(&meta, "body").unwrap();
+        let h2 = store.put_object(&meta, "body").unwrap();
+        assert_eq!(h1, h2, "identical content hashes to the same object");
+        assert_ne!(h1, store.put_object(&meta, "other body").unwrap());
+
+        let (got, body) = store.get_object(&h1).unwrap();
+        assert_eq!(got.title, "hello");
+        assert_eq!(body, "body");
+    }
+
+    #[test]
+    fn refs_and_status_log() {
+        let (_t, store) = temp_store();
+        store.set_ref("task-1", "abc").unwrap();
+        assert_eq!(store.get_ref("task-1").unwrap(), "abc");
+        assert!(store.list_refs().unwrap().contains(&"task-1".to_string()));
+
+        let ev = |s: &str| StatusEvent {
+            at: 0,
+            status: s.into(),
+            author: Author::Human,
+            version: "abc".into(),
+        };
+        store.append_status("task-1", &ev("open")).unwrap();
+        store.append_status("task-1", &ev("done")).unwrap();
+        let log = store.status_log("task-1").unwrap();
+        assert_eq!(log.events.len(), 2);
+        assert_eq!(log.events.last().unwrap().status, "done");
+    }
+
+    #[test]
+    fn edge_staleness_detects_moved_and_missing_targets() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs::default();
+
+        let target = put_node(&store, "task-target", vec![], None);
+        let edge = Edge {
+            to: "task-target".into(),
+            rel: "depends_on".into(),
+            pin: target,
+        };
+        put_node(&store, "task-dep", vec![edge], None);
+        let (dep, _) = store.get_object(&store.get_ref("task-dep").unwrap()).unwrap();
+
+        // Fresh: pin matches the target's current ref.
+        assert!(staleness(&store, &fake, &dep).is_empty());
+
+        // Move the target on: the dependent goes stale.
+        store.set_ref("task-target", "newhash").unwrap();
+        let reasons = staleness(&store, &fake, &dep);
+        assert_eq!(reasons.len(), 1);
+        assert!(reasons[0].contains("target moved"), "{reasons:?}");
+
+        // A vanished target is reported too.
+        let edge = Edge {
+            to: "task-gone".into(),
+            rel: "depends_on".into(),
+            pin: "x".into(),
+        };
+        put_node(&store, "task-orphan", vec![edge], None);
+        let (orphan, _) = store.get_object(&store.get_ref("task-orphan").unwrap()).unwrap();
+        assert!(staleness(&store, &fake, &orphan)[0].contains("target missing"));
+    }
+
+    #[test]
+    fn output_staleness_uses_the_vcs() {
+        let (_t, store) = temp_store();
+        let hash = put_node(&store, "impl-1", vec![], Some("commitX".into()));
+        let (meta, _) = store.get_object(&hash).unwrap();
+
+        // No drift recorded -> not stale.
+        let mut fake = FakeVcs::default();
+        assert!(staleness(&store, &fake, &meta).is_empty());
+
+        // Drift recorded for that output id -> stale, with the reason surfaced.
+        fake.drift_for
+            .insert("commitX".into(), "M\tsrc/x.rs".into());
+        let reasons = staleness(&store, &fake, &meta);
+        assert_eq!(reasons.len(), 1);
+        assert!(reasons[0].contains("output changed since"));
+        assert!(reasons[0].contains("src/x.rs"));
+    }
+
+    #[test]
+    fn complete_captures_output_and_marks_done() {
+        let (_t, store) = temp_store();
+        put_node(&store, "impl-1", vec![], None);
+        let mut fake = FakeVcs {
+            next_id: "commit-abc".into(),
+            ..Default::default()
+        };
+
+        let (hash, commit) =
+            complete(&store, &fake, "impl-1", &["src/x.rs".into()], None, Author::Machine).unwrap();
+
+        assert_eq!(commit, "commit-abc");
+        assert_eq!(store.get_ref("impl-1").unwrap(), hash, "ref advanced to new version");
+
+        let (meta, _) = store.get_object(&hash).unwrap();
+        assert_eq!(meta.output_commit.as_deref(), Some("commit-abc"));
+        assert_eq!(meta.author, Author::Machine);
+        assert_eq!(store.status_log("impl-1").unwrap().events.last().unwrap().status, "done");
+
+        // The right paths were captured, and the store change was committed once.
+        assert_eq!(fake.captured.borrow().as_slice(), &[vec!["src/x.rs".to_string()]]);
+        assert_eq!(*fake.store_commits.borrow(), 1);
+
+        // And the completed node now reports as stale once its output drifts.
+        fake.drift_for.insert("commit-abc".into(), "M\tsrc/x.rs".into());
+        assert!(!staleness(&store, &fake, &meta).is_empty());
+    }
 }

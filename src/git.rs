@@ -6,8 +6,33 @@
 //! then just `git diff <commit>`, which also gives the explicit reason for free.
 
 use anyhow::{bail, Context, Result};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+
+use crate::vcs::Vcs;
+
+/// The real [`Vcs`]: drives the `git` CLI rooted at `base` (the project root).
+pub struct GitVcs {
+    base: PathBuf,
+}
+
+impl GitVcs {
+    pub fn new(base: PathBuf) -> Self {
+        Self { base }
+    }
+}
+
+impl Vcs for GitVcs {
+    fn capture(&self, paths: &[String], message: &str) -> Result<String> {
+        commit_paths(&self.base, paths, message)
+    }
+    fn commit_store(&self, path: &str, message: &str) -> Result<()> {
+        commit_path(&self.base, path, message)
+    }
+    fn drift(&self, id: &str) -> Result<Option<String>> {
+        output_drift(&self.base, id)
+    }
+}
 
 fn git(base: &Path, args: &[&str]) -> Result<std::process::Output> {
     Command::new("git")
@@ -40,7 +65,7 @@ fn nothing_staged(base: &Path, paths: &[String]) -> Result<bool> {
 
 /// Commit exactly `paths` (a partial commit that ignores anything else that may be
 /// staged), returning the new commit hash.
-pub fn commit_paths(base: &Path, paths: &[String], message: &str) -> Result<String> {
+fn commit_paths(base: &Path, paths: &[String], message: &str) -> Result<String> {
     let mut add = vec!["add", "--"];
     add.extend(paths.iter().map(String::as_str));
     checked(base, &add)?;
@@ -56,7 +81,7 @@ pub fn commit_paths(base: &Path, paths: &[String], message: &str) -> Result<Stri
 }
 
 /// Commit changes under a single path (e.g. the store directory). No-op if clean.
-pub fn commit_path(base: &Path, path: &str, message: &str) -> Result<()> {
+fn commit_path(base: &Path, path: &str, message: &str) -> Result<()> {
     checked(base, &["add", "--", path])?;
     if nothing_staged(base, std::slice::from_ref(&path.to_string()))? {
         return Ok(());
@@ -67,7 +92,7 @@ pub fn commit_path(base: &Path, path: &str, message: &str) -> Result<()> {
 
 /// If any file introduced by `commit` differs from its state at that commit,
 /// return a short `git diff --name-status` description; otherwise `None`.
-pub fn output_drift(base: &Path, commit: &str) -> Result<Option<String>> {
+fn output_drift(base: &Path, commit: &str) -> Result<Option<String>> {
     let changed = checked(
         base,
         &[
