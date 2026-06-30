@@ -109,6 +109,14 @@ content. A status change appends an event and never alters any node's identity.
 Each kind of change re-hashes only its own object, which is exactly what
 content-addressing should do.
 
+Status is a small, closed, **validated enum** — `open | in_progress | done |
+failed` — like `type` and `author`. Notably there is **no `blocked`**: whether a
+node is blocked is a fact about its *dependencies*, which the graph already records
+as edges, so it is *derived* (see §2.10), never stored. A stored `blocked` flag
+would only duplicate the graph and then drift — nothing would clear it when the
+blocking dependency finished — the same store-vs-derive anti-pattern avoided for the
+index (§2.3) and hashes (§2.4).
+
 ### 2.7 Edges carry a logical id *and* a pinned version
 
 An edge stores both:
@@ -176,6 +184,15 @@ reference existing content a node consumed, rather than a change it made, so no 
 commit is involved. (*Enforcement* — sandboxing an agent so it physically cannot
 read undeclared context — is a runtime/MCP concern and out of scope here; recording
 the pins is useful for invalidation regardless.)
+
+### 2.10 Readiness is derived, not stored
+
+Because dependencies are explicit edges and every node carries its status, "can
+this node be worked yet?" is a query, not a stored flag. A node is **ready** when
+every `depends_on` target is `done` and not itself stale, and **blocked** otherwise
+— with the unsatisfied dependencies as the explicit reason. The `ready` and
+`blocked` commands compute this each time, so it can never disagree with the graph.
+This is why §2.6 drops `blocked` from the status enum: it belongs here, derived.
 
 ---
 
@@ -321,11 +338,13 @@ overridden with `--store <dir>` or the `LLAUNDRY_DIR` environment variable.
 | `link <from> <to>` | Add a typed edge (a new version of `<from>`). |
 | `edit <id>` | Produce a new version of a node. |
 | `complete <id> -o <file>...` | Commit the produced files with git; store that commit on the node; mark it `done`. `-c/--context <file>` pins used context. |
-| `set-status <id> <status>` | Append a status event (alias: `status`). |
+| `set-status <id> <status>` | Append a status event; `<status>` is one of `open\|in_progress\|done\|failed` (alias: `status`). |
 | `show <id>` | Show current version, edges, inputs, context, outputs, and any staleness reasons. |
 | `list` | List every node with its current status. |
 | `log <id>` | Walk a node's version history (newest first). |
 | `stale` | Report nodes that are stale, with explicit reasons. |
+| `ready` | List unfinished nodes whose dependencies are all satisfied (done, not stale). |
+| `blocked` | List nodes blocked by an unsatisfied dependency, with reasons. |
 
 ### Examples
 
@@ -366,6 +385,11 @@ llaundry complete "$U" -o src/use.rs --context src/helper.rs
 # context) flags U directly — no need to re-version the producer:
 #   U: input src/config.rs: content changed (pinned …, now …)
 #   U: context src/helper.rs: content changed (pinned …, now …)
+
+# Readiness is derived from dependency status, not stored.
+llaundry blocked        # -> lists nodes waiting on a not-yet-done dependency
+llaundry set-status "$T1" done
+llaundry ready          # -> T2 now appears: its dependency is satisfied
 ```
 
 ### What each command does to the store
@@ -380,10 +404,11 @@ llaundry complete "$U" -o src/use.rs --context src/helper.rs
   stores both on the node, appends a `done` status event, and commits the store
   change.
 * **set-status** — appends one immutable event; touches no object and no ref.
-* **show / list / log / stale** — read-only; they rebuild what they need by
-  scanning, holding no persisted index. `stale` checks edge pins (against target
-  refs), input/context pins (file content via `git hash-object`), and outputs (via
-  `git diff` against each node's output commit).
+* **show / list / log / stale / ready / blocked** — read-only; they rebuild what
+  they need by scanning, holding no persisted index. `stale` checks edge pins
+  (against target refs), input/context pins (file content via `git hash-object`),
+  and outputs (via `git diff` against each node's output commit). `ready`/`blocked`
+  derive dependency satisfaction from edges + target statuses (§2.10).
 
 ---
 

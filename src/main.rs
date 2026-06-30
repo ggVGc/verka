@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 use ulid::Ulid;
 
-use model::{Author, Edge, Meta, NodeType, Pin, StatusEvent};
+use model::{Author, Edge, Meta, NodeType, Pin, Status, StatusEvent};
 use store::Store;
 use vcs::Vcs;
 
@@ -108,11 +108,12 @@ enum Cmd {
         author: Author,
     },
 
-    /// Append a status event (open, in_progress, done, failed, blocked, ...).
+    /// Append a status event.
     #[command(alias = "status")]
     SetStatus {
         id: String,
-        status: String,
+        #[arg(value_enum)]
+        status: Status,
         #[arg(long, value_enum, default_value = "human")]
         author: Author,
     },
@@ -128,6 +129,12 @@ enum Cmd {
 
     /// Report nodes whose edges point at outdated versions of their targets.
     Stale,
+
+    /// List unfinished nodes whose dependencies are all satisfied (done, not stale).
+    Ready,
+
+    /// List nodes blocked by an unsatisfied dependency, with reasons.
+    Blocked,
 }
 
 fn main() -> Result<()> {
@@ -180,7 +187,7 @@ fn main() -> Result<()> {
                 &logical_id,
                 &StatusEvent {
                     at: now_millis(),
-                    status: "open".into(),
+                    status: Status::Open,
                     author,
                     version: hash.clone(),
                 },
@@ -269,12 +276,12 @@ fn main() -> Result<()> {
                 &id,
                 &StatusEvent {
                     at: now_millis(),
-                    status: status.clone(),
+                    status,
                     author,
                     version,
                 },
             )?;
-            println!("{id}  -> {status}");
+            println!("{id}  -> {}", status.as_str());
         }
 
         Cmd::Show { id } => {
@@ -383,6 +390,42 @@ fn main() -> Result<()> {
                 println!("all nodes up to date");
             }
         }
+
+        Cmd::Ready => {
+            let store = Store::open(store)?;
+            let vcs = git::GitVcs::new(store.project_root());
+            for id in store.list_refs()? {
+                let hash = store.get_ref(&id)?;
+                let (meta, _) = store.get_object(&hash)?;
+                if current_status(&store, &id) == Some(Status::Done) {
+                    continue;
+                }
+                if blockers(&store, &vcs, &meta).is_empty() {
+                    println!("{:<30} {}", id, meta.title);
+                }
+            }
+        }
+
+        Cmd::Blocked => {
+            let store = Store::open(store)?;
+            let vcs = git::GitVcs::new(store.project_root());
+            let mut any = false;
+            for id in store.list_refs()? {
+                let hash = store.get_ref(&id)?;
+                let (meta, _) = store.get_object(&hash)?;
+                let blockers = blockers(&store, &vcs, &meta);
+                if !blockers.is_empty() {
+                    any = true;
+                    println!("{id}:");
+                    for b in &blockers {
+                        println!("  blocked by {b}");
+                    }
+                }
+            }
+            if !any {
+                println!("nothing blocked");
+            }
+        }
     }
     Ok(())
 }
@@ -421,7 +464,7 @@ fn complete(
         id,
         &StatusEvent {
             at: now_millis(),
-            status: "done".into(),
+            status: Status::Done,
             author,
             version: hash.clone(),
         },
@@ -470,6 +513,50 @@ fn staleness(store: &Store, vcs: &dyn Vcs, meta: &Meta) -> Vec<String> {
     }
 
     reasons
+}
+
+/// The current (latest) status of a node, or `None` if it has no status events.
+fn current_status(store: &Store, id: &str) -> Option<Status> {
+    store
+        .status_log(id)
+        .ok()
+        .and_then(|log| log.events.last().map(|e| e.status))
+}
+
+/// Reasons a node's `depends_on` dependencies are unsatisfied — empty means ready.
+///
+/// "Blocked" is computed here, not stored: a dependency is satisfied only if its
+/// target is `done` and not itself stale. Because it is derived from the graph, it
+/// can never drift out of sync the way a manual `blocked` flag would.
+fn blockers(store: &Store, vcs: &dyn Vcs, meta: &Meta) -> Vec<String> {
+    let mut out = Vec::new();
+    for e in &meta.edges {
+        if e.rel != "depends_on" {
+            continue;
+        }
+        let hash = match store.get_ref(&e.to) {
+            Ok(h) => h,
+            Err(_) => {
+                out.push(format!("{}: missing", e.to));
+                continue;
+            }
+        };
+        match current_status(store, &e.to) {
+            Some(Status::Done) => match store.get_object(&hash) {
+                Ok((target, _)) if !staleness(store, vcs, &target).is_empty() => {
+                    out.push(format!("{}: stale", e.to));
+                }
+                Ok(_) => {}
+                Err(_) => out.push(format!("{}: unreadable", e.to)),
+            },
+            other => out.push(format!(
+                "{}: not done ({})",
+                e.to,
+                other.map_or("no status", |s| s.as_str())
+            )),
+        }
+    }
+    out
 }
 
 /// Pin each path by its current content; errors if a file is missing.
@@ -634,17 +721,17 @@ mod tests {
         assert_eq!(store.get_ref("task-1").unwrap(), "abc");
         assert!(store.list_refs().unwrap().contains(&"task-1".to_string()));
 
-        let ev = |s: &str| StatusEvent {
+        let ev = |s: Status| StatusEvent {
             at: 0,
-            status: s.into(),
+            status: s,
             author: Author::Human,
             version: "abc".into(),
         };
-        store.append_status("task-1", &ev("open")).unwrap();
-        store.append_status("task-1", &ev("done")).unwrap();
+        store.append_status("task-1", &ev(Status::Open)).unwrap();
+        store.append_status("task-1", &ev(Status::Done)).unwrap();
         let log = store.status_log("task-1").unwrap();
         assert_eq!(log.events.len(), 2);
-        assert_eq!(log.events.last().unwrap().status, "done");
+        assert_eq!(log.events.last().unwrap().status, Status::Done);
     }
 
     #[test]
@@ -726,7 +813,7 @@ mod tests {
         let (meta, _) = store.get_object(&hash).unwrap();
         assert_eq!(meta.output_commit.as_deref(), Some("commit-abc"));
         assert_eq!(meta.author, Author::Machine);
-        assert_eq!(store.status_log("impl-1").unwrap().events.last().unwrap().status, "done");
+        assert_eq!(current_status(&store, "impl-1"), Some(Status::Done));
 
         // The right paths were captured, and the store change was committed once.
         assert_eq!(fake.captured.borrow().as_slice(), &[vec!["src/x.rs".to_string()]]);
@@ -810,5 +897,35 @@ mod tests {
         assert_eq!(meta.context.len(), 1);
         assert_eq!(meta.context[0].path, "src/read.rs");
         assert_eq!(meta.context[0].content, "rh");
+    }
+
+    #[test]
+    fn blockers_follow_dependency_status() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs::default();
+
+        let target = put_node(&store, "task-target", vec![], None);
+        let edge = Edge {
+            to: "task-target".into(),
+            rel: "depends_on".into(),
+            pin: target,
+        };
+        put_node(&store, "task-dep", vec![edge], None);
+        let (dep, _) = store.get_object(&store.get_ref("task-dep").unwrap()).unwrap();
+
+        // Target has no status yet -> the dependent is blocked.
+        let b = blockers(&store, &fake, &dep);
+        assert_eq!(b.len(), 1);
+        assert!(b[0].contains("not done"), "{b:?}");
+
+        // Once the target is done (and not stale), the dependent is ready.
+        let ev = StatusEvent {
+            at: 0,
+            status: Status::Done,
+            author: Author::Human,
+            version: "h".into(),
+        };
+        store.append_status("task-target", &ev).unwrap();
+        assert!(blockers(&store, &fake, &dep).is_empty());
     }
 }

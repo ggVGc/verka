@@ -68,6 +68,32 @@ impl Author {
     }
 }
 
+/// A node's own lifecycle status. The current status is the last event in the log.
+///
+/// Deliberately a small, closed set. There is no `blocked` — whether a node is
+/// blocked is *derived* from its dependencies (see `blockers`/`ready` in the CLI),
+/// not stored, so it can never drift out of sync with the graph.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "snake_case")]
+pub enum Status {
+    Open,
+    #[value(name = "in_progress")]
+    InProgress,
+    Done,
+    Failed,
+}
+
+impl Status {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Status::Open => "open",
+            Status::InProgress => "in_progress",
+            Status::Done => "done",
+            Status::Failed => "failed",
+        }
+    }
+}
+
 /// A typed, directed edge to another node.
 ///
 /// `to` is the *logical id* of the target (a stable handle that survives edits),
@@ -141,8 +167,7 @@ pub struct Meta {
 pub struct StatusEvent {
     /// Unix milliseconds when the event was recorded.
     pub at: i64,
-    /// Free-form status: `open`, `in_progress`, `done`, `failed`, `blocked`, ...
-    pub status: String,
+    pub status: Status,
     pub author: Author,
     /// The version hash this status was asserted against.
     pub version: String,
