@@ -7,7 +7,7 @@ mod model;
 mod store;
 mod vcs;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -157,6 +157,7 @@ fn main() -> Result<()> {
         } => {
             let store = Store::open(store)?;
             let vcs = git::GitVcs::new(store.project_root());
+            require_clean(&vcs)?;
             let body = read_body(body, file)?;
             let logical_id = format!("{}-{}", node_type.prefix(), Ulid::new());
 
@@ -192,6 +193,7 @@ fn main() -> Result<()> {
                     version: hash.clone(),
                 },
             )?;
+            vcs.commit_store(&store.store_name(), &format!("llaundry: add {logical_id}"))?;
             println!("{logical_id}  {}", short(&hash));
         }
 
@@ -202,6 +204,8 @@ fn main() -> Result<()> {
             author,
         } => {
             let store = Store::open(store)?;
+            let vcs = git::GitVcs::new(store.project_root());
+            require_clean(&vcs)?;
             let current = store.get_ref(&from)?;
             let (mut meta, body) = store.get_object(&current)?;
             let pin = store
@@ -216,6 +220,7 @@ fn main() -> Result<()> {
             meta.author = author;
             let hash = store.put_object(&meta, &body)?;
             store.set_ref(&from, &hash)?;
+            vcs.commit_store(&store.store_name(), &format!("llaundry: link {from} -> {to}"))?;
             println!("{from}  {}  (+{rel} -> {to})", short(&hash));
         }
 
@@ -227,6 +232,8 @@ fn main() -> Result<()> {
             author,
         } => {
             let store = Store::open(store)?;
+            let vcs = git::GitVcs::new(store.project_root());
+            require_clean(&vcs)?;
             let current = store.get_ref(&id)?;
             let (mut meta, old_body) = store.get_object(&current)?;
             if let Some(t) = title {
@@ -241,6 +248,7 @@ fn main() -> Result<()> {
             meta.author = author;
             let hash = store.put_object(&meta, &new_body)?;
             store.set_ref(&id, &hash)?;
+            vcs.commit_store(&store.store_name(), &format!("llaundry: edit {id}"))?;
             println!("{id}  {}", short(&hash));
         }
 
@@ -271,6 +279,8 @@ fn main() -> Result<()> {
             author,
         } => {
             let store = Store::open(store)?;
+            let vcs = git::GitVcs::new(store.project_root());
+            require_clean(&vcs)?;
             let version = store.get_ref(&id)?;
             store.append_status(
                 &id,
@@ -281,6 +291,7 @@ fn main() -> Result<()> {
                     version,
                 },
             )?;
+            vcs.commit_store(&store.store_name(), &format!("llaundry: status {id} {}", status.as_str()))?;
             println!("{id}  -> {}", status.as_str());
         }
 
@@ -445,6 +456,9 @@ fn complete(
     message: Option<String>,
     author: Author,
 ) -> Result<(String, String)> {
+    // The only uncommitted changes allowed are the outputs we are about to commit.
+    require_clean_except(vcs, outputs)?;
+
     let current = store.get_ref(id)?;
     let (mut meta, body) = store.get_object(&current)?;
 
@@ -513,6 +527,37 @@ fn staleness(store: &Store, vcs: &dyn Vcs, meta: &Meta) -> Vec<String> {
     }
 
     reasons
+}
+
+/// Enforce a clean working tree before a node operation, so the commit recorded
+/// for the resulting state change fully represents the repository.
+fn require_clean(vcs: &dyn Vcs) -> Result<()> {
+    let dirty = vcs.dirty_paths()?;
+    if !dirty.is_empty() {
+        bail!(
+            "working tree is not clean; commit or stash first:\n  {}",
+            dirty.join("\n  ")
+        );
+    }
+    Ok(())
+}
+
+/// Like [`require_clean`], but tolerates uncommitted changes to `allowed` paths —
+/// used by `complete`, whose job is to commit exactly the produced outputs.
+fn require_clean_except(vcs: &dyn Vcs, allowed: &[String]) -> Result<()> {
+    let allowed: std::collections::HashSet<&str> = allowed.iter().map(String::as_str).collect();
+    let stray: Vec<String> = vcs
+        .dirty_paths()?
+        .into_iter()
+        .filter(|p| !allowed.contains(p.as_str()))
+        .collect();
+    if !stray.is_empty() {
+        bail!(
+            "uncommitted changes outside the declared outputs; declare or revert them:\n  {}",
+            stray.join("\n  ")
+        );
+    }
+    Ok(())
 }
 
 /// The current (latest) status of a node, or `None` if it has no status events.
@@ -927,5 +972,31 @@ mod tests {
         };
         store.append_status("task-target", &ev).unwrap();
         assert!(blockers(&store, &fake, &dep).is_empty());
+    }
+
+    #[test]
+    fn require_clean_rejects_a_dirty_tree() {
+        let dirty = FakeVcs {
+            dirty: vec!["src/x.rs".into()],
+            ..Default::default()
+        };
+        assert!(require_clean(&dirty).is_err());
+        assert!(require_clean(&FakeVcs::default()).is_ok());
+    }
+
+    #[test]
+    fn require_clean_except_allows_only_declared_outputs() {
+        let outputs = vec!["src/out.rs".to_string()];
+        let ok = FakeVcs {
+            dirty: vec!["src/out.rs".into()],
+            ..Default::default()
+        };
+        assert!(require_clean_except(&ok, &outputs).is_ok());
+
+        let stray = FakeVcs {
+            dirty: vec!["src/out.rs".into(), "src/other.rs".into()],
+            ..Default::default()
+        };
+        assert!(require_clean_except(&stray, &outputs).is_err());
     }
 }

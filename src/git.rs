@@ -40,6 +40,15 @@ impl Vcs for GitVcs {
         }
         Ok(Some(checked(&self.base, &["hash-object", "--", path])?))
     }
+
+    fn dirty_paths(&self) -> Result<Vec<String>> {
+        let out = checked(&self.base, &["status", "--porcelain"])?;
+        Ok(out
+            .lines()
+            .filter_map(|l| l.get(3..).map(|p| p.trim().to_string()))
+            .filter(|p| !p.is_empty())
+            .collect())
+    }
 }
 
 fn git(base: &Path, args: &[&str]) -> Result<std::process::Output> {

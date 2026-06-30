@@ -23,6 +23,9 @@ pub trait Vcs {
     /// The current content hash of a file (for git, its blob id), or `None` if the
     /// file is missing. Used to pin and re-check declared inputs and used context.
     fn content_id(&self, path: &str) -> Result<Option<String>>;
+
+    /// Paths with uncommitted changes (empty means a clean working tree).
+    fn dirty_paths(&self) -> Result<Vec<String>>;
 }
 
 /// In-memory [`Vcs`] for tests. `capture` records the paths and returns `next_id`;
@@ -31,6 +34,7 @@ pub trait Vcs {
 #[derive(Default)]
 pub struct FakeVcs {
     pub next_id: String,
+    pub dirty: Vec<String>,
     pub drift_for: std::collections::HashMap<String, String>,
     pub content: std::collections::HashMap<String, String>,
     pub captured: std::cell::RefCell<Vec<Vec<String>>>,
@@ -55,5 +59,9 @@ impl Vcs for FakeVcs {
 
     fn content_id(&self, path: &str) -> Result<Option<String>> {
         Ok(self.content.get(path).cloned())
+    }
+
+    fn dirty_paths(&self) -> Result<Vec<String>> {
+        Ok(self.dirty.clone())
     }
 }

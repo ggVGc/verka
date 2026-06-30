@@ -194,6 +194,28 @@ every `depends_on` target is `done` and not itself stale, and **blocked** otherw
 `blocked` commands compute this each time, so it can never disagree with the graph.
 This is why §2.6 drops `blocked` from the status enum: it belongs here, derived.
 
+### 2.11 Each state change is its own commit, on a clean tree
+
+Every mutating operation commits its `.llaundry` change, and only against a clean
+working tree. So each state change is its own commit, the tree is clean between
+operations, and **the repository state behind any change is recoverable straight from
+git history**: `git blame status/<id>.toml` maps each event to the commit that
+recorded it, whose parent is the baseline the change was made against (for `done`,
+that baseline is the output commit, already on the node as `output_commit`).
+
+For that to hold, the tree must be clean when a change is recorded — otherwise
+uncommitted changes wouldn't be captured by the commit. So the tool **enforces a
+clean tree**: `add`, `set-status`, `link`, and `edit` refuse to run against a dirty
+tree, and `complete` permits only the declared output files to be dirty (it is about
+to commit exactly those).
+
+We deliberately do **not** store the commit on the event itself — that would
+duplicate what history already records, and a stored hash could dangle if the
+history were rewritten. Same store-vs-derive principle as the index (§2.3) and
+`blocked` (§2.10). The enforcement plus the per-change commit are what make history a
+faithful record — the "use git as the graph" stance (`ideas.wiki`). (Consequently
+all mutating commands require a git repository with at least one commit.)
+
 ---
 
 ## 3. On-disk layout
@@ -286,9 +308,10 @@ version = "9f1c..."
 ```
 
 Appended to, never edited. Appending another `[[event]]` block keeps the file
-valid TOML while adding only new lines. The current status is the last event.
-(`at` is Unix milliseconds — deliberately dependency-free; a future version may
-switch to RFC 3339.)
+valid TOML while adding only new lines. The current status is the last event. The
+event does not store which commit it happened at — that is recoverable from git
+history (§2.11), since every change is its own commit. (`at` is Unix milliseconds —
+deliberately dependency-free; a future version may switch to RFC 3339.)
 
 ### 3.4 Logical ids
 
@@ -311,15 +334,17 @@ That semantic layer is the product; everything storage-shaped is delegated to gi
 Concretely: commit the `.llaundry/` directory like any other source. Because each
 node lives in its own immutable file, history and merges are clean by construction.
 
-The `complete` command goes one step further and *drives* git: it commits the
-produced files and stores the commit hash on the node (§2.8). So `complete`
-requires a git repository (with a configured identity); the other commands do not.
+The CLI goes further and *drives* git (§2.11): every mutating command checks the
+working tree is clean (`complete` allows only its declared outputs), records the
+relevant commit, and commits its own store change. So all mutating commands require
+a git repository with at least one commit and a configured identity; the read-only
+commands do not.
 
 To keep that git dependency from leaking into tests, all git interaction goes
-through a small `Vcs` trait (`capture`, `commit_store`, `drift`, `content_id`). The
-real implementation (`GitVcs`) shells out to `git`; `complete`, `add` (for pinning
-inputs), and the staleness check take `&dyn Vcs`. Unit tests inject an in-memory
-`FakeVcs`, so the store, hashing, edge/input/context/output staleness, and the
+through a small `Vcs` trait (`capture`, `commit_store`, `drift`, `content_id`,
+`dirty_paths`). The real implementation (`GitVcs`) shells out to `git`; the
+command logic takes `&dyn Vcs`. Unit tests inject an in-memory `FakeVcs`, so the
+store, hashing, edge/input/context/output staleness, the clean-tree checks, and the
 `complete` flow are all exercised with **no git binary, no repository, and no
 configured identity** — fast, deterministic, self-standing. A separate (optional)
 integration test can exercise real `GitVcs`.
@@ -376,6 +401,7 @@ echo 'fn parse() {}' > src/config.rs
 llaundry complete "$T2" -o src/config.rs
 echo "// hand-edit" >> src/config.rs
 llaundry stale          # -> T2: output changed since <commit>: M  src/config.rs
+git checkout -- src/config.rs   # restore a clean tree before the next operation
 
 # Declared inputs and recorded context. A node that consumes config.rs declares it
 # as an input; completing also records files the agent actually read.
@@ -394,6 +420,10 @@ llaundry ready          # -> T2 now appears: its dependency is satisfied
 
 ### What each command does to the store
 
+Every mutating command below first requires a clean working tree (§2.11) and, after
+mutating the store, commits that store change — so the tree is clean between
+operations and each is its own git commit.
+
 * **add** — writes one object, creates one ref, appends an `open` status event.
   `--depends-on` / `--derived-from` add edges pinned to the targets' current
   versions; `--input` pins declared input files by their current content.
@@ -401,9 +431,9 @@ llaundry ready          # -> T2 now appears: its dependency is satisfied
   change it, write a **new** object, and move the ref. The previous version stays
   on disk forever (it is the history). `complete` additionally git-commits the
   named output files (the output commit), pins any `--context` files by content,
-  stores both on the node, appends a `done` status event, and commits the store
-  change.
-* **set-status** — appends one immutable event; touches no object and no ref.
+  stores both on the node, and appends a `done` status event. (`complete` permits
+  only the declared outputs to be dirty.)
+* **set-status** — appends one immutable event.
 * **show / list / log / stale / ready / blocked** — read-only; they rebuild what
   they need by scanning, holding no persisted index. `stale` checks edge pins
   (against target refs), input/context pins (file content via `git hash-object`),
