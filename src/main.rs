@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 use ulid::Ulid;
 
-use model::{Author, Edge, Meta, NodeType, StatusEvent};
+use model::{Author, Edge, Meta, NodeType, Pin, StatusEvent};
 use store::Store;
 use vcs::Vcs;
 
@@ -56,6 +56,10 @@ enum Cmd {
         /// Add a `derived_from` edge to another node (repeatable), by logical id.
         #[arg(long = "derived-from")]
         derived_from: Vec<String>,
+        /// Declare an input file this node is allowed to use, pinned by its current
+        /// content (repeatable). Changing it later invalidates the node.
+        #[arg(long = "input", short = 'i')]
+        input: Vec<PathBuf>,
     },
 
     /// Add a typed edge from one node to another.
@@ -92,6 +96,11 @@ enum Cmd {
         /// A produced file, relative to the project root (repeatable).
         #[arg(long = "output", short = 'o', required = true)]
         outputs: Vec<PathBuf>,
+        /// A file that was actually used while working this node but was not a
+        /// declared input — e.g. read by an agent's tool call (repeatable). Pinned
+        /// by content, so a later change to it also invalidates the node.
+        #[arg(long = "context", short = 'c')]
+        context: Vec<PathBuf>,
         /// Message for the output commit (defaults to the node's type and title).
         #[arg(long, short = 'm')]
         message: Option<String>,
@@ -137,8 +146,10 @@ fn main() -> Result<()> {
             author,
             depends_on,
             derived_from,
+            input,
         } => {
             let store = Store::open(store)?;
+            let vcs = git::GitVcs::new(store.project_root());
             let body = read_body(body, file)?;
             let logical_id = format!("{}-{}", node_type.prefix(), Ulid::new());
 
@@ -149,6 +160,7 @@ fn main() -> Result<()> {
             for src in &derived_from {
                 edges.push(make_edge(&store, src, "derived_from")?);
             }
+            let inputs = pin_files(&vcs, &to_strings(&input))?;
 
             let meta = Meta {
                 schema: 1,
@@ -159,6 +171,8 @@ fn main() -> Result<()> {
                 parent: None,
                 output_commit: None,
                 edges,
+                inputs,
+                context: Vec::new(),
             };
             let hash = store.put_object(&meta, &body)?;
             store.set_ref(&logical_id, &hash)?;
@@ -226,16 +240,21 @@ fn main() -> Result<()> {
         Cmd::Complete {
             id,
             outputs,
+            context,
             message,
             author,
         } => {
             let store = Store::open(store)?;
             let vcs = git::GitVcs::new(store.project_root());
-            let paths: Vec<String> = outputs
-                .iter()
-                .map(|p| p.to_string_lossy().into_owned())
-                .collect();
-            let (hash, commit) = complete(&store, &vcs, &id, &paths, message, author)?;
+            let (hash, commit) = complete(
+                &store,
+                &vcs,
+                &id,
+                &to_strings(&outputs),
+                &to_strings(&context),
+                message,
+                author,
+            )?;
             println!("{id}  {}  (output {})", short(&hash), short(&commit));
         }
 
@@ -279,6 +298,18 @@ fn main() -> Result<()> {
                 println!("edges:");
                 for e in &meta.edges {
                     println!("  {:<12} -> {} @ {}", e.rel, e.to, short(&e.pin));
+                }
+            }
+            if !meta.inputs.is_empty() {
+                println!("inputs:");
+                for p in &meta.inputs {
+                    println!("  {} @ {}", p.path, short(&p.content));
+                }
+            }
+            if !meta.context.is_empty() {
+                println!("context:");
+                for p in &meta.context {
+                    println!("  {} @ {}", p.path, short(&p.content));
                 }
             }
             if let Some(commit) = &meta.output_commit {
@@ -366,18 +397,22 @@ fn complete(
     store: &Store,
     vcs: &dyn Vcs,
     id: &str,
-    paths: &[String],
+    outputs: &[String],
+    context: &[String],
     message: Option<String>,
     author: Author,
 ) -> Result<(String, String)> {
     let current = store.get_ref(id)?;
     let (mut meta, body) = store.get_object(&current)?;
 
+    // Pin the context actually used (before committing outputs).
+    let context = pin_files(vcs, context)?;
     let message =
         message.unwrap_or_else(|| format!("{}: {}", meta.node_type.as_str(), meta.title));
-    let commit = vcs.capture(paths, &message)?;
+    let commit = vcs.capture(outputs, &message)?;
 
     meta.output_commit = Some(commit.clone());
+    meta.context = context;
     meta.parent = Some(current);
     meta.author = author;
     let hash = store.put_object(&meta, &body)?;
@@ -398,9 +433,10 @@ fn complete(
 
 /// Collect explicit reasons a node version is stale, if any.
 ///
-/// Two independent sources of staleness:
-///   * an edge whose target has moved past the pinned version (or vanished), and
-///   * an output that has changed since the node's output capture (via `vcs`).
+/// Independent sources of staleness:
+///   * an edge whose target node has moved past the pinned version (or vanished),
+///   * a declared input or recorded context file whose content has drifted, and
+///   * an output that has changed since the node's output capture.
 fn staleness(store: &Store, vcs: &dyn Vcs, meta: &Meta) -> Vec<String> {
     let mut reasons = Vec::new();
 
@@ -418,6 +454,9 @@ fn staleness(store: &Store, vcs: &dyn Vcs, meta: &Meta) -> Vec<String> {
         }
     }
 
+    pin_drift(vcs, "input", &meta.inputs, &mut reasons);
+    pin_drift(vcs, "context", &meta.context, &mut reasons);
+
     if let Some(commit) = &meta.output_commit {
         match vcs.drift(commit) {
             Ok(Some(drift)) => reasons.push(format!(
@@ -431,6 +470,51 @@ fn staleness(store: &Store, vcs: &dyn Vcs, meta: &Meta) -> Vec<String> {
     }
 
     reasons
+}
+
+/// Pin each path by its current content; errors if a file is missing.
+fn pin_files(vcs: &dyn Vcs, paths: &[String]) -> Result<Vec<Pin>> {
+    paths
+        .iter()
+        .map(|path| {
+            let content = vcs
+                .content_id(path)?
+                .with_context(|| format!("cannot pin `{path}`: file not found"))?;
+            Ok(Pin {
+                path: path.clone(),
+                content,
+            })
+        })
+        .collect()
+}
+
+/// Append a reason for every pinned file whose content has drifted or vanished.
+fn pin_drift(vcs: &dyn Vcs, kind: &str, pins: &[Pin], reasons: &mut Vec<String>) {
+    for pin in pins {
+        match vcs.content_id(&pin.path) {
+            Ok(Some(now)) if now != pin.content => reasons.push(format!(
+                "{kind} {}: content changed (pinned {}, now {})",
+                pin.path,
+                short(&pin.content),
+                short(&now)
+            )),
+            Ok(Some(_)) => {}
+            Ok(None) => reasons.push(format!(
+                "{kind} {}: missing (pinned {})",
+                pin.path,
+                short(&pin.content)
+            )),
+            Err(e) => reasons.push(format!("{kind} {} check failed: {e}", pin.path)),
+        }
+    }
+}
+
+/// Convert CLI path arguments to project-root-relative strings.
+fn to_strings(paths: &[PathBuf]) -> Vec<String> {
+    paths
+        .iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect()
 }
 
 /// Resolve a target's current version hash and build an edge pinned to it.
@@ -494,18 +578,27 @@ mod tests {
 
     /// Write a node version with a given logical id; returns its hash.
     fn put_node(store: &Store, id: &str, edges: Vec<Edge>, output_commit: Option<String>) -> String {
-        let meta = Meta {
-            schema: 1,
-            logical_id: id.to_string(),
-            node_type: NodeType::Task,
-            title: "title".into(),
-            author: Author::Human,
-            parent: None,
-            output_commit,
-            edges,
-        };
+        put_meta(
+            store,
+            Meta {
+                schema: 1,
+                logical_id: id.to_string(),
+                node_type: NodeType::Task,
+                title: "title".into(),
+                author: Author::Human,
+                parent: None,
+                output_commit,
+                edges,
+                inputs: vec![],
+                context: vec![],
+            },
+        )
+    }
+
+    fn put_meta(store: &Store, meta: Meta) -> String {
+        let id = meta.logical_id.clone();
         let hash = store.put_object(&meta, "body").unwrap();
-        store.set_ref(id, &hash).unwrap();
+        store.set_ref(&id, &hash).unwrap();
         hash
     }
 
@@ -521,6 +614,8 @@ mod tests {
             parent: None,
             output_commit: None,
             edges: vec![],
+            inputs: vec![],
+            context: vec![],
         };
         let h1 = store.put_object(&meta, "body").unwrap();
         let h2 = store.put_object(&meta, "body").unwrap();
@@ -614,8 +709,16 @@ mod tests {
             ..Default::default()
         };
 
-        let (hash, commit) =
-            complete(&store, &fake, "impl-1", &["src/x.rs".into()], None, Author::Machine).unwrap();
+        let (hash, commit) = complete(
+            &store,
+            &fake,
+            "impl-1",
+            &["src/x.rs".into()],
+            &[],
+            None,
+            Author::Machine,
+        )
+        .unwrap();
 
         assert_eq!(commit, "commit-abc");
         assert_eq!(store.get_ref("impl-1").unwrap(), hash, "ref advanced to new version");
@@ -632,5 +735,80 @@ mod tests {
         // And the completed node now reports as stale once its output drifts.
         fake.drift_for.insert("commit-abc".into(), "M\tsrc/x.rs".into());
         assert!(!staleness(&store, &fake, &meta).is_empty());
+    }
+
+    #[test]
+    fn input_and_context_staleness() {
+        let (_t, store) = temp_store();
+        let meta = Meta {
+            schema: 1,
+            logical_id: "task-1".into(),
+            node_type: NodeType::Task,
+            title: "t".into(),
+            author: Author::Human,
+            parent: None,
+            output_commit: None,
+            edges: vec![],
+            inputs: vec![Pin {
+                path: "src/a.rs".into(),
+                content: "h1".into(),
+            }],
+            context: vec![Pin {
+                path: "src/b.rs".into(),
+                content: "h2".into(),
+            }],
+        };
+        put_meta(&store, meta.clone());
+
+        // Both pins match current content -> clean.
+        let mut fake = FakeVcs::default();
+        fake.content.insert("src/a.rs".into(), "h1".into());
+        fake.content.insert("src/b.rs".into(), "h2".into());
+        assert!(staleness(&store, &fake, &meta).is_empty());
+
+        // A declared input changes -> stale, labelled "input".
+        fake.content.insert("src/a.rs".into(), "h1-new".into());
+        let r = staleness(&store, &fake, &meta);
+        assert!(
+            r.iter()
+                .any(|s| s.contains("input src/a.rs") && s.contains("content changed")),
+            "{r:?}"
+        );
+
+        // Recorded context goes missing -> stale, labelled "context".
+        fake.content.remove("src/b.rs");
+        let r = staleness(&store, &fake, &meta);
+        assert!(
+            r.iter()
+                .any(|s| s.contains("context src/b.rs") && s.contains("missing")),
+            "{r:?}"
+        );
+    }
+
+    #[test]
+    fn complete_pins_recorded_context() {
+        let (_t, store) = temp_store();
+        put_node(&store, "impl-1", vec![], None);
+        let mut fake = FakeVcs {
+            next_id: "commit-1".into(),
+            ..Default::default()
+        };
+        fake.content.insert("src/read.rs".into(), "rh".into());
+
+        let (hash, _) = complete(
+            &store,
+            &fake,
+            "impl-1",
+            &["src/out.rs".into()],
+            &["src/read.rs".into()],
+            None,
+            Author::Machine,
+        )
+        .unwrap();
+
+        let (meta, _) = store.get_object(&hash).unwrap();
+        assert_eq!(meta.context.len(), 1);
+        assert_eq!(meta.context[0].path, "src/read.rs");
+        assert_eq!(meta.context[0].content, "rh");
     }
 }

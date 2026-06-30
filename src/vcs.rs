@@ -19,6 +19,10 @@ pub trait Vcs {
     /// If the outputs captured under `id` have changed since, return a short,
     /// human-readable reason (for git, a `diff --name-status`); else `None`.
     fn drift(&self, id: &str) -> Result<Option<String>>;
+
+    /// The current content hash of a file (for git, its blob id), or `None` if the
+    /// file is missing. Used to pin and re-check declared inputs and used context.
+    fn content_id(&self, path: &str) -> Result<Option<String>>;
 }
 
 /// In-memory [`Vcs`] for tests. `capture` records the paths and returns `next_id`;
@@ -28,6 +32,7 @@ pub trait Vcs {
 pub struct FakeVcs {
     pub next_id: String,
     pub drift_for: std::collections::HashMap<String, String>,
+    pub content: std::collections::HashMap<String, String>,
     pub captured: std::cell::RefCell<Vec<Vec<String>>>,
     pub store_commits: std::cell::RefCell<usize>,
 }
@@ -46,5 +51,9 @@ impl Vcs for FakeVcs {
 
     fn drift(&self, id: &str) -> Result<Option<String>> {
         Ok(self.drift_for.get(id).cloned())
+    }
+
+    fn content_id(&self, path: &str) -> Result<Option<String>> {
+        Ok(self.content.get(path).cloned())
     }
 }

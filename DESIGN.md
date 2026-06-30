@@ -148,6 +148,35 @@ content integrity and diffs; llaundry only records *which commit* is the output 
 *which node* it belongs to — the semantics git cannot express. The trade-off is
 that `complete` now requires a git repository (see §4).
 
+### 2.9 Inputs and used context are pinned by content too
+
+An agent works a node using only what is *declared* on it: the connected nodes
+(edges) and a set of **declared input files**. Because that context is declared up
+front and treated as a closed sandbox — not discovered after the fact — it is fully
+knowable and can be pinned by content hash, exactly like outputs. So:
+
+* **Declared inputs** (`inputs`) are pinned at `add` time. If a declared input
+  later changes, the node is stale — and, crucially, the *consumer* is flagged
+  directly (it pinned the actual content), without waiting for the producing node
+  to be re-versioned. This closes the gap where a raw file edit only flagged the
+  producer (§2.8) and not its dependents.
+* **Recorded context** (`context`) covers what was *actually* used during the work
+  but wasn't pre-declared — e.g. files a coding agent's tool calls read. It is
+  pinned at `complete` time. It is provenance plus a staleness source: if that
+  context later changes, the node is flagged too.
+
+The principle behind "only what is declared": if an agent needs more than its
+declared context, that is not a licence to read arbitrary files — it is a signal to
+create a **new node** (e.g. a description "search the web for X") that *produces an
+output*, which is then wired in as an input to the downstream work. The graph stays
+closed, and every input remains a tracked, content-addressed thing.
+
+Inputs and context pin git **blob ids** (`git hash-object`), not commits: they
+reference existing content a node consumed, rather than a change it made, so no new
+commit is involved. (*Enforcement* — sandboxing an agent so it physically cannot
+read undeclared context — is a runtime/MCP concern and out of scope here; recording
+the pins is useful for invalidation regardless.)
+
 ---
 
 ## 3. On-disk layout
@@ -194,10 +223,18 @@ pin = "4a7e..."
 to = "task-01J8XQ4P..."
 rel = "depends_on"
 pin = "1b2c..."
+
+[[inputs]]                  # declared input files, pinned by content (git blob id)
+path = "src/config.rs"
+content = "ebb1..."
+
+[[context]]                 # context actually used during work (e.g. a tool-call read)
+path = "src/helper.rs"
+content = "f44d..."
 ```
 
 `body.md` is free-form Markdown. Scalar keys (including `output_commit`) precede
-the `[[edges]]` array-of-tables, as TOML requires.
+the `[[edges]]`/`[[inputs]]`/`[[context]]` arrays-of-tables, as TOML requires.
 
 **Hash.** `hash = sha256(meta.toml bytes || 0x00 || body.md bytes)`, hex-encoded.
 It is computed over the exact bytes written, and is never stored inside the record.
@@ -205,8 +242,9 @@ A given (meta, body) pair therefore always lands at the same path — writes are
 idempotent, and identical content is deduplicated automatically.
 
 **Identity includes everything definitional**: `logical_id`, `type`, `title`,
-`parent`, `output_commit`, `edges`, and the body. Change any of them and you get a
-new hash, i.e. a new version. `parent` links versions into a history chain.
+`parent`, `output_commit`, `edges`, `inputs`, `context`, and the body. Change any of
+them and you get a new hash, i.e. a new version. `parent` links versions into a
+history chain.
 
 ### 3.2 Ref: `refs/<logical-id>`
 
@@ -261,12 +299,13 @@ produced files and stores the commit hash on the node (§2.8). So `complete`
 requires a git repository (with a configured identity); the other commands do not.
 
 To keep that git dependency from leaking into tests, all git interaction goes
-through a small `Vcs` trait (`capture`, `commit_store`, `drift`). The real
-implementation (`GitVcs`) shells out to `git`; `complete` and the staleness check
-take `&dyn Vcs`. Unit tests inject an in-memory `FakeVcs`, so the store, hashing,
-edge staleness, output staleness, and the `complete` flow are all exercised with
-**no git binary, no repository, and no configured identity** — fast, deterministic,
-self-standing. A separate (optional) integration test can exercise real `GitVcs`.
+through a small `Vcs` trait (`capture`, `commit_store`, `drift`, `content_id`). The
+real implementation (`GitVcs`) shells out to `git`; `complete`, `add` (for pinning
+inputs), and the staleness check take `&dyn Vcs`. Unit tests inject an in-memory
+`FakeVcs`, so the store, hashing, edge/input/context/output staleness, and the
+`complete` flow are all exercised with **no git binary, no repository, and no
+configured identity** — fast, deterministic, self-standing. A separate (optional)
+integration test can exercise real `GitVcs`.
 
 ---
 
@@ -278,12 +317,12 @@ overridden with `--store <dir>` or the `LLAUNDRY_DIR` environment variable.
 | Command | Purpose |
 |---|---|
 | `init` | Create an empty store. |
-| `add` | Create a new node; prints its logical id. |
+| `add` | Create a new node; prints its logical id. `-i/--input <file>` declares a pinned input. |
 | `link <from> <to>` | Add a typed edge (a new version of `<from>`). |
 | `edit <id>` | Produce a new version of a node. |
-| `complete <id> -o <file>...` | Commit the produced files with git; store that commit on the node; mark it `done`. |
+| `complete <id> -o <file>...` | Commit the produced files with git; store that commit on the node; mark it `done`. `-c/--context <file>` pins used context. |
 | `set-status <id> <status>` | Append a status event (alias: `status`). |
-| `show <id>` | Show current version, edges, outputs, and any staleness reasons. |
+| `show <id>` | Show current version, edges, inputs, context, outputs, and any staleness reasons. |
 | `list` | List every node with its current status. |
 | `log <id>` | Walk a node's version history (newest first). |
 | `stale` | Report nodes that are stale, with explicit reasons. |
@@ -318,37 +357,50 @@ echo 'fn parse() {}' > src/config.rs
 llaundry complete "$T2" -o src/config.rs
 echo "// hand-edit" >> src/config.rs
 llaundry stale          # -> T2: output changed since <commit>: M  src/config.rs
+
+# Declared inputs and recorded context. A node that consumes config.rs declares it
+# as an input; completing also records files the agent actually read.
+U=$(llaundry add --type task --title "use config" --input src/config.rs | awk '{print $1}')
+llaundry complete "$U" -o src/use.rs --context src/helper.rs
+# Later, editing src/config.rs (a declared input) or src/helper.rs (recorded
+# context) flags U directly — no need to re-version the producer:
+#   U: input src/config.rs: content changed (pinned …, now …)
+#   U: context src/helper.rs: content changed (pinned …, now …)
 ```
 
 ### What each command does to the store
 
 * **add** — writes one object, creates one ref, appends an `open` status event.
   `--depends-on` / `--derived-from` add edges pinned to the targets' current
-  versions.
+  versions; `--input` pins declared input files by their current content.
 * **link / edit / complete** — these are *edits*: they read the current version,
   change it, write a **new** object, and move the ref. The previous version stays
   on disk forever (it is the history). `complete` additionally git-commits the
-  named files (the output commit), stores that commit on the node, appends a
-  `done` status event, and commits the store change.
+  named output files (the output commit), pins any `--context` files by content,
+  stores both on the node, appends a `done` status event, and commits the store
+  change.
 * **set-status** — appends one immutable event; touches no object and no ref.
 * **show / list / log / stale** — read-only; they rebuild what they need by
-  scanning, holding no persisted index. `stale` checks both edge pins (against
-  target refs) and outputs (via `git diff` against each node's output commit).
+  scanning, holding no persisted index. `stale` checks edge pins (against target
+  refs), input/context pins (file content via `git hash-object`), and outputs (via
+  `git diff` against each node's output commit).
 
 ---
 
 ## 6. Deliberately out of scope (for now)
 
-* **MCP / server / context enforcement.** This is just the database and a CLI.
+* **MCP / server.** This is just the database and a CLI.
+* **Context *enforcement*.** Inputs and used context are *recorded* and pinned
+  (§2.9), but nothing yet *prevents* an agent from reading undeclared files — that
+  sandboxing is a runtime/MCP concern.
 * **Reverse-edge queries** ("what depends on X") beyond the `stale` scan, and any
   persisted index — would be an in-memory cache in a long-running process.
 * **Executing builds and verifications.** Nodes can be *typed* `build` /
   `verification`, but running them is not implemented.
-* **Pinning consumed *inputs*.** Outputs are pinned to a commit (§2.8); the
-  symmetric idea — recording which commit the context files a node *read* were at
-  — is not yet implemented, but would work the same way.
-* **Transitive staleness.** Only a node's own edges and outputs are checked; a
-  dependent is not auto-flagged because something upstream of *its* target moved.
+* **Transitive staleness.** Each node's own edges, inputs, context, and outputs are
+  checked; a dependent is not auto-flagged because something upstream of *its*
+  target moved. (Content-pinned inputs reduce the need: a consumer that pins an
+  input is flagged directly when that content changes — see §2.9.)
 * **Output commit policy.** `complete` makes a partial commit of exactly the named
   files plus a separate commit for the store. It does not squash, sign, or let you
   reuse an existing commit; those are easy future options.

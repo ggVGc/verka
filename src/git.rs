@@ -32,6 +32,14 @@ impl Vcs for GitVcs {
     fn drift(&self, id: &str) -> Result<Option<String>> {
         output_drift(&self.base, id)
     }
+    fn content_id(&self, path: &str) -> Result<Option<String>> {
+        // `git hash-object` gives git's blob id for the working-tree file, with no
+        // commit required and regardless of whether the file is tracked.
+        if !self.base.join(path).exists() {
+            return Ok(None);
+        }
+        Ok(Some(checked(&self.base, &["hash-object", "--", path])?))
+    }
 }
 
 fn git(base: &Path, args: &[&str]) -> Result<std::process::Output> {
