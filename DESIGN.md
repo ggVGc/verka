@@ -25,8 +25,9 @@ for LLM development".
 * **Verifiable dependencies.** A node records which exact versions of other nodes
   it was built against, so we can detect when an upstream change has invalidated
   downstream work.
-* **Minimal.** The first cut is just the database plus a tiny CLI. No MCP, no
-  server, no build/verification execution.
+* **Minimal.** The core is just the database and its operations, exposed as a
+  library. Frontends stay thin: a CLI, a TUI, and an MCP server all wrap the same
+  `llaundry::ops`. No build/verification execution.
 
 ---
 
@@ -372,9 +373,20 @@ integration test can exercise real `GitVcs`.
 
 ---
 
-## 5. The CLI
+## 5. The frontends
 
-A single binary, `llaundry`. The store path defaults to `.llaundry/` and can be
+All functionality lives in the `llaundry` **library** (`llaundry::ops` over
+`llaundry::store`, with git behind the `Vcs` seam). Every executable is a thin shell
+over it, so they share one implementation of the model, staleness, and clean-tree
+discipline:
+
+* `llaundry` — the CLI (below).
+* `llaundry-tui` — an interactive terminal UI.
+* `llaundry-mcp` — a Model Context Protocol server (§5.2).
+
+### 5.1 The CLI
+
+The `llaundry` binary. The store path defaults to `.llaundry/` and can be
 overridden with `--store <dir>` or the `LLAUNDRY_DIR` environment variable.
 
 | Command | Purpose |
@@ -477,14 +489,42 @@ operations and each is its own git commit.
   forward onto new versions, `origin` returns the *completing* version (the oldest
   bearing that commit), which is unique per `complete`.
 
+### 5.2 The MCP server
+
+The `llaundry-mcp` binary exposes the same operations to an LLM agent over the
+[Model Context Protocol](https://modelcontextprotocol.io). It speaks JSON-RPC 2.0
+over MCP's stdio transport — one JSON message per line, replies on stdout, logs on
+stderr — and, like the rest of the project, is synchronous and dependency-light: the
+loop reads a line, dispatches to `llaundry::ops`, writes a line. It implements
+`initialize`, `tools/list`, and `tools/call` (plus `ping`); notifications such as
+`notifications/initialized` get no reply.
+
+Each tool is a thin wrapper over one library call, so an agent gets the same surface
+as the CLI. The store path comes from `--store`/`LLAUNDRY_DIR`, and every call opens
+the store fresh — so `initialize`/`tools/list` work before a store exists and an
+agent can create one with `init_store`.
+
+| Tool | Wraps |
+|---|---|
+| `init_store` | `Store::init` |
+| `add_node`, `link_nodes`, `edit_node`, `complete_node`, `set_status` | the mutating `ops::*` |
+| `show_node`, `list_nodes`, `node_history` | read-only reads |
+| `stale_nodes`, `ready_nodes`, `blocked_nodes` | the derived queries |
+| `node_origin`, `node_outputs` | provenance (§2.8) |
+
+The mutating tools inherit the clean-tree rule (§2.11): they require a git
+repository and commit their own store change, and surface any refusal as an MCP
+tool error (`isError: true`) rather than a protocol failure. Sandboxing an agent to
+its declared inputs (§2.9) remains a runtime concern the server does not yet
+enforce.
+
 ---
 
 ## 6. Deliberately out of scope (for now)
 
-* **MCP / server.** This is just the database and a CLI.
 * **Context *enforcement*.** Inputs and used context are *recorded* and pinned
   (§2.9), but nothing yet *prevents* an agent from reading undeclared files — that
-  sandboxing is a runtime/MCP concern.
+  sandboxing is a runtime concern the MCP server (§5.2) does not yet impose.
 * **Reverse-edge queries** ("what depends on X") beyond the `stale` scan, and any
   persisted index — would be an in-memory cache in a long-running process.
 * **Executing builds and verifications.** Nodes can be *typed* `build` /
