@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2021"
 description = "A content-addressed, immutable graph database for LLM-assisted development"
 
+[lib]
+name = "llaundry"
+path = "src/lib.rs"
+
 [[bin]]
 name = "llaundry"
 path = "src/main.rs"
