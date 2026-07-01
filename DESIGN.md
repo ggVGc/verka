@@ -391,6 +391,8 @@ overridden with `--store <dir>` or the `LLAUNDRY_DIR` environment variable.
 | `stale` | Report nodes that are stale, with explicit reasons. |
 | `ready` | List unfinished nodes whose dependencies are all satisfied (done, not stale). |
 | `blocked` | List nodes blocked by an unsatisfied dependency, with reasons. |
+| `outputs <id>` | Print the output commit a node produced, if any. |
+| `origin <commit>` | Find which node produced a given output commit (the inverse of `outputs`). |
 
 ### Examples
 
@@ -437,6 +439,12 @@ llaundry complete "$U" -o src/use.rs --context src/helper.rs
 llaundry blocked        # -> lists nodes waiting on a not-yet-done dependency
 llaundry set-status "$T1" done
 llaundry ready          # -> T2 now appears: its dependency is satisfied
+
+# Provenance, both directions. `outputs` reads the commit off the node; `origin`
+# inverts it by scanning. (The output commit is the one `complete` made — it is the
+# parent of the store commit, not HEAD; `outputs` gives you the right hash to trace.)
+C=$(llaundry outputs "$T2")
+llaundry origin "$C"    # -> T2, and the version that produced it
 ```
 
 ### What each command does to the store
@@ -455,13 +463,19 @@ operations and each is its own git commit.
   stores both on the node, and appends a `done` status event. (`complete` permits
   only the declared outputs to be dirty.)
 * **set-status** — appends one immutable event.
-* **show / list / log / stale / ready / blocked** — read-only; they rebuild what
-  they need by scanning, holding no persisted index. `stale` checks edge pins
-  (against target refs), input/context pins (file content via `git hash-object`),
-  outputs (via `git diff` against each node's output commit), and whether a `done`
-  status still matches the node's current version (§2.12). `ready`/`blocked` derive
-  dependency satisfaction from edges + target statuses (§2.10), counting a
-  dependency as done only if its completion covers its current version.
+* **show / list / log / stale / ready / blocked / outputs / origin** — read-only;
+  they rebuild what they need by scanning, holding no persisted index. `stale`
+  checks edge pins (against target refs), input/context pins (file content via
+  `git hash-object`), outputs (via `git diff` against each node's output commit),
+  and whether a `done` status still matches the node's current version (§2.12).
+  `ready`/`blocked` derive dependency satisfaction from edges + target statuses
+  (§2.10), counting a dependency as done only if its completion covers its current
+  version. `outputs` reads the node's stored output commit; `origin` is its inverse,
+  derived by scanning every node's version history for the matching `output_commit`
+  rather than persisting a second commit→node index — the same store-vs-derive
+  choice as the missing index (§2.3). Because `edit` carries the output commit
+  forward onto new versions, `origin` returns the *completing* version (the oldest
+  bearing that commit), which is unique per `complete`.
 
 ---
 

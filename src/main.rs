@@ -129,6 +129,15 @@ enum Cmd {
 
     /// List nodes blocked by an unsatisfied dependency, with reasons.
     Blocked,
+
+    /// Find which node produced a given output commit.
+    Origin {
+        /// The output commit hash to trace back to its node.
+        commit: String,
+    },
+
+    /// Show the output commit a node produced, if any.
+    Outputs { id: String },
 }
 
 fn main() -> Result<()> {
@@ -361,6 +370,24 @@ fn main() -> Result<()> {
             }
             if !any {
                 println!("nothing blocked");
+            }
+        }
+
+        Cmd::Origin { commit } => {
+            let store = Store::open(store)?;
+            match ops::producer(&store, &commit)? {
+                Some((id, version)) => println!("{id}  {}", ops::short(&version)),
+                None => println!("no node produced {}", ops::short(&commit)),
+            }
+        }
+
+        Cmd::Outputs { id } => {
+            let store = Store::open(store)?;
+            let hash = store.get_ref(&id)?;
+            let (meta, _) = store.get_object(&hash)?;
+            match meta.output_commit {
+                Some(commit) => println!("{commit}"),
+                None => println!("{id} has produced no output"),
             }
         }
     }

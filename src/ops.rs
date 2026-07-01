@@ -297,6 +297,39 @@ pub fn is_ready(store: &Store, vcs: &dyn Vcs, meta: &Meta) -> bool {
         && blockers(store, vcs, meta).is_empty()
 }
 
+/// The node version whose completion produced `commit`, if any. Returns
+/// `(logical_id, version hash)`.
+///
+/// This is the inverse of the `output_commit` we already store — derived by
+/// scanning rather than persisted as a second index. It walks each node's `parent`
+/// chain, not just current versions, so a commit from a node that was later edited
+/// or re-completed is still found.
+///
+/// A later [`edit`] carries `output_commit` forward, so several versions in a chain
+/// can bear the same commit; the *completing* version is the oldest of them (its
+/// parent didn't have it). We keep walking and return that deepest match, which is
+/// unique — each `complete` mints one commit onto one new version.
+pub fn producer(store: &Store, commit: &str) -> Result<Option<(String, String)>> {
+    for id in store.list_refs()? {
+        let mut hash = store.get_ref(&id)?;
+        let mut origin = None;
+        loop {
+            let (meta, _) = store.get_object(&hash)?;
+            if meta.output_commit.as_deref() == Some(commit) {
+                origin = Some(hash.clone());
+            }
+            match meta.parent {
+                Some(parent) => hash = parent,
+                None => break,
+            }
+        }
+        if let Some(version) = origin {
+            return Ok(Some((id, version)));
+        }
+    }
+    Ok(None)
+}
+
 /// The current (latest) status of a node, or `None` if it has no status events.
 pub fn current_status(store: &Store, id: &str) -> Option<Status> {
     store
@@ -590,6 +623,59 @@ mod tests {
         // And the completed node now reports as stale once its output drifts.
         fake.drift_for.insert("commit-abc".into(), "M\tsrc/x.rs".into());
         assert!(!staleness(&store, &fake, &meta).is_empty());
+    }
+
+    #[test]
+    fn producer_maps_a_commit_back_to_its_node_version() {
+        let (_t, store) = temp_store();
+        put_node(&store, "impl-1", vec![], None);
+        put_node(&store, "impl-2", vec![], None);
+        let fake = FakeVcs {
+            next_id: "commit-xyz".into(),
+            ..Default::default()
+        };
+
+        let (version, commit) =
+            complete(&store, &fake, "impl-1", &["src/x.rs".into()], &[], None, Author::Machine)
+                .unwrap();
+
+        // The produced commit resolves to the exact node version that made it.
+        let found = producer(&store, &commit).unwrap();
+        assert_eq!(found, Some(("impl-1".to_string(), version)));
+
+        // An unknown commit resolves to nothing.
+        assert_eq!(producer(&store, "no-such-commit").unwrap(), None);
+    }
+
+    #[test]
+    fn producer_finds_a_commit_from_an_older_version() {
+        let (_t, store) = temp_store();
+        put_node(&store, "impl-1", vec![], None);
+        let fake = FakeVcs {
+            next_id: "commit-old".into(),
+            ..Default::default()
+        };
+
+        // Complete, then edit — the output commit now lives on an ancestor version.
+        let (completed, commit) =
+            complete(&store, &fake, "impl-1", &["src/x.rs".into()], &[], None, Author::Machine)
+                .unwrap();
+        let edited = edit(
+            &store,
+            &fake,
+            "impl-1",
+            Some("revised".into()),
+            None,
+            Author::Human,
+        )
+        .unwrap();
+        assert_ne!(completed, edited);
+
+        // Walking the parent chain still finds the completing version.
+        assert_eq!(
+            producer(&store, &commit).unwrap(),
+            Some(("impl-1".to_string(), completed))
+        );
     }
 
     #[test]
