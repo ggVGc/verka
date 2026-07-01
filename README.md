@@ -27,7 +27,7 @@ Hierarchical LLM coding
 - The user accepts the planned work.
 - The agent uses the llaundry MCP to store the initial request and creates a task node for each planned task, connected to the initial request node:
   - If the tasks are dependent on each-other, that should be indicated by connections, otherwise they are assumed to be parallelisable.
-- The planning agent finished, and a new implementor agent is launched. It is handed the ID of the description node, and proceeds to work on each associated task:
+- The planning agent finished, and a new implementor agent is launched. It is handed the ID of the initial request node, and proceeds to work on each associated task:
   - Implementation consists of producing code in Go
   - When implementation is finished, metadata about which files were produced is added to the implementation node and it is marked completed.
   - A verification node is created, pointing to the implementation node. The implementation agent is closed and a verification agent is launched. The verification agent uses the llaundry MCP to run verification on the generated sources:

@@ -12,9 +12,14 @@ path = "src/lib.rs"
 name = "llaundry"
 path = "src/main.rs"
 
+[[bin]]
+name = "llaundry-tui"
+path = "src/bin/tui.rs"
+
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive", "env"] }
+crossterm = "0.28"
 serde = { version = "1", features = ["derive"] }
 sha2 = "0.10"
 toml = "0.8"

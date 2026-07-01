@@ -14,11 +14,10 @@
 use serde::{Deserialize, Serialize};
 
 /// What kind of node this is. Mirrors the llaundry node taxonomy
-/// (description -> task -> implementation -> build/verification).
+/// (task -> implementation -> build/verification).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "snake_case")]
 pub enum NodeType {
-    Description,
     Task,
     Implementation,
     Build,
@@ -30,7 +29,6 @@ impl NodeType {
     /// Short, human-scannable prefix used in logical ids, e.g. `task-01J8...`.
     pub fn prefix(self) -> &'static str {
         match self {
-            NodeType::Description => "desc",
             NodeType::Task => "task",
             NodeType::Implementation => "impl",
             NodeType::Build => "build",
@@ -41,7 +39,6 @@ impl NodeType {
 
     pub fn as_str(self) -> &'static str {
         match self {
-            NodeType::Description => "description",
             NodeType::Task => "task",
             NodeType::Implementation => "implementation",
             NodeType::Build => "build",

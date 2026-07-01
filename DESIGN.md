@@ -5,8 +5,8 @@ behind it, and the small CLI tool that operates on it. It is a record of the
 design discussion as much as a specification.
 
 llaundry's premise (see `README.md` / `ideas.wiki`): **the prompt history is the
-story, not the output code.** Work is driven by a graph of nodes — descriptions,
-tasks, implementations, builds, verifications — each carrying the prompt and
+story, not the output code.** Work is driven by a graph of nodes — tasks,
+implementations, builds, verifications — each carrying the prompt and
 context that produced it. The output can in principle be regenerated from that
 graph. To make that credible the store has to be *verifiable* (content-addressed)
 and *auditable* (immutable history, clear human/machine authorship). This is "git
@@ -175,7 +175,7 @@ knowable and can be pinned by content hash, exactly like outputs. So:
 
 The principle behind "only what is declared": if an agent needs more than its
 declared context, that is not a licence to read arbitrary files — it is a signal to
-create a **new node** (e.g. a description "search the web for X") that *produces an
+create a **new node** (e.g. a task "search the web for X") that *produces an
 output*, which is then wired in as an input to the downstream work. The graph stays
 closed, and every input remains a tracked, content-addressed thing.
 
@@ -273,7 +273,7 @@ parent = "9f1c..."          # previous version hash; omitted on the first versio
 output_commit = "86cb1a1..." # git commit capturing this version's outputs; omitted until completed
 
 [[edges]]
-to = "desc-01J8XQ2A..."
+to = "task-01J8XQ2A..."
 rel = "derived_from"
 pin = "4a7e..."
 
@@ -398,7 +398,7 @@ overridden with `--store <dir>` or the `LLAUNDRY_DIR` environment variable.
 llaundry init
 
 # A feature request, then two tasks derived from it, one depending on the other.
-REQ=$(llaundry add --type description --title "Add config loading" \
+REQ=$(llaundry add --type task --title "Add config loading" \
         --body "User wants TOML config support." | awk '{print $1}')
 
 T1=$(llaundry add --type task --title "Define config schema" \
