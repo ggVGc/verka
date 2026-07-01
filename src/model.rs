@@ -169,7 +169,9 @@ pub struct StatusEvent {
     pub at: i64,
     pub status: Status,
     pub author: Author,
-    /// The version hash this status was asserted against.
+    /// The node-version hash this status was asserted against. A `done` certifies
+    /// only this version: if the node is later edited to a new version, the
+    /// completion is stale (see `staleness`).
     pub version: String,
 }
 

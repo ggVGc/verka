@@ -526,6 +526,25 @@ fn staleness(store: &Store, vcs: &dyn Vcs, meta: &Meta) -> Vec<String> {
         }
     }
 
+    // A `done` status certifies the specific version it was set on. If the node has
+    // since been edited (a new version), the completion no longer covers the current
+    // content, so it is stale. (`open`/`in_progress` don't certify content, so they
+    // are not version-sensitive.)
+    if let (Ok(current), Ok(log)) = (
+        store.get_ref(&meta.logical_id),
+        store.status_log(&meta.logical_id),
+    ) {
+        if let Some(last) = log.events.last() {
+            if last.status == Status::Done && last.version != current {
+                reasons.push(format!(
+                    "done on an older version (completed {}, now {})",
+                    short(&last.version),
+                    short(&current)
+                ));
+            }
+        }
+    }
+
     reasons
 }
 
@@ -953,7 +972,7 @@ mod tests {
         let edge = Edge {
             to: "task-target".into(),
             rel: "depends_on".into(),
-            pin: target,
+            pin: target.clone(),
         };
         put_node(&store, "task-dep", vec![edge], None);
         let (dep, _) = store.get_object(&store.get_ref("task-dep").unwrap()).unwrap();
@@ -963,15 +982,76 @@ mod tests {
         assert_eq!(b.len(), 1);
         assert!(b[0].contains("not done"), "{b:?}");
 
-        // Once the target is done (and not stale), the dependent is ready.
-        let ev = StatusEvent {
+        // Once the target is done on its current version, the dependent is ready.
+        store
+            .append_status("task-target", &done_event(&target))
+            .unwrap();
+        assert!(blockers(&store, &fake, &dep).is_empty());
+    }
+
+    /// A `done` event asserted against version `v`.
+    fn done_event(v: &str) -> StatusEvent {
+        StatusEvent {
             at: 0,
             status: Status::Done,
             author: Author::Human,
-            version: "h".into(),
+            version: v.to_string(),
+        }
+    }
+
+    #[test]
+    fn done_status_only_covers_the_version_it_was_set_on() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs::default();
+
+        let v1 = put_node(&store, "task-1", vec![], None);
+        store.append_status("task-1", &done_event(&v1)).unwrap();
+
+        // Completed on the current version -> not stale.
+        let (m1, _) = store.get_object(&v1).unwrap();
+        assert!(staleness(&store, &fake, &m1).is_empty());
+
+        // Edit the node: new version, ref moves; the done event still points at v1.
+        let mut m2 = m1.clone();
+        m2.title = "revised".into();
+        m2.parent = Some(v1.clone());
+        let v2 = store.put_object(&m2, "body").unwrap();
+        store.set_ref("task-1", &v2).unwrap();
+        let (m2, _) = store.get_object(&v2).unwrap();
+
+        // The completion no longer covers the current version -> stale.
+        let reasons = staleness(&store, &fake, &m2);
+        assert!(
+            reasons.iter().any(|r| r.contains("older version")),
+            "{reasons:?}"
+        );
+    }
+
+    #[test]
+    fn done_on_an_older_version_blocks_dependents() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs::default();
+
+        let tv1 = put_node(&store, "task-target", vec![], None);
+        store.append_status("task-target", &done_event(&tv1)).unwrap();
+        let edge = Edge {
+            to: "task-target".into(),
+            rel: "depends_on".into(),
+            pin: tv1.clone(),
         };
-        store.append_status("task-target", &ev).unwrap();
+        put_node(&store, "task-dep", vec![edge], None);
+        let (dep, _) = store.get_object(&store.get_ref("task-dep").unwrap()).unwrap();
+
+        // Target done on its current version -> dependent ready.
         assert!(blockers(&store, &fake, &dep).is_empty());
+
+        // Edit the target: its `done` no longer applies -> dependent blocked again.
+        let (mut tmeta, _) = store.get_object(&tv1).unwrap();
+        tmeta.title = "revised".into();
+        tmeta.parent = Some(tv1.clone());
+        let tv2 = store.put_object(&tmeta, "body").unwrap();
+        store.set_ref("task-target", &tv2).unwrap();
+        assert!(!blockers(&store, &fake, &dep).is_empty());
     }
 
     #[test]

@@ -216,6 +216,25 @@ history were rewritten. Same store-vs-derive principle as the index (§2.3) and
 faithful record — the "use git as the graph" stance (`ideas.wiki`). (Consequently
 all mutating commands require a git repository with at least one commit.)
 
+### 2.12 A `done` status certifies a specific version
+
+Each status event stores the node **`version`** (content hash) it was asserted
+against. This matters for completion: marking a node `done` certifies *that
+version's* content. An edit produces a new version without touching the status log,
+so a node completed and then edited would still show `done` — yet the current version
+was never completed.
+
+So a `done` is treated as **stale when the node has moved past the version it was set
+on** (reported as `done on an older version` by `stale`/`show`). And because
+dependency satisfaction routes through the same staleness check, `ready`/`blocked`
+stop counting such a dependency as done: a consumer of a node that was completed and
+then edited is blocked again until the node is re-completed on its current version.
+
+`open` and `in_progress` don't certify content, so they are *not* version-sensitive;
+only the completion claim is. (The same reasoning would extend to `failed`.) This is
+the counterpart, for a node's own lifecycle, of the edge/input/output staleness in
+§2.7–2.9 — the `version` on each event is what makes it computable.
+
 ---
 
 ## 3. On-disk layout
@@ -308,10 +327,12 @@ version = "9f1c..."
 ```
 
 Appended to, never edited. Appending another `[[event]]` block keeps the file
-valid TOML while adding only new lines. The current status is the last event. The
-event does not store which commit it happened at — that is recoverable from git
-history (§2.11), since every change is its own commit. (`at` is Unix milliseconds —
-deliberately dependency-free; a future version may switch to RFC 3339.)
+valid TOML while adding only new lines. The current status is the last event. Each
+event's `version` is the node-version hash the status was asserted against — a `done`
+certifies only that version (§2.12). The event does *not* store which commit it
+happened at; that is recoverable from git history (§2.11), since every change is its
+own commit. (`at` is Unix milliseconds — deliberately dependency-free; a future
+version may switch to RFC 3339.)
 
 ### 3.4 Logical ids
 
@@ -437,8 +458,10 @@ operations and each is its own git commit.
 * **show / list / log / stale / ready / blocked** — read-only; they rebuild what
   they need by scanning, holding no persisted index. `stale` checks edge pins
   (against target refs), input/context pins (file content via `git hash-object`),
-  and outputs (via `git diff` against each node's output commit). `ready`/`blocked`
-  derive dependency satisfaction from edges + target statuses (§2.10).
+  outputs (via `git diff` against each node's output commit), and whether a `done`
+  status still matches the node's current version (§2.12). `ready`/`blocked` derive
+  dependency satisfaction from edges + target statuses (§2.10), counting a
+  dependency as done only if its completion covers its current version.
 
 ---
 
