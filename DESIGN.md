@@ -499,10 +499,14 @@ loop reads a line, dispatches to `llaundry::ops`, writes a line. It implements
 `initialize`, `tools/list`, and `tools/call` (plus `ping`); notifications such as
 `notifications/initialized` get no reply.
 
-Each tool is a thin wrapper over one library call, so an agent gets the same surface
-as the CLI. The store path comes from `--store`/`LLAUNDRY_DIR`, and every call opens
-the store fresh — so `initialize`/`tools/list` work before a store exists and an
-agent can create one with `init_store`.
+Each tool is its own type implementing a small `Tool` trait — `name`, `description`,
+`input_schema`, and `call` — and a `registry()` lists them. `tools/list` maps over
+the registry and `tools/call` finds a tool by name, so adding a tool is adding a type
+and one registry entry, with no central dispatch match to keep in sync. Every `call`
+is a thin wrapper over one `ops::*` function, so an agent gets the same surface as
+the CLI. The store path comes from `--store`/`LLAUNDRY_DIR`, and each call opens the
+store fresh (via a `Ctx`) — so `initialize`/`tools/list` work before a store exists
+and an agent can create one with `init_store`.
 
 | Tool | Wraps |
 |---|---|
