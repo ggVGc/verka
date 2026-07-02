@@ -20,6 +20,10 @@ path = "src/bin/tui.rs"
 name = "llaundry-mcp"
 path = "src/bin/mcp.rs"
 
+[[bin]]
+name = "llaundry-work"
+path = "src/bin/work.rs"
+
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive", "env"] }

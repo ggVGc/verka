@@ -383,6 +383,7 @@ discipline:
 * `llaundry` — the CLI (below).
 * `llaundry-tui` — an interactive terminal UI.
 * `llaundry-mcp` — a Model Context Protocol server (§5.2).
+* `llaundry-work` — the driver that runs an LLM session against a node (§5.3).
 
 ### 5.1 The CLI
 
@@ -521,6 +522,34 @@ repository and commit their own store change, and surface any refusal as an MCP
 tool error (`isError: true`) rather than a protocol failure. Sandboxing an agent to
 its declared inputs (§2.9) remains a runtime concern the server does not yet
 enforce.
+
+### 5.3 The worker
+
+The `llaundry-work` binary is the driver for actually *doing* a node's work with an
+LLM. It launches a **session** against one node: it loads the node, refuses to start
+if the node is blocked (its `depends_on` targets aren't satisfied — override with
+`--force`), builds a prompt from the node's type, title, body, edges, and inputs,
+and hands that to a backend. Once the prompt is built, the session carries no store
+handle — a backend needs nothing more from the database.
+
+The LLM is behind a `Backend` trait (`run` a session; `describe` it for
+`--dry-run`), so engines are swappable without touching the launcher. The first
+backend, `ClaudeCode`, shells out to `claude -p` deliberately sandboxed:
+
+* `--mcp-config <json>` + `--strict-mcp-config` — expose **only** the `llaundry`
+  MCP server (§5.2), ignoring any user/project MCP config.
+* `--allowedTools mcp__llaundry` — grant every tool of that server and nothing
+  else. In non-interactive `-p` mode any tool not listed is denied, so no built-in
+  tools (shell, file, network) are reachable, and permissions are not bypassed.
+
+So the model can act on the graph and nothing else. Because it has no file tools, a
+session produces no output files, so the prompt steers completion toward
+`set_status … done` rather than `complete_node` (which commits produced files). A
+future backend with file access would use `complete_node` to capture real outputs.
+
+Command construction is separated from execution (`ClaudeCode::command`), so the
+exact sandboxed invocation is unit-tested and shown verbatim by `--dry-run` without
+running or even installing Claude Code.
 
 ---
 
