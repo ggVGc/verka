@@ -141,6 +141,11 @@ enum Cmd {
 
     /// List the nodes that depend on (or derive from) a node.
     Dependents { id: String },
+
+    /// Integrity-check the store (fsck): parse errors, missing or ill-typed edge
+    /// targets, duplicates, self-references, and dependency cycles. Exits
+    /// non-zero if problems are found.
+    Check,
 }
 
 fn main() -> Result<()> {
@@ -347,6 +352,20 @@ fn main() -> Result<()> {
             match ops::output_of(&store, &id) {
                 Some(commit) => println!("{commit}"),
                 None => println!("{id} has produced no output"),
+            }
+        }
+
+        Cmd::Check => {
+            let store = Store::open(store)?;
+            let problems = ops::check(&store)?;
+            if problems.is_empty() {
+                println!("store is consistent");
+            } else {
+                for p in &problems {
+                    println!("{p}");
+                }
+                eprintln!("{} problem(s) found", problems.len());
+                std::process::exit(1);
             }
         }
 

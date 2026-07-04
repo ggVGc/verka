@@ -56,6 +56,9 @@ pub fn add(store: &Store, vcs: &dyn Vcs, new: NewNode) -> Result<String> {
 /// `from`'s version.
 pub fn link(store: &Store, vcs: &dyn Vcs, from: &str, to: &str, kind: DepKind) -> Result<()> {
     require_clean(vcs)?;
+    if from == to {
+        bail!("cannot link `{from}` to itself");
+    }
     let (mut meta, body) = store.read_node(from)?;
     check_edge(store, meta.node_type, to)?;
     let list = match kind {
@@ -328,6 +331,110 @@ pub fn dependents(store: &Store, id: &str) -> Result<Vec<String>> {
         }
     }
     Ok(out)
+}
+
+/// Integrity-check the whole store, fsck-style: every problem that write-time
+/// validation cannot see because it entered sideways (hand edits, git merges of
+/// individually-valid branches, older tools). Returns explicit problem reports;
+/// empty means the store is consistent. Read-only and git-free.
+///
+/// Checked per node: `node.md` and `result.md` parse; dependency lists hold no
+/// duplicates or self-references; every edge target exists; every edge obeys
+/// the type rules; and `depends_on` contains no cycles (which would deadlock
+/// readiness — every node in the cycle waiting on another).
+pub fn check(store: &Store) -> Result<Vec<String>> {
+    let mut problems = Vec::new();
+    let mut depends_on: std::collections::BTreeMap<String, Vec<String>> = Default::default();
+
+    for id in store.list_ids()? {
+        let meta = match store.read_node(&id) {
+            Ok((meta, _)) => meta,
+            Err(e) => {
+                problems.push(format!("{id}: unreadable node.md ({e:#})"));
+                continue;
+            }
+        };
+        if let Err(e) = store.read_result(&id) {
+            problems.push(format!("{id}: unreadable result.md ({e:#})"));
+        }
+        for (kind, list) in [
+            ("depends_on", &meta.depends_on),
+            ("derived_from", &meta.derived_from),
+        ] {
+            let mut seen = std::collections::HashSet::new();
+            for dep in list {
+                if !seen.insert(dep.as_str()) {
+                    problems.push(format!("{id}: duplicate {kind} entry `{dep}`"));
+                }
+                if dep == &id {
+                    problems.push(format!("{id}: {kind} refers to the node itself"));
+                    continue;
+                }
+                match store.read_node(dep) {
+                    Err(_) => {
+                        problems.push(format!("{id}: {kind} target `{dep}` missing or unreadable"))
+                    }
+                    Ok((target, _)) if !meta.node_type.may_link_to(target.node_type) => problems
+                        .push(format!(
+                            "{id}: a {} may not link to a {} (`{dep}`)",
+                            meta.node_type.as_str(),
+                            target.node_type.as_str()
+                        )),
+                    Ok(_) => {}
+                }
+            }
+        }
+        depends_on.insert(id, meta.depends_on);
+    }
+
+    problems.extend(find_cycles(&depends_on));
+    Ok(problems)
+}
+
+/// Report each `depends_on` cycle once, as an explicit `a -> b -> a` path.
+fn find_cycles(graph: &std::collections::BTreeMap<String, Vec<String>>) -> Vec<String> {
+    #[derive(Clone, Copy, PartialEq)]
+    enum State {
+        Visiting,
+        Done,
+    }
+    fn visit(
+        node: &str,
+        graph: &std::collections::BTreeMap<String, Vec<String>>,
+        state: &mut std::collections::HashMap<String, State>,
+        stack: &mut Vec<String>,
+        out: &mut Vec<String>,
+    ) {
+        match state.get(node) {
+            Some(State::Done) => return,
+            Some(State::Visiting) => {
+                // Back-edge: the cycle is the stack from the first occurrence on.
+                let start = stack.iter().position(|n| n == node).unwrap_or(0);
+                let mut path: Vec<&str> = stack[start..].iter().map(String::as_str).collect();
+                path.push(node);
+                out.push(format!("dependency cycle: {}", path.join(" -> ")));
+                return;
+            }
+            None => {}
+        }
+        state.insert(node.to_string(), State::Visiting);
+        stack.push(node.to_string());
+        for dep in graph.get(node).into_iter().flatten() {
+            // Missing targets are reported separately; only follow known nodes.
+            if graph.contains_key(dep) {
+                visit(dep, graph, state, stack, out);
+            }
+        }
+        stack.pop();
+        state.insert(node.to_string(), State::Done);
+    }
+
+    let mut state = std::collections::HashMap::new();
+    let mut out = Vec::new();
+    for node in graph.keys() {
+        visit(node, graph, &mut state, &mut Vec::new(), &mut out);
+    }
+    out
 }
 
 /// Enforce a clean working tree before a store operation, so the commit recorded
@@ -754,6 +861,63 @@ mod tests {
         // Info is freeform: anything may link to it, and it may link to anything.
         let info = add(&store, &fake, node(NodeType::Info, vec![verify.clone()])).unwrap();
         link(&store, &fake, &build, &info, DepKind::DerivedFrom).unwrap();
+    }
+
+    #[test]
+    fn check_reports_sideways_damage() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs::default();
+
+        // A healthy little graph passes.
+        let task = add(&store, &fake, new_node("a", vec![])).unwrap();
+        let dep = add(&store, &fake, new_node("b", vec![task.clone()])).unwrap();
+        assert!(check(&store).unwrap().is_empty());
+
+        // Damage entered "sideways" (direct writes, as a hand edit or merge would):
+        // retyping `task` to a build makes `dep`'s edge ill-typed (task -> build),
+        // and gives `task` a self-reference and a missing target.
+        let (mut meta, body) = store.read_node(&task).unwrap();
+        meta.node_type = NodeType::Build;
+        meta.depends_on = vec![task.clone(), "task-gone".into()];
+        store.write_node(&task, &meta, &body).unwrap();
+
+        let problems = check(&store).unwrap();
+        let all = problems.join("\n");
+        assert!(all.contains("refers to the node itself"), "{all}");
+        assert!(all.contains("missing or unreadable"), "{all}");
+        assert!(all.contains("may not link to"), "{all}");
+        assert!(all.contains(&format!("dependency cycle: {task} -> {task}")), "{all}");
+
+        // An unparseable file is reported, not a crash.
+        std::fs::write(store.node_dir(&dep).join("node.md"), "not frontmatter").unwrap();
+        let problems = check(&store).unwrap();
+        assert!(problems.iter().any(|p| p.contains("unreadable node.md")), "{problems:?}");
+    }
+
+    #[test]
+    fn check_finds_multi_node_cycles() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs::default();
+        let a = add(&store, &fake, new_node("a", vec![])).unwrap();
+        let b = add(&store, &fake, new_node("b", vec![a.clone()])).unwrap();
+        // Close the loop sideways: a -> b (write-time link would allow a -> b
+        // since both are tasks; the *cycle* is only visible to check).
+        let (mut meta, body) = store.read_node(&a).unwrap();
+        meta.depends_on = vec![b.clone()];
+        store.write_node(&a, &meta, &body).unwrap();
+
+        let problems = check(&store).unwrap();
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(problems[0].starts_with("dependency cycle: "), "{problems:?}");
+        assert!(problems[0].contains(&a) && problems[0].contains(&b));
+    }
+
+    #[test]
+    fn link_rejects_self_reference() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs::default();
+        let a = add(&store, &fake, new_node("a", vec![])).unwrap();
+        assert!(link(&store, &fake, &a, &a, DepKind::DependsOn).is_err());
     }
 
     #[test]

@@ -173,8 +173,16 @@ are:
 
 `info` is freeform documentation, linkable in both directions. The rules are
 enforced at the only two edge-creation points (`add`, `link`) by
-`NodeType::allowed_targets`, so an ill-typed graph cannot be constructed; both
-`depends_on` and `derived_from` follow the same table.
+`NodeType::allowed_targets`, so an ill-typed graph cannot be constructed *by
+the tools*; both `depends_on` and `derived_from` follow the same table.
+
+Write-time validation cannot see damage that enters sideways — hand edits, or
+a git merge combining two individually-valid branches. The complement is
+`llaundry check` (and the `check_store` MCP tool): an fsck-style scan that
+re-derives every invariant over the store as it actually is — files parse,
+edge targets exist, type rules hold, no duplicates or self-references, and no
+`depends_on` cycles (which would deadlock readiness). Like every other query
+it is derived, read-only, and git-free.
 
 ### 2.10 What context is: outputs first, files second
 
@@ -303,6 +311,7 @@ The store path defaults to `.llaundry/`, overridable with `--store` or
 | `ready` / `blocked` | Derived readiness, with blocker reasons. |
 | `outputs <id>` / `origin <commit>` | Provenance in both directions. |
 | `dependents <id>` | Which nodes depend on / derive from this one. |
+| `check` | Integrity-check the store (fsck): parse errors, missing/ill-typed edge targets, duplicates, self-references, dependency cycles. Non-zero exit on problems. |
 
 ### Example
 

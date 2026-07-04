@@ -88,7 +88,25 @@ fn registry() -> Vec<Box<dyn Tool>> {
         Box::new(NodeOrigin),
         Box::new(NodeOutputs),
         Box::new(NodeDependents),
+        Box::new(CheckStore),
     ]
+}
+
+struct CheckStore;
+impl Tool for CheckStore {
+    fn name(&self) -> &'static str {
+        "check_store"
+    }
+    fn description(&self) -> &'static str {
+        "Integrity-check the store (fsck): parse errors, missing or ill-typed edge targets, duplicates, self-references, and dependency cycles."
+    }
+    fn input_schema(&self) -> Value {
+        obj_schema(json!({}), &[])
+    }
+    fn call(&self, ctx: &Ctx, _args: &Value) -> Result<String> {
+        let (store, _) = ctx.open()?;
+        Ok(joined(ops::check(&store)?, "store is consistent"))
+    }
 }
 
 struct InitStore;
