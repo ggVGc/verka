@@ -1,128 +1,105 @@
 //! Graph operations and derived queries.
 //!
-//! Every mutating operation ([`add`], [`link`], [`edit`], [`complete`],
-//! [`set_status`]) requires a clean working tree and commits its own store change,
-//! so each is its own git commit (§2.11). The derived queries ([`staleness`],
-//! [`blockers`], [`is_ready`]) recompute from the graph and are never stored.
+//! Every mutating operation ([`add`], [`link`], [`edit`], [`complete`], [`fail`])
+//! requires a clean working tree and commits its own store change, so each is its
+//! own git commit. The derived queries ([`current_status`], [`staleness`],
+//! [`blockers`], [`is_ready`]) recompute from the two files per node and are never
+//! stored.
 //!
-//! All git interaction goes through `&dyn Vcs`, so the whole module is unit-testable
-//! with an in-memory fake — no git binary, repository, or identity required.
+//! All git interaction goes through `&dyn Vcs`, so the whole module is
+//! unit-testable with an in-memory fake — no git binary, repository, or identity
+//! required. (Blob hashing for versions and pins is computed locally.)
 
 use anyhow::{bail, Context, Result};
 use std::time::{SystemTime, UNIX_EPOCH};
 use ulid::Ulid;
 
-use crate::model::{Author, Edge, Meta, NodeType, Pin, Status, StatusEvent};
-use crate::store::Store;
+use crate::model::{
+    Author, BuiltAgainst, ContextPin, DepKind, NodeMeta, Outcome, ResultMeta, Status,
+};
+use crate::store::{file_blob, Store};
 use crate::vcs::Vcs;
 
 /// Parameters for creating a node with [`add`].
 pub struct NewNode {
-    pub node_type: NodeType,
+    pub node_type: crate::model::NodeType,
     pub title: String,
     pub body: String,
     pub author: Author,
-    /// Logical ids to add `depends_on` edges to.
+    /// Ids this node depends on (must exist).
     pub depends_on: Vec<String>,
-    /// Logical ids to add `derived_from` edges to.
+    /// Ids this node is derived from (must exist).
     pub derived_from: Vec<String>,
 }
 
-/// Create a new node. Returns `(logical_id, version hash)`.
-pub fn add(store: &Store, vcs: &dyn Vcs, new: NewNode) -> Result<(String, String)> {
+/// Create a new node. Returns its id.
+pub fn add(store: &Store, vcs: &dyn Vcs, new: NewNode) -> Result<String> {
     require_clean(vcs)?;
-    let logical_id = format!("{}-{}", new.node_type.prefix(), Ulid::new());
-
-    let mut edges = Vec::new();
-    for dep in &new.depends_on {
-        edges.push(make_edge(store, dep, "depends_on")?);
+    for dep in new.depends_on.iter().chain(&new.derived_from) {
+        if !store.exists(dep) {
+            bail!("cannot link to unknown node `{dep}`");
+        }
     }
-    for src in &new.derived_from {
-        edges.push(make_edge(store, src, "derived_from")?);
-    }
-
-    let meta = Meta {
+    let id = format!("{}-{}", new.node_type.prefix(), Ulid::new());
+    let meta = NodeMeta {
         schema: 1,
-        logical_id: logical_id.clone(),
         node_type: new.node_type,
         title: new.title,
         author: new.author,
-        parent: None,
-        output_commit: None,
-        edges,
-        context: Vec::new(),
+        depends_on: new.depends_on,
+        derived_from: new.derived_from,
     };
-    let hash = store.put_object(&meta, &new.body)?;
-    store.set_ref(&logical_id, &hash)?;
-    store.append_status(
-        &logical_id,
-        &StatusEvent {
-            at: now_millis(),
-            status: Status::Open,
-            author: new.author,
-            version: hash.clone(),
-        },
-    )?;
-    vcs.commit_store(&store.store_name(), &format!("llaundry: add {logical_id}"))?;
-    Ok((logical_id, hash))
+    store.write_node(&id, &meta, &new.body)?;
+    vcs.commit_store(&store.store_name(), &format!("llaundry: add {id}"))?;
+    Ok(id)
 }
 
-/// Add a typed edge from `from` to `to` (a new version of `from`). Returns the new hash.
-pub fn link(
-    store: &Store,
-    vcs: &dyn Vcs,
-    from: &str,
-    to: &str,
-    rel: &str,
-    author: Author,
-) -> Result<String> {
+/// Add `to` to one of `from`'s dependency lists. A definition change: it moves
+/// `from`'s version.
+pub fn link(store: &Store, vcs: &dyn Vcs, from: &str, to: &str, kind: DepKind) -> Result<()> {
     require_clean(vcs)?;
-    let current = store.get_ref(from)?;
-    let (mut meta, body) = store.get_object(&current)?;
-    let pin = store
-        .get_ref(to)
-        .with_context(|| format!("cannot link to unknown node `{to}`"))?;
-    meta.edges.push(Edge {
-        to: to.to_string(),
-        rel: rel.to_string(),
-        pin,
-    });
-    meta.parent = Some(current);
-    meta.author = author;
-    let hash = store.put_object(&meta, &body)?;
-    store.set_ref(from, &hash)?;
+    if !store.exists(to) {
+        bail!("cannot link to unknown node `{to}`");
+    }
+    let (mut meta, body) = store.read_node(from)?;
+    let list = match kind {
+        DepKind::DependsOn => &mut meta.depends_on,
+        DepKind::DerivedFrom => &mut meta.derived_from,
+    };
+    if list.iter().any(|d| d == to) {
+        bail!("{from} already has a {} link to {to}", kind.as_str());
+    }
+    list.push(to.to_string());
+    store.write_node(from, &meta, &body)?;
     vcs.commit_store(&store.store_name(), &format!("llaundry: link {from} -> {to}"))?;
-    Ok(hash)
+    Ok(())
 }
 
-/// Edit a node's title and/or body, producing a new version. `body = None` keeps the
-/// current body. Returns the new hash.
+/// Edit a node's title and/or body. A definition change: it moves the node's
+/// version, so a prior `done` no longer covers it and dependents' pins go stale.
 pub fn edit(
     store: &Store,
     vcs: &dyn Vcs,
     id: &str,
     title: Option<String>,
     body: Option<String>,
-    author: Author,
-) -> Result<String> {
+) -> Result<()> {
     require_clean(vcs)?;
-    let current = store.get_ref(id)?;
-    let (mut meta, old_body) = store.get_object(&current)?;
+    let (mut meta, old_body) = store.read_node(id)?;
     if let Some(t) = title {
         meta.title = t;
     }
-    let new_body = body.unwrap_or(old_body);
-    meta.parent = Some(current);
-    meta.author = author;
-    let hash = store.put_object(&meta, &new_body)?;
-    store.set_ref(id, &hash)?;
+    let body = body.unwrap_or(old_body);
+    store.write_node(id, &meta, &body)?;
     vcs.commit_store(&store.store_name(), &format!("llaundry: edit {id}"))?;
-    Ok(hash)
+    Ok(())
 }
 
-/// Complete a node: capture the produced files via `vcs`, record the resulting
-/// output id on a new immutable version, mark it `done`, and persist the store
-/// change. Returns `(new version hash, output id)`.
+/// Complete a node's work: commit all produced files as one output commit, pin
+/// what the work was built against (dependency versions and outputs, plus any
+/// extra context files), and record it all in `result.md`. Returns the output
+/// commit, or `None` when the work produced no files (graph-only work).
+#[allow(clippy::too_many_arguments)] // mirrors the CLI/MCP surface one-to-one
 pub fn complete(
     store: &Store,
     vcs: &dyn Vcs,
@@ -130,92 +107,149 @@ pub fn complete(
     outputs: &[String],
     context: &[String],
     message: Option<String>,
+    notes: &str,
     author: Author,
-) -> Result<(String, String)> {
+) -> Result<Option<String>> {
     // The only uncommitted changes allowed are the outputs we are about to commit.
     require_clean_except(vcs, outputs)?;
+    let (meta, _) = store.read_node(id)?;
 
-    let current = store.get_ref(id)?;
-    let (mut meta, body) = store.get_object(&current)?;
+    // Pin everything the work saw, before committing anything.
+    let context = pin_context(store, context)?;
+    let built_against = pin_deps(store, &meta)?;
 
-    // Pin the context actually used (before committing outputs).
-    let context = pin_files(vcs, context)?;
-    let message = message.unwrap_or_else(|| format!("{}: {}", meta.node_type.as_str(), meta.title));
-    let commit = vcs.capture(outputs, &message)?;
+    let output_commit = if outputs.is_empty() {
+        None
+    } else {
+        let message =
+            message.unwrap_or_else(|| format!("{}: {}", meta.node_type.as_str(), meta.title));
+        Some(vcs.capture(outputs, &message)?)
+    };
 
-    meta.output_commit = Some(commit.clone());
-    meta.context = context;
-    meta.parent = Some(current);
-    meta.author = author;
-    let hash = store.put_object(&meta, &body)?;
-    store.set_ref(id, &hash)?;
-    store.append_status(
+    store.write_result(
         id,
-        &StatusEvent {
+        &ResultMeta {
             at: now_millis(),
-            status: Status::Done,
             author,
-            version: hash.clone(),
+            node_version: store.node_version(id)?,
+            outcome: Outcome::Done,
+            output_commit: output_commit.clone(),
+            built_against,
+            context,
         },
+        notes,
     )?;
-
     vcs.commit_store(&store.store_name(), &format!("llaundry: complete {id}"))?;
-    Ok((hash, commit))
+    Ok(output_commit)
 }
 
-/// Append a status event and commit the store change.
-pub fn set_status(
-    store: &Store,
-    vcs: &dyn Vcs,
-    id: &str,
-    status: Status,
-    author: Author,
-) -> Result<()> {
+/// Record that a node's work was attempted and failed. Like [`complete`] it pins
+/// what the attempt was built against, so the failure is reproducible evidence.
+pub fn fail(store: &Store, vcs: &dyn Vcs, id: &str, notes: &str, author: Author) -> Result<()> {
     require_clean(vcs)?;
-    let version = store.get_ref(id)?;
-    store.append_status(
+    let (meta, _) = store.read_node(id)?;
+    let built_against = pin_deps(store, &meta)?;
+    store.write_result(
         id,
-        &StatusEvent {
+        &ResultMeta {
             at: now_millis(),
-            status,
             author,
-            version,
+            node_version: store.node_version(id)?,
+            outcome: Outcome::Failed,
+            output_commit: None,
+            built_against,
+            context: Vec::new(),
         },
+        notes,
     )?;
-    vcs.commit_store(
-        &store.store_name(),
-        &format!("llaundry: status {id} {}", status.as_str()),
-    )?;
+    vcs.commit_store(&store.store_name(), &format!("llaundry: fail {id}"))?;
     Ok(())
 }
 
-/// Collect explicit reasons a node version is stale, if any.
+/// A node's derived status.
+///
+/// `done` holds only while the result's `node_version` still matches `node.md`:
+/// editing the definition after completion reopens the node, because the
+/// completion no longer certifies the current content.
+pub fn current_status(store: &Store, id: &str) -> Status {
+    match store.read_result(id) {
+        Ok(Some((r, _))) => match r.outcome {
+            Outcome::Failed => Status::Failed,
+            Outcome::Done => {
+                if store.node_version(id).ok().as_deref() == Some(r.node_version.as_str()) {
+                    Status::Done
+                } else {
+                    Status::Open
+                }
+            }
+        },
+        _ => Status::Open,
+    }
+}
+
+/// Collect explicit reasons a node's recorded work is stale, if any. A node with
+/// no result cannot be stale (there is no work to invalidate).
 ///
 /// Independent sources of staleness:
-///   * an edge whose target node has moved past the pinned version (or vanished),
-///   * a recorded context file whose content has drifted,
-///   * an output that has changed since the node's output capture, and
-///   * a `done` status set on a version the node has since moved past.
-pub fn staleness(store: &Store, vcs: &dyn Vcs, meta: &Meta) -> Vec<String> {
+///   * a pinned dependency whose definition has moved (or that vanished),
+///   * a pinned dependency whose output commit has changed since,
+///   * a pinned context file whose content has drifted,
+///   * the node's own outputs changed since its output commit, and
+///   * the definition edited after completion (which also reopens the node).
+pub fn staleness(store: &Store, vcs: &dyn Vcs, id: &str) -> Vec<String> {
     let mut reasons = Vec::new();
+    let Ok(Some((result, _))) = store.read_result(id) else {
+        return reasons;
+    };
 
-    for e in &meta.edges {
-        match store.get_ref(&e.to) {
-            Ok(current) if current != e.pin => reasons.push(format!(
-                "{} -> {}: target moved (pinned {}, now {})",
-                e.rel,
-                e.to,
-                short(&e.pin),
+    if store.node_version(id).ok().as_deref() != Some(result.node_version.as_str()) {
+        reasons.push(format!(
+            "definition changed since the work (result covers {}, node.md moved)",
+            short(&result.node_version)
+        ));
+    }
+
+    for ba in &result.built_against {
+        match store.node_version(&ba.id) {
+            Ok(current) if current != ba.pin => reasons.push(format!(
+                "dependency {}: definition moved (built against {}, now {})",
+                ba.id,
+                short(&ba.pin),
                 short(&current)
             )),
             Ok(_) => {}
-            Err(_) => reasons.push(format!("{} -> {}: target missing", e.rel, e.to)),
+            Err(_) => reasons.push(format!("dependency {}: missing", ba.id)),
+        }
+        let current_output = output_of(store, &ba.id);
+        if current_output != ba.output {
+            reasons.push(format!(
+                "dependency {}: output changed (built against {}, now {})",
+                ba.id,
+                ba.output.as_deref().map_or("none", short),
+                current_output.as_deref().map_or("none", short)
+            ));
         }
     }
 
-    pin_drift(vcs, "context", &meta.context, &mut reasons);
+    let root = store.project_root();
+    for pin in &result.context {
+        match file_blob(&root.join(&pin.path)) {
+            Some(now) if now != pin.blob => reasons.push(format!(
+                "context {}: content changed (pinned {}, now {})",
+                pin.path,
+                short(&pin.blob),
+                short(&now)
+            )),
+            Some(_) => {}
+            None => reasons.push(format!(
+                "context {}: missing (pinned {})",
+                pin.path,
+                short(&pin.blob)
+            )),
+        }
+    }
 
-    if let Some(commit) = &meta.output_commit {
+    if let Some(commit) = &result.output_commit {
         match vcs.drift(commit) {
             Ok(Some(drift)) => reasons.push(format!(
                 "output changed since {}:\n      {}",
@@ -227,114 +261,81 @@ pub fn staleness(store: &Store, vcs: &dyn Vcs, meta: &Meta) -> Vec<String> {
         }
     }
 
-    // A `done` status certifies the specific version it was set on. If the node has
-    // since been edited (a new version), the completion no longer covers the current
-    // content, so it is stale. (`open`/`in_progress` don't certify content, so they
-    // are not version-sensitive.)
-    if let (Ok(current), Ok(log)) = (
-        store.get_ref(&meta.logical_id),
-        store.status_log(&meta.logical_id),
-    ) {
-        if let Some(last) = log.events.last() {
-            if last.status == Status::Done && last.version != current {
-                reasons.push(format!(
-                    "done on an older version (completed {}, now {})",
-                    short(&last.version),
-                    short(&current)
-                ));
-            }
-        }
-    }
-
     reasons
 }
 
-/// Reasons a node's `depends_on` dependencies are unsatisfied — empty means ready.
-///
-/// "Blocked" is computed here, not stored: a dependency is satisfied only if its
-/// target is `done` and not itself stale. Because it is derived from the graph, it
-/// can never drift out of sync the way a manual `blocked` flag would.
-pub fn blockers(store: &Store, vcs: &dyn Vcs, meta: &Meta) -> Vec<String> {
+/// Reasons a node's `depends_on` dependencies are unsatisfied — empty means the
+/// node can be worked. A dependency is satisfied only if it is `done` (on its
+/// current definition) and its own recorded work is not stale.
+pub fn blockers(store: &Store, vcs: &dyn Vcs, id: &str) -> Vec<String> {
     let mut out = Vec::new();
-    for e in &meta.edges {
-        if e.rel != "depends_on" {
+    let Ok((meta, _)) = store.read_node(id) else {
+        return out;
+    };
+    for dep in &meta.depends_on {
+        if !store.exists(dep) {
+            out.push(format!("{dep}: missing"));
             continue;
         }
-        let hash = match store.get_ref(&e.to) {
-            Ok(h) => h,
-            Err(_) => {
-                out.push(format!("{}: missing", e.to));
-                continue;
-            }
-        };
-        match current_status(store, &e.to) {
-            Some(Status::Done) => match store.get_object(&hash) {
-                Ok((target, _)) if !staleness(store, vcs, &target).is_empty() => {
-                    out.push(format!("{}: stale", e.to));
+        match current_status(store, dep) {
+            Status::Done => {
+                if !staleness(store, vcs, dep).is_empty() {
+                    out.push(format!("{dep}: stale"));
                 }
-                Ok(_) => {}
-                Err(_) => out.push(format!("{}: unreadable", e.to)),
-            },
-            other => out.push(format!(
-                "{}: not done ({})",
-                e.to,
-                other.map_or("no status", |s| s.as_str())
-            )),
+            }
+            other => out.push(format!("{dep}: not done ({})", other.as_str())),
         }
     }
     out
 }
 
 /// Whether a node is ready to be worked: not already done, and no unsatisfied
-/// dependencies.
-pub fn is_ready(store: &Store, vcs: &dyn Vcs, meta: &Meta) -> bool {
-    current_status(store, &meta.logical_id) != Some(Status::Done)
-        && blockers(store, vcs, meta).is_empty()
+/// dependencies. (A failed node is ready again — its work can be retried.)
+pub fn is_ready(store: &Store, vcs: &dyn Vcs, id: &str) -> bool {
+    current_status(store, id) != Status::Done && blockers(store, vcs, id).is_empty()
 }
 
-/// The node version whose completion produced `commit`, if any. Returns
-/// `(logical_id, version hash)`.
-///
-/// This is the inverse of the `output_commit` we already store — derived by
-/// scanning rather than persisted as a second index. It walks each node's `parent`
-/// chain, not just current versions, so a commit from a node that was later edited
-/// or re-completed is still found.
-///
-/// A later [`edit`] carries `output_commit` forward, so several versions in a chain
-/// can bear the same commit; the *completing* version is the oldest of them (its
-/// parent didn't have it). We keep walking and return that deepest match, which is
-/// unique — each `complete` mints one commit onto one new version.
-pub fn producer(store: &Store, commit: &str) -> Result<Option<(String, String)>> {
-    for id in store.list_refs()? {
-        let mut hash = store.get_ref(&id)?;
-        let mut origin = None;
-        loop {
-            let (meta, _) = store.get_object(&hash)?;
-            if meta.output_commit.as_deref() == Some(commit) {
-                origin = Some(hash.clone());
+/// The node whose work produced `commit`, if any — the inverse of the
+/// `output_commit` on each result, derived by scanning rather than persisted as
+/// a second index. Unique because each completion mints one commit for one node.
+pub fn origin(store: &Store, commit: &str) -> Result<Option<String>> {
+    for id in store.list_ids()? {
+        if let Some((result, _)) = store.read_result(&id)? {
+            if result.output_commit.as_deref() == Some(commit) {
+                return Ok(Some(id));
             }
-            match meta.parent {
-                Some(parent) => hash = parent,
-                None => break,
-            }
-        }
-        if let Some(version) = origin {
-            return Ok(Some((id, version)));
         }
     }
     Ok(None)
 }
 
-/// The current (latest) status of a node, or `None` if it has no status events.
-pub fn current_status(store: &Store, id: &str) -> Option<Status> {
+/// A node's current output commit: what its recorded work produced. `None` if it
+/// has no result or the work produced no files.
+pub fn output_of(store: &Store, id: &str) -> Option<String> {
     store
-        .status_log(id)
+        .read_result(id)
         .ok()
-        .and_then(|log| log.events.last().map(|e| e.status))
+        .flatten()
+        .and_then(|(r, _)| r.output_commit)
 }
 
-/// Enforce a clean working tree before a node operation, so the commit recorded for
-/// the resulting state change fully represents the repository.
+/// Ids of nodes that name `id` in either dependency list.
+pub fn dependents(store: &Store, id: &str) -> Result<Vec<String>> {
+    let mut out = Vec::new();
+    for other in store.list_ids()? {
+        if other == id {
+            continue;
+        }
+        let (meta, _) = store.read_node(&other)?;
+        if meta.depends_on.iter().chain(&meta.derived_from).any(|d| d == id) {
+            out.push(other);
+        }
+    }
+    Ok(out)
+}
+
+/// Enforce a clean working tree before a store operation, so the commit recorded
+/// for the resulting state change fully represents the repository.
 pub fn require_clean(vcs: &dyn Vcs) -> Result<()> {
     let dirty = vcs.dirty_paths()?;
     if !dirty.is_empty() {
@@ -369,53 +370,38 @@ pub fn short(hash: &str) -> &str {
     &hash[..hash.len().min(12)]
 }
 
-/// Resolve a target's current version hash and build an edge pinned to it.
-fn make_edge(store: &Store, to: &str, rel: &str) -> Result<Edge> {
-    let pin = store
-        .get_ref(to)
-        .with_context(|| format!("cannot link to unknown node `{to}`"))?;
-    Ok(Edge {
-        to: to.to_string(),
-        rel: rel.to_string(),
-        pin,
-    })
-}
-
-/// Pin each path by its current content; errors if a file is missing.
-fn pin_files(vcs: &dyn Vcs, paths: &[String]) -> Result<Vec<Pin>> {
-    paths
+/// Pin the current version and output of every node in `meta`'s dependency lists.
+fn pin_deps(store: &Store, meta: &NodeMeta) -> Result<Vec<BuiltAgainst>> {
+    meta.depends_on
         .iter()
-        .map(|path| {
-            let content = vcs
-                .content_id(path)?
-                .with_context(|| format!("cannot pin `{path}`: file not found"))?;
-            Ok(Pin {
-                path: path.clone(),
-                content,
+        .chain(&meta.derived_from)
+        .map(|dep| {
+            let pin = store
+                .node_version(dep)
+                .with_context(|| format!("cannot pin unknown dependency `{dep}`"))?;
+            Ok(BuiltAgainst {
+                id: dep.clone(),
+                pin,
+                output: output_of(store, dep),
             })
         })
         .collect()
 }
 
-/// Append a reason for every pinned file whose content has drifted or vanished.
-fn pin_drift(vcs: &dyn Vcs, kind: &str, pins: &[Pin], reasons: &mut Vec<String>) {
-    for pin in pins {
-        match vcs.content_id(&pin.path) {
-            Ok(Some(now)) if now != pin.content => reasons.push(format!(
-                "{kind} {}: content changed (pinned {}, now {})",
-                pin.path,
-                short(&pin.content),
-                short(&now)
-            )),
-            Ok(Some(_)) => {}
-            Ok(None) => reasons.push(format!(
-                "{kind} {}: missing (pinned {})",
-                pin.path,
-                short(&pin.content)
-            )),
-            Err(e) => reasons.push(format!("{kind} {} check failed: {e}", pin.path)),
-        }
-    }
+/// Pin each context path by its current content; errors if a file is missing.
+fn pin_context(store: &Store, paths: &[String]) -> Result<Vec<ContextPin>> {
+    let root = store.project_root();
+    paths
+        .iter()
+        .map(|path| {
+            let blob = file_blob(&root.join(path))
+                .with_context(|| format!("cannot pin `{path}`: file not found"))?;
+            Ok(ContextPin {
+                path: path.clone(),
+                blob,
+            })
+        })
+        .collect()
 }
 
 fn now_millis() -> i64 {
@@ -428,6 +414,7 @@ fn now_millis() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::NodeType;
     use crate::vcs::FakeVcs;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU32, Ordering};
@@ -450,376 +437,267 @@ mod tests {
         (TempDir(root), store)
     }
 
-    /// Write a node version with a given logical id; returns its hash.
-    fn put_node(store: &Store, id: &str, edges: Vec<Edge>, output_commit: Option<String>) -> String {
-        put_meta(
-            store,
-            Meta {
-                schema: 1,
-                logical_id: id.to_string(),
-                node_type: NodeType::Task,
-                title: "title".into(),
-                author: Author::Human,
-                parent: None,
-                output_commit,
-                edges,
-                context: vec![],
-            },
-        )
-    }
-
-    fn put_meta(store: &Store, meta: Meta) -> String {
-        let id = meta.logical_id.clone();
-        let hash = store.put_object(&meta, "body").unwrap();
-        store.set_ref(&id, &hash).unwrap();
-        hash
-    }
-
-    /// A `done` event asserted against version `v`.
-    fn done_event(v: &str) -> StatusEvent {
-        StatusEvent {
-            at: 0,
-            status: Status::Done,
+    fn new_node(title: &str, depends_on: Vec<String>) -> NewNode {
+        NewNode {
+            node_type: NodeType::Task,
+            title: title.into(),
+            body: "body".into(),
             author: Author::Human,
-            version: v.to_string(),
+            depends_on,
+            derived_from: vec![],
         }
     }
 
-    #[test]
-    fn objects_roundtrip_and_dedup() {
-        let (_t, store) = temp_store();
-        let meta = Meta {
-            schema: 1,
-            logical_id: "task-1".into(),
-            node_type: NodeType::Task,
-            title: "hello".into(),
-            author: Author::Human,
-            parent: None,
-            output_commit: None,
-            edges: vec![],
-            context: vec![],
-        };
-        let h1 = store.put_object(&meta, "body").unwrap();
-        let h2 = store.put_object(&meta, "body").unwrap();
-        assert_eq!(h1, h2, "identical content hashes to the same object");
-        assert_ne!(h1, store.put_object(&meta, "other body").unwrap());
-
-        let (got, body) = store.get_object(&h1).unwrap();
-        assert_eq!(got.title, "hello");
-        assert_eq!(body, "body");
+    fn done(store: &Store, vcs: &dyn Vcs, id: &str) {
+        complete(store, vcs, id, &[], &[], None, "done", Author::Machine).unwrap();
     }
 
     #[test]
-    fn refs_and_status_log() {
-        let (_t, store) = temp_store();
-        store.set_ref("task-1", "abc").unwrap();
-        assert_eq!(store.get_ref("task-1").unwrap(), "abc");
-        assert!(store.list_refs().unwrap().contains(&"task-1".to_string()));
-
-        let ev = |s: Status| StatusEvent {
-            at: 0,
-            status: s,
-            author: Author::Human,
-            version: "abc".into(),
-        };
-        store.append_status("task-1", &ev(Status::Open)).unwrap();
-        store.append_status("task-1", &ev(Status::Done)).unwrap();
-        let log = store.status_log("task-1").unwrap();
-        assert_eq!(log.events.len(), 2);
-        assert_eq!(log.events.last().unwrap().status, Status::Done);
-    }
-
-    #[test]
-    fn edge_staleness_detects_moved_and_missing_targets() {
+    fn add_validates_dependencies_and_starts_open() {
         let (_t, store) = temp_store();
         let fake = FakeVcs::default();
 
-        let target = put_node(&store, "task-target", vec![], None);
-        let edge = Edge {
-            to: "task-target".into(),
-            rel: "depends_on".into(),
-            pin: target,
-        };
-        put_node(&store, "task-dep", vec![edge], None);
-        let (dep, _) = store.get_object(&store.get_ref("task-dep").unwrap()).unwrap();
+        assert!(add(&store, &fake, new_node("a", vec!["task-nope".into()])).is_err());
 
-        // Fresh: pin matches the target's current ref.
-        assert!(staleness(&store, &fake, &dep).is_empty());
-
-        // Move the target on: the dependent goes stale.
-        store.set_ref("task-target", "newhash").unwrap();
-        let reasons = staleness(&store, &fake, &dep);
-        assert_eq!(reasons.len(), 1);
-        assert!(reasons[0].contains("target moved"), "{reasons:?}");
-
-        // A vanished target is reported too.
-        let edge = Edge {
-            to: "task-gone".into(),
-            rel: "depends_on".into(),
-            pin: "x".into(),
-        };
-        put_node(&store, "task-orphan", vec![edge], None);
-        let (orphan, _) = store.get_object(&store.get_ref("task-orphan").unwrap()).unwrap();
-        assert!(staleness(&store, &fake, &orphan)[0].contains("target missing"));
+        let id = add(&store, &fake, new_node("a", vec![])).unwrap();
+        assert!(store.exists(&id));
+        assert_eq!(current_status(&store, &id), Status::Open);
+        assert!(staleness(&store, &fake, &id).is_empty(), "no result, nothing to invalidate");
     }
 
     #[test]
-    fn output_staleness_uses_the_vcs() {
+    fn complete_records_result_and_output_commit() {
         let (_t, store) = temp_store();
-        let hash = put_node(&store, "impl-1", vec![], Some("commitX".into()));
-        let (meta, _) = store.get_object(&hash).unwrap();
-
-        // No drift recorded -> not stale.
-        let mut fake = FakeVcs::default();
-        assert!(staleness(&store, &fake, &meta).is_empty());
-
-        // Drift recorded for that output id -> stale, with the reason surfaced.
-        fake.drift_for.insert("commitX".into(), "M\tsrc/x.rs".into());
-        let reasons = staleness(&store, &fake, &meta);
-        assert_eq!(reasons.len(), 1);
-        assert!(reasons[0].contains("output changed since"));
-        assert!(reasons[0].contains("src/x.rs"));
-    }
-
-    #[test]
-    fn complete_captures_output_and_marks_done() {
-        let (_t, store) = temp_store();
-        put_node(&store, "impl-1", vec![], None);
-        let mut fake = FakeVcs {
+        let fake = FakeVcs {
             next_id: "commit-abc".into(),
             ..Default::default()
         };
+        let id = add(&store, &fake, new_node("a", vec![])).unwrap();
 
-        let (hash, commit) = complete(
+        let commit = complete(
             &store,
             &fake,
-            "impl-1",
+            &id,
             &["src/x.rs".into()],
             &[],
             None,
+            "implemented it",
             Author::Machine,
         )
         .unwrap();
+        assert_eq!(commit.as_deref(), Some("commit-abc"));
+        assert_eq!(current_status(&store, &id), Status::Done);
+        assert_eq!(output_of(&store, &id).as_deref(), Some("commit-abc"));
 
-        assert_eq!(commit, "commit-abc");
-        assert_eq!(store.get_ref("impl-1").unwrap(), hash, "ref advanced to new version");
+        let (result, notes) = store.read_result(&id).unwrap().unwrap();
+        assert_eq!(result.node_version, store.node_version(&id).unwrap());
+        assert_eq!(notes, "implemented it");
 
-        let (meta, _) = store.get_object(&hash).unwrap();
-        assert_eq!(meta.output_commit.as_deref(), Some("commit-abc"));
-        assert_eq!(meta.author, Author::Machine);
-        assert_eq!(current_status(&store, "impl-1"), Some(Status::Done));
-
-        // The right paths were captured, and the store change was committed once.
+        // The right paths were captured; add + complete each committed the store.
         assert_eq!(fake.captured.borrow().as_slice(), &[vec!["src/x.rs".to_string()]]);
-        assert_eq!(*fake.store_commits.borrow(), 1);
-
-        // And the completed node now reports as stale once its output drifts.
-        fake.drift_for.insert("commit-abc".into(), "M\tsrc/x.rs".into());
-        assert!(!staleness(&store, &fake, &meta).is_empty());
+        assert_eq!(*fake.store_commits.borrow(), 2);
     }
 
     #[test]
-    fn producer_maps_a_commit_back_to_its_node_version() {
+    fn complete_without_outputs_makes_no_commit() {
         let (_t, store) = temp_store();
-        put_node(&store, "impl-1", vec![], None);
-        put_node(&store, "impl-2", vec![], None);
-        let fake = FakeVcs {
-            next_id: "commit-xyz".into(),
-            ..Default::default()
-        };
+        let fake = FakeVcs::default();
+        let id = add(&store, &fake, new_node("planning", vec![])).unwrap();
 
-        let (version, commit) =
-            complete(&store, &fake, "impl-1", &["src/x.rs".into()], &[], None, Author::Machine)
-                .unwrap();
-
-        // The produced commit resolves to the exact node version that made it.
-        let found = producer(&store, &commit).unwrap();
-        assert_eq!(found, Some(("impl-1".to_string(), version)));
-
-        // An unknown commit resolves to nothing.
-        assert_eq!(producer(&store, "no-such-commit").unwrap(), None);
+        let commit =
+            complete(&store, &fake, &id, &[], &[], None, "made sub-tasks", Author::Machine).unwrap();
+        assert_eq!(commit, None);
+        assert_eq!(current_status(&store, &id), Status::Done);
+        assert!(fake.captured.borrow().is_empty(), "nothing captured");
     }
 
     #[test]
-    fn producer_finds_a_commit_from_an_older_version() {
+    fn editing_a_done_node_reopens_it() {
         let (_t, store) = temp_store();
-        put_node(&store, "impl-1", vec![], None);
-        let fake = FakeVcs {
-            next_id: "commit-old".into(),
-            ..Default::default()
-        };
+        let fake = FakeVcs::default();
+        let id = add(&store, &fake, new_node("a", vec![])).unwrap();
+        done(&store, &fake, &id);
+        assert_eq!(current_status(&store, &id), Status::Done);
 
-        // Complete, then edit — the output commit now lives on an ancestor version.
-        let (completed, commit) =
-            complete(&store, &fake, "impl-1", &["src/x.rs".into()], &[], None, Author::Machine)
-                .unwrap();
-        let edited = edit(
-            &store,
-            &fake,
-            "impl-1",
-            Some("revised".into()),
-            None,
-            Author::Human,
-        )
-        .unwrap();
-        assert_ne!(completed, edited);
-
-        // Walking the parent chain still finds the completing version.
-        assert_eq!(
-            producer(&store, &commit).unwrap(),
-            Some(("impl-1".to_string(), completed))
-        );
-    }
-
-    #[test]
-    fn context_staleness() {
-        let (_t, store) = temp_store();
-        let meta = Meta {
-            schema: 1,
-            logical_id: "task-1".into(),
-            node_type: NodeType::Task,
-            title: "t".into(),
-            author: Author::Human,
-            parent: None,
-            output_commit: None,
-            edges: vec![],
-            context: vec![Pin {
-                path: "src/b.rs".into(),
-                content: "h2".into(),
-            }],
-        };
-        put_meta(&store, meta.clone());
-
-        // The pin matches current content -> clean.
-        let mut fake = FakeVcs::default();
-        fake.content.insert("src/b.rs".into(), "h2".into());
-        assert!(staleness(&store, &fake, &meta).is_empty());
-
-        // Recorded context changes -> stale, labelled "context".
-        fake.content.insert("src/b.rs".into(), "h2-new".into());
-        let r = staleness(&store, &fake, &meta);
+        edit(&store, &fake, &id, Some("revised".into()), None).unwrap();
+        assert_eq!(current_status(&store, &id), Status::Open);
+        let reasons = staleness(&store, &fake, &id);
         assert!(
-            r.iter()
-                .any(|s| s.contains("context src/b.rs") && s.contains("content changed")),
-            "{r:?}"
-        );
-
-        // Recorded context goes missing -> stale, labelled "context".
-        fake.content.remove("src/b.rs");
-        let r = staleness(&store, &fake, &meta);
-        assert!(
-            r.iter()
-                .any(|s| s.contains("context src/b.rs") && s.contains("missing")),
-            "{r:?}"
+            reasons.iter().any(|r| r.contains("definition changed since the work")),
+            "{reasons:?}"
         );
     }
 
     #[test]
-    fn complete_pins_recorded_context() {
+    fn dependency_definition_move_makes_dependent_stale() {
         let (_t, store) = temp_store();
-        put_node(&store, "impl-1", vec![], None);
+        let fake = FakeVcs::default();
+        let a = add(&store, &fake, new_node("a", vec![])).unwrap();
+        done(&store, &fake, &a);
+        let b = add(&store, &fake, new_node("b", vec![a.clone()])).unwrap();
+        done(&store, &fake, &b);
+        assert!(staleness(&store, &fake, &b).is_empty());
+
+        edit(&store, &fake, &a, Some("revised".into()), None).unwrap();
+        let reasons = staleness(&store, &fake, &b);
+        assert!(
+            reasons.iter().any(|r| r.contains(&a) && r.contains("definition moved")),
+            "{reasons:?}"
+        );
+    }
+
+    #[test]
+    fn dependency_output_change_makes_dependent_stale() {
+        let (_t, store) = temp_store();
         let mut fake = FakeVcs {
             next_id: "commit-1".into(),
             ..Default::default()
         };
-        fake.content.insert("src/read.rs".into(), "rh".into());
+        let a = add(&store, &fake, new_node("a", vec![])).unwrap();
+        complete(&store, &fake, &a, &["src/a.rs".into()], &[], None, "", Author::Machine).unwrap();
+        let b = add(&store, &fake, new_node("b", vec![a.clone()])).unwrap();
+        done(&store, &fake, &b);
+        assert!(staleness(&store, &fake, &b).is_empty());
 
-        let (hash, _) = complete(
-            &store,
-            &fake,
-            "impl-1",
-            &["src/out.rs".into()],
-            &["src/read.rs".into()],
-            None,
-            Author::Machine,
-        )
-        .unwrap();
+        // A is re-worked and produces a new output commit -> B is stale.
+        fake.next_id = "commit-2".into();
+        complete(&store, &fake, &a, &["src/a.rs".into()], &[], None, "", Author::Machine).unwrap();
+        let reasons = staleness(&store, &fake, &b);
+        assert!(
+            reasons.iter().any(|r| r.contains(&a) && r.contains("output changed")),
+            "{reasons:?}"
+        );
+    }
 
-        let (meta, _) = store.get_object(&hash).unwrap();
-        assert_eq!(meta.context.len(), 1);
-        assert_eq!(meta.context[0].path, "src/read.rs");
-        assert_eq!(meta.context[0].content, "rh");
+    #[test]
+    fn context_drift_makes_node_stale() {
+        let (t, store) = temp_store();
+        let fake = FakeVcs::default();
+        let id = add(&store, &fake, new_node("a", vec![])).unwrap();
+
+        std::fs::write(t.0.join("helper.rs"), "v1").unwrap();
+        complete(&store, &fake, &id, &[], &["helper.rs".into()], None, "", Author::Machine)
+            .unwrap();
+        assert!(staleness(&store, &fake, &id).is_empty());
+
+        std::fs::write(t.0.join("helper.rs"), "v2").unwrap();
+        let reasons = staleness(&store, &fake, &id);
+        assert!(
+            reasons.iter().any(|r| r.contains("context helper.rs") && r.contains("content changed")),
+            "{reasons:?}"
+        );
+
+        std::fs::remove_file(t.0.join("helper.rs")).unwrap();
+        let reasons = staleness(&store, &fake, &id);
+        assert!(
+            reasons.iter().any(|r| r.contains("context helper.rs") && r.contains("missing")),
+            "{reasons:?}"
+        );
+    }
+
+    #[test]
+    fn own_output_drift_uses_the_vcs() {
+        let (_t, store) = temp_store();
+        let mut fake = FakeVcs {
+            next_id: "commit-x".into(),
+            ..Default::default()
+        };
+        let id = add(&store, &fake, new_node("a", vec![])).unwrap();
+        complete(&store, &fake, &id, &["src/x.rs".into()], &[], None, "", Author::Machine).unwrap();
+        assert!(staleness(&store, &fake, &id).is_empty());
+
+        fake.drift_for.insert("commit-x".into(), "M\tsrc/x.rs".into());
+        let reasons = staleness(&store, &fake, &id);
+        assert!(reasons.iter().any(|r| r.contains("output changed since")), "{reasons:?}");
     }
 
     #[test]
     fn blockers_follow_dependency_status() {
         let (_t, store) = temp_store();
         let fake = FakeVcs::default();
+        let a = add(&store, &fake, new_node("a", vec![])).unwrap();
+        let b = add(&store, &fake, new_node("b", vec![a.clone()])).unwrap();
 
-        let target = put_node(&store, "task-target", vec![], None);
-        let edge = Edge {
-            to: "task-target".into(),
-            rel: "depends_on".into(),
-            pin: target.clone(),
-        };
-        put_node(&store, "task-dep", vec![edge], None);
-        let (dep, _) = store.get_object(&store.get_ref("task-dep").unwrap()).unwrap();
+        // A not done -> B blocked, not ready.
+        let blocked = blockers(&store, &fake, &b);
+        assert!(blocked.iter().any(|r| r.contains("not done")), "{blocked:?}");
+        assert!(!is_ready(&store, &fake, &b));
 
-        // Target has no status yet -> the dependent is blocked.
-        let b = blockers(&store, &fake, &dep);
-        assert_eq!(b.len(), 1);
-        assert!(b[0].contains("not done"), "{b:?}");
+        // A done -> B ready.
+        done(&store, &fake, &a);
+        assert!(blockers(&store, &fake, &b).is_empty());
+        assert!(is_ready(&store, &fake, &b));
 
-        // Once the target is done on its current version, the dependent is ready.
-        store
-            .append_status("task-target", &done_event(&target))
-            .unwrap();
-        assert!(blockers(&store, &fake, &dep).is_empty());
+        // A edited after done -> reopened -> B blocked again.
+        edit(&store, &fake, &a, Some("revised".into()), None).unwrap();
+        let blocked = blockers(&store, &fake, &b);
+        assert!(blocked.iter().any(|r| r.contains("not done")), "{blocked:?}");
     }
 
     #[test]
-    fn done_status_only_covers_the_version_it_was_set_on() {
+    fn failed_node_is_ready_to_retry_but_blocks_dependents() {
         let (_t, store) = temp_store();
         let fake = FakeVcs::default();
+        let a = add(&store, &fake, new_node("a", vec![])).unwrap();
+        let b = add(&store, &fake, new_node("b", vec![a.clone()])).unwrap();
 
-        let v1 = put_node(&store, "task-1", vec![], None);
-        store.append_status("task-1", &done_event(&v1)).unwrap();
+        fail(&store, &fake, &a, "build broke", Author::Machine).unwrap();
+        assert_eq!(current_status(&store, &a), Status::Failed);
+        assert!(is_ready(&store, &fake, &a), "a failed node can be retried");
+        assert!(!is_ready(&store, &fake, &b), "its dependents stay blocked");
 
-        // Completed on the current version -> not stale.
-        let (m1, _) = store.get_object(&v1).unwrap();
-        assert!(staleness(&store, &fake, &m1).is_empty());
-
-        // Edit the node: new version, ref moves; the done event still points at v1.
-        let mut m2 = m1.clone();
-        m2.title = "revised".into();
-        m2.parent = Some(v1.clone());
-        let v2 = store.put_object(&m2, "body").unwrap();
-        store.set_ref("task-1", &v2).unwrap();
-        let (m2, _) = store.get_object(&v2).unwrap();
-
-        // The completion no longer covers the current version -> stale.
-        let reasons = staleness(&store, &fake, &m2);
-        assert!(
-            reasons.iter().any(|r| r.contains("older version")),
-            "{reasons:?}"
-        );
+        // Retry succeeds: the result is overwritten, B unblocks.
+        done(&store, &fake, &a);
+        assert_eq!(current_status(&store, &a), Status::Done);
+        assert!(is_ready(&store, &fake, &b));
     }
 
     #[test]
-    fn done_on_an_older_version_blocks_dependents() {
+    fn origin_maps_a_commit_back_to_its_node() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs {
+            next_id: "commit-xyz".into(),
+            ..Default::default()
+        };
+        let a = add(&store, &fake, new_node("a", vec![])).unwrap();
+        add(&store, &fake, new_node("other", vec![])).unwrap();
+        complete(&store, &fake, &a, &["src/x.rs".into()], &[], None, "", Author::Machine).unwrap();
+
+        assert_eq!(origin(&store, "commit-xyz").unwrap(), Some(a));
+        assert_eq!(origin(&store, "no-such-commit").unwrap(), None);
+    }
+
+    #[test]
+    fn dependents_scans_both_lists() {
         let (_t, store) = temp_store();
         let fake = FakeVcs::default();
+        let a = add(&store, &fake, new_node("a", vec![])).unwrap();
+        let b = add(&store, &fake, new_node("b", vec![a.clone()])).unwrap();
+        let mut c = new_node("c", vec![]);
+        c.derived_from = vec![a.clone()];
+        let c = add(&store, &fake, c).unwrap();
+        add(&store, &fake, new_node("unrelated", vec![])).unwrap();
 
-        let tv1 = put_node(&store, "task-target", vec![], None);
-        store.append_status("task-target", &done_event(&tv1)).unwrap();
-        let edge = Edge {
-            to: "task-target".into(),
-            rel: "depends_on".into(),
-            pin: tv1.clone(),
-        };
-        put_node(&store, "task-dep", vec![edge], None);
-        let (dep, _) = store.get_object(&store.get_ref("task-dep").unwrap()).unwrap();
+        let mut deps = dependents(&store, &a).unwrap();
+        deps.sort();
+        let mut expected = vec![b, c];
+        expected.sort();
+        assert_eq!(deps, expected);
+    }
 
-        // Target done on its current version -> dependent ready.
-        assert!(blockers(&store, &fake, &dep).is_empty());
+    #[test]
+    fn link_rejects_unknown_and_duplicate_targets() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs::default();
+        let a = add(&store, &fake, new_node("a", vec![])).unwrap();
+        let b = add(&store, &fake, new_node("b", vec![])).unwrap();
 
-        // Edit the target: its `done` no longer applies -> dependent blocked again.
-        let (mut tmeta, _) = store.get_object(&tv1).unwrap();
-        tmeta.title = "revised".into();
-        tmeta.parent = Some(tv1.clone());
-        let tv2 = store.put_object(&tmeta, "body").unwrap();
-        store.set_ref("task-target", &tv2).unwrap();
-        assert!(!blockers(&store, &fake, &dep).is_empty());
+        assert!(link(&store, &fake, &a, "task-nope", DepKind::DependsOn).is_err());
+        link(&store, &fake, &a, &b, DepKind::DependsOn).unwrap();
+        assert!(link(&store, &fake, &a, &b, DepKind::DependsOn).is_err());
+
+        let (meta, _) = store.read_node(&a).unwrap();
+        assert_eq!(meta.depends_on, vec![b]);
     }
 
     #[test]

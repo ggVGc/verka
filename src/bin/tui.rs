@@ -1,9 +1,9 @@
 //! `llaundry-tui` — an interactive terminal UI over the llaundry library.
 //!
-//! It exposes the same operations as the `llaundry` CLI (add, link, edit, complete,
-//! set-status, and the browse/derive queries) but in a live, navigable view of the
-//! graph. It is deliberately event-driven: the main loop *blocks* on a key event,
-//! mutates state, and redraws once — there is no polling render loop.
+//! It exposes the same operations as the `llaundry` CLI (add, link, edit,
+//! complete, fail, and the browse/derive queries) but in a live, navigable view of
+//! the graph. It is deliberately event-driven: the main loop *blocks* on a key
+//! event, mutates state, and redraws once — there is no polling render loop.
 //!
 //! The screen is a two-pane dashboard: a filterable node list on the left and the
 //! selected node's detail (the `show` view) on the right. Actions are triggered by
@@ -25,7 +25,7 @@ use crossterm::{
 };
 
 use llaundry::ops::{self, NewNode};
-use llaundry::{Author, GitVcs, Meta, NodeType, Status, Store};
+use llaundry::{Author, DepKind, GitVcs, NodeMeta, NodeType, ResultMeta, Status, Store};
 
 #[derive(Parser)]
 #[command(
@@ -145,9 +145,11 @@ impl Filter {
 /// A snapshot of one node, precomputed once per refresh so drawing is cheap.
 struct Row {
     id: String,
-    hash: String,
-    meta: Meta,
-    status: Option<Status>,
+    version: String,
+    meta: NodeMeta,
+    body: String,
+    result: Option<(ResultMeta, String)>,
+    status: Status,
     stale: Vec<String>,
     blockers: Vec<String>,
     ready: bool,
@@ -180,21 +182,18 @@ impl App {
     fn refresh(&mut self, store: &Store, vcs: &GitVcs) -> Result<()> {
         let keep = self.selected_id();
         let mut rows = Vec::new();
-        for id in store.list_refs()? {
-            let hash = store.get_ref(&id)?;
-            let (meta, _) = store.get_object(&hash)?;
-            let status = ops::current_status(store, &id);
-            let stale = ops::staleness(store, vcs, &meta);
-            let blockers = ops::blockers(store, vcs, &meta);
-            let ready = ops::is_ready(store, vcs, &meta);
+        for id in store.list_ids()? {
+            let (meta, body) = store.read_node(&id)?;
             rows.push(Row {
+                version: store.node_version(&id)?,
+                result: store.read_result(&id)?,
+                status: ops::current_status(store, &id),
+                stale: ops::staleness(store, vcs, &id),
+                blockers: ops::blockers(store, vcs, &id),
+                ready: ops::is_ready(store, vcs, &id),
                 id,
-                hash,
                 meta,
-                status,
-                stale,
-                blockers,
-                ready,
+                body,
             });
         }
         self.rows = rows;
@@ -255,7 +254,7 @@ impl App {
 fn run(term: &mut Terminal, store: &Store, vcs: &GitVcs) -> Result<()> {
     let mut app = App::load(store, vcs)?;
     loop {
-        draw(&mut term.out, &mut app, store)?;
+        draw(&mut term.out, &mut app)?;
 
         let key = match read_key()? {
             Some(k) => k,
@@ -296,13 +295,6 @@ fn run(term: &mut Terminal, store: &Store, vcs: &GitVcs) -> Result<()> {
                     act(&mut app, store, vcs, done);
                 }
             }
-            KeyCode::Char('s') => {
-                let out = &mut term.out;
-                let done = app.selected_id().map(|id| action_status(out, store, vcs, &id));
-                if let Some(done) = done {
-                    act(&mut app, store, vcs, done);
-                }
-            }
             KeyCode::Char('c') => {
                 let out = &mut term.out;
                 let done = app.selected_id().map(|id| action_complete(out, store, vcs, &id));
@@ -310,10 +302,17 @@ fn run(term: &mut Terminal, store: &Store, vcs: &GitVcs) -> Result<()> {
                     act(&mut app, store, vcs, done);
                 }
             }
+            KeyCode::Char('f') => {
+                let out = &mut term.out;
+                let done = app.selected_id().map(|id| action_fail(out, store, vcs, &id));
+                if let Some(done) = done {
+                    act(&mut app, store, vcs, done);
+                }
+            }
             KeyCode::Enter => {
                 if let Some(r) = app.selected_row() {
-                    let lines = history_lines(store, &r.hash);
-                    popup(&mut term.out, &format!("history: {}", r.id), &lines)?;
+                    let lines = result_lines(r);
+                    popup(&mut term.out, &format!("result: {}", r.id), &lines)?;
                 }
             }
             _ => {}
@@ -362,7 +361,7 @@ fn action_add(out: &mut Stdout, store: &Store, vcs: &GitVcs) -> Result<Option<St
     let Some(body) = prompt_text(out, "body (Ctrl-S save, Esc cancel)", "")? else {
         return Ok(None);
     };
-    let (id, hash) = ops::add(
+    let id = ops::add(
         store,
         vcs,
         NewNode {
@@ -374,30 +373,29 @@ fn action_add(out: &mut Stdout, store: &Store, vcs: &GitVcs) -> Result<Option<St
             derived_from: Vec::new(),
         },
     )?;
-    Ok(Some(format!("added {id} ({})", ops::short(&hash))))
+    Ok(Some(format!("added {id}")))
 }
 
 fn action_edit(out: &mut Stdout, store: &Store, vcs: &GitVcs, row: &Row) -> Result<Option<String>> {
-    let (_, body) = store.get_object(&row.hash)?;
     let Some(title) = prompt_line(out, "title", &row.meta.title)? else {
         return Ok(None);
     };
-    let Some(new_body) = prompt_text(out, "body (Ctrl-S save, Esc cancel)", &body)? else {
+    let Some(new_body) = prompt_text(out, "body (Ctrl-S save, Esc cancel)", &row.body)? else {
         return Ok(None);
     };
     let title = (title != row.meta.title).then_some(title);
-    let body = (new_body != body).then_some(new_body);
+    let body = (new_body != row.body).then_some(new_body);
     if title.is_none() && body.is_none() {
         return Ok(Some("edit: no changes".into()));
     }
-    let hash = ops::edit(store, vcs, &row.id, title, body, Author::Human)?;
-    Ok(Some(format!("edited {} ({})", row.id, ops::short(&hash))))
+    ops::edit(store, vcs, &row.id, title, body)?;
+    Ok(Some(format!("edited {}", row.id)))
 }
 
 fn action_link(out: &mut Stdout, store: &Store, vcs: &GitVcs, from: &str) -> Result<Option<String>> {
     // Offer the other nodes as link targets.
     let targets: Vec<String> = store
-        .list_refs()?
+        .list_ids()?
         .into_iter()
         .filter(|id| id != from)
         .collect();
@@ -408,27 +406,14 @@ fn action_link(out: &mut Stdout, store: &Store, vcs: &GitVcs, from: &str) -> Res
     let Some(ti) = pick(out, &format!("link {from} -> ?"), &labels, 0)? else {
         return Ok(None);
     };
-    let rels = ["depends_on", "derived_from", "verifies", "builds"];
-    let Some(ri) = pick(out, "relationship", &rels, 0)? else {
+    let rels = [DepKind::DependsOn, DepKind::DerivedFrom];
+    let rel_labels: Vec<&str> = rels.iter().map(|r| r.as_str()).collect();
+    let Some(ri) = pick(out, "relationship", &rel_labels, 0)? else {
         return Ok(None);
     };
     let to = &targets[ti];
-    let hash = ops::link(store, vcs, from, to, rels[ri], Author::Human)?;
-    Ok(Some(format!(
-        "linked {from} -{}-> {to} ({})",
-        rels[ri],
-        ops::short(&hash)
-    )))
-}
-
-fn action_status(out: &mut Stdout, store: &Store, vcs: &GitVcs, id: &str) -> Result<Option<String>> {
-    let states = [Status::Open, Status::InProgress, Status::Done, Status::Failed];
-    let labels: Vec<&str> = states.iter().map(|s| s.as_str()).collect();
-    let Some(si) = pick(out, &format!("status of {id}"), &labels, 0)? else {
-        return Ok(None);
-    };
-    ops::set_status(store, vcs, id, states[si], Author::Human)?;
-    Ok(Some(format!("{id} -> {}", states[si].as_str())))
+    ops::link(store, vcs, from, to, rels[ri])?;
+    Ok(Some(format!("linked {from} -{}-> {to}", rels[ri].as_str())))
 }
 
 fn action_complete(
@@ -437,13 +422,10 @@ fn action_complete(
     vcs: &GitVcs,
     id: &str,
 ) -> Result<Option<String>> {
-    let Some(outputs) = prompt_line(out, "output files (space-separated)", "")? else {
+    let Some(outputs) = prompt_line(out, "output files (space-separated, blank = none)", "")? else {
         return Ok(None);
     };
     let outputs: Vec<String> = outputs.split_whitespace().map(str::to_string).collect();
-    if outputs.is_empty() {
-        return Ok(Some("complete cancelled: no outputs".into()));
-    }
     let Some(context) = prompt_line(out, "context files (space-separated, optional)", "")? else {
         return Ok(None);
     };
@@ -452,45 +434,57 @@ fn action_complete(
         return Ok(None);
     };
     let message = (!message.trim().is_empty()).then_some(message);
-    let (hash, commit) = ops::complete(
-        store,
-        vcs,
-        id,
-        &outputs,
-        &context,
-        message,
-        Author::Machine,
-    )?;
-    Ok(Some(format!(
-        "completed {id} ({}, output {})",
-        ops::short(&hash),
-        ops::short(&commit)
-    )))
+    let Some(notes) = prompt_text(out, "notes — what happened? (Ctrl-S save, Esc cancel)", "")?
+    else {
+        return Ok(None);
+    };
+    let commit = ops::complete(store, vcs, id, &outputs, &context, message, &notes, Author::Human)?;
+    Ok(Some(match commit {
+        Some(c) => format!("completed {id} (output {})", ops::short(&c)),
+        None => format!("completed {id} (no output files)"),
+    }))
 }
 
-/// The version history of a node (newest first), for the log popup.
-fn history_lines(store: &Store, head: &str) -> Vec<String> {
-    let mut lines = Vec::new();
-    let mut hash = head.to_string();
-    loop {
-        match store.get_object(&hash) {
-            Ok((meta, _)) => {
-                lines.push(format!(
-                    "{}  {:<8} {}",
-                    ops::short(&hash),
-                    meta.author.as_str(),
-                    meta.title
-                ));
-                match meta.parent {
-                    Some(parent) => hash = parent,
-                    None => break,
-                }
-            }
-            Err(e) => {
-                lines.push(format!("(unreadable {}: {e})", ops::short(&hash)));
-                break;
-            }
-        }
+fn action_fail(out: &mut Stdout, store: &Store, vcs: &GitVcs, id: &str) -> Result<Option<String>> {
+    let Some(notes) = prompt_text(out, "notes — what went wrong? (Ctrl-S save, Esc cancel)", "")?
+    else {
+        return Ok(None);
+    };
+    ops::fail(store, vcs, id, &notes, Author::Human)?;
+    Ok(Some(format!("{id} -> failed")))
+}
+
+/// The result record of a node, for the popup.
+fn result_lines(r: &Row) -> Vec<String> {
+    let Some((result, notes)) = &r.result else {
+        return vec!["(no result yet — the node has not been worked)".into()];
+    };
+    let mut lines = vec![
+        format!("outcome: {}", result.outcome.as_str()),
+        format!("author:  {}", result.author.as_str()),
+        format!("version: {}", ops::short(&result.node_version)),
+    ];
+    if let Some(commit) = &result.output_commit {
+        lines.push(format!("output:  commit {}", ops::short(commit)));
+    }
+    for ba in &result.built_against {
+        lines.push(match &ba.output {
+            Some(o) => format!(
+                "built against {} @ {} (output {})",
+                ba.id,
+                ops::short(&ba.pin),
+                ops::short(o)
+            ),
+            None => format!("built against {} @ {}", ba.id, ops::short(&ba.pin)),
+        });
+    }
+    for pin in &result.context {
+        lines.push(format!("context {} @ {}", pin.path, ops::short(&pin.blob)));
+    }
+    let notes = notes.trim_end();
+    if !notes.is_empty() {
+        lines.push(String::new());
+        lines.extend(notes.lines().map(String::from));
     }
     lines
 }
@@ -502,7 +496,7 @@ fn history_lines(store: &Store, head: &str) -> Vec<String> {
 const HEADER: u16 = 0;
 const BODY_TOP: u16 = 1;
 
-fn draw(out: &mut Stdout, app: &mut App, store: &Store) -> Result<()> {
+fn draw(out: &mut Stdout, app: &mut App) -> Result<()> {
     let (w, h) = terminal::size()?;
     let footer = h.saturating_sub(1);
     let body_bottom = footer.saturating_sub(1); // last body row
@@ -542,10 +536,9 @@ fn draw(out: &mut Stdout, app: &mut App, store: &Store) -> Result<()> {
         if let Some(&idx) = filtered.get(row_i) {
             let r = &app.rows[idx];
             let marker = if !r.stale.is_empty() { '*' } else { ' ' };
-            let status = r.status.map_or("-", Status::as_str);
             let text = format!(
-                "{marker}{:<11} {:<7} {}",
-                status,
+                "{marker}{:<7} {:<7} {}",
+                r.status.as_str(),
                 r.meta.node_type.prefix(),
                 r.meta.title
             );
@@ -562,7 +555,7 @@ fn draw(out: &mut Stdout, app: &mut App, store: &Store) -> Result<()> {
     // Right: detail of the selected node.
     let detail = app
         .selected_row()
-        .map(|r| detail_lines(store, r))
+        .map(detail_lines)
         .unwrap_or_else(|| vec![("(no node selected)".into(), Color::DarkGrey)]);
     for (i, y) in (BODY_TOP..=body_bottom).enumerate() {
         let (text, color) = detail
@@ -573,7 +566,7 @@ fn draw(out: &mut Stdout, app: &mut App, store: &Store) -> Result<()> {
     }
 
     // Footer: a message if any, else the key hints.
-    let hint = "a add  e edit  l link  s status  c complete  ⏎ log  Tab filter  r refresh  ? help  q quit";
+    let hint = "a add  e edit  l link  c complete  f fail  ⏎ result  Tab filter  r refresh  ? help  q quit";
     let footer_text = if app.message.is_empty() {
         format!(" {hint}")
     } else {
@@ -586,50 +579,47 @@ fn draw(out: &mut Stdout, app: &mut App, store: &Store) -> Result<()> {
 }
 
 /// Colour a row/label by node status.
-fn status_color(status: Option<Status>) -> Color {
+fn status_color(status: Status) -> Color {
     match status {
-        Some(Status::Open) => Color::Reset,
-        Some(Status::InProgress) => Color::Yellow,
-        Some(Status::Done) => Color::Green,
-        Some(Status::Failed) => Color::Red,
-        None => Color::DarkGrey,
+        Status::Open => Color::Reset,
+        Status::Done => Color::Green,
+        Status::Failed => Color::Red,
     }
 }
 
 /// The right-pane detail view for a node — the `show` command, as coloured lines.
-fn detail_lines(store: &Store, r: &Row) -> Vec<(String, Color)> {
+fn detail_lines(r: &Row) -> Vec<(String, Color)> {
     let mut lines: Vec<(String, Color)> = Vec::new();
     let mut plain = |s: String| lines.push((s, Color::Reset));
 
-    plain(format!("id:      {}", r.meta.logical_id));
+    plain(format!("id:      {}", r.id));
     plain(format!("type:    {}", r.meta.node_type.as_str()));
     plain(format!("title:   {}", r.meta.title));
     lines.push((
-        format!("status:  {}", r.status.map_or("(none)", Status::as_str)),
+        format!("status:  {}", r.status.as_str()),
         status_color(r.status),
     ));
     lines.push((format!("author:  {}", r.meta.author.as_str()), Color::Reset));
-    lines.push((format!("version: {}", ops::short(&r.hash)), Color::Reset));
-    if let Some(parent) = &r.meta.parent {
-        lines.push((format!("parent:  {}", ops::short(parent)), Color::Reset));
+    lines.push((format!("version: {}", ops::short(&r.version)), Color::Reset));
+    for dep in &r.meta.depends_on {
+        lines.push((format!("depends_on:   {dep}"), Color::Reset));
     }
-    if !r.meta.edges.is_empty() {
-        lines.push(("edges:".into(), Color::Reset));
-        for e in &r.meta.edges {
-            lines.push((
-                format!("  {:<12} -> {} @ {}", e.rel, e.to, ops::short(&e.pin)),
-                Color::Reset,
-            ));
-        }
+    for src in &r.meta.derived_from {
+        lines.push((format!("derived_from: {src}"), Color::Reset));
     }
-    if !r.meta.context.is_empty() {
-        lines.push(("context:".into(), Color::Reset));
-        for p in &r.meta.context {
-            lines.push((format!("  {} @ {}", p.path, ops::short(&p.content)), Color::Reset));
-        }
-    }
-    if let Some(commit) = &r.meta.output_commit {
-        lines.push((format!("output:  commit {}", ops::short(commit)), Color::Reset));
+    if let Some((result, _)) = &r.result {
+        lines.push((
+            format!(
+                "result:  {}{}",
+                result.outcome.as_str(),
+                result
+                    .output_commit
+                    .as_ref()
+                    .map(|c| format!(" (output {})", ops::short(c)))
+                    .unwrap_or_default()
+            ),
+            Color::Reset,
+        ));
     }
     if !r.blockers.is_empty() {
         lines.push(("blocked by:".into(), Color::Red));
@@ -645,13 +635,11 @@ fn detail_lines(store: &Store, r: &Row) -> Vec<(String, Color)> {
             }
         }
     }
-    if let Ok((_, body)) = store.get_object(&r.hash) {
-        let body = body.trim_end();
-        if !body.is_empty() {
-            lines.push((String::new(), Color::Reset));
-            for line in body.lines() {
-                lines.push((line.to_string(), Color::Reset));
-            }
+    let body = r.body.trim_end();
+    if !body.is_empty() {
+        lines.push((String::new(), Color::Reset));
+        for line in body.lines() {
+            lines.push((line.to_string(), Color::Reset));
         }
     }
     lines
@@ -860,7 +848,7 @@ fn pick(out: &mut Stdout, label: &str, items: &[&str], initial: usize) -> Result
     }
 }
 
-/// A scrollable read-only popup (used for the version-history log).
+/// A scrollable read-only popup (used for the result view).
 fn popup(out: &mut Stdout, title: &str, lines: &[String]) -> Result<()> {
     let (tw, th) = terminal::size()?;
     let box_w = tw.saturating_sub(4).min(100);
@@ -905,20 +893,20 @@ fn help(out: &mut Stdout) -> Result<()> {
         "  j / k, ↓ / ↑    move selection",
         "  g / G           first / last",
         "  Tab             cycle filter (all → ready → blocked → stale)",
-        "  Enter           show version history of the selected node",
+        "  Enter           show the selected node's result record",
         "  r               refresh from the store",
         "",
         "Actions (operate on the selected node)",
         "  a               add a new node",
-        "  e               edit title / body",
+        "  e               edit title / body (a definition change)",
         "  l               link to another node",
-        "  s               set status",
-        "  c               complete (commit output files)",
+        "  c               complete (commit outputs, write result.md)",
+        "  f               fail (write result.md with what went wrong)",
         "",
         "  ? this help      q / Esc quit",
         "",
-        "A '*' marks a stale node. Colours: green done, yellow in-progress,",
-        "red failed, grey no status. Every action requires a clean git tree.",
+        "A '*' marks a stale node. Colours: green done, red failed.",
+        "Every action requires a clean git tree.",
     ]
     .map(String::from);
     popup(out, "llaundry-tui — help", &lines)

@@ -14,7 +14,7 @@
 //! A [`Ctx`] opens the store fresh for each call, so `initialize`/`tools/list` work
 //! even before a store exists and an agent can create one with `init_store`.
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
@@ -22,7 +22,7 @@ use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 
 use llaundry::ops::{self, NewNode};
-use llaundry::{Author, GitVcs, NodeType, Status, Store};
+use llaundry::{Author, DepKind, GitVcs, NodeType, Store};
 
 /// The MCP protocol revision we advertise (a client may negotiate its own; we echo
 /// back whatever it asks for when present).
@@ -79,15 +79,15 @@ fn registry() -> Vec<Box<dyn Tool>> {
         Box::new(LinkNodes),
         Box::new(EditNode),
         Box::new(CompleteNode),
-        Box::new(SetStatus),
+        Box::new(FailNode),
         Box::new(ShowNode),
         Box::new(ListNodes),
-        Box::new(NodeHistory),
         Box::new(StaleNodes),
         Box::new(ReadyNodes),
         Box::new(BlockedNodes),
         Box::new(NodeOrigin),
         Box::new(NodeOutputs),
+        Box::new(NodeDependents),
     ]
 }
 
@@ -114,7 +114,7 @@ impl Tool for AddNode {
         "add_node"
     }
     fn description(&self) -> &'static str {
-        "Create a new node in the graph. Returns its logical id."
+        "Create a new node in the graph. Returns its id."
     }
     fn input_schema(&self) -> Value {
         obj_schema(
@@ -123,8 +123,8 @@ impl Tool for AddNode {
                 "title": {"type": "string", "description": "Short title."},
                 "body": {"type": "string", "description": "Prose body (markdown)."},
                 "author": author_prop(),
-                "depends_on": paths_prop("Logical ids this node depends on (pinned to their current versions)."),
-                "derived_from": paths_prop("Logical ids this node is derived from.")
+                "depends_on": ids_prop("Ids of nodes this node depends on."),
+                "derived_from": ids_prop("Ids of nodes this node is derived from.")
             }),
             &["title"],
         )
@@ -135,12 +135,12 @@ impl Tool for AddNode {
             node_type: enum_or(args, "type", NodeType::Task)?,
             title: req_str(args, "title")?,
             body: opt_str(args, "body").unwrap_or_default(),
-            author: enum_or(args, "author", Author::Human)?,
+            author: enum_or(args, "author", Author::Machine)?,
             depends_on: str_list(args, "depends_on"),
             derived_from: str_list(args, "derived_from"),
         };
-        let (id, hash) = ops::add(&store, &vcs, new)?;
-        Ok(format!("created {id}  ({})", ops::short(&hash)))
+        let id = ops::add(&store, &vcs, new)?;
+        Ok(format!("created {id}"))
     }
 }
 
@@ -150,15 +150,14 @@ impl Tool for LinkNodes {
         "link_nodes"
     }
     fn description(&self) -> &'static str {
-        "Add a typed edge from one node to another. Produces a new version of the source node."
+        "Add a dependency from one node to another (a definition change of the source node)."
     }
     fn input_schema(&self) -> Value {
         obj_schema(
             json!({
-                "from": {"type": "string", "description": "Source node logical id (gains the edge)."},
-                "to": {"type": "string", "description": "Target node logical id."},
-                "rel": {"type": "string", "description": "Relationship kind (default depends_on)."},
-                "author": author_prop()
+                "from": {"type": "string", "description": "Source node id (gains the dependency)."},
+                "to": {"type": "string", "description": "Target node id."},
+                "rel": enum_prop(&["depends_on", "derived_from"], "Which list to add to (default depends_on).")
             }),
             &["from", "to"],
         )
@@ -167,10 +166,9 @@ impl Tool for LinkNodes {
         let (store, vcs) = ctx.open()?;
         let from = req_str(args, "from")?;
         let to = req_str(args, "to")?;
-        let rel = opt_str(args, "rel").unwrap_or_else(|| "depends_on".into());
-        let author = enum_or(args, "author", Author::Human)?;
-        let hash = ops::link(&store, &vcs, &from, &to, &rel, author)?;
-        Ok(format!("{from} +{rel} -> {to}  (new version {})", ops::short(&hash)))
+        let rel: DepKind = enum_or(args, "rel", DepKind::DependsOn)?;
+        ops::link(&store, &vcs, &from, &to, rel)?;
+        Ok(format!("{from} +{} -> {to}", rel.as_str()))
     }
 }
 
@@ -180,15 +178,14 @@ impl Tool for EditNode {
         "edit_node"
     }
     fn description(&self) -> &'static str {
-        "Edit a node's title and/or body, producing a new immutable version."
+        "Edit a node's title and/or body. A definition change: it reopens a done node and makes dependents' pins stale."
     }
     fn input_schema(&self) -> Value {
         obj_schema(
             json!({
                 "id": {"type": "string"},
                 "title": {"type": "string"},
-                "body": {"type": "string"},
-                "author": author_prop()
+                "body": {"type": "string"}
             }),
             &["id"],
         )
@@ -198,9 +195,8 @@ impl Tool for EditNode {
         let id = req_str(args, "id")?;
         let title = opt_str(args, "title");
         let body = opt_str(args, "body");
-        let author = enum_or(args, "author", Author::Human)?;
-        let hash = ops::edit(&store, &vcs, &id, title, body, author)?;
-        Ok(format!("edited {id}  (new version {})", ops::short(&hash)))
+        ops::edit(&store, &vcs, &id, title, body)?;
+        Ok(format!("edited {id} (now {})", ops::short(&store.node_version(&id)?)))
     }
 }
 
@@ -210,64 +206,62 @@ impl Tool for CompleteNode {
         "complete_node"
     }
     fn description(&self) -> &'static str {
-        "Complete a node: git-commit the produced files, store that commit on a new version, record used context, and mark it done. Requires a clean tree apart from the declared outputs."
+        "Record a node's work as done: git-commit any produced files as one output commit, pin the dependency versions and context the work was built against, and write result.md with your notes. `outputs` may be empty for graph-only work."
     }
     fn input_schema(&self) -> Value {
         obj_schema(
             json!({
                 "id": {"type": "string"},
-                "outputs": paths_prop("Produced files to commit, relative to the project root."),
-                "context": paths_prop("Files used while working the node (pinned by content)."),
+                "outputs": paths_prop("Produced files to commit, relative to the project root. Omit for graph-only work."),
+                "context": paths_prop("Consumed files that are not any node's output (pinned by content)."),
                 "message": {"type": "string", "description": "Output commit message (defaults to the node's type and title)."},
+                "notes": {"type": "string", "description": "Narrative of what happened during the work — becomes the body of result.md."},
                 "author": author_prop()
             }),
-            &["id", "outputs"],
+            &["id"],
         )
     }
     fn call(&self, ctx: &Ctx, args: &Value) -> Result<String> {
         let (store, vcs) = ctx.open()?;
         let id = req_str(args, "id")?;
         let outputs = str_list(args, "outputs");
-        if outputs.is_empty() {
-            bail!("`outputs` must list at least one produced file");
-        }
         let context = str_list(args, "context");
         let message = opt_str(args, "message");
+        let notes = opt_str(args, "notes").unwrap_or_default();
         let author = enum_or(args, "author", Author::Machine)?;
-        let (hash, commit) = ops::complete(&store, &vcs, &id, &outputs, &context, message, author)?;
-        Ok(format!(
-            "completed {id}  (version {}, output commit {})",
-            ops::short(&hash),
-            ops::short(&commit)
-        ))
+        let commit = ops::complete(&store, &vcs, &id, &outputs, &context, message, &notes, author)?;
+        Ok(match commit {
+            Some(c) => format!("completed {id} (output commit {})", ops::short(&c)),
+            None => format!("completed {id} (no output files)"),
+        })
     }
 }
 
-struct SetStatus;
-impl Tool for SetStatus {
+struct FailNode;
+impl Tool for FailNode {
     fn name(&self) -> &'static str {
-        "set_status"
+        "fail_node"
     }
     fn description(&self) -> &'static str {
-        "Append a status event to a node."
+        "Record a node's work as failed, with notes on what went wrong. The node stays ready to retry; its dependents stay blocked."
     }
     fn input_schema(&self) -> Value {
         obj_schema(
             json!({
                 "id": {"type": "string"},
-                "status": enum_prop(&["open", "in_progress", "done", "failed"], "New status."),
+                "notes": {"type": "string", "description": "What was attempted and why it failed."},
                 "author": author_prop()
             }),
-            &["id", "status"],
+            &["id"],
         )
     }
     fn call(&self, ctx: &Ctx, args: &Value) -> Result<String> {
         let (store, vcs) = ctx.open()?;
         let id = req_str(args, "id")?;
-        let status: Status = enum_req(args, "status")?;
-        let author = enum_or(args, "author", Author::Human)?;
-        ops::set_status(&store, &vcs, &id, status, author)?;
-        Ok(format!("{id} -> {}", status.as_str()))
+        let notes = opt_str(args, "notes").unwrap_or_default();
+        let author = enum_or(args, "author", Author::Machine)?;
+        ops::fail(&store, &vcs, &id, &notes, author)?;
+        Ok(format!("{id} -> failed"))
     }
 }
 
@@ -277,7 +271,7 @@ impl Tool for ShowNode {
         "show_node"
     }
     fn description(&self) -> &'static str {
-        "Show a node: current version, edges, context, output, and any staleness reasons."
+        "Show a node: definition, derived status, dependencies, result (outcome, output commit, pins, notes), and staleness reasons."
     }
     fn input_schema(&self) -> Value {
         obj_schema(json!({ "id": {"type": "string"} }), &["id"])
@@ -285,38 +279,50 @@ impl Tool for ShowNode {
     fn call(&self, ctx: &Ctx, args: &Value) -> Result<String> {
         let (store, vcs) = ctx.open()?;
         let id = req_str(args, "id")?;
-        let hash = store.get_ref(&id)?;
-        let (meta, body) = store.get_object(&hash)?;
-        let log = store.status_log(&id)?;
-        let status = log.events.last().map_or("(none)", |e| e.status.as_str());
+        let (meta, body) = store.read_node(&id)?;
 
         let mut lines = vec![
-            format!("id:      {}", meta.logical_id),
+            format!("id:      {id}"),
             format!("type:    {}", meta.node_type.as_str()),
             format!("title:   {}", meta.title),
-            format!("status:  {status}"),
+            format!("status:  {}", ops::current_status(&store, &id).as_str()),
             format!("author:  {}", meta.author.as_str()),
-            format!("version: {hash}"),
+            format!("version: {}", ops::short(&store.node_version(&id)?)),
         ];
-        if let Some(parent) = &meta.parent {
-            lines.push(format!("parent:  {}", ops::short(parent)));
+        for dep in &meta.depends_on {
+            lines.push(format!("depends_on:   {dep}"));
         }
-        if !meta.edges.is_empty() {
-            lines.push("edges:".into());
-            for e in &meta.edges {
-                lines.push(format!("  {} -> {} @ {}", e.rel, e.to, ops::short(&e.pin)));
+        for src in &meta.derived_from {
+            lines.push(format!("derived_from: {src}"));
+        }
+        if let Some((result, notes)) = store.read_result(&id)? {
+            lines.push("result:".into());
+            lines.push(format!("  outcome: {}", result.outcome.as_str()));
+            lines.push(format!("  author:  {}", result.author.as_str()));
+            if let Some(commit) = &result.output_commit {
+                lines.push(format!("  output:  commit {}", ops::short(commit)));
+            }
+            for ba in &result.built_against {
+                lines.push(match &ba.output {
+                    Some(o) => format!(
+                        "  built against {} @ {} (output {})",
+                        ba.id,
+                        ops::short(&ba.pin),
+                        ops::short(o)
+                    ),
+                    None => format!("  built against {} @ {}", ba.id, ops::short(&ba.pin)),
+                });
+            }
+            for pin in &result.context {
+                lines.push(format!("  context {} @ {}", pin.path, ops::short(&pin.blob)));
+            }
+            let notes = notes.trim_end();
+            if !notes.is_empty() {
+                lines.push("  notes:".into());
+                lines.extend(notes.lines().map(|l| format!("    {l}")));
             }
         }
-        if !meta.context.is_empty() {
-            lines.push("context:".into());
-            for p in &meta.context {
-                lines.push(format!("  {} @ {}", p.path, ops::short(&p.content)));
-            }
-        }
-        if let Some(commit) = &meta.output_commit {
-            lines.push(format!("output:  commit {}", ops::short(commit)));
-        }
-        let reasons = ops::staleness(&store, &vcs, &meta);
+        let reasons = ops::staleness(&store, &vcs, &id);
         if !reasons.is_empty() {
             lines.push("stale:".into());
             lines.extend(reasons.iter().map(|r| format!("  {r}")));
@@ -336,7 +342,7 @@ impl Tool for ListNodes {
         "list_nodes"
     }
     fn description(&self) -> &'static str {
-        "List every node with its current status, type, and title."
+        "List every node with its derived status, type, and title."
     }
     fn input_schema(&self) -> Value {
         obj_schema(json!({}), &[])
@@ -344,46 +350,17 @@ impl Tool for ListNodes {
     fn call(&self, ctx: &Ctx, _args: &Value) -> Result<String> {
         let (store, _) = ctx.open()?;
         let mut lines = Vec::new();
-        for id in store.list_refs()? {
-            let hash = store.get_ref(&id)?;
-            let (meta, _) = store.get_object(&hash)?;
-            let log = store.status_log(&id)?;
-            let status = log.events.last().map_or("-", |e| e.status.as_str());
+        for id in store.list_ids()? {
+            let (meta, _) = store.read_node(&id)?;
+            let status = ops::current_status(&store, &id);
             lines.push(format!(
-                "{id}  [{status}]  {}  {}",
+                "{id}  [{}]  {}  {}",
+                status.as_str(),
                 meta.node_type.as_str(),
                 meta.title
             ));
         }
         Ok(joined(lines, "(no nodes)"))
-    }
-}
-
-struct NodeHistory;
-impl Tool for NodeHistory {
-    fn name(&self) -> &'static str {
-        "node_history"
-    }
-    fn description(&self) -> &'static str {
-        "Show a node's version history, newest first."
-    }
-    fn input_schema(&self) -> Value {
-        obj_schema(json!({ "id": {"type": "string"} }), &["id"])
-    }
-    fn call(&self, ctx: &Ctx, args: &Value) -> Result<String> {
-        let (store, _) = ctx.open()?;
-        let id = req_str(args, "id")?;
-        let mut hash = store.get_ref(&id)?;
-        let mut lines = Vec::new();
-        loop {
-            let (meta, _) = store.get_object(&hash)?;
-            lines.push(format!("{}  {} {}", ops::short(&hash), meta.author.as_str(), meta.title));
-            match meta.parent {
-                Some(parent) => hash = parent,
-                None => break,
-            }
-        }
-        Ok(lines.join("\n"))
     }
 }
 
@@ -393,7 +370,7 @@ impl Tool for StaleNodes {
         "stale_nodes"
     }
     fn description(&self) -> &'static str {
-        "List nodes that are stale, with explicit reasons (moved edges, changed context/outputs, superseded completions)."
+        "List nodes whose recorded work has been invalidated, with explicit reasons (moved dependency definitions or outputs, changed context, drifted outputs, edited definitions)."
     }
     fn input_schema(&self) -> Value {
         obj_schema(json!({}), &[])
@@ -401,10 +378,8 @@ impl Tool for StaleNodes {
     fn call(&self, ctx: &Ctx, _args: &Value) -> Result<String> {
         let (store, vcs) = ctx.open()?;
         let mut lines = Vec::new();
-        for id in store.list_refs()? {
-            let hash = store.get_ref(&id)?;
-            let (meta, _) = store.get_object(&hash)?;
-            let reasons = ops::staleness(&store, &vcs, &meta);
+        for id in store.list_ids()? {
+            let reasons = ops::staleness(&store, &vcs, &id);
             if !reasons.is_empty() {
                 lines.push(format!("{id}:"));
                 lines.extend(reasons.iter().map(|r| format!("  {r}")));
@@ -428,10 +403,9 @@ impl Tool for ReadyNodes {
     fn call(&self, ctx: &Ctx, _args: &Value) -> Result<String> {
         let (store, vcs) = ctx.open()?;
         let mut lines = Vec::new();
-        for id in store.list_refs()? {
-            let hash = store.get_ref(&id)?;
-            let (meta, _) = store.get_object(&hash)?;
-            if ops::is_ready(&store, &vcs, &meta) {
+        for id in store.list_ids()? {
+            if ops::is_ready(&store, &vcs, &id) {
+                let (meta, _) = store.read_node(&id)?;
                 lines.push(format!("{id}  {}", meta.title));
             }
         }
@@ -453,10 +427,8 @@ impl Tool for BlockedNodes {
     fn call(&self, ctx: &Ctx, _args: &Value) -> Result<String> {
         let (store, vcs) = ctx.open()?;
         let mut lines = Vec::new();
-        for id in store.list_refs()? {
-            let hash = store.get_ref(&id)?;
-            let (meta, _) = store.get_object(&hash)?;
-            let blockers = ops::blockers(&store, &vcs, &meta);
+        for id in store.list_ids()? {
+            let blockers = ops::blockers(&store, &vcs, &id);
             if !blockers.is_empty() {
                 lines.push(format!("{id}:"));
                 lines.extend(blockers.iter().map(|b| format!("  blocked by {b}")));
@@ -472,7 +444,7 @@ impl Tool for NodeOrigin {
         "node_origin"
     }
     fn description(&self) -> &'static str {
-        "Find which node version produced a given output commit."
+        "Find which node's work produced a given output commit."
     }
     fn input_schema(&self) -> Value {
         obj_schema(json!({ "commit": {"type": "string"} }), &["commit"])
@@ -480,8 +452,8 @@ impl Tool for NodeOrigin {
     fn call(&self, ctx: &Ctx, args: &Value) -> Result<String> {
         let (store, _) = ctx.open()?;
         let commit = req_str(args, "commit")?;
-        Ok(match ops::producer(&store, &commit)? {
-            Some((id, version)) => format!("{id}  {}", ops::short(&version)),
+        Ok(match ops::origin(&store, &commit)? {
+            Some(id) => id,
             None => format!("no node produced {}", ops::short(&commit)),
         })
     }
@@ -501,12 +473,34 @@ impl Tool for NodeOutputs {
     fn call(&self, ctx: &Ctx, args: &Value) -> Result<String> {
         let (store, _) = ctx.open()?;
         let id = req_str(args, "id")?;
-        let hash = store.get_ref(&id)?;
-        let (meta, _) = store.get_object(&hash)?;
-        Ok(match meta.output_commit {
+        if !store.exists(&id) {
+            anyhow::bail!("unknown node `{id}`");
+        }
+        Ok(match ops::output_of(&store, &id) {
             Some(commit) => commit,
             None => format!("{id} has produced no output"),
         })
+    }
+}
+
+struct NodeDependents;
+impl Tool for NodeDependents {
+    fn name(&self) -> &'static str {
+        "node_dependents"
+    }
+    fn description(&self) -> &'static str {
+        "List the nodes that depend on (or derive from) a node — the follow-up work affected when it changes."
+    }
+    fn input_schema(&self) -> Value {
+        obj_schema(json!({ "id": {"type": "string"} }), &["id"])
+    }
+    fn call(&self, ctx: &Ctx, args: &Value) -> Result<String> {
+        let (store, _) = ctx.open()?;
+        let id = req_str(args, "id")?;
+        if !store.exists(&id) {
+            anyhow::bail!("unknown node `{id}`");
+        }
+        Ok(joined(ops::dependents(&store, &id)?, "(no dependents)"))
     }
 }
 
@@ -659,6 +653,10 @@ fn paths_prop(desc: &str) -> Value {
     json!({ "type": "array", "items": { "type": "string" }, "description": desc })
 }
 
+fn ids_prop(desc: &str) -> Value {
+    json!({ "type": "array", "items": { "type": "string" }, "description": desc })
+}
+
 fn enum_prop(values: &[&str], desc: &str) -> Value {
     json!({ "type": "string", "enum": values, "description": desc })
 }
@@ -691,15 +689,6 @@ fn enum_or<T: DeserializeOwned>(args: &Value, key: &str, default: T) -> Result<T
         }
         _ => Ok(default),
     }
-}
-
-/// Parse a required enum-valued argument.
-fn enum_req<T: DeserializeOwned>(args: &Value, key: &str) -> Result<T> {
-    let v = args
-        .get(key)
-        .filter(|v| !v.is_null())
-        .with_context(|| format!("missing required argument `{key}`"))?;
-    serde_json::from_value(v.clone()).with_context(|| format!("invalid value for `{key}`"))
 }
 
 /// Join lines, or return `empty` when there are none.
@@ -762,9 +751,18 @@ mod tests {
             .iter()
             .map(|t| t["name"].as_str().unwrap())
             .collect();
-        for expected in ["init_store", "add_node", "list_nodes", "complete_node", "node_origin"] {
+        for expected in [
+            "init_store",
+            "add_node",
+            "list_nodes",
+            "complete_node",
+            "fail_node",
+            "node_origin",
+            "node_dependents",
+        ] {
             assert!(names.contains(&expected), "missing tool {expected} in {names:?}");
         }
+        assert!(!names.contains(&"set_status"), "set_status was removed");
     }
 
     #[test]

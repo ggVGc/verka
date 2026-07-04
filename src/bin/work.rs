@@ -1,6 +1,6 @@
 //! `llaundry-work` — the driver for doing work on a llaundry node with an LLM.
 //!
-//! It launches a *session* focused on one node: it loads the node, builds a prompt
+//! It launches one unit of work on one node: it loads the node, builds a prompt
 //! from it, and hands that to a pluggable [`Backend`]. The backend is the LLM seam,
 //! so different engines can be dropped in without touching the launcher.
 //!
@@ -15,17 +15,17 @@ use clap::{Parser, ValueEnum};
 use serde_json::{json, Value};
 use std::process::Command;
 
-use llaundry::{ops, GitVcs, Meta, Store};
+use llaundry::{ops, GitVcs, NodeMeta, Store};
 
 #[derive(Parser)]
-#[command(name = "llaundry-work", version, about = "Run an LLM session against a llaundry node")]
+#[command(name = "llaundry-work", version, about = "Run an LLM against a llaundry node")]
 struct Cli {
-    /// Logical id of the node to work on.
+    /// Id of the node to work on.
     node: String,
     /// Path to the store directory.
     #[arg(long, env = "LLAUNDRY_DIR", default_value = ".llaundry")]
     store: std::path::PathBuf,
-    /// Which LLM backend to run the session with.
+    /// Which LLM backend to run the work with.
     #[arg(long, value_enum, default_value = "claude-code")]
     backend: BackendKind,
     /// The Claude Code executable.
@@ -55,11 +55,10 @@ fn main() -> Result<()> {
 
     let store = Store::open(cli.store.clone())?;
     let vcs = GitVcs::new(store.project_root());
-    let hash = store.get_ref(&cli.node)?;
-    let (meta, body) = store.get_object(&hash)?;
+    let (meta, body) = store.read_node(&cli.node)?;
 
     // Don't launch work on a node whose dependencies aren't satisfied, unless forced.
-    let blockers = ops::blockers(&store, &vcs, &meta);
+    let blockers = ops::blockers(&store, &vcs, &cli.node);
     if !blockers.is_empty() && !cli.force {
         bail!(
             "node `{}` is blocked; resolve its dependencies or pass --force:\n  {}",
@@ -91,7 +90,7 @@ fn main() -> Result<()> {
     }
 
     eprintln!(
-        "llaundry-work: {} session on {} — {}",
+        "llaundry-work: {} working {} — {}",
         backend.name(),
         session.node_id,
         meta.title
@@ -191,9 +190,10 @@ impl Backend for ClaudeCode {
 }
 
 /// The instruction handed to the model: what the node is, and the tools-only
-/// discipline it must follow. It steers completion toward `set_status … done`
-/// rather than `complete_node`, since a file-free session produces no output files.
-fn build_prompt(id: &str, meta: &Meta, body: &str) -> String {
+/// discipline it must follow. A file-free session produces no output files, so it
+/// finishes with `complete_node` (no outputs, notes as the record of what happened)
+/// or `fail_node`.
+fn build_prompt(id: &str, meta: &NodeMeta, body: &str) -> String {
     let mut p = vec![
         "You are an autonomous worker on a llaundry node graph.".to_string(),
         "You can act ONLY through the `llaundry` MCP tools — you have no shell, file,"
@@ -205,11 +205,11 @@ fn build_prompt(id: &str, meta: &Meta, body: &str) -> String {
         format!("  type:  {}", meta.node_type.as_str()),
         format!("  title: {}", meta.title),
     ];
-    if !meta.edges.is_empty() {
-        p.push("  edges:".into());
-        for e in &meta.edges {
-            p.push(format!("    {} -> {}", e.rel, e.to));
-        }
+    for dep in &meta.depends_on {
+        p.push(format!("  depends_on -> {dep}"));
+    }
+    for src in &meta.derived_from {
+        p.push(format!("  derived_from -> {src}"));
     }
     let body = body.trim();
     if !body.is_empty() {
@@ -219,12 +219,15 @@ fn build_prompt(id: &str, meta: &Meta, body: &str) -> String {
     }
     p.push(String::new());
     p.push("Do this:".into());
-    p.push(format!("  1. Mark it in progress: set_status {id} in_progress."));
-    p.push("  2. Gather what you need with show_node, list_nodes, node_history and the".into());
-    p.push("     stale/ready/blocked queries.".into());
-    p.push("  3. Carry out the node's work by updating the graph — add_node, link_nodes,".into());
+    p.push("  1. Gather what you need with show_node, list_nodes, node_dependents and".into());
+    p.push("     the stale/ready/blocked queries.".into());
+    p.push("  2. Carry out the node's work by updating the graph — add_node, link_nodes,".into());
     p.push("     edit_node — keeping each change small and clearly described.".into());
-    p.push(format!("  4. When the work is done, record it: set_status {id} done."));
+    p.push(format!(
+        "  3. When the work is done, record it: complete_node {id}, with `notes`"
+    ));
+    p.push("     summarising what you did and why. If the work cannot be done,".into());
+    p.push(format!("     record that instead: fail_node {id} with `notes` explaining why."));
     p.push("Finish with a brief summary of what you changed.".into());
     p.join("\n")
 }
@@ -244,7 +247,7 @@ fn shell_quote(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use llaundry::{Author, Edge, NodeType};
+    use llaundry::{Author, NodeType};
 
     fn sample_session() -> Session {
         Session {
@@ -325,28 +328,21 @@ mod tests {
 
     #[test]
     fn prompt_states_the_node_and_the_tools_only_rule() {
-        let meta = Meta {
+        let meta = NodeMeta {
             schema: 1,
-            logical_id: "task-1".into(),
             node_type: NodeType::Task,
             title: "Parse config".into(),
             author: Author::Human,
-            parent: None,
-            output_commit: None,
-            edges: vec![Edge {
-                to: "task-0".into(),
-                rel: "depends_on".into(),
-                pin: "abc".into(),
-            }],
-            context: vec![],
+            depends_on: vec!["task-0".into()],
+            derived_from: vec![],
         };
         let prompt = build_prompt("task-1", &meta, "  Write the config parser.  ");
 
         assert!(prompt.contains("task-1"));
         assert!(prompt.contains("Parse config"));
         assert!(prompt.contains("llaundry` MCP tools"));
-        assert!(prompt.contains("set_status task-1 in_progress"));
-        assert!(prompt.contains("set_status task-1 done"));
+        assert!(prompt.contains("complete_node task-1"));
+        assert!(prompt.contains("fail_node task-1"));
         assert!(prompt.contains("depends_on -> task-0"));
         assert!(prompt.contains("Write the config parser."));
     }

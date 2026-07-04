@@ -4,25 +4,22 @@
 //!
 //! ```text
 //! <root>/
-//!   objects/<hash>/meta.toml   immutable definition  (content-addressed)
-//!   objects/<hash>/body.md     immutable prose        (content-addressed)
-//!   refs/<logical-id>          one line: the current version hash  (mutable)
-//!   status/<logical-id>.toml   append-only [[event]] log            (append-only)
+//!   nodes/<id>/
+//!     node.md      frontmatter (TOML) + prose — the definition
+//!     result.md    frontmatter (TOML) + narrative — the completion record
 //! ```
 //!
-//! `objects/` is the source of truth and is immutable + content-addressed, exactly
-//! like git's object store: writing the same content twice is idempotent, and
-//! nothing is ever edited in place. `refs/` is the single mutable surface — the
-//! pointer that answers "which immutable version is current". `status/` is an
-//! append-only event log kept *outside* the hashed content.
+//! There is no object store, no refs, and no status log: git is the only
+//! versioning layer. A node's *version* is the git blob id of its `node.md`,
+//! computed on demand ([`Store::node_version`]) and never stored inside the
+//! file. History is `git log` on the node's directory.
 
 use anyhow::{bail, Context, Result};
-use sha2::{Digest, Sha256};
+use sha1::{Digest, Sha1};
 use std::fs;
-use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use crate::model::{Meta, StatusEvent, StatusLog};
+use crate::model::{NodeMeta, ResultMeta};
 
 pub struct Store {
     root: PathBuf,
@@ -31,7 +28,7 @@ pub struct Store {
 impl Store {
     /// Open an existing store, erroring if it has not been initialised.
     pub fn open(root: PathBuf) -> Result<Self> {
-        if !root.join("objects").is_dir() {
+        if !root.join("nodes").is_dir() {
             bail!(
                 "no llaundry store at {} (run `llaundry init` first)",
                 root.display()
@@ -42,83 +39,86 @@ impl Store {
 
     /// Create the directory skeleton for a new store.
     pub fn init(root: PathBuf) -> Result<Self> {
-        for sub in ["objects", "refs", "status"] {
-            fs::create_dir_all(root.join(sub))
-                .with_context(|| format!("creating {}/{sub}", root.display()))?;
-        }
+        fs::create_dir_all(root.join("nodes"))
+            .with_context(|| format!("creating {}/nodes", root.display()))?;
         Ok(Store { root })
     }
 
-    // --- paths --------------------------------------------------------------
+    // --- paths ----------------------------------------------------------------
 
-    fn object_dir(&self, hash: &str) -> PathBuf {
-        self.root.join("objects").join(hash)
+    pub fn node_dir(&self, id: &str) -> PathBuf {
+        self.root.join("nodes").join(id)
     }
-    fn ref_path(&self, id: &str) -> PathBuf {
-        self.root.join("refs").join(id)
+    fn node_path(&self, id: &str) -> PathBuf {
+        self.node_dir(id).join("node.md")
     }
-    fn status_path(&self, id: &str) -> PathBuf {
-        self.root.join("status").join(format!("{id}.toml"))
-    }
-
-    // --- objects (immutable, content-addressed) -----------------------------
-
-    /// The node hash is `sha256(meta_bytes || 0x00 || body_bytes)`.
-    ///
-    /// The hash is computed over the exact bytes we are about to write, so the
-    /// filename and the content can never drift. The hash is deliberately *not*
-    /// stored inside the object (that would be self-referential); the directory
-    /// name is the only place it lives.
-    fn hash(meta_bytes: &str, body: &str) -> String {
-        let mut h = Sha256::new();
-        h.update(meta_bytes.as_bytes());
-        h.update([0u8]);
-        h.update(body.as_bytes());
-        hex(&h.finalize())
+    fn result_path(&self, id: &str) -> PathBuf {
+        self.node_dir(id).join("result.md")
     }
 
-    /// Write an immutable object and return its hash. Idempotent: if an identical
-    /// object already exists it is left untouched.
-    pub fn put_object(&self, meta: &Meta, body: &str) -> Result<String> {
-        let meta_bytes = toml::to_string_pretty(meta).context("serialising meta")?;
-        let hash = Self::hash(&meta_bytes, body);
-        let dir = self.object_dir(&hash);
-        if !dir.exists() {
-            fs::create_dir_all(&dir)?;
-            fs::write(dir.join("meta.toml"), &meta_bytes)?;
-            fs::write(dir.join("body.md"), body)?;
-        }
-        Ok(hash)
+    pub fn exists(&self, id: &str) -> bool {
+        self.node_path(id).is_file()
     }
 
-    pub fn get_object(&self, hash: &str) -> Result<(Meta, String)> {
-        let dir = self.object_dir(hash);
-        let meta_bytes = fs::read_to_string(dir.join("meta.toml"))
-            .with_context(|| format!("reading object {hash}"))?;
-        let meta: Meta = toml::from_str(&meta_bytes).context("parsing meta.toml")?;
-        let body = fs::read_to_string(dir.join("body.md")).unwrap_or_default();
-        Ok((meta, body))
-    }
+    // --- node.md (the definition) ----------------------------------------------
 
-    // --- refs (the one mutable pointer) -------------------------------------
-
-    pub fn set_ref(&self, id: &str, hash: &str) -> Result<()> {
-        fs::write(self.ref_path(id), format!("{hash}\n"))
-            .with_context(|| format!("writing ref {id}"))?;
+    pub fn write_node(&self, id: &str, meta: &NodeMeta, body: &str) -> Result<()> {
+        fs::create_dir_all(self.node_dir(id))?;
+        let doc = to_document(&toml::to_string_pretty(meta).context("serialising node meta")?, body);
+        fs::write(self.node_path(id), doc).with_context(|| format!("writing node `{id}`"))?;
         Ok(())
     }
 
-    pub fn get_ref(&self, id: &str) -> Result<String> {
-        let s = fs::read_to_string(self.ref_path(id))
+    pub fn read_node(&self, id: &str) -> Result<(NodeMeta, String)> {
+        let text = fs::read_to_string(self.node_path(id))
             .with_context(|| format!("unknown node `{id}`"))?;
-        Ok(s.trim().to_string())
+        let (front, body) = split_document(&text)
+            .with_context(|| format!("malformed node.md for `{id}`"))?;
+        let meta = toml::from_str(&front).with_context(|| format!("parsing node.md for `{id}`"))?;
+        Ok((meta, body))
     }
 
-    pub fn list_refs(&self) -> Result<Vec<String>> {
+    /// The node's version: the git blob id of its `node.md` bytes, computed on
+    /// demand. Editing the definition changes it; writing `result.md` does not.
+    pub fn node_version(&self, id: &str) -> Result<String> {
+        let bytes =
+            fs::read(self.node_path(id)).with_context(|| format!("unknown node `{id}`"))?;
+        Ok(blob_id(&bytes))
+    }
+
+    // --- result.md (the completion record) --------------------------------------
+
+    pub fn write_result(&self, id: &str, meta: &ResultMeta, notes: &str) -> Result<()> {
+        if !self.exists(id) {
+            bail!("unknown node `{id}`");
+        }
+        let doc =
+            to_document(&toml::to_string_pretty(meta).context("serialising result meta")?, notes);
+        fs::write(self.result_path(id), doc).with_context(|| format!("writing result for `{id}`"))?;
+        Ok(())
+    }
+
+    /// The node's completion record, or `None` if it has not been worked yet.
+    pub fn read_result(&self, id: &str) -> Result<Option<(ResultMeta, String)>> {
+        let text = match fs::read_to_string(self.result_path(id)) {
+            Ok(t) => t,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e).with_context(|| format!("reading result for `{id}`")),
+        };
+        let (front, notes) = split_document(&text)
+            .with_context(|| format!("malformed result.md for `{id}`"))?;
+        let meta =
+            toml::from_str(&front).with_context(|| format!("parsing result.md for `{id}`"))?;
+        Ok(Some((meta, notes)))
+    }
+
+    // --- listing -----------------------------------------------------------------
+
+    pub fn list_ids(&self) -> Result<Vec<String>> {
         let mut ids = Vec::new();
-        for entry in fs::read_dir(self.root.join("refs"))? {
+        for entry in fs::read_dir(self.root.join("nodes"))? {
             let entry = entry?;
-            if entry.file_type()?.is_file() {
+            if entry.file_type()?.is_dir() {
                 ids.push(entry.file_name().to_string_lossy().into_owned());
             }
         }
@@ -126,36 +126,9 @@ impl Store {
         Ok(ids)
     }
 
-    // --- status (append-only event log) -------------------------------------
+    // --- git integration points ----------------------------------------------------
 
-    /// Append one status event. Appending a fresh `[[event]]` block keeps the
-    /// file valid TOML while only ever adding lines — a clean, minimal diff.
-    pub fn append_status(&self, id: &str, event: &StatusEvent) -> Result<()> {
-        let block = toml::to_string(&StatusLog {
-            events: vec![event.clone()],
-        })?;
-        let path = self.status_path(id);
-        // Separate blocks with a blank line for readability (none before the first).
-        let separator = if path.exists() { "\n" } else { "" };
-        let mut f = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .with_context(|| format!("opening status log for {id}"))?;
-        write!(f, "{separator}{block}")?;
-        Ok(())
-    }
-
-    pub fn status_log(&self, id: &str) -> Result<StatusLog> {
-        match fs::read_to_string(self.status_path(id)) {
-            Ok(s) => Ok(toml::from_str(&s).context("parsing status log")?),
-            Err(_) => Ok(StatusLog::default()),
-        }
-    }
-
-    // --- git integration points ---------------------------------------------
-
-    /// The project root that git operations and output paths resolve against: the
+    /// The project root that git operations and file paths resolve against: the
     /// directory containing the store (e.g. the parent of `.llaundry/`).
     pub fn project_root(&self) -> PathBuf {
         match self.root.parent() {
@@ -174,6 +147,60 @@ impl Store {
     }
 }
 
+/// Git's blob id for `bytes`: `sha1("blob <len>\0" + bytes)`. Computed locally so
+/// pins and node versions need no git invocation (and no repository) to check.
+pub fn blob_id(bytes: &[u8]) -> String {
+    let mut h = Sha1::new();
+    h.update(format!("blob {}\0", bytes.len()).as_bytes());
+    h.update(bytes);
+    hex(&h.finalize())
+}
+
+/// The blob id of a file on disk, or `None` if it does not exist.
+pub fn file_blob(path: &Path) -> Option<String> {
+    fs::read(path).ok().map(|bytes| blob_id(&bytes))
+}
+
+// --- the `---` frontmatter document format ---------------------------------------
+
+/// `---\n<toml>---\n\n<body>`. The body is omitted entirely when empty.
+fn to_document(front: &str, body: &str) -> String {
+    let front = if front.ends_with('\n') || front.is_empty() {
+        front.to_string()
+    } else {
+        format!("{front}\n")
+    };
+    if body.is_empty() {
+        format!("---\n{front}---\n")
+    } else {
+        format!("---\n{front}---\n\n{body}")
+    }
+}
+
+/// Split a document into its TOML frontmatter and body. The frontmatter ends at
+/// the first line that is exactly `---`.
+fn split_document(text: &str) -> Result<(String, String)> {
+    let rest = text
+        .strip_prefix("---\n")
+        .context("missing opening `---` frontmatter delimiter")?;
+    let mut front = String::new();
+    let mut consumed = 4; // the opening "---\n"
+    let mut closed = false;
+    for line in rest.split_inclusive('\n') {
+        consumed += line.len();
+        if line.trim_end_matches(['\r', '\n']) == "---" {
+            closed = true;
+            break;
+        }
+        front.push_str(line);
+    }
+    if !closed {
+        bail!("missing closing `---` frontmatter delimiter");
+    }
+    let body = text[consumed..].strip_prefix('\n').unwrap_or(&text[consumed..]);
+    Ok((front, body.to_string()))
+}
+
 fn hex(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() * 2);
     for b in bytes {
@@ -181,4 +208,82 @@ fn hex(bytes: &[u8]) -> String {
         let _ = write!(s, "{b:02x}");
     }
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{Author, NodeType, Outcome};
+
+    #[test]
+    fn blob_id_matches_git() {
+        // `echo 'hello' | git hash-object --stdin`
+        assert_eq!(blob_id(b"hello\n"), "ce013625030ba8dba906f756967f9e9ca394464a");
+        // `printf '' | git hash-object --stdin`
+        assert_eq!(blob_id(b""), "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391");
+    }
+
+    #[test]
+    fn document_roundtrip() {
+        let (front, body) = split_document(&to_document("a = 1\n", "body\nlines\n")).unwrap();
+        assert_eq!(front, "a = 1\n");
+        assert_eq!(body, "body\nlines\n");
+
+        // An empty body round-trips to empty.
+        let (front, body) = split_document(&to_document("a = 1\n", "")).unwrap();
+        assert_eq!(front, "a = 1\n");
+        assert_eq!(body, "");
+
+        // A body containing `---` lines is not mistaken for a delimiter, because
+        // the split stops at the *first* closing delimiter.
+        let (_, body) = split_document(&to_document("a = 1\n", "x\n---\ny\n")).unwrap();
+        assert_eq!(body, "x\n---\ny\n");
+    }
+
+    #[test]
+    fn node_and_result_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("llaundry-store-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = Store::init(dir.join(".llaundry")).unwrap();
+
+        let meta = NodeMeta {
+            schema: 1,
+            node_type: NodeType::Task,
+            title: "hello".into(),
+            author: Author::Human,
+            depends_on: vec!["task-a".into()],
+            derived_from: vec![],
+        };
+        store.write_node("task-1", &meta, "the body").unwrap();
+        let (got, body) = store.read_node("task-1").unwrap();
+        assert_eq!(got.title, "hello");
+        assert_eq!(got.depends_on, vec!["task-a".to_string()]);
+        assert_eq!(body, "the body");
+
+        // The version changes exactly when the definition changes.
+        let v1 = store.node_version("task-1").unwrap();
+        store.write_node("task-1", &meta, "other body").unwrap();
+        assert_ne!(v1, store.node_version("task-1").unwrap());
+
+        // No result yet; then one round-trips, without touching the version.
+        assert!(store.read_result("task-1").unwrap().is_none());
+        let v2 = store.node_version("task-1").unwrap();
+        let result = ResultMeta {
+            at: 0,
+            author: Author::Machine,
+            node_version: v2.clone(),
+            outcome: Outcome::Done,
+            output_commit: Some("abc".into()),
+            built_against: vec![],
+            context: vec![],
+        };
+        store.write_result("task-1", &result, "did the thing").unwrap();
+        let (r, notes) = store.read_result("task-1").unwrap().unwrap();
+        assert_eq!(r.output_commit.as_deref(), Some("abc"));
+        assert_eq!(r.outcome, Outcome::Done);
+        assert_eq!(notes, "did the thing");
+        assert_eq!(store.node_version("task-1").unwrap(), v2);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

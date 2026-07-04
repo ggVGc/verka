@@ -1,4 +1,4 @@
-//! `llaundry` — a tiny CLI over a content-addressed, immutable node graph.
+//! `llaundry` — a tiny CLI over a git-versioned node graph.
 //!
 //! This binary is a thin shell: it parses arguments, opens the store, wires up the
 //! real [`GitVcs`], and delegates every operation to the `llaundry` library. See
@@ -9,13 +9,13 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 use llaundry::ops::{self, NewNode};
-use llaundry::{Author, GitVcs, NodeType, Status, Store};
+use llaundry::{Author, DepKind, GitVcs, NodeType, Store};
 
 #[derive(Parser)]
 #[command(
     name = "llaundry",
     version,
-    about = "A content-addressed, immutable graph of LLM-development nodes"
+    about = "A git-versioned graph of LLM-development nodes"
 )]
 struct Cli {
     /// Path to the store directory.
@@ -30,7 +30,7 @@ enum Cmd {
     /// Create a new, empty store.
     Init,
 
-    /// Add a new node. Prints its logical id.
+    /// Add a new node. Prints its id.
     Add {
         #[arg(long = "type", value_enum, default_value = "task")]
         node_type: NodeType,
@@ -44,28 +44,26 @@ enum Cmd {
         file: Option<PathBuf>,
         #[arg(long, value_enum, default_value = "human")]
         author: Author,
-        /// Add a `depends_on` edge to another node (repeatable), by logical id.
+        /// Another node this one depends on (repeatable), by id.
         #[arg(long = "depends-on")]
         depends_on: Vec<String>,
-        /// Add a `derived_from` edge to another node (repeatable), by logical id.
+        /// Another node this one is derived from (repeatable), by id.
         #[arg(long = "derived-from")]
         derived_from: Vec<String>,
     },
 
-    /// Add a typed edge from one node to another.
-    /// This is an edit, so it produces a new version of <from>.
+    /// Add <to> to one of <from>'s dependency lists (a definition change).
     Link {
-        /// Source node (the one that gains the edge).
+        /// Source node (the one that gains the dependency).
         from: String,
         /// Target node.
         to: String,
-        #[arg(long, default_value = "depends_on")]
-        rel: String,
-        #[arg(long, value_enum, default_value = "human")]
-        author: Author,
+        #[arg(long, value_enum, default_value = "depends-on")]
+        rel: DepKind,
     },
 
-    /// Edit a node, producing a new immutable version.
+    /// Edit a node's title and/or body (a definition change: reopens a done node
+    /// and makes dependents' pins stale).
     Edit {
         id: String,
         #[arg(long)]
@@ -74,50 +72,49 @@ enum Cmd {
         body: Option<String>,
         #[arg(long, conflicts_with = "body")]
         file: Option<PathBuf>,
-        #[arg(long, value_enum, default_value = "human")]
-        author: Author,
     },
 
-    /// Complete a node by committing the output files it produced.
-    /// Commits the named files with git, stores that commit hash on a new version,
-    /// commits the store change, and marks the node `done`.
+    /// Record a node's work as done: commit the produced files as one output
+    /// commit, pin what the work was built against, and write result.md.
     Complete {
         id: String,
-        /// A produced file, relative to the project root (repeatable).
-        #[arg(long = "output", short = 'o', required = true)]
+        /// A produced file, relative to the project root (repeatable). May be
+        /// omitted entirely for graph-only work that produces no files.
+        #[arg(long = "output", short = 'o')]
         outputs: Vec<PathBuf>,
-        /// A file that was actually used while working this node — e.g. read by an
-        /// agent's tool call (repeatable). Pinned by content, so a later change to
-        /// it also invalidates the node.
+        /// A consumed file that is not any node's output (repeatable). Pinned by
+        /// content, so a later change to it flags this node.
         #[arg(long = "context", short = 'c')]
         context: Vec<PathBuf>,
         /// Message for the output commit (defaults to the node's type and title).
         #[arg(long, short = 'm')]
         message: Option<String>,
+        /// Narrative of what happened during the work (the body of result.md).
+        #[arg(long)]
+        notes: Option<String>,
         #[arg(long, value_enum, default_value = "machine")]
         author: Author,
     },
 
-    /// Append a status event.
-    #[command(alias = "status")]
-    SetStatus {
+    /// Record a node's work as failed, with notes on what went wrong.
+    Fail {
         id: String,
-        #[arg(value_enum)]
-        status: Status,
-        #[arg(long, value_enum, default_value = "human")]
+        #[arg(long)]
+        notes: Option<String>,
+        #[arg(long, value_enum, default_value = "machine")]
         author: Author,
     },
 
-    /// Show a node: its current version, edges, and status.
+    /// Show a node: definition, derived status, result, and staleness reasons.
     Show { id: String },
 
-    /// List every node with its current status.
+    /// List every node with its derived status.
     List,
 
-    /// Show the version history of a node (newest first).
+    /// Show a node's git history (every definition and result change).
     Log { id: String },
 
-    /// Report nodes whose edges point at outdated versions of their targets.
+    /// Report nodes whose recorded work has been invalidated, with reasons.
     Stale,
 
     /// List unfinished nodes whose dependencies are all satisfied (done, not stale).
@@ -126,7 +123,7 @@ enum Cmd {
     /// List nodes blocked by an unsatisfied dependency, with reasons.
     Blocked,
 
-    /// Find which node produced a given output commit.
+    /// Find which node's work produced a given output commit.
     Origin {
         /// The output commit hash to trace back to its node.
         commit: String,
@@ -134,6 +131,9 @@ enum Cmd {
 
     /// Show the output commit a node produced, if any.
     Outputs { id: String },
+
+    /// List the nodes that depend on (or derive from) a node.
+    Dependents { id: String },
 }
 
 fn main() -> Result<()> {
@@ -155,7 +155,7 @@ fn main() -> Result<()> {
         } => {
             let store = Store::open(store)?;
             let vcs = GitVcs::new(store.project_root());
-            let (logical_id, hash) = ops::add(
+            let id = ops::add(
                 &store,
                 &vcs,
                 NewNode {
@@ -167,19 +167,14 @@ fn main() -> Result<()> {
                     derived_from,
                 },
             )?;
-            println!("{logical_id}  {}", ops::short(&hash));
+            println!("{id}");
         }
 
-        Cmd::Link {
-            from,
-            to,
-            rel,
-            author,
-        } => {
+        Cmd::Link { from, to, rel } => {
             let store = Store::open(store)?;
             let vcs = GitVcs::new(store.project_root());
-            let hash = ops::link(&store, &vcs, &from, &to, &rel, author)?;
-            println!("{from}  {}  (+{rel} -> {to})", ops::short(&hash));
+            ops::link(&store, &vcs, &from, &to, rel)?;
+            println!("{from}  +{} -> {to}", rel.as_str());
         }
 
         Cmd::Edit {
@@ -187,7 +182,6 @@ fn main() -> Result<()> {
             title,
             body,
             file,
-            author,
         } => {
             let store = Store::open(store)?;
             let vcs = GitVcs::new(store.project_root());
@@ -196,8 +190,8 @@ fn main() -> Result<()> {
             } else {
                 None
             };
-            let hash = ops::edit(&store, &vcs, &id, title, new_body, author)?;
-            println!("{id}  {}", ops::short(&hash));
+            ops::edit(&store, &vcs, &id, title, new_body)?;
+            println!("{id}  {}", ops::short(&store.node_version(&id)?));
         }
 
         Cmd::Complete {
@@ -205,89 +199,49 @@ fn main() -> Result<()> {
             outputs,
             context,
             message,
+            notes,
             author,
         } => {
             let store = Store::open(store)?;
             let vcs = GitVcs::new(store.project_root());
-            let (hash, commit) = ops::complete(
+            let commit = ops::complete(
                 &store,
                 &vcs,
                 &id,
                 &to_strings(&outputs),
                 &to_strings(&context),
                 message,
+                notes.as_deref().unwrap_or(""),
                 author,
             )?;
-            println!("{id}  {}  (output {})", ops::short(&hash), ops::short(&commit));
+            match commit {
+                Some(c) => println!("{id}  done  (output {})", ops::short(&c)),
+                None => println!("{id}  done  (no output files)"),
+            }
         }
 
-        Cmd::SetStatus {
-            id,
-            status,
-            author,
-        } => {
+        Cmd::Fail { id, notes, author } => {
             let store = Store::open(store)?;
             let vcs = GitVcs::new(store.project_root());
-            ops::set_status(&store, &vcs, &id, status, author)?;
-            println!("{id}  -> {}", status.as_str());
+            ops::fail(&store, &vcs, &id, notes.as_deref().unwrap_or(""), author)?;
+            println!("{id}  failed");
         }
 
         Cmd::Show { id } => {
             let store = Store::open(store)?;
             let vcs = GitVcs::new(store.project_root());
-            let hash = store.get_ref(&id)?;
-            let (meta, body) = store.get_object(&hash)?;
-            let log = store.status_log(&id)?;
-            let status = log.events.last().map_or("(none)", |e| e.status.as_str());
-
-            println!("id:      {}", meta.logical_id);
-            println!("type:    {}", meta.node_type.as_str());
-            println!("title:   {}", meta.title);
-            println!("status:  {status}");
-            println!("author:  {}", meta.author.as_str());
-            println!("version: {hash}");
-            if let Some(parent) = &meta.parent {
-                println!("parent:  {}", ops::short(parent));
-            }
-            if !meta.edges.is_empty() {
-                println!("edges:");
-                for e in &meta.edges {
-                    println!("  {:<12} -> {} @ {}", e.rel, e.to, ops::short(&e.pin));
-                }
-            }
-            if !meta.context.is_empty() {
-                println!("context:");
-                for p in &meta.context {
-                    println!("  {} @ {}", p.path, ops::short(&p.content));
-                }
-            }
-            if let Some(commit) = &meta.output_commit {
-                println!("output:  commit {}", ops::short(commit));
-            }
-            let reasons = ops::staleness(&store, &vcs, &meta);
-            if !reasons.is_empty() {
-                println!("stale:");
-                for r in &reasons {
-                    println!("  {r}");
-                }
-            }
-            let body = body.trim_end();
-            if !body.is_empty() {
-                println!("\n{body}");
-            }
+            print!("{}", show_node(&store, &vcs, &id)?);
         }
 
         Cmd::List => {
             let store = Store::open(store)?;
-            for id in store.list_refs()? {
-                let hash = store.get_ref(&id)?;
-                let (meta, _) = store.get_object(&hash)?;
-                let log = store.status_log(&id)?;
-                let status = log.events.last().map_or("-", |e| e.status.as_str());
+            for id in store.list_ids()? {
+                let (meta, _) = store.read_node(&id)?;
+                let status = ops::current_status(&store, &id);
                 println!(
-                    "{:<30} {:<12} {:<14} {}",
+                    "{:<32} {:<8} {:<14} {}",
                     id,
-                    status,
+                    status.as_str(),
                     meta.node_type.as_str(),
                     meta.title
                 );
@@ -296,14 +250,20 @@ fn main() -> Result<()> {
 
         Cmd::Log { id } => {
             let store = Store::open(store)?;
-            let mut hash = store.get_ref(&id)?;
-            loop {
-                let (meta, _) = store.get_object(&hash)?;
-                println!("{}  {} {}", ops::short(&hash), meta.author.as_str(), meta.title);
-                match meta.parent {
-                    Some(parent) => hash = parent,
-                    None => break,
-                }
+            if !store.exists(&id) {
+                anyhow::bail!("unknown node `{id}`");
+            }
+            // A node's history *is* git history: every definition edit and every
+            // result is a commit touching its directory.
+            let pathspec = format!("{}/nodes/{id}", store.store_name());
+            let status = std::process::Command::new("git")
+                .arg("-C")
+                .arg(store.project_root())
+                .args(["log", "--oneline", "--stat", "--", &pathspec])
+                .status()
+                .context("failed to run git log")?;
+            if !status.success() {
+                anyhow::bail!("git log failed");
             }
         }
 
@@ -311,10 +271,8 @@ fn main() -> Result<()> {
             let store = Store::open(store)?;
             let vcs = GitVcs::new(store.project_root());
             let mut found = false;
-            for id in store.list_refs()? {
-                let hash = store.get_ref(&id)?;
-                let (meta, _) = store.get_object(&hash)?;
-                let reasons = ops::staleness(&store, &vcs, &meta);
+            for id in store.list_ids()? {
+                let reasons = ops::staleness(&store, &vcs, &id);
                 if !reasons.is_empty() {
                     found = true;
                     println!("{id}:");
@@ -331,11 +289,10 @@ fn main() -> Result<()> {
         Cmd::Ready => {
             let store = Store::open(store)?;
             let vcs = GitVcs::new(store.project_root());
-            for id in store.list_refs()? {
-                let hash = store.get_ref(&id)?;
-                let (meta, _) = store.get_object(&hash)?;
-                if ops::is_ready(&store, &vcs, &meta) {
-                    println!("{:<30} {}", id, meta.title);
+            for id in store.list_ids()? {
+                if ops::is_ready(&store, &vcs, &id) {
+                    let (meta, _) = store.read_node(&id)?;
+                    println!("{:<32} {}", id, meta.title);
                 }
             }
         }
@@ -344,10 +301,8 @@ fn main() -> Result<()> {
             let store = Store::open(store)?;
             let vcs = GitVcs::new(store.project_root());
             let mut any = false;
-            for id in store.list_refs()? {
-                let hash = store.get_ref(&id)?;
-                let (meta, _) = store.get_object(&hash)?;
-                let blockers = ops::blockers(&store, &vcs, &meta);
+            for id in store.list_ids()? {
+                let blockers = ops::blockers(&store, &vcs, &id);
                 if !blockers.is_empty() {
                     any = true;
                     println!("{id}:");
@@ -363,23 +318,98 @@ fn main() -> Result<()> {
 
         Cmd::Origin { commit } => {
             let store = Store::open(store)?;
-            match ops::producer(&store, &commit)? {
-                Some((id, version)) => println!("{id}  {}", ops::short(&version)),
+            match ops::origin(&store, &commit)? {
+                Some(id) => println!("{id}"),
                 None => println!("no node produced {}", ops::short(&commit)),
             }
         }
 
         Cmd::Outputs { id } => {
             let store = Store::open(store)?;
-            let hash = store.get_ref(&id)?;
-            let (meta, _) = store.get_object(&hash)?;
-            match meta.output_commit {
+            if !store.exists(&id) {
+                anyhow::bail!("unknown node `{id}`");
+            }
+            match ops::output_of(&store, &id) {
                 Some(commit) => println!("{commit}"),
                 None => println!("{id} has produced no output"),
             }
         }
+
+        Cmd::Dependents { id } => {
+            let store = Store::open(store)?;
+            if !store.exists(&id) {
+                anyhow::bail!("unknown node `{id}`");
+            }
+            for dep in ops::dependents(&store, &id)? {
+                println!("{dep}");
+            }
+        }
     }
     Ok(())
+}
+
+/// The `show` view, shared in spirit with the MCP server's `show_node`.
+fn show_node(store: &Store, vcs: &GitVcs, id: &str) -> Result<String> {
+    let (meta, body) = store.read_node(id)?;
+    let mut out = String::new();
+    use std::fmt::Write;
+
+    writeln!(out, "id:      {id}")?;
+    writeln!(out, "type:    {}", meta.node_type.as_str())?;
+    writeln!(out, "title:   {}", meta.title)?;
+    writeln!(out, "status:  {}", ops::current_status(store, id).as_str())?;
+    writeln!(out, "author:  {}", meta.author.as_str())?;
+    writeln!(out, "version: {}", ops::short(&store.node_version(id)?))?;
+    for dep in &meta.depends_on {
+        writeln!(out, "depends_on:   {dep}")?;
+    }
+    for src in &meta.derived_from {
+        writeln!(out, "derived_from: {src}")?;
+    }
+
+    if let Some((result, notes)) = store.read_result(id)? {
+        writeln!(out, "result:")?;
+        writeln!(out, "  outcome: {}", result.outcome.as_str())?;
+        writeln!(out, "  author:  {}", result.author.as_str())?;
+        if let Some(commit) = &result.output_commit {
+            writeln!(out, "  output:  commit {}", ops::short(commit))?;
+        }
+        for ba in &result.built_against {
+            match &ba.output {
+                Some(o) => writeln!(
+                    out,
+                    "  built against {} @ {} (output {})",
+                    ba.id,
+                    ops::short(&ba.pin),
+                    ops::short(o)
+                )?,
+                None => writeln!(out, "  built against {} @ {}", ba.id, ops::short(&ba.pin))?,
+            }
+        }
+        for pin in &result.context {
+            writeln!(out, "  context {} @ {}", pin.path, ops::short(&pin.blob))?;
+        }
+        let notes = notes.trim_end();
+        if !notes.is_empty() {
+            writeln!(out, "  notes:")?;
+            for line in notes.lines() {
+                writeln!(out, "    {line}")?;
+            }
+        }
+    }
+
+    let reasons = ops::staleness(store, vcs, id);
+    if !reasons.is_empty() {
+        writeln!(out, "stale:")?;
+        for r in &reasons {
+            writeln!(out, "  {r}")?;
+        }
+    }
+    let body = body.trim_end();
+    if !body.is_empty() {
+        writeln!(out, "\n{body}")?;
+    }
+    Ok(out)
 }
 
 fn read_body(body: Option<String>, file: Option<PathBuf>) -> Result<String> {

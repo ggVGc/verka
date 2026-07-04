@@ -1,10 +1,11 @@
 //! The version-control seam.
 //!
-//! `complete` and staleness checks are the only parts of llaundry that touch git.
-//! Routing them through this trait keeps that dependency injectable: the real
-//! implementation ([`crate::git::GitVcs`]) shells out to `git`, while tests use an
-//! in-memory [`FakeVcs`] so the rest of the project can be unit-tested with no git
-//! binary, no repository, and no configured identity.
+//! Committing outputs/store changes and checking output drift are the only parts
+//! of llaundry that need a git repository (versions and pins are blob ids
+//! computed locally). Routing them through this trait keeps that dependency
+//! injectable: the real implementation ([`crate::git::GitVcs`]) shells out to
+//! `git`, while tests use an in-memory [`FakeVcs`] so the rest of the project can
+//! be unit-tested with no git binary, no repository, and no configured identity.
 
 use anyhow::Result;
 
@@ -20,10 +21,6 @@ pub trait Vcs {
     /// human-readable reason (for git, a `diff --name-status`); else `None`.
     fn drift(&self, id: &str) -> Result<Option<String>>;
 
-    /// The current content hash of a file (for git, its blob id), or `None` if the
-    /// file is missing. Used to pin and re-check declared inputs and used context.
-    fn content_id(&self, path: &str) -> Result<Option<String>>;
-
     /// Paths with uncommitted changes (empty means a clean working tree).
     fn dirty_paths(&self) -> Result<Vec<String>>;
 }
@@ -36,7 +33,6 @@ pub struct FakeVcs {
     pub next_id: String,
     pub dirty: Vec<String>,
     pub drift_for: std::collections::HashMap<String, String>,
-    pub content: std::collections::HashMap<String, String>,
     pub captured: std::cell::RefCell<Vec<Vec<String>>>,
     pub store_commits: std::cell::RefCell<usize>,
 }
@@ -55,10 +51,6 @@ impl Vcs for FakeVcs {
 
     fn drift(&self, id: &str) -> Result<Option<String>> {
         Ok(self.drift_for.get(id).cloned())
-    }
-
-    fn content_id(&self, path: &str) -> Result<Option<String>> {
-        Ok(self.content.get(path).cloned())
     }
 
     fn dirty_paths(&self) -> Result<Vec<String>> {

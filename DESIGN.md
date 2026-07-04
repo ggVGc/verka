@@ -1,16 +1,18 @@
-# llaundry — database design
+# llaundry — design
 
-This document describes the local database that backs llaundry, the reasoning
-behind it, and the small CLI tool that operates on it. It is a record of the
-design discussion as much as a specification.
+This document describes llaundry's data model, the reasoning behind it, and the
+tools that operate on it. It is a record of the design discussion as much as a
+specification.
 
 llaundry's premise (see `README.md` / `ideas.wiki`): **the prompt history is the
 story, not the output code.** Work is driven by a graph of nodes — tasks,
-implementations, builds, verifications — each carrying the prompt and
-context that produced it. The output can in principle be regenerated from that
-graph. To make that credible the store has to be *verifiable* (content-addressed)
-and *auditable* (immutable history, clear human/machine authorship). This is "git
-for LLM development".
+implementations, builds, verifications — each carrying the description that
+drives the work and, once worked, a record of what happened: the context
+consumed, the output produced, and the narrative. The two questions the system
+must answer are:
+
+1. *What happened during the work on this node?*
+2. *Which follow-up work depends on some previous work — and is it still valid?*
 
 ---
 
@@ -18,211 +20,148 @@ for LLM development".
 
 * **Text-based and diff-friendly.** Every record is human-readable text, and any
   change produces a minimal, reviewable diff.
-* **Lives in git.** Git is the storage, history, integrity, and (eventually)
-  collaboration substrate. We do not build a storage layer on top of it.
-* **Immutable and content-addressed.** A node's identity *is* its content. Editing
-  anything yields a new identity; nothing is rewritten in place.
-* **Verifiable dependencies.** A node records which exact versions of other nodes
-  it was built against, so we can detect when an upstream change has invalidated
-  downstream work.
-* **Minimal.** The core is just the database and its operations, exposed as a
-  library. Frontends stay thin: a CLI, a TUI, and an MCP server all wrap the same
-  `llaundry::ops`. No build/verification execution.
+* **Git is the only versioning layer.** Git owns content integrity, history,
+  blame, and distribution. llaundry stores nothing git could store for it — no
+  object store, no refs, no hashes of its own design.
+* **One unit of work per node.** A node is worked once; the work produces a
+  single result record and (at most) a single output commit encompassing
+  everything it produced. Rework replaces the record; git history keeps every
+  earlier attempt.
+* **Verifiable dependencies.** A result records exactly which versions of other
+  nodes (and which of their outputs) the work was built against, so an upstream
+  change flags the downstream work with an explicit, diffable reason.
+* **Everything derivable is derived.** Status, readiness, blockedness,
+  staleness, reverse dependencies, and commit→node provenance are all computed
+  from the files on each query — never stored, so they can never drift.
+* **Minimal.** The core is a small library; a CLI, a TUI, an MCP server, and a
+  work driver are thin shells over it.
 
 ---
 
-## 2. The reasoning (summary of the discussion)
+## 2. The reasoning
 
-The design fell out of a sequence of decisions, each worth recording because the
-*why* matters more than the *what*.
+The design went through a full cycle: an earlier version had its own
+content-addressed object store (`objects/<sha256>/`), per-node refs, append-only
+status logs, version parent-chains, and edge pins inside the hashed content.
+Each piece was individually defensible — and collectively they re-implemented
+git inside a git repository. The current design is what remained after asking,
+for each mechanism, "does git already do this?" The decisions worth recording:
 
-### 2.1 One file (record) per node, not one aggregate file
+### 2.1 A node is two files; git is the object store
 
-A single aggregate file (JSON/JSONL/SQLite dump) makes every write touch the same
-bytes: concurrent agents conflict, and edits produce noisy diffs. With one record
-per node, **adding a node is purely additive** — you write new files and never
-touch existing ones — which mirrors how git itself grows (a commit points at its
-parents; it does not rewrite them). Diffs stay surgical and parallel work merges
-cleanly.
+Each node is a directory holding at most two markdown-with-TOML-frontmatter
+files:
 
-### 2.2 Structured data is strict; prose is loose
+* **`node.md`** — the *definition*: what the node is and what it depends on.
+* **`result.md`** — the *completion record*: what happened when the work was
+  done, written once at the end of the node's single unit of work.
 
-Markdown front-matter is too loose for the structured fields (it is schemaless and
-has type-coercion traps). So we split the two concerns:
+There is no third thing. A node with no `result.md` is open; writing
+`result.md` is completing (or failing) it; editing `node.md` is revising the
+definition. Adding a node only adds files, so concurrent work merges cleanly —
+and the high-frequency write (recording results) touches a file nothing else
+touches.
 
-* **`meta.toml`** holds the strict, typed, schema-checkable fields.
-* **`body.md`** holds the prose (the prompt / task statement / discussion), where
-  looseness is appropriate and Markdown tooling and line-by-line diffs are wanted.
+### 2.2 The node version is a git blob id, computed on demand
 
-TOML (over JSON) for the structured part because it diffs better — one key per
-line, no brace/comma churn — and because keeping the prose in its own `.md` file
-avoids escaping newlines into a single string.
+A node's version is `git hash-object node.md` — computed locally (the blob
+hash is just `sha1("blob <len>\0" + bytes)`), never stored inside the file, and
+identical to what git itself would say. Editing the definition changes the
+version; writing `result.md` does not. Version history is `git log` on the
+node's directory; old versions are `git show <commit>:.../node.md`.
 
-### 2.3 No persisted index
+This kills three mechanisms from the earlier design at once: the custom sha256
+identity, the mutable per-node ref (git's history *is* the pointer), and the
+`parent` version chain (git's commit graph is the chain). One hash authority,
+zero stored hashes that must equal content.
 
-A shared `index.json` aggregating all nodes would reintroduce exactly the
-contention that per-node files removed: committed, it causes merge conflicts;
-derived, it races and goes stale; either way it duplicates the source of truth.
+### 2.3 Status is derived, not stored — and the enum shrank to nothing
 
-The resolution mirrors how **git treats its own index**: the index is a
-*rebuildable cache*, never the authority. Git's authoritative data — the object
-store — avoids contention entirely through content-addressing and immutability
-(idempotent writes, never in place), and the only mutable thing (refs) is tiny and
-guarded by lock + atomic rename. So: **no persisted index.** The directory of
-records *is* the index; a reader rebuilds whatever lookup structures it needs in
-memory by scanning. (This CLI scans on each invocation, which is trivially fast at
-realistic sizes; a long-running process would scan once and keep it in memory.)
+The earlier design kept an append-only status event log so that flipping
+`open → done` would not change the node's identity. The two-file split makes
+the whole log unnecessary. Status is a pure function of the files:
 
-### 2.4 One hash, not two
+* no `result.md` → **open**
+* `outcome = "failed"` → **failed**
+* `outcome = "done"` and the result's `node_version` equals the current blob id
+  of `node.md` → **done**
+* `outcome = "done"` but `node.md` has moved → **open again**: the completion
+  certified a definition that no longer exists, so the node needs rework and
+  its dependents are blocked until it gets it.
 
-Both git and llaundry want a content hash. Keeping two authoritative hashes in
-sync is a problem you should simply not have. The fix is to never *store* a hash
-that must equal the content:
+`in_progress` disappeared with the one-shot work model (nothing records "being
+worked"; if parallel workers ever need claims, that belongs in the dispatcher,
+not the data model). `blocked` was always derived from dependencies. What
+remains — open/done/failed — is never written anywhere.
 
-* The node's hash is computed from its bytes (here, `sha256` of the record). It is
-  **not** stored inside the record — the location of the record is its only name —
-  which also avoids the self-reference problem (hashing a file that contains its
-  own hash).
-* If you instead adopt git's own object id as the node hash, there is likewise
-  only one hash. Either way: one authoritative hash, recomputed, never duplicated.
+### 2.4 Pins are facts about the work, so they live in the result
 
-### 2.5 Everything immutable — and the one irreducible mutable pointer
+`node.md` lists dependencies by **id only** (`depends_on`, `derived_from`).
+Which *versions* those resolved to is recorded in `result.md`, pinned
+automatically at completion time as `[[built_against]]` entries: the target's
+`node.md` blob id (`pin`) and its output commit at that moment (`output`).
 
-The strongest position, and the one we took: **updating any property of a node
-changes its identity.** There are no in-place edits. But immutability does not
-*remove* mutable state — it *relocates and shrinks* it. Git proves this: its
-objects are 100% immutable, yet `refs/heads/main` must move, because *something*
-has to answer "which immutable object is current," and that answer changes over
-time.
+This placement matters. A pin is provenance — "the work saw *this*" — not part
+of the task statement. If pins lived in the definition, re-pinning after an
+upstream change would itself be a definition change and would falsely cascade
+invalidation to *this* node's dependents. Kept in the result, updating what the
+work was built against never moves the definition.
 
-So any system with a notion of "the current state" needs exactly one kind of
-mutable thing: a pointer to the latest immutable version. We shrink it to the
-smallest possible surface — **one ref per logical node** — and make everything
-else immutable.
+### 2.5 One output commit per node
 
-### 2.6 Status is an event, not a field
+When work produces files, `complete` commits exactly those files as **one git
+commit**, and stores that commit hash on the result. A commit hash is already a
+content hash of the change, so this is the node's "output hash" for free — plus
+blame, diff, and history. Graph-only work (e.g. a planning node that only mints
+sub-tasks) simply has no output commit.
 
-If status were a field of the node, flipping `open -> done` would change the
-node's hash and thereby **falsely invalidate every dependent** (they pinned the
-old hash, see §2.7) — even though the *definition* did not change. So status is
-modelled as an **append-only log of immutable events** kept *outside* the hashed
-content. A status change appends an event and never alters any node's identity.
-Each kind of change re-hashes only its own object, which is exactly what
-content-addressing should do.
+Two derived queries fall out: `outputs <id>` reads the commit off the result;
+`origin <commit>` inverts it by scanning results — unique by construction,
+since each completion mints one commit for one node.
 
-Status is a small, closed, **validated enum** — `open | in_progress | done |
-failed` — like `type` and `author`. Notably there is **no `blocked`**: whether a
-node is blocked is a fact about its *dependencies*, which the graph already records
-as edges, so it is *derived* (see §2.10), never stored. A stored `blocked` flag
-would only duplicate the graph and then drift — nothing would clear it when the
-blocking dependency finished — the same store-vs-derive anti-pattern avoided for the
-index (§2.3) and hashes (§2.4).
+### 2.6 Staleness is derived, with explicit diffable reasons
 
-### 2.7 Edges carry a logical id *and* a pinned version
+A node with no result cannot be stale — there is no work to invalidate. For a
+node with a result, each reason is checked on demand:
 
-An edge stores both:
+* **dependency definition moved** — a `built_against` pin no longer equals the
+  target's current `node.md` blob id (the reason is a real diff away:
+  `git diff <pin> <current>`);
+* **dependency output changed** — the target was re-worked and its output
+  commit differs from the pinned one;
+* **context drifted** — a pinned context file's blob id no longer matches (or
+  the file is gone);
+* **own output drifted** — files in the output commit changed since
+  (`git diff <commit>`, which also yields the explicit reason);
+* **definition edited after completion** — the result no longer covers
+  `node.md` (this is also what reopens the node, §2.3).
 
-* the **logical id** of the target — a stable handle, so "depends on task X"
-  survives edits to X; and
-* the target's **version hash at link time** (the *pin*) — so we can tell when X
-  has moved on.
+The invalidation rule of thumb: **results and status flow forward (a `done`
+unblocks dependents); content changes flow backward (definitions and outputs
+moving invalidate the work built on them).**
 
-If the target later gets a new version, its ref no longer equals the pin, and the
-dependent is **stale**: it was built against a definition that has since changed.
-This is the mechanism behind the "edit a test -> graph partially invalidated ->
-agents rework the affected nodes" workflow.
+### 2.7 Readiness is derived too
 
-### 2.8 Produced outputs are a git commit, not a hash we compute
+A node is **ready** when it is not done and every `depends_on` target is done
+(on its current definition) and not itself stale; otherwise the unsatisfied
+dependencies are its **blockers**, reported with reasons. A failed node is
+ready — failure means "retry", and the retry simply overwrites `result.md`.
 
-When a node is completed by producing files (e.g. source code), we do **not** hash
-those files ourselves — that would duplicate what git already does. Instead:
+### 2.8 Each state change is its own commit, on a clean tree
 
-1. The produced files are **committed with git**. That commit captures the exact
-   diff, and its hash *is* a content hash of the change.
-2. That **commit hash is stored on the node** as its output reference (and, being
-   part of `meta.toml`, becomes part of the node's own identity hash).
-3. The store change (the new node version) is then committed too.
+Every mutating operation commits its `.llaundry` change, and only against a
+clean working tree (`complete` permits exactly the declared output files to be
+dirty — it is about to commit them). So each change is its own commit, the tree
+is clean between operations, and the repository state behind any change is
+recoverable straight from git history. Nothing stores which commit an event
+happened at; history already records it.
 
-This gives the same two properties as before, but for free from git:
+### 2.9 What context is: outputs first, files second
 
-* **A verifiable claim**: "this version produced exactly the diff in commit `C`,"
-  captured alongside the prompt and context that produced it.
-* **Drift detection**: staleness is simply *"have any of the files that commit `C`
-  touched changed since `C`?"* — answered by `git diff C`, which also yields the
-  **explicit reason** (a real `name-status` / diff), strictly better than a
-  hash-mismatch. Same staleness machinery as edges (§2.7), delegated to git.
-
-This is the cleanest expression of the project's principle (§2.3, §2.4): git owns
-content integrity and diffs; llaundry only records *which commit* is the output and
-*which node* it belongs to — the semantics git cannot express. The trade-off is
-that `complete` now requires a git repository (see §4).
-
-### 2.9 Used context is pinned by content too
-
-Beyond its connected nodes (edges) and its outputs, a node records the **context**
-it actually consumed while being worked — e.g. files a coding agent's tool calls
-read. Because that context is real, existing content, it can be pinned by content
-hash, exactly like outputs.
-
-* **Recorded context** (`context`) is pinned at `complete` time. It is provenance
-  plus a staleness source: if that context later changes, the node is flagged too —
-  and, crucially, the *consumer* is flagged directly (it pinned the actual
-  content), without waiting for a producing node to be re-versioned. This closes the
-  gap where a raw file edit only flagged the producer (§2.8) and not its dependents.
-
-Context pins git **blob ids** (`git hash-object`), not commits: it references
-existing content a node consumed, rather than a change it made, so no new commit is
-involved.
-
-### 2.10 Readiness is derived, not stored
-
-Because dependencies are explicit edges and every node carries its status, "can
-this node be worked yet?" is a query, not a stored flag. A node is **ready** when
-every `depends_on` target is `done` and not itself stale, and **blocked** otherwise
-— with the unsatisfied dependencies as the explicit reason. The `ready` and
-`blocked` commands compute this each time, so it can never disagree with the graph.
-This is why §2.6 drops `blocked` from the status enum: it belongs here, derived.
-
-### 2.11 Each state change is its own commit, on a clean tree
-
-Every mutating operation commits its `.llaundry` change, and only against a clean
-working tree. So each state change is its own commit, the tree is clean between
-operations, and **the repository state behind any change is recoverable straight from
-git history**: `git blame status/<id>.toml` maps each event to the commit that
-recorded it, whose parent is the baseline the change was made against (for `done`,
-that baseline is the output commit, already on the node as `output_commit`).
-
-For that to hold, the tree must be clean when a change is recorded — otherwise
-uncommitted changes wouldn't be captured by the commit. So the tool **enforces a
-clean tree**: `add`, `set-status`, `link`, and `edit` refuse to run against a dirty
-tree, and `complete` permits only the declared output files to be dirty (it is about
-to commit exactly those).
-
-We deliberately do **not** store the commit on the event itself — that would
-duplicate what history already records, and a stored hash could dangle if the
-history were rewritten. Same store-vs-derive principle as the index (§2.3) and
-`blocked` (§2.10). The enforcement plus the per-change commit are what make history a
-faithful record — the "use git as the graph" stance (`ideas.wiki`). (Consequently
-all mutating commands require a git repository with at least one commit.)
-
-### 2.12 A `done` status certifies a specific version
-
-Each status event stores the node **`version`** (content hash) it was asserted
-against. This matters for completion: marking a node `done` certifies *that
-version's* content. An edit produces a new version without touching the status log,
-so a node completed and then edited would still show `done` — yet the current version
-was never completed.
-
-So a `done` is treated as **stale when the node has moved past the version it was set
-on** (reported as `done on an older version` by `stale`/`show`). And because
-dependency satisfaction routes through the same staleness check, `ready`/`blocked`
-stop counting such a dependency as done: a consumer of a node that was completed and
-then edited is blocked again until the node is re-completed on its current version.
-
-`open` and `in_progress` don't certify content, so they are *not* version-sensitive;
-only the completion claim is. (The same reasoning would extend to `failed`.) This is
-the counterpart, for a node's own lifecycle, of the edge/context/output staleness in
-§2.7–2.9 — the `version` on each event is what makes it computable.
+Most of what work consumes is *other nodes' outputs* — covered by the
+`built_against` output pins, one hash per dependency. Explicit per-file
+`[[context]]` pins (blob ids) exist for the remainder: pre-existing files that
+no node produced. They are expected to be the minority case.
 
 ---
 
@@ -232,327 +171,187 @@ A store is a single directory (default `.llaundry/`, committed to git):
 
 ```text
 .llaundry/
-  objects/
-    <hash>/
-      meta.toml        # immutable definition of one node version
-      body.md          # immutable prose for that version
-  refs/
-    <logical-id>       # one line: the current version hash  (the only mutable file)
-  status/
-    <logical-id>.toml  # append-only [[event]] log
+  nodes/
+    <id>/
+      node.md      # the definition
+      result.md    # the completion record (absent until worked)
 ```
 
-Three categories, mapping directly onto the git model:
+### 3.1 `node.md`
 
-| Area       | Mutability   | git analogue         |
-|------------|--------------|----------------------|
-| `objects/` | immutable    | the object store     |
-| `refs/`    | mutable      | `refs/heads/*`       |
-| `status/`  | append-only  | (an event log)       |
-
-### 3.1 Object: `objects/<hash>/meta.toml`
-
-```toml
+```markdown
+---
 schema = 1
-logical_id = "task-01J8XQ3K7M..."
 type = "task"
 title = "Parse the config file"
 author = "human"
-parent = "9f1c..."          # previous version hash; omitted on the first version
-output_commit = "86cb1a1..." # git commit capturing this version's outputs; omitted until completed
+depends_on = ["task-01J8XQ2A..."]
+derived_from = ["info-01J8XQ1B..."]
+---
 
-[[edges]]
-to = "task-01J8XQ2A..."
-rel = "derived_from"
-pin = "4a7e..."
-
-[[edges]]
-to = "task-01J8XQ4P..."
-rel = "depends_on"
-pin = "1b2c..."
-
-[[context]]                 # context actually used during work (e.g. a tool-call read)
-path = "src/helper.rs"
-content = "f44d..."
+Parse the TOML config into the Config struct...
 ```
 
-`body.md` is free-form Markdown. Scalar keys (including `output_commit`) precede
-the `[[edges]]`/`[[context]]` arrays-of-tables, as TOML requires.
+The frontmatter is strict, typed TOML (scalars and string arrays only); the
+body is free-form Markdown. The file's git blob id is the node's version.
 
-**Hash.** `hash = sha256(meta.toml bytes || 0x00 || body.md bytes)`, hex-encoded.
-It is computed over the exact bytes written, and is never stored inside the record.
-A given (meta, body) pair therefore always lands at the same path — writes are
-idempotent, and identical content is deduplicated automatically.
+### 3.2 `result.md`
 
-**Identity includes everything definitional**: `logical_id`, `type`, `title`,
-`parent`, `output_commit`, `edges`, `context`, and the body. Change any of
-them and you get a new hash, i.e. a new version. `parent` links versions into a
-history chain.
-
-### 3.2 Ref: `refs/<logical-id>`
-
-A one-line text file containing the current version hash. This is the single
-mutable element of the whole store. "Editing" a node means: write a new immutable
-object, then point the ref at it.
-
-### 3.3 Status log: `status/<logical-id>.toml`
-
-```toml
-[[event]]
+```markdown
+---
 at = 1719571200000
-status = "open"
-author = "human"
-version = "9f1c..."
-
-[[event]]
-at = 1719574800000
-status = "done"
 author = "machine"
-version = "9f1c..."
+node_version = "4ec1916e..."     # blob id of node.md this work fulfilled
+outcome = "done"                  # or "failed"
+output_commit = "a45ab51c..."     # the one commit with everything produced; optional
+
+[[built_against]]
+id = "task-01J8XQ2A..."
+pin = "6102d492..."               # target's node.md blob at completion
+output = "86cb1a1..."             # target's output commit at completion; optional
+
+[[context]]
+path = "docs/legacy-format.txt"
+blob = "f44d..."
+---
+
+Implemented the parser in src/config.rs. Chose serde over hand-rolling because...
 ```
 
-Appended to, never edited. Appending another `[[event]]` block keeps the file
-valid TOML while adding only new lines. The current status is the last event. Each
-event's `version` is the node-version hash the status was asserted against — a `done`
-certifies only that version (§2.12). The event does *not* store which commit it
-happened at; that is recoverable from git history (§2.11), since every change is its
-own commit. (`at` is Unix milliseconds — deliberately dependency-free; a future
-version may switch to RFC 3339.)
+The body is the narrative — for an LLM worker, the story of what it did and
+why. (`at` is Unix milliseconds — deliberately dependency-free.)
 
-### 3.4 Logical ids
+### 3.3 Ids
 
-`<type-prefix>-<ULID>`, e.g. `task-01J8XQ3K7M...`. The prefix is human-scannable;
-the ULID is time-sortable and collision-free without any central counter, which
-matters because nodes may be minted concurrently. (A sequential counter would be a
-shared mutable hotspot — the very thing we are avoiding.)
+`<type-prefix>-<ULID>`, e.g. `task-01J8XQ3K7M...`. The prefix is
+human-scannable; the ULID is time-sortable and collision-free without a central
+counter, so nodes can be minted concurrently. Uniqueness is enforced by the
+filesystem (the directory either exists or it doesn't).
 
 ---
 
 ## 4. Relationship to git
 
-llaundry stores nothing git could store for it. Git owns: content integrity,
-immutable history, blame, authorship/signing, branching, merge, and distribution.
-The records are plain text in a committed directory, so all of that applies for
-free. The only thing llaundry adds — the part git cannot express — is the
-**typed-graph semantics**: typed edges, node status, version chains, and staleness.
-That semantic layer is the product; everything storage-shaped is delegated to git.
+llaundry stores nothing git could store for it. Git owns content integrity,
+immutable history, blame, authorship, branching, merge, and distribution. The
+only thing llaundry adds — the part git cannot express — is the typed-graph
+semantics: dependencies, derived status, pins, and staleness. That semantic
+layer is the product; everything storage-shaped is delegated.
 
-Concretely: commit the `.llaundry/` directory like any other source. Because each
-node lives in its own immutable file, history and merges are clean by construction.
+The CLI drives git (§2.8): every mutating command checks the tree is clean and
+commits its own store change, so all mutating commands require a git repository
+with at least one commit and a configured identity. The read-only queries need
+no git at all — blob hashing is computed locally (and verified against
+`git hash-object` in tests) — except `log`, which *is* git log.
 
-The CLI goes further and *drives* git (§2.11): every mutating command checks the
-working tree is clean (`complete` allows only its declared outputs), records the
-relevant commit, and commits its own store change. So all mutating commands require
-a git repository with at least one commit and a configured identity; the read-only
-commands do not.
-
-To keep that git dependency from leaking into tests, all git interaction goes
-through a small `Vcs` trait (`capture`, `commit_store`, `drift`, `content_id`,
-`dirty_paths`). The real implementation (`GitVcs`) shells out to `git`; the
-command logic takes `&dyn Vcs`. Unit tests inject an in-memory `FakeVcs`, so the
-store, hashing, edge/context/output staleness, the clean-tree checks, and the
-`complete` flow are all exercised with **no git binary, no repository, and no
-configured identity** — fast, deterministic, self-standing. A separate (optional)
-integration test can exercise real `GitVcs`.
+To keep the git dependency out of tests, the remaining git interaction goes
+through a small `Vcs` trait (`capture`, `commit_store`, `drift`,
+`dirty_paths`). The real `GitVcs` shells out to `git`; unit tests inject an
+in-memory `FakeVcs`, so the store, derived status, staleness, blockers, and the
+complete/fail flows run with no git binary, repository, or identity.
 
 ---
 
 ## 5. The frontends
 
-All functionality lives in the `llaundry` **library** (`llaundry::ops` over
-`llaundry::store`, with git behind the `Vcs` seam). Every executable is a thin shell
-over it, so they share one implementation of the model, staleness, and clean-tree
-discipline:
+All functionality lives in the `llaundry` library (`llaundry::ops` over
+`llaundry::store`, with git behind the `Vcs` seam). Every executable is a thin
+shell over it:
 
 * `llaundry` — the CLI (below).
-* `llaundry-tui` — an interactive terminal UI.
+* `llaundry-tui` — an interactive terminal UI over the same operations.
 * `llaundry-mcp` — a Model Context Protocol server (§5.2).
-* `llaundry-work` — the driver that runs an LLM session against a node (§5.3).
+* `llaundry-work` — the driver that runs an LLM against a node (§5.3).
 
 ### 5.1 The CLI
 
-The `llaundry` binary. The store path defaults to `.llaundry/` and can be
-overridden with `--store <dir>` or the `LLAUNDRY_DIR` environment variable.
+The store path defaults to `.llaundry/`, overridable with `--store` or
+`LLAUNDRY_DIR`.
 
 | Command | Purpose |
 |---|---|
 | `init` | Create an empty store. |
-| `add` | Create a new node; prints its logical id. |
-| `link <from> <to>` | Add a typed edge (a new version of `<from>`). |
-| `edit <id>` | Produce a new version of a node. |
-| `complete <id> -o <file>...` | Commit the produced files with git; store that commit on the node; mark it `done`. `-c/--context <file>` pins used context. |
-| `set-status <id> <status>` | Append a status event; `<status>` is one of `open\|in_progress\|done\|failed` (alias: `status`). |
-| `show <id>` | Show current version, edges, context, outputs, and any staleness reasons. |
-| `list` | List every node with its current status. |
-| `log <id>` | Walk a node's version history (newest first). |
-| `stale` | Report nodes that are stale, with explicit reasons. |
-| `ready` | List unfinished nodes whose dependencies are all satisfied (done, not stale). |
-| `blocked` | List nodes blocked by an unsatisfied dependency, with reasons. |
-| `outputs <id>` | Print the output commit a node produced, if any. |
-| `origin <commit>` | Find which node produced a given output commit (the inverse of `outputs`). |
+| `add` | Create a node (`--depends-on`/`--derived-from` by id). Prints its id. |
+| `link <from> <to>` | Add a dependency (a definition change of `<from>`). |
+| `edit <id>` | Change title/body (a definition change: reopens a done node). |
+| `complete <id> [-o <file>...] [--notes ...]` | Commit produced files as one output commit, pin deps/context, write `result.md`. |
+| `fail <id> [--notes ...]` | Record a failed attempt. |
+| `show <id>` | Definition, derived status, result, staleness reasons. |
+| `list` | Every node with its derived status. |
+| `log <id>` | The node's git history (definition edits and results). |
+| `stale` | Nodes whose recorded work has been invalidated, with reasons. |
+| `ready` / `blocked` | Derived readiness, with blocker reasons. |
+| `outputs <id>` / `origin <commit>` | Provenance in both directions. |
+| `dependents <id>` | Which nodes depend on / derive from this one. |
 
-### Examples
+### Example
 
 ```sh
 llaundry init
 
-# A feature request, then two tasks derived from it, one depending on the other.
-REQ=$(llaundry add --type task --title "Add config loading" \
-        --body "User wants TOML config support." | awk '{print $1}')
+A=$(llaundry add --title "Define config schema")
+B=$(llaundry add --title "Parse config file" --depends-on "$A")
 
-T1=$(llaundry add --type task --title "Define config schema" \
-        --derived-from "$REQ" | awk '{print $1}')
+llaundry blocked            # B waits on A
+llaundry complete "$A" --notes "schema agreed"
+llaundry ready              # -> B
 
-T2=$(llaundry add --type task --title "Parse config file" \
-        --derived-from "$REQ" --depends-on "$T1" | awk '{print $1}')
-
-llaundry list
-llaundry show "$T2"
-
-# Mark the first task done; then revise it — which makes T2 stale.
-llaundry set-status "$T1" done
-llaundry edit "$T1" --title "Define and validate config schema"
-llaundry stale          # -> T2's depends_on edge is now stale
-
-# Implement T2: write the file, then complete it. `complete` git-commits the file
-# and stores that commit on the node. Editing the file later makes T2 stale, and
-# the reason is a real git diff.
 echo 'fn parse() {}' > src/config.rs
-llaundry complete "$T2" -o src/config.rs
-echo "// hand-edit" >> src/config.rs
-llaundry stale          # -> T2: output changed since <commit>: M  src/config.rs
-git checkout -- src/config.rs   # restore a clean tree before the next operation
+llaundry complete "$B" -o src/config.rs --notes "implemented parser"
 
-# Recorded context. Completing a node records the files the agent actually read.
-U=$(llaundry add --type task --title "use config" | awk '{print $1}')
-llaundry complete "$U" -o src/use.rs --context src/helper.rs
-# Later, editing src/helper.rs (recorded context) flags U directly — no need to
-# re-version the producer:
-#   U: context src/helper.rs: content changed (pinned …, now …)
+# Revising A reopens it and flags B, with the pinned-vs-current versions:
+llaundry edit "$A" --title "Define and validate config schema"
+llaundry stale
+#   A: definition changed since the work (...)
+#   B: dependency A: definition moved (built against 6102d4, now 516cc0)
 
-# Readiness is derived from dependency status, not stored.
-llaundry blocked        # -> lists nodes waiting on a not-yet-done dependency
-llaundry set-status "$T1" done
-llaundry ready          # -> T2 now appears: its dependency is satisfied
-
-# Provenance, both directions. `outputs` reads the commit off the node; `origin`
-# inverts it by scanning. (The output commit is the one `complete` made — it is the
-# parent of the store commit, not HEAD; `outputs` gives you the right hash to trace.)
-C=$(llaundry outputs "$T2")
-llaundry origin "$C"    # -> T2, and the version that produced it
+# Provenance both ways:
+C=$(llaundry outputs "$B"); llaundry origin "$C"    # -> B
+llaundry dependents "$A"                             # -> B
 ```
-
-### What each command does to the store
-
-Every mutating command below first requires a clean working tree (§2.11) and, after
-mutating the store, commits that store change — so the tree is clean between
-operations and each is its own git commit.
-
-* **add** — writes one object, creates one ref, appends an `open` status event.
-  `--depends-on` / `--derived-from` add edges pinned to the targets' current
-  versions.
-* **link / edit / complete** — these are *edits*: they read the current version,
-  change it, write a **new** object, and move the ref. The previous version stays
-  on disk forever (it is the history). `complete` additionally git-commits the
-  named output files (the output commit), pins any `--context` files by content,
-  stores both on the node, and appends a `done` status event. (`complete` permits
-  only the declared outputs to be dirty.)
-* **set-status** — appends one immutable event.
-* **show / list / log / stale / ready / blocked / outputs / origin** — read-only;
-  they rebuild what they need by scanning, holding no persisted index. `stale`
-  checks edge pins (against target refs), context pins (file content via
-  `git hash-object`), outputs (via `git diff` against each node's output commit),
-  and whether a `done` status still matches the node's current version (§2.12).
-  `ready`/`blocked` derive dependency satisfaction from edges + target statuses
-  (§2.10), counting a dependency as done only if its completion covers its current
-  version. `outputs` reads the node's stored output commit; `origin` is its inverse,
-  derived by scanning every node's version history for the matching `output_commit`
-  rather than persisting a second commit→node index — the same store-vs-derive
-  choice as the missing index (§2.3). Because `edit` carries the output commit
-  forward onto new versions, `origin` returns the *completing* version (the oldest
-  bearing that commit), which is unique per `complete`.
 
 ### 5.2 The MCP server
 
-The `llaundry-mcp` binary exposes the same operations to an LLM agent over the
-[Model Context Protocol](https://modelcontextprotocol.io). It speaks JSON-RPC 2.0
-over MCP's stdio transport — one JSON message per line, replies on stdout, logs on
-stderr — and, like the rest of the project, is synchronous and dependency-light: the
-loop reads a line, dispatches to `llaundry::ops`, writes a line. It implements
-`initialize`, `tools/list`, and `tools/call` (plus `ping`); notifications such as
-`notifications/initialized` get no reply.
+`llaundry-mcp` exposes the same operations over the
+[Model Context Protocol](https://modelcontextprotocol.io) (JSON-RPC 2.0 on
+stdio, synchronous, dependency-light). Each tool is a type implementing a small
+`Tool` trait listed in a `registry()`; every `call` is a thin wrapper over one
+`ops::*` function.
 
-Each tool is its own type implementing a small `Tool` trait — `name`, `description`,
-`input_schema`, and `call` — and a `registry()` lists them. `tools/list` maps over
-the registry and `tools/call` finds a tool by name, so adding a tool is adding a type
-and one registry entry, with no central dispatch match to keep in sync. Every `call`
-is a thin wrapper over one `ops::*` function, so an agent gets the same surface as
-the CLI. The store path comes from `--store`/`LLAUNDRY_DIR`, and each call opens the
-store fresh (via a `Ctx`) — so `initialize`/`tools/list` work before a store exists
-and an agent can create one with `init_store`.
-
-| Tool | Wraps |
-|---|---|
-| `init_store` | `Store::init` |
-| `add_node`, `link_nodes`, `edit_node`, `complete_node`, `set_status` | the mutating `ops::*` |
-| `show_node`, `list_nodes`, `node_history` | read-only reads |
-| `stale_nodes`, `ready_nodes`, `blocked_nodes` | the derived queries |
-| `node_origin`, `node_outputs` | provenance (§2.8) |
-
-The mutating tools inherit the clean-tree rule (§2.11): they require a git
-repository and commit their own store change, and surface any refusal as an MCP
-tool error (`isError: true`) rather than a protocol failure. Sandboxing an agent to
-its declared context (§2.9) remains a runtime concern the server does not yet
-enforce.
+Tools: `init_store`; `add_node`, `link_nodes`, `edit_node`, `complete_node`,
+`fail_node` (mutating); `show_node`, `list_nodes` (reads); `stale_nodes`,
+`ready_nodes`, `blocked_nodes` (derived queries); `node_origin`,
+`node_outputs`, `node_dependents` (provenance). The mutating tools inherit the
+clean-tree rule and surface refusals as in-band MCP errors (`isError: true`).
 
 ### 5.3 The worker
 
-The `llaundry-work` binary is the driver for actually *doing* a node's work with an
-LLM. It launches a **session** against one node: it loads the node, refuses to start
-if the node is blocked (its `depends_on` targets aren't satisfied — override with
-`--force`), builds a prompt from the node's type, title, body, and edges,
-and hands that to a backend. Once the prompt is built, the session carries no store
-handle — a backend needs nothing more from the database.
-
-The LLM is behind a `Backend` trait (`run` a session; `describe` it for
-`--dry-run`), so engines are swappable without touching the launcher. The first
-backend, `ClaudeCode`, shells out to `claude -p` deliberately sandboxed:
-
-* `--mcp-config <json>` + `--strict-mcp-config` — expose **only** the `llaundry`
-  MCP server (§5.2), ignoring any user/project MCP config.
-* `--allowedTools mcp__llaundry` — grant every tool of that server and nothing
-  else. In non-interactive `-p` mode any tool not listed is denied, so no built-in
-  tools (shell, file, network) are reachable, and permissions are not bypassed.
-
-So the model can act on the graph and nothing else. Because it has no file tools, a
-session produces no output files, so the prompt steers completion toward
-`set_status … done` rather than `complete_node` (which commits produced files). A
-future backend with file access would use `complete_node` to capture real outputs.
-
-Command construction is separated from execution (`ClaudeCode::command`), so the
-exact sandboxed invocation is unit-tested and shown verbatim by `--dry-run` without
-running or even installing Claude Code.
+`llaundry-work` runs one unit of work on one node. It refuses to start if the
+node is blocked (override with `--force`), builds a prompt from the node's
+type, title, body, and dependency ids, and hands it to a `Backend`. The first
+backend, `ClaudeCode`, shells out to `claude -p` sandboxed to **only** the
+llaundry MCP server (`--strict-mcp-config`, `--allowedTools mcp__llaundry`) —
+no shell, file, or network tools. A file-free session produces no output
+commit, so the prompt steers it to finish with `complete_node` (notes as the
+record of what happened) or `fail_node`. Command construction is separated from
+execution so the exact invocation is unit-tested and shown by `--dry-run`.
 
 ---
 
 ## 6. Deliberately out of scope (for now)
 
-* **Context *enforcement*.** Used context is *recorded* and pinned
-  (§2.9), but nothing yet *prevents* an agent from reading undeclared files — that
-  sandboxing is a runtime concern the MCP server (§5.2) does not yet impose.
-* **Reverse-edge queries** ("what depends on X") beyond the `stale` scan, and any
-  persisted index — would be an in-memory cache in a long-running process.
-* **Executing builds and verifications.** Nodes can be *typed* `build` /
+* **Context enforcement.** Consumed context is recorded and pinned, but nothing
+  prevents an agent from reading undeclared files — a runtime concern for the
+  MCP server.
+* **Transitive staleness.** Each node's own pins are checked; a node is not
+  auto-flagged because something upstream of *its dependency* moved. Output and
+  context pins reduce the need: consumers are flagged directly when what they
+  actually consumed changes.
+* **Executing builds and verifications.** Nodes can be typed `build` /
   `verification`, but running them is not implemented.
-* **Transitive staleness.** Each node's own edges, context, and outputs are
-  checked; a dependent is not auto-flagged because something upstream of *its*
-  target moved. (Content-pinned context reduces the need: a consumer that pins a
-  file is flagged directly when that content changes — see §2.9.)
-* **Output commit policy.** `complete` makes a partial commit of exactly the named
-  files plus a separate commit for the store. It does not squash, sign, or let you
-  reuse an existing commit; those are easy future options.
-* **Object sharding** (`objects/ab/cdef...`) and an `fsck`/verify command that
-  re-derives and checks every hash.
-* **Adopting git's own object ids as the *node* hash** (§2.4). Outputs already
-  delegate to git (§2.8); node identity and edge pins still use our own `sha256`,
-  so those parts of the tool work without git. Unifying them is a separate call.
+* **Re-certification without rework.** When a dependency moves, the only way to
+  clear the staleness today is to re-complete the node. A cheap `repin` ("I
+  inspected the diff; my work still stands") would be a small addition.
+* **Claiming for parallel workers.** With no `in_progress`, two dispatchers
+  could hand the same open node to two workers; coordination belongs in the
+  dispatcher.
