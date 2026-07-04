@@ -89,7 +89,33 @@ fn registry() -> Vec<Box<dyn Tool>> {
         Box::new(NodeOutputs),
         Box::new(NodeDependents),
         Box::new(CheckStore),
+        Box::new(NodeSettled),
     ]
+}
+
+struct NodeSettled;
+impl Tool for NodeSettled {
+    fn name(&self) -> &'static str {
+        "node_settled"
+    }
+    fn description(&self) -> &'static str {
+        "Check whether a node is settled: done, not stale, and all work derived from it (transitively) also done and not stale. Lists what is still outstanding otherwise."
+    }
+    fn input_schema(&self) -> Value {
+        obj_schema(json!({ "id": {"type": "string"} }), &["id"])
+    }
+    fn call(&self, ctx: &Ctx, args: &Value) -> Result<String> {
+        let (store, vcs) = ctx.open()?;
+        let id = req_str(args, "id")?;
+        let reasons = ops::unsettled(&store, &vcs, &id)?;
+        Ok(if reasons.is_empty() {
+            format!("{id}: settled")
+        } else {
+            let mut lines = vec![format!("{id}: not settled")];
+            lines.extend(reasons.iter().map(|r| format!("  {r}")));
+            lines.join("\n")
+        })
+    }
 }
 
 struct CheckStore;

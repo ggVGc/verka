@@ -333,6 +333,49 @@ pub fn dependents(store: &Store, id: &str) -> Result<Vec<String>> {
     Ok(out)
 }
 
+/// Reasons a node is not *settled* — done, not stale, and with every piece of
+/// work derived from it (transitively, over reverse `depends_on` and
+/// `derived_from` edges) also done and not stale. Empty means the whole branch
+/// of work rooted at this node is finished and still valid.
+///
+/// This answers "is this actually finished?" for a node whose own `done` only
+/// certifies its own unit of work — e.g. a task that closed at spec time while
+/// its implementations were still open.
+pub fn unsettled(store: &Store, vcs: &dyn Vcs, id: &str) -> Result<Vec<String>> {
+    if !store.exists(id) {
+        bail!("unknown node `{id}`");
+    }
+    // Reverse adjacency over both edge kinds, built in one scan.
+    let mut rev: std::collections::BTreeMap<String, Vec<String>> = Default::default();
+    for other in store.list_ids()? {
+        let (meta, _) = store.read_node(&other)?;
+        for dep in meta.depends_on.iter().chain(&meta.derived_from) {
+            rev.entry(dep.clone()).or_default().push(other.clone());
+        }
+    }
+
+    let mut reasons = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut queue = std::collections::VecDeque::from([id.to_string()]);
+    while let Some(node) = queue.pop_front() {
+        if !seen.insert(node.clone()) {
+            continue;
+        }
+        match current_status(store, &node) {
+            Status::Done => {
+                if !staleness(store, vcs, &node).is_empty() {
+                    reasons.push(format!("{node}: done but stale"));
+                }
+            }
+            other => reasons.push(format!("{node}: not done ({})", other.as_str())),
+        }
+        for dependent in rev.get(&node).into_iter().flatten() {
+            queue.push_back(dependent.clone());
+        }
+    }
+    Ok(reasons)
+}
+
 /// Integrity-check the whole store, fsck-style: every problem that write-time
 /// validation cannot see because it entered sideways (hand edits, git merges of
 /// individually-valid branches, older tools). Returns explicit problem reports;
@@ -906,6 +949,53 @@ mod tests {
         assert_eq!(problems.len(), 1, "{problems:?}");
         assert!(problems[0].starts_with("dependency cycle: "), "{problems:?}");
         assert!(problems[0].contains(&a) && problems[0].contains(&b));
+    }
+
+    #[test]
+    fn settled_requires_the_whole_derived_branch_to_be_done_and_fresh() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs {
+            next_id: "commit-1".into(),
+            ..Default::default()
+        };
+        // Root task -> sub-task (derived) -> implementation (depends on the sub-task).
+        let root = add(&store, &fake, new_node("idea", vec![])).unwrap();
+        let mut sub = new_node("sub", vec![]);
+        sub.derived_from = vec![root.clone()];
+        let sub = add(&store, &fake, sub).unwrap();
+        let imp = add(
+            &store,
+            &fake,
+            NewNode {
+                node_type: NodeType::Implementation,
+                title: "impl".into(),
+                body: String::new(),
+                author: Author::Human,
+                depends_on: vec![sub.clone()],
+                derived_from: vec![],
+            },
+        )
+        .unwrap();
+
+        // Root done (spawned the sub-task), sub done (spec settled), impl open:
+        // root is done, but not settled — the derived branch is unfinished.
+        done(&store, &fake, &root);
+        done(&store, &fake, &sub);
+        let reasons = unsettled(&store, &fake, &root).unwrap();
+        assert_eq!(reasons, vec![format!("{imp}: not done (open)")]);
+
+        // Implementation lands: the whole branch is settled.
+        complete(&store, &fake, &imp, &["src/x.rs".into()], &[], None, "", Author::Machine)
+            .unwrap();
+        assert!(unsettled(&store, &fake, &root).unwrap().is_empty());
+        assert!(unsettled(&store, &fake, &imp).unwrap().is_empty(), "leaves settle too");
+
+        // Editing the sub-task reopens it and flags the branch again, twice over:
+        // the sub-task is no longer done, and the impl is done-but-stale.
+        edit(&store, &fake, &sub, Some("revised".into()), None).unwrap();
+        let reasons = unsettled(&store, &fake, &root).unwrap();
+        assert!(reasons.contains(&format!("{sub}: not done (open)")), "{reasons:?}");
+        assert!(reasons.contains(&format!("{imp}: done but stale")), "{reasons:?}");
     }
 
     #[test]

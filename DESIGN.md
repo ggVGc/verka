@@ -317,6 +317,7 @@ The store path defaults to `.llaundry/`, overridable with `--store` or
 | `outputs <id>` / `origin <commit>` | Provenance in both directions. |
 | `dependents <id>` | Which nodes depend on / derive from this one. |
 | `check` | Integrity-check the store (fsck): parse errors, missing/ill-typed edge targets, duplicates, self-references, dependency cycles. Non-zero exit on problems. |
+| `settled <id>` | Whether the node *and all work transitively derived from it* is done and not stale — "is this branch actually finished?" (a node's own `done` only certifies its own unit of work, e.g. a task that closed at spec time). Non-zero exit if not. |
 
 ### Example
 

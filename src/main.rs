@@ -146,6 +146,10 @@ enum Cmd {
     /// targets, duplicates, self-references, and dependency cycles. Exits
     /// non-zero if problems are found.
     Check,
+
+    /// Check whether a node is settled: done, not stale, and all work derived
+    /// from it (transitively) also done and not stale. Exits non-zero if not.
+    Settled { id: String },
 }
 
 fn main() -> Result<()> {
@@ -365,6 +369,21 @@ fn main() -> Result<()> {
                     println!("{p}");
                 }
                 eprintln!("{} problem(s) found", problems.len());
+                std::process::exit(1);
+            }
+        }
+
+        Cmd::Settled { id } => {
+            let store = Store::open(store)?;
+            let vcs = GitVcs::new(store.project_root());
+            let reasons = ops::unsettled(&store, &vcs, &id)?;
+            if reasons.is_empty() {
+                println!("{id}: settled");
+            } else {
+                println!("{id}: not settled");
+                for r in &reasons {
+                    println!("  {r}");
+                }
                 std::process::exit(1);
             }
         }
