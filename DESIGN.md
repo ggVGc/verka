@@ -156,7 +156,27 @@ is clean between operations, and the repository state behind any change is
 recoverable straight from git history. Nothing stores which commit an event
 happened at; history already records it.
 
-### 2.9 What context is: outputs first, files second
+### 2.9 Edges are typed by the pipeline
+
+Node types form a pipeline — task → implementation → build, with verification
+attached to the artifact stages — and edges must follow it. An edge points from
+later work back at what it came from, so the allowed targets per source type
+are:
+
+| from \ may link to | task | implementation | build | verification | info |
+|---|---|---|---|---|---|
+| task           | ✓ (sub-tasking) | | | | ✓ |
+| implementation | ✓ | | ✓ (a built tool it needs) | | ✓ |
+| build          | | ✓ | | | ✓ |
+| verification   | | ✓ | ✓ | | ✓ |
+| info           | ✓ | ✓ | ✓ | ✓ | ✓ |
+
+`info` is freeform documentation, linkable in both directions. The rules are
+enforced at the only two edge-creation points (`add`, `link`) by
+`NodeType::allowed_targets`, so an ill-typed graph cannot be constructed; both
+`depends_on` and `derived_from` follow the same table.
+
+### 2.10 What context is: outputs first, files second
 
 Most of what work consumes is *other nodes' outputs* — covered by the
 `built_against` output pins, one hash per dependency. Explicit per-file

@@ -36,9 +36,7 @@ pub struct NewNode {
 pub fn add(store: &Store, vcs: &dyn Vcs, new: NewNode) -> Result<String> {
     require_clean(vcs)?;
     for dep in new.depends_on.iter().chain(&new.derived_from) {
-        if !store.exists(dep) {
-            bail!("cannot link to unknown node `{dep}`");
-        }
+        check_edge(store, new.node_type, dep)?;
     }
     let id = format!("{}-{}", new.node_type.prefix(), Ulid::new());
     let meta = NodeMeta {
@@ -58,10 +56,8 @@ pub fn add(store: &Store, vcs: &dyn Vcs, new: NewNode) -> Result<String> {
 /// `from`'s version.
 pub fn link(store: &Store, vcs: &dyn Vcs, from: &str, to: &str, kind: DepKind) -> Result<()> {
     require_clean(vcs)?;
-    if !store.exists(to) {
-        bail!("cannot link to unknown node `{to}`");
-    }
     let (mut meta, body) = store.read_node(from)?;
+    check_edge(store, meta.node_type, to)?;
     let list = match kind {
         DepKind::DependsOn => &mut meta.depends_on,
         DepKind::DerivedFrom => &mut meta.derived_from,
@@ -368,6 +364,29 @@ pub fn require_clean_except(vcs: &dyn Vcs, allowed: &[String]) -> Result<()> {
 /// First 12 characters of a hash, for compact display.
 pub fn short(hash: &str) -> &str {
     &hash[..hash.len().min(12)]
+}
+
+/// Validate that an edge from a node of `from_type` to node `to` is allowed:
+/// the target must exist, and the type pair must follow the pipeline rules
+/// ([`NodeType::allowed_targets`]).
+fn check_edge(store: &Store, from_type: crate::model::NodeType, to: &str) -> Result<()> {
+    let (target, _) = store
+        .read_node(to)
+        .with_context(|| format!("cannot link to unknown node `{to}`"))?;
+    if !from_type.may_link_to(target.node_type) {
+        bail!(
+            "a {} may not link to a {} (`{to}`); allowed targets: {}",
+            from_type.as_str(),
+            target.node_type.as_str(),
+            from_type
+                .allowed_targets()
+                .iter()
+                .map(|t| t.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+    Ok(())
 }
 
 /// Pin the current version and output of every node in `meta`'s dependency lists.
@@ -698,6 +717,43 @@ mod tests {
 
         let (meta, _) = store.read_node(&a).unwrap();
         assert_eq!(meta.depends_on, vec![b]);
+    }
+
+    #[test]
+    fn edge_type_rules_follow_the_pipeline() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs::default();
+        let node = |ty: NodeType, deps: Vec<String>| NewNode {
+            node_type: ty,
+            title: "t".into(),
+            body: String::new(),
+            author: Author::Human,
+            depends_on: deps,
+            derived_from: vec![],
+        };
+
+        // The pipeline chain is allowed: task -> impl -> build -> verification.
+        let task = add(&store, &fake, node(NodeType::Task, vec![])).unwrap();
+        let sub = add(&store, &fake, node(NodeType::Task, vec![task.clone()])).unwrap();
+        let imp = add(&store, &fake, node(NodeType::Implementation, vec![task.clone()])).unwrap();
+        let build = add(&store, &fake, node(NodeType::Build, vec![imp.clone()])).unwrap();
+        let verify = add(&store, &fake, node(NodeType::Verification, vec![build.clone()])).unwrap();
+        link(&store, &fake, &verify, &imp, DepKind::DependsOn).unwrap();
+        // An implementation may need a built tool.
+        link(&store, &fake, &imp, &build, DepKind::DependsOn).unwrap();
+        let _ = sub;
+
+        // Off-pipeline edges are rejected, with the allowed targets named.
+        let err = add(&store, &fake, node(NodeType::Task, vec![build.clone()])).unwrap_err();
+        assert!(err.to_string().contains("task may not link to a build"), "{err}");
+        assert!(err.to_string().contains("allowed targets: task, info"), "{err}");
+        assert!(add(&store, &fake, node(NodeType::Build, vec![task.clone()])).is_err());
+        assert!(add(&store, &fake, node(NodeType::Verification, vec![task.clone()])).is_err());
+        assert!(link(&store, &fake, &build, &verify, DepKind::DerivedFrom).is_err());
+
+        // Info is freeform: anything may link to it, and it may link to anything.
+        let info = add(&store, &fake, node(NodeType::Info, vec![verify.clone()])).unwrap();
+        link(&store, &fake, &build, &info, DepKind::DerivedFrom).unwrap();
     }
 
     #[test]

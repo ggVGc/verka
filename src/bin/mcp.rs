@@ -114,7 +114,7 @@ impl Tool for AddNode {
         "add_node"
     }
     fn description(&self) -> &'static str {
-        "Create a new node in the graph. Returns its id."
+        "Create a new node in the graph. Returns its id. Edge type rules: a task may link to tasks; an implementation to tasks and builds; a build to implementations; a verification to implementations and builds; info links freely."
     }
     fn input_schema(&self) -> Value {
         obj_schema(
@@ -150,7 +150,7 @@ impl Tool for LinkNodes {
         "link_nodes"
     }
     fn description(&self) -> &'static str {
-        "Add a dependency from one node to another (a definition change of the source node)."
+        "Add a dependency from one node to another (a definition change of the source node). Subject to the edge type rules: task -> task; implementation -> task/build; build -> implementation; verification -> implementation/build; info freely."
     }
     fn input_schema(&self) -> Value {
         obj_schema(

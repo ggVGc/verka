@@ -47,6 +47,30 @@ impl NodeType {
             NodeType::Info => "info",
         }
     }
+
+    /// The node types this type may point at with an edge (`depends_on` or
+    /// `derived_from`). Encodes the pipeline direction — an edge points from
+    /// later work back at what it came from:
+    ///
+    ///   * a task comes from a parent task (sub-tasking);
+    ///   * an implementation comes from tasks, and may need a built tool;
+    ///   * a build comes from implementations;
+    ///   * a verification verifies implementations or builds;
+    ///   * info is freeform documentation, linkable in both directions.
+    pub fn allowed_targets(self) -> &'static [NodeType] {
+        use NodeType::*;
+        match self {
+            Task => &[Task, Info],
+            Implementation => &[Task, Build, Info],
+            Build => &[Implementation, Info],
+            Verification => &[Implementation, Build, Info],
+            Info => &[Task, Implementation, Build, Verification, Info],
+        }
+    }
+
+    pub fn may_link_to(self, target: NodeType) -> bool {
+        target == NodeType::Info || self.allowed_targets().contains(&target)
+    }
 }
 
 /// Who authored a definition or did the work.
