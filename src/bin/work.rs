@@ -211,12 +211,6 @@ fn build_prompt(id: &str, meta: &Meta, body: &str) -> String {
             p.push(format!("    {} -> {}", e.rel, e.to));
         }
     }
-    if !meta.inputs.is_empty() {
-        p.push("  inputs:".into());
-        for i in &meta.inputs {
-            p.push(format!("    {}", i.path));
-        }
-    }
     let body = body.trim();
     if !body.is_empty() {
         p.push(String::new());
@@ -250,7 +244,7 @@ fn shell_quote(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use llaundry::{Author, Edge, NodeType, Pin};
+    use llaundry::{Author, Edge, NodeType};
 
     fn sample_session() -> Session {
         Session {
@@ -344,10 +338,6 @@ mod tests {
                 rel: "depends_on".into(),
                 pin: "abc".into(),
             }],
-            inputs: vec![Pin {
-                path: "src/schema.rs".into(),
-                content: "def".into(),
-            }],
             context: vec![],
         };
         let prompt = build_prompt("task-1", &meta, "  Write the config parser.  ");
@@ -358,7 +348,6 @@ mod tests {
         assert!(prompt.contains("set_status task-1 in_progress"));
         assert!(prompt.contains("set_status task-1 done"));
         assert!(prompt.contains("depends_on -> task-0"));
-        assert!(prompt.contains("src/schema.rs"));
         assert!(prompt.contains("Write the config parser."));
     }
 }

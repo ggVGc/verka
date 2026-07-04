@@ -124,8 +124,7 @@ impl Tool for AddNode {
                 "body": {"type": "string", "description": "Prose body (markdown)."},
                 "author": author_prop(),
                 "depends_on": paths_prop("Logical ids this node depends on (pinned to their current versions)."),
-                "derived_from": paths_prop("Logical ids this node is derived from."),
-                "inputs": paths_prop("Declared input file paths, pinned by content; changing one invalidates the node.")
+                "derived_from": paths_prop("Logical ids this node is derived from.")
             }),
             &["title"],
         )
@@ -139,7 +138,6 @@ impl Tool for AddNode {
             author: enum_or(args, "author", Author::Human)?,
             depends_on: str_list(args, "depends_on"),
             derived_from: str_list(args, "derived_from"),
-            inputs: str_list(args, "inputs"),
         };
         let (id, hash) = ops::add(&store, &vcs, new)?;
         Ok(format!("created {id}  ({})", ops::short(&hash)))
@@ -219,7 +217,7 @@ impl Tool for CompleteNode {
             json!({
                 "id": {"type": "string"},
                 "outputs": paths_prop("Produced files to commit, relative to the project root."),
-                "context": paths_prop("Files used while working but not declared inputs (pinned by content)."),
+                "context": paths_prop("Files used while working the node (pinned by content)."),
                 "message": {"type": "string", "description": "Output commit message (defaults to the node's type and title)."},
                 "author": author_prop()
             }),
@@ -279,7 +277,7 @@ impl Tool for ShowNode {
         "show_node"
     }
     fn description(&self) -> &'static str {
-        "Show a node: current version, edges, inputs, context, output, and any staleness reasons."
+        "Show a node: current version, edges, context, output, and any staleness reasons."
     }
     fn input_schema(&self) -> Value {
         obj_schema(json!({ "id": {"type": "string"} }), &["id"])
@@ -309,12 +307,10 @@ impl Tool for ShowNode {
                 lines.push(format!("  {} -> {} @ {}", e.rel, e.to, ops::short(&e.pin)));
             }
         }
-        for (label, pins) in [("inputs", &meta.inputs), ("context", &meta.context)] {
-            if !pins.is_empty() {
-                lines.push(format!("{label}:"));
-                for p in pins {
-                    lines.push(format!("  {} @ {}", p.path, ops::short(&p.content)));
-                }
+        if !meta.context.is_empty() {
+            lines.push("context:".into());
+            for p in &meta.context {
+                lines.push(format!("  {} @ {}", p.path, ops::short(&p.content)));
             }
         }
         if let Some(commit) = &meta.output_commit {
@@ -397,7 +393,7 @@ impl Tool for StaleNodes {
         "stale_nodes"
     }
     fn description(&self) -> &'static str {
-        "List nodes that are stale, with explicit reasons (moved edges, changed inputs/outputs, superseded completions)."
+        "List nodes that are stale, with explicit reasons (moved edges, changed context/outputs, superseded completions)."
     }
     fn input_schema(&self) -> Value {
         obj_schema(json!({}), &[])

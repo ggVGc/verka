@@ -12,6 +12,9 @@ My wish is for a system where work definition and implementation live as one,
 wich a shared interconnected diffable history.
 Initial ideas, discussion/refinement, implementation, review with comments: All in one historical graph.
 
+Knowing what was produced by a human, and what is from an automated tool (LLM or otherwise) is important.
+Being able to gate it is preferable.
+
 = Core philosophy =
 The output code is no longer the story. The prompt history is the story.
 Theoretically, the code can be recreated from prompt history, as long as it also includes all context that went in, in a verifiable way (through hashes).
@@ -94,6 +97,8 @@ until a valid artifact can be produced, while not being allowed to edit the defi
 
 If the artifact is tested and exhibits problems, then the definition graph is edited, followed by the implementation graph
 and the production of a new artifact.
+
+
 
 = Implementation language =
 

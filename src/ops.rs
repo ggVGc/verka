@@ -26,8 +26,6 @@ pub struct NewNode {
     pub depends_on: Vec<String>,
     /// Logical ids to add `derived_from` edges to.
     pub derived_from: Vec<String>,
-    /// Paths to declare as pinned inputs.
-    pub inputs: Vec<String>,
 }
 
 /// Create a new node. Returns `(logical_id, version hash)`.
@@ -42,7 +40,6 @@ pub fn add(store: &Store, vcs: &dyn Vcs, new: NewNode) -> Result<(String, String
     for src in &new.derived_from {
         edges.push(make_edge(store, src, "derived_from")?);
     }
-    let inputs = pin_files(vcs, &new.inputs)?;
 
     let meta = Meta {
         schema: 1,
@@ -53,7 +50,6 @@ pub fn add(store: &Store, vcs: &dyn Vcs, new: NewNode) -> Result<(String, String
         parent: None,
         output_commit: None,
         edges,
-        inputs,
         context: Vec::new(),
     };
     let hash = store.put_object(&meta, &new.body)?;
@@ -197,7 +193,7 @@ pub fn set_status(
 ///
 /// Independent sources of staleness:
 ///   * an edge whose target node has moved past the pinned version (or vanished),
-///   * a declared input or recorded context file whose content has drifted,
+///   * a recorded context file whose content has drifted,
 ///   * an output that has changed since the node's output capture, and
 ///   * a `done` status set on a version the node has since moved past.
 pub fn staleness(store: &Store, vcs: &dyn Vcs, meta: &Meta) -> Vec<String> {
@@ -217,7 +213,6 @@ pub fn staleness(store: &Store, vcs: &dyn Vcs, meta: &Meta) -> Vec<String> {
         }
     }
 
-    pin_drift(vcs, "input", &meta.inputs, &mut reasons);
     pin_drift(vcs, "context", &meta.context, &mut reasons);
 
     if let Some(commit) = &meta.output_commit {
@@ -468,7 +463,6 @@ mod tests {
                 parent: None,
                 output_commit,
                 edges,
-                inputs: vec![],
                 context: vec![],
             },
         )
@@ -503,7 +497,6 @@ mod tests {
             parent: None,
             output_commit: None,
             edges: vec![],
-            inputs: vec![],
             context: vec![],
         };
         let h1 = store.put_object(&meta, "body").unwrap();
@@ -679,7 +672,7 @@ mod tests {
     }
 
     #[test]
-    fn input_and_context_staleness() {
+    fn context_staleness() {
         let (_t, store) = temp_store();
         let meta = Meta {
             schema: 1,
@@ -690,10 +683,6 @@ mod tests {
             parent: None,
             output_commit: None,
             edges: vec![],
-            inputs: vec![Pin {
-                path: "src/a.rs".into(),
-                content: "h1".into(),
-            }],
             context: vec![Pin {
                 path: "src/b.rs".into(),
                 content: "h2".into(),
@@ -701,18 +690,17 @@ mod tests {
         };
         put_meta(&store, meta.clone());
 
-        // Both pins match current content -> clean.
+        // The pin matches current content -> clean.
         let mut fake = FakeVcs::default();
-        fake.content.insert("src/a.rs".into(), "h1".into());
         fake.content.insert("src/b.rs".into(), "h2".into());
         assert!(staleness(&store, &fake, &meta).is_empty());
 
-        // A declared input changes -> stale, labelled "input".
-        fake.content.insert("src/a.rs".into(), "h1-new".into());
+        // Recorded context changes -> stale, labelled "context".
+        fake.content.insert("src/b.rs".into(), "h2-new".into());
         let r = staleness(&store, &fake, &meta);
         assert!(
             r.iter()
-                .any(|s| s.contains("input src/a.rs") && s.contains("content changed")),
+                .any(|s| s.contains("context src/b.rs") && s.contains("content changed")),
             "{r:?}"
         );
 

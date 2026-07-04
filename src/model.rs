@@ -109,8 +109,8 @@ pub struct Edge {
 }
 
 /// A file pinned by its content hash (a git blob id) at a point in time. Used for
-/// declared inputs and for recorded context. The node is stale if the file's
-/// content no longer matches `content` (or the file is gone).
+/// recorded context. The node is stale if the file's content no longer matches
+/// `content` (or the file is gone).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Pin {
     /// Path relative to the project root.
@@ -147,12 +147,7 @@ pub struct Meta {
     pub output_commit: Option<String>,
     #[serde(default)]
     pub edges: Vec<Edge>,
-    /// Files declared up front as this node's allowed inputs, pinned by content at
-    /// declaration. The agent works only within its declared context; a change to
-    /// a declared input invalidates the node. Part of the node's identity.
-    #[serde(default)]
-    pub inputs: Vec<Pin>,
-    /// Context actually used while working the node but not pre-declared — e.g.
+    /// Context actually used while working the node — e.g.
     /// files a coding agent's tool calls read. Recorded (pinned) at completion, so
     /// a later change to that context also invalidates the node.
     #[serde(default)]

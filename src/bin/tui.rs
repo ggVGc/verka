@@ -372,7 +372,6 @@ fn action_add(out: &mut Stdout, store: &Store, vcs: &GitVcs) -> Result<Option<St
             author: Author::Human,
             depends_on: Vec::new(),
             derived_from: Vec::new(),
-            inputs: Vec::new(),
         },
     )?;
     Ok(Some(format!("added {id} ({})", ops::short(&hash))))
@@ -621,12 +620,6 @@ fn detail_lines(store: &Store, r: &Row) -> Vec<(String, Color)> {
                 format!("  {:<12} -> {} @ {}", e.rel, e.to, ops::short(&e.pin)),
                 Color::Reset,
             ));
-        }
-    }
-    if !r.meta.inputs.is_empty() {
-        lines.push(("inputs:".into(), Color::Reset));
-        for p in &r.meta.inputs {
-            lines.push((format!("  {} @ {}", p.path, ops::short(&p.content)), Color::Reset));
         }
     }
     if !r.meta.context.is_empty() {

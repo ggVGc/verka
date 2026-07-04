@@ -50,10 +50,6 @@ enum Cmd {
         /// Add a `derived_from` edge to another node (repeatable), by logical id.
         #[arg(long = "derived-from")]
         derived_from: Vec<String>,
-        /// Declare an input file this node is allowed to use, pinned by its current
-        /// content (repeatable). Changing it later invalidates the node.
-        #[arg(long = "input", short = 'i')]
-        input: Vec<PathBuf>,
     },
 
     /// Add a typed edge from one node to another.
@@ -90,9 +86,9 @@ enum Cmd {
         /// A produced file, relative to the project root (repeatable).
         #[arg(long = "output", short = 'o', required = true)]
         outputs: Vec<PathBuf>,
-        /// A file that was actually used while working this node but was not a
-        /// declared input — e.g. read by an agent's tool call (repeatable). Pinned
-        /// by content, so a later change to it also invalidates the node.
+        /// A file that was actually used while working this node — e.g. read by an
+        /// agent's tool call (repeatable). Pinned by content, so a later change to
+        /// it also invalidates the node.
         #[arg(long = "context", short = 'c')]
         context: Vec<PathBuf>,
         /// Message for the output commit (defaults to the node's type and title).
@@ -156,7 +152,6 @@ fn main() -> Result<()> {
             author,
             depends_on,
             derived_from,
-            input,
         } => {
             let store = Store::open(store)?;
             let vcs = GitVcs::new(store.project_root());
@@ -170,7 +165,6 @@ fn main() -> Result<()> {
                     author,
                     depends_on,
                     derived_from,
-                    inputs: to_strings(&input),
                 },
             )?;
             println!("{logical_id}  {}", ops::short(&hash));
@@ -259,12 +253,6 @@ fn main() -> Result<()> {
                 println!("edges:");
                 for e in &meta.edges {
                     println!("  {:<12} -> {} @ {}", e.rel, e.to, ops::short(&e.pin));
-                }
-            }
-            if !meta.inputs.is_empty() {
-                println!("inputs:");
-                for p in &meta.inputs {
-                    println!("  {} @ {}", p.path, ops::short(&p.content));
                 }
             }
             if !meta.context.is_empty() {
