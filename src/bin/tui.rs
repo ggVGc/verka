@@ -346,7 +346,6 @@ fn action_add(out: &mut Stdout, store: &Store, vcs: &GitVcs) -> Result<Option<St
         NodeType::Implementation,
         NodeType::Build,
         NodeType::Verification,
-        NodeType::Info,
     ];
     let labels: Vec<&str> = types.iter().map(|t| t.as_str()).collect();
     let Some(ti) = pick(out, "node type", &labels, 0)? else {

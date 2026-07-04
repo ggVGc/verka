@@ -163,16 +163,21 @@ attached to the artifact stages — and edges must follow it. An edge points fro
 later work back at what it came from, so the allowed targets per source type
 are:
 
-| from \ may link to | task | implementation | build | verification | info |
-|---|---|---|---|---|---|
-| task           | ✓ (sub-tasking) | | | | ✓ |
-| implementation | ✓ | | ✓ (a built tool it needs) | | ✓ |
-| build          | | ✓ | | | ✓ |
-| verification   | | ✓ | ✓ | | ✓ |
-| info           | ✓ | ✓ | ✓ | ✓ | ✓ |
+| from \ may link to | task | implementation | build | verification |
+|---|---|---|---|---|
+| task           | ✓ (sub-tasking) | | | |
+| implementation | ✓ | | ✓ (a built tool it needs) | |
+| build          | | ✓ | | |
+| verification   | | ✓ | ✓ | |
 
-`info` is freeform documentation, linkable in both directions. The rules are
-enforced at the only two edge-creation points (`add`, `link`) by
+There is deliberately no freeform "info" type: knowledge is modelled as work
+that produced it. An originating request is a *root task* (sub-tasks derive
+from it, and revising the request flags them all); a decision or research
+finding is a task whose result notes record the outcome. Every node is
+therefore workable, and prose context lives in exactly two places — a node's
+definition body and its result notes.
+
+The rules are enforced at the only two edge-creation points (`add`, `link`) by
 `NodeType::allowed_targets`, so an ill-typed graph cannot be constructed *by
 the tools*; both `depends_on` and `derived_from` follow the same table.
 
@@ -214,7 +219,7 @@ type = "task"
 title = "Parse the config file"
 author = "human"
 depends_on = ["task-01J8XQ2A..."]
-derived_from = ["info-01J8XQ1B..."]
+derived_from = ["task-01J8XQ1B..."]
 ---
 
 Parse the TOML config into the Config struct...

@@ -132,12 +132,12 @@ impl Tool for AddNode {
         "add_node"
     }
     fn description(&self) -> &'static str {
-        "Create a new node in the graph. Returns its id. Edge type rules: a task may link to tasks; an implementation to tasks and builds; a build to implementations; a verification to implementations and builds; info links freely."
+        "Create a new node in the graph. Returns its id. Edge type rules: a task may link to tasks; an implementation to tasks and builds; a build to implementations; a verification to implementations and builds."
     }
     fn input_schema(&self) -> Value {
         obj_schema(
             json!({
-                "type": enum_prop(&["task", "implementation", "build", "verification", "info"], "Node type (default task)."),
+                "type": enum_prop(&["task", "implementation", "build", "verification"], "Node type (default task)."),
                 "title": {"type": "string", "description": "Short title."},
                 "body": {"type": "string", "description": "Prose body (markdown)."},
                 "author": author_prop(),
@@ -168,7 +168,7 @@ impl Tool for LinkNodes {
         "link_nodes"
     }
     fn description(&self) -> &'static str {
-        "Add a dependency from one node to another (a definition change of the source node). Subject to the edge type rules: task -> task; implementation -> task/build; build -> implementation; verification -> implementation/build; info freely."
+        "Add a dependency from one node to another (a definition change of the source node). Subject to the edge type rules: task -> task; implementation -> task/build; build -> implementation; verification -> implementation/build."
     }
     fn input_schema(&self) -> Value {
         obj_schema(

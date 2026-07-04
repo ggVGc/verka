@@ -853,14 +853,10 @@ mod tests {
         // Off-pipeline edges are rejected, with the allowed targets named.
         let err = add(&store, &fake, node(NodeType::Task, vec![build.clone()])).unwrap_err();
         assert!(err.to_string().contains("task may not link to a build"), "{err}");
-        assert!(err.to_string().contains("allowed targets: task, info"), "{err}");
+        assert!(err.to_string().contains("allowed targets: task"), "{err}");
         assert!(add(&store, &fake, node(NodeType::Build, vec![task.clone()])).is_err());
         assert!(add(&store, &fake, node(NodeType::Verification, vec![task.clone()])).is_err());
         assert!(link(&store, &fake, &build, &verify, DepKind::DerivedFrom).is_err());
-
-        // Info is freeform: anything may link to it, and it may link to anything.
-        let info = add(&store, &fake, node(NodeType::Info, vec![verify.clone()])).unwrap();
-        link(&store, &fake, &build, &info, DepKind::DerivedFrom).unwrap();
     }
 
     #[test]

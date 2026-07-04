@@ -23,7 +23,6 @@ pub enum NodeType {
     Implementation,
     Build,
     Verification,
-    Info,
 }
 
 impl NodeType {
@@ -34,7 +33,6 @@ impl NodeType {
             NodeType::Implementation => "impl",
             NodeType::Build => "build",
             NodeType::Verification => "verify",
-            NodeType::Info => "info",
         }
     }
 
@@ -44,7 +42,6 @@ impl NodeType {
             NodeType::Implementation => "implementation",
             NodeType::Build => "build",
             NodeType::Verification => "verification",
-            NodeType::Info => "info",
         }
     }
 
@@ -52,24 +49,23 @@ impl NodeType {
     /// `derived_from`). Encodes the pipeline direction — an edge points from
     /// later work back at what it came from:
     ///
-    ///   * a task comes from a parent task (sub-tasking);
+    ///   * a task comes from a parent task (sub-tasking; a root task carries
+    ///     the originating request itself);
     ///   * an implementation comes from tasks, and may need a built tool;
     ///   * a build comes from implementations;
-    ///   * a verification verifies implementations or builds;
-    ///   * info is freeform documentation, linkable in both directions.
+    ///   * a verification verifies implementations or builds.
     pub fn allowed_targets(self) -> &'static [NodeType] {
         use NodeType::*;
         match self {
-            Task => &[Task, Info],
-            Implementation => &[Task, Build, Info],
-            Build => &[Implementation, Info],
-            Verification => &[Implementation, Build, Info],
-            Info => &[Task, Implementation, Build, Verification, Info],
+            Task => &[Task],
+            Implementation => &[Task, Build],
+            Build => &[Implementation],
+            Verification => &[Implementation, Build],
         }
     }
 
     pub fn may_link_to(self, target: NodeType) -> bool {
-        target == NodeType::Info || self.allowed_targets().contains(&target)
+        self.allowed_targets().contains(&target)
     }
 }
 
