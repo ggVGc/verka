@@ -6,6 +6,7 @@
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use std::io;
 use std::path::PathBuf;
 
 use llaundry::ops::{self, NewNode};
@@ -92,6 +93,9 @@ enum Cmd {
         /// Narrative of what happened during the work (the body of result.md).
         #[arg(long)]
         notes: Option<String>,
+        /// Read the notes from a file instead.
+        #[arg(long, conflicts_with = "notes")]
+        notes_file: Option<PathBuf>,
         #[arg(long, value_enum, default_value = "machine")]
         author: Author,
     },
@@ -101,6 +105,9 @@ enum Cmd {
         id: String,
         #[arg(long)]
         notes: Option<String>,
+        /// Read the notes from a file instead.
+        #[arg(long, conflicts_with = "notes")]
+        notes_file: Option<PathBuf>,
         #[arg(long, value_enum, default_value = "machine")]
         author: Author,
     },
@@ -200,10 +207,12 @@ fn main() -> Result<()> {
             context,
             message,
             notes,
+            notes_file,
             author,
         } => {
             let store = Store::open(store)?;
             let vcs = GitVcs::new(store.project_root());
+            let notes = resolve_notes(notes, notes_file, &store, &id, "what happened?")?;
             let commit = ops::complete(
                 &store,
                 &vcs,
@@ -211,7 +220,7 @@ fn main() -> Result<()> {
                 &to_strings(&outputs),
                 &to_strings(&context),
                 message,
-                notes.as_deref().unwrap_or(""),
+                &notes,
                 author,
             )?;
             match commit {
@@ -220,10 +229,16 @@ fn main() -> Result<()> {
             }
         }
 
-        Cmd::Fail { id, notes, author } => {
+        Cmd::Fail {
+            id,
+            notes,
+            notes_file,
+            author,
+        } => {
             let store = Store::open(store)?;
             let vcs = GitVcs::new(store.project_root());
-            ops::fail(&store, &vcs, &id, notes.as_deref().unwrap_or(""), author)?;
+            let notes = resolve_notes(notes, notes_file, &store, &id, "what went wrong?")?;
+            ops::fail(&store, &vcs, &id, &notes, author)?;
             println!("{id}  failed");
         }
 
@@ -412,6 +427,63 @@ fn show_node(store: &Store, vcs: &GitVcs, id: &str) -> Result<String> {
     Ok(out)
 }
 
+/// Resolve the notes for `complete`/`fail`: `--notes` inline, `--notes-file`
+/// from a file, or — when neither is given and we are on a terminal — a
+/// git-commit-style `$EDITOR` session. Non-interactive callers (agents, scripts)
+/// that pass nothing get empty notes, unchanged from before.
+fn resolve_notes(
+    notes: Option<String>,
+    file: Option<PathBuf>,
+    store: &Store,
+    id: &str,
+    ask: &str,
+) -> Result<String> {
+    use std::io::IsTerminal;
+    if let Some(n) = notes {
+        return Ok(n);
+    }
+    if let Some(f) = file {
+        return std::fs::read_to_string(&f)
+            .with_context(|| format!("reading notes from {}", f.display()));
+    }
+    if !(io::stdin().is_terminal() && io::stdout().is_terminal()) {
+        return Ok(String::new());
+    }
+
+    // Interactive and no notes supplied: open $VISUAL/$EDITOR on a template,
+    // git-commit style. '#' lines are stripped from the result.
+    let (meta, _) = store.read_node(id)?;
+    let editor = std::env::var("VISUAL")
+        .or_else(|_| std::env::var("EDITOR"))
+        .unwrap_or_else(|_| "vi".into());
+    let path = std::env::temp_dir().join(format!("llaundry-notes-{id}.md"));
+    std::fs::write(
+        &path,
+        format!(
+            "\n# Notes for {id} — {}\n# {ask} These notes become the body of result.md.\n# Lines starting with '#' are ignored; an empty file records no notes.\n",
+            meta.title
+        ),
+    )?;
+    let status = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!("{editor} '{}'", path.display()))
+        .status()
+        .with_context(|| format!("failed to launch editor `{editor}` (set $EDITOR)"))?;
+    if !status.success() {
+        anyhow::bail!("editor `{editor}` exited unsuccessfully; aborting");
+    }
+    let text = std::fs::read_to_string(&path)?;
+    let _ = std::fs::remove_file(&path);
+    Ok(strip_comment_lines(&text))
+}
+
+/// Drop lines starting with '#' and trim surrounding blank space — the
+/// git-commit template convention.
+fn strip_comment_lines(text: &str) -> String {
+    let kept: Vec<&str> = text.lines().filter(|l| !l.trim_start().starts_with('#')).collect();
+    kept.join("\n").trim().to_string()
+}
+
 fn read_body(body: Option<String>, file: Option<PathBuf>) -> Result<String> {
     match (body, file) {
         (Some(b), _) => Ok(b),
@@ -428,4 +500,17 @@ fn to_strings(paths: &[PathBuf]) -> Vec<String> {
         .iter()
         .map(|p| p.to_string_lossy().into_owned())
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::strip_comment_lines;
+
+    #[test]
+    fn strip_comment_lines_follows_the_git_template_convention() {
+        let text = "\n# Notes for task-1 — title\n# ignored\nDid the work.\n\nMore detail.\n# trailing comment\n";
+        assert_eq!(strip_comment_lines(text), "Did the work.\n\nMore detail.");
+        assert_eq!(strip_comment_lines("# only comments\n#\n"), "");
+        assert_eq!(strip_comment_lines(""), "");
+    }
 }
