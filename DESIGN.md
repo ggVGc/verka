@@ -55,11 +55,10 @@ files:
 * **`result.md`** — the *completion record*: what happened when the work was
   done, written once at the end of the node's single unit of work.
 
-There is no third thing. A node with no `result.md` is open; writing
-`result.md` is completing (or failing) it; editing `node.md` is revising the
-definition. Adding a node only adds files, so concurrent work merges cleanly —
-and the high-frequency write (recording results) touches a file nothing else
-touches.
+A node with no `result.md` is open; writing `result.md` is completing (or
+failing) it; editing `node.md` is revising the definition. Adding a node only
+adds files, so concurrent work merges cleanly — and the high-frequency write
+(recording results) touches a file nothing else touches.
 
 ### 2.2 The node version is a git blob id, computed on demand
 
@@ -185,7 +184,31 @@ edge targets exist, no duplicates or self-references, and no `depends_on`
 cycles (which would deadlock readiness). Like every other query it is derived,
 read-only, and git-free.
 
-### 2.10 What context is: outputs first, files second
+### 2.10 Questions are nodes; `assignee` says who a node is for
+
+An agent mid-work that needs a human decision must not fail (that means "the
+work cannot be done") and must not silently stall. The design's own move from
+§2.9 — knowledge is work that produced it — extends to questions: **a question
+is a unit of work assigned to a human, and the answer is its result.** The
+agent adds a question node (`assignee = "human"`, the context and options in
+its body), links its own node to `depends_on` it, and stops without
+completing. Its node is now derived-*blocked*, not failed; the question shows
+up in `ready --for human` — the human's inbox; the human completes it with the
+answer as result notes; the asker becomes ready again.
+
+Everything else falls out of existing machinery: the answer is a dependency,
+so it is pinned at completion — a human who later *revises* an answer makes
+the work built on it stale, with a diffable reason. No new node kind, no
+message channel, no state machine.
+
+`assignee` is the one addition: an optional scalar on the definition saying
+who the work is *for* (`human`/`machine`), distinct from `author` — a
+machine-authored question is human-assigned. Absent means anyone may work it.
+Dispatch respects it (`llaundry-work` refuses a human-assigned node; `ready`
+filters on it), but no derived semantics — status, staleness, readiness —
+branch on it.
+
+### 2.11 What context is: outputs first, files second
 
 Most of what work consumes is *other nodes' outputs* — covered by the
 `built_against` output pins, one hash per dependency. Explicit per-file
@@ -213,6 +236,7 @@ A store is a single directory (default `.llaundry/`, committed to git):
 schema = 1
 title = "Parse the config file"
 author = "human"
+assignee = "human"                # optional: who the work is for (§2.10)
 depends_on = ["node-01J8XQ2A..."]
 derived_from = ["node-01J8XQ1B..."]
 ---
@@ -298,7 +322,7 @@ The store path defaults to `.llaundry/`, overridable with `--store` or
 | Command | Purpose |
 |---|---|
 | `init` | Create an empty store. |
-| `add` | Create a node (`--depends-on`/`--derived-from` by id). Prints its id. |
+| `add` | Create a node (`--depends-on`/`--derived-from` by id, `--assignee` for who the work is for). Prints its id. |
 | `link <from> <to>` | Add a dependency (a definition change of `<from>`). |
 | `edit <id>` | Change title/body (a definition change: reopens a done node). |
 | `complete <id> [-o <file>...] [--notes ...]` | Commit produced files as one output commit, pin deps/context, write `result.md`. |
@@ -307,7 +331,7 @@ The store path defaults to `.llaundry/`, overridable with `--store` or
 | `list` | Every node with its derived status. |
 | `log <id>` | The node's git history (definition edits and results). |
 | `stale` | Nodes whose recorded work has been invalidated, with reasons. |
-| `ready` / `blocked` | Derived readiness, with blocker reasons. |
+| `ready` / `blocked` | Derived readiness, with blocker reasons. `ready --for human` is the human's inbox of pending questions (unassigned nodes match either). |
 | `outputs <id>` / `origin <commit>` | Provenance in both directions. |
 | `dependents <id>` | Which nodes depend on / derive from this one. |
 | `check` | Integrity-check the store (fsck): parse errors, missing edge targets, duplicates, self-references, dependency cycles. Non-zero exit on problems. |
@@ -356,14 +380,17 @@ clean-tree rule and surface refusals as in-band MCP errors (`isError: true`).
 ### 5.3 The worker
 
 `llaundry-work` runs one unit of work on one node. It refuses to start if the
-node is blocked (override with `--force`), builds a prompt from the node's
-title, body, and dependency ids, and hands it to a `Backend`. The first
-backend, `ClaudeCode`, shells out to `claude -p` sandboxed to **only** the
-llaundry MCP server (`--strict-mcp-config`, `--allowedTools mcp__llaundry`) —
-no shell, file, or network tools. A file-free session produces no output
-commit, so the prompt steers it to finish with `complete_node` (notes as the
-record of what happened) or `fail_node`. Command construction is separated from
-execution so the exact invocation is unit-tested and shown by `--dry-run`.
+node is blocked or assigned to a human (override with `--force`), builds a
+prompt from the node's title, body, and dependency ids, and hands it to a
+`Backend`. The first backend, `ClaudeCode`, shells out to `claude -p`
+sandboxed to **only** the llaundry MCP server (`--strict-mcp-config`,
+`--allowedTools mcp__llaundry`) — no shell, file, or network tools. A
+file-free session produces no output commit, so the prompt steers it to
+finish with `complete_node` (notes as the record of what happened) or
+`fail_node` — or, when it needs a human decision, to pause: mint a
+human-assigned question node, depend on it, and stop (§2.10). Command
+construction is separated from execution so the exact invocation is
+unit-tested and shown by `--dry-run`.
 
 ---
 

@@ -25,6 +25,8 @@ pub struct NewNode {
     pub title: String,
     pub body: String,
     pub author: Author,
+    /// Who the work is for (e.g. `human` for a question node); `None` = anyone.
+    pub assignee: Option<Author>,
     /// Ids this node depends on (must exist).
     pub depends_on: Vec<String>,
     /// Ids this node is derived from (must exist).
@@ -42,6 +44,7 @@ pub fn add(store: &Store, vcs: &dyn Vcs, new: NewNode) -> Result<String> {
         schema: 1,
         title: new.title,
         author: new.author,
+        assignee: new.assignee,
         depends_on: new.depends_on,
         derived_from: new.derived_from,
     };
@@ -583,6 +586,7 @@ mod tests {
             title: title.into(),
             body: "body".into(),
             author: Author::Human,
+            assignee: None,
             depends_on,
             derived_from: vec![],
         }
@@ -928,6 +932,26 @@ mod tests {
         let fake = FakeVcs::default();
         let a = add(&store, &fake, new_node("a", vec![])).unwrap();
         assert!(link(&store, &fake, &a, &a, DepKind::DependsOn).is_err());
+    }
+
+    #[test]
+    fn assignee_round_trips_through_add() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs::default();
+        let mut question = new_node("Question: which auth scheme?", vec![]);
+        question.author = Author::Machine;
+        question.assignee = Some(Author::Human);
+        let q = add(&store, &fake, question).unwrap();
+
+        let (meta, _) = store.read_node(&q).unwrap();
+        assert_eq!(meta.assignee, Some(Author::Human));
+
+        // Unassigned nodes stay unassigned (and omit the key on disk).
+        let a = add(&store, &fake, new_node("a", vec![])).unwrap();
+        let (meta, _) = store.read_node(&a).unwrap();
+        assert_eq!(meta.assignee, None);
+        let text = std::fs::read_to_string(store.node_dir(&a).join("node.md")).unwrap();
+        assert!(!text.contains("assignee"), "{text}");
     }
 
     #[test]

@@ -357,6 +357,7 @@ fn action_add(out: &mut Stdout, store: &Store, vcs: &GitVcs) -> Result<Option<St
             title,
             body,
             author: Author::Human,
+            assignee: None,
             depends_on: Vec::new(),
             derived_from: Vec::new(),
         },

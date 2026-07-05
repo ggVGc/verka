@@ -15,7 +15,7 @@ use clap::{Parser, ValueEnum};
 use serde_json::{json, Value};
 use std::process::Command;
 
-use llaundry::{ops, GitVcs, NodeMeta, Store};
+use llaundry::{ops, Author, GitVcs, NodeMeta, Store};
 
 #[derive(Parser)]
 #[command(name = "llaundry-work", version, about = "Run an LLM against a llaundry node")]
@@ -56,6 +56,15 @@ fn main() -> Result<()> {
     let store = Store::open(cli.store.clone())?;
     let vcs = GitVcs::new(store.project_root());
     let (meta, body) = store.read_node(&cli.node)?;
+
+    // A node assigned to a human is not an LLM's to work — it is waiting for a
+    // human's answer (typically a question node minted by a paused worker).
+    if meta.assignee == Some(Author::Human) && !cli.force {
+        bail!(
+            "node `{}` is assigned to a human; answer it (llaundry complete) or pass --force",
+            cli.node
+        );
+    }
 
     // Don't launch work on a node whose dependencies aren't satisfied, unless forced.
     let blockers = ops::blockers(&store, &vcs, &cli.node);
@@ -192,7 +201,7 @@ impl Backend for ClaudeCode {
 /// The instruction handed to the model: what the node is, and the tools-only
 /// discipline it must follow. A file-free session produces no output files, so it
 /// finishes with `complete_node` (no outputs, notes as the record of what happened)
-/// or `fail_node`.
+/// or `fail_node` — or pauses on a human-assigned question node.
 fn build_prompt(id: &str, meta: &NodeMeta, body: &str) -> String {
     let mut p = vec![
         "You are an autonomous worker on a llaundry node graph.".to_string(),
@@ -227,6 +236,12 @@ fn build_prompt(id: &str, meta: &NodeMeta, body: &str) -> String {
     ));
     p.push("     summarising what you did and why. If the work cannot be done,".into());
     p.push(format!("     record that instead: fail_node {id} with `notes` explaining why."));
+    p.push("  4. If you need a decision or information only a human can give, do NOT".into());
+    p.push("     complete or fail. Instead add_node a question (title `Question: ...`,".into());
+    p.push("     assignee `human`, the context and options in its body), link_nodes".into());
+    p.push(format!(
+        "     {id} depends_on it, and stop. Work resumes here once it is answered."
+    ));
     p.push("Finish with a brief summary of what you changed.".into());
     p.join("\n")
 }
@@ -331,6 +346,7 @@ mod tests {
             schema: 1,
             title: "Parse config".into(),
             author: Author::Human,
+            assignee: None,
             depends_on: vec!["node-0".into()],
             derived_from: vec![],
         };
@@ -343,5 +359,9 @@ mod tests {
         assert!(prompt.contains("fail_node node-1"));
         assert!(prompt.contains("depends_on -> node-0"));
         assert!(prompt.contains("Write the config parser."));
+
+        // The pause protocol: a human question is a node, not a completion.
+        assert!(prompt.contains("Question:"));
+        assert!(prompt.contains("assignee `human`"));
     }
 }

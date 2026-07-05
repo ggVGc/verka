@@ -43,6 +43,10 @@ enum Cmd {
         file: Option<PathBuf>,
         #[arg(long, value_enum, default_value = "human")]
         author: Author,
+        /// Who the work is for (e.g. `human` for a question node). Unset means
+        /// anyone may work it.
+        #[arg(long, value_enum)]
+        assignee: Option<Author>,
         /// Another node this one depends on (repeatable), by id.
         #[arg(long = "depends-on")]
         depends_on: Vec<String>,
@@ -123,7 +127,12 @@ enum Cmd {
     Stale,
 
     /// List unfinished nodes whose dependencies are all satisfied (done, not stale).
-    Ready,
+    Ready {
+        /// Only nodes assigned to this worker kind (e.g. `human`: the inbox of
+        /// pending questions). Unassigned nodes match either.
+        #[arg(long = "for", value_enum)]
+        assignee: Option<Author>,
+    },
 
     /// List nodes blocked by an unsatisfied dependency, with reasons.
     Blocked,
@@ -163,6 +172,7 @@ fn main() -> Result<()> {
             body,
             file,
             author,
+            assignee,
             depends_on,
             derived_from,
         } => {
@@ -175,6 +185,7 @@ fn main() -> Result<()> {
                     title,
                     body: read_body(body, file)?,
                     author,
+                    assignee,
                     depends_on,
                     derived_from,
                 },
@@ -300,12 +311,17 @@ fn main() -> Result<()> {
             }
         }
 
-        Cmd::Ready => {
+        Cmd::Ready { assignee } => {
             let store = Store::open(store)?;
             let vcs = GitVcs::new(store.project_root());
             for id in store.list_ids()? {
                 if ops::is_ready(&store, &vcs, &id) {
                     let (meta, _) = store.read_node(&id)?;
+                    // With --for, a node assigned to the *other* kind is hidden;
+                    // unassigned nodes are anyone's to pick up.
+                    if matches!((assignee, meta.assignee), (Some(want), Some(has)) if want != has) {
+                        continue;
+                    }
                     println!("{:<32} {}", id, meta.title);
                 }
             }
@@ -401,6 +417,9 @@ fn show_node(store: &Store, vcs: &GitVcs, id: &str) -> Result<String> {
     writeln!(out, "title:   {}", meta.title)?;
     writeln!(out, "status:  {}", ops::current_status(store, id).as_str())?;
     writeln!(out, "author:  {}", meta.author.as_str())?;
+    if let Some(assignee) = meta.assignee {
+        writeln!(out, "assignee: {}", assignee.as_str())?;
+    }
     writeln!(out, "version: {}", ops::short(&store.node_version(id)?))?;
     for dep in &meta.depends_on {
         writeln!(out, "depends_on:   {dep}")?;

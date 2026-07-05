@@ -100,6 +100,11 @@ pub struct NodeMeta {
     pub schema: u32,
     pub title: String,
     pub author: Author,
+    /// Who the work is *for*: a machine-authored question node is assigned to a
+    /// human, whose answer (its result notes) unblocks the asker. Absent means
+    /// anyone may work it. Distinct from `author` — who wrote the definition.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignee: Option<Author>,
     /// Ids of nodes this node needs finished before it can be worked.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub depends_on: Vec<String>,

@@ -250,6 +250,7 @@ mod tests {
             schema: 1,
             title: "hello".into(),
             author: Author::Human,
+            assignee: None,
             depends_on: vec!["node-a".into()],
             derived_from: vec![],
         };

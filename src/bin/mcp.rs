@@ -166,6 +166,7 @@ impl Tool for AddNode {
                 "title": {"type": "string", "description": "Short title."},
                 "body": {"type": "string", "description": "Prose body (markdown)."},
                 "author": author_prop(),
+                "assignee": enum_prop(&["human", "machine"], "Who the work is for — set `human` on a question node needing a human decision. Omit for anyone."),
                 "depends_on": ids_prop("Ids of nodes this node depends on."),
                 "derived_from": ids_prop("Ids of nodes this node is derived from.")
             }),
@@ -178,6 +179,7 @@ impl Tool for AddNode {
             title: req_str(args, "title")?,
             body: opt_str(args, "body").unwrap_or_default(),
             author: enum_or(args, "author", Author::Machine)?,
+            assignee: enum_or(args, "assignee", None)?,
             depends_on: str_list(args, "depends_on"),
             derived_from: str_list(args, "derived_from"),
         };
@@ -330,6 +332,9 @@ impl Tool for ShowNode {
             format!("author:  {}", meta.author.as_str()),
             format!("version: {}", ops::short(&store.node_version(&id)?)),
         ];
+        if let Some(assignee) = meta.assignee {
+            lines.push(format!("assignee: {}", assignee.as_str()));
+        }
         for dep in &meta.depends_on {
             lines.push(format!("depends_on:   {dep}"));
         }
@@ -431,17 +436,24 @@ impl Tool for ReadyNodes {
         "ready_nodes"
     }
     fn description(&self) -> &'static str {
-        "List unfinished nodes whose dependencies are all satisfied (done and not stale)."
+        "List unfinished nodes whose dependencies are all satisfied (done and not stale). Optionally only those for a given assignee (unassigned nodes match either)."
     }
     fn input_schema(&self) -> Value {
-        obj_schema(json!({}), &[])
+        obj_schema(
+            json!({ "assignee": enum_prop(&["human", "machine"], "Only nodes workable by this kind of worker.") }),
+            &[],
+        )
     }
-    fn call(&self, ctx: &Ctx, _args: &Value) -> Result<String> {
+    fn call(&self, ctx: &Ctx, args: &Value) -> Result<String> {
         let (store, vcs) = ctx.open()?;
+        let want: Option<Author> = enum_or(args, "assignee", None)?;
         let mut lines = Vec::new();
         for id in store.list_ids()? {
             if ops::is_ready(&store, &vcs, &id) {
                 let (meta, _) = store.read_node(&id)?;
+                if matches!((want, meta.assignee), (Some(w), Some(has)) if w != has) {
+                    continue;
+                }
                 lines.push(format!("{id}  {}", meta.title));
             }
         }
