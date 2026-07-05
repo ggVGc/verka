@@ -10,7 +10,7 @@ use std::io;
 use std::path::PathBuf;
 
 use llaundry::ops::{self, NewNode};
-use llaundry::{Author, DepKind, GitVcs, NodeType, Store};
+use llaundry::{Author, DepKind, GitVcs, Store};
 
 #[derive(Parser)]
 #[command(
@@ -33,8 +33,6 @@ enum Cmd {
 
     /// Add a new node. Prints its id.
     Add {
-        #[arg(long = "type", value_enum, default_value = "task")]
-        node_type: NodeType,
         #[arg(long)]
         title: String,
         /// Body text inline.
@@ -87,7 +85,7 @@ enum Cmd {
         /// content, so a later change to it flags this node.
         #[arg(long = "context", short = 'c')]
         context: Vec<PathBuf>,
-        /// Message for the output commit (defaults to the node's type and title).
+        /// Message for the output commit (defaults to the node's title).
         #[arg(long, short = 'm')]
         message: Option<String>,
         /// Narrative of what happened during the work (the body of result.md).
@@ -142,9 +140,9 @@ enum Cmd {
     /// List the nodes that depend on (or derive from) a node.
     Dependents { id: String },
 
-    /// Integrity-check the store (fsck): parse errors, missing or ill-typed edge
-    /// targets, duplicates, self-references, and dependency cycles. Exits
-    /// non-zero if problems are found.
+    /// Integrity-check the store (fsck): parse errors, missing edge targets,
+    /// duplicates, self-references, and dependency cycles. Exits non-zero if
+    /// problems are found.
     Check,
 
     /// Check whether a node is settled: done, not stale, and all work derived
@@ -161,7 +159,6 @@ fn main() -> Result<()> {
         }
 
         Cmd::Add {
-            node_type,
             title,
             body,
             file,
@@ -175,7 +172,6 @@ fn main() -> Result<()> {
                 &store,
                 &vcs,
                 NewNode {
-                    node_type,
                     title,
                     body: read_body(body, file)?,
                     author,
@@ -262,13 +258,7 @@ fn main() -> Result<()> {
             for id in store.list_ids()? {
                 let (meta, _) = store.read_node(&id)?;
                 let status = ops::current_status(&store, &id);
-                println!(
-                    "{:<32} {:<8} {:<14} {}",
-                    id,
-                    status.as_str(),
-                    meta.node_type.as_str(),
-                    meta.title
-                );
+                println!("{:<32} {:<8} {}", id, status.as_str(), meta.title);
             }
         }
 
@@ -408,7 +398,6 @@ fn show_node(store: &Store, vcs: &GitVcs, id: &str) -> Result<String> {
     use std::fmt::Write;
 
     writeln!(out, "id:      {id}")?;
-    writeln!(out, "type:    {}", meta.node_type.as_str())?;
     writeln!(out, "title:   {}", meta.title)?;
     writeln!(out, "status:  {}", ops::current_status(store, id).as_str())?;
     writeln!(out, "author:  {}", meta.author.as_str())?;

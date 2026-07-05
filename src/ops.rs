@@ -22,7 +22,6 @@ use crate::vcs::Vcs;
 
 /// Parameters for creating a node with [`add`].
 pub struct NewNode {
-    pub node_type: crate::model::NodeType,
     pub title: String,
     pub body: String,
     pub author: Author,
@@ -36,12 +35,11 @@ pub struct NewNode {
 pub fn add(store: &Store, vcs: &dyn Vcs, new: NewNode) -> Result<String> {
     require_clean(vcs)?;
     for dep in new.depends_on.iter().chain(&new.derived_from) {
-        check_edge(store, new.node_type, dep)?;
+        check_edge(store, dep)?;
     }
-    let id = format!("{}-{}", new.node_type.prefix(), Ulid::new());
+    let id = format!("node-{}", Ulid::new());
     let meta = NodeMeta {
         schema: 1,
-        node_type: new.node_type,
         title: new.title,
         author: new.author,
         depends_on: new.depends_on,
@@ -60,7 +58,7 @@ pub fn link(store: &Store, vcs: &dyn Vcs, from: &str, to: &str, kind: DepKind) -
         bail!("cannot link `{from}` to itself");
     }
     let (mut meta, body) = store.read_node(from)?;
-    check_edge(store, meta.node_type, to)?;
+    check_edge(store, to)?;
     let list = match kind {
         DepKind::DependsOn => &mut meta.depends_on,
         DepKind::DerivedFrom => &mut meta.derived_from,
@@ -120,8 +118,7 @@ pub fn complete(
     let output_commit = if outputs.is_empty() {
         None
     } else {
-        let message =
-            message.unwrap_or_else(|| format!("{}: {}", meta.node_type.as_str(), meta.title));
+        let message = message.unwrap_or_else(|| meta.title.clone());
         Some(vcs.capture(outputs, &message)?)
     };
 
@@ -382,9 +379,9 @@ pub fn unsettled(store: &Store, vcs: &dyn Vcs, id: &str) -> Result<Vec<String>> 
 /// empty means the store is consistent. Read-only and git-free.
 ///
 /// Checked per node: `node.md` and `result.md` parse; dependency lists hold no
-/// duplicates or self-references; every edge target exists; every edge obeys
-/// the type rules; and `depends_on` contains no cycles (which would deadlock
-/// readiness — every node in the cycle waiting on another).
+/// duplicates or self-references; every edge target exists; and `depends_on`
+/// contains no cycles (which would deadlock readiness — every node in the
+/// cycle waiting on another).
 pub fn check(store: &Store) -> Result<Vec<String>> {
     let mut problems = Vec::new();
     let mut depends_on: std::collections::BTreeMap<String, Vec<String>> = Default::default();
@@ -413,17 +410,8 @@ pub fn check(store: &Store) -> Result<Vec<String>> {
                     problems.push(format!("{id}: {kind} refers to the node itself"));
                     continue;
                 }
-                match store.read_node(dep) {
-                    Err(_) => {
-                        problems.push(format!("{id}: {kind} target `{dep}` missing or unreadable"))
-                    }
-                    Ok((target, _)) if !meta.node_type.may_link_to(target.node_type) => problems
-                        .push(format!(
-                            "{id}: a {} may not link to a {} (`{dep}`)",
-                            meta.node_type.as_str(),
-                            target.node_type.as_str()
-                        )),
-                    Ok(_) => {}
+                if store.read_node(dep).is_err() {
+                    problems.push(format!("{id}: {kind} target `{dep}` missing or unreadable"));
                 }
             }
         }
@@ -516,26 +504,11 @@ pub fn short(hash: &str) -> &str {
     &hash[..hash.len().min(12)]
 }
 
-/// Validate that an edge from a node of `from_type` to node `to` is allowed:
-/// the target must exist, and the type pair must follow the pipeline rules
-/// ([`NodeType::allowed_targets`]).
-fn check_edge(store: &Store, from_type: crate::model::NodeType, to: &str) -> Result<()> {
-    let (target, _) = store
+/// Validate that an edge target exists.
+fn check_edge(store: &Store, to: &str) -> Result<()> {
+    store
         .read_node(to)
         .with_context(|| format!("cannot link to unknown node `{to}`"))?;
-    if !from_type.may_link_to(target.node_type) {
-        bail!(
-            "a {} may not link to a {} (`{to}`); allowed targets: {}",
-            from_type.as_str(),
-            target.node_type.as_str(),
-            from_type
-                .allowed_targets()
-                .iter()
-                .map(|t| t.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
-    }
     Ok(())
 }
 
@@ -583,7 +556,6 @@ fn now_millis() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::NodeType;
     use crate::vcs::FakeVcs;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU32, Ordering};
@@ -608,7 +580,6 @@ mod tests {
 
     fn new_node(title: &str, depends_on: Vec<String>) -> NewNode {
         NewNode {
-            node_type: NodeType::Task,
             title: title.into(),
             body: "body".into(),
             author: Author::Human,
@@ -626,7 +597,7 @@ mod tests {
         let (_t, store) = temp_store();
         let fake = FakeVcs::default();
 
-        assert!(add(&store, &fake, new_node("a", vec!["task-nope".into()])).is_err());
+        assert!(add(&store, &fake, new_node("a", vec!["node-nope".into()])).is_err());
 
         let id = add(&store, &fake, new_node("a", vec![])).unwrap();
         assert!(store.exists(&id));
@@ -861,7 +832,7 @@ mod tests {
         let a = add(&store, &fake, new_node("a", vec![])).unwrap();
         let b = add(&store, &fake, new_node("b", vec![])).unwrap();
 
-        assert!(link(&store, &fake, &a, "task-nope", DepKind::DependsOn).is_err());
+        assert!(link(&store, &fake, &a, "node-nope", DepKind::DependsOn).is_err());
         link(&store, &fake, &a, &b, DepKind::DependsOn).unwrap();
         assert!(link(&store, &fake, &a, &b, DepKind::DependsOn).is_err());
 
@@ -870,62 +841,27 @@ mod tests {
     }
 
     #[test]
-    fn edge_type_rules_follow_the_pipeline() {
-        let (_t, store) = temp_store();
-        let fake = FakeVcs::default();
-        let node = |ty: NodeType, deps: Vec<String>| NewNode {
-            node_type: ty,
-            title: "t".into(),
-            body: String::new(),
-            author: Author::Human,
-            depends_on: deps,
-            derived_from: vec![],
-        };
-
-        // The pipeline chain is allowed: task -> impl -> build -> verification.
-        let task = add(&store, &fake, node(NodeType::Task, vec![])).unwrap();
-        let sub = add(&store, &fake, node(NodeType::Task, vec![task.clone()])).unwrap();
-        let imp = add(&store, &fake, node(NodeType::Implementation, vec![task.clone()])).unwrap();
-        let build = add(&store, &fake, node(NodeType::Build, vec![imp.clone()])).unwrap();
-        let verify = add(&store, &fake, node(NodeType::Verification, vec![build.clone()])).unwrap();
-        link(&store, &fake, &verify, &imp, DepKind::DependsOn).unwrap();
-        // An implementation may need a built tool.
-        link(&store, &fake, &imp, &build, DepKind::DependsOn).unwrap();
-        let _ = sub;
-
-        // Off-pipeline edges are rejected, with the allowed targets named.
-        let err = add(&store, &fake, node(NodeType::Task, vec![build.clone()])).unwrap_err();
-        assert!(err.to_string().contains("task may not link to a build"), "{err}");
-        assert!(err.to_string().contains("allowed targets: task"), "{err}");
-        assert!(add(&store, &fake, node(NodeType::Build, vec![task.clone()])).is_err());
-        assert!(add(&store, &fake, node(NodeType::Verification, vec![task.clone()])).is_err());
-        assert!(link(&store, &fake, &build, &verify, DepKind::DerivedFrom).is_err());
-    }
-
-    #[test]
     fn check_reports_sideways_damage() {
         let (_t, store) = temp_store();
         let fake = FakeVcs::default();
 
         // A healthy little graph passes.
-        let task = add(&store, &fake, new_node("a", vec![])).unwrap();
-        let dep = add(&store, &fake, new_node("b", vec![task.clone()])).unwrap();
+        let node = add(&store, &fake, new_node("a", vec![])).unwrap();
+        let dep = add(&store, &fake, new_node("b", vec![node.clone()])).unwrap();
         assert!(check(&store).unwrap().is_empty());
 
         // Damage entered "sideways" (direct writes, as a hand edit or merge would):
-        // retyping `task` to a build makes `dep`'s edge ill-typed (task -> build),
-        // and gives `task` a self-reference and a missing target.
-        let (mut meta, body) = store.read_node(&task).unwrap();
-        meta.node_type = NodeType::Build;
-        meta.depends_on = vec![task.clone(), "task-gone".into()];
-        store.write_node(&task, &meta, &body).unwrap();
+        // give `node` a self-reference, a duplicate, and a missing target.
+        let (mut meta, body) = store.read_node(&node).unwrap();
+        meta.depends_on = vec![node.clone(), node.clone(), "node-gone".into()];
+        store.write_node(&node, &meta, &body).unwrap();
 
         let problems = check(&store).unwrap();
         let all = problems.join("\n");
         assert!(all.contains("refers to the node itself"), "{all}");
+        assert!(all.contains("duplicate depends_on entry"), "{all}");
         assert!(all.contains("missing or unreadable"), "{all}");
-        assert!(all.contains("may not link to"), "{all}");
-        assert!(all.contains(&format!("dependency cycle: {task} -> {task}")), "{all}");
+        assert!(all.contains(&format!("dependency cycle: {node} -> {node}")), "{all}");
 
         // An unparseable file is reported, not a crash.
         std::fs::write(store.node_dir(&dep).join("node.md"), "not frontmatter").unwrap();
@@ -939,8 +875,8 @@ mod tests {
         let fake = FakeVcs::default();
         let a = add(&store, &fake, new_node("a", vec![])).unwrap();
         let b = add(&store, &fake, new_node("b", vec![a.clone()])).unwrap();
-        // Close the loop sideways: a -> b (write-time link would allow a -> b
-        // since both are tasks; the *cycle* is only visible to check).
+        // Close the loop sideways: a -> b (write-time link would allow a -> b;
+        // the *cycle* is only visible to check).
         let (mut meta, body) = store.read_node(&a).unwrap();
         meta.depends_on = vec![b.clone()];
         store.write_node(&a, &meta, &body).unwrap();
@@ -958,24 +894,12 @@ mod tests {
             next_id: "commit-1".into(),
             ..Default::default()
         };
-        // Root task -> sub-task (derived) -> implementation (depends on the sub-task).
+        // Root -> sub-task (derived) -> implementation (depends on the sub-task).
         let root = add(&store, &fake, new_node("idea", vec![])).unwrap();
         let mut sub = new_node("sub", vec![]);
         sub.derived_from = vec![root.clone()];
         let sub = add(&store, &fake, sub).unwrap();
-        let imp = add(
-            &store,
-            &fake,
-            NewNode {
-                node_type: NodeType::Implementation,
-                title: "impl".into(),
-                body: String::new(),
-                author: Author::Human,
-                depends_on: vec![sub.clone()],
-                derived_from: vec![],
-            },
-        )
-        .unwrap();
+        let imp = add(&store, &fake, new_node("impl", vec![sub.clone()])).unwrap();
 
         // Root done (spawned the sub-task), sub done (spec settled), impl open:
         // root is done, but not settled — the derived branch is unfinished.

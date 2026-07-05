@@ -25,7 +25,7 @@ use crossterm::{
 };
 
 use llaundry::ops::{self, NewNode};
-use llaundry::{Author, DepKind, GitVcs, NodeMeta, NodeType, ResultMeta, Status, Store};
+use llaundry::{Author, DepKind, GitVcs, NodeMeta, ResultMeta, Status, Store};
 
 #[derive(Parser)]
 #[command(
@@ -341,16 +341,6 @@ fn act(app: &mut App, store: &Store, vcs: &GitVcs, outcome: Result<Option<String
 // ---------------------------------------------------------------------------
 
 fn action_add(out: &mut Stdout, store: &Store, vcs: &GitVcs) -> Result<Option<String>> {
-    let types = [
-        NodeType::Task,
-        NodeType::Implementation,
-        NodeType::Build,
-        NodeType::Verification,
-    ];
-    let labels: Vec<&str> = types.iter().map(|t| t.as_str()).collect();
-    let Some(ti) = pick(out, "node type", &labels, 0)? else {
-        return Ok(None);
-    };
     let Some(title) = prompt_line(out, "title", "")? else {
         return Ok(None);
     };
@@ -364,7 +354,6 @@ fn action_add(out: &mut Stdout, store: &Store, vcs: &GitVcs) -> Result<Option<St
         store,
         vcs,
         NewNode {
-            node_type: types[ti],
             title,
             body,
             author: Author::Human,
@@ -535,12 +524,7 @@ fn draw(out: &mut Stdout, app: &mut App) -> Result<()> {
         if let Some(&idx) = filtered.get(row_i) {
             let r = &app.rows[idx];
             let marker = if !r.stale.is_empty() { '*' } else { ' ' };
-            let text = format!(
-                "{marker}{:<7} {:<7} {}",
-                r.status.as_str(),
-                r.meta.node_type.prefix(),
-                r.meta.title
-            );
+            let text = format!("{marker}{:<7} {}", r.status.as_str(), r.meta.title);
             let selected = row_i == app.selected;
             let color = status_color(r.status);
             put(out, 0, y, &text, left_w as usize, color, selected)?;
@@ -592,7 +576,6 @@ fn detail_lines(r: &Row) -> Vec<(String, Color)> {
     let mut plain = |s: String| lines.push((s, Color::Reset));
 
     plain(format!("id:      {}", r.id));
-    plain(format!("type:    {}", r.meta.node_type.as_str()));
     plain(format!("title:   {}", r.meta.title));
     lines.push((
         format!("status:  {}", r.status.as_str()),

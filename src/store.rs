@@ -213,7 +213,7 @@ fn hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Author, NodeType, Outcome};
+    use crate::model::{Author, Outcome};
 
     #[test]
     fn blob_id_matches_git() {
@@ -248,26 +248,25 @@ mod tests {
 
         let meta = NodeMeta {
             schema: 1,
-            node_type: NodeType::Task,
             title: "hello".into(),
             author: Author::Human,
-            depends_on: vec!["task-a".into()],
+            depends_on: vec!["node-a".into()],
             derived_from: vec![],
         };
-        store.write_node("task-1", &meta, "the body").unwrap();
-        let (got, body) = store.read_node("task-1").unwrap();
+        store.write_node("node-1", &meta, "the body").unwrap();
+        let (got, body) = store.read_node("node-1").unwrap();
         assert_eq!(got.title, "hello");
-        assert_eq!(got.depends_on, vec!["task-a".to_string()]);
+        assert_eq!(got.depends_on, vec!["node-a".to_string()]);
         assert_eq!(body, "the body");
 
         // The version changes exactly when the definition changes.
-        let v1 = store.node_version("task-1").unwrap();
-        store.write_node("task-1", &meta, "other body").unwrap();
-        assert_ne!(v1, store.node_version("task-1").unwrap());
+        let v1 = store.node_version("node-1").unwrap();
+        store.write_node("node-1", &meta, "other body").unwrap();
+        assert_ne!(v1, store.node_version("node-1").unwrap());
 
         // No result yet; then one round-trips, without touching the version.
-        assert!(store.read_result("task-1").unwrap().is_none());
-        let v2 = store.node_version("task-1").unwrap();
+        assert!(store.read_result("node-1").unwrap().is_none());
+        let v2 = store.node_version("node-1").unwrap();
         let result = ResultMeta {
             at: 0,
             author: Author::Machine,
@@ -277,12 +276,12 @@ mod tests {
             built_against: vec![],
             context: vec![],
         };
-        store.write_result("task-1", &result, "did the thing").unwrap();
-        let (r, notes) = store.read_result("task-1").unwrap().unwrap();
+        store.write_result("node-1", &result, "did the thing").unwrap();
+        let (r, notes) = store.read_result("node-1").unwrap().unwrap();
         assert_eq!(r.output_commit.as_deref(), Some("abc"));
         assert_eq!(r.outcome, Outcome::Done);
         assert_eq!(notes, "did the thing");
-        assert_eq!(store.node_version("task-1").unwrap(), v2);
+        assert_eq!(store.node_version("node-1").unwrap(), v2);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

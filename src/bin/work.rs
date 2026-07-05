@@ -202,7 +202,6 @@ fn build_prompt(id: &str, meta: &NodeMeta, body: &str) -> String {
             .to_string(),
         String::new(),
         format!("You are assigned to node `{id}`:"),
-        format!("  type:  {}", meta.node_type.as_str()),
         format!("  title: {}", meta.title),
     ];
     for dep in &meta.depends_on {
@@ -247,11 +246,11 @@ fn shell_quote(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use llaundry::{Author, NodeType};
+    use llaundry::Author;
 
     fn sample_session() -> Session {
         Session {
-            node_id: "task-1".into(),
+            node_id: "node-1".into(),
             prompt: "do the work".into(),
             mcp: McpServer {
                 name: "llaundry".into(),
@@ -330,20 +329,19 @@ mod tests {
     fn prompt_states_the_node_and_the_tools_only_rule() {
         let meta = NodeMeta {
             schema: 1,
-            node_type: NodeType::Task,
             title: "Parse config".into(),
             author: Author::Human,
-            depends_on: vec!["task-0".into()],
+            depends_on: vec!["node-0".into()],
             derived_from: vec![],
         };
-        let prompt = build_prompt("task-1", &meta, "  Write the config parser.  ");
+        let prompt = build_prompt("node-1", &meta, "  Write the config parser.  ");
 
-        assert!(prompt.contains("task-1"));
+        assert!(prompt.contains("node-1"));
         assert!(prompt.contains("Parse config"));
         assert!(prompt.contains("llaundry` MCP tools"));
-        assert!(prompt.contains("complete_node task-1"));
-        assert!(prompt.contains("fail_node task-1"));
-        assert!(prompt.contains("depends_on -> task-0"));
+        assert!(prompt.contains("complete_node node-1"));
+        assert!(prompt.contains("fail_node node-1"));
+        assert!(prompt.contains("depends_on -> node-0"));
         assert!(prompt.contains("Write the config parser."));
     }
 }

@@ -5,10 +5,9 @@ tools that operate on it. It is a record of the design discussion as much as a
 specification.
 
 llaundry's premise (see `README.md` / `ideas.wiki`): **the prompt history is the
-story, not the output code.** Work is driven by a graph of nodes — tasks,
-implementations, builds, verifications — each carrying the description that
-drives the work and, once worked, a record of what happened: the context
-consumed, the output produced, and the narrative. The two questions the system
+story, not the output code.** Work is driven by a graph of nodes, each carrying
+the description that drives the work and, once worked, a record of what
+happened: the context consumed, the output produced, and the narrative. The two questions the system
 must answer are:
 
 1. *What happened during the work on this node?*
@@ -156,38 +155,35 @@ is clean between operations, and the repository state behind any change is
 recoverable straight from git history. Nothing stores which commit an event
 happened at; history already records it.
 
-### 2.9 Edges are typed by the pipeline
+### 2.9 One node type
 
-Node types form a pipeline — task → implementation → build, with verification
-attached to the artifact stages — and edges must follow it. An edge points from
-later work back at what it came from, so the allowed targets per source type
-are:
+Earlier iterations typed every node (task / implementation / build /
+verification) and constrained which types could link to which, encoding the
+intended pipeline as write-time edge rules. That machinery was removed: none of
+the core mechanics — status derivation, pins, staleness, readiness, provenance
+— ever branched on the type, so the taxonomy was a schema bolted onto the
+graph, maintained before real usage had shown which distinctions matter. Today
+there is a single node kind; what a node *is* lives in its title and body. A
+taxonomy (and per-type behaviour, e.g. runnable builds) can be reintroduced
+once usage of the tool makes the right shape clear.
 
-| from \ may link to | task | implementation | build | verification |
-|---|---|---|---|---|
-| task           | ✓ (sub-tasking) | | | |
-| implementation | ✓ | | ✓ (a built tool it needs) | |
-| build          | | ✓ | | |
-| verification   | | ✓ | ✓ | |
+The same reasoning already removed the freeform "info" type: knowledge is
+modelled as work that produced it. An originating request is a *root node*
+(sub-nodes derive from it, and revising the request flags them all); a decision
+or research finding is a node whose result notes record the outcome. Every
+node is therefore workable, and prose context lives in exactly two places — a
+node's definition body and its result notes.
 
-There is deliberately no freeform "info" type: knowledge is modelled as work
-that produced it. An originating request is a *root task* (sub-tasks derive
-from it, and revising the request flags them all); a decision or research
-finding is a task whose result notes record the outcome. Every node is
-therefore workable, and prose context lives in exactly two places — a node's
-definition body and its result notes.
-
-The rules are enforced at the only two edge-creation points (`add`, `link`) by
-`NodeType::allowed_targets`, so an ill-typed graph cannot be constructed *by
-the tools*; both `depends_on` and `derived_from` follow the same table.
+Edge creation (`add`, `link`) validates that the target exists, rejects
+self-references and duplicates, and nothing more.
 
 Write-time validation cannot see damage that enters sideways — hand edits, or
 a git merge combining two individually-valid branches. The complement is
 `llaundry check` (and the `check_store` MCP tool): an fsck-style scan that
 re-derives every invariant over the store as it actually is — files parse,
-edge targets exist, type rules hold, no duplicates or self-references, and no
-`depends_on` cycles (which would deadlock readiness). Like every other query
-it is derived, read-only, and git-free.
+edge targets exist, no duplicates or self-references, and no `depends_on`
+cycles (which would deadlock readiness). Like every other query it is derived,
+read-only, and git-free.
 
 ### 2.10 What context is: outputs first, files second
 
@@ -215,11 +211,10 @@ A store is a single directory (default `.llaundry/`, committed to git):
 ```markdown
 ---
 schema = 1
-type = "task"
 title = "Parse the config file"
 author = "human"
-depends_on = ["task-01J8XQ2A..."]
-derived_from = ["task-01J8XQ1B..."]
+depends_on = ["node-01J8XQ2A..."]
+derived_from = ["node-01J8XQ1B..."]
 ---
 
 Parse the TOML config into the Config struct...
@@ -239,7 +234,7 @@ outcome = "done"                  # or "failed"
 output_commit = "a45ab51c..."     # the one commit with everything produced; optional
 
 [[built_against]]
-id = "task-01J8XQ2A..."
+id = "node-01J8XQ2A..."
 pin = "6102d492..."               # target's node.md blob at completion
 output = "86cb1a1..."             # target's output commit at completion; optional
 
@@ -256,9 +251,8 @@ why. (`at` is Unix milliseconds — deliberately dependency-free.)
 
 ### 3.3 Ids
 
-`<type-prefix>-<ULID>`, e.g. `task-01J8XQ3K7M...`. The prefix is
-human-scannable; the ULID is time-sortable and collision-free without a central
-counter, so nodes can be minted concurrently. Uniqueness is enforced by the
+`node-<ULID>`, e.g. `node-01J8XQ3K7M...`. The ULID is time-sortable and
+collision-free without a central counter, so nodes can be minted concurrently. Uniqueness is enforced by the
 filesystem (the directory either exists or it doesn't).
 
 ---
@@ -267,7 +261,7 @@ filesystem (the directory either exists or it doesn't).
 
 llaundry stores nothing git could store for it. Git owns content integrity,
 immutable history, blame, authorship, branching, merge, and distribution. The
-only thing llaundry adds — the part git cannot express — is the typed-graph
+only thing llaundry adds — the part git cannot express — is the graph
 semantics: dependencies, derived status, pins, and staleness. That semantic
 layer is the product; everything storage-shaped is delegated.
 
@@ -316,7 +310,7 @@ The store path defaults to `.llaundry/`, overridable with `--store` or
 | `ready` / `blocked` | Derived readiness, with blocker reasons. |
 | `outputs <id>` / `origin <commit>` | Provenance in both directions. |
 | `dependents <id>` | Which nodes depend on / derive from this one. |
-| `check` | Integrity-check the store (fsck): parse errors, missing/ill-typed edge targets, duplicates, self-references, dependency cycles. Non-zero exit on problems. |
+| `check` | Integrity-check the store (fsck): parse errors, missing edge targets, duplicates, self-references, dependency cycles. Non-zero exit on problems. |
 | `settled <id>` | Whether the node *and all work transitively derived from it* is done and not stale — "is this branch actually finished?" (a node's own `done` only certifies its own unit of work, e.g. a task that closed at spec time). Non-zero exit if not. |
 
 ### Example
@@ -363,7 +357,7 @@ clean-tree rule and surface refusals as in-band MCP errors (`isError: true`).
 
 `llaundry-work` runs one unit of work on one node. It refuses to start if the
 node is blocked (override with `--force`), builds a prompt from the node's
-type, title, body, and dependency ids, and hands it to a `Backend`. The first
+title, body, and dependency ids, and hands it to a `Backend`. The first
 backend, `ClaudeCode`, shells out to `claude -p` sandboxed to **only** the
 llaundry MCP server (`--strict-mcp-config`, `--allowedTools mcp__llaundry`) —
 no shell, file, or network tools. A file-free session produces no output
@@ -382,8 +376,10 @@ execution so the exact invocation is unit-tested and shown by `--dry-run`.
   auto-flagged because something upstream of *its dependency* moved. Output and
   context pins reduce the need: consumers are flagged directly when what they
   actually consumed changes.
-* **Executing builds and verifications.** Nodes can be typed `build` /
-  `verification`, but running them is not implemented.
+* **Node taxonomy and executable stages.** Earlier designs typed nodes (task /
+  implementation / build / verification) with per-type edge rules; the types
+  were removed until usage shows which distinctions matter (§2.9). Running
+  builds or verifications would come back with them.
 * **Re-certification without rework.** When a dependency moves, the only way to
   clear the staleness today is to re-complete the node. A cheap `repin` ("I
   inspected the diff; my work still stands") would be a small addition.

@@ -22,7 +22,7 @@ use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 
 use llaundry::ops::{self, NewNode};
-use llaundry::{Author, DepKind, GitVcs, NodeType, Store};
+use llaundry::{Author, DepKind, GitVcs, Store};
 
 /// The MCP protocol revision we advertise (a client may negotiate its own; we echo
 /// back whatever it asks for when present).
@@ -124,7 +124,7 @@ impl Tool for CheckStore {
         "check_store"
     }
     fn description(&self) -> &'static str {
-        "Integrity-check the store (fsck): parse errors, missing or ill-typed edge targets, duplicates, self-references, and dependency cycles."
+        "Integrity-check the store (fsck): parse errors, missing edge targets, duplicates, self-references, and dependency cycles."
     }
     fn input_schema(&self) -> Value {
         obj_schema(json!({}), &[])
@@ -158,12 +158,11 @@ impl Tool for AddNode {
         "add_node"
     }
     fn description(&self) -> &'static str {
-        "Create a new node in the graph. Returns its id. Edge type rules: a task may link to tasks; an implementation to tasks and builds; a build to implementations; a verification to implementations and builds."
+        "Create a new node in the graph. Returns its id."
     }
     fn input_schema(&self) -> Value {
         obj_schema(
             json!({
-                "type": enum_prop(&["task", "implementation", "build", "verification"], "Node type (default task)."),
                 "title": {"type": "string", "description": "Short title."},
                 "body": {"type": "string", "description": "Prose body (markdown)."},
                 "author": author_prop(),
@@ -176,7 +175,6 @@ impl Tool for AddNode {
     fn call(&self, ctx: &Ctx, args: &Value) -> Result<String> {
         let (store, vcs) = ctx.open()?;
         let new = NewNode {
-            node_type: enum_or(args, "type", NodeType::Task)?,
             title: req_str(args, "title")?,
             body: opt_str(args, "body").unwrap_or_default(),
             author: enum_or(args, "author", Author::Machine)?,
@@ -194,7 +192,7 @@ impl Tool for LinkNodes {
         "link_nodes"
     }
     fn description(&self) -> &'static str {
-        "Add a dependency from one node to another (a definition change of the source node). Subject to the edge type rules: task -> task; implementation -> task/build; build -> implementation; verification -> implementation/build."
+        "Add a dependency from one node to another (a definition change of the source node)."
     }
     fn input_schema(&self) -> Value {
         obj_schema(
@@ -258,7 +256,7 @@ impl Tool for CompleteNode {
                 "id": {"type": "string"},
                 "outputs": paths_prop("Produced files to commit, relative to the project root. Omit for graph-only work."),
                 "context": paths_prop("Consumed files that are not any node's output (pinned by content)."),
-                "message": {"type": "string", "description": "Output commit message (defaults to the node's type and title)."},
+                "message": {"type": "string", "description": "Output commit message (defaults to the node's title)."},
                 "notes": {"type": "string", "description": "Narrative of what happened during the work — becomes the body of result.md."},
                 "author": author_prop()
             }),
@@ -327,7 +325,6 @@ impl Tool for ShowNode {
 
         let mut lines = vec![
             format!("id:      {id}"),
-            format!("type:    {}", meta.node_type.as_str()),
             format!("title:   {}", meta.title),
             format!("status:  {}", ops::current_status(&store, &id).as_str()),
             format!("author:  {}", meta.author.as_str()),
@@ -386,7 +383,7 @@ impl Tool for ListNodes {
         "list_nodes"
     }
     fn description(&self) -> &'static str {
-        "List every node with its derived status, type, and title."
+        "List every node with its derived status and title."
     }
     fn input_schema(&self) -> Value {
         obj_schema(json!({}), &[])
@@ -397,12 +394,7 @@ impl Tool for ListNodes {
         for id in store.list_ids()? {
             let (meta, _) = store.read_node(&id)?;
             let status = ops::current_status(&store, &id);
-            lines.push(format!(
-                "{id}  [{}]  {}  {}",
-                status.as_str(),
-                meta.node_type.as_str(),
-                meta.title
-            ));
+            lines.push(format!("{id}  [{}]  {}", status.as_str(), meta.title));
         }
         Ok(joined(lines, "(no nodes)"))
     }
