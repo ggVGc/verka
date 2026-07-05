@@ -9,6 +9,13 @@
 //! mcp__llaundry`) and no built-in tools at all, and pins MCP config to just that
 //! server (`--strict-mcp-config`). So the model can act on the graph and nothing
 //! else — no shell, no file, no network access.
+//!
+//! Every session's interaction stream is recorded to the node's `work.jsonl`
+//! after the session ends (recording during it would dirty the tree under the
+//! agent's own mutating calls). Continuity across sessions is mechanical, not
+//! left to agent discipline: when a node is re-worked while still mid-unit
+//! (open, no result — e.g. it paused on a question node), the previous log is
+//! replayed into the new session's prompt so it continues where it left off.
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, ValueEnum};
@@ -76,9 +83,19 @@ fn main() -> Result<()> {
         );
     }
 
+    // Open with no result and a recorded log means a paused unit of work (it
+    // stopped mid-unit, e.g. on a question node): replay the log so the new
+    // session continues where the last one left off. A node with a result is
+    // being *re*worked — its old story doesn't continue, it starts over.
+    let previous_log = if store.read_result(&cli.node)?.is_none() {
+        store.read_work_log(&cli.node)?
+    } else {
+        None
+    };
+
     let session = Session {
         node_id: cli.node.clone(),
-        prompt: build_prompt(&cli.node, &meta, &body),
+        prompt: build_prompt(&cli.node, &meta, &body, previous_log.as_deref()),
         mcp: McpServer {
             name: "llaundry".into(),
             command: cli.mcp_bin.clone(),
@@ -99,12 +116,35 @@ fn main() -> Result<()> {
     }
 
     eprintln!(
-        "llaundry-work: {} working {} — {}",
+        "llaundry-work: {} working {} — {}{}",
         backend.name(),
         session.node_id,
-        meta.title
+        meta.title,
+        if previous_log.is_some() { " (continuing)" } else { "" }
     );
-    backend.run(&session)
+
+    // The attempt header is stamped at launch: it records which definition this
+    // session set out to work, even if the agent edits the graph during it.
+    let header = json!({
+        "event": "attempt",
+        "at": now_millis(),
+        "backend": backend.name(),
+        "node_version": store.node_version(&cli.node)?,
+    })
+    .to_string();
+
+    let out = backend.run(&session)?;
+
+    // Record the session's interaction log — the story of the work — before
+    // judging the exit status, so even a failed session's story is kept.
+    // Append to a paused unit of work; start over on rework.
+    let log = format!("{header}\n{}", out.transcript);
+    ops::record_work_log(&store, &vcs, &cli.node, &log, previous_log.is_some())?;
+
+    if !out.success {
+        bail!("backend session exited unsuccessfully");
+    }
+    Ok(())
 }
 
 /// One unit of work: an LLM session focused on a single node, together with the MCP
@@ -123,11 +163,20 @@ struct McpServer {
     args: Vec<String>,
 }
 
+/// What a completed session leaves behind: the JSONL interaction transcript
+/// (recorded to the node's `work.jsonl`) and whether the backend exited cleanly.
+/// The transcript is returned even for unsuccessful sessions — a failed story
+/// is still a story.
+struct RunOutput {
+    transcript: String,
+    success: bool,
+}
+
 /// The LLM seam. An implementation runs a [`Session`] to completion; `describe`
 /// renders the invocation for `--dry-run` without running anything.
 trait Backend {
     fn name(&self) -> &str;
-    fn run(&self, session: &Session) -> Result<()>;
+    fn run(&self, session: &Session) -> Result<RunOutput>;
     fn describe(&self, session: &Session) -> String;
 }
 
@@ -162,8 +211,11 @@ impl ClaudeCode {
             // mode any tool not listed here is denied, so no built-ins are reachable.
             .arg("--allowedTools")
             .arg(format!("mcp__{}", session.mcp.name))
+            // One JSON event per line — the session transcript recorded to the
+            // node's work.jsonl (stream-json in print mode requires --verbose).
             .arg("--output-format")
-            .arg("text");
+            .arg("stream-json")
+            .arg("--verbose");
         if let Some(model) = &self.model {
             cmd.arg("--model").arg(model);
         }
@@ -176,18 +228,33 @@ impl Backend for ClaudeCode {
         "claude-code"
     }
 
-    fn run(&self, session: &Session) -> Result<()> {
-        // Inherit stdio so the session streams to the terminal.
-        let status = self.command(session).status().with_context(|| {
-            format!(
-                "failed to launch `{}` — is Claude Code installed and on PATH?",
-                self.binary
-            )
-        })?;
-        if !status.success() {
-            bail!("{} exited unsuccessfully ({status})", self.binary);
+    fn run(&self, session: &Session) -> Result<RunOutput> {
+        use std::io::{BufRead, BufReader};
+        // Capture stdout (the JSONL event stream), teeing each line to the
+        // terminal as it arrives; stderr stays inherited.
+        let mut child = self
+            .command(session)
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .with_context(|| {
+                format!(
+                    "failed to launch `{}` — is Claude Code installed and on PATH?",
+                    self.binary
+                )
+            })?;
+        let mut transcript = String::new();
+        let stdout = child.stdout.take().expect("stdout was piped");
+        for line in BufReader::new(stdout).lines() {
+            let line = line.context("reading backend output")?;
+            println!("{line}");
+            transcript.push_str(&line);
+            transcript.push('\n');
         }
-        Ok(())
+        let status = child.wait()?;
+        Ok(RunOutput {
+            transcript,
+            success: status.success(),
+        })
     }
 
     fn describe(&self, session: &Session) -> String {
@@ -202,7 +269,11 @@ impl Backend for ClaudeCode {
 /// discipline it must follow. A file-free session produces no output files, so it
 /// finishes with `complete_node` (no outputs, notes as the record of what happened)
 /// or `fail_node` — or pauses on a human-assigned question node.
-fn build_prompt(id: &str, meta: &NodeMeta, body: &str) -> String {
+///
+/// On continuation, `previous_log` (the node's recorded `work.jsonl`) is replayed
+/// verbatim so the session picks up exactly where the last one stopped — the
+/// handoff is mechanical, not dependent on the previous agent having left notes.
+fn build_prompt(id: &str, meta: &NodeMeta, body: &str, previous_log: Option<&str>) -> String {
     let mut p = vec![
         "You are an autonomous worker on a llaundry node graph.".to_string(),
         "You can act ONLY through the `llaundry` MCP tools — you have no shell, file,"
@@ -225,6 +296,16 @@ fn build_prompt(id: &str, meta: &NodeMeta, body: &str) -> String {
         p.push("Node description:".into());
         p.push(body.to_string());
     }
+    if let Some(log) = previous_log {
+        p.push(String::new());
+        p.push("You already started this node in an earlier session. Its recorded".into());
+        p.push("interaction log follows (JSONL, oldest first). Continue from where it".into());
+        p.push("ends — do not redo work it already records. If it ends with a question".into());
+        p.push("node being created, that question's answer is now in its result notes".into());
+        p.push("(show_node it).".into());
+        p.push(String::new());
+        p.push(log.trim_end().to_string());
+    }
     p.push(String::new());
     p.push("Do this:".into());
     p.push("  1. Gather what you need with show_node, list_nodes, node_dependents and".into());
@@ -244,6 +325,14 @@ fn build_prompt(id: &str, meta: &NodeMeta, body: &str) -> String {
     ));
     p.push("Finish with a brief summary of what you changed.".into());
     p.join("\n")
+}
+
+fn now_millis() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 /// Quote an argument for a copy-pasteable single-line command display.
@@ -293,6 +382,11 @@ mod tests {
 
         assert!(args.contains(&"-p".to_string()));
         assert!(args.contains(&"--strict-mcp-config".to_string()));
+
+        // The transcript is captured as one JSON event per line for work.jsonl.
+        let k = args.iter().position(|a| a == "--output-format").unwrap();
+        assert_eq!(args[k + 1], "stream-json");
+        assert!(args.contains(&"--verbose".to_string()));
 
         // Allowed tools are exactly the whole llaundry MCP server — nothing else.
         let i = args.iter().position(|a| a == "--allowedTools").unwrap();
@@ -350,7 +444,7 @@ mod tests {
             depends_on: vec!["node-0".into()],
             derived_from: vec![],
         };
-        let prompt = build_prompt("node-1", &meta, "  Write the config parser.  ");
+        let prompt = build_prompt("node-1", &meta, "  Write the config parser.  ", None);
 
         assert!(prompt.contains("node-1"));
         assert!(prompt.contains("Parse config"));
@@ -363,5 +457,27 @@ mod tests {
         // The pause protocol: a human question is a node, not a completion.
         assert!(prompt.contains("Question:"));
         assert!(prompt.contains("assignee `human`"));
+
+        // No continuation section on a first attempt.
+        assert!(!prompt.contains("earlier session"));
+    }
+
+    #[test]
+    fn prompt_replays_the_previous_log_on_continuation() {
+        let meta = NodeMeta {
+            schema: 1,
+            title: "Parse config".into(),
+            author: Author::Human,
+            assignee: None,
+            depends_on: vec![],
+            derived_from: vec![],
+        };
+        let log = "{\"event\":\"attempt\"}\n{\"tool\":\"add_node\"}\n";
+        let prompt = build_prompt("node-1", &meta, "", Some(log));
+
+        assert!(prompt.contains("earlier session"));
+        assert!(prompt.contains("Continue from where it"));
+        // The log is included verbatim (sans trailing newline).
+        assert!(prompt.contains("{\"event\":\"attempt\"}\n{\"tool\":\"add_node\"}"));
     }
 }

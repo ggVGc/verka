@@ -165,6 +165,26 @@ pub fn fail(store: &Store, vcs: &dyn Vcs, id: &str, notes: &str, author: Author)
     Ok(())
 }
 
+/// Record a work session's interaction log (`work.jsonl`) — the machine-grade
+/// story of what happened, opaque to every derived query. `append` extends a
+/// paused unit of work's log; `!append` starts over for rework (git history
+/// keeps the previous story). Like every other mutation it requires a clean
+/// tree and is its own commit — which is also why the log is written *after*
+/// a session, never streamed during one: a dirty `work.jsonl` would make the
+/// session's own mutating calls refuse.
+pub fn record_work_log(
+    store: &Store,
+    vcs: &dyn Vcs,
+    id: &str,
+    events: &str,
+    append: bool,
+) -> Result<()> {
+    require_clean(vcs)?;
+    store.write_work_log(id, events, append)?;
+    vcs.commit_store(&store.store_name(), &format!("llaundry: work log {id}"))?;
+    Ok(())
+}
+
 /// A node's derived status.
 ///
 /// `done` holds only while the result's `node_version` still matches `node.md`:
@@ -952,6 +972,32 @@ mod tests {
         assert_eq!(meta.assignee, None);
         let text = std::fs::read_to_string(store.node_dir(&a).join("node.md")).unwrap();
         assert!(!text.contains("assignee"), "{text}");
+    }
+
+    #[test]
+    fn record_work_log_commits_and_respects_the_clean_tree_rule() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs::default();
+        let id = add(&store, &fake, new_node("a", vec![])).unwrap();
+
+        record_work_log(&store, &fake, &id, r#"{"event":"attempt"}"#, true).unwrap();
+        assert_eq!(
+            store.read_work_log(&id).unwrap().unwrap(),
+            "{\"event\":\"attempt\"}\n"
+        );
+        // add + record each committed the store; the log is not an output capture.
+        assert_eq!(*fake.store_commits.borrow(), 2);
+        assert!(fake.captured.borrow().is_empty());
+
+        // The log never affects derived state.
+        assert_eq!(current_status(&store, &id), Status::Open);
+        assert!(staleness(&store, &fake, &id).is_empty());
+
+        let dirty = FakeVcs {
+            dirty: vec!["src/x.rs".into()],
+            ..Default::default()
+        };
+        assert!(record_work_log(&store, &dirty, &id, "{}", true).is_err());
     }
 
     #[test]

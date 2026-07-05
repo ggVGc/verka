@@ -60,6 +60,11 @@ failing) it; editing `node.md` is revising the definition. Adding a node only
 adds files, so concurrent work merges cleanly — and the high-frequency write
 (recording results) touches a file nothing else touches.
 
+There is one more file a node may carry — `work.jsonl`, the recorded
+interaction log of work sessions (§2.11) — but it is deliberately *not* a third
+kind of state: it is opaque to every derived query, participates in nothing,
+and exists purely as a record.
+
 ### 2.2 The node version is a git blob id, computed on demand
 
 A node's version is `git hash-object node.md` — computed locally (the blob
@@ -208,7 +213,37 @@ Dispatch respects it (`llaundry-work` refuses a human-assigned node; `ready`
 filters on it), but no derived semantics — status, staleness, readiness —
 branch on it.
 
-### 2.11 What context is: outputs first, files second
+### 2.11 The interaction log: the story is recorded, not remembered
+
+The premise is that the prompt history is the story — so the story is
+recorded mechanically, not left to agent discipline. Every `llaundry-work`
+session's full interaction stream (one JSON event per line: the prompts, the
+assistant turns, every tool call and result) is written to the node's
+`work.jsonl` when the session ends, prefixed with a small attempt header
+(timestamp, backend, the `node.md` version the session set out to work).
+
+The log is what makes the pause-on-a-question protocol (§2.10) resumable:
+when a node that paused mid-unit (open, no result, log present) is worked
+again, the previous log is replayed verbatim into the new session, which
+continues exactly where the last one stopped — the final events of a paused
+log *are* the question being minted. There is deliberately no backend-native
+session resume: the log in git is the only continuation mechanism, so it
+works on any clone, after any delay, with any backend.
+
+Three rules keep it honest:
+
+* **Opaque.** No derived query reads it; it does not participate in the node
+  version; writing it reopens and stales nothing. It is narrative,
+  machine-grade instead of prose-grade.
+* **Written after the session, never during.** Streaming into the store would
+  hold the tree dirty under the agent's own mutating MCP calls (§2.8). The
+  driver buffers, then records-and-commits as its own state change.
+* **Appended for continuation, restarted for rework.** A paused unit of work
+  extends its log (appends diff minimally — goal #1); a node being reworked
+  after a recorded result starts a fresh story, and git history keeps the old
+  one — exactly the `result.md` overwrite semantics.
+
+### 2.12 What context is: outputs first, files second
 
 Most of what work consumes is *other nodes' outputs* — covered by the
 `built_against` output pins, one hash per dependency. Explicit per-file
@@ -227,6 +262,7 @@ A store is a single directory (default `.llaundry/`, committed to git):
     <id>/
       node.md      # the definition
       result.md    # the completion record (absent until worked)
+      work.jsonl   # the recorded interaction log (absent until worked by the driver)
 ```
 
 ### 3.1 `node.md`
@@ -273,7 +309,24 @@ Implemented the parser in src/config.rs. Chose serde over hand-rolling because..
 The body is the narrative — for an LLM worker, the story of what it did and
 why. (`at` is Unix milliseconds — deliberately dependency-free.)
 
-### 3.3 Ids
+### 3.3 `work.jsonl`
+
+The interaction log (§2.11): one JSON object per line, exactly as the backend
+streamed it, each attempt preceded by a header line the driver stamps at
+launch:
+
+```jsonl
+{"event":"attempt","at":1719571200000,"backend":"claude-code","node_version":"4ec1916e..."}
+{"type":"system","subtype":"init",...}
+{"type":"assistant","message":{...}}
+{"type":"user","message":{...}}
+...
+```
+
+No schema of llaundry's own beyond the header — the event lines are whatever
+the backend emits, kept verbatim so replay is lossless.
+
+### 3.4 Ids
 
 `node-<ULID>`, e.g. `node-01J8XQ3K7M...`. The ULID is time-sortable and
 collision-free without a central counter, so nodes can be minted concurrently. Uniqueness is enforced by the
@@ -391,6 +444,13 @@ finish with `complete_node` (notes as the record of what happened) or
 human-assigned question node, depend on it, and stop (§2.10). Command
 construction is separated from execution so the exact invocation is
 unit-tested and shown by `--dry-run`.
+
+The driver records every session's interaction stream
+(`--output-format stream-json`, teed to the terminal) to the node's
+`work.jsonl` after the session — even an unsuccessful one — as its own
+clean-tree commit (§2.11). On launching a node that is open with no result
+but with a recorded log — a paused unit of work — it replays that log into
+the prompt so the new session continues where the previous one stopped.
 
 ---
 
