@@ -71,6 +71,22 @@ fn handle(mut stream: TcpStream, store: &Store, vcs: &dyn Vcs) -> Result<()> {
                 json!({ "error": format!("{e:#}") }).to_string(),
             ),
         },
+        _ if path.starts_with("/api/log/") => {
+            let id = &path["/api/log/".len()..];
+            match store.read_work_log(id) {
+                Ok(Some(log)) => ("200 OK", "application/json", json!({ "id": id, "log": log }).to_string()),
+                Ok(None) => (
+                    "404 Not Found",
+                    "application/json",
+                    json!({ "error": format!("no work log recorded for `{id}`") }).to_string(),
+                ),
+                Err(e) => (
+                    "500 Internal Server Error",
+                    "application/json",
+                    json!({ "error": format!("{e:#}") }).to_string(),
+                ),
+            }
+        }
         _ => ("404 Not Found", "text/plain; charset=utf-8", "not found".into()),
     };
 
@@ -124,6 +140,7 @@ fn graph_json(store: &Store, vcs: &dyn Vcs) -> Result<Value> {
             "derived_from": meta.derived_from,
             "status": status.as_str(),
             "ready": ops::is_ready(store, vcs, &id),
+            "has_log": matches!(store.read_work_log(&id), Ok(Some(_))),
             "stale": stale,
             "blockers": blockers,
             "result": result,

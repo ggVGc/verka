@@ -163,6 +163,33 @@
   }
   .nodelink:hover { border-color: var(--open); }
   .nodelink small { color: var(--muted); font-family: system-ui, sans-serif; display: block; }
+  /* work log timeline */
+  #panel .log { display: flex; flex-direction: column; gap: 6px; }
+  .ev {
+    font-size: 12.5px; color: var(--ink-2);
+    border: 1px solid var(--hairline); border-radius: 6px;
+    background: var(--page); padding: 6px 8px; overflow-wrap: anywhere;
+  }
+  .ev .evtext { white-space: pre-wrap; }
+  .ev.claude { background: var(--surface); color: var(--ink); }
+  .ev.tool .evtext { font-family: ui-monospace, monospace; font-size: 12px; }
+  .ev .tag {
+    display: inline-block; font-size: 10px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.04em;
+    border-radius: 4px; padding: 0 6px; margin-right: 6px; vertical-align: 1px;
+    background: var(--hairline); color: var(--ink-2);
+  }
+  .ev .tag.attempt { background: var(--stale-bg);  color: var(--stale-ink); }
+  .ev .tag.claude  { background: var(--open-bg);   color: var(--open-ink); }
+  .ev .tag.tool    { background: #ece9fb;          color: #4a3aa7; }
+  .ev .tag.done    { background: var(--done-bg);   color: var(--done-ink); }
+  .ev .tag.failed  { background: var(--failed-bg); color: var(--failed-ink); }
+  .ev .tag.thinking { color: var(--muted); }
+  .ev details { margin-top: 4px; }
+  .ev summary { cursor: pointer; color: var(--muted); font-size: 11px; }
+  .ev summary:hover { color: var(--ink); }
+  .ev pre { margin-top: 4px; max-height: 260px; overflow: auto; }
+
   #close {
     float: right; border: none; background: none; cursor: pointer;
     color: var(--muted); font-size: 18px; line-height: 1; padding: 2px 4px;
@@ -520,6 +547,143 @@ function renderPanel() {
       panel.appendChild(section("notes", pre));
     }
   }
+
+  if (n.has_log) panel.appendChild(logSection(n));
+}
+
+// --- work log ---------------------------------------------------------------
+
+// The log is fetched on demand — it can be big and most panel opens don't need it.
+function logSection(n) {
+  const box = document.createElement("div");
+  const btn = document.createElement("button");
+  btn.className = "nodelink";
+  btn.textContent = "show work log";
+  btn.addEventListener("click", async () => {
+    btn.disabled = true;
+    btn.textContent = "loading…";
+    try {
+      const res = await fetch(`/api/log/${encodeURIComponent(n.id)}`);
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || res.statusText);
+      box.replaceChildren(renderLog(body.log));
+    } catch (e) {
+      btn.textContent = `failed to load: ${e.message}`;
+      btn.disabled = false;
+    }
+  });
+  box.appendChild(btn);
+  return section("work log", box);
+}
+
+// One JSONL line per event: our own `attempt` header plus the backend's
+// stream-json events (system, assistant, user/tool_result, result).
+function renderLog(text) {
+  const wrap = document.createElement("div");
+  wrap.className = "log";
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue;
+    let ev = null;
+    try { ev = JSON.parse(line); } catch { /* rendered raw below */ }
+    for (const el of eventRows(ev, line)) wrap.appendChild(el);
+  }
+  if (!wrap.children.length) wrap.appendChild(evRow("raw", "log", "(empty)"));
+  return wrap;
+}
+
+function eventRows(ev, raw) {
+  if (!ev || typeof ev !== "object") return [evRow("raw", "raw", raw)];
+
+  if (ev.event === "attempt") {
+    const bits = [
+      ev.backend,
+      ev.at && new Date(ev.at).toLocaleString(),
+      ev.node_version && `node @ ${String(ev.node_version).slice(0, 12)}`,
+    ].filter(Boolean).join(" · ");
+    return [evRow("attempt", "attempt", bits || "work session started")];
+  }
+
+  if (ev.type === "system")
+    return [evRow("session", "session", [ev.subtype, ev.model].filter(Boolean).join(" · "),
+                  detailsJson(ev, "details"))];
+
+  if (ev.type === "assistant" || ev.type === "user") {
+    const blocks = ev.message?.content;
+    if (!Array.isArray(blocks))
+      return [evRow(ev.type, ev.type, textOf(blocks) || "", detailsJson(ev, "raw event"))];
+    const rows = [];
+    for (const b of blocks) {
+      if (b.type === "text" && (b.text || "").trim()) {
+        rows.push(evRow("claude", "claude", b.text.trim()));
+      } else if (b.type === "thinking" && (b.thinking || "").trim()) {
+        rows.push(evRow("thinking", "thinking", trunc(b.thinking.trim(), 300)));
+      } else if (b.type === "tool_use") {
+        const inp = JSON.stringify(b.input ?? {});
+        rows.push(evRow("tool", "tool", `${toolName(b.name)} ${inp.length <= 100 ? inp : ""}`.trim(),
+                        inp.length > 100 ? detailsJson(b.input, "input") : null));
+      } else if (b.type === "tool_result") {
+        const t = textOf(b.content) || "(empty result)";
+        rows.push(evRow("toolres", "result", trunc(t, 400),
+                        t.length > 400 ? detailsText(t, "full result") : null));
+      }
+    }
+    return rows;
+  }
+
+  if (ev.type === "result") {
+    const ok = ev.subtype === "success";
+    const bits = [
+      ev.subtype,
+      ev.num_turns != null && `${ev.num_turns} turns`,
+      ev.duration_ms != null && `${(ev.duration_ms / 1000).toFixed(1)}s`,
+      ev.total_cost_usd != null && `$${ev.total_cost_usd.toFixed(2)}`,
+    ].filter(Boolean).join(" · ");
+    return [evRow(ok ? "done" : "failed", ok ? "done" : "failed", bits,
+                  ev.result ? detailsText(String(ev.result), "final message") : null)];
+  }
+
+  return [evRow("raw", ev.type || ev.event || "event", "", detailsJson(ev, "raw event"))];
+}
+
+function evRow(cls, tag, text, extra) {
+  const d = document.createElement("div");
+  d.className = `ev ${cls}`;
+  const t = document.createElement("span");
+  t.className = `tag ${cls}`;
+  t.textContent = tag;
+  d.appendChild(t);
+  if (text) {
+    const s = document.createElement("span");
+    s.className = "evtext";
+    s.textContent = text;
+    d.appendChild(s);
+  }
+  if (extra) d.appendChild(extra);
+  return d;
+}
+
+// Tool-result / message content can be a plain string or a list of text blocks.
+function textOf(content) {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content))
+    return content.map(c => (typeof c === "string" ? c : c?.text || "")).join("\n");
+  return null;
+}
+
+const toolName = name => (name || "?").replace(/^mcp__[^_]+__/, "");
+const trunc = (s, n) => (s.length > n ? s.slice(0, n) + " …" : s);
+
+function detailsJson(obj, label) {
+  return detailsText(JSON.stringify(obj, null, 2), label);
+}
+function detailsText(text, label) {
+  const det = document.createElement("details");
+  const sum = document.createElement("summary");
+  sum.textContent = label;
+  const pre = document.createElement("pre");
+  pre.textContent = text;
+  det.append(sum, pre);
+  return det;
 }
 
 function section(title, content) {
