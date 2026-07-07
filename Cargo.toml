@@ -24,6 +24,10 @@ path = "src/bin/mcp.rs"
 name = "llaundry-work"
 path = "src/bin/work.rs"
 
+[[bin]]
+name = "llaundry-viz"
+path = "src/bin/viz.rs"
+
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive", "env"] }
