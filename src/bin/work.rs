@@ -108,13 +108,24 @@ fn main() -> Result<()> {
         None
     };
 
+    // The session is anchored to the store's location, not to wherever this
+    // driver was launched: the backend runs in the project root (so the
+    // project-scoped write rules resolve there) and the MCP server gets the
+    // store by absolute path.
+    let project_root = store
+        .project_root()
+        .canonicalize()
+        .with_context(|| format!("resolving project root of {}", cli.store.display()))?;
+    let store_abs = project_root.join(store.store_name());
+
     let session = Session {
         node_id: cli.node.clone(),
         prompt: build_prompt(&cli.node, &meta, &body, previous_log.as_deref()),
+        project_root,
         mcp: McpServer {
             name: "llaundry".into(),
             command: cli.mcp_bin.clone(),
-            args: vec!["--store".into(), cli.store.to_string_lossy().into_owned()],
+            args: vec!["--store".into(), store_abs.to_string_lossy().into_owned()],
         },
     };
 
@@ -190,6 +201,10 @@ fn main() -> Result<()> {
 struct Session {
     node_id: String,
     prompt: String,
+    /// Absolute project root (the directory containing the store). The backend
+    /// runs here, so project-scoped tool rules and relative paths resolve
+    /// against the store's location, not the driver's launch directory.
+    project_root: std::path::PathBuf,
     mcp: McpServer,
 }
 
@@ -236,8 +251,10 @@ impl ClaudeCode {
         // In `-p` mode any tool not listed here is denied. The graph tools, plus
         // the built-in file tools: reads anywhere (only project reads become
         // pins; the rest stays in the log), writes scoped to the project tree —
-        // where the clean-tree rule forces every write to be declared at
-        // completion. No Bash: a shell's reads are invisible to provenance.
+        // `./**` resolves against the session's working directory, which is
+        // pinned to the project root below — where the clean-tree rule forces
+        // every write to be declared at completion. No Bash: a shell's reads
+        // are invisible to provenance.
         let mut allowed = vec![
             format!("mcp__{}", session.mcp.name),
             "Read".into(),
@@ -252,6 +269,7 @@ impl ClaudeCode {
         }
 
         let mut cmd = Command::new(&self.binary);
+        cmd.current_dir(&session.project_root);
         cmd.arg("-p")
             .arg(&session.prompt)
             // Only our MCP server, ignoring any user/project MCP config.
@@ -304,7 +322,14 @@ impl Backend for ClaudeCode {
 
     fn describe(&self, session: &Session) -> String {
         let cmd = self.command(session);
-        let mut parts = vec![cmd.get_program().to_string_lossy().into_owned()];
+        // The working directory is part of the invocation: the session runs in
+        // the project root, wherever the driver itself was launched.
+        let mut parts = vec![
+            "cd".into(),
+            shell_quote(&session.project_root.to_string_lossy()),
+            "&&".into(),
+            cmd.get_program().to_string_lossy().into_owned(),
+        ];
         parts.extend(cmd.get_args().map(|a| shell_quote(&a.to_string_lossy())));
         parts.join(" ")
     }
@@ -469,10 +494,11 @@ mod tests {
         Session {
             node_id: "node-1".into(),
             prompt: "do the work".into(),
+            project_root: "/proj".into(),
             mcp: McpServer {
                 name: "llaundry".into(),
                 command: "llaundry-mcp".into(),
-                args: vec!["--store".into(), ".llaundry".into()],
+                args: vec!["--store".into(), "/proj/.llaundry".into()],
             },
         }
     }
@@ -495,6 +521,9 @@ mod tests {
     fn claude_command_grants_graph_and_file_tools_but_no_shell() {
         let cmd = backend(false).command(&sample_session());
         assert_eq!(cmd.get_program().to_string_lossy(), "claude");
+        // The session runs in the project root — the store's location, not the
+        // driver's launch directory — so `./**` scoping resolves there.
+        assert_eq!(cmd.get_current_dir(), Some(std::path::Path::new("/proj")));
         let args = args_of(&cmd);
 
         assert!(args.contains(&"-p".to_string()));
@@ -517,12 +546,13 @@ mod tests {
         assert!(!args.iter().any(|a| a.contains("WebFetch")));
         assert!(!args.iter().any(|a| a == "--dangerously-skip-permissions"));
 
-        // The MCP config points at the llaundry-mcp binary and passes the store.
+        // The MCP config points at the llaundry-mcp binary and passes the store
+        // by absolute path, so the server too is independent of any cwd.
         let j = args.iter().position(|a| a == "--mcp-config").unwrap();
         let cfg: Value = serde_json::from_str(&args[j + 1]).unwrap();
         assert_eq!(cfg["mcpServers"]["llaundry"]["command"], "llaundry-mcp");
         assert_eq!(cfg["mcpServers"]["llaundry"]["args"][0], "--store");
-        assert_eq!(cfg["mcpServers"]["llaundry"]["args"][1], ".llaundry");
+        assert_eq!(cfg["mcpServers"]["llaundry"]["args"][1], "/proj/.llaundry");
     }
 
     #[test]
@@ -553,7 +583,7 @@ mod tests {
     fn describe_is_a_copy_pasteable_command() {
         let backend = backend(false);
         let d = backend.describe(&sample_session());
-        assert!(d.starts_with("claude "));
+        assert!(d.starts_with("cd /proj && claude "));
         assert!(d.contains("mcp__llaundry"));
         // The multi-word prompt gets quoted into a single token.
         assert!(d.contains("'do the work'"));
