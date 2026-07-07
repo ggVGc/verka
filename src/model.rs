@@ -133,6 +133,12 @@ pub struct ContextPin {
     pub path: String,
     /// The file's blob id when it was pinned.
     pub blob: String,
+    /// How the pin got here: `false` for a pin the worker declared at
+    /// completion, `true` for one derived afterwards from the recorded
+    /// session (the worker was observed reading the file but did not
+    /// declare it).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub observed: bool,
 }
 
 /// Frontmatter of `result.md` — the record of the node's one unit of work.

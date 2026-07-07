@@ -21,6 +21,9 @@ pub trait Vcs {
     /// human-readable reason (for git, a `diff --name-status`); else `None`.
     fn drift(&self, id: &str) -> Result<Option<String>>;
 
+    /// The paths captured under `id` (for git, the files the commit touches).
+    fn files_in(&self, id: &str) -> Result<Vec<String>>;
+
     /// Paths with uncommitted changes (empty means a clean working tree).
     fn dirty_paths(&self) -> Result<Vec<String>>;
 }
@@ -35,12 +38,16 @@ pub struct FakeVcs {
     pub drift_for: std::collections::HashMap<String, String>,
     pub captured: std::cell::RefCell<Vec<Vec<String>>>,
     pub store_commits: std::cell::RefCell<usize>,
+    pub files_for: std::cell::RefCell<std::collections::HashMap<String, Vec<String>>>,
 }
 
 #[cfg(test)]
 impl Vcs for FakeVcs {
     fn capture(&self, paths: &[String], _message: &str) -> Result<String> {
         self.captured.borrow_mut().push(paths.to_vec());
+        self.files_for
+            .borrow_mut()
+            .insert(self.next_id.clone(), paths.to_vec());
         Ok(self.next_id.clone())
     }
 
@@ -55,5 +62,9 @@ impl Vcs for FakeVcs {
 
     fn dirty_paths(&self) -> Result<Vec<String>> {
         Ok(self.dirty.clone())
+    }
+
+    fn files_in(&self, id: &str) -> Result<Vec<String>> {
+        Ok(self.files_for.borrow().get(id).cloned().unwrap_or_default())
     }
 }

@@ -448,7 +448,8 @@ fn show_node(store: &Store, vcs: &GitVcs, id: &str) -> Result<String> {
             }
         }
         for pin in &result.context {
-            writeln!(out, "  context {} @ {}", pin.path, ops::short(&pin.blob))?;
+            let tag = if pin.observed { " (observed)" } else { "" };
+            writeln!(out, "  context {} @ {}{tag}", pin.path, ops::short(&pin.blob))?;
         }
         let notes = notes.trim_end();
         if !notes.is_empty() {

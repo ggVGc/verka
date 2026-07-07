@@ -261,6 +261,15 @@ Most of what work consumes is *other nodes' outputs* — covered by the
 `[[context]]` pins (blob ids) exist for the remainder: pre-existing files that
 no node produced. They are expected to be the minority case.
 
+Context pins come from two sources. The worker declares them at `complete`;
+then, because every work session is recorded verbatim (`work.jsonl`), the
+driver mines the transcript afterwards and pins any project file the worker
+was *observed* reading but did not declare — marked `observed = true` to keep
+self-reported and derived provenance distinguishable. Input provenance is thus
+a derived fact, not agent discipline, matching how output provenance is
+enforced (the clean-tree rule refuses `complete` while undeclared writes are
+dirty, whatever tool wrote them).
+
 ---
 
 ## 3. On-disk layout

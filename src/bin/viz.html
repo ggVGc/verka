@@ -630,12 +630,30 @@ $("logclose").addEventListener("click", closeLog);
 function renderLog(text) {
   const wrap = document.createElement("div");
   wrap.className = "log";
+  // Consecutive thinking blocks — within one message or across adjacent events —
+  // are one train of thought: buffer them and emit a single combined row.
+  let thinking = [];
+  const flushThinking = () => {
+    if (!thinking.length) return;
+    const t = thinking.join("\n\n");
+    wrap.appendChild(evRow("thinking", "thinking", trunc(t, 300),
+                           t.length > 300 ? detailsText(t, "full thinking") : null));
+    thinking = [];
+  };
   for (const line of text.split("\n")) {
     if (!line.trim()) continue;
     let ev = null;
     try { ev = JSON.parse(line); } catch { /* rendered raw below */ }
-    for (const el of eventRows(ev, line)) wrap.appendChild(el);
+    for (const item of eventRows(ev, line)) {
+      if (item.thinking !== undefined) {
+        thinking.push(item.thinking);
+      } else {
+        flushThinking();
+        wrap.appendChild(item);
+      }
+    }
   }
+  flushThinking();
   if (!wrap.children.length) wrap.appendChild(evRow("raw", "log", "(empty)"));
   return wrap;
 }
@@ -665,7 +683,8 @@ function eventRows(ev, raw) {
       if (b.type === "text" && (b.text || "").trim()) {
         rows.push(evRow("claude", "claude", b.text.trim()));
       } else if (b.type === "thinking" && (b.thinking || "").trim()) {
-        rows.push(evRow("thinking", "thinking", trunc(b.thinking.trim(), 300)));
+        // A marker, not an element: renderLog merges runs of these into one row.
+        rows.push({ thinking: b.thinking.trim() });
       } else if (b.type === "tool_use") {
         const inp = JSON.stringify(b.input ?? {});
         rows.push(evRow("tool", "tool", `${toolName(b.name)} ${inp.length <= 100 ? inp : ""}`.trim(),

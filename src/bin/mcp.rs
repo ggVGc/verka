@@ -360,7 +360,8 @@ impl Tool for ShowNode {
                 });
             }
             for pin in &result.context {
-                lines.push(format!("  context {} @ {}", pin.path, ops::short(&pin.blob)));
+                let tag = if pin.observed { " (observed)" } else { "" };
+                lines.push(format!("  context {} @ {}{tag}", pin.path, ops::short(&pin.blob)));
             }
             let notes = notes.trim_end();
             if !notes.is_empty() {

@@ -4,11 +4,19 @@
 //! from it, and hands that to a pluggable [`Backend`]. The backend is the LLM seam,
 //! so different engines can be dropped in without touching the launcher.
 //!
-//! The first backend, [`ClaudeCode`], shells out to `claude -p` deliberately
-//! sandboxed: it grants **only** the `llaundry` MCP server's tools (`--allowedTools
-//! mcp__llaundry`) and no built-in tools at all, and pins MCP config to just that
-//! server (`--strict-mcp-config`). So the model can act on the graph and nothing
-//! else — no shell, no file, no network access.
+//! The first backend, [`ClaudeCode`], shells out to `claude -p` with a deliberate
+//! tool grant: the `llaundry` MCP server for graph operations, plus the built-in
+//! file tools — Read/Glob/Grep freely, Edit/Write scoped to the project tree —
+//! but no shell, and the web tools only behind `--network`. MCP config is pinned
+//! to just the llaundry server (`--strict-mcp-config`).
+//!
+//! Provenance does not depend on agent discipline. Output provenance is enforced
+//! by git: `complete` refuses to record a result while undeclared writes are
+//! dirty, so every produced file is declared. Input provenance is *derived*:
+//! after the session, the driver mines the recorded transcript for the files the
+//! agent was observed reading and pins the undeclared ones as context
+//! ([`ops::amend_context`]), marked `observed`. What can't be pinned (reads
+//! outside the project, web fetches) still sits verbatim in the log.
 //!
 //! Every session's interaction stream is *streamed* to the node's `work.jsonl`
 //! as it happens, one flushed line per event, so an abrupt exit (Ctrl-C, crash,
@@ -47,6 +55,10 @@ struct Cli {
     /// Model to request from the backend (backend default if unset).
     #[arg(long)]
     model: Option<String>,
+    /// Also allow the web tools (WebFetch, WebSearch). Web reads cannot be
+    /// pinned as context; they are only visible in the recorded log.
+    #[arg(long)]
+    network: bool,
     /// Print the backend invocation instead of running it.
     #[arg(long)]
     dry_run: bool,
@@ -110,6 +122,7 @@ fn main() -> Result<()> {
         BackendKind::ClaudeCode => Box::new(ClaudeCode {
             binary: cli.claude_bin.clone(),
             model: cli.model.clone(),
+            network: cli.network,
         }),
     };
 
@@ -147,6 +160,18 @@ fn main() -> Result<()> {
 
     let success = backend.run(&session, &mut log)?;
     drop(log);
+
+    // Derive input provenance from the recorded session: pin project files the
+    // agent was observed reading but did not declare as context. Best-effort —
+    // the raw log keeps the full story either way.
+    if let Some(log_text) = store.read_work_log(&cli.node)? {
+        let reads = observed_reads(&log_text, &store);
+        match ops::amend_context(&store, &vcs, &cli.node, &reads) {
+            Ok(n) if n > 0 => eprintln!("llaundry-work: pinned {n} observed context file(s)"),
+            Ok(_) => {}
+            Err(e) => eprintln!("llaundry-work: could not pin observed context: {e:#}"),
+        }
+    }
 
     // Commit whatever of the story the session's own store commits didn't
     // already sweep in — before judging the exit status, so even a failed
@@ -186,11 +211,13 @@ trait Backend {
     fn describe(&self, session: &Session) -> String;
 }
 
-/// Backend that shells out to Claude Code (`claude -p`), sandboxed to the llaundry
-/// MCP: no built-in tools, no other MCP servers.
+/// Backend that shells out to Claude Code (`claude -p`): the llaundry MCP for
+/// graph operations, the built-in file tools for real work — no shell, no other
+/// MCP servers, web tools only when `network` is set.
 struct ClaudeCode {
     binary: String,
     model: Option<String>,
+    network: bool,
 }
 
 impl ClaudeCode {
@@ -206,6 +233,24 @@ impl ClaudeCode {
         );
         let mcp_config = json!({ "mcpServers": Value::Object(servers) });
 
+        // In `-p` mode any tool not listed here is denied. The graph tools, plus
+        // the built-in file tools: reads anywhere (only project reads become
+        // pins; the rest stays in the log), writes scoped to the project tree —
+        // where the clean-tree rule forces every write to be declared at
+        // completion. No Bash: a shell's reads are invisible to provenance.
+        let mut allowed = vec![
+            format!("mcp__{}", session.mcp.name),
+            "Read".into(),
+            "Glob".into(),
+            "Grep".into(),
+            "Edit(./**)".into(),
+            "Write(./**)".into(),
+        ];
+        if self.network {
+            allowed.push("WebFetch".into());
+            allowed.push("WebSearch".into());
+        }
+
         let mut cmd = Command::new(&self.binary);
         cmd.arg("-p")
             .arg(&session.prompt)
@@ -213,10 +258,8 @@ impl ClaudeCode {
             .arg("--mcp-config")
             .arg(mcp_config.to_string())
             .arg("--strict-mcp-config")
-            // Allow every tool from the llaundry server and nothing else. In `-p`
-            // mode any tool not listed here is denied, so no built-ins are reachable.
             .arg("--allowedTools")
-            .arg(format!("mcp__{}", session.mcp.name))
+            .arg(allowed.join(","))
             // One JSON event per line — the session transcript recorded to the
             // node's work.jsonl (stream-json in print mode requires --verbose).
             .arg("--output-format")
@@ -267,10 +310,71 @@ impl Backend for ClaudeCode {
     }
 }
 
-/// The instruction handed to the model: what the node is, and the tools-only
-/// discipline it must follow. A file-free session produces no output files, so it
-/// finishes with `complete_node` (no outputs, notes as the record of what happened)
-/// or `fail_node` — or pauses on a human-assigned question node.
+/// Project files the session was observed reading, mined from the recorded
+/// transcript: the `file_path` of every built-in `Read` tool call, relativised
+/// to the project root. Reads outside the project, inside the store, or inside
+/// `.git` are dropped — the store is graph state, not context, and what can't
+/// be pinned stays visible in the raw log. Deduplicated, transcript order.
+/// Unparseable lines are skipped: the log may hold non-transcript events (the
+/// attempt header) and half-written tails.
+fn observed_reads(log: &str, store: &Store) -> Vec<String> {
+    let root = store.project_root();
+    let root = root.canonicalize().unwrap_or(root);
+    let store_name = store.store_name();
+    let mut seen = std::collections::HashSet::new();
+    let mut reads = Vec::new();
+    for line in log.lines() {
+        let Ok(event) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let blocks = event
+            .pointer("/message/content")
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        for block in blocks {
+            if block.get("type").and_then(Value::as_str) != Some("tool_use")
+                || block.get("name").and_then(Value::as_str) != Some("Read")
+            {
+                continue;
+            }
+            let Some(path) = block.pointer("/input/file_path").and_then(Value::as_str) else {
+                continue;
+            };
+            let path = std::path::Path::new(path);
+            let rel = if path.is_absolute() {
+                match path.strip_prefix(&root) {
+                    Ok(rel) => rel,
+                    Err(_) => continue,
+                }
+            } else {
+                path
+            };
+            let inside = rel.components().all(|c| {
+                matches!(c, std::path::Component::Normal(_) | std::path::Component::CurDir)
+            });
+            let first = rel.components().find_map(|c| match c {
+                std::path::Component::Normal(seg) => Some(seg.to_string_lossy()),
+                _ => None,
+            });
+            match first {
+                Some(first) if inside && first != store_name && first != ".git" => {}
+                _ => continue,
+            }
+            let rel = rel.to_string_lossy().into_owned();
+            if seen.insert(rel.clone()) {
+                reads.push(rel);
+            }
+        }
+    }
+    reads
+}
+
+/// The instruction handed to the model: what the node is, and the discipline it
+/// must follow — graph changes through the `llaundry` MCP tools, files through
+/// the built-in file tools, no shell. A session finishes with `complete_node`
+/// (outputs and context declared, notes as the record of what happened) or
+/// `fail_node` — or pauses on a human-assigned question node.
 ///
 /// On continuation, `previous_log` (the node's recorded `work.jsonl`) is replayed
 /// verbatim so the session picks up exactly where the last one stopped — the
@@ -278,10 +382,13 @@ impl Backend for ClaudeCode {
 fn build_prompt(id: &str, meta: &NodeMeta, body: &str, previous_log: Option<&str>) -> String {
     let mut p = vec![
         "You are an autonomous worker on a llaundry node graph.".to_string(),
-        "You can act ONLY through the `llaundry` MCP tools — you have no shell, file,"
+        "Every graph change goes through the `llaundry` MCP tools. For real work you"
             .to_string(),
-        "or network access. Every change you make must go through those tools."
+        "also have the built-in file tools (Read, Glob, Grep, Edit, Write) — but no"
             .to_string(),
+        "shell. Keep all file work inside the project tree. Your session is recorded"
+            .to_string(),
+        "verbatim as the node's work log.".to_string(),
         String::new(),
         format!("You are assigned to node `{id}`:"),
         format!("  title: {}", meta.title),
@@ -312,12 +419,16 @@ fn build_prompt(id: &str, meta: &NodeMeta, body: &str, previous_log: Option<&str
     p.push("Do this:".into());
     p.push("  1. Gather what you need with show_node, list_nodes, node_dependents and".into());
     p.push("     the stale/ready/blocked queries.".into());
-    p.push("  2. Carry out the node's work by updating the graph — add_node, link_nodes,".into());
-    p.push("     edit_node — keeping each change small and clearly described.".into());
+    p.push("  2. Carry out the node's work: produce files with the file tools, and".into());
+    p.push("     update the graph with add_node, link_nodes, edit_node — keeping each".into());
+    p.push("     change small and clearly described.".into());
     p.push(format!(
-        "  3. When the work is done, record it: complete_node {id}, with `notes`"
+        "  3. When the work is done, record it: complete_node {id}, declaring every"
     ));
-    p.push("     summarising what you did and why. If the work cannot be done,".into());
+    p.push("     file you wrote in `outputs`, files you consumed in `context` (other".into());
+    p.push("     nodes' outputs need no pin), and `notes` summarising what you did".into());
+    p.push("     and why. Completion is refused while undeclared writes are dirty.".into());
+    p.push("     If the work cannot be done,".into());
     p.push(format!("     record that instead: fail_node {id} with `notes` explaining why."));
     p.push("  4. If you need a decision or information only a human can give, do NOT".into());
     p.push("     complete or fail. Instead add_node a question (title `Question: ...`,".into());
@@ -372,13 +483,17 @@ mod tests {
             .collect()
     }
 
-    #[test]
-    fn claude_command_sandboxes_to_only_the_llaundry_mcp() {
-        let backend = ClaudeCode {
+    fn backend(network: bool) -> ClaudeCode {
+        ClaudeCode {
             binary: "claude".into(),
             model: None,
-        };
-        let cmd = backend.command(&sample_session());
+            network,
+        }
+    }
+
+    #[test]
+    fn claude_command_grants_graph_and_file_tools_but_no_shell() {
+        let cmd = backend(false).command(&sample_session());
         assert_eq!(cmd.get_program().to_string_lossy(), "claude");
         let args = args_of(&cmd);
 
@@ -390,12 +505,16 @@ mod tests {
         assert_eq!(args[k + 1], "stream-json");
         assert!(args.contains(&"--verbose".to_string()));
 
-        // Allowed tools are exactly the whole llaundry MCP server — nothing else.
+        // The llaundry MCP server plus the file tools, writes scoped to the
+        // project tree. No shell, no web by default, permissions not bypassed.
         let i = args.iter().position(|a| a == "--allowedTools").unwrap();
-        assert_eq!(args[i + 1], "mcp__llaundry");
-
-        // No built-in tools are granted, and permissions are not bypassed.
+        let allowed: Vec<&str> = args[i + 1].split(',').collect();
+        assert_eq!(
+            allowed,
+            ["mcp__llaundry", "Read", "Glob", "Grep", "Edit(./**)", "Write(./**)"]
+        );
         assert!(!args.iter().any(|a| a.contains("Bash")));
+        assert!(!args.iter().any(|a| a.contains("WebFetch")));
         assert!(!args.iter().any(|a| a == "--dangerously-skip-permissions"));
 
         // The MCP config points at the llaundry-mcp binary and passes the store.
@@ -407,16 +526,23 @@ mod tests {
     }
 
     #[test]
+    fn web_tools_are_granted_only_with_network() {
+        let args = args_of(&backend(true).command(&sample_session()));
+        let i = args.iter().position(|a| a == "--allowedTools").unwrap();
+        assert!(args[i + 1].split(',').any(|t| t == "WebFetch"));
+        assert!(args[i + 1].split(',').any(|t| t == "WebSearch"));
+        assert!(!args[i + 1].contains("Bash"));
+    }
+
+    #[test]
     fn model_is_forwarded_only_when_set() {
-        let without = ClaudeCode {
-            binary: "claude".into(),
-            model: None,
-        };
-        assert!(!args_of(&without.command(&sample_session())).contains(&"--model".to_string()));
+        assert!(!args_of(&backend(false).command(&sample_session()))
+            .contains(&"--model".to_string()));
 
         let with = ClaudeCode {
             binary: "claude".into(),
             model: Some("opus".into()),
+            network: false,
         };
         let args = args_of(&with.command(&sample_session()));
         let i = args.iter().position(|a| a == "--model").unwrap();
@@ -425,15 +551,42 @@ mod tests {
 
     #[test]
     fn describe_is_a_copy_pasteable_command() {
-        let backend = ClaudeCode {
-            binary: "claude".into(),
-            model: None,
-        };
+        let backend = backend(false);
         let d = backend.describe(&sample_session());
         assert!(d.starts_with("claude "));
         assert!(d.contains("mcp__llaundry"));
         // The multi-word prompt gets quoted into a single token.
         assert!(d.contains("'do the work'"));
+    }
+
+    #[test]
+    fn observed_reads_mines_project_read_calls_from_the_transcript() {
+        let dir = std::env::temp_dir().join(format!("llaundry-work-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Store::init(dir.join(".llaundry")).unwrap();
+        let root = dir.canonicalize().unwrap();
+
+        let read = |path: String| {
+            format!(
+                r#"{{"type":"assistant","message":{{"content":[{{"type":"tool_use","name":"Read","input":{{"file_path":"{path}"}}}}]}}}}"#
+            )
+        };
+        let log = [
+            r#"{"event":"attempt","at":1}"#.to_string(),
+            read(format!("{}/README.md", root.display())),
+            read("/somewhere/else.txt".into()),
+            read(format!("{}/.llaundry/nodes/n/node.md", root.display())),
+            read(format!("{}/.git/config", root.display())),
+            read("src/lib.rs".into()), // relative paths count too
+            read(format!("{}/README.md", root.display())), // duplicate
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"mcp__llaundry__show_node","input":{"id":"n"}}]}}"#.to_string(),
+            "not json (a half-written tail)".to_string(),
+        ]
+        .join("\n");
+
+        assert_eq!(observed_reads(&log, &store), ["README.md", "src/lib.rs"]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -176,6 +176,56 @@ pub fn commit_work_log(store: &Store, vcs: &dyn Vcs, id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Append *observed* context pins to a node's recorded result: files a work
+/// session was seen reading (mined from its recorded transcript) that the
+/// worker did not declare in `complete`. Turns input provenance from agent
+/// discipline into a derived fact.
+///
+/// Skips paths already pinned, paths inside any node's output commit (those
+/// are covered by `built_against` pins — context is for files no node
+/// produced), and files that no longer exist. Returns how many pins were
+/// added; a no-op when the node has no result yet (a paused unit's reads are
+/// amended once it completes, from the full replayed log).
+pub fn amend_context(store: &Store, vcs: &dyn Vcs, id: &str, reads: &[String]) -> Result<usize> {
+    let Some((mut result, notes)) = store.read_result(id)? else {
+        return Ok(0);
+    };
+    require_clean(store, vcs)?;
+
+    let mut node_outputs = std::collections::HashSet::new();
+    for other in store.list_ids()? {
+        if let Some(commit) = output_of(store, &other) {
+            node_outputs.extend(vcs.files_in(&commit)?);
+        }
+    }
+
+    let root = store.project_root();
+    let mut pinned: std::collections::HashSet<String> =
+        result.context.iter().map(|p| p.path.clone()).collect();
+    let mut added = 0;
+    for path in reads {
+        if pinned.contains(path) || node_outputs.contains(path) {
+            continue;
+        }
+        let Some(blob) = file_blob(&root.join(path)) else {
+            continue;
+        };
+        pinned.insert(path.clone());
+        result.context.push(ContextPin {
+            path: path.clone(),
+            blob,
+            observed: true,
+        });
+        added += 1;
+    }
+    if added == 0 {
+        return Ok(0);
+    }
+    store.write_result(id, &result, &notes)?;
+    vcs.commit_store(&store.store_name(), &format!("llaundry: observed context {id}"))?;
+    Ok(added)
+}
+
 /// A node's derived status.
 ///
 /// `done` holds only while the result's `node_version` still matches `node.md`:
@@ -564,6 +614,7 @@ fn pin_context(store: &Store, paths: &[String]) -> Result<Vec<ContextPin>> {
             Ok(ContextPin {
                 path: path.clone(),
                 blob,
+                observed: false,
             })
         })
         .collect()
@@ -614,6 +665,77 @@ mod tests {
 
     fn done(store: &Store, vcs: &dyn Vcs, id: &str) {
         complete(store, vcs, id, &[], &[], None, "done", Author::Machine).unwrap();
+    }
+
+    #[test]
+    fn amend_context_pins_observed_reads_only() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs {
+            next_id: "c1".into(),
+            ..Default::default()
+        };
+        let root = store.project_root();
+        std::fs::write(root.join("declared.txt"), "d").unwrap();
+        std::fs::write(root.join("read.txt"), "r").unwrap();
+        std::fs::write(root.join("out.txt"), "o").unwrap();
+
+        let id = add(&store, &fake, new_node("a", vec![])).unwrap();
+        complete(
+            &store,
+            &fake,
+            &id,
+            &["out.txt".into()],
+            &["declared.txt".into()],
+            None,
+            "done",
+            Author::Machine,
+        )
+        .unwrap();
+
+        // One genuinely new read gets pinned; a declared pin, a node output, a
+        // missing file, and a duplicate do not.
+        let reads: Vec<String> = ["read.txt", "declared.txt", "out.txt", "missing.txt", "read.txt"]
+            .map(String::from)
+            .to_vec();
+        assert_eq!(amend_context(&store, &fake, &id, &reads).unwrap(), 1);
+
+        let (result, notes) = store.read_result(&id).unwrap().unwrap();
+        assert_eq!(notes, "done", "amending keeps the narrative");
+        let pin = result.context.iter().find(|p| p.path == "read.txt").unwrap();
+        assert!(pin.observed);
+        let declared = result.context.iter().find(|p| p.path == "declared.txt").unwrap();
+        assert!(!declared.observed);
+        assert!(!result.context.iter().any(|p| p.path == "out.txt" || p.path == "missing.txt"));
+
+        // Re-running with the same reads adds nothing.
+        assert_eq!(amend_context(&store, &fake, &id, &reads).unwrap(), 0);
+    }
+
+    #[test]
+    fn amend_context_is_a_no_op_without_a_result() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs::default();
+        let id = add(&store, &fake, new_node("a", vec![])).unwrap();
+        let commits_before = *fake.store_commits.borrow();
+        assert_eq!(amend_context(&store, &fake, &id, &["x.txt".into()]).unwrap(), 0);
+        assert_eq!(*fake.store_commits.borrow(), commits_before);
+    }
+
+    #[test]
+    fn observed_pins_participate_in_staleness() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs::default();
+        let root = store.project_root();
+        std::fs::write(root.join("read.txt"), "v1").unwrap();
+
+        let id = add(&store, &fake, new_node("a", vec![])).unwrap();
+        done(&store, &fake, &id);
+        assert_eq!(amend_context(&store, &fake, &id, &["read.txt".into()]).unwrap(), 1);
+        assert!(staleness(&store, &fake, &id).is_empty());
+
+        std::fs::write(root.join("read.txt"), "v2").unwrap();
+        let reasons = staleness(&store, &fake, &id);
+        assert!(reasons.iter().any(|r| r.contains("read.txt")), "{reasons:?}");
     }
 
     #[test]

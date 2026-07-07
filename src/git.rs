@@ -41,6 +41,10 @@ impl Vcs for GitVcs {
             .filter(|p| !p.is_empty())
             .collect())
     }
+
+    fn files_in(&self, id: &str) -> Result<Vec<String>> {
+        commit_files(&self.base, id)
+    }
 }
 
 fn git(base: &Path, args: &[&str]) -> Result<std::process::Output> {
@@ -99,10 +103,9 @@ fn commit_path(base: &Path, path: &str, message: &str) -> Result<()> {
     Ok(())
 }
 
-/// If any file introduced by `commit` differs from its state at that commit,
-/// return a short `git diff --name-status` description; otherwise `None`.
-fn output_drift(base: &Path, commit: &str) -> Result<Option<String>> {
-    let changed = checked(
+/// The files a commit touches.
+fn commit_files(base: &Path, commit: &str) -> Result<Vec<String>> {
+    let out = checked(
         base,
         &[
             "diff-tree",
@@ -113,13 +116,19 @@ fn output_drift(base: &Path, commit: &str) -> Result<Option<String>> {
             commit,
         ],
     )?;
-    let paths: Vec<&str> = changed.lines().filter(|l| !l.is_empty()).collect();
+    Ok(out.lines().filter(|l| !l.is_empty()).map(str::to_string).collect())
+}
+
+/// If any file introduced by `commit` differs from its state at that commit,
+/// return a short `git diff --name-status` description; otherwise `None`.
+fn output_drift(base: &Path, commit: &str) -> Result<Option<String>> {
+    let paths = commit_files(base, commit)?;
     if paths.is_empty() {
         return Ok(None);
     }
 
     let mut args = vec!["diff", "--name-status", commit, "--"];
-    args.extend(paths.iter().copied());
+    args.extend(paths.iter().map(String::as_str));
     let drift = checked(base, &args)?;
     Ok((!drift.is_empty()).then_some(drift))
 }
