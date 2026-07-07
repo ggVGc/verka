@@ -35,7 +35,7 @@ pub struct NewNode {
 
 /// Create a new node. Returns its id.
 pub fn add(store: &Store, vcs: &dyn Vcs, new: NewNode) -> Result<String> {
-    require_clean(vcs)?;
+    require_clean(store, vcs)?;
     for dep in new.depends_on.iter().chain(&new.derived_from) {
         check_edge(store, dep)?;
     }
@@ -56,7 +56,7 @@ pub fn add(store: &Store, vcs: &dyn Vcs, new: NewNode) -> Result<String> {
 /// Add `to` to one of `from`'s dependency lists. A definition change: it moves
 /// `from`'s version.
 pub fn link(store: &Store, vcs: &dyn Vcs, from: &str, to: &str, kind: DepKind) -> Result<()> {
-    require_clean(vcs)?;
+    require_clean(store, vcs)?;
     if from == to {
         bail!("cannot link `{from}` to itself");
     }
@@ -84,7 +84,7 @@ pub fn edit(
     title: Option<String>,
     body: Option<String>,
 ) -> Result<()> {
-    require_clean(vcs)?;
+    require_clean(store, vcs)?;
     let (mut meta, old_body) = store.read_node(id)?;
     if let Some(t) = title {
         meta.title = t;
@@ -111,7 +111,7 @@ pub fn complete(
     author: Author,
 ) -> Result<Option<String>> {
     // The only uncommitted changes allowed are the outputs we are about to commit.
-    require_clean_except(vcs, outputs)?;
+    require_clean_except(store, vcs, outputs)?;
     let (meta, _) = store.read_node(id)?;
 
     // Pin everything the work saw, before committing anything.
@@ -145,7 +145,7 @@ pub fn complete(
 /// Record that a node's work was attempted and failed. Like [`complete`] it pins
 /// what the attempt was built against, so the failure is reproducible evidence.
 pub fn fail(store: &Store, vcs: &dyn Vcs, id: &str, notes: &str, author: Author) -> Result<()> {
-    require_clean(vcs)?;
+    require_clean(store, vcs)?;
     let (meta, _) = store.read_node(id)?;
     let built_against = pin_deps(store, &meta)?;
     store.write_result(
@@ -165,22 +165,13 @@ pub fn fail(store: &Store, vcs: &dyn Vcs, id: &str, notes: &str, author: Author)
     Ok(())
 }
 
-/// Record a work session's interaction log (`work.jsonl`) — the machine-grade
-/// story of what happened, opaque to every derived query. `append` extends a
-/// paused unit of work's log; `!append` starts over for rework (git history
-/// keeps the previous story). Like every other mutation it requires a clean
-/// tree and is its own commit — which is also why the log is written *after*
-/// a session, never streamed during one: a dirty `work.jsonl` would make the
-/// session's own mutating calls refuse.
-pub fn record_work_log(
-    store: &Store,
-    vcs: &dyn Vcs,
-    id: &str,
-    events: &str,
-    append: bool,
-) -> Result<()> {
-    require_clean(vcs)?;
-    store.write_work_log(id, events, append)?;
+/// Commit whatever of the node's streamed interaction log (`work.jsonl`) is not
+/// yet in git. The log is written line by line *during* a session — the one
+/// tolerated dirty path (see [`require_clean`]) — and each store commit the
+/// session makes already sweeps the story-so-far in; this picks up the tail
+/// after the session ends. A no-op when the log is fully committed.
+pub fn commit_work_log(store: &Store, vcs: &dyn Vcs, id: &str) -> Result<()> {
+    require_clean(store, vcs)?;
     vcs.commit_store(&store.store_name(), &format!("llaundry: work log {id}"))?;
     Ok(())
 }
@@ -493,8 +484,17 @@ fn find_cycles(graph: &std::collections::BTreeMap<String, Vec<String>>) -> Vec<S
 
 /// Enforce a clean working tree before a store operation, so the commit recorded
 /// for the resulting state change fully represents the repository.
-pub fn require_clean(vcs: &dyn Vcs) -> Result<()> {
-    let dirty = vcs.dirty_paths()?;
+///
+/// Work logs are the one tolerated exception: they are streamed *during* a
+/// session (so any mutating call the session makes runs against a dirty log by
+/// construction), and they are opaque non-state — a commit that sweeps a
+/// half-written story in is still a true story-so-far.
+pub fn require_clean(store: &Store, vcs: &dyn Vcs) -> Result<()> {
+    let dirty: Vec<String> = vcs
+        .dirty_paths()?
+        .into_iter()
+        .filter(|p| !store.is_work_log_path(p))
+        .collect();
     if !dirty.is_empty() {
         bail!(
             "working tree is not clean; commit or stash first:\n  {}",
@@ -506,12 +506,12 @@ pub fn require_clean(vcs: &dyn Vcs) -> Result<()> {
 
 /// Like [`require_clean`], but tolerates uncommitted changes to `allowed` paths —
 /// used by [`complete`], whose job is to commit exactly the produced outputs.
-pub fn require_clean_except(vcs: &dyn Vcs, allowed: &[String]) -> Result<()> {
+pub fn require_clean_except(store: &Store, vcs: &dyn Vcs, allowed: &[String]) -> Result<()> {
     let allowed: std::collections::HashSet<&str> = allowed.iter().map(String::as_str).collect();
     let stray: Vec<String> = vcs
         .dirty_paths()?
         .into_iter()
-        .filter(|p| !allowed.contains(p.as_str()))
+        .filter(|p| !allowed.contains(p.as_str()) && !store.is_work_log_path(p))
         .collect();
     if !stray.is_empty() {
         bail!(
@@ -975,54 +975,70 @@ mod tests {
     }
 
     #[test]
-    fn record_work_log_commits_and_respects_the_clean_tree_rule() {
+    fn a_streaming_work_log_never_blocks_mutations() {
+        use std::io::Write;
         let (_t, store) = temp_store();
         let fake = FakeVcs::default();
         let id = add(&store, &fake, new_node("a", vec![])).unwrap();
 
-        record_work_log(&store, &fake, &id, r#"{"event":"attempt"}"#, true).unwrap();
-        assert_eq!(
-            store.read_work_log(&id).unwrap().unwrap(),
-            "{\"event\":\"attempt\"}\n"
-        );
-        // add + record each committed the store; the log is not an output capture.
-        assert_eq!(*fake.store_commits.borrow(), 2);
-        assert!(fake.captured.borrow().is_empty());
+        // A session is streaming the log: the file is dirty while the agent works.
+        writeln!(store.open_work_log(&id, true).unwrap(), r#"{{"event":"attempt"}}"#).unwrap();
+        let mid_session = FakeVcs {
+            dirty: vec![format!("{}/nodes/{id}/work.jsonl", store.store_name())],
+            ..Default::default()
+        };
+
+        // The agent's own mutating calls tolerate it — this is the whole point.
+        let q = add(&store, &mid_session, new_node("q", vec![])).unwrap();
+        link(&store, &mid_session, &q, &id, DepKind::DependsOn).unwrap();
+        complete(&store, &mid_session, &id, &[], &[], None, "", Author::Machine).unwrap();
+
+        // The end-of-session sweep commits the tail; anything else dirty is refused.
+        commit_work_log(&store, &mid_session, &id).unwrap();
+        let stray = FakeVcs {
+            dirty: vec!["src/x.rs".into()],
+            ..Default::default()
+        };
+        assert!(commit_work_log(&store, &stray, &id).is_err());
 
         // The log never affects derived state.
-        assert_eq!(current_status(&store, &id), Status::Open);
-        assert!(staleness(&store, &fake, &id).is_empty());
+        assert!(staleness(&store, &fake, &q).is_empty());
+    }
 
+    #[test]
+    fn require_clean_rejects_a_dirty_tree_but_tolerates_work_logs() {
+        let (_t, store) = temp_store();
         let dirty = FakeVcs {
             dirty: vec!["src/x.rs".into()],
             ..Default::default()
         };
-        assert!(record_work_log(&store, &dirty, &id, "{}", true).is_err());
-    }
+        assert!(require_clean(&store, &dirty).is_err());
+        assert!(require_clean(&store, &FakeVcs::default()).is_ok());
 
-    #[test]
-    fn require_clean_rejects_a_dirty_tree() {
-        let dirty = FakeVcs {
-            dirty: vec!["src/x.rs".into()],
+        let log_only = FakeVcs {
+            dirty: vec![format!("{}/nodes/node-1/work.jsonl", store.store_name())],
             ..Default::default()
         };
-        assert!(require_clean(&dirty).is_err());
-        assert!(require_clean(&FakeVcs::default()).is_ok());
+        assert!(require_clean(&store, &log_only).is_ok());
     }
 
     #[test]
-    fn require_clean_except_allows_only_declared_outputs() {
+    fn require_clean_except_allows_declared_outputs_and_work_logs() {
+        let (_t, store) = temp_store();
         let outputs = vec!["src/out.rs".to_string()];
         let ok = FakeVcs {
-            dirty: vec!["src/out.rs".into()],
+            dirty: vec![
+                "src/out.rs".into(),
+                format!("{}/nodes/node-1/work.jsonl", store.store_name()),
+            ],
             ..Default::default()
         };
-        assert!(require_clean_except(&ok, &outputs).is_ok());
+        assert!(require_clean_except(&store, &ok, &outputs).is_ok());
 
         let stray = FakeVcs {
             dirty: vec!["src/out.rs".into(), "src/other.rs".into()],
             ..Default::default()
         };
-        assert!(require_clean_except(&stray, &outputs).is_err());
+        assert!(require_clean_except(&store, &stray, &outputs).is_err());
     }
 }

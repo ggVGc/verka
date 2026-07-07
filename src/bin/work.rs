@@ -10,11 +10,14 @@
 //! server (`--strict-mcp-config`). So the model can act on the graph and nothing
 //! else — no shell, no file, no network access.
 //!
-//! Every session's interaction stream is recorded to the node's `work.jsonl`
-//! after the session ends (recording during it would dirty the tree under the
-//! agent's own mutating calls). Continuity across sessions is mechanical, not
-//! left to agent discipline: when a node is re-worked while still mid-unit
-//! (open, no result — e.g. it paused on a question node), the previous log is
+//! Every session's interaction stream is *streamed* to the node's `work.jsonl`
+//! as it happens, one flushed line per event, so an abrupt exit (Ctrl-C, crash,
+//! kill) loses at most an unflushed tail. The store's mutating operations
+//! tolerate a dirty work log — the one exception to the clean-tree rule — and
+//! sweep the story-so-far into their own commits; the driver commits the tail
+//! when the session ends. Continuity across sessions is mechanical, not left
+//! to agent discipline: when a node is re-worked while still mid-unit (open,
+//! no result — e.g. it paused on a question node), the previous log is
 //! replayed into the new session's prompt so it continues where it left off.
 
 use anyhow::{bail, Context, Result};
@@ -123,25 +126,34 @@ fn main() -> Result<()> {
         if previous_log.is_some() { " (continuing)" } else { "" }
     );
 
-    // The attempt header is stamped at launch: it records which definition this
-    // session set out to work, even if the agent edits the graph during it.
-    let header = json!({
-        "event": "attempt",
-        "at": now_millis(),
-        "backend": backend.name(),
-        "node_version": store.node_version(&cli.node)?,
-    })
-    .to_string();
+    // The log is streamed during the session (the one dirty path the clean-tree
+    // rule tolerates), so an abrupt exit loses at most an unflushed tail.
+    // Append to a paused unit of work; start over on rework. The attempt header
+    // is stamped at launch: it records which definition this session set out to
+    // work, even if the agent edits the graph during it.
+    use std::io::Write;
+    let mut log = store.open_work_log(&cli.node, previous_log.is_some())?;
+    writeln!(
+        log,
+        "{}",
+        json!({
+            "event": "attempt",
+            "at": now_millis(),
+            "backend": backend.name(),
+            "node_version": store.node_version(&cli.node)?,
+        })
+    )?;
+    log.flush()?;
 
-    let out = backend.run(&session)?;
+    let success = backend.run(&session, &mut log)?;
+    drop(log);
 
-    // Record the session's interaction log — the story of the work — before
-    // judging the exit status, so even a failed session's story is kept.
-    // Append to a paused unit of work; start over on rework.
-    let log = format!("{header}\n{}", out.transcript);
-    ops::record_work_log(&store, &vcs, &cli.node, &log, previous_log.is_some())?;
+    // Commit whatever of the story the session's own store commits didn't
+    // already sweep in — before judging the exit status, so even a failed
+    // session's story is kept.
+    ops::commit_work_log(&store, &vcs, &cli.node)?;
 
-    if !out.success {
+    if !success {
         bail!("backend session exited unsuccessfully");
     }
     Ok(())
@@ -163,20 +175,14 @@ struct McpServer {
     args: Vec<String>,
 }
 
-/// What a completed session leaves behind: the JSONL interaction transcript
-/// (recorded to the node's `work.jsonl`) and whether the backend exited cleanly.
-/// The transcript is returned even for unsuccessful sessions — a failed story
-/// is still a story.
-struct RunOutput {
-    transcript: String,
-    success: bool,
-}
-
-/// The LLM seam. An implementation runs a [`Session`] to completion; `describe`
-/// renders the invocation for `--dry-run` without running anything.
+/// The LLM seam. An implementation runs a [`Session`] to completion, streaming
+/// each JSONL transcript line to `log` as it arrives (flushed per line, so the
+/// story survives an abrupt exit), and returns whether the backend exited
+/// cleanly. `describe` renders the invocation for `--dry-run` without running
+/// anything.
 trait Backend {
     fn name(&self) -> &str;
-    fn run(&self, session: &Session) -> Result<RunOutput>;
+    fn run(&self, session: &Session, log: &mut dyn std::io::Write) -> Result<bool>;
     fn describe(&self, session: &Session) -> String;
 }
 
@@ -228,10 +234,10 @@ impl Backend for ClaudeCode {
         "claude-code"
     }
 
-    fn run(&self, session: &Session) -> Result<RunOutput> {
+    fn run(&self, session: &Session, log: &mut dyn std::io::Write) -> Result<bool> {
         use std::io::{BufRead, BufReader};
-        // Capture stdout (the JSONL event stream), teeing each line to the
-        // terminal as it arrives; stderr stays inherited.
+        // Stream stdout (the JSONL event stream) to the log, teeing each line to
+        // the terminal as it arrives; stderr stays inherited.
         let mut child = self
             .command(session)
             .stdout(std::process::Stdio::piped())
@@ -242,19 +248,15 @@ impl Backend for ClaudeCode {
                     self.binary
                 )
             })?;
-        let mut transcript = String::new();
         let stdout = child.stdout.take().expect("stdout was piped");
         for line in BufReader::new(stdout).lines() {
             let line = line.context("reading backend output")?;
             println!("{line}");
-            transcript.push_str(&line);
-            transcript.push('\n');
+            writeln!(log, "{line}").context("writing work log")?;
+            log.flush().context("flushing work log")?;
         }
         let status = child.wait()?;
-        Ok(RunOutput {
-            transcript,
-            success: status.success(),
-        })
+        Ok(status.success())
     }
 
     fn describe(&self, session: &Session) -> String {

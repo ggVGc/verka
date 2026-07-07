@@ -132,15 +132,15 @@ impl Store {
         }
     }
 
-    /// Record a session's events in the node's interaction log. `append` extends
-    /// the log (a continuation of a paused unit of work); `!append` starts it
-    /// over (rework — git history keeps the previous story, like an overwritten
-    /// `result.md`). A trailing newline is ensured so appends stay line-aligned.
-    pub fn write_work_log(&self, id: &str, events: &str, append: bool) -> Result<()> {
+    /// Open the node's interaction log for streaming. `append` extends the log
+    /// (a continuation of a paused unit of work); `!append` starts it over
+    /// (rework — git history keeps the previous story, like an overwritten
+    /// `result.md`). The caller writes events line by line, flushing each, so
+    /// an abrupt exit at any point loses at most an unflushed tail.
+    pub fn open_work_log(&self, id: &str, append: bool) -> Result<fs::File> {
         if !self.exists(id) {
             bail!("unknown node `{id}`");
         }
-        use std::io::Write;
         let mut opts = fs::OpenOptions::new();
         opts.create(true);
         if append {
@@ -148,14 +148,22 @@ impl Store {
         } else {
             opts.write(true).truncate(true);
         }
-        let mut f = opts
-            .open(self.work_log_path(id))
-            .with_context(|| format!("writing work log for `{id}`"))?;
-        f.write_all(events.as_bytes())?;
-        if !events.ends_with('\n') {
-            f.write_all(b"\n")?;
-        }
-        Ok(())
+        opts.open(self.work_log_path(id))
+            .with_context(|| format!("opening work log for `{id}`"))
+    }
+
+    /// Whether a repository-relative path is a node's work log — the one file
+    /// the clean-tree rule tolerates dirty, because the log is streamed during
+    /// a session and is opaque non-state (a commit sweeping half a story is
+    /// still a true story-so-far).
+    pub fn is_work_log_path(&self, path: &str) -> bool {
+        let Some(rest) = path
+            .strip_prefix(&self.store_name())
+            .and_then(|p| p.strip_prefix("/nodes/"))
+        else {
+            return false;
+        };
+        matches!(rest.split_once('/'), Some((id, "work.jsonl")) if !id.is_empty())
     }
 
     // --- listing -----------------------------------------------------------------
@@ -335,12 +343,13 @@ mod tests {
 
     #[test]
     fn work_log_appends_and_starts_over() {
+        use std::io::Write;
         let dir = std::env::temp_dir().join(format!("llaundry-worklog-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let store = Store::init(dir.join(".llaundry")).unwrap();
 
         // Only existing nodes can carry a log.
-        assert!(store.write_work_log("node-nope", "{}", true).is_err());
+        assert!(store.open_work_log("node-nope", true).is_err());
 
         let meta = NodeMeta {
             schema: 1,
@@ -353,10 +362,10 @@ mod tests {
         store.write_node("node-1", &meta, "").unwrap();
         assert_eq!(store.read_work_log("node-1").unwrap(), None);
 
-        // Appends accumulate, stay line-aligned, and leave the version alone.
+        // Streamed writes accumulate across sessions and leave the version alone.
         let v = store.node_version("node-1").unwrap();
-        store.write_work_log("node-1", r#"{"event":"a"}"#, true).unwrap();
-        store.write_work_log("node-1", r#"{"event":"b"}"#, true).unwrap();
+        writeln!(store.open_work_log("node-1", true).unwrap(), r#"{{"event":"a"}}"#).unwrap();
+        writeln!(store.open_work_log("node-1", true).unwrap(), r#"{{"event":"b"}}"#).unwrap();
         assert_eq!(
             store.read_work_log("node-1").unwrap().unwrap(),
             "{\"event\":\"a\"}\n{\"event\":\"b\"}\n"
@@ -364,9 +373,23 @@ mod tests {
         assert_eq!(store.node_version("node-1").unwrap(), v);
 
         // Rework starts the log over.
-        store.write_work_log("node-1", r#"{"event":"c"}"#, false).unwrap();
+        writeln!(store.open_work_log("node-1", false).unwrap(), r#"{{"event":"c"}}"#).unwrap();
         assert_eq!(store.read_work_log("node-1").unwrap().unwrap(), "{\"event\":\"c\"}\n");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn work_log_paths_are_recognised() {
+        let store = Store {
+            root: PathBuf::from(".llaundry"),
+        };
+        assert!(store.is_work_log_path(".llaundry/nodes/node-1/work.jsonl"));
+        assert!(!store.is_work_log_path(".llaundry/nodes/node-1/node.md"));
+        assert!(!store.is_work_log_path(".llaundry/nodes/node-1/result.md"));
+        assert!(!store.is_work_log_path("src/nodes/x/work.jsonl"));
+        assert!(!store.is_work_log_path(".llaundry/nodes//work.jsonl"));
+        assert!(!store.is_work_log_path(".llaundry/nodes/node-1/sub/work.jsonl"));
+        assert!(!store.is_work_log_path("work.jsonl"));
     }
 }

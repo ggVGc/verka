@@ -218,9 +218,12 @@ branch on it.
 The premise is that the prompt history is the story — so the story is
 recorded mechanically, not left to agent discipline. Every `llaundry-work`
 session's full interaction stream (one JSON event per line: the prompts, the
-assistant turns, every tool call and result) is written to the node's
-`work.jsonl` when the session ends, prefixed with a small attempt header
-(timestamp, backend, the `node.md` version the session set out to work).
+assistant turns, every tool call and result) is *streamed* to the node's
+`work.jsonl` as it happens — one flushed line per event, opened at launch with
+a small attempt header (timestamp, backend, the `node.md` version the session
+set out to work). Streaming, not buffering, is the point: an abrupt end
+(Ctrl-C, crash, kill) loses at most an unflushed tail, never the story so far,
+so no exit — however rude — leaves the node without its record.
 
 The log is what makes the pause-on-a-question protocol (§2.10) resumable:
 when a node that paused mid-unit (open, no result, log present) is worked
@@ -235,9 +238,17 @@ Three rules keep it honest:
 * **Opaque.** No derived query reads it; it does not participate in the node
   version; writing it reopens and stales nothing. It is narrative,
   machine-grade instead of prose-grade.
-* **Written after the session, never during.** Streaming into the store would
-  hold the tree dirty under the agent's own mutating MCP calls (§2.8). The
-  driver buffers, then records-and-commits as its own state change.
+* **The one tolerated dirty path.** A streaming log is dirty for the whole
+  session, under the agent's own mutating MCP calls — so the clean-tree rule
+  (§2.8) exempts exactly `nodes/<id>/work.jsonl`, and nothing else. The
+  exemption is principled, not pragmatic: the rule exists so each commit fully
+  represents the repository's *state*, and the log is not state — a commit
+  that sweeps half a story in is still a true story-so-far. And sweep they do:
+  every store commit the session makes (`git add` on the store directory)
+  carries the log written up to that moment, giving incremental durability in
+  git for free; the driver commits the remaining tail when the session ends.
+  A crash between commits leaves a dirty log that blocks nothing and is swept
+  in by whatever store commit comes next.
 * **Appended for continuation, restarted for rework.** A paused unit of work
   extends its log (appends diff minimally — goal #1); a node being reworked
   after a recorded result starts a fresh story, and git history keeps the old
@@ -445,12 +456,14 @@ human-assigned question node, depend on it, and stop (§2.10). Command
 construction is separated from execution so the exact invocation is
 unit-tested and shown by `--dry-run`.
 
-The driver records every session's interaction stream
+The driver streams every session's interaction events
 (`--output-format stream-json`, teed to the terminal) to the node's
-`work.jsonl` after the session — even an unsuccessful one — as its own
-clean-tree commit (§2.11). On launching a node that is open with no result
-but with a recorded log — a paused unit of work — it replays that log into
-the prompt so the new session continues where the previous one stopped.
+`work.jsonl` as they arrive, flushed per line — so an interrupted or crashed
+session keeps its story (§2.11) — and commits whatever tail the session's own
+store commits did not already sweep in when the backend exits, successfully
+or not. On launching a node that is open with no result but with a recorded
+log — a paused unit of work — it replays that log into the prompt so the new
+session continues where the previous one stopped.
 
 ---
 
