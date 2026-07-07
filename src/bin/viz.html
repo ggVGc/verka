@@ -553,6 +553,9 @@ function fit(xy) {
   const svg = $("svg");
   let pan = null;
   svg.addEventListener("pointerdown", ev => {
+    // A press on a card is a click-in-waiting, not a pan: capturing the
+    // pointer here would retarget the click to the svg and eat the selection.
+    if (ev.target instanceof Element && ev.target.closest(".card")) return;
     pan = { x: ev.clientX, y: ev.clientY, tx: tf.x, ty: tf.y, moved: false };
     svg.classList.add("panning");
     svg.setPointerCapture(ev.pointerId);
