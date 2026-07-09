@@ -161,6 +161,24 @@
   #panel ul { list-style: none; display: flex; flex-direction: column; gap: 4px; }
   #panel .reason { font-size: 12.5px; color: var(--stale-ink); background: var(--stale-bg);
                    border-radius: 6px; padding: 4px 8px; overflow-wrap: anywhere; }
+  #panel textarea {
+    width: 100%; min-height: 90px; resize: vertical;
+    font: 13px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+    color: var(--ink); background: var(--page);
+    border: 1px solid var(--hairline); border-radius: 6px;
+    padding: 8px 10px;
+  }
+  #panel textarea:focus { outline: none; border-color: var(--open); }
+  #panel .respond-send {
+    margin-top: 8px; cursor: pointer;
+    font: inherit; font-size: 12.5px; font-weight: 600;
+    padding: 5px 14px; border-radius: 6px;
+    background: var(--open-bg); color: var(--open-ink);
+    border: 1px solid var(--open);
+  }
+  #panel .respond-send:hover { background: var(--open); color: #fff; }
+  #panel .respond-send:disabled { opacity: 0.5; cursor: default; }
+  #panel .respond-err { margin-top: 6px; font-size: 12.5px; color: var(--failed-ink); }
   .nodelink {
     font: 12.5px/1.4 ui-monospace, monospace;
     display: block; width: 100%; text-align: left;
@@ -483,8 +501,14 @@ function select(id) {
   renderPanel();
 }
 
+// Drafts of in-progress responses, keyed by node id, so the periodic
+// re-render doesn't eat what the human is typing.
+const drafts = new Map();
+
 function renderPanel() {
   const panel = $("panel");
+  // Never rebuild the panel out from under a response being typed.
+  if (panel.contains(document.activeElement) && document.activeElement.tagName === "TEXTAREA") return;
   const n = selected && byId.get(selected);
   panel.classList.toggle("show", !!n);
   if (!n) { panel.replaceChildren(); return; }
@@ -569,6 +593,24 @@ function renderPanel() {
   if ((n.blockers || []).length) panel.appendChild(section("blocked by", reasonList(n.blockers)));
   if ((n.stale || []).length) panel.appendChild(section("stale because", reasonList(n.stale)));
 
+  // A node assigned to a human that is not done takes a typed response;
+  // submitting completes the node with the response as its result notes.
+  if (n.assignee === "human" && n.status !== "done") {
+    const form = document.createElement("div");
+    const ta = document.createElement("textarea");
+    ta.placeholder = "type your response…";
+    ta.value = drafts.get(n.id) || "";
+    ta.addEventListener("input", () => drafts.set(n.id, ta.value));
+    const btn = document.createElement("button");
+    btn.className = "respond-send";
+    btn.textContent = "respond & complete";
+    const err = document.createElement("div");
+    err.className = "respond-err";
+    btn.addEventListener("click", () => submitResponse(n.id, ta, btn, err));
+    form.append(ta, btn, err);
+    panel.appendChild(section("respond", form));
+  }
+
   if (n.result) {
     const r = n.result;
     const kv2 = document.createElement("dl");
@@ -591,6 +633,30 @@ function renderPanel() {
       pre.textContent = r.notes.trim();
       panel.appendChild(section("notes", pre));
     }
+  }
+}
+
+async function submitResponse(id, ta, btn, err) {
+  const notes = ta.value.trim();
+  if (!notes) { err.textContent = "a response needs some text"; return; }
+  btn.disabled = true;
+  ta.disabled = true;
+  err.textContent = "";
+  try {
+    const res = await fetch(`/api/respond/${encodeURIComponent(id)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ notes }),
+    });
+    const payload = await res.json();
+    if (!res.ok) throw new Error(payload.error || res.statusText);
+    drafts.delete(id);
+    ta.blur(); // release the typing guard so the refresh can rebuild the panel
+    await load();
+  } catch (e) {
+    err.textContent = `failed: ${e.message}`;
+    btn.disabled = false;
+    ta.disabled = false;
   }
 }
 

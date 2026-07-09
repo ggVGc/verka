@@ -3,20 +3,21 @@
 //! It serves a single self-contained page (no external assets) showing every
 //! node and its `depends_on` / `derived_from` connections, laid out as a
 //! left-to-right dependency graph, plus a JSON endpoint the page polls so the
-//! view tracks the store live. Read-only: it never mutates the store or the
-//! repository.
+//! view tracks the store live. Read-only, with one exception: a human can
+//! answer a node assigned to them (`POST /api/respond/<id>`), which completes
+//! it with their response as the result notes.
 //!
-//! The server is a deliberately tiny `std::net` loop — the two routes (`/` and
-//! `/api/graph`) don't justify an HTTP framework dependency.
+//! The server is a deliberately tiny `std::net` loop — a handful of routes
+//! doesn't justify an HTTP framework dependency.
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use clap::Parser;
 use serde_json::{json, Value};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 
-use llaundry::{ops, title_of, GitVcs, Store, Vcs};
+use llaundry::{ops, title_of, Author, GitVcs, Store, Vcs};
 
 const PAGE: &str = include_str!("viz.html");
 
@@ -54,16 +55,40 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// Serve one request: parse just the request line, route, respond, close.
+/// Serve one request: parse the request line and headers, read the body if
+/// one is declared, route, respond, close.
 fn handle(mut stream: TcpStream, store: &Store, vcs: &dyn Vcs) -> Result<()> {
+    let mut reader = BufReader::new(stream.try_clone()?);
     let mut line = String::new();
-    BufReader::new(&stream).read_line(&mut line)?;
-    let path = line.split_whitespace().nth(1).unwrap_or("/");
-    let path = path.split('?').next().unwrap_or(path);
+    reader.read_line(&mut line)?;
+    let mut parts = line.split_whitespace();
+    let method = parts.next().unwrap_or("GET").to_string();
+    let path = parts.next().unwrap_or("/");
+    let path = path.split('?').next().unwrap_or(path).to_string();
 
-    let (status, content_type, body) = match path {
-        "/" | "/index.html" => ("200 OK", "text/html; charset=utf-8", PAGE.to_string()),
-        "/api/graph" => match graph_json(store, vcs) {
+    // Drain the headers, keeping only Content-Length (capped: the only
+    // expected body is a short JSON response payload).
+    let mut content_length = 0usize;
+    loop {
+        let mut header = String::new();
+        if reader.read_line(&mut header)? == 0 || header.trim().is_empty() {
+            break;
+        }
+        if let Some((name, value)) = header.split_once(':') {
+            if name.eq_ignore_ascii_case("content-length") {
+                content_length = value.trim().parse().unwrap_or(0);
+            }
+        }
+    }
+    if content_length > 1 << 20 {
+        bail!("request body too large ({content_length} bytes)");
+    }
+    let mut request_body = vec![0u8; content_length];
+    reader.read_exact(&mut request_body)?;
+
+    let (status, content_type, body) = match (method.as_str(), path.as_str()) {
+        ("GET", "/" | "/index.html") => ("200 OK", "text/html; charset=utf-8", PAGE.to_string()),
+        ("GET", "/api/graph") => match graph_json(store, vcs) {
             Ok(v) => ("200 OK", "application/json", v.to_string()),
             Err(e) => (
                 "500 Internal Server Error",
@@ -71,8 +96,19 @@ fn handle(mut stream: TcpStream, store: &Store, vcs: &dyn Vcs) -> Result<()> {
                 json!({ "error": format!("{e:#}") }).to_string(),
             ),
         },
-        _ if path.starts_with("/api/log/") => {
-            let id = &path["/api/log/".len()..];
+        ("POST", p) if p.starts_with("/api/respond/") => {
+            let id = &p["/api/respond/".len()..];
+            match respond(store, vcs, id, &request_body) {
+                Ok(()) => ("200 OK", "application/json", json!({ "id": id }).to_string()),
+                Err(e) => (
+                    "400 Bad Request",
+                    "application/json",
+                    json!({ "error": format!("{e:#}") }).to_string(),
+                ),
+            }
+        }
+        ("GET", p) if p.starts_with("/api/log/") => {
+            let id = &p["/api/log/".len()..];
             match store.read_work_log(id) {
                 Ok(Some(log)) => ("200 OK", "application/json", json!({ "id": id, "log": log }).to_string()),
                 Ok(None) => (
@@ -95,6 +131,21 @@ fn handle(mut stream: TcpStream, store: &Store, vcs: &dyn Vcs) -> Result<()> {
         "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{body}",
         body.len()
     )?;
+    Ok(())
+}
+
+/// Complete a human-assigned node with the human's typed response as its
+/// result notes — the one write the page offers. Refuses nodes not assigned
+/// to a human, so the browser cannot close machine work. Goes through
+/// [`ops::respond`], which does not gate on project-tree cleanliness.
+fn respond(store: &Store, vcs: &dyn Vcs, id: &str, body: &[u8]) -> Result<()> {
+    let payload: Value = serde_json::from_slice(body).context("request body is not JSON")?;
+    let notes = payload["notes"].as_str().unwrap_or_default();
+    let (meta, _) = store.read_node(id)?;
+    if meta.assignee != Some(Author::Human) {
+        bail!("`{id}` is not assigned to a human");
+    }
+    ops::respond(store, vcs, id, notes, Author::Human)?;
     Ok(())
 }
 

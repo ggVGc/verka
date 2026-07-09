@@ -137,6 +137,35 @@ pub fn complete(
     Ok(output_commit)
 }
 
+/// Answer a node: record it done with the response as its result notes,
+/// producing no output commit. Unlike [`complete`] this does not gate on
+/// project-tree cleanliness: an answer asserts no output provenance, and a
+/// question node is typically answered mid-work, while the tree is dirty with
+/// whatever prompted the question. Dependency versions are still pinned, so
+/// the answer participates in staleness like any other result.
+pub fn respond(store: &Store, vcs: &dyn Vcs, id: &str, notes: &str, author: Author) -> Result<()> {
+    if notes.trim().is_empty() {
+        bail!("a response needs some text");
+    }
+    let (meta, _) = store.read_node(id)?;
+    let built_against = pin_deps(store, &meta)?;
+    store.write_result(
+        id,
+        &ResultMeta {
+            at: now_millis(),
+            author,
+            node_version: store.node_version(id)?,
+            outcome: Outcome::Done,
+            output_commit: None,
+            built_against,
+            context: Vec::new(),
+        },
+        notes,
+    )?;
+    vcs.commit_store(&store.store_name(), &format!("llaundry: respond {id}"))?;
+    Ok(())
+}
+
 /// Record that a node's work was attempted and failed. Like [`complete`] it pins
 /// what the attempt was built against, so the failure is reproducible evidence.
 /// It does not gate on project-tree cleanliness: a failed attempt may well have
@@ -1069,6 +1098,37 @@ mod tests {
         assert_eq!(meta.assignee, None);
         let text = std::fs::read_to_string(store.node_dir(&a).join("node.md")).unwrap();
         assert!(!text.contains("assignee"), "{text}");
+    }
+
+    #[test]
+    fn respond_completes_despite_a_dirty_tree_and_pins_dependencies() {
+        let (_t, store) = temp_store();
+        // Groundwork lands on a clean tree; then the tree goes dirty with
+        // whatever prompted the question — the normal state when a question
+        // node is answered.
+        let mut dirty = FakeVcs::default();
+        let dep = add(&store, &dirty, new_node("groundwork", vec![])).unwrap();
+        done(&store, &dirty, &dep);
+        dirty.dirty.push("PROPOSAL.md".into());
+        let mut question = new_node("Question: which concept?", vec![dep.clone()]);
+        question.author = Author::Machine;
+        question.assignee = Some(Author::Human);
+        let q = add(&store, &dirty, question).unwrap();
+
+        assert!(respond(&store, &dirty, &q, "  ", Author::Human).is_err(), "needs text");
+        respond(&store, &dirty, &q, "concept A", Author::Human).unwrap();
+
+        assert_eq!(current_status(&store, &q), Status::Done);
+        let (result, notes) = store.read_result(&q).unwrap().unwrap();
+        assert_eq!(notes, "concept A");
+        assert_eq!(result.author, Author::Human);
+        assert_eq!(result.output_commit, None);
+        assert_eq!(result.built_against.len(), 1, "the answer pins its dependencies");
+        assert!(dirty.captured.borrow().is_empty(), "no output commit is minted");
+
+        // Editing the question afterwards invalidates the answer as usual.
+        edit(&store, &dirty, &q, "Question: revised".into()).unwrap();
+        assert_eq!(current_status(&store, &q), Status::Open);
     }
 
     #[test]
