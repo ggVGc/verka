@@ -485,6 +485,25 @@ human-assigned question node, depend on it, and stop (§2.10). Command
 construction is separated from execution so the exact invocation is
 unit-tested and shown by `--dry-run`.
 
+Which backend, model, and executables the driver uses default to the store's
+optional `config.toml` (`<store>/config.toml`, versioned with the rest of the
+store), so a workbench pins its choices once instead of respelling them on
+every invocation:
+
+```toml
+[work]
+backend = "claude-code"   # default backend when --backend is not given
+mcp-bin = "llaundry-mcp"  # the MCP server binary the model may use
+
+[work.claude-code]        # per-backend settings, keyed by backend name
+model = "opus"            # model to request (backend default if unset)
+bin   = "claude"          # the Claude Code executable
+```
+
+Every field is optional and layered: an explicit `--flag` wins, else the file,
+else the built-in default. A missing file means all-defaults; a present but
+malformed one is a hard error, so a typo surfaces rather than being ignored.
+
 The driver streams every session's interaction events
 (`--output-format stream-json`, teed to the terminal) to the node's
 `work.jsonl` as they arrive, flushed per line — so an interrupted or crashed

@@ -35,6 +35,10 @@ Being able to gate it is preferable.
 I want to be able to inspect work that happened in a structured way, not as part of a scrolling backlog of "agent conversation" in a crappy chat harness that does not
 properly behave as a terminal program.
 
+
+I want to be able to look through code in an editor, go to some line, and do the equivalent of a git blame, but instead viewing the
+work that led up to this part of the code through llaundry.
+
 = Core philosophy =
 The output code is no longer the story. The prompt history is the story.
 Theoretically, the code can be recreated from prompt history, as long as it also includes all context that went in, in a verifiable way (through hashes).

@@ -4,6 +4,10 @@
 //! from it, and hands that to a pluggable [`Backend`]. The backend is the LLM seam,
 //! so different engines can be dropped in without touching the launcher.
 //!
+//! Which backend, model, and executables it uses default to the store's
+//! optional [`Config`] (`<store>/config.toml`); an explicit `--flag` always
+//! wins over the file, which wins over the built-in default.
+//!
 //! The first backend, [`ClaudeCode`], shells out to `claude -p` with a deliberate
 //! tool grant: the `llaundry` MCP server for graph operations, plus the built-in
 //! file tools, every one scoped to the session's working directory (`./**`) —
@@ -40,7 +44,7 @@ use clap::{Parser, ValueEnum};
 use serde_json::{json, Value};
 use std::process::Command;
 
-use llaundry::{ops, title_of, Author, GitVcs, NodeMeta, Store};
+use llaundry::{ops, title_of, Author, Config, GitVcs, NodeMeta, Store};
 
 #[derive(Parser)]
 #[command(name = "llaundry-work", version, about = "Run an LLM against a llaundry node")]
@@ -51,15 +55,19 @@ struct Cli {
     #[arg(long, env = "LLAUNDRY_DIR", default_value = ".llaundry")]
     store: std::path::PathBuf,
     /// Which LLM backend to run the work with.
-    #[arg(long, value_enum, default_value = "claude-code")]
-    backend: BackendKind,
+    /// Config `work.backend`; built-in default `claude-code`.
+    #[arg(long, value_enum)]
+    backend: Option<BackendKind>,
     /// The Claude Code executable.
-    #[arg(long, default_value = "claude")]
-    claude_bin: String,
+    /// Config `work.claude-code.bin`; built-in default `claude`.
+    #[arg(long)]
+    claude_bin: Option<String>,
     /// Path to the `llaundry-mcp` executable the model is allowed to use.
-    #[arg(long, default_value = "llaundry-mcp")]
-    mcp_bin: String,
-    /// Model to request from the backend (backend default if unset).
+    /// Config `work.mcp-bin`; built-in default `llaundry-mcp`.
+    #[arg(long)]
+    mcp_bin: Option<String>,
+    /// Model to request from the backend.
+    /// Config `work.claude-code.model`; backend default if unset.
     #[arg(long)]
     model: Option<String>,
     /// Also allow the web tools (WebFetch, WebSearch). Web reads cannot be
@@ -85,6 +93,25 @@ fn main() -> Result<()> {
     let store = Store::open(cli.store.clone())?;
     let vcs = GitVcs::for_store(&store);
     let (meta, description) = store.read_node(&cli.node)?;
+
+    // The store's optional defaults. Precedence for every setting it covers:
+    // an explicit `--flag` wins, else `config.toml`, else the built-in default.
+    let config = Config::load(&cli.store)?;
+    let backend_kind = match cli.backend {
+        Some(b) => b,
+        None => match config.work.backend.as_deref() {
+            Some(name) => match BackendKind::from_str(name, true) {
+                Ok(b) => b,
+                Err(e) => bail!("config work.backend: {e}"),
+            },
+            None => BackendKind::ClaudeCode,
+        },
+    };
+    let mcp_bin = cli
+        .mcp_bin
+        .clone()
+        .or_else(|| config.work.mcp_bin.clone())
+        .unwrap_or_else(|| "llaundry-mcp".into());
 
     // A node assigned to a human is not an LLM's to work — it is waiting for a
     // human's answer (typically a question node minted by a paused worker).
@@ -135,17 +162,24 @@ fn main() -> Result<()> {
         project_root,
         mcp: McpServer {
             name: "llaundry".into(),
-            command: cli.mcp_bin.clone(),
+            command: mcp_bin,
             args: vec!["--store".into(), store_abs.to_string_lossy().into_owned()],
         },
     };
 
-    let backend: Box<dyn Backend> = match cli.backend {
-        BackendKind::ClaudeCode => Box::new(ClaudeCode {
-            binary: cli.claude_bin.clone(),
-            model: cli.model.clone(),
-            network: cli.network,
-        }),
+    let backend: Box<dyn Backend> = match backend_kind {
+        BackendKind::ClaudeCode => {
+            let cc = &config.work.claude_code;
+            Box::new(ClaudeCode {
+                binary: cli
+                    .claude_bin
+                    .clone()
+                    .or_else(|| cc.bin.clone())
+                    .unwrap_or_else(|| "claude".into()),
+                model: cli.model.clone().or_else(|| cc.model.clone()),
+                network: cli.network,
+            })
+        }
     };
 
     if cli.dry_run {

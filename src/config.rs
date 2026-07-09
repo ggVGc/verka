@@ -1,0 +1,147 @@
+//! Optional per-store configuration, read from `<store>/config.toml`.
+//!
+//! It sets *defaults* for the work driver — which backend to run, which model
+//! and executables to use — so a workbench can pin its choices once instead of
+//! spelling them on every `llaundry-work` invocation. Everything is optional: a
+//! missing file, or any missing field, means "use the built-in default". An
+//! explicit `--flag` always wins over the file. The file is plain TOML,
+//! versioned with the rest of the store:
+//!
+//! ```toml
+//! [work]
+//! backend = "claude-code"   # default backend when --backend is not given
+//! mcp-bin = "llaundry-mcp"  # the MCP server binary the model may use
+//!
+//! [work.claude-code]        # per-backend settings, keyed by backend name
+//! model = "opus"            # model to request (backend default if unset)
+//! bin   = "claude"          # the Claude Code executable
+//! ```
+
+use anyhow::{Context, Result};
+use serde::Deserialize;
+use std::path::Path;
+
+/// The config file's name inside the store root.
+pub const CONFIG_FILE: &str = "config.toml";
+
+/// The parsed `config.toml`. Absent sections and fields default, so the
+/// all-defaults value (a missing file) is simply `Config::default()`.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
+pub struct Config {
+    pub work: WorkConfig,
+}
+
+/// Defaults for `llaundry-work`.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
+pub struct WorkConfig {
+    /// Default backend when `--backend` is not given (e.g. `"claude-code"`).
+    pub backend: Option<String>,
+    /// The `llaundry-mcp` executable the model is allowed to use.
+    pub mcp_bin: Option<String>,
+    /// Settings for the Claude Code backend.
+    pub claude_code: ClaudeCodeConfig,
+}
+
+/// Defaults for the Claude Code backend.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
+pub struct ClaudeCodeConfig {
+    /// Model to request (backend default if unset).
+    pub model: Option<String>,
+    /// The Claude Code executable.
+    pub bin: Option<String>,
+}
+
+impl Config {
+    /// Load `<store_root>/config.toml`, returning the all-defaults value if the
+    /// file does not exist. A present-but-unreadable or malformed file is an
+    /// error — a typo in the config should be surfaced, not silently ignored.
+    pub fn load(store_root: &Path) -> Result<Self> {
+        let path = store_root.join(CONFIG_FILE);
+        let text = match std::fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Self::default()),
+            Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+        };
+        toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write(dir: &Path, contents: &str) {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join(CONFIG_FILE), contents).unwrap();
+    }
+
+    #[test]
+    fn missing_file_is_all_defaults() {
+        let dir = std::env::temp_dir().join(format!("llaundry-cfg-missing-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg = Config::load(&dir).unwrap();
+        assert!(cfg.work.backend.is_none());
+        assert!(cfg.work.mcp_bin.is_none());
+        assert!(cfg.work.claude_code.model.is_none());
+        assert!(cfg.work.claude_code.bin.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn parses_backend_and_per_backend_settings() {
+        let dir = std::env::temp_dir().join(format!("llaundry-cfg-parse-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        write(
+            &dir,
+            r#"
+                [work]
+                backend = "claude-code"
+                mcp-bin = "/opt/llaundry-mcp"
+
+                [work.claude-code]
+                model = "opus"
+                bin = "claude"
+            "#,
+        );
+        let cfg = Config::load(&dir).unwrap();
+        assert_eq!(cfg.work.backend.as_deref(), Some("claude-code"));
+        assert_eq!(cfg.work.mcp_bin.as_deref(), Some("/opt/llaundry-mcp"));
+        assert_eq!(cfg.work.claude_code.model.as_deref(), Some("opus"));
+        assert_eq!(cfg.work.claude_code.bin.as_deref(), Some("claude"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn partial_config_leaves_the_rest_defaulted() {
+        let dir = std::env::temp_dir().join(format!("llaundry-cfg-partial-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        write(&dir, "[work.claude-code]\nmodel = \"sonnet\"\n");
+        let cfg = Config::load(&dir).unwrap();
+        assert_eq!(cfg.work.claude_code.model.as_deref(), Some("sonnet"));
+        assert!(cfg.work.backend.is_none());
+        assert!(cfg.work.claude_code.bin.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn unknown_field_is_rejected() {
+        let dir = std::env::temp_dir().join(format!("llaundry-cfg-unknown-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        write(&dir, "[work]\nbakend = \"claude-code\"\n"); // typo
+        assert!(Config::load(&dir).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn malformed_file_is_an_error() {
+        let dir = std::env::temp_dir().join(format!("llaundry-cfg-bad-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        write(&dir, "this is not = = toml");
+        assert!(Config::load(&dir).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
