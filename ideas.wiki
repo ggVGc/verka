@@ -32,6 +32,9 @@ Initial ideas, discussion/refinement, implementation, review with comments: All 
 Knowing what was produced by a human, and what is from an automated tool (LLM or otherwise) is important.
 Being able to gate it is preferable.
 
+I want to be able to inspect work that happened in a structured way, not as part of a scrolling backlog of "agent conversation" in a crappy chat harness that does not
+properly behave as a terminal program.
+
 = Core philosophy =
 The output code is no longer the story. The prompt history is the story.
 Theoretically, the code can be recreated from prompt history, as long as it also includes all context that went in, in a verifiable way (through hashes).
