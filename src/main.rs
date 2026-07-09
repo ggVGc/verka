@@ -161,8 +161,23 @@ fn main() -> Result<()> {
     let Cli { store, cmd } = Cli::parse();
     match cmd {
         Cmd::Init => {
-            Store::init(store.clone())?;
-            println!("initialised llaundry store at {}", store.display());
+            let store = Store::init(store)?;
+            // Two separate repositories: the workbench holds the store's
+            // history; the project is an ordinary repo of its own (move an
+            // existing checkout into place and its repo is simply kept).
+            for (name, dir) in [
+                ("workbench", store.workbench_root()),
+                ("project", store.project_root()),
+            ] {
+                if llaundry::git::ensure_repo(&dir)? {
+                    println!("initialised {name} repository at {}", dir.display());
+                }
+            }
+            println!(
+                "initialised llaundry workbench (store {}, project {})",
+                store.workbench_root().join(store.store_name()).display(),
+                store.project_root().display()
+            );
         }
 
         Cmd::Add {
@@ -174,7 +189,7 @@ fn main() -> Result<()> {
             derived_from,
         } => {
             let store = Store::open(store)?;
-            let vcs = GitVcs::new(store.project_root());
+            let vcs = GitVcs::for_store(&store);
             let id = ops::add(
                 &store,
                 &vcs,
@@ -191,14 +206,14 @@ fn main() -> Result<()> {
 
         Cmd::Link { from, to, rel } => {
             let store = Store::open(store)?;
-            let vcs = GitVcs::new(store.project_root());
+            let vcs = GitVcs::for_store(&store);
             ops::link(&store, &vcs, &from, &to, rel)?;
             println!("{from}  +{} -> {to}", rel.as_str());
         }
 
         Cmd::Edit { id, description, file } => {
             let store = Store::open(store)?;
-            let vcs = GitVcs::new(store.project_root());
+            let vcs = GitVcs::for_store(&store);
             ops::edit(&store, &vcs, &id, read_description(description, file)?)?;
             println!("{id}  {}", ops::short(&store.node_version(&id)?));
         }
@@ -213,7 +228,7 @@ fn main() -> Result<()> {
             author,
         } => {
             let store = Store::open(store)?;
-            let vcs = GitVcs::new(store.project_root());
+            let vcs = GitVcs::for_store(&store);
             let notes = resolve_notes(notes, notes_file, &store, &id, "what happened?")?;
             let commit = ops::complete(
                 &store,
@@ -238,7 +253,7 @@ fn main() -> Result<()> {
             author,
         } => {
             let store = Store::open(store)?;
-            let vcs = GitVcs::new(store.project_root());
+            let vcs = GitVcs::for_store(&store);
             let notes = resolve_notes(notes, notes_file, &store, &id, "what went wrong?")?;
             ops::fail(&store, &vcs, &id, &notes, author)?;
             println!("{id}  failed");
@@ -246,7 +261,7 @@ fn main() -> Result<()> {
 
         Cmd::Show { id } => {
             let store = Store::open(store)?;
-            let vcs = GitVcs::new(store.project_root());
+            let vcs = GitVcs::for_store(&store);
             print!("{}", show_node(&store, &vcs, &id)?);
         }
 
@@ -264,12 +279,12 @@ fn main() -> Result<()> {
             if !store.exists(&id) {
                 anyhow::bail!("unknown node `{id}`");
             }
-            // A node's history *is* git history: every definition edit and every
-            // result is a commit touching its directory.
+            // A node's history *is* git history — the workbench repo's: every
+            // definition edit and every result is a commit touching its directory.
             let pathspec = format!("{}/nodes/{id}", store.store_name());
             let status = std::process::Command::new("git")
                 .arg("-C")
-                .arg(store.project_root())
+                .arg(store.workbench_root())
                 .args(["log", "--oneline", "--stat", "--", &pathspec])
                 .status()
                 .context("failed to run git log")?;
@@ -280,7 +295,7 @@ fn main() -> Result<()> {
 
         Cmd::Stale => {
             let store = Store::open(store)?;
-            let vcs = GitVcs::new(store.project_root());
+            let vcs = GitVcs::for_store(&store);
             let mut found = false;
             for id in store.list_ids()? {
                 let reasons = ops::staleness(&store, &vcs, &id);
@@ -299,7 +314,7 @@ fn main() -> Result<()> {
 
         Cmd::Ready { assignee } => {
             let store = Store::open(store)?;
-            let vcs = GitVcs::new(store.project_root());
+            let vcs = GitVcs::for_store(&store);
             for id in store.list_ids()? {
                 if ops::is_ready(&store, &vcs, &id) {
                     let (meta, description) = store.read_node(&id)?;
@@ -315,7 +330,7 @@ fn main() -> Result<()> {
 
         Cmd::Blocked => {
             let store = Store::open(store)?;
-            let vcs = GitVcs::new(store.project_root());
+            let vcs = GitVcs::for_store(&store);
             let mut any = false;
             for id in store.list_ids()? {
                 let blockers = ops::blockers(&store, &vcs, &id);
@@ -367,7 +382,7 @@ fn main() -> Result<()> {
 
         Cmd::Settled { id } => {
             let store = Store::open(store)?;
-            let vcs = GitVcs::new(store.project_root());
+            let vcs = GitVcs::for_store(&store);
             let reasons = ops::unsettled(&store, &vcs, &id)?;
             if reasons.is_empty() {
                 println!("{id}: settled");

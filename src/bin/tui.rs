@@ -58,7 +58,7 @@ fn main() -> Result<()> {
             Store::init(cli.store.clone())?
         }
     };
-    let vcs = GitVcs::new(store.project_root());
+    let vcs = GitVcs::for_store(&store);
 
     let mut term = Terminal::enter()?;
     let result = run(&mut term, &store, &vcs);

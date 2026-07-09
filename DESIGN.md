@@ -150,14 +150,22 @@ A node is **ready** when it is not done and every `depends_on` target is done
 dependencies are its **blockers**, reported with reasons. A failed node is
 ready — failure means "retry", and the retry simply overwrites `result.md`.
 
-### 2.8 Each state change is its own commit, on a clean tree
+### 2.8 Each state change is its own commit; cleanliness where provenance is asserted
 
-Every mutating operation commits its `.llaundry` change, and only against a
-clean working tree (`complete` permits exactly the declared output files to be
-dirty — it is about to commit them). So each change is its own commit, the tree
-is clean between operations, and the repository state behind any change is
-recoverable straight from git history. Nothing stores which commit an event
-happened at; history already records it.
+The store lives in a *workbench*: an outer git repository holding `.llaundry/`
+next to `project/`, the actual project — an ordinary, completely separate git
+repository (see ISOLATION.md for the layout and the isolation reasoning).
+
+Every mutating operation commits its `.llaundry` change to the workbench
+repository, so each graph change is its own commit there and the store's
+history is a linear journal — branching the project does not fork the
+database. The project repository is checked only where output provenance is
+asserted: `complete` refuses undeclared dirty writes (it permits exactly the
+declared output files — it is about to commit them). Pure graph edits (add,
+link, edit, fail) never gate on project state: jotting nodes mid-hack is
+fine, and recording a failure is possible even when the failed attempt left
+a mess. Nothing stores which commit an event happened at; history already
+records it.
 
 ### 2.9 One node type
 
@@ -239,17 +247,15 @@ Three rules keep it honest:
 * **Opaque.** No derived query reads it; it does not participate in the node
   version; writing it reopens and stales nothing. It is narrative,
   machine-grade instead of prose-grade.
-* **The one tolerated dirty path.** A streaming log is dirty for the whole
-  session, under the agent's own mutating MCP calls — so the clean-tree rule
-  (§2.8) exempts exactly `nodes/<id>/work.jsonl`, and nothing else. The
-  exemption is principled, not pragmatic: the rule exists so each commit fully
-  represents the repository's *state*, and the log is not state — a commit
-  that sweeps half a story in is still a true story-so-far. And sweep they do:
-  every store commit the session makes (`git add` on the store directory)
-  carries the log written up to that moment, giving incremental durability in
-  git for free; the driver commits the remaining tail when the session ends.
-  A crash between commits leaves a dirty log that blocks nothing and is swept
-  in by whatever store commit comes next.
+* **Streamed, swept, never blocking.** A streaming log is dirty for the whole
+  session — but only in the workbench repository, which is entirely
+  machine-written, so it gates nothing (the project repo's cleanliness rule,
+  §2.8, is untouched by it). Every store commit the session makes (`git add`
+  on the store directory) sweeps the log written up to that moment, giving
+  incremental durability in git for free — a commit that sweeps half a story
+  in is still a true story-so-far; the driver commits the remaining tail when
+  the session ends. A crash between commits leaves a dirty log that blocks
+  nothing and is swept in by whatever store commit comes next.
 * **Appended for continuation, restarted for rework.** A paused unit of work
   extends its log (appends diff minimally — goal #1); a node being reworked
   after a recorded result starts a fresh story, and git history keeps the old
@@ -275,15 +281,18 @@ dirty, whatever tool wrote them).
 
 ## 3. On-disk layout
 
-A store is a single directory (default `.llaundry/`, committed to git):
+A store is a single directory (default `.llaundry/`) inside a workbench,
+beside the project it describes (§2.8, ISOLATION.md):
 
 ```text
-.llaundry/
-  nodes/
-    <id>/
-      node.md      # the definition
-      result.md    # the completion record (absent until worked)
-      work.jsonl   # the recorded interaction log (absent until worked by the driver)
+<workbench>/       # outer git repo: the store's history
+  .llaundry/
+    nodes/
+      <id>/
+        node.md      # the definition
+        result.md    # the completion record (absent until worked)
+        work.jsonl   # the recorded interaction log (absent until worked by the driver)
+  project/         # inner git repo: the actual project, ordinary in every way
 ```
 
 ### 3.1 `node.md`
@@ -366,17 +375,21 @@ only thing llaundry adds — the part git cannot express — is the graph
 semantics: dependencies, derived status, pins, and staleness. That semantic
 layer is the product; everything storage-shaped is delegated.
 
-The CLI drives git (§2.8): every mutating command checks the tree is clean and
-commits its own store change, so all mutating commands require a git repository
-with at least one commit and a configured identity. The read-only queries need
-no git at all — blob hashing is computed locally (and verified against
-`git hash-object` in tests) — except `log`, which *is* git log.
+The CLI drives git (§2.8) over the workbench's two repositories: every
+mutating command commits its own store change to the workbench repo, and
+`complete` additionally checks and commits the project repo — so mutating
+commands require git repositories with a configured identity (`init` creates
+both). The read-only queries need no git at all — blob hashing is computed
+locally (and verified against `git hash-object` in tests) — except `log`,
+which *is* git log on the workbench repo.
 
 To keep the git dependency out of tests, the remaining git interaction goes
-through a small `Vcs` trait (`capture`, `commit_store`, `drift`,
-`dirty_paths`). The real `GitVcs` shells out to `git`; unit tests inject an
-in-memory `FakeVcs`, so the store, derived status, staleness, blockers, and the
-complete/fail flows run with no git binary, repository, or identity.
+through a small `Vcs` trait whose methods split along the two repositories:
+`commit_store` speaks to the workbench repo; `capture`, `drift`, `files_in`,
+and `dirty_paths` to the project repo. The real `GitVcs` shells out to `git`;
+unit tests inject an in-memory `FakeVcs`, so the store, derived status,
+staleness, blockers, and the complete/fail flows run with no git binary,
+repository, or identity.
 
 ---
 
@@ -398,7 +411,7 @@ The store path defaults to `.llaundry/`, overridable with `--store` or
 
 | Command | Purpose |
 |---|---|
-| `init` | Create an empty store. |
+| `init` | Create a workbench: the store, the project directory, and a git repository for each. |
 | `add` | Create a node (`--depends-on`/`--derived-from` by id, `--assignee` for who the work is for). Prints its id. |
 | `link <from> <to>` | Add a dependency (a definition change of `<from>`). |
 | `edit <id>` | Change the description (a definition change: reopens a done node). |
@@ -459,10 +472,13 @@ clean-tree rule and surface refusals as in-band MCP errors (`isError: true`).
 `llaundry-work` runs one unit of work on one node. It refuses to start if the
 node is blocked or assigned to a human (override with `--force`), builds a
 prompt from the node's description and dependency ids, and hands it to a
-`Backend`. The first backend, `ClaudeCode`, shells out to `claude -p`
-sandboxed to **only** the llaundry MCP server (`--strict-mcp-config`,
-`--allowedTools mcp__llaundry`) — no shell, file, or network tools. A
-file-free session produces no output commit, so the prompt steers it to
+`Backend`. The first backend, `ClaudeCode`, shells out to `claude -p` with
+its working directory pinned to the workbench's `project/` and a whitelist
+grant: the llaundry MCP server (`--strict-mcp-config`) plus the file tools,
+every one scoped to the working directory (`Read(./**)` … `Write(./**)`) —
+no shell, no network tools (web only behind `--network`). The store and its
+history sit above the granted subtree, so no rule about them exists at all
+(ISOLATION.md). The prompt steers the session to
 finish with `complete_node` (notes as the record of what happened) or
 `fail_node` — or, when it needs a human decision, to pause: mint a
 human-assigned question node, depend on it, and stop (§2.10). Command
@@ -482,9 +498,11 @@ session continues where the previous one stopped.
 
 ## 6. Deliberately out of scope (for now)
 
-* **Context enforcement.** Consumed context is recorded and pinned, but nothing
-  prevents an agent from reading undeclared files — a runtime concern for the
-  MCP server.
+* **Context enforcement within the project.** The workbench layout confines a
+  session to the project tree and keeps the graph reachable only through the
+  MCP server (ISOLATION.md), but *within* the project, reads are observed and
+  pinned rather than pre-authorised. Narrowing a session's view to a node's
+  declared context is the natural end-state; not built.
 * **Transitive staleness.** Each node's own pins are checked; a node is not
   auto-flagged because something upstream of *its dependency* moved. Output and
   context pins reduce the need: consumers are flagged directly when what they

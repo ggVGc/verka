@@ -14,6 +14,20 @@
 //! versioning layer. A node's *version* is the git blob id of its `node.md`,
 //! computed on demand ([`Store::node_version`]) and never stored inside the
 //! file. History is `git log` on the node's directory.
+//!
+//! The store lives in a *workbench*: an outer directory (its own git repo)
+//! holding the store next to the project, which is a completely ordinary,
+//! separate git repository (see ISOLATION.md):
+//!
+//! ```text
+//! <workbench>/       outer repo — store history
+//!   .llaundry/       the store (<root> above)
+//!   project/         inner repo — the actual project
+//! ```
+//!
+//! Work sessions run inside `project/` with file tools scoped to it; the
+//! store sits above the granted subtree, so a node's context stays what the
+//! graph says it is without any deny rules.
 
 use anyhow::{bail, Context, Result};
 use sha1::{Digest, Sha1};
@@ -21,6 +35,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::model::{NodeMeta, ResultMeta};
+
+/// The project directory inside a workbench, beside the store.
+pub const PROJECT_DIR: &str = "project";
 
 pub struct Store {
     root: PathBuf,
@@ -38,11 +55,16 @@ impl Store {
         Ok(Store { root })
     }
 
-    /// Create the directory skeleton for a new store.
+    /// Create the directory skeleton for a new store, including the project
+    /// directory beside it (the workbench layout).
     pub fn init(root: PathBuf) -> Result<Self> {
         fs::create_dir_all(root.join("nodes"))
             .with_context(|| format!("creating {}/nodes", root.display()))?;
-        Ok(Store { root })
+        let store = Store { root };
+        let project = store.project_root();
+        fs::create_dir_all(&project)
+            .with_context(|| format!("creating {}", project.display()))?;
+        Ok(store)
     }
 
     // --- paths ----------------------------------------------------------------
@@ -153,20 +175,6 @@ impl Store {
             .with_context(|| format!("opening work log for `{id}`"))
     }
 
-    /// Whether a repository-relative path is a node's work log — the one file
-    /// the clean-tree rule tolerates dirty, because the log is streamed during
-    /// a session and is opaque non-state (a commit sweeping half a story is
-    /// still a true story-so-far).
-    pub fn is_work_log_path(&self, path: &str) -> bool {
-        let Some(rest) = path
-            .strip_prefix(&self.store_name())
-            .and_then(|p| p.strip_prefix("/nodes/"))
-        else {
-            return false;
-        };
-        matches!(rest.split_once('/'), Some((id, "work.jsonl")) if !id.is_empty())
-    }
-
     // --- listing -----------------------------------------------------------------
 
     pub fn list_ids(&self) -> Result<Vec<String>> {
@@ -183,13 +191,20 @@ impl Store {
 
     // --- git integration points ----------------------------------------------------
 
-    /// The project root that git operations and file paths resolve against: the
-    /// directory containing the store (e.g. the parent of `.llaundry/`).
-    pub fn project_root(&self) -> PathBuf {
+    /// The workbench root: the directory containing the store (e.g. the parent
+    /// of `.llaundry/`). Its git repository holds the store's history.
+    pub fn workbench_root(&self) -> PathBuf {
         match self.root.parent() {
             Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
             _ => PathBuf::from("."),
         }
+    }
+
+    /// The project root that output commits and pinned file paths resolve
+    /// against: the `project/` directory inside the workbench — an ordinary
+    /// git repository of its own, entirely separate from the store's.
+    pub fn project_root(&self) -> PathBuf {
+        self.workbench_root().join(PROJECT_DIR)
     }
 
     /// The store directory relative to the project root, for use as a git
@@ -379,16 +394,18 @@ mod tests {
     }
 
     #[test]
-    fn work_log_paths_are_recognised() {
-        let store = Store {
-            root: PathBuf::from(".llaundry"),
-        };
-        assert!(store.is_work_log_path(".llaundry/nodes/node-1/work.jsonl"));
-        assert!(!store.is_work_log_path(".llaundry/nodes/node-1/node.md"));
-        assert!(!store.is_work_log_path(".llaundry/nodes/node-1/result.md"));
-        assert!(!store.is_work_log_path("src/nodes/x/work.jsonl"));
-        assert!(!store.is_work_log_path(".llaundry/nodes//work.jsonl"));
-        assert!(!store.is_work_log_path(".llaundry/nodes/node-1/sub/work.jsonl"));
-        assert!(!store.is_work_log_path("work.jsonl"));
+    fn init_lays_out_the_workbench() {
+        let dir = std::env::temp_dir().join(format!("llaundry-layout-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = Store::init(dir.join(".llaundry")).unwrap();
+
+        // Store and project sit side by side under the workbench root.
+        assert_eq!(store.workbench_root(), dir);
+        assert_eq!(store.project_root(), dir.join(PROJECT_DIR));
+        assert!(dir.join(".llaundry/nodes").is_dir());
+        assert!(store.project_root().is_dir());
+        assert_eq!(store.store_name(), ".llaundry");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

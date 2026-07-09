@@ -9,32 +9,46 @@ use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::store::Store;
 use crate::vcs::Vcs;
 
-/// The real [`Vcs`]: drives the `git` CLI rooted at `base` (the project root).
+/// The real [`Vcs`]: drives the `git` CLI over the workbench's two separate
+/// repositories. Store commits go to the workbench repo; everything about
+/// outputs — capturing, drift, file listing, working-tree cleanliness — is
+/// the project repo's business. The [`Vcs`] trait already splits along that
+/// line, so each method simply picks its repository.
 pub struct GitVcs {
-    base: PathBuf,
+    /// The project repository (`<workbench>/project`): output commits.
+    project: PathBuf,
+    /// The workbench repository (the store's parent): store history.
+    workbench: PathBuf,
 }
 
 impl GitVcs {
-    pub fn new(base: PathBuf) -> Self {
-        Self { base }
+    pub fn new(project: PathBuf, workbench: PathBuf) -> Self {
+        Self { project, workbench }
+    }
+
+    /// The conventional wiring: both repository roots derived from the store's
+    /// location in its workbench.
+    pub fn for_store(store: &Store) -> Self {
+        Self::new(store.project_root(), store.workbench_root())
     }
 }
 
 impl Vcs for GitVcs {
     fn capture(&self, paths: &[String], message: &str) -> Result<String> {
-        commit_paths(&self.base, paths, message)
+        commit_paths(&self.project, paths, message)
     }
     fn commit_store(&self, path: &str, message: &str) -> Result<()> {
-        commit_path(&self.base, path, message)
+        commit_path(&self.workbench, path, message)
     }
     fn drift(&self, id: &str) -> Result<Option<String>> {
-        output_drift(&self.base, id)
+        output_drift(&self.project, id)
     }
 
     fn dirty_paths(&self) -> Result<Vec<String>> {
-        let out = checked(&self.base, &["status", "--porcelain"])?;
+        let out = checked(&self.project, &["status", "--porcelain"])?;
         Ok(out
             .lines()
             .filter_map(|l| l.get(3..).map(|p| p.trim().to_string()))
@@ -43,8 +57,19 @@ impl Vcs for GitVcs {
     }
 
     fn files_in(&self, id: &str) -> Result<Vec<String>> {
-        commit_files(&self.base, id)
+        commit_files(&self.project, id)
     }
+}
+
+/// `git init` a directory unless it already is a repository (its own, not a
+/// parent's). Returns whether a repository was created.
+pub fn ensure_repo(dir: &Path) -> Result<bool> {
+    if dir.join(".git").exists() {
+        return Ok(false);
+    }
+    std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    checked(dir, &["init"])?;
+    Ok(true)
 }
 
 fn git(base: &Path, args: &[&str]) -> Result<std::process::Output> {

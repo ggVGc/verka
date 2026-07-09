@@ -6,23 +6,30 @@
 //!
 //! The first backend, [`ClaudeCode`], shells out to `claude -p` with a deliberate
 //! tool grant: the `llaundry` MCP server for graph operations, plus the built-in
-//! file tools — Read/Glob/Grep freely, Edit/Write scoped to the project tree —
-//! but no shell, and the web tools only behind `--network`. MCP config is pinned
+//! file tools, every one scoped to the session's working directory (`./**`) —
+//! no shell, and the web tools only behind `--network`. MCP config is pinned
 //! to just the llaundry server (`--strict-mcp-config`).
+//!
+//! Isolation is the workbench geometry (see ISOLATION.md): the session runs
+//! inside `project/`, an ordinary git repository, and everything it is granted
+//! lives below its working directory. The store — and the store's git history,
+//! in the workbench repo above — is not fenced off by any rule; it simply sits
+//! outside the granted subtree. The MCP server, a separate process unbound by
+//! the model's tool rules, is the only channel to graph state.
 //!
 //! Provenance does not depend on agent discipline. Output provenance is enforced
 //! by git: `complete` refuses to record a result while undeclared writes are
 //! dirty, so every produced file is declared. Input provenance is *derived*:
 //! after the session, the driver mines the recorded transcript for the files the
 //! agent was observed reading and pins the undeclared ones as context
-//! ([`ops::amend_context`]), marked `observed`. What can't be pinned (reads
-//! outside the project, web fetches) still sits verbatim in the log.
+//! ([`ops::amend_context`]), marked `observed`. What can't be pinned (web
+//! fetches) still sits verbatim in the log.
 //!
 //! Every session's interaction stream is *streamed* to the node's `work.jsonl`
 //! as it happens, one flushed line per event, so an abrupt exit (Ctrl-C, crash,
-//! kill) loses at most an unflushed tail. The store's mutating operations
-//! tolerate a dirty work log — the one exception to the clean-tree rule — and
-//! sweep the story-so-far into their own commits; the driver commits the tail
+//! kill) loses at most an unflushed tail. The log dirties only the workbench
+//! repository; the store's mutating operations sweep the story-so-far into
+//! their own commits, and the driver commits the tail
 //! when the session ends. Continuity across sessions is mechanical, not left
 //! to agent discipline: when a node is re-worked while still mid-unit (open,
 //! no result — e.g. it paused on a question node), the previous log is
@@ -76,7 +83,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     let store = Store::open(cli.store.clone())?;
-    let vcs = GitVcs::new(store.project_root());
+    let vcs = GitVcs::for_store(&store);
     let (meta, description) = store.read_node(&cli.node)?;
 
     // A node assigned to a human is not an LLM's to work — it is waiting for a
@@ -108,15 +115,19 @@ fn main() -> Result<()> {
         None
     };
 
-    // The session is anchored to the store's location, not to wherever this
-    // driver was launched: the backend runs in the project root (so the
-    // project-scoped write rules resolve there) and the MCP server gets the
-    // store by absolute path.
+    // The session is anchored to the workbench, not to wherever this driver was
+    // launched: the backend runs in the project directory (so every `./**`
+    // grant resolves there), and the MCP server gets the store — one level
+    // above, outside the granted subtree — by absolute path.
     let project_root = store
         .project_root()
         .canonicalize()
-        .with_context(|| format!("resolving project root of {}", cli.store.display()))?;
-    let store_abs = project_root.join(store.store_name());
+        .with_context(|| format!("resolving project directory of {}", cli.store.display()))?;
+    let store_abs = store
+        .workbench_root()
+        .canonicalize()
+        .with_context(|| format!("resolving workbench of {}", cli.store.display()))?
+        .join(store.store_name());
 
     let session = Session {
         node_id: cli.node.clone(),
@@ -249,17 +260,18 @@ impl ClaudeCode {
         let mcp_config = json!({ "mcpServers": Value::Object(servers) });
 
         // In `-p` mode any tool not listed here is denied. The graph tools, plus
-        // the built-in file tools: reads anywhere (only project reads become
-        // pins; the rest stays in the log), writes scoped to the project tree —
-        // `./**` resolves against the session's working directory, which is
-        // pinned to the project root below — where the clean-tree rule forces
-        // every write to be declared at completion. No Bash: a shell's reads
-        // are invisible to provenance.
+        // the built-in file tools — every one scoped to `./**`, which resolves
+        // against the session's working directory, pinned to the project
+        // directory below. This is a pure whitelist: the store and its history
+        // sit *above* the granted subtree, so no rule about them exists to
+        // miswrite (see ISOLATION.md), and the clean-tree rule forces every
+        // write to be declared at completion. No Bash: a shell's reads are
+        // invisible to provenance.
         let mut allowed = vec![
             format!("mcp__{}", session.mcp.name),
-            "Read".into(),
-            "Glob".into(),
-            "Grep".into(),
+            "Read(./**)".into(),
+            "Glob(./**)".into(),
+            "Grep(./**)".into(),
             "Edit(./**)".into(),
             "Write(./**)".into(),
         ];
@@ -337,11 +349,12 @@ impl Backend for ClaudeCode {
 
 /// Project files the session was observed reading, mined from the recorded
 /// transcript: the `file_path` of every built-in `Read` tool call, relativised
-/// to the project root. Reads outside the project, inside the store, or inside
-/// `.git` are dropped — the store is graph state, not context, and what can't
-/// be pinned stays visible in the raw log. Deduplicated, transcript order.
-/// Unparseable lines are skipped: the log may hold non-transcript events (the
-/// attempt header) and half-written tails.
+/// to the project root. Reads outside the project tree cannot happen (the
+/// tools are scoped to it) but are dropped defensively should a transcript
+/// claim one, as are `.git` reads — history is browsable context, not
+/// pinnable file content. Everything stays visible in the raw log either way.
+/// Deduplicated, transcript order. Unparseable lines are skipped: the log may
+/// hold non-transcript events (the attempt header) and half-written tails.
 fn observed_reads(log: &str, store: &Store) -> Vec<String> {
     let root = store.project_root();
     let root = root.canonicalize().unwrap_or(root);
@@ -411,9 +424,11 @@ fn build_prompt(id: &str, meta: &NodeMeta, description: &str, previous_log: Opti
             .to_string(),
         "also have the built-in file tools (Read, Glob, Grep, Edit, Write) — but no"
             .to_string(),
-        "shell. Keep all file work inside the project tree. Your session is recorded"
+        "shell. The file tools are scoped to your working directory, the project;"
             .to_string(),
-        "verbatim as the node's work log.".to_string(),
+        "the graph lives outside it and is reachable only through the MCP tools."
+            .to_string(),
+        "Your session is recorded verbatim as the node's work log.".to_string(),
         String::new(),
         format!("You are assigned to node `{id}`:"),
     ];
@@ -490,14 +505,16 @@ mod tests {
     use llaundry::Author;
 
     fn sample_session() -> Session {
+        // The workbench geometry: the session's world is /wb/project; the store
+        // sits beside it at /wb/.llaundry, above the granted subtree.
         Session {
             node_id: "node-1".into(),
             prompt: "do the work".into(),
-            project_root: "/proj".into(),
+            project_root: "/wb/project".into(),
             mcp: McpServer {
                 name: "llaundry".into(),
                 command: "llaundry-mcp".into(),
-                args: vec!["--store".into(), "/proj/.llaundry".into()],
+                args: vec!["--store".into(), "/wb/.llaundry".into()],
             },
         }
     }
@@ -517,12 +534,13 @@ mod tests {
     }
 
     #[test]
-    fn claude_command_grants_graph_and_file_tools_but_no_shell() {
+    fn claude_command_grants_scoped_file_tools_but_no_shell() {
         let cmd = backend(false).command(&sample_session());
         assert_eq!(cmd.get_program().to_string_lossy(), "claude");
-        // The session runs in the project root — the store's location, not the
-        // driver's launch directory — so `./**` scoping resolves there.
-        assert_eq!(cmd.get_current_dir(), Some(std::path::Path::new("/proj")));
+        // The session runs in the project directory — the workbench's inner
+        // repo, not the driver's launch directory — so every `./**` grant
+        // resolves there, and the store sits above the granted subtree.
+        assert_eq!(cmd.get_current_dir(), Some(std::path::Path::new("/wb/project")));
         let args = args_of(&cmd);
 
         assert!(args.contains(&"-p".to_string()));
@@ -533,25 +551,34 @@ mod tests {
         assert_eq!(args[k + 1], "stream-json");
         assert!(args.contains(&"--verbose".to_string()));
 
-        // The llaundry MCP server plus the file tools, writes scoped to the
-        // project tree. No shell, no web by default, permissions not bypassed.
+        // The llaundry MCP server plus the file tools, every one scoped to the
+        // working directory — a pure whitelist, no deny rules. No shell, no web
+        // by default, permissions not bypassed.
         let i = args.iter().position(|a| a == "--allowedTools").unwrap();
         let allowed: Vec<&str> = args[i + 1].split(',').collect();
         assert_eq!(
             allowed,
-            ["mcp__llaundry", "Read", "Glob", "Grep", "Edit(./**)", "Write(./**)"]
+            [
+                "mcp__llaundry",
+                "Read(./**)",
+                "Glob(./**)",
+                "Grep(./**)",
+                "Edit(./**)",
+                "Write(./**)"
+            ]
         );
         assert!(!args.iter().any(|a| a.contains("Bash")));
         assert!(!args.iter().any(|a| a.contains("WebFetch")));
         assert!(!args.iter().any(|a| a == "--dangerously-skip-permissions"));
 
         // The MCP config points at the llaundry-mcp binary and passes the store
-        // by absolute path, so the server too is independent of any cwd.
+        // by absolute path — outside the session's subtree; the server, its own
+        // process, is the one channel to graph state.
         let j = args.iter().position(|a| a == "--mcp-config").unwrap();
         let cfg: Value = serde_json::from_str(&args[j + 1]).unwrap();
         assert_eq!(cfg["mcpServers"]["llaundry"]["command"], "llaundry-mcp");
         assert_eq!(cfg["mcpServers"]["llaundry"]["args"][0], "--store");
-        assert_eq!(cfg["mcpServers"]["llaundry"]["args"][1], "/proj/.llaundry");
+        assert_eq!(cfg["mcpServers"]["llaundry"]["args"][1], "/wb/.llaundry");
     }
 
     #[test]
@@ -582,7 +609,7 @@ mod tests {
     fn describe_is_a_copy_pasteable_command() {
         let backend = backend(false);
         let d = backend.describe(&sample_session());
-        assert!(d.starts_with("cd /proj && claude "));
+        assert!(d.starts_with("cd /wb/project && claude "));
         assert!(d.contains("mcp__llaundry"));
         // The multi-word prompt gets quoted into a single token.
         assert!(d.contains("'do the work'"));
@@ -594,7 +621,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let store = Store::init(dir.join(".llaundry")).unwrap();
-        let root = dir.canonicalize().unwrap();
+        let root = store.project_root().canonicalize().unwrap();
+        let workbench = dir.canonicalize().unwrap();
 
         let read = |path: String| {
             format!(
@@ -605,7 +633,8 @@ mod tests {
             r#"{"event":"attempt","at":1}"#.to_string(),
             read(format!("{}/README.md", root.display())),
             read("/somewhere/else.txt".into()),
-            read(format!("{}/.llaundry/nodes/n/node.md", root.display())),
+            // The store lives above the project root: an outside-the-tree path.
+            read(format!("{}/.llaundry/nodes/n/node.md", workbench.display())),
             read(format!("{}/.git/config", root.display())),
             read("src/lib.rs".into()), // relative paths count too
             read(format!("{}/README.md", root.display())), // duplicate
@@ -631,6 +660,9 @@ mod tests {
 
         assert!(prompt.contains("node-1"));
         assert!(prompt.contains("llaundry` MCP tools"));
+        // The scoping is stated up front: the graph is outside the file tools'
+        // world, so a denied path reads as policy, not a malfunction.
+        assert!(prompt.contains("reachable only through the MCP tools"));
         assert!(prompt.contains("complete_node node-1"));
         assert!(prompt.contains("fail_node node-1"));
         assert!(prompt.contains("depends_on -> node-0"));

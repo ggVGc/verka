@@ -34,7 +34,7 @@ struct Cli {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let store = Store::open(cli.store)?;
-    let vcs = GitVcs::new(store.project_root());
+    let vcs = GitVcs::for_store(&store);
     let shared = Arc::new((store, vcs));
 
     let listener = TcpListener::bind(&cli.addr)

@@ -66,7 +66,7 @@ impl Ctx {
     /// Open the store and wire up the real git seam for one operation.
     fn open(&self) -> Result<(Store, GitVcs)> {
         let store = Store::open(self.store_path.clone())?;
-        let vcs = GitVcs::new(store.project_root());
+        let vcs = GitVcs::for_store(&store);
         Ok((store, vcs))
     }
 }

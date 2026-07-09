@@ -9,12 +9,18 @@
 
 use anyhow::Result;
 
+/// The trait's methods split along the workbench's two repositories:
+/// [`commit_store`](Vcs::commit_store) persists graph state to the workbench
+/// repo; everything else — capturing outputs, drift, file listing, cleanliness
+/// — speaks about the project repo.
 pub trait Vcs {
-    /// Capture (commit) exactly `paths`, returning an opaque output id — for git,
-    /// the commit hash, which is itself a content hash of the change.
+    /// Capture (commit) exactly `paths` in the project repository, returning an
+    /// opaque output id — for git, the commit hash, which is itself a content
+    /// hash of the change.
     fn capture(&self, paths: &[String], message: &str) -> Result<String>;
 
-    /// Persist a store change (commit the given path, e.g. the store directory).
+    /// Persist a store change (commit the given path, e.g. the store directory)
+    /// to the workbench repository.
     fn commit_store(&self, path: &str, message: &str) -> Result<()>;
 
     /// If the outputs captured under `id` have changed since, return a short,
@@ -24,7 +30,8 @@ pub trait Vcs {
     /// The paths captured under `id` (for git, the files the commit touches).
     fn files_in(&self, id: &str) -> Result<Vec<String>>;
 
-    /// Paths with uncommitted changes (empty means a clean working tree).
+    /// Project paths with uncommitted changes (empty means a clean project
+    /// working tree).
     fn dirty_paths(&self) -> Result<Vec<String>>;
 }
 
