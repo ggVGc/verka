@@ -22,8 +22,8 @@ use crate::vcs::Vcs;
 
 /// Parameters for creating a node with [`add`].
 pub struct NewNode {
-    pub title: String,
-    pub body: String,
+    /// The definition prose (markdown). Its first line serves as the title.
+    pub description: String,
     pub author: Author,
     /// Who the work is for (e.g. `human` for a question node); `None` = anyone.
     pub assignee: Option<Author>,
@@ -36,19 +36,21 @@ pub struct NewNode {
 /// Create a new node. Returns its id.
 pub fn add(store: &Store, vcs: &dyn Vcs, new: NewNode) -> Result<String> {
     require_clean(store, vcs)?;
+    if new.description.trim().is_empty() {
+        bail!("a node needs a description (its first line serves as the title)");
+    }
     for dep in new.depends_on.iter().chain(&new.derived_from) {
         check_edge(store, dep)?;
     }
     let id = format!("node-{}", Ulid::new());
     let meta = NodeMeta {
         schema: 1,
-        title: new.title,
         author: new.author,
         assignee: new.assignee,
         depends_on: new.depends_on,
         derived_from: new.derived_from,
     };
-    store.write_node(&id, &meta, &new.body)?;
+    store.write_node(&id, &meta, &new.description)?;
     vcs.commit_store(&store.store_name(), &format!("llaundry: add {id}"))?;
     Ok(id)
 }
@@ -60,7 +62,7 @@ pub fn link(store: &Store, vcs: &dyn Vcs, from: &str, to: &str, kind: DepKind) -
     if from == to {
         bail!("cannot link `{from}` to itself");
     }
-    let (mut meta, body) = store.read_node(from)?;
+    let (mut meta, description) = store.read_node(from)?;
     check_edge(store, to)?;
     let list = match kind {
         DepKind::DependsOn => &mut meta.depends_on,
@@ -70,27 +72,20 @@ pub fn link(store: &Store, vcs: &dyn Vcs, from: &str, to: &str, kind: DepKind) -
         bail!("{from} already has a {} link to {to}", kind.as_str());
     }
     list.push(to.to_string());
-    store.write_node(from, &meta, &body)?;
+    store.write_node(from, &meta, &description)?;
     vcs.commit_store(&store.store_name(), &format!("llaundry: link {from} -> {to}"))?;
     Ok(())
 }
 
-/// Edit a node's title and/or body. A definition change: it moves the node's
+/// Edit a node's description. A definition change: it moves the node's
 /// version, so a prior `done` no longer covers it and dependents' pins go stale.
-pub fn edit(
-    store: &Store,
-    vcs: &dyn Vcs,
-    id: &str,
-    title: Option<String>,
-    body: Option<String>,
-) -> Result<()> {
+pub fn edit(store: &Store, vcs: &dyn Vcs, id: &str, description: String) -> Result<()> {
     require_clean(store, vcs)?;
-    let (mut meta, old_body) = store.read_node(id)?;
-    if let Some(t) = title {
-        meta.title = t;
+    if description.trim().is_empty() {
+        bail!("a node needs a description (its first line serves as the title)");
     }
-    let body = body.unwrap_or(old_body);
-    store.write_node(id, &meta, &body)?;
+    let (meta, _) = store.read_node(id)?;
+    store.write_node(id, &meta, &description)?;
     vcs.commit_store(&store.store_name(), &format!("llaundry: edit {id}"))?;
     Ok(())
 }
@@ -112,7 +107,7 @@ pub fn complete(
 ) -> Result<Option<String>> {
     // The only uncommitted changes allowed are the outputs we are about to commit.
     require_clean_except(store, vcs, outputs)?;
-    let (meta, _) = store.read_node(id)?;
+    let (meta, description) = store.read_node(id)?;
 
     // Pin everything the work saw, before committing anything.
     let context = pin_context(store, context)?;
@@ -121,7 +116,7 @@ pub fn complete(
     let output_commit = if outputs.is_empty() {
         None
     } else {
-        let message = message.unwrap_or_else(|| meta.title.clone());
+        let message = message.unwrap_or_else(|| crate::model::title_of(&description).to_string());
         Some(vcs.capture(outputs, &message)?)
     };
 
@@ -652,10 +647,9 @@ mod tests {
         (TempDir(root), store)
     }
 
-    fn new_node(title: &str, depends_on: Vec<String>) -> NewNode {
+    fn new_node(description: &str, depends_on: Vec<String>) -> NewNode {
         NewNode {
-            title: title.into(),
-            body: "body".into(),
+            description: description.into(),
             author: Author::Human,
             assignee: None,
             depends_on,
@@ -805,7 +799,7 @@ mod tests {
         done(&store, &fake, &id);
         assert_eq!(current_status(&store, &id), Status::Done);
 
-        edit(&store, &fake, &id, Some("revised".into()), None).unwrap();
+        edit(&store, &fake, &id, "revised".into()).unwrap();
         assert_eq!(current_status(&store, &id), Status::Open);
         let reasons = staleness(&store, &fake, &id);
         assert!(
@@ -824,7 +818,7 @@ mod tests {
         done(&store, &fake, &b);
         assert!(staleness(&store, &fake, &b).is_empty());
 
-        edit(&store, &fake, &a, Some("revised".into()), None).unwrap();
+        edit(&store, &fake, &a, "revised".into()).unwrap();
         let reasons = staleness(&store, &fake, &b);
         assert!(
             reasons.iter().any(|r| r.contains(&a) && r.contains("definition moved")),
@@ -915,7 +909,7 @@ mod tests {
         assert!(is_ready(&store, &fake, &b));
 
         // A edited after done -> reopened -> B blocked again.
-        edit(&store, &fake, &a, Some("revised".into()), None).unwrap();
+        edit(&store, &fake, &a, "revised".into()).unwrap();
         let blocked = blockers(&store, &fake, &b);
         assert!(blocked.iter().any(|r| r.contains("not done")), "{blocked:?}");
     }
@@ -1062,7 +1056,7 @@ mod tests {
 
         // Editing the sub-task reopens it and flags the branch again, twice over:
         // the sub-task is no longer done, and the impl is done-but-stale.
-        edit(&store, &fake, &sub, Some("revised".into()), None).unwrap();
+        edit(&store, &fake, &sub, "revised".into()).unwrap();
         let reasons = unsettled(&store, &fake, &root).unwrap();
         assert!(reasons.contains(&format!("{sub}: not done (open)")), "{reasons:?}");
         assert!(reasons.contains(&format!("{imp}: done but stale")), "{reasons:?}");

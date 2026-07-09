@@ -25,7 +25,7 @@ use crossterm::{
 };
 
 use llaundry::ops::{self, NewNode};
-use llaundry::{Author, DepKind, GitVcs, NodeMeta, ResultMeta, Status, Store};
+use llaundry::{title_of, Author, DepKind, GitVcs, NodeMeta, ResultMeta, Status, Store};
 
 #[derive(Parser)]
 #[command(
@@ -147,7 +147,7 @@ struct Row {
     id: String,
     version: String,
     meta: NodeMeta,
-    body: String,
+    description: String,
     result: Option<(ResultMeta, String)>,
     status: Status,
     stale: Vec<String>,
@@ -183,7 +183,7 @@ impl App {
         let keep = self.selected_id();
         let mut rows = Vec::new();
         for id in store.list_ids()? {
-            let (meta, body) = store.read_node(&id)?;
+            let (meta, description) = store.read_node(&id)?;
             rows.push(Row {
                 version: store.node_version(&id)?,
                 result: store.read_result(&id)?,
@@ -193,7 +193,7 @@ impl App {
                 ready: ops::is_ready(store, vcs, &id),
                 id,
                 meta,
-                body,
+                description,
             });
         }
         self.rows = rows;
@@ -341,21 +341,19 @@ fn act(app: &mut App, store: &Store, vcs: &GitVcs, outcome: Result<Option<String
 // ---------------------------------------------------------------------------
 
 fn action_add(out: &mut Stdout, store: &Store, vcs: &GitVcs) -> Result<Option<String>> {
-    let Some(title) = prompt_line(out, "title", "")? else {
+    let Some(description) =
+        prompt_text(out, "description — first line is the title (Ctrl-S save, Esc cancel)", "")?
+    else {
         return Ok(None);
     };
-    if title.trim().is_empty() {
-        return Ok(Some("add cancelled: empty title".into()));
+    if description.trim().is_empty() {
+        return Ok(Some("add cancelled: empty description".into()));
     }
-    let Some(body) = prompt_text(out, "body (Ctrl-S save, Esc cancel)", "")? else {
-        return Ok(None);
-    };
     let id = ops::add(
         store,
         vcs,
         NewNode {
-            title,
-            body,
+            description,
             author: Author::Human,
             assignee: None,
             depends_on: Vec::new(),
@@ -366,18 +364,18 @@ fn action_add(out: &mut Stdout, store: &Store, vcs: &GitVcs) -> Result<Option<St
 }
 
 fn action_edit(out: &mut Stdout, store: &Store, vcs: &GitVcs, row: &Row) -> Result<Option<String>> {
-    let Some(title) = prompt_line(out, "title", &row.meta.title)? else {
+    let Some(description) = prompt_text(
+        out,
+        "description — first line is the title (Ctrl-S save, Esc cancel)",
+        &row.description,
+    )?
+    else {
         return Ok(None);
     };
-    let Some(new_body) = prompt_text(out, "body (Ctrl-S save, Esc cancel)", &row.body)? else {
-        return Ok(None);
-    };
-    let title = (title != row.meta.title).then_some(title);
-    let body = (new_body != row.body).then_some(new_body);
-    if title.is_none() && body.is_none() {
+    if description == row.description {
         return Ok(Some("edit: no changes".into()));
     }
-    ops::edit(store, vcs, &row.id, title, body)?;
+    ops::edit(store, vcs, &row.id, description)?;
     Ok(Some(format!("edited {}", row.id)))
 }
 
@@ -526,7 +524,7 @@ fn draw(out: &mut Stdout, app: &mut App) -> Result<()> {
         if let Some(&idx) = filtered.get(row_i) {
             let r = &app.rows[idx];
             let marker = if !r.stale.is_empty() { '*' } else { ' ' };
-            let text = format!("{marker}{:<7} {}", r.status.as_str(), r.meta.title);
+            let text = format!("{marker}{:<7} {}", r.status.as_str(), title_of(&r.description));
             let selected = row_i == app.selected;
             let color = status_color(r.status);
             put(out, 0, y, &text, left_w as usize, color, selected)?;
@@ -578,7 +576,6 @@ fn detail_lines(r: &Row) -> Vec<(String, Color)> {
     let mut plain = |s: String| lines.push((s, Color::Reset));
 
     plain(format!("id:      {}", r.id));
-    plain(format!("title:   {}", r.meta.title));
     lines.push((
         format!("status:  {}", r.status.as_str()),
         status_color(r.status),
@@ -619,10 +616,10 @@ fn detail_lines(r: &Row) -> Vec<(String, Color)> {
             }
         }
     }
-    let body = r.body.trim_end();
-    if !body.is_empty() {
+    let description = r.description.trim_end();
+    if !description.is_empty() {
         lines.push((String::new(), Color::Reset));
-        for line in body.lines() {
+        for line in description.lines() {
             lines.push((line.to_string(), Color::Reset));
         }
     }
@@ -882,7 +879,7 @@ fn help(out: &mut Stdout) -> Result<()> {
         "",
         "Actions (operate on the selected node)",
         "  a               add a new node",
-        "  e               edit title / body (a definition change)",
+        "  e               edit the description (a definition change)",
         "  l               link to another node",
         "  c               complete (commit outputs, write result.md)",
         "  f               fail (write result.md with what went wrong)",

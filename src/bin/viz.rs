@@ -16,7 +16,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 
-use llaundry::{ops, GitVcs, Store, Vcs};
+use llaundry::{ops, title_of, GitVcs, Store, Vcs};
 
 const PAGE: &str = include_str!("viz.html");
 
@@ -104,7 +104,7 @@ fn handle(mut stream: TcpStream, store: &Store, vcs: &dyn Vcs) -> Result<()> {
 fn graph_json(store: &Store, vcs: &dyn Vcs) -> Result<Value> {
     let mut nodes = Vec::new();
     for id in store.list_ids()? {
-        let (meta, body) = match store.read_node(&id) {
+        let (meta, description) = match store.read_node(&id) {
             Ok(x) => x,
             Err(e) => {
                 // Surface a broken node instead of hiding the whole graph.
@@ -132,8 +132,8 @@ fn graph_json(store: &Store, vcs: &dyn Vcs) -> Result<Value> {
         });
         nodes.push(json!({
             "id": id,
-            "title": meta.title,
-            "body": body,
+            "title": title_of(&description),
+            "description": description,
             "author": meta.author.as_str(),
             "assignee": meta.assignee.map(|a| a.as_str()),
             "depends_on": meta.depends_on,

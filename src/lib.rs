@@ -23,7 +23,7 @@ pub mod vcs;
 
 pub use git::GitVcs;
 pub use model::{
-    Author, BuiltAgainst, ContextPin, DepKind, NodeMeta, Outcome, ResultMeta, Status,
+    title_of, Author, BuiltAgainst, ContextPin, DepKind, NodeMeta, Outcome, ResultMeta, Status,
 };
 pub use store::Store;
 pub use vcs::Vcs;

@@ -33,13 +33,11 @@ enum Cmd {
 
     /// Add a new node. Prints its id.
     Add {
-        #[arg(long)]
-        title: String,
-        /// Body text inline.
-        #[arg(long)]
-        body: Option<String>,
-        /// Body text read from a file (mutually exclusive with --body).
-        #[arg(long, conflicts_with = "body")]
+        /// The node's description (markdown); its first line serves as the title.
+        #[arg(long, required_unless_present = "file")]
+        description: Option<String>,
+        /// Description read from a file (mutually exclusive with --description).
+        #[arg(long, conflicts_with = "description")]
         file: Option<PathBuf>,
         #[arg(long, value_enum, default_value = "human")]
         author: Author,
@@ -65,15 +63,14 @@ enum Cmd {
         rel: DepKind,
     },
 
-    /// Edit a node's title and/or body (a definition change: reopens a done node
+    /// Edit a node's description (a definition change: reopens a done node
     /// and makes dependents' pins stale).
     Edit {
         id: String,
-        #[arg(long)]
-        title: Option<String>,
-        #[arg(long)]
-        body: Option<String>,
-        #[arg(long, conflicts_with = "body")]
+        /// The new description; its first line serves as the title.
+        #[arg(long, required_unless_present = "file")]
+        description: Option<String>,
+        #[arg(long, conflicts_with = "description")]
         file: Option<PathBuf>,
     },
 
@@ -89,7 +86,8 @@ enum Cmd {
         /// content, so a later change to it flags this node.
         #[arg(long = "context", short = 'c')]
         context: Vec<PathBuf>,
-        /// Message for the output commit (defaults to the node's title).
+        /// Message for the output commit (defaults to the first line of the
+        /// node's description).
         #[arg(long, short = 'm')]
         message: Option<String>,
         /// Narrative of what happened during the work (the body of result.md).
@@ -168,8 +166,7 @@ fn main() -> Result<()> {
         }
 
         Cmd::Add {
-            title,
-            body,
+            description,
             file,
             author,
             assignee,
@@ -182,8 +179,7 @@ fn main() -> Result<()> {
                 &store,
                 &vcs,
                 NewNode {
-                    title,
-                    body: read_body(body, file)?,
+                    description: read_description(description, file)?,
                     author,
                     assignee,
                     depends_on,
@@ -200,20 +196,10 @@ fn main() -> Result<()> {
             println!("{from}  +{} -> {to}", rel.as_str());
         }
 
-        Cmd::Edit {
-            id,
-            title,
-            body,
-            file,
-        } => {
+        Cmd::Edit { id, description, file } => {
             let store = Store::open(store)?;
             let vcs = GitVcs::new(store.project_root());
-            let new_body = if body.is_some() || file.is_some() {
-                Some(read_body(body, file)?)
-            } else {
-                None
-            };
-            ops::edit(&store, &vcs, &id, title, new_body)?;
+            ops::edit(&store, &vcs, &id, read_description(description, file)?)?;
             println!("{id}  {}", ops::short(&store.node_version(&id)?));
         }
 
@@ -267,9 +253,9 @@ fn main() -> Result<()> {
         Cmd::List => {
             let store = Store::open(store)?;
             for id in store.list_ids()? {
-                let (meta, _) = store.read_node(&id)?;
+                let (_, description) = store.read_node(&id)?;
                 let status = ops::current_status(&store, &id);
-                println!("{:<32} {:<8} {}", id, status.as_str(), meta.title);
+                println!("{:<32} {:<8} {}", id, status.as_str(), llaundry::title_of(&description));
             }
         }
 
@@ -316,13 +302,13 @@ fn main() -> Result<()> {
             let vcs = GitVcs::new(store.project_root());
             for id in store.list_ids()? {
                 if ops::is_ready(&store, &vcs, &id) {
-                    let (meta, _) = store.read_node(&id)?;
+                    let (meta, description) = store.read_node(&id)?;
                     // With --for, a node assigned to the *other* kind is hidden;
                     // unassigned nodes are anyone's to pick up.
                     if matches!((assignee, meta.assignee), (Some(want), Some(has)) if want != has) {
                         continue;
                     }
-                    println!("{:<32} {}", id, meta.title);
+                    println!("{:<32} {}", id, llaundry::title_of(&description));
                 }
             }
         }
@@ -409,12 +395,11 @@ fn main() -> Result<()> {
 
 /// The `show` view, shared in spirit with the MCP server's `show_node`.
 fn show_node(store: &Store, vcs: &GitVcs, id: &str) -> Result<String> {
-    let (meta, body) = store.read_node(id)?;
+    let (meta, description) = store.read_node(id)?;
     let mut out = String::new();
     use std::fmt::Write;
 
     writeln!(out, "id:      {id}")?;
-    writeln!(out, "title:   {}", meta.title)?;
     writeln!(out, "status:  {}", ops::current_status(store, id).as_str())?;
     writeln!(out, "author:  {}", meta.author.as_str())?;
     if let Some(assignee) = meta.assignee {
@@ -467,9 +452,9 @@ fn show_node(store: &Store, vcs: &GitVcs, id: &str) -> Result<String> {
             writeln!(out, "  {r}")?;
         }
     }
-    let body = body.trim_end();
-    if !body.is_empty() {
-        writeln!(out, "\n{body}")?;
+    let description = description.trim_end();
+    if !description.is_empty() {
+        writeln!(out, "\n{description}")?;
     }
     Ok(out)
 }
@@ -499,7 +484,7 @@ fn resolve_notes(
 
     // Interactive and no notes supplied: open $VISUAL/$EDITOR on a template,
     // git-commit style. '#' lines are stripped from the result.
-    let (meta, _) = store.read_node(id)?;
+    let (_, description) = store.read_node(id)?;
     let editor = std::env::var("VISUAL")
         .or_else(|_| std::env::var("EDITOR"))
         .unwrap_or_else(|_| "vi".into());
@@ -508,7 +493,7 @@ fn resolve_notes(
         &path,
         format!(
             "\n# Notes for {id} — {}\n# {ask} These notes become the body of result.md.\n# Lines starting with '#' are ignored; an empty file records no notes.\n",
-            meta.title
+            llaundry::title_of(&description)
         ),
     )?;
     let status = std::process::Command::new("sh")
@@ -531,12 +516,11 @@ fn strip_comment_lines(text: &str) -> String {
     kept.join("\n").trim().to_string()
 }
 
-fn read_body(body: Option<String>, file: Option<PathBuf>) -> Result<String> {
-    match (body, file) {
-        (Some(b), _) => Ok(b),
-        (None, Some(f)) => {
-            std::fs::read_to_string(&f).with_context(|| format!("reading body from {}", f.display()))
-        }
+fn read_description(description: Option<String>, file: Option<PathBuf>) -> Result<String> {
+    match (description, file) {
+        (Some(d), _) => Ok(d),
+        (None, Some(f)) => std::fs::read_to_string(&f)
+            .with_context(|| format!("reading description from {}", f.display())),
         (None, None) => Ok(String::new()),
     }
 }

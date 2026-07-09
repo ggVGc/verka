@@ -33,7 +33,7 @@ use clap::{Parser, ValueEnum};
 use serde_json::{json, Value};
 use std::process::Command;
 
-use llaundry::{ops, Author, GitVcs, NodeMeta, Store};
+use llaundry::{ops, title_of, Author, GitVcs, NodeMeta, Store};
 
 #[derive(Parser)]
 #[command(name = "llaundry-work", version, about = "Run an LLM against a llaundry node")]
@@ -77,7 +77,7 @@ fn main() -> Result<()> {
 
     let store = Store::open(cli.store.clone())?;
     let vcs = GitVcs::new(store.project_root());
-    let (meta, body) = store.read_node(&cli.node)?;
+    let (meta, description) = store.read_node(&cli.node)?;
 
     // A node assigned to a human is not an LLM's to work — it is waiting for a
     // human's answer (typically a question node minted by a paused worker).
@@ -120,7 +120,7 @@ fn main() -> Result<()> {
 
     let session = Session {
         node_id: cli.node.clone(),
-        prompt: build_prompt(&cli.node, &meta, &body, previous_log.as_deref()),
+        prompt: build_prompt(&cli.node, &meta, &description, previous_log.as_deref()),
         project_root,
         mcp: McpServer {
             name: "llaundry".into(),
@@ -146,7 +146,7 @@ fn main() -> Result<()> {
         "llaundry-work: {} working {} — {}{}",
         backend.name(),
         session.node_id,
-        meta.title,
+        title_of(&description),
         if previous_log.is_some() { " (continuing)" } else { "" }
     );
 
@@ -404,7 +404,7 @@ fn observed_reads(log: &str, store: &Store) -> Vec<String> {
 /// On continuation, `previous_log` (the node's recorded `work.jsonl`) is replayed
 /// verbatim so the session picks up exactly where the last one stopped — the
 /// handoff is mechanical, not dependent on the previous agent having left notes.
-fn build_prompt(id: &str, meta: &NodeMeta, body: &str, previous_log: Option<&str>) -> String {
+fn build_prompt(id: &str, meta: &NodeMeta, description: &str, previous_log: Option<&str>) -> String {
     let mut p = vec![
         "You are an autonomous worker on a llaundry node graph.".to_string(),
         "Every graph change goes through the `llaundry` MCP tools. For real work you"
@@ -416,7 +416,6 @@ fn build_prompt(id: &str, meta: &NodeMeta, body: &str, previous_log: Option<&str
         "verbatim as the node's work log.".to_string(),
         String::new(),
         format!("You are assigned to node `{id}`:"),
-        format!("  title: {}", meta.title),
     ];
     for dep in &meta.depends_on {
         p.push(format!("  depends_on -> {dep}"));
@@ -424,11 +423,11 @@ fn build_prompt(id: &str, meta: &NodeMeta, body: &str, previous_log: Option<&str
     for src in &meta.derived_from {
         p.push(format!("  derived_from -> {src}"));
     }
-    let body = body.trim();
-    if !body.is_empty() {
+    let description = description.trim();
+    if !description.is_empty() {
         p.push(String::new());
         p.push("Node description:".into());
-        p.push(body.to_string());
+        p.push(description.to_string());
     }
     if let Some(log) = previous_log {
         p.push(String::new());
@@ -456,10 +455,10 @@ fn build_prompt(id: &str, meta: &NodeMeta, body: &str, previous_log: Option<&str
     p.push("     If the work cannot be done,".into());
     p.push(format!("     record that instead: fail_node {id} with `notes` explaining why."));
     p.push("  4. If you need a decision or information only a human can give, do NOT".into());
-    p.push("     complete or fail. Instead add_node a question (title `Question: ...`,".into());
-    p.push("     assignee `human`, the context and options in its body), link_nodes".into());
+    p.push("     complete or fail. Instead add_node a question (description starting".into());
+    p.push("     `Question: ...`, assignee `human`, with the context and options),".into());
     p.push(format!(
-        "     {id} depends_on it, and stop. Work resumes here once it is answered."
+        "     link_nodes {id} depends_on it, and stop. Work resumes here once it is answered."
     ));
     p.push("Finish with a brief summary of what you changed.".into());
     p.join("\n")
@@ -623,7 +622,6 @@ mod tests {
     fn prompt_states_the_node_and_the_tools_only_rule() {
         let meta = NodeMeta {
             schema: 1,
-            title: "Parse config".into(),
             author: Author::Human,
             assignee: None,
             depends_on: vec!["node-0".into()],
@@ -632,7 +630,6 @@ mod tests {
         let prompt = build_prompt("node-1", &meta, "  Write the config parser.  ", None);
 
         assert!(prompt.contains("node-1"));
-        assert!(prompt.contains("Parse config"));
         assert!(prompt.contains("llaundry` MCP tools"));
         assert!(prompt.contains("complete_node node-1"));
         assert!(prompt.contains("fail_node node-1"));
@@ -651,7 +648,6 @@ mod tests {
     fn prompt_replays_the_previous_log_on_continuation() {
         let meta = NodeMeta {
             schema: 1,
-            title: "Parse config".into(),
             author: Author::Human,
             assignee: None,
             depends_on: vec![],

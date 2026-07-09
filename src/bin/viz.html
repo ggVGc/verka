@@ -523,10 +523,10 @@ function renderPanel() {
   if (n.assignee) row("assignee", n.assignee);
   panel.appendChild(section("about", kv));
 
-  if ((n.body || "").trim()) {
+  if ((n.description || "").trim()) {
     const div = document.createElement("div");
     div.className = "prose";
-    div.textContent = n.body.trim();
+    div.textContent = n.description.trim();
     panel.appendChild(section("definition", div));
   }
 

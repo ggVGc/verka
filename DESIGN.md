@@ -167,7 +167,8 @@ intended pipeline as write-time edge rules. That machinery was removed: none of
 the core mechanics — status derivation, pins, staleness, readiness, provenance
 — ever branched on the type, so the taxonomy was a schema bolted onto the
 graph, maintained before real usage had shown which distinctions matter. Today
-there is a single node kind; what a node *is* lives in its title and body. A
+there is a single node kind; what a node *is* lives in its description (whose
+first line serves as its title). A
 taxonomy (and per-type behaviour, e.g. runnable builds) can be reintroduced
 once usage of the tool makes the right shape clear.
 
@@ -176,7 +177,7 @@ modelled as work that produced it. An originating request is a *root node*
 (sub-nodes derive from it, and revising the request flags them all); a decision
 or research finding is a node whose result notes record the outcome. Every
 node is therefore workable, and prose context lives in exactly two places — a
-node's definition body and its result notes.
+node's description and its result notes.
 
 Edge creation (`add`, `link`) validates that the target exists, rejects
 self-references and duplicates, and nothing more.
@@ -196,7 +197,7 @@ work cannot be done") and must not silently stall. The design's own move from
 §2.9 — knowledge is work that produced it — extends to questions: **a question
 is a unit of work assigned to a human, and the answer is its result.** The
 agent adds a question node (`assignee = "human"`, the context and options in
-its body), links its own node to `depends_on` it, and stops without
+its description), links its own node to `depends_on` it, and stops without
 completing. Its node is now derived-*blocked*, not failed; the question shows
 up in `ready --for human` — the human's inbox; the human completes it with the
 answer as result notes; the asker becomes ready again.
@@ -290,18 +291,21 @@ A store is a single directory (default `.llaundry/`, committed to git):
 ```markdown
 ---
 schema = 1
-title = "Parse the config file"
 author = "human"
 assignee = "human"                # optional: who the work is for (§2.10)
 depends_on = ["node-01J8XQ2A..."]
 derived_from = ["node-01J8XQ1B..."]
 ---
 
+Parse the config file
+
 Parse the TOML config into the Config struct...
 ```
 
 The frontmatter is strict, typed TOML (scalars and string arrays only); the
-body is free-form Markdown. The file's git blob id is the node's version.
+body is the node's description, free-form Markdown. There is no stored title:
+the description's first line serves as the title wherever a one-liner is
+needed. The file's git blob id is the node's version.
 
 ### 3.2 `result.md`
 
@@ -397,7 +401,7 @@ The store path defaults to `.llaundry/`, overridable with `--store` or
 | `init` | Create an empty store. |
 | `add` | Create a node (`--depends-on`/`--derived-from` by id, `--assignee` for who the work is for). Prints its id. |
 | `link <from> <to>` | Add a dependency (a definition change of `<from>`). |
-| `edit <id>` | Change title/body (a definition change: reopens a done node). |
+| `edit <id>` | Change the description (a definition change: reopens a done node). |
 | `complete <id> [-o <file>...] [--notes ...]` | Commit produced files as one output commit, pin deps/context, write `result.md`. |
 | `fail <id> [--notes ...]` | Record a failed attempt. |
 | `show <id>` | Definition, derived status, result, staleness reasons. |
@@ -415,8 +419,8 @@ The store path defaults to `.llaundry/`, overridable with `--store` or
 ```sh
 llaundry init
 
-A=$(llaundry add --title "Define config schema")
-B=$(llaundry add --title "Parse config file" --depends-on "$A")
+A=$(llaundry add --description "Define config schema")
+B=$(llaundry add --description "Parse config file" --depends-on "$A")
 
 llaundry blocked            # B waits on A
 llaundry complete "$A" --notes "schema agreed"
@@ -426,7 +430,7 @@ echo 'fn parse() {}' > src/config.rs
 llaundry complete "$B" -o src/config.rs --notes "implemented parser"
 
 # Revising A reopens it and flags B, with the pinned-vs-current versions:
-llaundry edit "$A" --title "Define and validate config schema"
+llaundry edit "$A" --description "Define and validate config schema"
 llaundry stale
 #   A: definition changed since the work (...)
 #   B: dependency A: definition moved (built against 6102d4, now 516cc0)
@@ -454,7 +458,7 @@ clean-tree rule and surface refusals as in-band MCP errors (`isError: true`).
 
 `llaundry-work` runs one unit of work on one node. It refuses to start if the
 node is blocked or assigned to a human (override with `--force`), builds a
-prompt from the node's title, body, and dependency ids, and hands it to a
+prompt from the node's description and dependency ids, and hands it to a
 `Backend`. The first backend, `ClaudeCode`, shells out to `claude -p`
 sandboxed to **only** the llaundry MCP server (`--strict-mcp-config`,
 `--allowedTools mcp__llaundry`) — no shell, file, or network tools. A

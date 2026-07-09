@@ -63,9 +63,10 @@ impl Store {
 
     // --- node.md (the definition) ----------------------------------------------
 
-    pub fn write_node(&self, id: &str, meta: &NodeMeta, body: &str) -> Result<()> {
+    pub fn write_node(&self, id: &str, meta: &NodeMeta, description: &str) -> Result<()> {
         fs::create_dir_all(self.node_dir(id))?;
-        let doc = to_document(&toml::to_string_pretty(meta).context("serialising node meta")?, body);
+        let doc =
+            to_document(&toml::to_string_pretty(meta).context("serialising node meta")?, description);
         fs::write(self.node_path(id), doc).with_context(|| format!("writing node `{id}`"))?;
         Ok(())
     }
@@ -73,10 +74,10 @@ impl Store {
     pub fn read_node(&self, id: &str) -> Result<(NodeMeta, String)> {
         let text = fs::read_to_string(self.node_path(id))
             .with_context(|| format!("unknown node `{id}`"))?;
-        let (front, body) = split_document(&text)
+        let (front, description) = split_document(&text)
             .with_context(|| format!("malformed node.md for `{id}`"))?;
         let meta = toml::from_str(&front).with_context(|| format!("parsing node.md for `{id}`"))?;
-        Ok((meta, body))
+        Ok((meta, description))
     }
 
     /// The node's version: the git blob id of its `node.md` bytes, computed on
@@ -302,21 +303,20 @@ mod tests {
 
         let meta = NodeMeta {
             schema: 1,
-            title: "hello".into(),
             author: Author::Human,
             assignee: None,
             depends_on: vec!["node-a".into()],
             derived_from: vec![],
         };
-        store.write_node("node-1", &meta, "the body").unwrap();
-        let (got, body) = store.read_node("node-1").unwrap();
-        assert_eq!(got.title, "hello");
+        store.write_node("node-1", &meta, "hello\n\nthe details").unwrap();
+        let (got, description) = store.read_node("node-1").unwrap();
         assert_eq!(got.depends_on, vec!["node-a".to_string()]);
-        assert_eq!(body, "the body");
+        assert_eq!(description, "hello\n\nthe details");
+        assert_eq!(crate::model::title_of(&description), "hello");
 
         // The version changes exactly when the definition changes.
         let v1 = store.node_version("node-1").unwrap();
-        store.write_node("node-1", &meta, "other body").unwrap();
+        store.write_node("node-1", &meta, "other description").unwrap();
         assert_ne!(v1, store.node_version("node-1").unwrap());
 
         // No result yet; then one round-trips, without touching the version.
@@ -353,7 +353,6 @@ mod tests {
 
         let meta = NodeMeta {
             schema: 1,
-            title: "hello".into(),
             author: Author::Human,
             assignee: None,
             depends_on: vec![],

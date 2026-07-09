@@ -22,7 +22,7 @@ use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 
 use llaundry::ops::{self, NewNode};
-use llaundry::{Author, DepKind, GitVcs, Store};
+use llaundry::{title_of, Author, DepKind, GitVcs, Store};
 
 /// The MCP protocol revision we advertise (a client may negotiate its own; we echo
 /// back whatever it asks for when present).
@@ -163,21 +163,19 @@ impl Tool for AddNode {
     fn input_schema(&self) -> Value {
         obj_schema(
             json!({
-                "title": {"type": "string", "description": "Short title."},
-                "body": {"type": "string", "description": "Prose body (markdown)."},
+                "description": {"type": "string", "description": "The node's description (markdown). Its first line serves as the title."},
                 "author": author_prop(),
                 "assignee": enum_prop(&["human", "machine"], "Who the work is for — set `human` on a question node needing a human decision. Omit for anyone."),
                 "depends_on": ids_prop("Ids of nodes this node depends on."),
                 "derived_from": ids_prop("Ids of nodes this node is derived from.")
             }),
-            &["title"],
+            &["description"],
         )
     }
     fn call(&self, ctx: &Ctx, args: &Value) -> Result<String> {
         let (store, vcs) = ctx.open()?;
         let new = NewNode {
-            title: req_str(args, "title")?,
-            body: opt_str(args, "body").unwrap_or_default(),
+            description: req_str(args, "description")?,
             author: enum_or(args, "author", Author::Machine)?,
             assignee: enum_or(args, "assignee", None)?,
             depends_on: str_list(args, "depends_on"),
@@ -222,24 +220,22 @@ impl Tool for EditNode {
         "edit_node"
     }
     fn description(&self) -> &'static str {
-        "Edit a node's title and/or body. A definition change: it reopens a done node and makes dependents' pins stale."
+        "Edit a node's description. A definition change: it reopens a done node and makes dependents' pins stale."
     }
     fn input_schema(&self) -> Value {
         obj_schema(
             json!({
                 "id": {"type": "string"},
-                "title": {"type": "string"},
-                "body": {"type": "string"}
+                "description": {"type": "string", "description": "The new description (markdown). Its first line serves as the title."}
             }),
-            &["id"],
+            &["id", "description"],
         )
     }
     fn call(&self, ctx: &Ctx, args: &Value) -> Result<String> {
         let (store, vcs) = ctx.open()?;
         let id = req_str(args, "id")?;
-        let title = opt_str(args, "title");
-        let body = opt_str(args, "body");
-        ops::edit(&store, &vcs, &id, title, body)?;
+        let description = req_str(args, "description")?;
+        ops::edit(&store, &vcs, &id, description)?;
         Ok(format!("edited {id} (now {})", ops::short(&store.node_version(&id)?)))
     }
 }
@@ -258,7 +254,7 @@ impl Tool for CompleteNode {
                 "id": {"type": "string"},
                 "outputs": paths_prop("Produced files to commit, relative to the project root. Omit for graph-only work."),
                 "context": paths_prop("Consumed files that are not any node's output (pinned by content)."),
-                "message": {"type": "string", "description": "Output commit message (defaults to the node's title)."},
+                "message": {"type": "string", "description": "Output commit message (defaults to the first line of the node's description)."},
                 "notes": {"type": "string", "description": "Narrative of what happened during the work — becomes the body of result.md."},
                 "author": author_prop()
             }),
@@ -323,11 +319,10 @@ impl Tool for ShowNode {
     fn call(&self, ctx: &Ctx, args: &Value) -> Result<String> {
         let (store, vcs) = ctx.open()?;
         let id = req_str(args, "id")?;
-        let (meta, body) = store.read_node(&id)?;
+        let (meta, description) = store.read_node(&id)?;
 
         let mut lines = vec![
             format!("id:      {id}"),
-            format!("title:   {}", meta.title),
             format!("status:  {}", ops::current_status(&store, &id).as_str()),
             format!("author:  {}", meta.author.as_str()),
             format!("version: {}", ops::short(&store.node_version(&id)?)),
@@ -374,10 +369,10 @@ impl Tool for ShowNode {
             lines.push("stale:".into());
             lines.extend(reasons.iter().map(|r| format!("  {r}")));
         }
-        let body = body.trim_end();
-        if !body.is_empty() {
+        let description = description.trim_end();
+        if !description.is_empty() {
             lines.push(String::new());
-            lines.push(body.to_string());
+            lines.push(description.to_string());
         }
         Ok(lines.join("\n"))
     }
@@ -389,7 +384,7 @@ impl Tool for ListNodes {
         "list_nodes"
     }
     fn description(&self) -> &'static str {
-        "List every node with its derived status and title."
+        "List every node with its derived status and title (the first line of its description)."
     }
     fn input_schema(&self) -> Value {
         obj_schema(json!({}), &[])
@@ -398,9 +393,9 @@ impl Tool for ListNodes {
         let (store, _) = ctx.open()?;
         let mut lines = Vec::new();
         for id in store.list_ids()? {
-            let (meta, _) = store.read_node(&id)?;
+            let (_, description) = store.read_node(&id)?;
             let status = ops::current_status(&store, &id);
-            lines.push(format!("{id}  [{}]  {}", status.as_str(), meta.title));
+            lines.push(format!("{id}  [{}]  {}", status.as_str(), title_of(&description)));
         }
         Ok(joined(lines, "(no nodes)"))
     }
@@ -451,11 +446,11 @@ impl Tool for ReadyNodes {
         let mut lines = Vec::new();
         for id in store.list_ids()? {
             if ops::is_ready(&store, &vcs, &id) {
-                let (meta, _) = store.read_node(&id)?;
+                let (meta, description) = store.read_node(&id)?;
                 if matches!((want, meta.assignee), (Some(w), Some(has)) if w != has) {
                     continue;
                 }
-                lines.push(format!("{id}  {}", meta.title));
+                lines.push(format!("{id}  {}", title_of(&description)));
             }
         }
         Ok(joined(lines, "(nothing ready)"))

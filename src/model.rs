@@ -2,8 +2,9 @@
 //!
 //! A node is a directory `nodes/<id>/` holding at most two files:
 //!
-//!   * `node.md` — the definition: [`NodeMeta`] frontmatter plus a prose body.
-//!     Its git blob id is the node's *version*; editing the file changes it.
+//!   * `node.md` — the definition: [`NodeMeta`] frontmatter plus the prose
+//!     description (whose first line serves as the node's title). Its git blob
+//!     id is the node's *version*; editing the file changes it.
 //!   * `result.md` — the completion record: [`ResultMeta`] frontmatter plus a
 //!     free-form narrative of what happened during the work. Written once when
 //!     the node's single unit of work finishes; overwritten on rework (git
@@ -13,6 +14,17 @@
 //! its `outcome` says, and whether its `node_version` still matches `node.md`.
 
 use serde::{Deserialize, Serialize};
+
+/// A node's display title: the first non-empty line of its description. There
+/// is no stored title — the description is the definition, and its opening
+/// line names the node wherever a one-liner is needed.
+pub fn title_of(description: &str) -> &str {
+    description
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("(no description)")
+}
 
 /// Who authored a definition or did the work.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
@@ -98,7 +110,6 @@ impl DepKind {
 pub struct NodeMeta {
     /// On-disk schema version, for forward compatibility.
     pub schema: u32,
-    pub title: String,
     pub author: Author,
     /// Who the work is *for*: a machine-authored question node is assigned to a
     /// human, whose answer (its result notes) unblocks the asker. Absent means
@@ -159,4 +170,18 @@ pub struct ResultMeta {
     pub built_against: Vec<BuiltAgainst>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub context: Vec<ContextPin>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::title_of;
+
+    #[test]
+    fn title_is_the_first_non_empty_line_of_the_description() {
+        assert_eq!(title_of("Parse config\n\nDetails follow."), "Parse config");
+        assert_eq!(title_of("\n  \n  Leading blanks\nrest"), "Leading blanks");
+        assert_eq!(title_of("one-liner"), "one-liner");
+        assert_eq!(title_of(""), "(no description)");
+        assert_eq!(title_of("  \n\t\n"), "(no description)");
+    }
 }
