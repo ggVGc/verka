@@ -613,13 +613,30 @@ fn find_cycles(graph: &std::collections::BTreeMap<String, Vec<String>>) -> Vec<S
 /// recorded root already matches. A mismatch is the error this exists to
 /// catch — the wrong project sitting in the workbench, or a rewritten
 /// history — and needs `force` to overwrite deliberately.
-pub fn pair(store: &Store, vcs: &dyn Vcs, force: bool) -> Result<Pairing> {
+///
+/// Two purely informational fields ride along for human readers, never
+/// checked by anything: `name`, given by the caller, and the project's
+/// `origin` remote URL, observed here. On a same-root re-pair they are
+/// refreshed (a given name wins; a currently-present remote wins) without
+/// touching the identity or its timestamp.
+pub fn pair(store: &Store, vcs: &dyn Vcs, name: Option<String>, force: bool) -> Result<Pairing> {
     let Some(root) = vcs.root_commit()? else {
         bail!("the project repository has no commits yet — nothing to pair to");
     };
+    let remote = vcs.remote_url()?;
     if let Some(existing) = Pairing::load(store.root())? {
         if existing.root_commit == root {
-            return Ok(existing);
+            let updated = Pairing {
+                name: name.or_else(|| existing.name.clone()),
+                remote: remote.or_else(|| existing.remote.clone()),
+                ..existing.clone()
+            };
+            if updated.name == existing.name && updated.remote == existing.remote {
+                return Ok(existing);
+            }
+            updated.save(store.root())?;
+            vcs.commit_store(&store.store_name(), "llaundry: pair project (update info)")?;
+            return Ok(updated);
         }
         if !force {
             bail!(
@@ -635,6 +652,8 @@ pub fn pair(store: &Store, vcs: &dyn Vcs, force: bool) -> Result<Pairing> {
         schema: 1,
         root_commit: root,
         paired_at: now_millis(),
+        name,
+        remote,
     };
     pairing.save(store.root())?;
     vcs.commit_store(&store.store_name(), "llaundry: pair project")?;
@@ -642,9 +661,10 @@ pub fn pair(store: &Store, vcs: &dyn Vcs, force: bool) -> Result<Pairing> {
 }
 
 /// Verify the store↔project pairing. Read-only and manual — nothing calls it
-/// implicitly. Returns the recorded root commit (`None` means the store is
-/// not paired, which is a notice, not a problem — stores predating pairing
-/// exist) and the list of problems found.
+/// implicitly. Returns the recorded pairing (`None` means the store is not
+/// paired, which is a notice, not a problem — stores predating pairing
+/// exist) and the list of problems found. Only the root commit is checked;
+/// the pairing's name and remote are information for the caller to display.
 ///
 /// The default check is one comparison: the project's actual root commit
 /// against the recorded one. With `deep`, every hash the store points at —
@@ -655,7 +675,7 @@ pub fn verify_pairing(
     store: &Store,
     vcs: &dyn Vcs,
     deep: bool,
-) -> Result<(Option<String>, Vec<String>)> {
+) -> Result<(Option<Pairing>, Vec<String>)> {
     let Some(pairing) = Pairing::load(store.root())? else {
         return Ok((None, Vec::new()));
     };
@@ -700,7 +720,7 @@ pub fn verify_pairing(
             }
         }
     }
-    Ok((Some(pairing.root_commit), problems))
+    Ok((Some(pairing), problems))
 }
 
 /// Enforce that the project working tree is clean apart from `allowed` paths —
@@ -1604,34 +1624,68 @@ mod tests {
             ..Default::default()
         };
 
-        let pairing = pair(&store, &fake, false).unwrap();
+        let pairing = pair(&store, &fake, None, false).unwrap();
         assert_eq!(pairing.root_commit, "root-1");
         assert_eq!(*fake.store_commits.borrow(), 1);
 
         // Same root again: no re-write, no extra store commit.
-        let again = pair(&store, &fake, false).unwrap();
+        let again = pair(&store, &fake, None, false).unwrap();
         assert_eq!(again.root_commit, "root-1");
         assert_eq!(*fake.store_commits.borrow(), 1);
     }
 
     #[test]
+    fn pair_records_and_refreshes_the_informational_fields() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs {
+            root: Some("root-1".into()),
+            remote: Some("git@host:me/p.git".into()),
+            ..Default::default()
+        };
+
+        // Name from the caller, remote observed from the repo.
+        let pairing = pair(&store, &fake, Some("splurt".into()), false).unwrap();
+        assert_eq!(pairing.name.as_deref(), Some("splurt"));
+        assert_eq!(pairing.remote.as_deref(), Some("git@host:me/p.git"));
+        let at = pairing.paired_at;
+
+        // Same root, new name: the info updates without touching the identity
+        // or its timestamp; one extra store commit records it.
+        let renamed = pair(&store, &fake, Some("splurt-2".into()), false).unwrap();
+        assert_eq!(renamed.name.as_deref(), Some("splurt-2"));
+        assert_eq!(renamed.paired_at, at);
+        assert_eq!(*fake.store_commits.borrow(), 2);
+
+        // A repo whose remote vanished keeps the last-known one; nothing to
+        // update, no commit.
+        let no_remote = FakeVcs {
+            root: Some("root-1".into()),
+            ..Default::default()
+        };
+        let kept = pair(&store, &no_remote, None, false).unwrap();
+        assert_eq!(kept.remote.as_deref(), Some("git@host:me/p.git"));
+        assert_eq!(kept.name.as_deref(), Some("splurt-2"));
+        assert_eq!(*no_remote.store_commits.borrow(), 0);
+    }
+
+    #[test]
     fn pair_refuses_an_empty_project_and_a_different_root_without_force() {
         let (_t, store) = temp_store();
-        assert!(pair(&store, &FakeVcs::default(), false).is_err(), "no commits");
+        assert!(pair(&store, &FakeVcs::default(), None, false).is_err(), "no commits");
 
         let first = FakeVcs {
             root: Some("root-1".into()),
             ..Default::default()
         };
-        pair(&store, &first, false).unwrap();
+        pair(&store, &first, None, false).unwrap();
 
         let other = FakeVcs {
             root: Some("root-2".into()),
             ..Default::default()
         };
-        assert!(pair(&store, &other, false).is_err(), "mismatched root");
+        assert!(pair(&store, &other, None, false).is_err(), "mismatched root");
         // A deliberate re-pair (history rewrite) goes through with force.
-        assert_eq!(pair(&store, &other, true).unwrap().root_commit, "root-2");
+        assert_eq!(pair(&store, &other, None, true).unwrap().root_commit, "root-2");
     }
 
     #[test]
@@ -1642,12 +1696,14 @@ mod tests {
             ..Default::default()
         };
 
-        // Unpaired: no problems, no recorded root.
-        assert_eq!(verify_pairing(&store, &fake, false).unwrap(), (None, vec![]));
-
-        pair(&store, &fake, false).unwrap();
+        // Unpaired: no problems, no recorded pairing.
         let (recorded, problems) = verify_pairing(&store, &fake, false).unwrap();
-        assert_eq!(recorded.as_deref(), Some("root-1"));
+        assert!(recorded.is_none());
+        assert!(problems.is_empty());
+
+        pair(&store, &fake, None, false).unwrap();
+        let (recorded, problems) = verify_pairing(&store, &fake, false).unwrap();
+        assert_eq!(recorded.unwrap().root_commit, "root-1");
         assert!(problems.is_empty());
 
         let moved = FakeVcs {
@@ -1672,7 +1728,7 @@ mod tests {
             next_id: "commit-1".into(),
             ..Default::default()
         };
-        pair(&store, &fake, false).unwrap();
+        pair(&store, &fake, None, false).unwrap();
 
         // A completes with an output commit; B is built against it.
         let a = add(&store, &fake, new_node("a", vec![])).unwrap();

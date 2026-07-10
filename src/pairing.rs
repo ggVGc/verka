@@ -14,10 +14,16 @@
 //! project repository stays completely ordinary: the pairing lives entirely
 //! on the store side.
 //!
+//! Besides the checked identity, the file may carry purely informational
+//! fields for human readers — a descriptive short-name and the project's
+//! remote URL, captured at pairing time. Nothing verifies them.
+//!
 //! ```toml
 //! schema = 1
 //! root-commit = "8a1f9c2e..."   # first-parent root of the project's HEAD
 //! paired-at = 1719571200000    # Unix milliseconds
+//! name = "splurt"              # optional, informational only
+//! remote = "git@host:me/splurt.git"  # optional, informational only
 //! ```
 
 use anyhow::{Context, Result};
@@ -36,6 +42,14 @@ pub struct Pairing {
     pub root_commit: String,
     /// When the pairing was recorded, Unix milliseconds.
     pub paired_at: i64,
+    /// A descriptive short-name for the project. Informational only — for
+    /// human readers of the store; never checked against anything.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// The project's remote URL as observed at pairing time (git remote
+    /// `origin`). Informational only; never checked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote: Option<String>,
 }
 
 impl Pairing {
@@ -89,11 +103,30 @@ mod tests {
             schema: 1,
             root_commit: "8a1f9c2e".into(),
             paired_at: 1719571200000,
+            name: Some("splurt".into()),
+            remote: Some("git@host:me/splurt.git".into()),
         };
         pairing.save(&dir).unwrap();
         let got = Pairing::load(&dir).unwrap().unwrap();
         assert_eq!(got.root_commit, "8a1f9c2e");
         assert_eq!(got.paired_at, 1719571200000);
+        assert_eq!(got.name.as_deref(), Some("splurt"));
+        assert_eq!(got.remote.as_deref(), Some("git@host:me/splurt.git"));
+
+        // The informational fields are optional: an identity-only file loads,
+        // and an identity-only pairing serialises without empty keys.
+        let bare = Pairing {
+            schema: 1,
+            root_commit: "8a1f9c2e".into(),
+            paired_at: 0,
+            name: None,
+            remote: None,
+        };
+        bare.save(&dir).unwrap();
+        let text = std::fs::read_to_string(dir.join(PAIRING_FILE)).unwrap();
+        assert!(!text.contains("name"), "{text}");
+        assert!(!text.contains("remote"), "{text}");
+        assert!(Pairing::load(&dir).unwrap().unwrap().name.is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

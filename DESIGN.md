@@ -436,7 +436,7 @@ The store path defaults to `.llaundry/`, overridable with `--store` or
 | `dependents <id>` | Which nodes depend on / derive from this one. |
 | `check` | Integrity-check the store (fsck): parse errors, missing edge targets, duplicates, self-references, dependency cycles. Non-zero exit on problems. |
 | `settled <id>` | Whether the node *and all work transitively derived from it* is done and not stale — "is this branch actually finished?" (a node's own `done` only certifies its own unit of work, e.g. a task that closed at spec time). Non-zero exit if not. |
-| `pair` | Record which project repository this store describes (`pairing.toml`: the project's root commit) — for adopting an existing checkout, or re-pairing with `--force` after a deliberate history rewrite. `--verify` checks the recorded pairing instead (manual, read-only, non-zero exit on problems); `--verify --deep` also checks every recorded output commit still exists in the project repo, catching rewrites the root does not reveal. |
+| `pair` | Record which project repository this store describes (`pairing.toml`: the project's root commit, plus — informationally, never checked — a `--name` and the observed `origin` remote URL) — for adopting an existing checkout, or re-pairing with `--force` after a deliberate history rewrite. `--verify` checks the recorded pairing instead (manual, read-only, non-zero exit on problems); `--verify --deep` also checks every recorded output commit still exists in the project repo, catching rewrites the root does not reveal. |
 
 ### Example
 

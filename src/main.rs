@@ -29,7 +29,12 @@ struct Cli {
 #[derive(Subcommand)]
 enum Cmd {
     /// Create a new, empty store.
-    Init,
+    Init {
+        /// A descriptive short-name for the project, recorded on the pairing
+        /// for human readers (never checked).
+        #[arg(long)]
+        name: Option<String>,
+    },
 
     /// Add a new node. Prints its id.
     Add {
@@ -172,13 +177,17 @@ enum Cmd {
         /// deliberate history rewrite).
         #[arg(long, conflicts_with = "verify")]
         force: bool,
+        /// A descriptive short-name for the project, recorded on the pairing
+        /// for human readers (never checked). Updatable on a re-pair.
+        #[arg(long, conflicts_with = "verify")]
+        name: Option<String>,
     },
 }
 
 fn main() -> Result<()> {
     let Cli { store, cmd } = Cli::parse();
     match cmd {
-        Cmd::Init => {
+        Cmd::Init { name } => {
             let store = Store::init(store)?;
             // Two separate repositories: the workbench holds the store's
             // history; the project is an ordinary repo of its own (move an
@@ -203,8 +212,8 @@ fn main() -> Result<()> {
                 println!("created empty root commit in the project repository");
             }
             let vcs = GitVcs::for_store(&store);
-            let pairing = ops::pair(&store, &vcs, false)?;
-            println!("paired to project root {}", ops::short(&pairing.root_commit));
+            let pairing = ops::pair(&store, &vcs, name, false)?;
+            println!("{}", pairing_line(&pairing));
         }
 
         Cmd::Add {
@@ -435,6 +444,7 @@ fn main() -> Result<()> {
             verify,
             deep,
             force,
+            name,
         } => {
             let store = Store::open(store)?;
             let vcs = GitVcs::for_store(&store);
@@ -442,8 +452,8 @@ fn main() -> Result<()> {
                 let (recorded, problems) = ops::verify_pairing(&store, &vcs, deep)?;
                 match recorded {
                     None => println!("store is not paired (run `llaundry pair` to record the project)"),
-                    Some(root) if problems.is_empty() => {
-                        println!("paired to project root {} — ok", ops::short(&root));
+                    Some(pairing) if problems.is_empty() => {
+                        println!("{} — ok", pairing_line(&pairing));
                     }
                     Some(_) => {
                         for p in &problems {
@@ -454,8 +464,8 @@ fn main() -> Result<()> {
                     }
                 }
             } else {
-                let pairing = ops::pair(&store, &vcs, force)?;
-                println!("paired to project root {}", ops::short(&pairing.root_commit));
+                let pairing = ops::pair(&store, &vcs, name, force)?;
+                println!("{}", pairing_line(&pairing));
             }
         }
 
@@ -470,6 +480,19 @@ fn main() -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// One human line describing a pairing: the checked root, then whatever
+/// informational fields it carries.
+fn pairing_line(pairing: &llaundry::Pairing) -> String {
+    let mut line = format!("paired to project root {}", ops::short(&pairing.root_commit));
+    if let Some(name) = &pairing.name {
+        line.push_str(&format!(" ({name})"));
+    }
+    if let Some(remote) = &pairing.remote {
+        line.push_str(&format!(", remote {remote}"));
+    }
+    line
 }
 
 /// The `show` view, shared in spirit with the MCP server's `show_node`.

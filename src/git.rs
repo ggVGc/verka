@@ -70,6 +70,16 @@ impl Vcs for GitVcs {
         let probe = format!("{hash}^{{commit}}");
         Ok(git(&self.project, &["cat-file", "-e", &probe])?.status.success())
     }
+
+    fn remote_url(&self) -> Result<Option<String>> {
+        // Non-zero means "no such remote" — an answer, not an error.
+        let out = git(&self.project, &["remote", "get-url", "origin"])?;
+        if !out.status.success() {
+            return Ok(None);
+        }
+        let url = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        Ok((!url.is_empty()).then_some(url))
+    }
 }
 
 /// `git init` a directory unless it already is a repository (its own, not a

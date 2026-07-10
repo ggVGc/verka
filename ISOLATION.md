@@ -105,7 +105,9 @@ while the model's own file tools cannot. No daemon, no socket.
   identifies the repository rather than a point in its history). `init`
   records it (minting an empty root commit for a fresh project); `llaundry
   pair` records it for an adopted checkout, and refuses a mismatch unless
-  `--force`d. Verification is deliberately manual, never implicit:
+  `--force`d. The pairing may also carry a descriptive short-name and the
+  project's `origin` remote URL — reference for human readers, never
+  checked. Verification is deliberately manual, never implicit:
   `pair --verify` compares the recorded root against reality, and
   `pair --verify --deep` additionally checks that every recorded output
   commit and built-against pin still exists in the project repository —

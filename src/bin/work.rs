@@ -746,6 +746,9 @@ mod tests {
         fn commit_exists(&self, _hash: &str) -> Result<bool> {
             Ok(true)
         }
+        fn remote_url(&self) -> Result<Option<String>> {
+            Ok(None)
+        }
     }
 
     #[test]

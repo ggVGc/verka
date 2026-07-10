@@ -44,6 +44,11 @@ pub trait Vcs {
     /// Used by the deep pairing check to find recorded output commits that a
     /// history rewrite has orphaned.
     fn commit_exists(&self, hash: &str) -> Result<bool>;
+
+    /// The project repository's remote URL (git remote `origin`), or `None`
+    /// if it has no such remote. Recorded on the pairing as information for
+    /// human readers; never checked.
+    fn remote_url(&self) -> Result<Option<String>>;
 }
 
 /// In-memory [`Vcs`] for tests. `capture` records the paths and returns `next_id`;
@@ -59,6 +64,8 @@ pub struct FakeVcs {
     pub files_for: std::cell::RefCell<std::collections::HashMap<String, Vec<String>>>,
     /// The project repo's root commit; `None` models an empty repository.
     pub root: Option<String>,
+    /// The project repo's `origin` remote URL, if any.
+    pub remote: Option<String>,
     /// Commits that exist in the project repo; `capture` adds `next_id`.
     pub commits: std::cell::RefCell<std::collections::HashSet<String>>,
 }
@@ -97,5 +104,9 @@ impl Vcs for FakeVcs {
 
     fn commit_exists(&self, hash: &str) -> Result<bool> {
         Ok(self.commits.borrow().contains(hash))
+    }
+
+    fn remote_url(&self) -> Result<Option<String>> {
+        Ok(self.remote.clone())
     }
 }
