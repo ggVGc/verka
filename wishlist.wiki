@@ -1,0 +1,17 @@
+- Supply configs per backend in a generic manner
+- Some way of specifying the default backend and backend config (which also configures model):
+  - Something like .git/config?
+- Capture all important info on agent work:
+  - Harness version number (e.g claude --version)
+  - Model used
+  - More?
+- Some way of performing the work of a node in parallel by multiple agents:
+  - Seems to force the inclusion of special output nodes.
+- Associate llaundry repo with target project repo through root commit hash:
+  - Later maybe multiple project repos
+- Make each node work happen in new worktree. Same basic idea as kuro.
+- Start an interactive session on a node:
+  - Everything essentially the same as non-interactive. Session and output captured as usual.
+- Native support for using another llaundry repo as input context.
+- Global context files, injected into the sessions:
+  - In order to be backend agnostic and explicit about context.
