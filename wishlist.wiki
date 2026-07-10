@@ -1,6 +1,8 @@
 - Supply configs per backend in a generic manner
 - Some way of specifying the default backend and backend config (which also configures model):
   - Something like .git/config?
+- New requests are nodes without prior connections:
+  - Should have some way of showing all such nodes, since they are in some way "root nodes"
 - Capture all important info on agent work:
   - Harness version number (e.g claude --version)
   - Model used
@@ -12,6 +14,16 @@
 - Make each node work happen in new worktree. Same basic idea as kuro.
 - Start an interactive session on a node:
   - Everything essentially the same as non-interactive. Session and output captured as usual.
+- During interactive session, when agent wants to show code or a diff, I want to be able to see that in a configurable way:
+  - Initially I will want the session to run in connection to vim, and show the diff in two vim buffers
+  - Possible implementation is a temporary worktree with the changes applied, where git diff will work as usual. Then the user can use their native workflow for diff viewing.
+- I want to be able to perform a code review from the output work of some node:
+  - Related to the diff viewing functionality
+  - I should be able to go through changes, add notes to lines, and also add edits. This should be saved in a new node, associated with the output which it was based on.
+- I should be able to look through the current main branch of the code, pick a line and create a node based on comments on that line/file:
+  - This is probably more of an editor integration, that in the end just creates a node
+  - Similar to "start a review" but based on the current state of the repo. More comments and edits can be added after the first one, until explicitly done.
+  - Maybe all done in a new worktree, so that each edit and comment is a new commit which is then used to build the node
 - Native support for using another llaundry repo as input context.
 - Global context files, injected into the sessions:
   - In order to be backend agnostic and explicit about context.
