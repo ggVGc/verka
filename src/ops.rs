@@ -6,7 +6,7 @@
 //! provenance is asserted: [`complete`] refuses undeclared dirty writes
 //! ([`require_clean_except`]); pure graph edits never gate on project state.
 //! The derived queries ([`current_status`], [`staleness`], [`blockers`],
-//! [`is_ready`]) recompute from the two files per node and are never stored.
+//! [`is_ready`]) recompute from the node files and are never stored.
 //!
 //! All git interaction goes through `&dyn Vcs`, so the whole module is
 //! unit-testable with an in-memory fake — no git binary, repository, or identity
@@ -17,7 +17,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use ulid::Ulid;
 
 use crate::model::{
-    Author, BuiltAgainst, ContextPin, DepKind, NodeMeta, Outcome, ResultMeta, Status, WorkedBy,
+    Author, BuiltAgainst, ContextPin, DefinitionVersion, DepKind, NodeMeta, Outcome, ResultMeta,
+    ResultVersion, Status, WorkedBy,
 };
 use crate::store::{file_blob, Store};
 use crate::vcs::Vcs;
@@ -73,7 +74,10 @@ pub fn link(store: &Store, vcs: &dyn Vcs, from: &str, to: &str, kind: DepKind) -
     }
     list.push(to.to_string());
     store.write_node(from, &meta, &description)?;
-    vcs.commit_store(&store.store_name(), &format!("llaundry: link {from} -> {to}"))?;
+    vcs.commit_store(
+        &store.store_name(),
+        &format!("llaundry: link {from} -> {to}"),
+    )?;
     Ok(())
 }
 
@@ -91,7 +95,7 @@ pub fn edit(store: &Store, vcs: &dyn Vcs, id: &str, description: String) -> Resu
 
 /// Complete a node's work: commit all produced files as one output commit, pin
 /// what the work was built against (dependency versions and outputs, plus any
-/// extra context files), and record it all in `result.md`. Returns the output
+/// extra context files), and record it all in `result.toml` and `result.md`.
 /// commit, or `None` when the work produced no files (graph-only work).
 #[allow(clippy::too_many_arguments)] // mirrors the CLI/MCP surface one-to-one
 pub fn complete(
@@ -125,7 +129,7 @@ pub fn complete(
         &ResultMeta {
             at: now_millis(),
             author,
-            node_version: store.node_version(id)?,
+            definition: store.node_version(id)?,
             outcome: Outcome::Done,
             output_commit: output_commit.clone(),
             worked_by: None,
@@ -155,7 +159,7 @@ pub fn respond(store: &Store, vcs: &dyn Vcs, id: &str, notes: &str, author: Auth
         &ResultMeta {
             at: now_millis(),
             author,
-            node_version: store.node_version(id)?,
+            definition: store.node_version(id)?,
             outcome: Outcome::Done,
             output_commit: None,
             worked_by: None,
@@ -180,7 +184,7 @@ pub fn fail(store: &Store, vcs: &dyn Vcs, id: &str, notes: &str, author: Author)
         &ResultMeta {
             at: now_millis(),
             author,
-            node_version: store.node_version(id)?,
+            definition: store.node_version(id)?,
             outcome: Outcome::Failed,
             output_commit: None,
             worked_by: None,
@@ -248,7 +252,10 @@ pub fn amend_context(store: &Store, vcs: &dyn Vcs, id: &str, reads: &[String]) -
         return Ok(0);
     }
     store.write_result(id, &result, &notes)?;
-    vcs.commit_store(&store.store_name(), &format!("llaundry: observed context {id}"))?;
+    vcs.commit_store(
+        &store.store_name(),
+        &format!("llaundry: observed context {id}"),
+    )?;
     Ok(added)
 }
 
@@ -281,7 +288,7 @@ pub fn amend_worker(
 
 /// A node's derived status.
 ///
-/// `done` holds only while the result's `node_version` still matches `node.md`:
+/// `done` holds only while the result's definition version still matches:
 /// editing the definition after completion reopens the node, because the
 /// completion no longer certifies the current content.
 pub fn current_status(store: &Store, id: &str) -> Status {
@@ -289,7 +296,7 @@ pub fn current_status(store: &Store, id: &str) -> Status {
         Ok(Some((r, _))) => match r.outcome {
             Outcome::Failed => Status::Failed,
             Outcome::Done => {
-                if store.node_version(id).ok().as_deref() == Some(r.node_version.as_str()) {
+                if store.node_version(id).ok().as_ref() == Some(&r.definition) {
                     Status::Done
                 } else {
                     Status::Open
@@ -315,23 +322,32 @@ pub fn staleness(store: &Store, vcs: &dyn Vcs, id: &str) -> Vec<String> {
         return reasons;
     };
 
-    if store.node_version(id).ok().as_deref() != Some(result.node_version.as_str()) {
-        reasons.push(format!(
-            "definition changed since the work (result covers {}, node.md moved)",
-            short(&result.node_version)
-        ));
+    if let Ok(current) = store.node_version(id) {
+        definition_drift(
+            "definition changed since the work",
+            &result.definition,
+            &current,
+            &mut reasons,
+        );
+    } else {
+        reasons.push("definition missing or unreadable since the work".into());
     }
 
     for ba in &result.built_against {
         match store.node_version(&ba.id) {
-            Ok(current) if current != ba.pin => reasons.push(format!(
-                "dependency {}: definition moved (built against {}, now {})",
-                ba.id,
-                short(&ba.pin),
-                short(&current)
-            )),
-            Ok(_) => {}
+            Ok(current) => definition_drift(
+                &format!("dependency {}: definition moved", ba.id),
+                &ba.definition,
+                &current,
+                &mut reasons,
+            ),
             Err(_) => reasons.push(format!("dependency {}: missing", ba.id)),
+        }
+        if store.result_version(&ba.id).ok() != ba.result {
+            reasons.push(format!(
+                "dependency {}: result changed since it was consumed",
+                ba.id
+            ));
         }
         let current_output = output_of(store, &ba.id);
         if current_output != ba.output {
@@ -440,7 +456,12 @@ pub fn dependents(store: &Store, id: &str) -> Result<Vec<String>> {
             continue;
         }
         let (meta, _) = store.read_node(&other)?;
-        if meta.depends_on.iter().chain(&meta.derived_from).any(|d| d == id) {
+        if meta
+            .depends_on
+            .iter()
+            .chain(&meta.derived_from)
+            .any(|d| d == id)
+        {
             out.push(other);
         }
     }
@@ -495,7 +516,7 @@ pub fn unsettled(store: &Store, vcs: &dyn Vcs, id: &str) -> Result<Vec<String>> 
 /// individually-valid branches, older tools). Returns explicit problem reports;
 /// empty means the store is consistent. Read-only and git-free.
 ///
-/// Checked per node: `node.md` and `result.md` parse; dependency lists hold no
+/// Checked per node: definition and result files parse; dependency lists hold no
 /// duplicates or self-references; every edge target exists; and `depends_on`
 /// contains no cycles (which would deadlock readiness — every node in the
 /// cycle waiting on another).
@@ -507,12 +528,12 @@ pub fn check(store: &Store) -> Result<Vec<String>> {
         let meta = match store.read_node(&id) {
             Ok((meta, _)) => meta,
             Err(e) => {
-                problems.push(format!("{id}: unreadable node.md ({e:#})"));
+                problems.push(format!("{id}: unreadable definition ({e:#})"));
                 continue;
             }
         };
         if let Err(e) = store.read_result(&id) {
-            problems.push(format!("{id}: unreadable result.md ({e:#})"));
+            problems.push(format!("{id}: unreadable result ({e:#})"));
         }
         for (kind, list) in [
             ("depends_on", &meta.depends_on),
@@ -612,6 +633,22 @@ pub fn short(hash: &str) -> &str {
     &hash[..hash.len().min(12)]
 }
 
+pub fn short_definition(version: &DefinitionVersion) -> String {
+    format!(
+        "{}/{}",
+        short(&version.metadata),
+        short(&version.description)
+    )
+}
+
+pub fn short_result(version: &ResultVersion) -> String {
+    format!(
+        "{}/{}",
+        short(&version.metadata),
+        version.notes.as_deref().map_or("none", short)
+    )
+}
+
 /// Validate that an edge target exists.
 fn check_edge(store: &Store, to: &str) -> Result<()> {
     store
@@ -626,16 +663,40 @@ fn pin_deps(store: &Store, meta: &NodeMeta) -> Result<Vec<BuiltAgainst>> {
         .iter()
         .chain(&meta.derived_from)
         .map(|dep| {
-            let pin = store
+            let definition = store
                 .node_version(dep)
                 .with_context(|| format!("cannot pin unknown dependency `{dep}`"))?;
+            let result = store.result_version(dep).ok();
             Ok(BuiltAgainst {
                 id: dep.clone(),
-                pin,
+                definition,
+                result,
                 output: output_of(store, dep),
             })
         })
         .collect()
+}
+
+fn definition_drift(
+    prefix: &str,
+    pinned: &DefinitionVersion,
+    current: &DefinitionVersion,
+    reasons: &mut Vec<String>,
+) {
+    if pinned.metadata != current.metadata {
+        reasons.push(format!(
+            "{prefix}: node.toml changed (built against {}, now {})",
+            short(&pinned.metadata),
+            short(&current.metadata)
+        ));
+    }
+    if pinned.description != current.description {
+        reasons.push(format!(
+            "{prefix}: description.md changed (built against {}, now {})",
+            short(&pinned.description),
+            short(&current.description)
+        ));
+    }
 }
 
 /// Pin each context path by its current content; errors if a file is missing.
@@ -728,18 +789,35 @@ mod tests {
 
         // One genuinely new read gets pinned; a declared pin, a node output, a
         // missing file, and a duplicate do not.
-        let reads: Vec<String> = ["read.txt", "declared.txt", "out.txt", "missing.txt", "read.txt"]
-            .map(String::from)
-            .to_vec();
+        let reads: Vec<String> = [
+            "read.txt",
+            "declared.txt",
+            "out.txt",
+            "missing.txt",
+            "read.txt",
+        ]
+        .map(String::from)
+        .to_vec();
         assert_eq!(amend_context(&store, &fake, &id, &reads).unwrap(), 1);
 
         let (result, notes) = store.read_result(&id).unwrap().unwrap();
         assert_eq!(notes, "done", "amending keeps the narrative");
-        let pin = result.context.iter().find(|p| p.path == "read.txt").unwrap();
+        let pin = result
+            .context
+            .iter()
+            .find(|p| p.path == "read.txt")
+            .unwrap();
         assert!(pin.observed);
-        let declared = result.context.iter().find(|p| p.path == "declared.txt").unwrap();
+        let declared = result
+            .context
+            .iter()
+            .find(|p| p.path == "declared.txt")
+            .unwrap();
         assert!(!declared.observed);
-        assert!(!result.context.iter().any(|p| p.path == "out.txt" || p.path == "missing.txt"));
+        assert!(!result
+            .context
+            .iter()
+            .any(|p| p.path == "out.txt" || p.path == "missing.txt"));
 
         // Re-running with the same reads adds nothing.
         assert_eq!(amend_context(&store, &fake, &id, &reads).unwrap(), 0);
@@ -751,7 +829,10 @@ mod tests {
         let fake = FakeVcs::default();
         let id = add(&store, &fake, new_node("a", vec![])).unwrap();
         let commits_before = *fake.store_commits.borrow();
-        assert_eq!(amend_context(&store, &fake, &id, &["x.txt".into()]).unwrap(), 0);
+        assert_eq!(
+            amend_context(&store, &fake, &id, &["x.txt".into()]).unwrap(),
+            0
+        );
         assert_eq!(*fake.store_commits.borrow(), commits_before);
     }
 
@@ -773,7 +854,13 @@ mod tests {
 
         // A result older than the session is someone else's — left untouched.
         assert!(!amend_worker(&store, &fake, &id, engine(), at + 1).unwrap());
-        assert!(store.read_result(&id).unwrap().unwrap().0.worked_by.is_none());
+        assert!(store
+            .read_result(&id)
+            .unwrap()
+            .unwrap()
+            .0
+            .worked_by
+            .is_none());
 
         // This session's result gets the stamp, keeping the narrative.
         assert!(amend_worker(&store, &fake, &id, engine(), at).unwrap());
@@ -797,12 +884,18 @@ mod tests {
 
         let id = add(&store, &fake, new_node("a", vec![])).unwrap();
         done(&store, &fake, &id);
-        assert_eq!(amend_context(&store, &fake, &id, &["read.txt".into()]).unwrap(), 1);
+        assert_eq!(
+            amend_context(&store, &fake, &id, &["read.txt".into()]).unwrap(),
+            1
+        );
         assert!(staleness(&store, &fake, &id).is_empty());
 
         std::fs::write(root.join("read.txt"), "v2").unwrap();
         let reasons = staleness(&store, &fake, &id);
-        assert!(reasons.iter().any(|r| r.contains("read.txt")), "{reasons:?}");
+        assert!(
+            reasons.iter().any(|r| r.contains("read.txt")),
+            "{reasons:?}"
+        );
     }
 
     #[test]
@@ -815,7 +908,10 @@ mod tests {
         let id = add(&store, &fake, new_node("a", vec![])).unwrap();
         assert!(store.exists(&id));
         assert_eq!(current_status(&store, &id), Status::Open);
-        assert!(staleness(&store, &fake, &id).is_empty(), "no result, nothing to invalidate");
+        assert!(
+            staleness(&store, &fake, &id).is_empty(),
+            "no result, nothing to invalidate"
+        );
     }
 
     #[test]
@@ -843,11 +939,14 @@ mod tests {
         assert_eq!(output_of(&store, &id).as_deref(), Some("commit-abc"));
 
         let (result, notes) = store.read_result(&id).unwrap().unwrap();
-        assert_eq!(result.node_version, store.node_version(&id).unwrap());
+        assert_eq!(result.definition, store.node_version(&id).unwrap());
         assert_eq!(notes, "implemented it");
 
         // The right paths were captured; add + complete each committed the store.
-        assert_eq!(fake.captured.borrow().as_slice(), &[vec!["src/x.rs".to_string()]]);
+        assert_eq!(
+            fake.captured.borrow().as_slice(),
+            &[vec!["src/x.rs".to_string()]]
+        );
         assert_eq!(*fake.store_commits.borrow(), 2);
     }
 
@@ -857,8 +956,17 @@ mod tests {
         let fake = FakeVcs::default();
         let id = add(&store, &fake, new_node("planning", vec![])).unwrap();
 
-        let commit =
-            complete(&store, &fake, &id, &[], &[], None, "made sub-tasks", Author::Machine).unwrap();
+        let commit = complete(
+            &store,
+            &fake,
+            &id,
+            &[],
+            &[],
+            None,
+            "made sub-tasks",
+            Author::Machine,
+        )
+        .unwrap();
         assert_eq!(commit, None);
         assert_eq!(current_status(&store, &id), Status::Done);
         assert!(fake.captured.borrow().is_empty(), "nothing captured");
@@ -876,7 +984,28 @@ mod tests {
         assert_eq!(current_status(&store, &id), Status::Open);
         let reasons = staleness(&store, &fake, &id);
         assert!(
-            reasons.iter().any(|r| r.contains("definition changed since the work")),
+            reasons
+                .iter()
+                .any(|r| r.contains("definition changed since the work")),
+            "{reasons:?}"
+        );
+    }
+
+    #[test]
+    fn editing_node_metadata_reopens_it() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs::default();
+        let id = add(&store, &fake, new_node("a", vec![])).unwrap();
+        done(&store, &fake, &id);
+
+        let (mut meta, description) = store.read_node(&id).unwrap();
+        meta.assignee = Some(Author::Human);
+        store.write_node(&id, &meta, &description).unwrap();
+
+        assert_eq!(current_status(&store, &id), Status::Open);
+        let reasons = staleness(&store, &fake, &id);
+        assert!(
+            reasons.iter().any(|r| r.contains("node.toml changed")),
             "{reasons:?}"
         );
     }
@@ -894,7 +1023,9 @@ mod tests {
         edit(&store, &fake, &a, "revised".into()).unwrap();
         let reasons = staleness(&store, &fake, &b);
         assert!(
-            reasons.iter().any(|r| r.contains(&a) && r.contains("definition moved")),
+            reasons
+                .iter()
+                .any(|r| r.contains(&a) && r.contains("definition moved")),
             "{reasons:?}"
         );
     }
@@ -907,17 +1038,59 @@ mod tests {
             ..Default::default()
         };
         let a = add(&store, &fake, new_node("a", vec![])).unwrap();
-        complete(&store, &fake, &a, &["src/a.rs".into()], &[], None, "", Author::Machine).unwrap();
+        complete(
+            &store,
+            &fake,
+            &a,
+            &["src/a.rs".into()],
+            &[],
+            None,
+            "",
+            Author::Machine,
+        )
+        .unwrap();
         let b = add(&store, &fake, new_node("b", vec![a.clone()])).unwrap();
         done(&store, &fake, &b);
         assert!(staleness(&store, &fake, &b).is_empty());
 
         // A is re-worked and produces a new output commit -> B is stale.
         fake.next_id = "commit-2".into();
-        complete(&store, &fake, &a, &["src/a.rs".into()], &[], None, "", Author::Machine).unwrap();
+        complete(
+            &store,
+            &fake,
+            &a,
+            &["src/a.rs".into()],
+            &[],
+            None,
+            "",
+            Author::Machine,
+        )
+        .unwrap();
         let reasons = staleness(&store, &fake, &b);
         assert!(
-            reasons.iter().any(|r| r.contains(&a) && r.contains("output changed")),
+            reasons
+                .iter()
+                .any(|r| r.contains(&a) && r.contains("output changed")),
+            "{reasons:?}"
+        );
+    }
+
+    #[test]
+    fn dependency_result_notes_change_makes_dependent_stale() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs::default();
+        let answer = add(&store, &fake, new_node("answer", vec![])).unwrap();
+        respond(&store, &fake, &answer, "use option A", Author::Human).unwrap();
+        let consumer = add(&store, &fake, new_node("consumer", vec![answer.clone()])).unwrap();
+        done(&store, &fake, &consumer);
+        assert!(staleness(&store, &fake, &consumer).is_empty());
+
+        respond(&store, &fake, &answer, "use option B", Author::Human).unwrap();
+        let reasons = staleness(&store, &fake, &consumer);
+        assert!(
+            reasons
+                .iter()
+                .any(|r| r.contains(&answer) && r.contains("result changed")),
             "{reasons:?}"
         );
     }
@@ -929,21 +1102,34 @@ mod tests {
         let id = add(&store, &fake, new_node("a", vec![])).unwrap();
 
         std::fs::write(store.project_root().join("helper.rs"), "v1").unwrap();
-        complete(&store, &fake, &id, &[], &["helper.rs".into()], None, "", Author::Machine)
-            .unwrap();
+        complete(
+            &store,
+            &fake,
+            &id,
+            &[],
+            &["helper.rs".into()],
+            None,
+            "",
+            Author::Machine,
+        )
+        .unwrap();
         assert!(staleness(&store, &fake, &id).is_empty());
 
         std::fs::write(store.project_root().join("helper.rs"), "v2").unwrap();
         let reasons = staleness(&store, &fake, &id);
         assert!(
-            reasons.iter().any(|r| r.contains("context helper.rs") && r.contains("content changed")),
+            reasons
+                .iter()
+                .any(|r| r.contains("context helper.rs") && r.contains("content changed")),
             "{reasons:?}"
         );
 
         std::fs::remove_file(store.project_root().join("helper.rs")).unwrap();
         let reasons = staleness(&store, &fake, &id);
         assert!(
-            reasons.iter().any(|r| r.contains("context helper.rs") && r.contains("missing")),
+            reasons
+                .iter()
+                .any(|r| r.contains("context helper.rs") && r.contains("missing")),
             "{reasons:?}"
         );
     }
@@ -956,12 +1142,26 @@ mod tests {
             ..Default::default()
         };
         let id = add(&store, &fake, new_node("a", vec![])).unwrap();
-        complete(&store, &fake, &id, &["src/x.rs".into()], &[], None, "", Author::Machine).unwrap();
+        complete(
+            &store,
+            &fake,
+            &id,
+            &["src/x.rs".into()],
+            &[],
+            None,
+            "",
+            Author::Machine,
+        )
+        .unwrap();
         assert!(staleness(&store, &fake, &id).is_empty());
 
-        fake.drift_for.insert("commit-x".into(), "M\tsrc/x.rs".into());
+        fake.drift_for
+            .insert("commit-x".into(), "M\tsrc/x.rs".into());
         let reasons = staleness(&store, &fake, &id);
-        assert!(reasons.iter().any(|r| r.contains("output changed since")), "{reasons:?}");
+        assert!(
+            reasons.iter().any(|r| r.contains("output changed since")),
+            "{reasons:?}"
+        );
     }
 
     #[test]
@@ -973,7 +1173,10 @@ mod tests {
 
         // A not done -> B blocked, not ready.
         let blocked = blockers(&store, &fake, &b);
-        assert!(blocked.iter().any(|r| r.contains("not done")), "{blocked:?}");
+        assert!(
+            blocked.iter().any(|r| r.contains("not done")),
+            "{blocked:?}"
+        );
         assert!(!is_ready(&store, &fake, &b));
 
         // A done -> B ready.
@@ -984,7 +1187,10 @@ mod tests {
         // A edited after done -> reopened -> B blocked again.
         edit(&store, &fake, &a, "revised".into()).unwrap();
         let blocked = blockers(&store, &fake, &b);
-        assert!(blocked.iter().any(|r| r.contains("not done")), "{blocked:?}");
+        assert!(
+            blocked.iter().any(|r| r.contains("not done")),
+            "{blocked:?}"
+        );
     }
 
     #[test]
@@ -1014,7 +1220,17 @@ mod tests {
         };
         let a = add(&store, &fake, new_node("a", vec![])).unwrap();
         add(&store, &fake, new_node("other", vec![])).unwrap();
-        complete(&store, &fake, &a, &["src/x.rs".into()], &[], None, "", Author::Machine).unwrap();
+        complete(
+            &store,
+            &fake,
+            &a,
+            &["src/x.rs".into()],
+            &[],
+            None,
+            "",
+            Author::Machine,
+        )
+        .unwrap();
 
         assert_eq!(origin(&store, "commit-xyz").unwrap(), Some(a));
         assert_eq!(origin(&store, "no-such-commit").unwrap(), None);
@@ -1074,12 +1290,18 @@ mod tests {
         assert!(all.contains("refers to the node itself"), "{all}");
         assert!(all.contains("duplicate depends_on entry"), "{all}");
         assert!(all.contains("missing or unreadable"), "{all}");
-        assert!(all.contains(&format!("dependency cycle: {node} -> {node}")), "{all}");
+        assert!(
+            all.contains(&format!("dependency cycle: {node} -> {node}")),
+            "{all}"
+        );
 
         // An unparseable file is reported, not a crash.
-        std::fs::write(store.node_dir(&dep).join("node.md"), "not frontmatter").unwrap();
+        std::fs::write(store.node_dir(&dep).join("node.toml"), "not = valid = toml").unwrap();
         let problems = check(&store).unwrap();
-        assert!(problems.iter().any(|p| p.contains("unreadable node.md")), "{problems:?}");
+        assert!(
+            problems.iter().any(|p| p.contains("unreadable definition")),
+            "{problems:?}"
+        );
     }
 
     #[test]
@@ -1096,7 +1318,10 @@ mod tests {
 
         let problems = check(&store).unwrap();
         assert_eq!(problems.len(), 1, "{problems:?}");
-        assert!(problems[0].starts_with("dependency cycle: "), "{problems:?}");
+        assert!(
+            problems[0].starts_with("dependency cycle: "),
+            "{problems:?}"
+        );
         assert!(problems[0].contains(&a) && problems[0].contains(&b));
     }
 
@@ -1122,17 +1347,35 @@ mod tests {
         assert_eq!(reasons, vec![format!("{imp}: not done (open)")]);
 
         // Implementation lands: the whole branch is settled.
-        complete(&store, &fake, &imp, &["src/x.rs".into()], &[], None, "", Author::Machine)
-            .unwrap();
+        complete(
+            &store,
+            &fake,
+            &imp,
+            &["src/x.rs".into()],
+            &[],
+            None,
+            "",
+            Author::Machine,
+        )
+        .unwrap();
         assert!(unsettled(&store, &fake, &root).unwrap().is_empty());
-        assert!(unsettled(&store, &fake, &imp).unwrap().is_empty(), "leaves settle too");
+        assert!(
+            unsettled(&store, &fake, &imp).unwrap().is_empty(),
+            "leaves settle too"
+        );
 
         // Editing the sub-task reopens it and flags the branch again, twice over:
         // the sub-task is no longer done, and the impl is done-but-stale.
         edit(&store, &fake, &sub, "revised".into()).unwrap();
         let reasons = unsettled(&store, &fake, &root).unwrap();
-        assert!(reasons.contains(&format!("{sub}: not done (open)")), "{reasons:?}");
-        assert!(reasons.contains(&format!("{imp}: done but stale")), "{reasons:?}");
+        assert!(
+            reasons.contains(&format!("{sub}: not done (open)")),
+            "{reasons:?}"
+        );
+        assert!(
+            reasons.contains(&format!("{imp}: done but stale")),
+            "{reasons:?}"
+        );
     }
 
     #[test]
@@ -1159,7 +1402,7 @@ mod tests {
         let a = add(&store, &fake, new_node("a", vec![])).unwrap();
         let (meta, _) = store.read_node(&a).unwrap();
         assert_eq!(meta.assignee, None);
-        let text = std::fs::read_to_string(store.node_dir(&a).join("node.md")).unwrap();
+        let text = std::fs::read_to_string(store.node_dir(&a).join("node.toml")).unwrap();
         assert!(!text.contains("assignee"), "{text}");
     }
 
@@ -1178,7 +1421,10 @@ mod tests {
         question.assignee = Some(Author::Human);
         let q = add(&store, &dirty, question).unwrap();
 
-        assert!(respond(&store, &dirty, &q, "  ", Author::Human).is_err(), "needs text");
+        assert!(
+            respond(&store, &dirty, &q, "  ", Author::Human).is_err(),
+            "needs text"
+        );
         respond(&store, &dirty, &q, "concept A", Author::Human).unwrap();
 
         assert_eq!(current_status(&store, &q), Status::Done);
@@ -1186,8 +1432,15 @@ mod tests {
         assert_eq!(notes, "concept A");
         assert_eq!(result.author, Author::Human);
         assert_eq!(result.output_commit, None);
-        assert_eq!(result.built_against.len(), 1, "the answer pins its dependencies");
-        assert!(dirty.captured.borrow().is_empty(), "no output commit is minted");
+        assert_eq!(
+            result.built_against.len(),
+            1,
+            "the answer pins its dependencies"
+        );
+        assert!(
+            dirty.captured.borrow().is_empty(),
+            "no output commit is minted"
+        );
 
         // Editing the question afterwards invalidates the answer as usual.
         edit(&store, &dirty, &q, "Question: revised".into()).unwrap();
@@ -1216,8 +1469,17 @@ mod tests {
         // Completion asserts output provenance: the undeclared write is refused,
         // and declaring it is what unblocks the completion.
         assert!(complete(&store, &dirty, &a, &[], &[], None, "", Author::Machine).is_err());
-        complete(&store, &dirty, &a, &["src/x.rs".into()], &[], None, "", Author::Machine)
-            .unwrap();
+        complete(
+            &store,
+            &dirty,
+            &a,
+            &["src/x.rs".into()],
+            &[],
+            None,
+            "",
+            Author::Machine,
+        )
+        .unwrap();
     }
 
     #[test]

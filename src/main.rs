@@ -75,7 +75,7 @@ enum Cmd {
     },
 
     /// Record a node's work as done: commit the produced files as one output
-    /// commit, pin what the work was built against, and write result.md.
+    /// commit, pin what the work was built against, and write its result files.
     Complete {
         id: String,
         /// A produced file, relative to the project root (repeatable). May be
@@ -90,7 +90,7 @@ enum Cmd {
         /// node's description).
         #[arg(long, short = 'm')]
         message: Option<String>,
-        /// Narrative of what happened during the work (the body of result.md).
+        /// Narrative of what happened during the work (written to result.md).
         #[arg(long)]
         notes: Option<String>,
         /// Read the notes from a file instead.
@@ -211,11 +211,15 @@ fn main() -> Result<()> {
             println!("{from}  +{} -> {to}", rel.as_str());
         }
 
-        Cmd::Edit { id, description, file } => {
+        Cmd::Edit {
+            id,
+            description,
+            file,
+        } => {
             let store = Store::open(store)?;
             let vcs = GitVcs::for_store(&store);
             ops::edit(&store, &vcs, &id, read_description(description, file)?)?;
-            println!("{id}  {}", ops::short(&store.node_version(&id)?));
+            println!("{id}  {}", ops::short_definition(&store.node_version(&id)?));
         }
 
         Cmd::Complete {
@@ -270,7 +274,12 @@ fn main() -> Result<()> {
             for id in store.list_ids()? {
                 let (_, description) = store.read_node(&id)?;
                 let status = ops::current_status(&store, &id);
-                println!("{:<32} {:<8} {}", id, status.as_str(), llaundry::title_of(&description));
+                println!(
+                    "{:<32} {:<8} {}",
+                    id,
+                    status.as_str(),
+                    llaundry::title_of(&description)
+                );
             }
         }
 
@@ -420,7 +429,11 @@ fn show_node(store: &Store, vcs: &GitVcs, id: &str) -> Result<String> {
     if let Some(assignee) = meta.assignee {
         writeln!(out, "assignee: {}", assignee.as_str())?;
     }
-    writeln!(out, "version: {}", ops::short(&store.node_version(id)?))?;
+    writeln!(
+        out,
+        "version: {}",
+        ops::short_definition(&store.node_version(id)?)
+    )?;
     for dep in &meta.depends_on {
         writeln!(out, "depends_on:   {dep}")?;
     }
@@ -442,20 +455,36 @@ fn show_node(store: &Store, vcs: &GitVcs, id: &str) -> Result<String> {
             writeln!(out, "  output:  commit {}", ops::short(commit))?;
         }
         for ba in &result.built_against {
+            let result_pin = ba
+                .result
+                .as_ref()
+                .map_or_else(|| "none".into(), ops::short_result);
             match &ba.output {
                 Some(o) => writeln!(
                     out,
-                    "  built against {} @ {} (output {})",
+                    "  built against {} @ {} (result {}, output {})",
                     ba.id,
-                    ops::short(&ba.pin),
+                    ops::short_definition(&ba.definition),
+                    result_pin,
                     ops::short(o)
                 )?,
-                None => writeln!(out, "  built against {} @ {}", ba.id, ops::short(&ba.pin))?,
+                None => writeln!(
+                    out,
+                    "  built against {} @ {} (result {})",
+                    ba.id,
+                    ops::short_definition(&ba.definition),
+                    result_pin
+                )?,
             }
         }
         for pin in &result.context {
             let tag = if pin.observed { " (observed)" } else { "" };
-            writeln!(out, "  context {} @ {}{tag}", pin.path, ops::short(&pin.blob))?;
+            writeln!(
+                out,
+                "  context {} @ {}{tag}",
+                pin.path,
+                ops::short(&pin.blob)
+            )?;
         }
         let notes = notes.trim_end();
         if !notes.is_empty() {
@@ -533,7 +562,10 @@ fn resolve_notes(
 /// Drop lines starting with '#' and trim surrounding blank space — the
 /// git-commit template convention.
 fn strip_comment_lines(text: &str) -> String {
-    let kept: Vec<&str> = text.lines().filter(|l| !l.trim_start().starts_with('#')).collect();
+    let kept: Vec<&str> = text
+        .lines()
+        .filter(|l| !l.trim_start().starts_with('#'))
+        .collect();
     kept.join("\n").trim().to_string()
 }
 

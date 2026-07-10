@@ -5,15 +5,16 @@
 //! ```text
 //! <root>/
 //!   nodes/<id>/
-//!     node.md      frontmatter (TOML) + prose — the definition
-//!     result.md    frontmatter (TOML) + narrative — the completion record
+//!     node.toml       structured definition metadata
+//!     description.md  definition prose
+//!     result.toml     structured completion record (optional)
+//!     result.md       completion narrative (optional)
 //!     work.jsonl   recorded interaction log of work sessions (optional)
 //! ```
 //!
 //! There is no object store, no refs, and no status log: git is the only
-//! versioning layer. A node's *version* is the git blob id of its `node.md`,
-//! computed on demand ([`Store::node_version`]) and never stored inside the
-//! file. History is `git log` on the node's directory.
+//! versioning layer. A node's version is the pair of Git blob ids for
+//! `node.toml` and `description.md`, computed on demand.
 //!
 //! The store lives in a *workbench*: an outer directory (its own git repo)
 //! holding the store next to the project, which is a completely ordinary,
@@ -34,7 +35,7 @@ use sha1::{Digest, Sha1};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::model::{NodeMeta, ResultMeta};
+use crate::model::{DefinitionVersion, NodeMeta, ResultMeta, ResultVersion};
 
 /// The project directory inside a workbench, beside the store.
 pub const PROJECT_DIR: &str = "project";
@@ -62,8 +63,7 @@ impl Store {
             .with_context(|| format!("creating {}/nodes", root.display()))?;
         let store = Store { root };
         let project = store.project_root();
-        fs::create_dir_all(&project)
-            .with_context(|| format!("creating {}", project.display()))?;
+        fs::create_dir_all(&project).with_context(|| format!("creating {}", project.display()))?;
         Ok(store)
     }
 
@@ -73,7 +73,13 @@ impl Store {
         self.root.join("nodes").join(id)
     }
     fn node_path(&self, id: &str) -> PathBuf {
-        self.node_dir(id).join("node.md")
+        self.node_dir(id).join("node.toml")
+    }
+    fn description_path(&self, id: &str) -> PathBuf {
+        self.node_dir(id).join("description.md")
+    }
+    fn result_meta_path(&self, id: &str) -> PathBuf {
+        self.node_dir(id).join("result.toml")
     }
     fn result_path(&self, id: &str) -> PathBuf {
         self.node_dir(id).join("result.md")
@@ -83,57 +89,98 @@ impl Store {
         self.node_path(id).is_file()
     }
 
-    // --- node.md (the definition) ----------------------------------------------
+    // --- definition ------------------------------------------------------------
 
     pub fn write_node(&self, id: &str, meta: &NodeMeta, description: &str) -> Result<()> {
         fs::create_dir_all(self.node_dir(id))?;
-        let doc =
-            to_document(&toml::to_string_pretty(meta).context("serialising node meta")?, description);
-        fs::write(self.node_path(id), doc).with_context(|| format!("writing node `{id}`"))?;
+        let data = toml::to_string_pretty(meta).context("serialising node metadata")?;
+        fs::write(self.node_path(id), data).with_context(|| format!("writing node `{id}`"))?;
+        fs::write(self.description_path(id), description)
+            .with_context(|| format!("writing description for `{id}`"))?;
         Ok(())
     }
 
     pub fn read_node(&self, id: &str) -> Result<(NodeMeta, String)> {
-        let text = fs::read_to_string(self.node_path(id))
+        let data = fs::read_to_string(self.node_path(id))
             .with_context(|| format!("unknown node `{id}`"))?;
-        let (front, description) = split_document(&text)
-            .with_context(|| format!("malformed node.md for `{id}`"))?;
-        let meta = toml::from_str(&front).with_context(|| format!("parsing node.md for `{id}`"))?;
+        let meta =
+            toml::from_str(&data).with_context(|| format!("parsing node.toml for `{id}`"))?;
+        let description = fs::read_to_string(self.description_path(id))
+            .with_context(|| format!("reading description.md for `{id}`"))?;
         Ok((meta, description))
     }
 
-    /// The node's version: the git blob id of its `node.md` bytes, computed on
-    /// demand. Editing the definition changes it; writing `result.md` does not.
-    pub fn node_version(&self, id: &str) -> Result<String> {
-        let bytes =
+    /// The node's version: Git blob ids of its structured metadata and prose.
+    pub fn node_version(&self, id: &str) -> Result<DefinitionVersion> {
+        let metadata =
             fs::read(self.node_path(id)).with_context(|| format!("unknown node `{id}`"))?;
-        Ok(blob_id(&bytes))
+        let description = fs::read(self.description_path(id))
+            .with_context(|| format!("reading description.md for `{id}`"))?;
+        Ok(DefinitionVersion {
+            metadata: blob_id(&metadata),
+            description: blob_id(&description),
+        })
     }
 
-    // --- result.md (the completion record) --------------------------------------
+    // --- result (structured record plus optional prose) -------------------------
 
     pub fn write_result(&self, id: &str, meta: &ResultMeta, notes: &str) -> Result<()> {
         if !self.exists(id) {
             bail!("unknown node `{id}`");
         }
-        let doc =
-            to_document(&toml::to_string_pretty(meta).context("serialising result meta")?, notes);
-        fs::write(self.result_path(id), doc).with_context(|| format!("writing result for `{id}`"))?;
+        let data = toml::to_string_pretty(meta).context("serialising result metadata")?;
+        fs::write(self.result_meta_path(id), data)
+            .with_context(|| format!("writing result metadata for `{id}`"))?;
+        if notes.is_empty() {
+            match fs::remove_file(self.result_path(id)) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => {
+                    return Err(e)
+                        .with_context(|| format!("removing empty result notes for `{id}`"))
+                }
+            }
+        } else {
+            fs::write(self.result_path(id), notes)
+                .with_context(|| format!("writing result notes for `{id}`"))?;
+        }
         Ok(())
     }
 
     /// The node's completion record, or `None` if it has not been worked yet.
     pub fn read_result(&self, id: &str) -> Result<Option<(ResultMeta, String)>> {
-        let text = match fs::read_to_string(self.result_path(id)) {
+        let data = match fs::read_to_string(self.result_meta_path(id)) {
             Ok(t) => t,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                if self.result_path(id).exists() {
+                    bail!("result.md exists without result.toml for `{id}`");
+                }
+                return Ok(None);
+            }
             Err(e) => return Err(e).with_context(|| format!("reading result for `{id}`")),
         };
-        let (front, notes) = split_document(&text)
-            .with_context(|| format!("malformed result.md for `{id}`"))?;
         let meta =
-            toml::from_str(&front).with_context(|| format!("parsing result.md for `{id}`"))?;
+            toml::from_str(&data).with_context(|| format!("parsing result.toml for `{id}`"))?;
+        let notes = match fs::read_to_string(self.result_path(id)) {
+            Ok(notes) => notes,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(e) => return Err(e).with_context(|| format!("reading result.md for `{id}`")),
+        };
         Ok(Some((meta, notes)))
+    }
+
+    pub fn result_version(&self, id: &str) -> Result<ResultVersion> {
+        let metadata = fs::read(self.result_meta_path(id))
+            .with_context(|| format!("node `{id}` has no result"))?;
+        let notes = match fs::read(self.result_path(id)) {
+            Ok(bytes) => Some(blob_id(&bytes)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(e).with_context(|| format!("reading result.md for `{id}`")),
+        };
+        Ok(ResultVersion {
+            metadata: blob_id(&metadata),
+            notes,
+        })
     }
 
     // --- work.jsonl (the interaction log) ----------------------------------------
@@ -231,46 +278,6 @@ pub fn file_blob(path: &Path) -> Option<String> {
     fs::read(path).ok().map(|bytes| blob_id(&bytes))
 }
 
-// --- the `---` frontmatter document format ---------------------------------------
-
-/// `---\n<toml>---\n\n<body>`. The body is omitted entirely when empty.
-fn to_document(front: &str, body: &str) -> String {
-    let front = if front.ends_with('\n') || front.is_empty() {
-        front.to_string()
-    } else {
-        format!("{front}\n")
-    };
-    if body.is_empty() {
-        format!("---\n{front}---\n")
-    } else {
-        format!("---\n{front}---\n\n{body}")
-    }
-}
-
-/// Split a document into its TOML frontmatter and body. The frontmatter ends at
-/// the first line that is exactly `---`.
-fn split_document(text: &str) -> Result<(String, String)> {
-    let rest = text
-        .strip_prefix("---\n")
-        .context("missing opening `---` frontmatter delimiter")?;
-    let mut front = String::new();
-    let mut consumed = 4; // the opening "---\n"
-    let mut closed = false;
-    for line in rest.split_inclusive('\n') {
-        consumed += line.len();
-        if line.trim_end_matches(['\r', '\n']) == "---" {
-            closed = true;
-            break;
-        }
-        front.push_str(line);
-    }
-    if !closed {
-        bail!("missing closing `---` frontmatter delimiter");
-    }
-    let body = text[consumed..].strip_prefix('\n').unwrap_or(&text[consumed..]);
-    Ok((front, body.to_string()))
-}
-
 fn hex(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() * 2);
     for b in bytes {
@@ -288,26 +295,12 @@ mod tests {
     #[test]
     fn blob_id_matches_git() {
         // `echo 'hello' | git hash-object --stdin`
-        assert_eq!(blob_id(b"hello\n"), "ce013625030ba8dba906f756967f9e9ca394464a");
+        assert_eq!(
+            blob_id(b"hello\n"),
+            "ce013625030ba8dba906f756967f9e9ca394464a"
+        );
         // `printf '' | git hash-object --stdin`
         assert_eq!(blob_id(b""), "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391");
-    }
-
-    #[test]
-    fn document_roundtrip() {
-        let (front, body) = split_document(&to_document("a = 1\n", "body\nlines\n")).unwrap();
-        assert_eq!(front, "a = 1\n");
-        assert_eq!(body, "body\nlines\n");
-
-        // An empty body round-trips to empty.
-        let (front, body) = split_document(&to_document("a = 1\n", "")).unwrap();
-        assert_eq!(front, "a = 1\n");
-        assert_eq!(body, "");
-
-        // A body containing `---` lines is not mistaken for a delimiter, because
-        // the split stops at the *first* closing delimiter.
-        let (_, body) = split_document(&to_document("a = 1\n", "x\n---\ny\n")).unwrap();
-        assert_eq!(body, "x\n---\ny\n");
     }
 
     #[test]
@@ -323,7 +316,9 @@ mod tests {
             depends_on: vec!["node-a".into()],
             derived_from: vec![],
         };
-        store.write_node("node-1", &meta, "hello\n\nthe details").unwrap();
+        store
+            .write_node("node-1", &meta, "hello\n\nthe details")
+            .unwrap();
         let (got, description) = store.read_node("node-1").unwrap();
         assert_eq!(got.depends_on, vec!["node-a".to_string()]);
         assert_eq!(description, "hello\n\nthe details");
@@ -331,7 +326,9 @@ mod tests {
 
         // The version changes exactly when the definition changes.
         let v1 = store.node_version("node-1").unwrap();
-        store.write_node("node-1", &meta, "other description").unwrap();
+        store
+            .write_node("node-1", &meta, "other description")
+            .unwrap();
         assert_ne!(v1, store.node_version("node-1").unwrap());
 
         // No result yet; then one round-trips, without touching the version.
@@ -340,14 +337,16 @@ mod tests {
         let result = ResultMeta {
             at: 0,
             author: Author::Machine,
-            node_version: v2.clone(),
+            definition: v2.clone(),
             outcome: Outcome::Done,
             output_commit: Some("abc".into()),
             worked_by: None,
             built_against: vec![],
             context: vec![],
         };
-        store.write_result("node-1", &result, "did the thing").unwrap();
+        store
+            .write_result("node-1", &result, "did the thing")
+            .unwrap();
         let (r, notes) = store.read_result("node-1").unwrap().unwrap();
         assert_eq!(r.output_commit.as_deref(), Some("abc"));
         assert_eq!(r.outcome, Outcome::Done);
@@ -360,7 +359,8 @@ mod tests {
     #[test]
     fn work_log_appends_and_starts_over() {
         use std::io::Write;
-        let dir = std::env::temp_dir().join(format!("llaundry-worklog-test-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("llaundry-worklog-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let store = Store::init(dir.join(".llaundry")).unwrap();
 
@@ -379,8 +379,16 @@ mod tests {
 
         // Streamed writes accumulate across sessions and leave the version alone.
         let v = store.node_version("node-1").unwrap();
-        writeln!(store.open_work_log("node-1", true).unwrap(), r#"{{"event":"a"}}"#).unwrap();
-        writeln!(store.open_work_log("node-1", true).unwrap(), r#"{{"event":"b"}}"#).unwrap();
+        writeln!(
+            store.open_work_log("node-1", true).unwrap(),
+            r#"{{"event":"a"}}"#
+        )
+        .unwrap();
+        writeln!(
+            store.open_work_log("node-1", true).unwrap(),
+            r#"{{"event":"b"}}"#
+        )
+        .unwrap();
         assert_eq!(
             store.read_work_log("node-1").unwrap().unwrap(),
             "{\"event\":\"a\"}\n{\"event\":\"b\"}\n"
@@ -388,8 +396,15 @@ mod tests {
         assert_eq!(store.node_version("node-1").unwrap(), v);
 
         // Rework starts the log over.
-        writeln!(store.open_work_log("node-1", false).unwrap(), r#"{{"event":"c"}}"#).unwrap();
-        assert_eq!(store.read_work_log("node-1").unwrap().unwrap(), "{\"event\":\"c\"}\n");
+        writeln!(
+            store.open_work_log("node-1", false).unwrap(),
+            r#"{{"event":"c"}}"#
+        )
+        .unwrap();
+        assert_eq!(
+            store.read_work_log("node-1").unwrap().unwrap(),
+            "{\"event\":\"c\"}\n"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

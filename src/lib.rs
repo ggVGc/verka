@@ -1,10 +1,10 @@
 //! llaundry — a plain-text node graph for LLM-assisted development, versioned
 //! entirely by git.
 //!
-//! Each node is a directory of two markdown files: `node.md` (the definition;
-//! its git blob id is the node's version) and `result.md` (the record of the
-//! node's one unit of work: outcome, output commit, and what it was built
-//! against). Status, readiness, and staleness are all derived, never stored.
+//! Each node keeps structured data in TOML and prose in Markdown. `node.toml`
+//! plus `description.md` form the definition; `result.toml` plus optional
+//! `result.md` form the completion record. Status, readiness, and staleness are
+//! all derived, never stored.
 //!
 //! This library holds all of the model and graph functionality; the `llaundry`
 //! binary is a thin CLI over it. See DESIGN.md for the model and reasoning.
@@ -26,8 +26,8 @@ pub mod vcs;
 pub use config::Config;
 pub use git::GitVcs;
 pub use model::{
-    title_of, Author, BuiltAgainst, ContextPin, DepKind, NodeMeta, Outcome, ResultMeta, Status,
-    WorkedBy,
+    title_of, Author, BuiltAgainst, ContextPin, DefinitionVersion, DepKind, NodeMeta, Outcome,
+    ResultMeta, ResultVersion, Status, WorkedBy,
 };
 pub use store::Store;
 pub use vcs::Vcs;

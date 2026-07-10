@@ -22,7 +22,11 @@ use llaundry::{ops, title_of, Author, GitVcs, Store, Vcs};
 const PAGE: &str = include_str!("viz.html");
 
 #[derive(Parser)]
-#[command(name = "llaundry-viz", version, about = "Serve an interactive view of the node graph")]
+#[command(
+    name = "llaundry-viz",
+    version,
+    about = "Serve an interactive view of the node graph"
+)]
 struct Cli {
     /// Path to the store directory.
     #[arg(long, env = "LLAUNDRY_DIR", default_value = ".llaundry")]
@@ -38,8 +42,8 @@ fn main() -> Result<()> {
     let vcs = GitVcs::for_store(&store);
     let shared = Arc::new((store, vcs));
 
-    let listener = TcpListener::bind(&cli.addr)
-        .with_context(|| format!("cannot listen on {}", cli.addr))?;
+    let listener =
+        TcpListener::bind(&cli.addr).with_context(|| format!("cannot listen on {}", cli.addr))?;
     println!("llaundry-viz: serving http://{}", listener.local_addr()?);
 
     for stream in listener.incoming() {
@@ -99,7 +103,11 @@ fn handle(mut stream: TcpStream, store: &Store, vcs: &dyn Vcs) -> Result<()> {
         ("POST", p) if p.starts_with("/api/respond/") => {
             let id = &p["/api/respond/".len()..];
             match respond(store, vcs, id, &request_body) {
-                Ok(()) => ("200 OK", "application/json", json!({ "id": id }).to_string()),
+                Ok(()) => (
+                    "200 OK",
+                    "application/json",
+                    json!({ "id": id }).to_string(),
+                ),
                 Err(e) => (
                     "400 Bad Request",
                     "application/json",
@@ -110,7 +118,11 @@ fn handle(mut stream: TcpStream, store: &Store, vcs: &dyn Vcs) -> Result<()> {
         ("GET", p) if p.starts_with("/api/log/") => {
             let id = &p["/api/log/".len()..];
             match store.read_work_log(id) {
-                Ok(Some(log)) => ("200 OK", "application/json", json!({ "id": id, "log": log }).to_string()),
+                Ok(Some(log)) => (
+                    "200 OK",
+                    "application/json",
+                    json!({ "id": id, "log": log }).to_string(),
+                ),
                 Ok(None) => (
                     "404 Not Found",
                     "application/json",
@@ -123,7 +135,11 @@ fn handle(mut stream: TcpStream, store: &Store, vcs: &dyn Vcs) -> Result<()> {
                 ),
             }
         }
-        _ => ("404 Not Found", "text/plain; charset=utf-8", "not found".into()),
+        _ => (
+            "404 Not Found",
+            "text/plain; charset=utf-8",
+            "not found".into(),
+        ),
     };
 
     write!(
@@ -159,7 +175,9 @@ fn graph_json(store: &Store, vcs: &dyn Vcs) -> Result<Value> {
             Ok(x) => x,
             Err(e) => {
                 // Surface a broken node instead of hiding the whole graph.
-                nodes.push(json!({ "id": id, "title": "(unreadable node)", "error": format!("{e:#}") }));
+                nodes.push(
+                    json!({ "id": id, "title": "(unreadable node)", "error": format!("{e:#}") }),
+                );
                 continue;
             }
         };
@@ -176,7 +194,10 @@ fn graph_json(store: &Store, vcs: &dyn Vcs) -> Result<Value> {
                     "backend": wb.backend, "model": wb.model,
                 })),
                 "built_against": r.built_against.iter().map(|ba| json!({
-                    "id": ba.id, "pin": ops::short(&ba.pin), "output": ba.output.as_deref().map(ops::short),
+                    "id": ba.id,
+                    "pin": ops::short_definition(&ba.definition),
+                    "result": ba.result.as_ref().map(ops::short_result),
+                    "output": ba.output.as_deref().map(ops::short),
                 })).collect::<Vec<_>>(),
                 "context": r.context.iter().map(|c| json!({
                     "path": c.path, "blob": ops::short(&c.blob),

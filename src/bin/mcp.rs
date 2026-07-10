@@ -29,7 +29,11 @@ use llaundry::{title_of, Author, DepKind, GitVcs, Store};
 const PROTOCOL_VERSION: &str = "2024-11-05";
 
 #[derive(Parser)]
-#[command(name = "llaundry-mcp", version, about = "MCP server for a llaundry store")]
+#[command(
+    name = "llaundry-mcp",
+    version,
+    about = "MCP server for a llaundry store"
+)]
 struct Cli {
     /// Path to the store directory.
     #[arg(long, env = "LLAUNDRY_DIR", default_value = ".llaundry")]
@@ -236,7 +240,10 @@ impl Tool for EditNode {
         let id = req_str(args, "id")?;
         let description = req_str(args, "description")?;
         ops::edit(&store, &vcs, &id, description)?;
-        Ok(format!("edited {id} (now {})", ops::short(&store.node_version(&id)?)))
+        Ok(format!(
+            "edited {id} (now {})",
+            ops::short_definition(&store.node_version(&id)?)
+        ))
     }
 }
 
@@ -246,7 +253,7 @@ impl Tool for CompleteNode {
         "complete_node"
     }
     fn description(&self) -> &'static str {
-        "Record a node's work as done: git-commit any produced files as one output commit, pin the dependency versions and context the work was built against, and write result.md with your notes. `outputs` may be empty for graph-only work."
+        "Record a node's work as done: git-commit any produced files as one output commit, pin the dependency versions and context the work was built against, and write structured result metadata plus optional Markdown notes. `outputs` may be empty for graph-only work."
     }
     fn input_schema(&self) -> Value {
         obj_schema(
@@ -269,7 +276,9 @@ impl Tool for CompleteNode {
         let message = opt_str(args, "message");
         let notes = opt_str(args, "notes").unwrap_or_default();
         let author = enum_or(args, "author", Author::Machine)?;
-        let commit = ops::complete(&store, &vcs, &id, &outputs, &context, message, &notes, author)?;
+        let commit = ops::complete(
+            &store, &vcs, &id, &outputs, &context, message, &notes, author,
+        )?;
         Ok(match commit {
             Some(c) => format!("completed {id} (output commit {})", ops::short(&c)),
             None => format!("completed {id} (no output files)"),
@@ -325,7 +334,10 @@ impl Tool for ShowNode {
             format!("id:      {id}"),
             format!("status:  {}", ops::current_status(&store, &id).as_str()),
             format!("author:  {}", meta.author.as_str()),
-            format!("version: {}", ops::short(&store.node_version(&id)?)),
+            format!(
+                "version: {}",
+                ops::short_definition(&store.node_version(&id)?)
+            ),
         ];
         if let Some(assignee) = meta.assignee {
             lines.push(format!("assignee: {}", assignee.as_str()));
@@ -350,19 +362,33 @@ impl Tool for ShowNode {
                 lines.push(format!("  output:  commit {}", ops::short(commit)));
             }
             for ba in &result.built_against {
+                let result_pin = ba
+                    .result
+                    .as_ref()
+                    .map_or_else(|| "none".into(), ops::short_result);
                 lines.push(match &ba.output {
                     Some(o) => format!(
-                        "  built against {} @ {} (output {})",
+                        "  built against {} @ {} (result {}, output {})",
                         ba.id,
-                        ops::short(&ba.pin),
+                        ops::short_definition(&ba.definition),
+                        result_pin,
                         ops::short(o)
                     ),
-                    None => format!("  built against {} @ {}", ba.id, ops::short(&ba.pin)),
+                    None => format!(
+                        "  built against {} @ {} (result {})",
+                        ba.id,
+                        ops::short_definition(&ba.definition),
+                        result_pin
+                    ),
                 });
             }
             for pin in &result.context {
                 let tag = if pin.observed { " (observed)" } else { "" };
-                lines.push(format!("  context {} @ {}{tag}", pin.path, ops::short(&pin.blob)));
+                lines.push(format!(
+                    "  context {} @ {}{tag}",
+                    pin.path,
+                    ops::short(&pin.blob)
+                ));
             }
             let notes = notes.trim_end();
             if !notes.is_empty() {
@@ -401,7 +427,11 @@ impl Tool for ListNodes {
         for id in store.list_ids()? {
             let (_, description) = store.read_node(&id)?;
             let status = ops::current_status(&store, &id);
-            lines.push(format!("{id}  [{}]  {}", status.as_str(), title_of(&description)));
+            lines.push(format!(
+                "{id}  [{}]  {}",
+                status.as_str(),
+                title_of(&description)
+            ));
         }
         Ok(joined(lines, "(no nodes)"))
     }
@@ -585,7 +615,10 @@ impl Server {
             let msg: Value = match serde_json::from_str(&line) {
                 Ok(v) => v,
                 Err(e) => {
-                    write_msg(&mut out, &rpc_err(Value::Null, -32700, &format!("parse error: {e}")))?;
+                    write_msg(
+                        &mut out,
+                        &rpc_err(Value::Null, -32700, &format!("parse error: {e}")),
+                    )?;
                     continue;
                 }
             };
@@ -635,7 +668,10 @@ impl Server {
     /// result with `isError: true` (per the spec), not as JSON-RPC protocol errors.
     fn call_tool(&self, params: &Value) -> Value {
         let name = params.get("name").and_then(Value::as_str).unwrap_or("");
-        let args = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
+        let args = params
+            .get("arguments")
+            .cloned()
+            .unwrap_or_else(|| json!({}));
         let ctx = Ctx {
             store_path: self.store_path.clone(),
         };
@@ -688,7 +724,8 @@ fn write_msg(out: &mut impl Write, msg: &Value) -> Result<()> {
 
 /// An `object` schema over `props`, marking `required` keys and forbidding extras.
 fn obj_schema(props: Value, required: &[&str]) -> Value {
-    let mut schema = json!({ "type": "object", "properties": props, "additionalProperties": false });
+    let mut schema =
+        json!({ "type": "object", "properties": props, "additionalProperties": false });
     if !required.is_empty() {
         schema["required"] = json!(required);
     }
@@ -727,7 +764,11 @@ fn opt_str(args: &Value, key: &str) -> Option<String> {
 fn str_list(args: &Value, key: &str) -> Vec<String> {
     args.get(key)
         .and_then(Value::as_array)
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(str::to_owned))
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -766,7 +807,8 @@ mod tests {
     fn temp_server() -> (TempDir, Server) {
         static COUNTER: AtomicU32 = AtomicU32::new(0);
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let root = std::env::temp_dir().join(format!("llaundry-mcp-test-{}-{n}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("llaundry-mcp-test-{}-{n}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         let store_path = root.join(".llaundry");
         (TempDir(root), Server::new(store_path))
@@ -810,7 +852,10 @@ mod tests {
             "node_origin",
             "node_dependents",
         ] {
-            assert!(names.contains(&expected), "missing tool {expected} in {names:?}");
+            assert!(
+                names.contains(&expected),
+                "missing tool {expected} in {names:?}"
+            );
         }
         assert!(!names.contains(&"set_status"), "set_status was removed");
     }

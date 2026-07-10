@@ -627,7 +627,7 @@ function renderPanel() {
       row2("worked by", `${r.worked_by.backend}${r.worked_by.model ? ` (${r.worked_by.model})` : ""}`);
     if (r.output_commit) row2("output", r.output_commit.slice(0, 12));
     for (const ba of r.built_against || [])
-      row2("built against", `${ba.id} @ ${ba.pin}${ba.output ? ` (output ${ba.output})` : ""}`);
+      row2("built against", `${ba.id} @ ${ba.pin} (result ${ba.result || "none"}${ba.output ? `, output ${ba.output}` : ""})`);
     for (const c of r.context || []) row2("context", `${c.path} @ ${c.blob}`);
     panel.appendChild(section("result", kv2));
     if ((r.notes || "").trim()) {
@@ -733,7 +733,7 @@ function eventRows(ev, raw) {
     const bits = [
       ev.backend,
       ev.at && new Date(ev.at).toLocaleString(),
-      ev.node_version && `node @ ${String(ev.node_version).slice(0, 12)}`,
+      ev.definition_version && `definition @ ${String(ev.definition_version.metadata).slice(0, 12)}/${String(ev.definition_version.description).slice(0, 12)}`,
     ].filter(Boolean).join(" · ");
     return [evRow("attempt", "attempt", bits || "work session started")];
   }

@@ -49,7 +49,11 @@ use std::process::Command;
 use llaundry::{ops, title_of, Author, Config, GitVcs, NodeMeta, Store, Vcs, WorkedBy};
 
 #[derive(Parser)]
-#[command(name = "llaundry-work", version, about = "Run an LLM against a llaundry node")]
+#[command(
+    name = "llaundry-work",
+    version,
+    about = "Run an LLM against a llaundry node"
+)]
 struct Cli {
     /// Id of the node to work on. Omit with --next to pick one automatically.
     #[arg(required_unless_present = "next", conflicts_with = "next")]
@@ -206,7 +210,11 @@ fn main() -> Result<()> {
         backend.name(),
         session.node_id,
         title_of(&description),
-        if previous_log.is_some() { " (continuing)" } else { "" }
+        if previous_log.is_some() {
+            " (continuing)"
+        } else {
+            ""
+        }
     );
 
     // The log is streamed during the session (the one dirty path the clean-tree
@@ -225,7 +233,7 @@ fn main() -> Result<()> {
             "at": started,
             "backend": backend.name(),
             "model": backend.model(),
-            "node_version": store.node_version(&node)?,
+            "definition_version": store.node_version(&node)?,
         })
     )?;
     log.flush()?;
@@ -477,7 +485,10 @@ fn observed_reads(log: &str, store: &Store) -> Vec<String> {
                 path
             };
             let inside = rel.components().all(|c| {
-                matches!(c, std::path::Component::Normal(_) | std::path::Component::CurDir)
+                matches!(
+                    c,
+                    std::path::Component::Normal(_) | std::path::Component::CurDir
+                )
             });
             let first = rel.components().find_map(|c| match c {
                 std::path::Component::Normal(seg) => Some(seg.to_string_lossy()),
@@ -505,17 +516,18 @@ fn observed_reads(log: &str, store: &Store) -> Vec<String> {
 /// On continuation, `previous_log` (the node's recorded `work.jsonl`) is replayed
 /// verbatim so the session picks up exactly where the last one stopped — the
 /// handoff is mechanical, not dependent on the previous agent having left notes.
-fn build_prompt(id: &str, meta: &NodeMeta, description: &str, previous_log: Option<&str>) -> String {
+fn build_prompt(
+    id: &str,
+    meta: &NodeMeta,
+    description: &str,
+    previous_log: Option<&str>,
+) -> String {
     let mut p = vec![
         "You are an autonomous worker on a llaundry node graph.".to_string(),
-        "Every graph change goes through the `llaundry` MCP tools. For real work you"
-            .to_string(),
-        "also have the built-in file tools (Read, Glob, Grep, Edit, Write) — but no"
-            .to_string(),
-        "shell. The file tools are scoped to your working directory, the project;"
-            .to_string(),
-        "the graph lives outside it and is reachable only through the MCP tools."
-            .to_string(),
+        "Every graph change goes through the `llaundry` MCP tools. For real work you".to_string(),
+        "also have the built-in file tools (Read, Glob, Grep, Edit, Write) — but no".to_string(),
+        "shell. The file tools are scoped to your working directory, the project;".to_string(),
+        "the graph lives outside it and is reachable only through the MCP tools.".to_string(),
         "Your session is recorded verbatim as the node's work log.".to_string(),
         String::new(),
         format!("You are assigned to node `{id}`:"),
@@ -556,7 +568,9 @@ fn build_prompt(id: &str, meta: &NodeMeta, description: &str, previous_log: Opti
     p.push("     nodes' outputs need no pin), and `notes` summarising what you did".into());
     p.push("     and why. Completion is refused while undeclared writes are dirty.".into());
     p.push("     If the work cannot be done,".into());
-    p.push(format!("     record that instead: fail_node {id} with `notes` explaining why."));
+    p.push(format!(
+        "     record that instead: fail_node {id} with `notes` explaining why."
+    ));
     p.push("  4. If you need a decision or information only a human can give, do NOT".into());
     p.push("     complete or fail. Instead add_node a question (description starting".into());
     p.push("     `Question: ...`, assignee `human`, with the context and options),".into());
@@ -628,7 +642,10 @@ mod tests {
         // The session runs in the project directory — the workbench's inner
         // repo, not the driver's launch directory — so every `./**` grant
         // resolves there, and the store sits above the granted subtree.
-        assert_eq!(cmd.get_current_dir(), Some(std::path::Path::new("/wb/project")));
+        assert_eq!(
+            cmd.get_current_dir(),
+            Some(std::path::Path::new("/wb/project"))
+        );
         let args = args_of(&cmd);
 
         assert!(args.contains(&"-p".to_string()));
@@ -680,8 +697,9 @@ mod tests {
 
     #[test]
     fn model_is_forwarded_only_when_set() {
-        assert!(!args_of(&backend(false).command(&sample_session()))
-            .contains(&"--model".to_string()));
+        assert!(
+            !args_of(&backend(false).command(&sample_session())).contains(&"--model".to_string())
+        );
 
         let with = ClaudeCode {
             binary: "claude".into(),
@@ -782,7 +800,7 @@ mod tests {
             read(format!("{}/README.md", root.display())),
             read("/somewhere/else.txt".into()),
             // The store lives above the project root: an outside-the-tree path.
-            read(format!("{}/.llaundry/nodes/n/node.md", workbench.display())),
+            read(format!("{}/.llaundry/nodes/n/node.toml", workbench.display())),
             read(format!("{}/.git/config", root.display())),
             read("src/lib.rs".into()), // relative paths count too
             read(format!("{}/README.md", root.display())), // duplicate

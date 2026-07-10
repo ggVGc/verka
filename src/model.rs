@@ -1,17 +1,11 @@
 //! On-disk data types.
 //!
-//! A node is a directory `nodes/<id>/` holding at most two files:
+//! A node separates structured data from prose: `node.toml` and
+//! `description.md` form its definition, while `result.toml` and the optional
+//! `result.md` form its completion record.
 //!
-//!   * `node.md` — the definition: [`NodeMeta`] frontmatter plus the prose
-//!     description (whose first line serves as the node's title). Its git blob
-//!     id is the node's *version*; editing the file changes it.
-//!   * `result.md` — the completion record: [`ResultMeta`] frontmatter plus a
-//!     free-form narrative of what happened during the work. Written once when
-//!     the node's single unit of work finishes; overwritten on rework (git
-//!     history keeps every earlier attempt).
-//!
-//! Status is never stored. It is derived from whether `result.md` exists, what
-//! its `outcome` says, and whether its `node_version` still matches `node.md`.
+//! Status is never stored. It is derived from whether `result.toml` exists,
+//! what its `outcome` says, and whether its definition version still matches.
 
 use serde::{Deserialize, Serialize};
 
@@ -44,7 +38,7 @@ impl Author {
 }
 
 /// A node's derived lifecycle status. Never stored anywhere: computed from the
-/// presence and content of `result.md` against the current `node.md`.
+/// presence and content of `result.toml` against the current definition files.
 ///
 /// There is deliberately no `in_progress` (a node is worked once, and nothing
 /// records "being worked") and no `blocked` (a fact about dependencies, derived
@@ -85,7 +79,7 @@ impl Outcome {
     }
 }
 
-/// Which dependency list of `node.md` an id goes into.
+/// Which dependency list of `node.toml` an id goes into.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "snake_case")]
 pub enum DepKind {
@@ -102,7 +96,7 @@ impl DepKind {
     }
 }
 
-/// Frontmatter of `node.md` — the definition. Dependencies are *ids only*:
+/// Contents of `node.toml`. Dependencies are *ids only*:
 /// which versions the work was actually built against is a fact about the work,
 /// recorded in [`ResultMeta::built_against`] at completion, so that updating a
 /// pin never counts as a definition change.
@@ -124,14 +118,32 @@ pub struct NodeMeta {
     pub derived_from: Vec<String>,
 }
 
+/// Git blob ids of the two files that constitute a node definition.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DefinitionVersion {
+    pub metadata: String,
+    pub description: String,
+}
+
+/// Git blob ids of the files that constitute a result. `notes` is absent when
+/// there is no `result.md`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResultVersion {
+    pub metadata: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notes: Option<String>,
+}
+
 /// The exact version of a related node the work was built against, captured at
-/// completion time. `pin` is the blob id of the target's `node.md`; `output` is
-/// the target's output commit at that moment, if it had one. Either moving on
-/// later makes this node stale.
+/// completion time. Definition and result versions are recorded separately,
+/// along with the target's output commit. Any consumed component moving later
+/// makes this node stale.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BuiltAgainst {
     pub id: String,
-    pub pin: String,
+    pub definition: DefinitionVersion,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<ResultVersion>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output: Option<String>,
 }
@@ -153,7 +165,7 @@ pub struct ContextPin {
 }
 
 /// The engine that produced a result: which backend ran the work, and which
-/// model it was given. Stamped onto `result.md` by the work driver after the
+/// model it was given. Stamped onto `result.toml` by the work driver after the
 /// session (the worker itself does not reliably know what it runs on); absent
 /// on results recorded by hand.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -166,15 +178,15 @@ pub struct WorkedBy {
     pub model: Option<String>,
 }
 
-/// Frontmatter of `result.md` — the record of the node's one unit of work.
+/// Contents of `result.toml` — the record of the node's one unit of work.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ResultMeta {
     /// Unix milliseconds when the result was recorded.
     pub at: i64,
     pub author: Author,
-    /// Blob id of the `node.md` this work fulfilled. A `done` certifies only
-    /// that version: editing the definition afterwards reopens the node.
-    pub node_version: String,
+    /// Version of the definition this work fulfilled. A `done` certifies only
+    /// these exact metadata and description blobs.
+    pub definition: DefinitionVersion,
     pub outcome: Outcome,
     /// The single git commit encompassing all files this node produced.
     /// Absent when the work produced no files (graph-only work) or failed.

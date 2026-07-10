@@ -25,7 +25,9 @@ use crossterm::{
 };
 
 use llaundry::ops::{self, NewNode};
-use llaundry::{title_of, Author, DepKind, GitVcs, NodeMeta, ResultMeta, Status, Store};
+use llaundry::{
+    title_of, Author, DefinitionVersion, DepKind, GitVcs, NodeMeta, ResultMeta, Status, Store,
+};
 
 #[derive(Parser)]
 #[command(
@@ -145,7 +147,7 @@ impl Filter {
 /// A snapshot of one node, precomputed once per refresh so drawing is cheap.
 struct Row {
     id: String,
-    version: String,
+    version: DefinitionVersion,
     meta: NodeMeta,
     description: String,
     result: Option<(ResultMeta, String)>,
@@ -199,7 +201,11 @@ impl App {
         self.rows = rows;
         // Try to keep the cursor on the same logical node across a refresh.
         if let Some(prev) = keep {
-            if let Some(pos) = self.filtered().iter().position(|&i| self.rows[i].id == prev) {
+            if let Some(pos) = self
+                .filtered()
+                .iter()
+                .position(|&i| self.rows[i].id == prev)
+            {
                 self.selected = pos;
             }
         }
@@ -281,30 +287,34 @@ fn run(term: &mut Terminal, store: &Store, vcs: &GitVcs) -> Result<()> {
             KeyCode::Char('a') => act(&mut app, store, vcs, action_add(&mut term.out, store, vcs)),
             KeyCode::Char('e') => {
                 let out = &mut term.out;
-                let done = app
-                    .selected_row()
-                    .map(|r| action_edit(out, store, vcs, r));
+                let done = app.selected_row().map(|r| action_edit(out, store, vcs, r));
                 if let Some(done) = done {
                     act(&mut app, store, vcs, done);
                 }
             }
             KeyCode::Char('l') => {
                 let out = &mut term.out;
-                let done = app.selected_id().map(|id| action_link(out, store, vcs, &id));
+                let done = app
+                    .selected_id()
+                    .map(|id| action_link(out, store, vcs, &id));
                 if let Some(done) = done {
                     act(&mut app, store, vcs, done);
                 }
             }
             KeyCode::Char('c') => {
                 let out = &mut term.out;
-                let done = app.selected_id().map(|id| action_complete(out, store, vcs, &id));
+                let done = app
+                    .selected_id()
+                    .map(|id| action_complete(out, store, vcs, &id));
                 if let Some(done) = done {
                     act(&mut app, store, vcs, done);
                 }
             }
             KeyCode::Char('f') => {
                 let out = &mut term.out;
-                let done = app.selected_id().map(|id| action_fail(out, store, vcs, &id));
+                let done = app
+                    .selected_id()
+                    .map(|id| action_fail(out, store, vcs, &id));
                 if let Some(done) = done {
                     act(&mut app, store, vcs, done);
                 }
@@ -341,8 +351,11 @@ fn act(app: &mut App, store: &Store, vcs: &GitVcs, outcome: Result<Option<String
 // ---------------------------------------------------------------------------
 
 fn action_add(out: &mut Stdout, store: &Store, vcs: &GitVcs) -> Result<Option<String>> {
-    let Some(description) =
-        prompt_text(out, "description — first line is the title (Ctrl-S save, Esc cancel)", "")?
+    let Some(description) = prompt_text(
+        out,
+        "description — first line is the title (Ctrl-S save, Esc cancel)",
+        "",
+    )?
     else {
         return Ok(None);
     };
@@ -379,7 +392,12 @@ fn action_edit(out: &mut Stdout, store: &Store, vcs: &GitVcs, row: &Row) -> Resu
     Ok(Some(format!("edited {}", row.id)))
 }
 
-fn action_link(out: &mut Stdout, store: &Store, vcs: &GitVcs, from: &str) -> Result<Option<String>> {
+fn action_link(
+    out: &mut Stdout,
+    store: &Store,
+    vcs: &GitVcs,
+    from: &str,
+) -> Result<Option<String>> {
     // Offer the other nodes as link targets.
     let targets: Vec<String> = store
         .list_ids()?
@@ -409,7 +427,8 @@ fn action_complete(
     vcs: &GitVcs,
     id: &str,
 ) -> Result<Option<String>> {
-    let Some(outputs) = prompt_line(out, "output files (space-separated, blank = none)", "")? else {
+    let Some(outputs) = prompt_line(out, "output files (space-separated, blank = none)", "")?
+    else {
         return Ok(None);
     };
     let outputs: Vec<String> = outputs.split_whitespace().map(str::to_string).collect();
@@ -425,7 +444,16 @@ fn action_complete(
     else {
         return Ok(None);
     };
-    let commit = ops::complete(store, vcs, id, &outputs, &context, message, &notes, Author::Human)?;
+    let commit = ops::complete(
+        store,
+        vcs,
+        id,
+        &outputs,
+        &context,
+        message,
+        &notes,
+        Author::Human,
+    )?;
     Ok(Some(match commit {
         Some(c) => format!("completed {id} (output {})", ops::short(&c)),
         None => format!("completed {id} (no output files)"),
@@ -433,7 +461,11 @@ fn action_complete(
 }
 
 fn action_fail(out: &mut Stdout, store: &Store, vcs: &GitVcs, id: &str) -> Result<Option<String>> {
-    let Some(notes) = prompt_text(out, "notes — what went wrong? (Ctrl-S save, Esc cancel)", "")?
+    let Some(notes) = prompt_text(
+        out,
+        "notes — what went wrong? (Ctrl-S save, Esc cancel)",
+        "",
+    )?
     else {
         return Ok(None);
     };
@@ -449,7 +481,7 @@ fn result_lines(r: &Row) -> Vec<String> {
     let mut lines = vec![
         format!("outcome: {}", result.outcome.as_str()),
         format!("author:  {}", result.author.as_str()),
-        format!("version: {}", ops::short(&result.node_version)),
+        format!("version: {}", ops::short_definition(&result.definition)),
     ];
     if let Some(wb) = &result.worked_by {
         lines.push(match &wb.model {
@@ -461,19 +493,33 @@ fn result_lines(r: &Row) -> Vec<String> {
         lines.push(format!("output:  commit {}", ops::short(commit)));
     }
     for ba in &result.built_against {
+        let result_pin = ba
+            .result
+            .as_ref()
+            .map_or_else(|| "none".into(), ops::short_result);
         lines.push(match &ba.output {
             Some(o) => format!(
-                "built against {} @ {} (output {})",
+                "built against {} @ {} (result {}, output {})",
                 ba.id,
-                ops::short(&ba.pin),
+                ops::short_definition(&ba.definition),
+                result_pin,
                 ops::short(o)
             ),
-            None => format!("built against {} @ {}", ba.id, ops::short(&ba.pin)),
+            None => format!(
+                "built against {} @ {} (result {})",
+                ba.id,
+                ops::short_definition(&ba.definition),
+                result_pin
+            ),
         });
     }
     for pin in &result.context {
         let tag = if pin.observed { " (observed)" } else { "" };
-        lines.push(format!("context {} @ {}{tag}", pin.path, ops::short(&pin.blob)));
+        lines.push(format!(
+            "context {} @ {}{tag}",
+            pin.path,
+            ops::short(&pin.blob)
+        ));
     }
     let notes = notes.trim_end();
     if !notes.is_empty() {
@@ -507,7 +553,11 @@ fn draw(out: &mut Stdout, app: &mut App) -> Result<()> {
         " llaundry  [{}]  {} node(s)  ({}/{})",
         app.filter.label(),
         filtered.len(),
-        if filtered.is_empty() { 0 } else { app.selected + 1 },
+        if filtered.is_empty() {
+            0
+        } else {
+            app.selected + 1
+        },
         filtered.len(),
     );
     put(out, 0, HEADER, &header, w as usize, Color::Reset, true)?;
@@ -530,7 +580,11 @@ fn draw(out: &mut Stdout, app: &mut App) -> Result<()> {
         if let Some(&idx) = filtered.get(row_i) {
             let r = &app.rows[idx];
             let marker = if !r.stale.is_empty() { '*' } else { ' ' };
-            let text = format!("{marker}{:<7} {}", r.status.as_str(), title_of(&r.description));
+            let text = format!(
+                "{marker}{:<7} {}",
+                r.status.as_str(),
+                title_of(&r.description)
+            );
             let selected = row_i == app.selected;
             let color = status_color(r.status);
             put(out, 0, y, &text, left_w as usize, color, selected)?;
@@ -587,7 +641,10 @@ fn detail_lines(r: &Row) -> Vec<(String, Color)> {
         status_color(r.status),
     ));
     lines.push((format!("author:  {}", r.meta.author.as_str()), Color::Reset));
-    lines.push((format!("version: {}", ops::short(&r.version)), Color::Reset));
+    lines.push((
+        format!("version: {}", ops::short_definition(&r.version)),
+        Color::Reset,
+    ));
     for dep in &r.meta.depends_on {
         lines.push((format!("depends_on:   {dep}"), Color::Reset));
     }
@@ -683,12 +740,20 @@ fn draw_box(out: &mut Stdout, title: &str, box_w: u16, box_h: u16) -> Result<(u1
         queue!(
             out,
             cursor::MoveTo(x, y + row),
-            Print(format!("│{}│", " ".repeat(box_w.saturating_sub(2) as usize)))
+            Print(format!(
+                "│{}│",
+                " ".repeat(box_w.saturating_sub(2) as usize)
+            ))
         )?;
     }
     queue!(out, cursor::MoveTo(x, y + box_h - 1), Print(bottom))?;
 
-    Ok((x + 1, y + 1, box_w.saturating_sub(2), box_h.saturating_sub(2)))
+    Ok((
+        x + 1,
+        y + 1,
+        box_w.saturating_sub(2),
+        box_h.saturating_sub(2),
+    ))
 }
 
 /// A horizontal border with an embedded ` title ` label, padded to `width`.
@@ -812,7 +877,9 @@ fn pick(out: &mut Stdout, label: &str, items: &[&str], initial: usize) -> Result
     let mut sel = initial.min(items.len() - 1);
     let (tw, th) = terminal::size()?;
     let widest = items.iter().map(|s| s.len()).max().unwrap_or(0);
-    let box_w = (widest as u16 + 4).max(label.len() as u16 + 4).min(tw.saturating_sub(2));
+    let box_w = (widest as u16 + 4)
+        .max(label.len() as u16 + 4)
+        .min(tw.saturating_sub(2));
     let box_h = (items.len() as u16 + 2).min(th.saturating_sub(2));
 
     loop {
@@ -887,8 +954,8 @@ fn help(out: &mut Stdout) -> Result<()> {
         "  a               add a new node",
         "  e               edit the description (a definition change)",
         "  l               link to another node",
-        "  c               complete (commit outputs, write result.md)",
-        "  f               fail (write result.md with what went wrong)",
+        "  c               complete (commit outputs, write result files)",
+        "  f               fail (write result files with what went wrong)",
         "",
         "  ? this help      q / Esc quit",
         "",

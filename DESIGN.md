@@ -46,32 +46,26 @@ Each piece was individually defensible — and collectively they re-implemented
 git inside a git repository. The current design is what remained after asking,
 for each mechanism, "does git already do this?" The decisions worth recording:
 
-### 2.1 A node is two files; git is the object store
+### 2.1 Structured data and prose are separate; git is the object store
 
-Each node is a directory holding at most two markdown-with-TOML-frontmatter
-files:
-
-* **`node.md`** — the *definition*: what the node is and what it depends on.
-* **`result.md`** — the *completion record*: what happened when the work was
-  done, written once at the end of the node's single unit of work.
-
-A node with no `result.md` is open; writing `result.md` is completing (or
-failing) it; editing `node.md` is revising the definition. Adding a node only
-adds files, so concurrent work merges cleanly — and the high-frequency write
-(recording results) touches a file nothing else touches.
+Each node directory contains `node.toml` and `description.md`, which together
+form its definition. Completed or failed work adds `result.toml` and may add
+`result.md` for narrative notes. Structured data is always TOML; free text is
+always Markdown. A node with no `result.toml` is open. Editing either definition
+file revises the definition.
 
 There is one more file a node may carry — `work.jsonl`, the recorded
 interaction log of work sessions (§2.11) — but it is deliberately *not* a third
 kind of state: it is opaque to every derived query, participates in nothing,
 and exists purely as a record.
 
-### 2.2 The node version is a git blob id, computed on demand
+### 2.2 Versions are Git blob ids, computed on demand
 
-A node's version is `git hash-object node.md` — computed locally (the blob
-hash is just `sha1("blob <len>\0" + bytes)`), never stored inside the file, and
-identical to what git itself would say. Editing the definition changes the
-version; writing `result.md` does not. Version history is `git log` on the
-node's directory; old versions are `git show <commit>:.../node.md`.
+A definition version is the pair of Git blob ids for `node.toml` and
+`description.md`. A result version similarly contains the blob id of
+`result.toml` and, when present, `result.md`. This preserves Git as the only
+hash authority while making drift reports identify the exact component that
+changed.
 
 This kills three mechanisms from the earlier design at once: the custom sha256
 identity, the mutable per-node ref (git's history *is* the pointer), and the
@@ -80,17 +74,13 @@ zero stored hashes that must equal content.
 
 ### 2.3 Status is derived, not stored — and the enum shrank to nothing
 
-The earlier design kept an append-only status event log so that flipping
-`open → done` would not change the node's identity. The two-file split makes
-the whole log unnecessary. Status is a pure function of the files:
+Status is a pure function of the files:
 
-* no `result.md` → **open**
+* no `result.toml` → **open**
 * `outcome = "failed"` → **failed**
-* `outcome = "done"` and the result's `node_version` equals the current blob id
-  of `node.md` → **done**
-* `outcome = "done"` but `node.md` has moved → **open again**: the completion
-  certified a definition that no longer exists, so the node needs rework and
-  its dependents are blocked until it gets it.
+* `outcome = "done"` and the recorded definition version matches both current
+  definition files → **done**
+* `outcome = "done"` but either definition file moved → **open again**.
 
 `in_progress` disappeared with the one-shot work model (nothing records "being
 worked"; if parallel workers ever need claims, that belongs in the dispatcher,
@@ -99,10 +89,11 @@ remains — open/done/failed — is never written anywhere.
 
 ### 2.4 Pins are facts about the work, so they live in the result
 
-`node.md` lists dependencies by **id only** (`depends_on`, `derived_from`).
-Which *versions* those resolved to is recorded in `result.md`, pinned
-automatically at completion time as `[[built_against]]` entries: the target's
-`node.md` blob id (`pin`) and its output commit at that moment (`output`).
+`node.toml` lists dependencies by **id only** (`depends_on`, `derived_from`).
+`result.toml` records the exact definition version, result version, and output
+commit observed for each related node. Pinning result files matters for
+graph-only work: changing a human answer in `result.md` must invalidate work
+that consumed the old answer.
 
 This placement matters. A pin is provenance — "the work saw *this*" — not part
 of the task statement. If pins lived in the definition, re-pinning after an
@@ -127,17 +118,16 @@ since each completion mints one commit for one node.
 A node with no result cannot be stale — there is no work to invalidate. For a
 node with a result, each reason is checked on demand:
 
-* **dependency definition moved** — a `built_against` pin no longer equals the
-  target's current `node.md` blob id (the reason is a real diff away:
-  `git diff <pin> <current>`);
+* **dependency definition moved** — either pinned definition file changed;
+* **dependency result moved** — the structured result or its notes changed;
 * **dependency output changed** — the target was re-worked and its output
   commit differs from the pinned one;
 * **context drifted** — a pinned context file's blob id no longer matches (or
   the file is gone);
 * **own output drifted** — files in the output commit changed since
   (`git diff <commit>`, which also yields the explicit reason);
-* **definition edited after completion** — the result no longer covers
-  `node.md` (this is also what reopens the node, §2.3).
+* **definition edited after completion** — the result no longer covers the
+  current definition (this is also what reopens the node, §2.3).
 
 The invalidation rule of thumb: **results and status flow forward (a `done`
 unblocks dependents); content changes flow backward (definitions and outputs
@@ -148,7 +138,7 @@ moving invalidate the work built on them).**
 A node is **ready** when it is not done and every `depends_on` target is done
 (on its current definition) and not itself stale; otherwise the unsatisfied
 dependencies are its **blockers**, reported with reasons. A failed node is
-ready — failure means "retry", and the retry simply overwrites `result.md`.
+ready — failure means "retry", and the retry overwrites the result files.
 
 ### 2.8 Each state change is its own commit; cleanliness where provenance is asserted
 
@@ -229,7 +219,7 @@ recorded mechanically, not left to agent discipline. Every `llaundry-work`
 session's full interaction stream (one JSON event per line: the prompts, the
 assistant turns, every tool call and result) is *streamed* to the node's
 `work.jsonl` as it happens — one flushed line per event, opened at launch with
-a small attempt header (timestamp, backend and model, the `node.md` version
+a small attempt header (timestamp, backend and model, the definition version
 the session set out to work). Streaming, not buffering, is the point: an abrupt end
 (Ctrl-C, crash, kill) loses at most an unflushed tail, never the story so far,
 so no exit — however rude — leaves the node without its record.
@@ -259,7 +249,7 @@ Three rules keep it honest:
 * **Appended for continuation, restarted for rework.** A paused unit of work
   extends its log (appends diff minimally — goal #1); a node being reworked
   after a recorded result starts a fresh story, and git history keeps the old
-  one — exactly the `result.md` overwrite semantics.
+  one — exactly the result overwrite semantics.
 
 ### 2.12 What context is: outputs first, files second
 
@@ -289,42 +279,48 @@ beside the project it describes (§2.8, ISOLATION.md):
   .llaundry/
     nodes/
       <id>/
-        node.md      # the definition
-        result.md    # the completion record (absent until worked)
+        node.toml       # structured definition metadata
+        description.md  # definition prose
+        result.toml     # structured completion record (absent until worked)
+        result.md       # optional completion narrative
         work.jsonl   # the recorded interaction log (absent until worked by the driver)
   project/         # inner git repo: the actual project, ordinary in every way
 ```
 
-### 3.1 `node.md`
+### 3.1 Definition files
 
-```markdown
----
+```toml
+# node.toml
 schema = 1
 author = "human"
 assignee = "human"                # optional: who the work is for (§2.10)
 depends_on = ["node-01J8XQ2A..."]
 derived_from = ["node-01J8XQ1B..."]
----
+```
 
+```markdown
+<!-- description.md -->
 Parse the config file
 
 Parse the TOML config into the Config struct...
 ```
 
-The frontmatter is strict, typed TOML (scalars and string arrays only); the
-body is the node's description, free-form Markdown. There is no stored title:
+There is no stored title:
 the description's first line serves as the title wherever a one-liner is
-needed. The file's git blob id is the node's version.
+needed.
 
-### 3.2 `result.md`
+### 3.2 Result files
 
-```markdown
----
+```toml
+# result.toml
 at = 1719571200000
 author = "machine"
-node_version = "4ec1916e..."     # blob id of node.md this work fulfilled
 outcome = "done"                  # or "failed"
 output_commit = "a45ab51c..."     # the one commit with everything produced; optional
+
+[definition]
+metadata = "4ec1916e..."          # node.toml blob fulfilled
+description = "7ab92cc1..."       # description.md blob fulfilled
 
 [worked_by]                       # the engine that did the work; optional
 backend = "claude-code"           # stamped by the driver after the session
@@ -332,14 +328,23 @@ model = "opus"                    # absent = the backend's default at the time
 
 [[built_against]]
 id = "node-01J8XQ2A..."
-pin = "6102d492..."               # target's node.md blob at completion
 output = "86cb1a1..."             # target's output commit at completion; optional
+
+[built_against.definition]
+metadata = "6102d492..."
+description = "9ca21d31..."
+
+[built_against.result]
+metadata = "11fa90cc..."
+notes = "2b61c040..."
 
 [[context]]
 path = "docs/legacy-format.txt"
 blob = "f44d..."
----
+```
 
+```markdown
+<!-- result.md -->
 Implemented the parser in src/config.rs. Chose serde over hand-rolling because...
 ```
 
@@ -353,7 +358,7 @@ streamed it, each attempt preceded by a header line the driver stamps at
 launch:
 
 ```jsonl
-{"event":"attempt","at":1719571200000,"backend":"claude-code","model":"opus","node_version":"4ec1916e..."}
+{"event":"attempt","at":1719571200000,"backend":"claude-code","model":"opus","definition_version":{"metadata":"4ec1916e...","description":"7ab92cc1..."}}
 {"type":"system","subtype":"init",...}
 {"type":"assistant","message":{...}}
 {"type":"user","message":{...}}
@@ -419,7 +424,7 @@ The store path defaults to `.llaundry/`, overridable with `--store` or
 | `add` | Create a node (`--depends-on`/`--derived-from` by id, `--assignee` for who the work is for). Prints its id. |
 | `link <from> <to>` | Add a dependency (a definition change of `<from>`). |
 | `edit <id>` | Change the description (a definition change: reopens a done node). |
-| `complete <id> [-o <file>...] [--notes ...]` | Commit produced files as one output commit, pin deps/context, write `result.md`. |
+| `complete <id> [-o <file>...] [--notes ...]` | Commit produced files as one output commit, pin deps/context, and write the result files. |
 | `fail <id> [--notes ...]` | Record a failed attempt. |
 | `show <id>` | Definition, derived status, result, staleness reasons. |
 | `list` | Every node with its derived status. |
