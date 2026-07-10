@@ -91,6 +91,12 @@ struct Cli {
     /// Work the node even if its dependencies are unsatisfied.
     #[arg(long)]
     force: bool,
+    /// Project revision from which to create the isolated execution worktree.
+    #[arg(long, default_value = "HEAD")]
+    base: String,
+    /// Retain the execution worktree even after successful clean completion.
+    #[arg(long)]
+    keep_worktree: bool,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -164,24 +170,33 @@ fn main() -> Result<()> {
     // launched: the backend runs in the project directory (so every `./**`
     // grant resolves there), and the MCP server gets the store — one level
     // above, outside the granted subtree — by absolute path.
-    let project_root = store
+    let canonical_project = store
         .project_root()
         .canonicalize()
         .with_context(|| format!("resolving project directory of {}", cli.store.display()))?;
-    let store_abs = store
+    let workbench_abs = store
         .workbench_root()
         .canonicalize()
-        .with_context(|| format!("resolving workbench of {}", cli.store.display()))?
-        .join(store.store_name());
+        .with_context(|| format!("resolving workbench of {}", cli.store.display()))?;
+    let store_abs = workbench_abs.join(store.store_name());
 
-    let session = Session {
+    let (input_commit, input_tree) = llaundry::git::resolve_revision(&canonical_project, &cli.base)?;
+    let run_id = ulid::Ulid::new().to_string();
+    let worktree_path = workbench_abs.join(".llaundry-worktrees").join(&run_id);
+
+    let mut session = Session {
         node_id: node.clone(),
         prompt: build_prompt(&node, &meta, &description, previous_log.as_deref()),
-        project_root,
+        project_root: worktree_path.clone(),
         mcp: McpServer {
             name: "llaundry".into(),
             command: mcp_bin,
-            args: vec!["--store".into(), store_abs.to_string_lossy().into_owned()],
+            args: vec![
+                "--store".into(),
+                store_abs.to_string_lossy().into_owned(),
+                "--project".into(),
+                worktree_path.to_string_lossy().into_owned(),
+            ],
         },
     };
 
@@ -201,9 +216,15 @@ fn main() -> Result<()> {
     };
 
     if cli.dry_run {
+        println!("input commit: {input_commit}");
+        println!("input tree: {input_tree}");
+        println!("worktree: {}", worktree_path.display());
         println!("{}", backend.describe(&session));
         return Ok(());
     }
+
+    let worktree = llaundry::git::create_worktree(&canonical_project, worktree_path, &input_commit)?;
+    session.project_root = worktree.path.clone();
 
     eprintln!(
         "llaundry-work: {} working {} — {}{}",
@@ -234,6 +255,9 @@ fn main() -> Result<()> {
             "backend": backend.name(),
             "model": backend.model(),
             "definition_version": store.node_version(&node)?,
+            "run_id": run_id,
+            "input_commit": worktree.input_commit,
+            "input_tree": worktree.input_tree,
         })
     )?;
     log.flush()?;
@@ -257,7 +281,7 @@ fn main() -> Result<()> {
     // agent was observed reading but did not declare as context. Best-effort —
     // the raw log keeps the full story either way.
     if let Some(log_text) = store.read_work_log(&node)? {
-        let reads = observed_reads(&log_text, &store);
+        let reads = observed_reads(&log_text, &store, Some(&worktree.path));
         match ops::amend_context(&store, &vcs, &node, &reads) {
             Ok(n) if n > 0 => eprintln!("llaundry-work: pinned {n} observed context file(s)"),
             Ok(_) => {}
@@ -271,7 +295,17 @@ fn main() -> Result<()> {
     ops::commit_work_log(&store, &vcs, &node)?;
 
     if !success {
+        eprintln!("llaundry-work: retained worktree {}", worktree.path.display());
         bail!("backend session exited unsuccessfully");
+    }
+
+    if store.read_result(&node)?.is_some()
+        && llaundry::git::worktree_clean(&worktree.path)?
+        && !cli.keep_worktree
+    {
+        llaundry::git::remove_worktree(&canonical_project, &worktree.path)?;
+    } else {
+        eprintln!("llaundry-work: retained worktree {}", worktree.path.display());
     }
     Ok(())
 }
@@ -451,8 +485,10 @@ impl Backend for ClaudeCode {
 /// pinnable file content. Everything stays visible in the raw log either way.
 /// Deduplicated, transcript order. Unparseable lines are skipped: the log may
 /// hold non-transcript events (the attempt header) and half-written tails.
-fn observed_reads(log: &str, store: &Store) -> Vec<String> {
-    let root = store.project_root();
+fn observed_reads(log: &str, store: &Store, execution_root: Option<&std::path::Path>) -> Vec<String> {
+    let root = execution_root
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| store.project_root());
     let root = root.canonicalize().unwrap_or(root);
     let store_name = store.store_name();
     let mut seen = std::collections::HashSet::new();
@@ -728,6 +764,18 @@ mod tests {
         fn capture(&self, _paths: &[String], _message: &str) -> Result<String> {
             Ok("id".into())
         }
+        fn head_commit(&self) -> Result<Option<String>> {
+            Ok(None)
+        }
+        fn tree_id(&self, commit: &str) -> Result<String> {
+            Ok(format!("tree-{commit}"))
+        }
+        fn retain_output(&self, _node: &str, _commit: &str) -> Result<()> {
+            Ok(())
+        }
+        fn file_blob(&self, _path: &str) -> Result<Option<String>> {
+            Ok(None)
+        }
         fn commit_store(&self, _path: &str, _message: &str) -> Result<()> {
             Ok(())
         }
@@ -818,7 +866,7 @@ mod tests {
         ]
         .join("\n");
 
-        assert_eq!(observed_reads(&log, &store), ["README.md", "src/lib.rs"]);
+        assert_eq!(observed_reads(&log, &store, None), ["README.md", "src/lib.rs"]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

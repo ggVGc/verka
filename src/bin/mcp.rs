@@ -38,11 +38,15 @@ struct Cli {
     /// Path to the store directory.
     #[arg(long, env = "LLAUNDRY_DIR", default_value = ".llaundry")]
     store: PathBuf,
+    /// Project checkout used for project-side operations. Work drivers set
+    /// this to their isolated linked worktree.
+    #[arg(long)]
+    project: Option<PathBuf>,
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    Server::new(cli.store).serve()
+    Server::new(cli.store, cli.project).serve()
 }
 
 // --- tools ------------------------------------------------------------------
@@ -64,13 +68,17 @@ trait Tool {
 /// nothing is cached across a long-running session.
 struct Ctx {
     store_path: PathBuf,
+    project_path: Option<PathBuf>,
 }
 
 impl Ctx {
     /// Open the store and wire up the real git seam for one operation.
     fn open(&self) -> Result<(Store, GitVcs)> {
         let store = Store::open(self.store_path.clone())?;
-        let vcs = GitVcs::for_store(&store);
+        let vcs = match &self.project_path {
+            Some(path) => GitVcs::for_execution(&store, path.clone()),
+            None => GitVcs::for_store(&store),
+        };
         Ok((store, vcs))
     }
 }
@@ -588,13 +596,15 @@ impl Tool for NodeDependents {
 
 struct Server {
     store_path: PathBuf,
+    project_path: Option<PathBuf>,
     tools: Vec<Box<dyn Tool>>,
 }
 
 impl Server {
-    fn new(store_path: PathBuf) -> Self {
+    fn new(store_path: PathBuf, project_path: Option<PathBuf>) -> Self {
         Server {
             store_path,
+            project_path,
             tools: registry(),
         }
     }
@@ -674,6 +684,7 @@ impl Server {
             .unwrap_or_else(|| json!({}));
         let ctx = Ctx {
             store_path: self.store_path.clone(),
+            project_path: self.project_path.clone(),
         };
         let result = match self.tools.iter().find(|t| t.name() == name) {
             Some(tool) => tool.call(&ctx, &args),
@@ -811,7 +822,7 @@ mod tests {
             std::env::temp_dir().join(format!("llaundry-mcp-test-{}-{n}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         let store_path = root.join(".llaundry");
-        (TempDir(root), Server::new(store_path))
+        (TempDir(root), Server::new(store_path, None))
     }
 
     #[test]

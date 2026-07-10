@@ -12,6 +12,47 @@ use std::process::Command;
 use crate::store::Store;
 use crate::vcs::Vcs;
 
+/// A detached linked worktree prepared for one isolated execution.
+pub struct Worktree {
+    pub path: PathBuf,
+    pub input_commit: String,
+    pub input_tree: String,
+}
+
+/// Resolve `rev` and return its full commit and tree ids.
+pub fn resolve_revision(project: &Path, rev: &str) -> Result<(String, String)> {
+    let commit_spec = format!("{rev}^{{commit}}");
+    let commit = checked(project, &["rev-parse", "--verify", &commit_spec])?;
+    let tree_spec = format!("{commit}^{{tree}}");
+    let tree = checked(project, &["rev-parse", &tree_spec])?;
+    Ok((commit, tree))
+}
+
+/// Create a detached linked worktree without moving any project branch.
+pub fn create_worktree(project: &Path, path: PathBuf, rev: &str) -> Result<Worktree> {
+    let (input_commit, input_tree) = resolve_revision(project, rev)?;
+    if path.exists() {
+        bail!("execution worktree path already exists: {}", path.display());
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating worktree directory {}", parent.display()))?;
+    }
+    let path_arg = path.to_string_lossy().into_owned();
+    checked(project, &["worktree", "add", "--detach", &path_arg, &input_commit])?;
+    Ok(Worktree { path, input_commit, input_tree })
+}
+
+pub fn worktree_clean(path: &Path) -> Result<bool> {
+    Ok(checked(path, &["status", "--porcelain"])?.is_empty())
+}
+
+pub fn remove_worktree(project: &Path, path: &Path) -> Result<()> {
+    let path_arg = path.to_string_lossy().into_owned();
+    checked(project, &["worktree", "remove", &path_arg])?;
+    Ok(())
+}
+
 /// The real [`Vcs`]: drives the `git` CLI over the workbench's two separate
 /// repositories. Store commits go to the workbench repo; everything about
 /// outputs — capturing, drift, file listing, working-tree cleanliness — is
@@ -34,11 +75,38 @@ impl GitVcs {
     pub fn for_store(store: &Store) -> Self {
         Self::new(store.project_root(), store.workbench_root())
     }
+
+    /// Use a linked execution worktree for all project-side operations while
+    /// continuing to commit graph state in the store's workbench repository.
+    pub fn for_execution(store: &Store, execution_tree: PathBuf) -> Self {
+        Self::new(execution_tree, store.workbench_root())
+    }
 }
 
 impl Vcs for GitVcs {
     fn capture(&self, paths: &[String], message: &str) -> Result<String> {
         commit_paths(&self.project, paths, message)
+    }
+    fn head_commit(&self) -> Result<Option<String>> {
+        if !git(&self.project, &["rev-parse", "--verify", "--quiet", "HEAD"])?
+            .status
+            .success()
+        {
+            return Ok(None);
+        }
+        Ok(Some(checked(&self.project, &["rev-parse", "HEAD"])?))
+    }
+    fn tree_id(&self, commit: &str) -> Result<String> {
+        let spec = format!("{commit}^{{tree}}");
+        checked(&self.project, &["rev-parse", &spec])
+    }
+    fn retain_output(&self, node: &str, commit: &str) -> Result<()> {
+        let refname = format!("refs/llaundry/outputs/{node}");
+        checked(&self.project, &["update-ref", &refname, commit])?;
+        Ok(())
+    }
+    fn file_blob(&self, path: &str) -> Result<Option<String>> {
+        Ok(crate::store::file_blob(&self.project.join(path)))
     }
     fn commit_store(&self, path: &str, message: &str) -> Result<()> {
         commit_path(&self.workbench, path, message)
@@ -201,4 +269,64 @@ fn output_drift(base: &Path, commit: &str) -> Result<Option<String>> {
     args.extend(paths.iter().map(String::as_str));
     let drift = checked(base, &args)?;
     Ok((!drift.is_empty()).then_some(drift))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct TempDir(PathBuf);
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn repo() -> (TempDir, PathBuf) {
+        let root = std::env::temp_dir().join(format!(
+            "llaundry-git-worktree-{}-{}",
+            std::process::id(),
+            ulid::Ulid::new()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        checked(&root, &["init"]).unwrap();
+        checked(&root, &["config", "user.name", "llaundry test"]).unwrap();
+        checked(&root, &["config", "user.email", "test@llaundry.invalid"]).unwrap();
+        std::fs::write(root.join("file.txt"), "base\n").unwrap();
+        checked(&root, &["add", "file.txt"]).unwrap();
+        checked(&root, &["commit", "-m", "base"]).unwrap();
+        (TempDir(root.clone()), root)
+    }
+
+    #[test]
+    fn isolated_worktree_captures_without_touching_checkout_and_ref_survives_cleanup() {
+        let (_temp, project) = repo();
+        let original = checked(&project, &["rev-parse", "HEAD"]).unwrap();
+        let path = project.parent().unwrap().join(format!(
+            ".llaundry-worktree-test-{}",
+            ulid::Ulid::new()
+        ));
+        let worktree = create_worktree(&project, path.clone(), "HEAD").unwrap();
+        assert_eq!(worktree.input_commit, original);
+
+        std::fs::write(path.join("file.txt"), "isolated\n").unwrap();
+        let vcs = GitVcs::new(path.clone(), project.parent().unwrap().to_path_buf());
+        let output = vcs.capture(&["file.txt".into()], "node output").unwrap();
+        vcs.retain_output("node-test", &output).unwrap();
+
+        assert_eq!(std::fs::read_to_string(project.join("file.txt")).unwrap(), "base\n");
+        assert_eq!(checked(&project, &["rev-parse", "HEAD"]).unwrap(), original);
+        assert!(worktree_clean(&path).unwrap());
+
+        remove_worktree(&project, &path).unwrap();
+        assert!(!path.exists());
+        assert_eq!(
+            checked(&project, &["rev-parse", "refs/llaundry/outputs/node-test"]).unwrap(),
+            output
+        );
+        assert!(git(&project, &["cat-file", "-e", &format!("{output}^{{commit}}")])
+            .unwrap()
+            .status
+            .success());
+    }
 }

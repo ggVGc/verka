@@ -188,6 +188,12 @@ pub struct ResultMeta {
     /// these exact metadata and description blobs.
     pub definition: DefinitionVersion,
     pub outcome: Outcome,
+    /// Exact project commit and tree the work started from. Optional for
+    /// results written by older versions and for hand-recorded answers/failures.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_commit: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_tree: Option<String>,
     /// The single git commit encompassing all files this node produced.
     /// Absent when the work produced no files (graph-only work) or failed.
     #[serde(skip_serializing_if = "Option::is_none")]

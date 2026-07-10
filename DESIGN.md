@@ -318,6 +318,8 @@ at = 1719571200000
 author = "machine"
 outcome = "done"                  # or "failed"
 output_commit = "a45ab51c..."     # the one commit with everything produced; optional
+input_commit = "0123abcd..."      # exact project commit the work started from; optional
+input_tree = "4567efab..."        # its tree, for source-state identity; optional
 
 [definition]
 metadata = "4ec1916e..."          # node.toml blob fulfilled

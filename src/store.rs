@@ -345,6 +345,8 @@ mod tests {
             author: Author::Machine,
             definition: v2.clone(),
             outcome: Outcome::Done,
+            input_commit: None,
+            input_tree: None,
             output_commit: Some("abc".into()),
             worked_by: None,
             built_against: vec![],

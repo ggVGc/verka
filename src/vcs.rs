@@ -19,6 +19,18 @@ pub trait Vcs {
     /// hash of the change.
     fn capture(&self, paths: &[String], message: &str) -> Result<String>;
 
+    /// Commit currently checked out in the project/execution tree.
+    fn head_commit(&self) -> Result<Option<String>>;
+
+    /// Tree object for `commit`.
+    fn tree_id(&self, commit: &str) -> Result<String>;
+
+    /// Keep a completed node output reachable independently of a worktree.
+    fn retain_output(&self, node: &str, commit: &str) -> Result<()>;
+
+    /// Blob id of a path in the project/execution tree, if it is a file.
+    fn file_blob(&self, path: &str) -> Result<Option<String>>;
+
     /// Persist a store change (commit the given path, e.g. the store directory)
     /// to the workbench repository.
     fn commit_store(&self, path: &str, message: &str) -> Result<()>;
@@ -79,6 +91,23 @@ impl Vcs for FakeVcs {
             .insert(self.next_id.clone(), paths.to_vec());
         self.commits.borrow_mut().insert(self.next_id.clone());
         Ok(self.next_id.clone())
+    }
+
+    fn head_commit(&self) -> Result<Option<String>> {
+        Ok(self.root.clone())
+    }
+
+    fn tree_id(&self, commit: &str) -> Result<String> {
+        Ok(format!("tree-{commit}"))
+    }
+
+    fn retain_output(&self, _node: &str, commit: &str) -> Result<()> {
+        self.commits.borrow_mut().insert(commit.to_string());
+        Ok(())
+    }
+
+    fn file_blob(&self, _path: &str) -> Result<Option<String>> {
+        Ok(None)
     }
 
     fn commit_store(&self, _path: &str, _message: &str) -> Result<()> {

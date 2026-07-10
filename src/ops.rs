@@ -114,15 +114,27 @@ pub fn complete(
     require_clean_except(vcs, outputs)?;
     let (meta, description) = store.read_node(id)?;
 
+    let input_commit = vcs.head_commit()?;
+    let input_tree = input_commit
+        .as_deref()
+        .map(|commit| vcs.tree_id(commit))
+        .transpose()?;
+
     // Pin everything the work saw, before committing anything.
-    let context = pin_context(store, context)?;
+    let context = pin_context(store, vcs, context)?;
     let built_against = pin_deps(store, &meta)?;
 
     let output_commit = if outputs.is_empty() {
         None
     } else {
         let message = message.unwrap_or_else(|| crate::model::title_of(&description).to_string());
-        Some(vcs.capture(outputs, &message)?)
+        let mut commit_message = format!("{message}\n\nLlaundry-Node: {id}");
+        if let Some(input) = &input_commit {
+            commit_message.push_str(&format!("\nLlaundry-Input: {input}"));
+        }
+        let commit = vcs.capture(outputs, &commit_message)?;
+        vcs.retain_output(id, &commit)?;
+        Some(commit)
     };
 
     store.write_result(
@@ -132,6 +144,8 @@ pub fn complete(
             author,
             definition: store.node_version(id)?,
             outcome: Outcome::Done,
+            input_commit,
+            input_tree,
             output_commit: output_commit.clone(),
             worked_by: None,
             built_against,
@@ -162,6 +176,8 @@ pub fn respond(store: &Store, vcs: &dyn Vcs, id: &str, notes: &str, author: Auth
             author,
             definition: store.node_version(id)?,
             outcome: Outcome::Done,
+            input_commit: None,
+            input_tree: None,
             output_commit: None,
             worked_by: None,
             built_against,
@@ -187,6 +203,8 @@ pub fn fail(store: &Store, vcs: &dyn Vcs, id: &str, notes: &str, author: Author)
             author,
             definition: store.node_version(id)?,
             outcome: Outcome::Failed,
+            input_commit: None,
+            input_tree: None,
             output_commit: None,
             worked_by: None,
             built_against,
@@ -238,7 +256,7 @@ pub fn amend_context(store: &Store, vcs: &dyn Vcs, id: &str, reads: &[String]) -
         if pinned.contains(path) || node_outputs.contains(path) {
             continue;
         }
-        let Some(blob) = file_blob(&root.join(path)) else {
+        let Some(blob) = vcs.file_blob(path)?.or_else(|| file_blob(&root.join(path))) else {
             continue;
         };
         pinned.insert(path.clone());
@@ -817,12 +835,12 @@ fn definition_drift(
 }
 
 /// Pin each context path by its current content; errors if a file is missing.
-fn pin_context(store: &Store, paths: &[String]) -> Result<Vec<ContextPin>> {
+fn pin_context(store: &Store, vcs: &dyn Vcs, paths: &[String]) -> Result<Vec<ContextPin>> {
     let root = store.project_root();
     paths
         .iter()
         .map(|path| {
-            let blob = file_blob(&root.join(path))
+            let blob = vcs.file_blob(path)?.or_else(|| file_blob(&root.join(path)))
                 .with_context(|| format!("cannot pin `{path}`: file not found"))?;
             Ok(ContextPin {
                 path: path.clone(),
