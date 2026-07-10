@@ -241,128 +241,54 @@ cleanup must never discard uncommitted files.
 reserved for explicit discard after the driver has independently checked and
 reported dirtiness.
 
-## 7. Integrating an output into a target branch
+## 7. Automatic finalization into the target branch
 
-Completing a node publishes an output commit; it does not put that commit on
-`main` or assert that it belongs in the current project projection. Integration
-is a separate, explicit operation performed only after completion. This keeps
-execution reproducible and allows output to be reviewed or verified before it
-affects a shared branch.
+The normal contract of `llaundry-work <node>` is complete only when the work is
+present on the configured target branch (`main` by default). The isolated
+output commit is a recovery and provenance boundary, not the normal user-facing
+endpoint. Integration is implicit; `--no-integrate` is the explicit exception
+for experiments and parallel variants.
+
+After the worker finalizes its isolated output, the driver verifies it and
+attempts a fast-forward publication. If the target has advanced, the driver
+rebases the same isolated worktree onto the new target, asks the worker to
+resolve any conflicts, then asks it to re-check the complete rebased result.
+Any corrections are committed, verification runs again, and publication is
+retried. A mechanically clean rebase never carries verification forward.
+
+The target update uses its previously observed commit as a compare-and-swap
+guard. If it moves again, the rebase/re-check/verify cycle repeats up to the
+configured retry limit. Failure retains the isolated worktree; no dirty state
+is discarded. The node result records the final isolated commit,
+`integrated_commit`, `target_ref`, and `target_previous`.
 
 The first implementation may call this operation `publish`. In the fuller
 selection/projection model in `PARALLEL_VARIANTS.md`, the same mechanism
 materializes a projection and publication is the final compare-and-swap ref
 update. The Git safety rules below apply in either model.
 
-### 7.1 Prepare integration
+### 7.1 Finalization loop
 
-Given an output commit and a target branch, the integration operation:
+1. Resolve the target ref and remember its exact tip.
+2. If the isolated commit is not based on that tip, rebase the isolated
+   worktree onto it.
+3. When rebase conflicts occur, run the worker on the same node and worktree to
+   resolve them, then continue the rebase.
+4. After every rebase, run the worker again to review the combined result and
+   make any necessary corrections.
+5. Commit those corrections and run verification against the resulting tree.
+6. Fast-forward the target only if it still equals the remembered tip.
+7. If the compare-and-swap fails, repeat from step 1. If the retry limit is
+   exhausted, retain the worktree and leave publication incomplete.
 
-1. Resolves the output from the completed node result, not from a caller-supplied
-   worktree path or temporary branch.
-2. Resolves the target ref (for example `refs/heads/main`) to an exact
-   `target_old` commit and records it.
-3. Verifies that both commits exist and that the output's recorded
-   `input_commit` is its parent.
-4. Creates a separate detached integration worktree at `target_old`. It never
-   merges in the user's checkout and never checks out the target branch.
-5. Creates temporary reachability refs for `target_old` and the candidate
-   integration result until the operation has either published or been
-   explicitly discarded.
+The ordinary project checkout is updated when it cleanly has the target branch
+checked out. Publication refuses to overwrite a dirty checkout. When the
+target is not checked out there, its ref is updated directly with an
+expected-old value.
 
-The integration run has its own opaque ID. It is distinct from the execution
-run that produced the output.
-
-### 7.2 Fast-forward and clean merge
-
-There are three clean cases:
-
-* If `target_old == input_commit`, the target can fast-forward directly to the
-  output commit.
-* If the output commit is already an ancestor of `target_old`, the output is
-  already integrated; publication is a successful no-op and records that fact.
-* Otherwise, perform a three-way merge of the output commit into `target_old`
-  inside the integration worktree. If it is clean, create a merge commit whose
-  first parent is `target_old` and second parent is the output commit. Include
-  `Llaundry-Node`, `Llaundry-Output`, and `Llaundry-Integration` trailers.
-
-A clean textual merge is only a candidate integration result. Run the
-configured verification against its exact tree before moving the target ref.
-The verification command, exit status, and relevant output are recorded. If
-verification fails, preserve the integration commit and worktree for diagnosis
-but do not update the target branch.
-
-After verification succeeds, update the target ref atomically:
-
-```text
-update refs/heads/main <integrated-commit> <target-old>
-```
-
-The expected-old value is mandatory. If the target moved while merging or
-verifying, the update fails without overwriting anyone's work. Discard the
-candidate only if clean and unneeded, or restart integration against the new
-tip. A merge result based on the old tip must never be published to the moved
-branch.
-
-Advancing `refs/heads/main` does not update a checkout that currently has
-`main` checked out safely in all Git configurations. Initially, refuse direct
-publication when the target branch is checked out in any worktree, including
-the user's checkout, and tell the user to switch that checkout away or perform
-an explicit local update. A later implementation may provide a coordinated
-checkout update, but it must verify a clean index/worktree and must not reset or
-discard local changes.
-
-### 7.3 Conflicted merge
-
-If Git reports conflicts, stop automatic publication. Preserve the integration
-worktree with its index and conflict markers intact and record:
-
-* integration ID and worktree path;
-* node ID and output commit;
-* `target_old` and target ref;
-* merge base;
-* unmerged paths and Git conflict stages;
-* the attempted strategy/options;
-* the verification policy that will apply after resolution.
-
-Create or request an explicit reconciliation node consuming the output node
-and the target projection/commit. Its description states that it must resolve
-this integration and includes the recorded conflict summary. The conflict is
-not marked as failure of the original implementation: that output remains a
-valid, addressable result against its recorded input.
-
-Resolution happens in the retained integration worktree as new work. On
-completion llaundry requires that:
-
-1. no unmerged index entries remain;
-2. the resolution commit has `target_old` and the original output commit as
-   parents (or otherwise records both exact inputs if the reconciliation
-   deliberately reconstructs the tree);
-3. all reconciliation edits are captured;
-4. required verification passes against the resolved commit;
-5. the target ref still equals `target_old` before its atomic update.
-
-If the target moved during conflict resolution, preserve the resolved commit
-but do not publish it. A new integration must combine that resolution with the
-new target tip; llaundry must not silently rebase or overwrite it.
-
-The user may explicitly abandon reconciliation. Abandoning removes the
-integration worktree only after reporting any uncommitted resolution work; it
-does not delete the original output commit or its result.
-
-### 7.4 Integration record and cleanup
-
-A successful publication records at least the node/output, input commit,
-previous target, integrated commit, target ref, method (`fast-forward`,
-`already-contained`, `merge`, or `reconciliation`), verifier, and timestamp.
-In the eventual graph model this is a projection/integration node result. A
-minimal implementation may use a store journal, but must not encode the fact
-only in a movable branch ref.
-
-After the record and target ref are durable, remove a clean integration
-worktree and its temporary refs. Retain failed-verification and conflicted
-worktrees according to the same never-discard-dirty-state rule used for
-execution worktrees.
+Only successful publication adds the final publication fields to the result.
+The transcript retains each rebase, conflict-resolution, and review attempt.
+Earlier output commits remain protected by llaundry output refs.
 
 ## 8. Pause, resume, and retry
 
@@ -496,17 +422,13 @@ its files.
 Names are illustrative:
 
 ```text
-llaundry-work <node> [--base <commit>] [--keep-worktree]
+llaundry-work <node> [--target main] [--verify <command>] [--no-integrate]
 llaundry worktree list
 llaundry worktree inspect <run-id>
 llaundry worktree resume <run-id>
 llaundry worktree discard <run-id>
 llaundry worktree recover [--repair]
 llaundry refs check [--repair]
-llaundry integrate <node> --target <branch> [--verify <command>]
-llaundry integration inspect <integration-id>
-llaundry integration continue <integration-id>
-llaundry integration abandon <integration-id>
 ```
 
 `--dry-run` shows the resolved input commit and intended worktree path but
@@ -541,17 +463,17 @@ creates neither refs nor directories.
 * create durable output refs;
 * remove clean completed worktrees.
 
-### Stage 2: integration and publication
+### Stage 2: automatic finalization and publication
 
-* integrate in a separate detached worktree;
-* handle fast-forward, already-contained, and clean three-way merge cases;
-* verify the exact candidate integration tree before publication;
-* update the target ref with an expected-old compare-and-swap;
-* refuse publication to a branch checked out in any worktree initially;
-* retain conflicted merges and record their inputs and conflict details;
-* resolve conflicts through explicit reconciliation work;
-* preserve integration commits when verification fails or the target moves;
-* record successful integration independently of the movable target ref.
+* make integration the default final phase of `llaundry-work`;
+* rebase the isolated worktree whenever the target has advanced;
+* have the same node's worker resolve conflicts and re-check rebased work;
+* rerun verification after every rebase or correction;
+* publish by fast-forward with an expected-old compare-and-swap;
+* safely update a clean ordinary checkout of the target branch;
+* retry when the target moves and retain work on exhaustion or failure;
+* record final publication provenance on the node result;
+* provide `--no-integrate` only as an explicit exceptional mode.
 
 ### Stage 3: recovery
 
@@ -592,16 +514,17 @@ The feature is complete when automated tests demonstrate at least:
    the produced commit.
 7. Paused work resumes with both transcript and uncommitted filesystem state.
 8. Cleanup never force-removes a dirty worktree automatically.
-9. No run moves the user's checked-out branch or changes its index.
+9. Execution never changes the ordinary checkout; successful publication alone
+   fast-forwards a clean checkout of the target branch.
 10. Context pins are computed from the run's input/worktree state rather than
     the current contents of `project/`.
 11. An output based on the target tip fast-forwards the target only after
-    verification and without modifying the user's checkout or index.
-12. A clean divergent merge produces a two-parent commit and publishes it only
-    if verification succeeds and the target still has its expected old value.
-13. A conflicted merge leaves the target unchanged and retains a worktree with
-    sufficient metadata to resume reconciliation.
-14. A target branch movement during merge, verification, or reconciliation
-    prevents publication without deleting the candidate integration commit.
+    verification and updates its clean ordinary checkout consistently.
+12. A target advance rebases the isolated work, invokes a worker review, and
+    reruns verification before publication.
+13. A conflicted rebase is resolved in the same isolated worktree and node,
+    followed by worker review and fresh verification.
+14. A target movement during review or verification repeats the finalization
+    loop without deleting the candidate commit or dirty worktree.
 15. Failed verification leaves `main` unchanged and preserves the candidate for
     inspection.

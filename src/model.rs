@@ -188,6 +188,9 @@ pub struct ResultMeta {
     /// these exact metadata and description blobs.
     pub definition: DefinitionVersion,
     pub outcome: Outcome,
+    /// Machine completion awaiting automatic verification/publication.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub publication_pending: bool,
     /// Exact project commit and tree the work started from. Optional for
     /// results written by older versions and for hand-recorded answers/failures.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -198,6 +201,13 @@ pub struct ResultMeta {
     /// Absent when the work produced no files (graph-only work) or failed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_commit: Option<String>,
+    /// Final verified commit published to the configured target branch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub integrated_commit: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_previous: Option<String>,
     /// The backend/model that did the work, stamped by the driver afterwards.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worked_by: Option<WorkedBy>,

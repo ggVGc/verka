@@ -317,9 +317,13 @@ needed.
 at = 1719571200000
 author = "machine"
 outcome = "done"                  # or "failed"
+publication_pending = true        # machine output not yet finalized onto target; normally omitted
 output_commit = "a45ab51c..."     # the one commit with everything produced; optional
 input_commit = "0123abcd..."      # exact project commit the work started from; optional
 input_tree = "4567efab..."        # its tree, for source-state identity; optional
+integrated_commit = "bcdef012..." # verified commit published to the target; optional
+target_ref = "refs/heads/main"    # branch receiving the normal work result
+target_previous = "789abcde..."  # target tip used for atomic publication
 
 [definition]
 metadata = "4ec1916e..."          # node.toml blob fulfilled
