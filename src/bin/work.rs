@@ -740,6 +740,12 @@ mod tests {
         fn dirty_paths(&self) -> Result<Vec<String>> {
             Ok(vec![])
         }
+        fn root_commit(&self) -> Result<Option<String>> {
+            Ok(None)
+        }
+        fn commit_exists(&self, _hash: &str) -> Result<bool> {
+            Ok(true)
+        }
     }
 
     #[test]

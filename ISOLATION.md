@@ -99,10 +99,17 @@ while the model's own file tools cannot. No daemon, no socket.
 - Project → store: stable keys. Output commits can carry a
   `Llaundry-Node: <id>` trailer; the id resolves through the store. A code
   checkout without the store cannot tell the story — that is the point.
-- Repo pairing is positional: the store lives at `../.llaundry` relative to
-  the project root. (Planned: record the project's root commit in the store
-  and verify it at open, so a store can never be run against the wrong
-  repository.)
+- Repo pairing is positional — the store lives at `../.llaundry` relative to
+  the project root — and recorded: the store's `pairing.toml` holds the
+  project's root commit (the first-parent root of HEAD, the one hash that
+  identifies the repository rather than a point in its history). `init`
+  records it (minting an empty root commit for a fresh project); `llaundry
+  pair` records it for an adopted checkout, and refuses a mismatch unless
+  `--force`d. Verification is deliberately manual, never implicit:
+  `pair --verify` compares the recorded root against reality, and
+  `pair --verify --deep` additionally checks that every recorded output
+  commit and built-against pin still exists in the project repository —
+  catching partial history rewrites that leave the root intact.
 
 ## Residual risks, accepted or deferred
 

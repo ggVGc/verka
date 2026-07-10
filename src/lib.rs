@@ -20,10 +20,12 @@ pub mod config;
 pub mod git;
 pub mod model;
 pub mod ops;
+pub mod pairing;
 pub mod store;
 pub mod vcs;
 
 pub use config::Config;
+pub use pairing::Pairing;
 pub use git::GitVcs;
 pub use model::{
     title_of, Author, BuiltAgainst, ContextPin, DefinitionVersion, DepKind, NodeMeta, Outcome,

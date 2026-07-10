@@ -33,6 +33,17 @@ pub trait Vcs {
     /// Project paths with uncommitted changes (empty means a clean project
     /// working tree).
     fn dirty_paths(&self) -> Result<Vec<String>>;
+
+    /// The root commit of the project repository's mainline (the first-parent
+    /// walk from HEAD), or `None` for a repository with no commits yet. The
+    /// one hash that identifies the repository rather than a point in its
+    /// history — the store↔project pairing is keyed on it.
+    fn root_commit(&self) -> Result<Option<String>>;
+
+    /// Whether `hash` names a commit that exists in the project repository.
+    /// Used by the deep pairing check to find recorded output commits that a
+    /// history rewrite has orphaned.
+    fn commit_exists(&self, hash: &str) -> Result<bool>;
 }
 
 /// In-memory [`Vcs`] for tests. `capture` records the paths and returns `next_id`;
@@ -46,6 +57,10 @@ pub struct FakeVcs {
     pub captured: std::cell::RefCell<Vec<Vec<String>>>,
     pub store_commits: std::cell::RefCell<usize>,
     pub files_for: std::cell::RefCell<std::collections::HashMap<String, Vec<String>>>,
+    /// The project repo's root commit; `None` models an empty repository.
+    pub root: Option<String>,
+    /// Commits that exist in the project repo; `capture` adds `next_id`.
+    pub commits: std::cell::RefCell<std::collections::HashSet<String>>,
 }
 
 #[cfg(test)]
@@ -55,6 +70,7 @@ impl Vcs for FakeVcs {
         self.files_for
             .borrow_mut()
             .insert(self.next_id.clone(), paths.to_vec());
+        self.commits.borrow_mut().insert(self.next_id.clone());
         Ok(self.next_id.clone())
     }
 
@@ -73,5 +89,13 @@ impl Vcs for FakeVcs {
 
     fn files_in(&self, id: &str) -> Result<Vec<String>> {
         Ok(self.files_for.borrow().get(id).cloned().unwrap_or_default())
+    }
+
+    fn root_commit(&self) -> Result<Option<String>> {
+        Ok(self.root.clone())
+    }
+
+    fn commit_exists(&self, hash: &str) -> Result<bool> {
+        Ok(self.commits.borrow().contains(hash))
     }
 }

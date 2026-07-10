@@ -155,6 +155,24 @@ enum Cmd {
     /// Check whether a node is settled: done, not stale, and all work derived
     /// from it (transitively) also done and not stale. Exits non-zero if not.
     Settled { id: String },
+
+    /// Record which project repository this store describes, keyed by the
+    /// project's root commit — or, with --verify, check the recorded pairing.
+    Pair {
+        /// Verify the recorded pairing instead of recording one (read-only).
+        /// Exits non-zero if the pairing does not hold.
+        #[arg(long)]
+        verify: bool,
+        /// With --verify: also check that every recorded output commit still
+        /// exists in the project repository (detects history rewrites that
+        /// leave the root commit intact).
+        #[arg(long, requires = "verify")]
+        deep: bool,
+        /// Re-pair even if the store is paired to a different root (after a
+        /// deliberate history rewrite).
+        #[arg(long, conflicts_with = "verify")]
+        force: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -178,6 +196,15 @@ fn main() -> Result<()> {
                 store.workbench_root().join(store.store_name()).display(),
                 store.project_root().display()
             );
+            // Pair the store to the project by its root commit; a fresh
+            // project gets an empty root commit so it has an identity to
+            // anchor to (an adopted checkout already has one).
+            if llaundry::git::ensure_root_commit(&store.project_root())? {
+                println!("created empty root commit in the project repository");
+            }
+            let vcs = GitVcs::for_store(&store);
+            let pairing = ops::pair(&store, &vcs, false)?;
+            println!("paired to project root {}", ops::short(&pairing.root_commit));
         }
 
         Cmd::Add {
@@ -401,6 +428,34 @@ fn main() -> Result<()> {
                     println!("  {r}");
                 }
                 std::process::exit(1);
+            }
+        }
+
+        Cmd::Pair {
+            verify,
+            deep,
+            force,
+        } => {
+            let store = Store::open(store)?;
+            let vcs = GitVcs::for_store(&store);
+            if verify {
+                let (recorded, problems) = ops::verify_pairing(&store, &vcs, deep)?;
+                match recorded {
+                    None => println!("store is not paired (run `llaundry pair` to record the project)"),
+                    Some(root) if problems.is_empty() => {
+                        println!("paired to project root {} — ok", ops::short(&root));
+                    }
+                    Some(_) => {
+                        for p in &problems {
+                            println!("{p}");
+                        }
+                        eprintln!("{} problem(s) found", problems.len());
+                        std::process::exit(1);
+                    }
+                }
+            } else {
+                let pairing = ops::pair(&store, &vcs, force)?;
+                println!("paired to project root {}", ops::short(&pairing.root_commit));
             }
         }
 

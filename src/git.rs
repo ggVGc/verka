@@ -59,6 +59,17 @@ impl Vcs for GitVcs {
     fn files_in(&self, id: &str) -> Result<Vec<String>> {
         commit_files(&self.project, id)
     }
+
+    fn root_commit(&self) -> Result<Option<String>> {
+        root_commit(&self.project)
+    }
+
+    fn commit_exists(&self, hash: &str) -> Result<bool> {
+        // `cat-file -e` exits non-zero for a missing object; that is the
+        // answer, not an error.
+        let probe = format!("{hash}^{{commit}}");
+        Ok(git(&self.project, &["cat-file", "-e", &probe])?.status.success())
+    }
 }
 
 /// `git init` a directory unless it already is a repository (its own, not a
@@ -69,6 +80,30 @@ pub fn ensure_repo(dir: &Path) -> Result<bool> {
     }
     std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     checked(dir, &["init"])?;
+    Ok(true)
+}
+
+/// The root commit of a repository's mainline: the parentless end of the
+/// first-parent walk from HEAD. `None` for a repository with no commits.
+/// First-parent keeps the answer single and deterministic even after merges
+/// of unrelated histories.
+pub fn root_commit(base: &Path) -> Result<Option<String>> {
+    if !git(base, &["rev-parse", "--verify", "--quiet", "HEAD"])?.status.success() {
+        return Ok(None); // no commits yet
+    }
+    let out = checked(base, &["rev-list", "--max-parents=0", "--first-parent", "HEAD"])?;
+    Ok(out.lines().next().map(str::to_string))
+}
+
+/// Ensure the repository has at least one commit, creating an empty root
+/// commit if it has none — so a freshly-initialised project has an identity
+/// the store↔project pairing can anchor to. Returns whether a commit was
+/// created. Requires a configured git identity when it does commit.
+pub fn ensure_root_commit(base: &Path) -> Result<bool> {
+    if root_commit(base)?.is_some() {
+        return Ok(false);
+    }
+    checked(base, &["commit", "--allow-empty", "-m", "project root"])?;
     Ok(true)
 }
 

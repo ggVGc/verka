@@ -4,6 +4,7 @@
 //!
 //! ```text
 //! <root>/
+//!   pairing.toml      which project repo this store describes (optional; see pairing)
 //!   nodes/<id>/
 //!     node.toml       structured definition metadata
 //!     description.md  definition prose
@@ -68,6 +69,11 @@ impl Store {
     }
 
     // --- paths ----------------------------------------------------------------
+
+    /// The store's root directory (holds `nodes/`, `config.toml`, `pairing.toml`).
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
 
     pub fn node_dir(&self, id: &str) -> PathBuf {
         self.root.join("nodes").join(id)

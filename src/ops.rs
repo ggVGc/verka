@@ -20,6 +20,7 @@ use crate::model::{
     Author, BuiltAgainst, ContextPin, DefinitionVersion, DepKind, NodeMeta, Outcome, ResultMeta,
     ResultVersion, Status, WorkedBy,
 };
+use crate::pairing::Pairing;
 use crate::store::{file_blob, Store};
 use crate::vcs::Vcs;
 
@@ -604,6 +605,102 @@ fn find_cycles(graph: &std::collections::BTreeMap<String, Vec<String>>) -> Vec<S
         visit(node, graph, &mut state, &mut Vec::new(), &mut out);
     }
     out
+}
+
+/// Record which project repository this store describes, keyed by the
+/// project's root commit (`pairing.toml` in the store, committed to the
+/// workbench repository like any other store change). Idempotent when the
+/// recorded root already matches. A mismatch is the error this exists to
+/// catch — the wrong project sitting in the workbench, or a rewritten
+/// history — and needs `force` to overwrite deliberately.
+pub fn pair(store: &Store, vcs: &dyn Vcs, force: bool) -> Result<Pairing> {
+    let Some(root) = vcs.root_commit()? else {
+        bail!("the project repository has no commits yet — nothing to pair to");
+    };
+    if let Some(existing) = Pairing::load(store.root())? {
+        if existing.root_commit == root {
+            return Ok(existing);
+        }
+        if !force {
+            bail!(
+                "store is paired to project root {} but the project's root is {} — \
+                 wrong project in the workbench, or a rewritten history \
+                 (re-pair with --force if this is intentional)",
+                short(&existing.root_commit),
+                short(&root)
+            );
+        }
+    }
+    let pairing = Pairing {
+        schema: 1,
+        root_commit: root,
+        paired_at: now_millis(),
+    };
+    pairing.save(store.root())?;
+    vcs.commit_store(&store.store_name(), "llaundry: pair project")?;
+    Ok(pairing)
+}
+
+/// Verify the store↔project pairing. Read-only and manual — nothing calls it
+/// implicitly. Returns the recorded root commit (`None` means the store is
+/// not paired, which is a notice, not a problem — stores predating pairing
+/// exist) and the list of problems found.
+///
+/// The default check is one comparison: the project's actual root commit
+/// against the recorded one. With `deep`, every hash the store points at —
+/// each result's output commit and every built-against output pin — is also
+/// checked to exist in the project repository, catching partial history
+/// rewrites that leave the root intact but orphan recorded outputs.
+pub fn verify_pairing(
+    store: &Store,
+    vcs: &dyn Vcs,
+    deep: bool,
+) -> Result<(Option<String>, Vec<String>)> {
+    let Some(pairing) = Pairing::load(store.root())? else {
+        return Ok((None, Vec::new()));
+    };
+    let mut problems = Vec::new();
+    match vcs.root_commit()? {
+        None => problems.push(format!(
+            "project repository has no commits, but the store is paired to root {}",
+            short(&pairing.root_commit)
+        )),
+        Some(actual) if actual != pairing.root_commit => problems.push(format!(
+            "project root commit is {} but the store is paired to {} — \
+             wrong project in the workbench, or a rewritten history \
+             (`llaundry pair --force` re-pairs deliberately)",
+            short(&actual),
+            short(&pairing.root_commit)
+        )),
+        Some(_) => {}
+    }
+    if deep {
+        for id in store.list_ids()? {
+            let Some((result, _)) = store.read_result(&id)? else {
+                continue;
+            };
+            if let Some(commit) = &result.output_commit {
+                if !vcs.commit_exists(commit)? {
+                    problems.push(format!(
+                        "{id}: output commit {} does not exist in the project repository",
+                        short(commit)
+                    ));
+                }
+            }
+            for ba in &result.built_against {
+                if let Some(output) = &ba.output {
+                    if !vcs.commit_exists(output)? {
+                        problems.push(format!(
+                            "{id}: built-against output {} (of {}) does not exist in the project repository",
+                            short(output),
+                            ba.id
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    Ok((Some(pairing.root_commit), problems))
 }
 
 /// Enforce that the project working tree is clean apart from `allowed` paths —
@@ -1497,5 +1594,113 @@ mod tests {
             ..Default::default()
         };
         assert!(require_clean_except(&stray, &outputs).is_err());
+    }
+
+    #[test]
+    fn pair_records_the_root_and_is_idempotent() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs {
+            root: Some("root-1".into()),
+            ..Default::default()
+        };
+
+        let pairing = pair(&store, &fake, false).unwrap();
+        assert_eq!(pairing.root_commit, "root-1");
+        assert_eq!(*fake.store_commits.borrow(), 1);
+
+        // Same root again: no re-write, no extra store commit.
+        let again = pair(&store, &fake, false).unwrap();
+        assert_eq!(again.root_commit, "root-1");
+        assert_eq!(*fake.store_commits.borrow(), 1);
+    }
+
+    #[test]
+    fn pair_refuses_an_empty_project_and_a_different_root_without_force() {
+        let (_t, store) = temp_store();
+        assert!(pair(&store, &FakeVcs::default(), false).is_err(), "no commits");
+
+        let first = FakeVcs {
+            root: Some("root-1".into()),
+            ..Default::default()
+        };
+        pair(&store, &first, false).unwrap();
+
+        let other = FakeVcs {
+            root: Some("root-2".into()),
+            ..Default::default()
+        };
+        assert!(pair(&store, &other, false).is_err(), "mismatched root");
+        // A deliberate re-pair (history rewrite) goes through with force.
+        assert_eq!(pair(&store, &other, true).unwrap().root_commit, "root-2");
+    }
+
+    #[test]
+    fn verify_pairing_reports_unpaired_matching_and_mismatched() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs {
+            root: Some("root-1".into()),
+            ..Default::default()
+        };
+
+        // Unpaired: no problems, no recorded root.
+        assert_eq!(verify_pairing(&store, &fake, false).unwrap(), (None, vec![]));
+
+        pair(&store, &fake, false).unwrap();
+        let (recorded, problems) = verify_pairing(&store, &fake, false).unwrap();
+        assert_eq!(recorded.as_deref(), Some("root-1"));
+        assert!(problems.is_empty());
+
+        let moved = FakeVcs {
+            root: Some("root-2".into()),
+            ..Default::default()
+        };
+        let (_, problems) = verify_pairing(&store, &moved, false).unwrap();
+        assert_eq!(problems.len(), 1);
+        assert!(problems[0].contains("root-2"), "{}", problems[0]);
+
+        let empty = FakeVcs::default();
+        let (_, problems) = verify_pairing(&store, &empty, false).unwrap();
+        assert_eq!(problems.len(), 1);
+        assert!(problems[0].contains("no commits"), "{}", problems[0]);
+    }
+
+    #[test]
+    fn deep_verify_finds_orphaned_output_commits() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs {
+            root: Some("root-1".into()),
+            next_id: "commit-1".into(),
+            ..Default::default()
+        };
+        pair(&store, &fake, false).unwrap();
+
+        // A completes with an output commit; B is built against it.
+        let a = add(&store, &fake, new_node("a", vec![])).unwrap();
+        std::fs::write(store.project_root().join("out.rs"), "x").unwrap();
+        complete(
+            &store,
+            &fake,
+            &a,
+            &["out.rs".into()],
+            &[],
+            None,
+            "",
+            Author::Machine,
+        )
+        .unwrap();
+        let b = add(&store, &fake, new_node("b", vec![a.clone()])).unwrap();
+        complete(&store, &fake, &b, &[], &[], None, "", Author::Machine).unwrap();
+
+        // The commit exists: deep verify is clean.
+        let (_, problems) = verify_pairing(&store, &fake, true).unwrap();
+        assert!(problems.is_empty(), "{problems:?}");
+
+        // A history rewrite drops the commit: both the output and the
+        // built-against pin are reported.
+        fake.commits.borrow_mut().clear();
+        let (_, problems) = verify_pairing(&store, &fake, true).unwrap();
+        assert_eq!(problems.len(), 2, "{problems:?}");
+        assert!(problems.iter().any(|p| p.starts_with(&a) && p.contains("output commit")));
+        assert!(problems.iter().any(|p| p.starts_with(&b) && p.contains("built-against")));
     }
 }

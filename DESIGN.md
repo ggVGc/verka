@@ -277,6 +277,7 @@ beside the project it describes (§2.8, ISOLATION.md):
 ```text
 <workbench>/       # outer git repo: the store's history
   .llaundry/
+    pairing.toml   # which project repo this store describes (its root commit)
     nodes/
       <id>/
         node.toml       # structured definition metadata
@@ -420,7 +421,7 @@ The store path defaults to `.llaundry/`, overridable with `--store` or
 
 | Command | Purpose |
 |---|---|
-| `init` | Create a workbench: the store, the project directory, and a git repository for each. |
+| `init` | Create a workbench: the store, the project directory, and a git repository for each — paired by the project's root commit (an empty root commit is minted for a fresh project). |
 | `add` | Create a node (`--depends-on`/`--derived-from` by id, `--assignee` for who the work is for). Prints its id. |
 | `link <from> <to>` | Add a dependency (a definition change of `<from>`). |
 | `edit <id>` | Change the description (a definition change: reopens a done node). |
@@ -435,6 +436,7 @@ The store path defaults to `.llaundry/`, overridable with `--store` or
 | `dependents <id>` | Which nodes depend on / derive from this one. |
 | `check` | Integrity-check the store (fsck): parse errors, missing edge targets, duplicates, self-references, dependency cycles. Non-zero exit on problems. |
 | `settled <id>` | Whether the node *and all work transitively derived from it* is done and not stale — "is this branch actually finished?" (a node's own `done` only certifies its own unit of work, e.g. a task that closed at spec time). Non-zero exit if not. |
+| `pair` | Record which project repository this store describes (`pairing.toml`: the project's root commit) — for adopting an existing checkout, or re-pairing with `--force` after a deliberate history rewrite. `--verify` checks the recorded pairing instead (manual, read-only, non-zero exit on problems); `--verify --deep` also checks every recorded output commit still exists in the project repo, catching rewrites the root does not reveal. |
 
 ### Example
 
