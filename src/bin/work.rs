@@ -2,7 +2,9 @@
 //!
 //! It launches one unit of work on one node: it loads the node, builds a prompt
 //! from it, and hands that to a pluggable [`Backend`]. The backend is the LLM seam,
-//! so different engines can be dropped in without touching the launcher.
+//! so different engines can be dropped in without touching the launcher. The
+//! node is named on the command line, or picked with `--next`: the first ready
+//! node that is not a human's to answer ([`first_ready`]).
 //!
 //! Which backend, model, and executables it uses default to the store's
 //! optional [`Config`] (`<store>/config.toml`); an explicit `--flag` always
@@ -44,13 +46,18 @@ use clap::{Parser, ValueEnum};
 use serde_json::{json, Value};
 use std::process::Command;
 
-use llaundry::{ops, title_of, Author, Config, GitVcs, NodeMeta, Store, WorkedBy};
+use llaundry::{ops, title_of, Author, Config, GitVcs, NodeMeta, Store, Vcs, WorkedBy};
 
 #[derive(Parser)]
 #[command(name = "llaundry-work", version, about = "Run an LLM against a llaundry node")]
 struct Cli {
-    /// Id of the node to work on.
-    node: String,
+    /// Id of the node to work on. Omit with --next to pick one automatically.
+    #[arg(required_unless_present = "next", conflicts_with = "next")]
+    node: Option<String>,
+    /// Work the first ready node instead of naming one: the first id (in
+    /// sorted order) that is ready and not assigned to a human.
+    #[arg(long)]
+    next: bool,
     /// Path to the store directory.
     #[arg(long, env = "LLAUNDRY_DIR", default_value = ".llaundry")]
     store: std::path::PathBuf,
@@ -92,7 +99,14 @@ fn main() -> Result<()> {
 
     let store = Store::open(cli.store.clone())?;
     let vcs = GitVcs::for_store(&store);
-    let (meta, description) = store.read_node(&cli.node)?;
+    let node = match &cli.node {
+        Some(id) => id.clone(),
+        None => match first_ready(&store, &vcs)? {
+            Some(id) => id,
+            None => bail!("no node is ready to work"),
+        },
+    };
+    let (meta, description) = store.read_node(&node)?;
 
     // The store's optional defaults. Precedence for every setting it covers:
     // an explicit `--flag` wins, else `config.toml`, else the built-in default.
@@ -118,16 +132,16 @@ fn main() -> Result<()> {
     if meta.assignee == Some(Author::Human) && !cli.force {
         bail!(
             "node `{}` is assigned to a human; answer it (llaundry complete) or pass --force",
-            cli.node
+            node
         );
     }
 
     // Don't launch work on a node whose dependencies aren't satisfied, unless forced.
-    let blockers = ops::blockers(&store, &vcs, &cli.node);
+    let blockers = ops::blockers(&store, &vcs, &node);
     if !blockers.is_empty() && !cli.force {
         bail!(
             "node `{}` is blocked; resolve its dependencies or pass --force:\n  {}",
-            cli.node,
+            node,
             blockers.join("\n  ")
         );
     }
@@ -136,8 +150,8 @@ fn main() -> Result<()> {
     // stopped mid-unit, e.g. on a question node): replay the log so the new
     // session continues where the last one left off. A node with a result is
     // being *re*worked — its old story doesn't continue, it starts over.
-    let previous_log = if store.read_result(&cli.node)?.is_none() {
-        store.read_work_log(&cli.node)?
+    let previous_log = if store.read_result(&node)?.is_none() {
+        store.read_work_log(&node)?
     } else {
         None
     };
@@ -157,8 +171,8 @@ fn main() -> Result<()> {
         .join(store.store_name());
 
     let session = Session {
-        node_id: cli.node.clone(),
-        prompt: build_prompt(&cli.node, &meta, &description, previous_log.as_deref()),
+        node_id: node.clone(),
+        prompt: build_prompt(&node, &meta, &description, previous_log.as_deref()),
         project_root,
         mcp: McpServer {
             name: "llaundry".into(),
@@ -202,7 +216,7 @@ fn main() -> Result<()> {
     // work, even if the agent edits the graph during it.
     use std::io::Write;
     let started = now_millis();
-    let mut log = store.open_work_log(&cli.node, previous_log.is_some())?;
+    let mut log = store.open_work_log(&node, previous_log.is_some())?;
     writeln!(
         log,
         "{}",
@@ -211,7 +225,7 @@ fn main() -> Result<()> {
             "at": started,
             "backend": backend.name(),
             "model": backend.model(),
-            "node_version": store.node_version(&cli.node)?,
+            "node_version": store.node_version(&node)?,
         })
     )?;
     log.flush()?;
@@ -226,7 +240,7 @@ fn main() -> Result<()> {
         backend: backend.name().to_string(),
         model: backend.model().map(str::to_string),
     };
-    match ops::amend_worker(&store, &vcs, &cli.node, worked_by, started) {
+    match ops::amend_worker(&store, &vcs, &node, worked_by, started) {
         Ok(_) => {}
         Err(e) => eprintln!("llaundry-work: could not record the worker: {e:#}"),
     }
@@ -234,9 +248,9 @@ fn main() -> Result<()> {
     // Derive input provenance from the recorded session: pin project files the
     // agent was observed reading but did not declare as context. Best-effort —
     // the raw log keeps the full story either way.
-    if let Some(log_text) = store.read_work_log(&cli.node)? {
+    if let Some(log_text) = store.read_work_log(&node)? {
         let reads = observed_reads(&log_text, &store);
-        match ops::amend_context(&store, &vcs, &cli.node, &reads) {
+        match ops::amend_context(&store, &vcs, &node, &reads) {
             Ok(n) if n > 0 => eprintln!("llaundry-work: pinned {n} observed context file(s)"),
             Ok(_) => {}
             Err(e) => eprintln!("llaundry-work: could not pin observed context: {e:#}"),
@@ -246,12 +260,30 @@ fn main() -> Result<()> {
     // Commit whatever of the story the session's own store commits didn't
     // already sweep in — before judging the exit status, so even a failed
     // session's story is kept.
-    ops::commit_work_log(&store, &vcs, &cli.node)?;
+    ops::commit_work_log(&store, &vcs, &node)?;
 
     if !success {
         bail!("backend session exited unsuccessfully");
     }
     Ok(())
+}
+
+/// The node `--next` picks: the first id (in [`Store::list_ids`] order, i.e.
+/// sorted) that is ready and not assigned to a human — the same pool
+/// `llaundry ready --for llm` shows. A human-assigned node is waiting for a
+/// human's answer, never an LLM's to pick up.
+fn first_ready(store: &Store, vcs: &dyn Vcs) -> Result<Option<String>> {
+    for id in store.list_ids()? {
+        if !ops::is_ready(store, vcs, &id) {
+            continue;
+        }
+        let (meta, _) = store.read_node(&id)?;
+        if meta.assignee == Some(Author::Human) {
+            continue;
+        }
+        return Ok(Some(id));
+    }
+    Ok(None)
 }
 
 /// One unit of work: an LLM session focused on a single node, together with the MCP
@@ -669,6 +701,66 @@ mod tests {
         assert!(d.contains("mcp__llaundry"));
         // The multi-word prompt gets quoted into a single token.
         assert!(d.contains("'do the work'"));
+    }
+
+    /// Minimal in-memory [`Vcs`] — the library's `FakeVcs` is `cfg(test)` there,
+    /// invisible to this crate's tests. `first_ready` only reads, so no-ops do.
+    struct NullVcs;
+    impl Vcs for NullVcs {
+        fn capture(&self, _paths: &[String], _message: &str) -> Result<String> {
+            Ok("id".into())
+        }
+        fn commit_store(&self, _path: &str, _message: &str) -> Result<()> {
+            Ok(())
+        }
+        fn drift(&self, _id: &str) -> Result<Option<String>> {
+            Ok(None)
+        }
+        fn files_in(&self, _id: &str) -> Result<Vec<String>> {
+            Ok(vec![])
+        }
+        fn dirty_paths(&self) -> Result<Vec<String>> {
+            Ok(vec![])
+        }
+    }
+
+    #[test]
+    fn first_ready_skips_human_assigned_and_blocked_nodes() {
+        let dir = std::env::temp_dir().join(format!("llaundry-next-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Store::init(dir.join(".llaundry")).unwrap();
+        let vcs = NullVcs;
+
+        assert_eq!(first_ready(&store, &vcs).unwrap(), None, "empty store");
+
+        let node = |description: &str, assignee, depends_on| {
+            ops::add(
+                &store,
+                &vcs,
+                ops::NewNode {
+                    description: description.into(),
+                    author: Author::Human,
+                    assignee,
+                    depends_on,
+                    derived_from: vec![],
+                },
+            )
+            .unwrap()
+        };
+        let question = node("Question: which way?", Some(Author::Human), vec![]);
+        assert_eq!(
+            first_ready(&store, &vcs).unwrap(),
+            None,
+            "a human-assigned node is not an LLM's to pick up"
+        );
+
+        let a = node("do a thing", None, vec![]);
+        let _blocked = node("after a", None, vec![a.clone()]);
+        let _also_blocked = node("after the question", None, vec![question]);
+        assert_eq!(first_ready(&store, &vcs).unwrap(), Some(a));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
