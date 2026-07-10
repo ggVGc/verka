@@ -152,6 +152,20 @@ pub struct ContextPin {
     pub observed: bool,
 }
 
+/// The engine that produced a result: which backend ran the work, and which
+/// model it was given. Stamped onto `result.md` by the work driver after the
+/// session (the worker itself does not reliably know what it runs on); absent
+/// on results recorded by hand.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WorkedBy {
+    /// The backend that ran the session (e.g. `claude-code`).
+    pub backend: String,
+    /// The model the backend was asked for. Absent means the backend's own
+    /// default — whatever that was at the time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+}
+
 /// Frontmatter of `result.md` — the record of the node's one unit of work.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ResultMeta {
@@ -166,6 +180,9 @@ pub struct ResultMeta {
     /// Absent when the work produced no files (graph-only work) or failed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_commit: Option<String>,
+    /// The backend/model that did the work, stamped by the driver afterwards.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worked_by: Option<WorkedBy>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub built_against: Vec<BuiltAgainst>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

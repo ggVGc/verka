@@ -343,6 +343,7 @@ mod tests {
             node_version: v2.clone(),
             outcome: Outcome::Done,
             output_commit: Some("abc".into()),
+            worked_by: None,
             built_against: vec![],
             context: vec![],
         };

@@ -451,6 +451,12 @@ fn result_lines(r: &Row) -> Vec<String> {
         format!("author:  {}", result.author.as_str()),
         format!("version: {}", ops::short(&result.node_version)),
     ];
+    if let Some(wb) = &result.worked_by {
+        lines.push(match &wb.model {
+            Some(m) => format!("worked by: {} ({m})", wb.backend),
+            None => format!("worked by: {}", wb.backend),
+        });
+    }
     if let Some(commit) = &result.output_commit {
         lines.push(format!("output:  commit {}", ops::short(commit)));
     }

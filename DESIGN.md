@@ -229,8 +229,8 @@ recorded mechanically, not left to agent discipline. Every `llaundry-work`
 session's full interaction stream (one JSON event per line: the prompts, the
 assistant turns, every tool call and result) is *streamed* to the node's
 `work.jsonl` as it happens — one flushed line per event, opened at launch with
-a small attempt header (timestamp, backend, the `node.md` version the session
-set out to work). Streaming, not buffering, is the point: an abrupt end
+a small attempt header (timestamp, backend and model, the `node.md` version
+the session set out to work). Streaming, not buffering, is the point: an abrupt end
 (Ctrl-C, crash, kill) loses at most an unflushed tail, never the story so far,
 so no exit — however rude — leaves the node without its record.
 
@@ -326,6 +326,10 @@ node_version = "4ec1916e..."     # blob id of node.md this work fulfilled
 outcome = "done"                  # or "failed"
 output_commit = "a45ab51c..."     # the one commit with everything produced; optional
 
+[worked_by]                       # the engine that did the work; optional
+backend = "claude-code"           # stamped by the driver after the session
+model = "opus"                    # absent = the backend's default at the time
+
 [[built_against]]
 id = "node-01J8XQ2A..."
 pin = "6102d492..."               # target's node.md blob at completion
@@ -349,7 +353,7 @@ streamed it, each attempt preceded by a header line the driver stamps at
 launch:
 
 ```jsonl
-{"event":"attempt","at":1719571200000,"backend":"claude-code","node_version":"4ec1916e..."}
+{"event":"attempt","at":1719571200000,"backend":"claude-code","model":"opus","node_version":"4ec1916e..."}
 {"type":"system","subtype":"init",...}
 {"type":"assistant","message":{...}}
 {"type":"user","message":{...}}
@@ -512,6 +516,13 @@ store commits did not already sweep in when the backend exits, successfully
 or not. On launching a node that is open with no result but with a recorded
 log — a paused unit of work — it replays that log into the prompt so the new
 session continues where the previous one stopped.
+
+Which engine did the work is recorded mechanically, like observed context:
+after the session, the driver stamps the resolved backend and model onto the
+result's `worked_by` (guarded by the attempt timestamp, so a rework session
+that died without writing a new result cannot mislabel the old one). The
+worker itself is never asked to know what it runs on. Results recorded by
+hand carry no stamp.
 
 ---
 

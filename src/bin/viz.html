@@ -623,6 +623,8 @@ function renderPanel() {
     row2("outcome", r.outcome);
     row2("author", r.author);
     if (r.at) row2("when", new Date(r.at).toLocaleString());
+    if (r.worked_by)
+      row2("worked by", `${r.worked_by.backend}${r.worked_by.model ? ` (${r.worked_by.model})` : ""}`);
     if (r.output_commit) row2("output", r.output_commit.slice(0, 12));
     for (const ba of r.built_against || [])
       row2("built against", `${ba.id} @ ${ba.pin}${ba.output ? ` (output ${ba.output})` : ""}`);

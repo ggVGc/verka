@@ -172,6 +172,9 @@ fn graph_json(store: &Store, vcs: &dyn Vcs) -> Result<Value> {
                 "author": r.author.as_str(),
                 "outcome": r.outcome.as_str(),
                 "output_commit": r.output_commit,
+                "worked_by": r.worked_by.as_ref().map(|wb| json!({
+                    "backend": wb.backend, "model": wb.model,
+                })),
                 "built_against": r.built_against.iter().map(|ba| json!({
                     "id": ba.id, "pin": ops::short(&ba.pin), "output": ba.output.as_deref().map(ops::short),
                 })).collect::<Vec<_>>(),

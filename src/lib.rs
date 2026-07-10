@@ -27,6 +27,7 @@ pub use config::Config;
 pub use git::GitVcs;
 pub use model::{
     title_of, Author, BuiltAgainst, ContextPin, DepKind, NodeMeta, Outcome, ResultMeta, Status,
+    WorkedBy,
 };
 pub use store::Store;
 pub use vcs::Vcs;

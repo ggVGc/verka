@@ -44,7 +44,7 @@ use clap::{Parser, ValueEnum};
 use serde_json::{json, Value};
 use std::process::Command;
 
-use llaundry::{ops, title_of, Author, Config, GitVcs, NodeMeta, Store};
+use llaundry::{ops, title_of, Author, Config, GitVcs, NodeMeta, Store, WorkedBy};
 
 #[derive(Parser)]
 #[command(name = "llaundry-work", version, about = "Run an LLM against a llaundry node")]
@@ -201,14 +201,16 @@ fn main() -> Result<()> {
     // is stamped at launch: it records which definition this session set out to
     // work, even if the agent edits the graph during it.
     use std::io::Write;
+    let started = now_millis();
     let mut log = store.open_work_log(&cli.node, previous_log.is_some())?;
     writeln!(
         log,
         "{}",
         json!({
             "event": "attempt",
-            "at": now_millis(),
+            "at": started,
             "backend": backend.name(),
+            "model": backend.model(),
             "node_version": store.node_version(&cli.node)?,
         })
     )?;
@@ -216,6 +218,18 @@ fn main() -> Result<()> {
 
     let success = backend.run(&session, &mut log)?;
     drop(log);
+
+    // Stamp which engine did the work onto the result — if this session wrote
+    // one (`since` keeps a dead rework session from relabelling the old
+    // result, and a paused session has no result to stamp yet).
+    let worked_by = WorkedBy {
+        backend: backend.name().to_string(),
+        model: backend.model().map(str::to_string),
+    };
+    match ops::amend_worker(&store, &vcs, &cli.node, worked_by, started) {
+        Ok(_) => {}
+        Err(e) => eprintln!("llaundry-work: could not record the worker: {e:#}"),
+    }
 
     // Derive input provenance from the recorded session: pin project files the
     // agent was observed reading but did not declare as context. Best-effort —
@@ -267,6 +281,10 @@ struct McpServer {
 /// anything.
 trait Backend {
     fn name(&self) -> &str;
+    /// The model this backend will request, if pinned; `None` means the
+    /// backend's own default. Recorded in the attempt header and stamped onto
+    /// the result, so every unit of work names the engine that did it.
+    fn model(&self) -> Option<&str>;
     fn run(&self, session: &Session, log: &mut dyn std::io::Write) -> Result<bool>;
     fn describe(&self, session: &Session) -> String;
 }
@@ -339,6 +357,10 @@ impl ClaudeCode {
 impl Backend for ClaudeCode {
     fn name(&self) -> &str {
         "claude-code"
+    }
+
+    fn model(&self) -> Option<&str> {
+        self.model.as_deref()
     }
 
     fn run(&self, session: &Session, log: &mut dyn std::io::Write) -> Result<bool> {

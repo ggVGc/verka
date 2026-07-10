@@ -432,6 +432,12 @@ fn show_node(store: &Store, vcs: &GitVcs, id: &str) -> Result<String> {
         writeln!(out, "result:")?;
         writeln!(out, "  outcome: {}", result.outcome.as_str())?;
         writeln!(out, "  author:  {}", result.author.as_str())?;
+        if let Some(wb) = &result.worked_by {
+            match &wb.model {
+                Some(m) => writeln!(out, "  worked by: {} ({m})", wb.backend)?,
+                None => writeln!(out, "  worked by: {}", wb.backend)?,
+            }
+        }
         if let Some(commit) = &result.output_commit {
             writeln!(out, "  output:  commit {}", ops::short(commit))?;
         }

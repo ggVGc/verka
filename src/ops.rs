@@ -17,7 +17,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use ulid::Ulid;
 
 use crate::model::{
-    Author, BuiltAgainst, ContextPin, DepKind, NodeMeta, Outcome, ResultMeta, Status,
+    Author, BuiltAgainst, ContextPin, DepKind, NodeMeta, Outcome, ResultMeta, Status, WorkedBy,
 };
 use crate::store::{file_blob, Store};
 use crate::vcs::Vcs;
@@ -128,6 +128,7 @@ pub fn complete(
             node_version: store.node_version(id)?,
             outcome: Outcome::Done,
             output_commit: output_commit.clone(),
+            worked_by: None,
             built_against,
             context,
         },
@@ -157,6 +158,7 @@ pub fn respond(store: &Store, vcs: &dyn Vcs, id: &str, notes: &str, author: Auth
             node_version: store.node_version(id)?,
             outcome: Outcome::Done,
             output_commit: None,
+            worked_by: None,
             built_against,
             context: Vec::new(),
         },
@@ -181,6 +183,7 @@ pub fn fail(store: &Store, vcs: &dyn Vcs, id: &str, notes: &str, author: Author)
             node_version: store.node_version(id)?,
             outcome: Outcome::Failed,
             output_commit: None,
+            worked_by: None,
             built_against,
             context: Vec::new(),
         },
@@ -247,6 +250,33 @@ pub fn amend_context(store: &Store, vcs: &dyn Vcs, id: &str, reads: &[String]) -
     store.write_result(id, &result, &notes)?;
     vcs.commit_store(&store.store_name(), &format!("llaundry: observed context {id}"))?;
     Ok(added)
+}
+
+/// Stamp onto a node's recorded result which backend (and model) produced it.
+/// The worker itself does not reliably know what it runs on, so the driver
+/// records this after the session — the same move as [`amend_context`].
+///
+/// `since` guards against mislabelling: only a result recorded at or after it
+/// (i.e. by *this* session) is stamped. A rework session that exits without
+/// writing a new result leaves the previous result — and its previous stamp —
+/// untouched. A no-op, returning `false`, when there is no result to stamp.
+pub fn amend_worker(
+    store: &Store,
+    vcs: &dyn Vcs,
+    id: &str,
+    worked_by: WorkedBy,
+    since: i64,
+) -> Result<bool> {
+    let Some((mut result, notes)) = store.read_result(id)? else {
+        return Ok(false);
+    };
+    if result.at < since {
+        return Ok(false);
+    }
+    result.worked_by = Some(worked_by);
+    store.write_result(id, &result, &notes)?;
+    vcs.commit_store(&store.store_name(), &format!("llaundry: worked by {id}"))?;
+    Ok(true)
 }
 
 /// A node's derived status.
@@ -723,6 +753,39 @@ mod tests {
         let commits_before = *fake.store_commits.borrow();
         assert_eq!(amend_context(&store, &fake, &id, &["x.txt".into()]).unwrap(), 0);
         assert_eq!(*fake.store_commits.borrow(), commits_before);
+    }
+
+    #[test]
+    fn amend_worker_stamps_only_this_sessions_result() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs::default();
+        let id = add(&store, &fake, new_node("a", vec![])).unwrap();
+        let engine = || WorkedBy {
+            backend: "claude-code".into(),
+            model: Some("opus".into()),
+        };
+
+        // No result yet (a paused unit of work): nothing to stamp.
+        assert!(!amend_worker(&store, &fake, &id, engine(), 0).unwrap());
+
+        done(&store, &fake, &id);
+        let at = store.read_result(&id).unwrap().unwrap().0.at;
+
+        // A result older than the session is someone else's — left untouched.
+        assert!(!amend_worker(&store, &fake, &id, engine(), at + 1).unwrap());
+        assert!(store.read_result(&id).unwrap().unwrap().0.worked_by.is_none());
+
+        // This session's result gets the stamp, keeping the narrative.
+        assert!(amend_worker(&store, &fake, &id, engine(), at).unwrap());
+        let (result, notes) = store.read_result(&id).unwrap().unwrap();
+        assert_eq!(notes, "done");
+        let wb = result.worked_by.unwrap();
+        assert_eq!(wb.backend, "claude-code");
+        assert_eq!(wb.model.as_deref(), Some("opus"));
+
+        // The stamp does not reopen the node or make it stale.
+        assert_eq!(current_status(&store, &id), Status::Done);
+        assert!(staleness(&store, &fake, &id).is_empty());
     }
 
     #[test]
