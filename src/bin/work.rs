@@ -163,14 +163,12 @@ fn main() -> Result<()> {
         .with_context(|| format!("resolving workbench of {}", cli.store.display()))?;
     let store_abs = workbench_abs.join(store.store_name());
 
-    let rejected_feedback = ops::rejected_review_feedback(&store, &node);
-    let base = cli.base.as_deref()
-        .or_else(|| rejected_feedback.as_ref().map(|(_, commit)| commit.as_str()))
-        .unwrap_or("HEAD");
-    let (input_commit, input_tree) = llaundry::git::resolve_revision(&canonical_project, base)?;
-    let run_id = ulid::Ulid::new().to_string();
-    let candidate_branch = format!("llaundry/candidates/{run_id}");
-    let worktree_path = workbench_abs.join(".llaundry-worktrees").join(&run_id);
+    let workspace = ops::prepare_execution(
+        &store, &vcs, &node, Author::Machine, cli.force, cli.base.as_deref(), !cli.dry_run,
+    )?;
+    let run_id = workspace.identity.attempt_id.clone();
+    let candidate_branch = workspace.identity.candidate_branch.clone();
+    let worktree_path = workspace.path.clone();
     let mut mcp_args = vec![
         "--store".into(),
         store_abs.to_string_lossy().into_owned(),
@@ -191,7 +189,7 @@ fn main() -> Result<()> {
         node_id: node.clone(),
         prompt: {
             let mut prompt = build_prompt(&node, &meta, &description, previous_log.as_deref());
-            if let Some((feedback, _)) = &rejected_feedback {
+            if let Some(feedback) = &workspace.rejected_feedback {
                 prompt.push_str("\n\nThe previous candidate was rejected by human review. Address this feedback in the new attempt:\n\n");
                 prompt.push_str(feedback);
             }
@@ -221,21 +219,15 @@ fn main() -> Result<()> {
     };
 
     if cli.dry_run {
-        println!("input commit: {input_commit}");
-        println!("input tree: {input_tree}");
+        println!("input commit: {}", workspace.input_commit);
+        println!("input tree: {}", workspace.input_tree);
         println!("worktree: {}", worktree_path.display());
         println!("candidate branch: {candidate_branch}");
         println!("{}", backend.describe(&session));
         return Ok(());
     }
 
-    let worktree = llaundry::git::create_worktree(
-        &canonical_project,
-        worktree_path,
-        &candidate_branch,
-        &input_commit,
-    )?;
-    session.project_root = worktree.path.clone();
+    session.project_root = workspace.path.clone();
 
     eprintln!(
         "llaundry-work: {} working {} — {}{}",
@@ -267,9 +259,9 @@ fn main() -> Result<()> {
             "model": backend.model(),
             "definition_version": store.node_version(&node)?,
             "run_id": run_id,
-            "candidate_branch": worktree.branch,
-            "input_commit": worktree.input_commit,
-            "input_tree": worktree.input_tree,
+            "candidate_branch": workspace.identity.candidate_branch,
+            "input_commit": workspace.input_commit,
+            "input_tree": workspace.input_tree,
         })
     )?;
     log.flush()?;
@@ -286,7 +278,7 @@ fn main() -> Result<()> {
     };
     let reads = store
         .read_work_log(&node)?
-        .map(|log| observed_reads(&log, &store, Some(&worktree.path)))
+        .map(|log| observed_reads(&log, &store, Some(&workspace.path)))
         .unwrap_or_default();
     let review = ops::finalize_execution_attempt(
         &store,
@@ -299,7 +291,7 @@ fn main() -> Result<()> {
     )?;
 
     if !success {
-        eprintln!("llaundry-work: retained worktree {}", worktree.path.display());
+        eprintln!("llaundry-work: retained worktree {}", workspace.path.display());
         bail!("backend session exited unsuccessfully");
     }
 
@@ -311,14 +303,14 @@ fn main() -> Result<()> {
         .is_some_and(|(result, _)| result.output_commit.is_some());
     if !produced_project_content
         && store.read_result(&node)?.is_some()
-        && llaundry::git::worktree_clean(&worktree.path)?
+        && llaundry::git::worktree_clean(&workspace.path)?
         && !cli.keep_worktree
     {
-        llaundry::git::remove_worktree(&canonical_project, &worktree.path)?;
+        llaundry::git::remove_worktree(&canonical_project, &workspace.path)?;
     } else {
         eprintln!(
             "llaundry-work: retained candidate worktree {} on {}",
-            worktree.path.display(), worktree.branch
+            workspace.path.display(), workspace.identity.candidate_branch
         );
     }
     Ok(())
@@ -783,6 +775,9 @@ mod tests {
         }
         fn current_branch(&self) -> Result<Option<String>> {
             Ok(None)
+        }
+        fn resolve_revision(&self, rev: &str) -> Result<(String, String)> {
+            Ok((rev.into(), format!("tree-{rev}")))
         }
         fn tree_id(&self, commit: &str) -> Result<String> {
             Ok(format!("tree-{commit}"))

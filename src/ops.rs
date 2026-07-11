@@ -377,6 +377,51 @@ pub fn authorize_execution_start(
     Ok(())
 }
 
+pub struct ExecutionWorkspace {
+    pub identity: ExecutionIdentity,
+    pub path: std::path::PathBuf,
+    pub input_commit: String,
+    pub input_tree: String,
+    pub rejected_feedback: Option<String>,
+}
+
+pub fn prepare_execution(
+    store: &Store,
+    vcs: &dyn Vcs,
+    id: &str,
+    worker: Author,
+    force: bool,
+    explicit_base: Option<&str>,
+    materialize: bool,
+) -> Result<ExecutionWorkspace> {
+    authorize_execution_start(store, vcs, id, worker, force)?;
+    let rejected = rejected_review_feedback(store, id);
+    let base = explicit_base
+        .or_else(|| rejected.as_ref().map(|(_, commit)| commit.as_str()))
+        .unwrap_or("HEAD");
+    let (input_commit, input_tree) = vcs.resolve_revision(base)?;
+    let attempt_id = Ulid::new().to_string();
+    let candidate_branch = format!("llaundry/candidates/{attempt_id}");
+    let workbench = store.workbench_root().canonicalize()
+        .with_context(|| format!("resolving workbench {}", store.workbench_root().display()))?;
+    let path = workbench.join(".llaundry-worktrees").join(&attempt_id);
+    if materialize {
+        vcs.create_worktree(&path, &candidate_branch, &input_commit)?;
+    }
+    Ok(ExecutionWorkspace {
+        identity: ExecutionIdentity {
+            node_id: id.to_string(),
+            attempt_id,
+            candidate_branch,
+            force,
+        },
+        path,
+        input_commit,
+        input_tree,
+        rejected_feedback: rejected.map(|(notes, _)| notes),
+    })
+}
+
 /// Commit whatever of the node's streamed interaction log (`work.jsonl`) is not
 /// yet in git. The log is written line by line *during* a session, dirtying only
 /// the workbench repository, and each store commit the session makes already
@@ -1470,6 +1515,38 @@ mod tests {
         let blocked = add(&store, &fake, new_node("blocked", vec![dependency])).unwrap();
         assert!(authorize_execution_start(&store, &fake, &blocked, Author::Machine, false).is_err());
         assert!(authorize_execution_start(&store, &fake, &blocked, Author::Machine, true).is_ok());
+    }
+
+    #[test]
+    fn library_prepares_attempt_identity_branch_base_and_worktree() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs::default();
+        let id = add(&store, &fake, new_node("work", vec![])).unwrap();
+        let workspace = prepare_execution(
+            &store,
+            &fake,
+            &id,
+            Author::Machine,
+            false,
+            Some("base-commit"),
+            true,
+        )
+        .unwrap();
+        assert_eq!(workspace.identity.node_id, id);
+        assert_eq!(workspace.input_commit, "base-commit");
+        assert_eq!(workspace.input_tree, "tree-base-commit");
+        assert_eq!(
+            workspace.identity.candidate_branch,
+            format!("llaundry/candidates/{}", workspace.identity.attempt_id)
+        );
+        assert!(workspace.path.is_dir());
+        assert_eq!(
+            fake.refs.borrow().get(&format!(
+                "refs/heads/{}",
+                workspace.identity.candidate_branch
+            )),
+            Some(&"base-commit".to_string())
+        );
     }
 
     #[test]

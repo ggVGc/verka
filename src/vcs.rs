@@ -26,6 +26,7 @@ pub trait Vcs {
     /// Name of the currently checked-out project branch, or `None` for a
     /// detached HEAD.
     fn current_branch(&self) -> Result<Option<String>>;
+    fn resolve_revision(&self, rev: &str) -> Result<(String, String)>;
 
     /// Tree object for `commit`.
     fn tree_id(&self, commit: &str) -> Result<String>;
@@ -116,6 +117,9 @@ impl Vcs for FakeVcs {
 
     fn current_branch(&self) -> Result<Option<String>> {
         Ok(self.current_branch.clone())
+    }
+    fn resolve_revision(&self, rev: &str) -> Result<(String, String)> {
+        Ok((rev.to_string(), format!("tree-{rev}")))
     }
 
     fn tree_id(&self, commit: &str) -> Result<String> {

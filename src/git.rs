@@ -107,6 +107,9 @@ impl Vcs for GitVcs {
         }
         Ok(Some(String::from_utf8_lossy(&out.stdout).trim().to_string()))
     }
+    fn resolve_revision(&self, rev: &str) -> Result<(String, String)> {
+        resolve_revision(&self.project, rev)
+    }
     fn tree_id(&self, commit: &str) -> Result<String> {
         let spec = format!("{commit}^{{tree}}");
         checked(&self.project, &["rev-parse", &spec])
