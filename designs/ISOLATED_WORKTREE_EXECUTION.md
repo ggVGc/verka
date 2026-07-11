@@ -246,60 +246,16 @@ reported dirtiness.
 
 ## 7. Human-reviewed publication
 
-The automatic integration process originally proposed below has been
-superseded by `HUMAN_REVIEW_GATING.md`. Machine completion creates a durable
-candidate and human review node. Only acceptance of the exact reviewed commit
-may publish it; rebasing or conflict resolution creates new work requiring a
-new review.
+Machine completion creates a durable candidate and a human review node as
+specified in `HUMAN_REVIEW_GATING.md`. Only acceptance of the exact reviewed
+commit may publish it. If the target cannot fast-forward, reconciliation is new
+implementation work and requires a new review.
 
-### Superseded automatic-finalization proposal
-
-The normal contract of `llaundry-work <node>` is complete only when the work is
-present on the configured target branch (`main` by default). The isolated
-output commit is a recovery and provenance boundary, not the normal user-facing
-endpoint. Integration is implicit; `--no-integrate` is the explicit exception
-for experiments and parallel variants.
-
-After the worker finalizes its isolated output, the driver verifies it and
-attempts a fast-forward publication. If the target has advanced, the driver
-rebases the same isolated worktree onto the new target, asks the worker to
-resolve any conflicts, then asks it to re-check the complete rebased result.
-Any corrections are committed, verification runs again, and publication is
-retried. A mechanically clean rebase never carries verification forward.
-
-The target update uses its previously observed commit as a compare-and-swap
-guard. If it moves again, the rebase/re-check/verify cycle repeats up to the
-configured retry limit. Failure retains the isolated worktree; no dirty state
-is discarded. The node result records the final isolated commit,
-`integrated_commit`, `target_ref`, and `target_previous`.
-
-The first implementation may call this operation `publish`. In the fuller
-selection/projection model in `PARALLEL_VARIANTS.md`, the same mechanism
-materializes a projection and publication is the final compare-and-swap ref
-update. The Git safety rules below apply in either model.
-
-### 7.1 Finalization loop
-
-1. Resolve the target ref and remember its exact tip.
-2. If the isolated commit is not based on that tip, rebase the isolated
-   worktree onto it.
-3. When rebase conflicts occur, run the worker on the same node and worktree to
-   resolve them, then continue the rebase.
-4. After every rebase, run the worker again to review the combined result and
-   make any necessary corrections.
-5. Commit those corrections and run verification against the resulting tree.
-6. Fast-forward the target only if it still equals the remembered tip.
-7. If the compare-and-swap fails, repeat from step 1. If the retry limit is
-   exhausted, retain the worktree and leave publication incomplete.
-
-The ordinary project checkout is updated when it cleanly has the target branch
-checked out. Publication refuses to overwrite a dirty checkout. When the
-target is not checked out there, its ref is updated directly with an
-expected-old value.
-
-Only successful publication adds the final publication fields to the result.
-The transcript retains each rebase, conflict-resolution, and review attempt.
-Earlier output commits remain protected by llaundry output refs.
+Acceptance uses a durable publication intent committed before the target ref
+moves. Finalization closes the review, updates the implementation's convenience
+result, and marks the intent complete in one store commit. Recovery safely
+finishes an interrupted acceptance whether the target is still at its expected
+old commit or already at the approved candidate.
 
 ## 8. Pause, resume, and retry
 
@@ -433,13 +389,14 @@ its files.
 Names are illustrative:
 
 ```text
-llaundry-work <node> [--target main] [--verify <command>] [--no-integrate]
-llaundry worktree list
-llaundry worktree inspect <run-id>
-llaundry worktree resume <run-id>
-llaundry worktree discard <run-id>
-llaundry worktree recover [--repair]
-llaundry refs check [--repair]
+llaundry-work <node>
+llaundry edit-review <review-node>
+llaundry review-workspace <review-node>
+llaundry cleanup-review <review-node>
+llaundry accept-review <review-node> [--target main]
+llaundry reject-review <review-node>
+llaundry recover-attempt <attempt-id>
+llaundry recover-publication <review-node>
 ```
 
 `--dry-run` shows the resolved input commit and intended worktree path but
@@ -474,17 +431,13 @@ creates neither refs nor directories.
 * create durable output refs;
 * remove clean completed worktrees.
 
-### Stage 2: automatic finalization and publication
+### Stage 2: human-reviewed publication
 
-* make integration the default final phase of `llaundry-work`;
-* rebase the isolated worktree whenever the target has advanced;
-* have the same node's worker resolve conflicts and re-check rebased work;
-* rerun verification after every rebase or correction;
-* publish by fast-forward with an expected-old compare-and-swap;
-* safely update a clean ordinary checkout of the target branch;
-* retry when the target moves and retain work on exhaustion or failure;
-* record final publication provenance on the node result;
-* provide `--no-integrate` only as an explicit exceptional mode.
+* create an exact review for every project-producing attempt;
+* publish only after explicit human acceptance;
+* use expected-old fast-forward publication without modifying approved content;
+* journal publication before moving the target and recover interrupted acceptance;
+* retain rejected candidates and reviewer suggestions for rework.
 
 ### Stage 3: recovery
 
@@ -529,13 +482,10 @@ The feature is complete when automated tests demonstrate at least:
    fast-forwards a clean checkout of the target branch.
 10. Context pins are computed from the run's input/worktree state rather than
     the current contents of `project/`.
-11. An output based on the target tip fast-forwards the target only after
-    verification and updates its clean ordinary checkout consistently.
-12. A target advance rebases the isolated work, invokes a worker review, and
-    reruns verification before publication.
-13. A conflicted rebase is resolved in the same isolated worktree and node,
-    followed by worker review and fresh verification.
-14. A target movement during review or verification repeats the finalization
-    loop without deleting the candidate commit or dirty worktree.
-15. Failed verification leaves `main` unchanged and preserves the candidate for
-    inspection.
+11. Acceptance fast-forwards the target to exactly the human-approved commit.
+12. A target advance refuses acceptance and preserves the candidate for new
+    reconciliation work and review.
+13. A crash before or after the target ref moves is recoverable from the
+    durable publication intent.
+14. Rejection preserves the candidate and any reviewer suggestion commit.
+15. A repeated implementation attempt creates a distinct candidate and review.

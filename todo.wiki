@@ -13,3 +13,11 @@
   * [x] Move execution identity, base, branch, and worktree preparation into the library.
   * [x] Move assignee-aware ready-node selection into library queries.
   * [x] Move canonical review-suggestion discovery into the library rejection operation.
+
+= Review workflow hardening =
+  * [x] Make review acceptance a durable, recoverable publication transaction.
+  * [x] Expose clear derived awaiting-review, rejected, and integrated states in CLI and TUI output.
+  * [x] Define and enforce the same-node execution concurrency policy.
+  * [x] Add review-worktree inspection, cleanup, and recovery operations.
+  * [x] Consolidate review/isolation documentation and use approval-oriented terminology consistently.
+  * [x] Add real-repository end-to-end tests for acceptance and repeated rejection/rework.

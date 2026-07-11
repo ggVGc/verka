@@ -26,7 +26,7 @@ use crossterm::{
 
 use llaundry::ops::{self, NewNode};
 use llaundry::{
-    title_of, Author, DefinitionVersion, DepKind, GitVcs, NodeMeta, ResultMeta, Status, Store,
+    title_of, Author, DefinitionVersion, DepKind, GitVcs, NodeMeta, NodeState, ResultMeta, Store,
 };
 
 #[derive(Parser)]
@@ -151,7 +151,7 @@ struct Row {
     meta: NodeMeta,
     description: String,
     result: Option<(ResultMeta, String)>,
-    status: Status,
+    status: NodeState,
     stale: Vec<String>,
     blockers: Vec<String>,
     ready: bool,
@@ -189,7 +189,7 @@ impl App {
             rows.push(Row {
                 version: store.node_version(&id)?,
                 result: store.read_result(&id)?,
-                status: ops::current_status(store, &id),
+                status: ops::node_state(store, &id),
                 stale: ops::staleness(store, vcs, &id),
                 blockers: ops::blockers(store, vcs, &id),
                 ready: ops::is_ready(store, vcs, &id),
@@ -622,11 +622,13 @@ fn draw(out: &mut Stdout, app: &mut App) -> Result<()> {
 }
 
 /// Colour a row/label by node status.
-fn status_color(status: Status) -> Color {
+fn status_color(status: NodeState) -> Color {
     match status {
-        Status::Open => Color::Reset,
-        Status::Done => Color::Green,
-        Status::Failed => Color::Red,
+        NodeState::Open => Color::Reset,
+        NodeState::AwaitingReview => Color::Yellow,
+        NodeState::Rejected => Color::Magenta,
+        NodeState::Integrated | NodeState::Done => Color::Green,
+        NodeState::Failed => Color::Red,
     }
 }
 

@@ -29,7 +29,7 @@ pub use pairing::Pairing;
 pub use git::GitVcs;
 pub use model::{
     title_of, AttemptFinal, AttemptMeta, Author, BuiltAgainst, ContextPin, DefinitionVersion, DepKind, ExecutionIdentity, NodeMeta, Outcome,
-    ResultMeta, ResultVersion, ReviewDecision, ReviewTarget, Status, WorkedBy,
+    NodeState, PublicationIntent, ResultMeta, ResultVersion, ReviewDecision, ReviewTarget, Status, WorkedBy,
 };
 pub use store::Store;
 pub use vcs::Vcs;

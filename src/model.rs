@@ -52,6 +52,31 @@ pub enum Status {
     Failed,
 }
 
+/// More informative presentation state derived from generic lifecycle status
+/// plus the review workflow. It is never stored.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NodeState {
+    Open,
+    AwaitingReview,
+    Rejected,
+    Integrated,
+    Done,
+    Failed,
+}
+
+impl NodeState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::AwaitingReview => "awaiting-review",
+            Self::Rejected => "rejected",
+            Self::Integrated => "integrated",
+            Self::Done => "done",
+            Self::Failed => "failed",
+        }
+    }
+}
+
 impl Status {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -218,7 +243,7 @@ pub struct ResultMeta {
     /// these exact metadata and description blobs.
     pub definition: DefinitionVersion,
     pub outcome: Outcome,
-    /// Machine completion awaiting automatic verification/publication.
+    /// Machine-produced project content awaiting human review and publication.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub publication_pending: bool,
     /// Exact project commit and tree the work started from. Optional for
@@ -244,7 +269,7 @@ pub struct ResultMeta {
     /// Absent when the work produced no files (graph-only work) or failed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_commit: Option<String>,
-    /// Final verified commit published to the configured target branch.
+    /// Human-approved commit published to the configured target branch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub integrated_commit: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -287,6 +312,24 @@ pub struct AttemptMeta {
 pub struct AttemptFinal {
     pub at: i64,
     pub backend_succeeded: bool,
+}
+
+/// Durable record for the cross-repository publication of an accepted review.
+/// Written and committed before the project ref moves, then marked completed
+/// in the same store commit that closes the review.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PublicationIntent {
+    pub schema: u32,
+    pub review: String,
+    pub implementation: String,
+    pub candidate_commit: String,
+    pub target: String,
+    pub target_ref: String,
+    pub target_previous: String,
+    pub notes: String,
+    pub prepared_at: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<i64>,
 }
 
 #[cfg(test)]

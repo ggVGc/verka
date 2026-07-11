@@ -27,6 +27,11 @@ and reviewed again. Rejection makes the implementation available for another
 attempt; its worker receives the review comments and starts from the proposed
 review edits when they exist, otherwise from the rejected candidate.
 
+Acceptance is journaled before `main` moves. If it is interrupted, resume it
+with `llaundry recover-publication <review-node>`. Review edit worktrees can be
+inspected with `llaundry review-workspace <review-node>` and clean, closed ones
+removed with `llaundry cleanup-review <review-node>`.
+
 
 - All edits and interaction with project are done through MCP which understands the hierarchical layout
 - Structure is based on a tree of:

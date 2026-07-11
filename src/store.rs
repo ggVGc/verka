@@ -42,13 +42,23 @@ use sha1::{Digest, Sha1};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::model::{AttemptFinal, AttemptMeta, DefinitionVersion, NodeMeta, ResultMeta, ResultVersion};
+use crate::model::{AttemptFinal, AttemptMeta, DefinitionVersion, NodeMeta, PublicationIntent, ResultMeta, ResultVersion};
 
 /// The project directory inside a workbench, beside the store.
 pub const PROJECT_DIR: &str = "project";
 
 pub struct Store {
     root: PathBuf,
+}
+
+pub struct ExecutionLock {
+    path: PathBuf,
+}
+
+impl Drop for ExecutionLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir(&self.path);
+    }
 }
 
 impl Store {
@@ -119,6 +129,10 @@ impl Store {
 
     fn attempt_log_path(&self, id: &str) -> PathBuf {
         self.attempt_dir(id).join("work.jsonl")
+    }
+
+    fn publication_path(&self, review: &str) -> PathBuf {
+        self.root.join("publications").join(review).join("publication.toml")
     }
 
     pub fn exists(&self, id: &str) -> bool {
@@ -248,6 +262,21 @@ impl Store {
         Ok(ids)
     }
 
+    /// Serialize the short authorization-and-recording phase for one logical
+    /// node. The directory creation is atomic across processes.
+    pub fn lock_execution(&self, node: &str) -> Result<ExecutionLock> {
+        let name = blob_id(node.as_bytes());
+        let path = self.root.join("locks/executions").join(name);
+        fs::create_dir_all(path.parent().expect("lock has parent"))?;
+        match fs::create_dir(&path) {
+            Ok(()) => Ok(ExecutionLock { path }),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                bail!("another process is starting work on node `{node}`")
+            }
+            Err(e) => Err(e).with_context(|| format!("locking execution of `{node}`")),
+        }
+    }
+
     pub fn write_attempt_result(&self, id: &str, meta: &ResultMeta, notes: &str) -> Result<()> {
         self.read_attempt(id)?;
         let data = toml::to_string_pretty(meta).context("serialising attempt result")?;
@@ -309,6 +338,38 @@ impl Store {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(e.into()),
         }
+    }
+
+    pub fn write_publication(&self, publication: &PublicationIntent) -> Result<()> {
+        let path = self.publication_path(&publication.review);
+        fs::create_dir_all(path.parent().expect("publication has parent"))?;
+        fs::write(&path, toml::to_string_pretty(publication)?)
+            .with_context(|| format!("writing publication for review `{}`", publication.review))
+    }
+
+    pub fn read_publication(&self, review: &str) -> Result<Option<PublicationIntent>> {
+        let path = self.publication_path(review);
+        let data = match fs::read_to_string(&path) {
+            Ok(data) => data,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+        };
+        Ok(Some(toml::from_str(&data)
+            .with_context(|| format!("parsing publication for review `{review}`"))?))
+    }
+
+    pub fn list_publication_ids(&self) -> Result<Vec<String>> {
+        let dir = self.root.join("publications");
+        if !dir.exists() { return Ok(Vec::new()); }
+        let mut ids = Vec::new();
+        for entry in fs::read_dir(dir)? {
+            let entry = entry?;
+            if entry.file_type()?.is_dir() {
+                ids.push(entry.file_name().to_string_lossy().into_owned());
+            }
+        }
+        ids.sort();
+        Ok(ids)
     }
 
     // --- work.jsonl (the interaction log) ----------------------------------------

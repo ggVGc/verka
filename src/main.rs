@@ -146,8 +146,17 @@ enum Cmd {
     /// Create a review branch and worktree for proposed edits.
     EditReview { id: String },
 
+    /// Show whether a review has an editable worktree and whether it is clean.
+    ReviewWorkspace { id: String },
+
+    /// Remove a clean worktree belonging to a closed review.
+    CleanupReview { id: String },
+
     /// Recover safe incomplete phases of a durable execution attempt.
     RecoverAttempt { id: String },
+
+    /// Recover a review acceptance interrupted while publishing to its target.
+    RecoverPublication { id: String },
 
     /// Show a node: definition, derived status, result, and staleness reasons.
     Show { id: String },
@@ -373,6 +382,30 @@ fn main() -> Result<()> {
             println!("commit proposed edits, then reject with --suggestion-branch {} --suggestion-commit <commit>", workspace.branch);
         }
 
+        Cmd::ReviewWorkspace { id } => {
+            let store = Store::open(store)?;
+            let vcs = GitVcs::for_store(&store);
+            let status = ops::review_workspace_status(&store, &vcs, &id)?;
+            println!("review branch: {}", status.branch);
+            println!("review worktree: {}", status.path.display());
+            println!("state: {}", match (status.exists, status.clean) {
+                (false, _) => "not-created",
+                (true, Some(true)) => "clean",
+                (true, Some(false)) => "dirty",
+                _ => "unknown",
+            });
+        }
+
+        Cmd::CleanupReview { id } => {
+            let store = Store::open(store)?;
+            let vcs = GitVcs::for_store(&store);
+            if ops::cleanup_review_workspace(&store, &vcs, &id)? {
+                println!("removed review worktree for {id}");
+            } else {
+                println!("review {id} has no worktree");
+            }
+        }
+
         Cmd::RecoverAttempt { id } => {
             let store = Store::open(store)?;
             let vcs = GitVcs::for_store(&store);
@@ -380,6 +413,13 @@ fn main() -> Result<()> {
                 Some(review) => println!("recovered attempt {id}; review {review}"),
                 None => println!("recovered attempt {id}"),
             }
+        }
+
+        Cmd::RecoverPublication { id } => {
+            let store = Store::open(store)?;
+            let vcs = GitVcs::for_store(&store);
+            ops::recover_publication(&store, &vcs, &id)?;
+            println!("recovered publication for review {id}");
         }
 
         Cmd::Show { id } => {
@@ -392,7 +432,7 @@ fn main() -> Result<()> {
             let store = Store::open(store)?;
             for id in store.list_ids()? {
                 let (_, description) = store.read_node(&id)?;
-                let status = ops::current_status(&store, &id);
+                let status = ops::node_state(&store, &id);
                 println!(
                     "{:<32} {:<8} {}",
                     id,
@@ -572,7 +612,7 @@ fn show_node(store: &Store, vcs: &GitVcs, id: &str) -> Result<String> {
     use std::fmt::Write;
 
     writeln!(out, "id:      {id}")?;
-    writeln!(out, "status:  {}", ops::current_status(store, id).as_str())?;
+    writeln!(out, "status:  {}", ops::node_state(store, id).as_str())?;
     writeln!(out, "author:  {}", meta.author.as_str())?;
     if let Some(assignee) = meta.assignee {
         writeln!(out, "assignee: {}", assignee.as_str())?;

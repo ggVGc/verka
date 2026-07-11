@@ -138,8 +138,13 @@ impl Vcs for GitVcs {
     }
 
     fn dirty_paths(&self) -> Result<Vec<String>> {
-        let out = checked(&self.project, &["status", "--porcelain"])?;
-        Ok(out
+        // Do not use `checked`: its outer trim would remove the leading index
+        // status column from the first line (for example ` M file`).
+        let out = git(&self.project, &["status", "--porcelain"])?;
+        if !out.status.success() {
+            bail!("`git status --porcelain` failed: {}", String::from_utf8_lossy(&out.stderr).trim());
+        }
+        Ok(String::from_utf8_lossy(&out.stdout)
             .lines()
             .filter_map(|l| l.get(3..).map(|p| p.trim().to_string()))
             .filter(|p| !p.is_empty())

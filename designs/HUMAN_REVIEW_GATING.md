@@ -116,6 +116,12 @@ After successful publication, the review and implementation result record the
 integrated commit, target ref, and prior target commit. Candidate and review
 branches remain as history.
 
+Because the project and llaundry stores are separate repositories, acceptance
+is a recoverable transaction rather than an atomic write. Llaundry commits a
+publication intent before moving the target. It then closes the review, updates
+the implementation view, and marks the intent complete in one store commit.
+`recover-publication` safely resumes either before or after the target move.
+
 ## 7. Rejection and rework
 
 Rejecting a review records comments and optional suggestion-branch metadata.
@@ -139,3 +145,8 @@ review node; an earlier review is never reopened or overwritten.
 6. Add optional review branches/worktrees for proposed edits.
 7. Feed rejected-review material into subsequent attempts.
 8. Add consistency checks and end-to-end lifecycle tests.
+
+The initial concurrency policy permits only one unfinished attempt for a
+logical implementation node. Parallel alternatives use distinct child nodes.
+Execution start is serialized around authorization and durable attempt
+creation; `--force` does not bypass this identity constraint.
