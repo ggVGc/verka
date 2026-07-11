@@ -1,3 +1,6 @@
+- Review gating before integrating into main
+- Implementation order: data structures, tests, logic (roughly). So I can review each chunk in isolation in a way that makes sense:
+  - More generally, implement work on nodes in logically associated pieces that make sense for review
 - Supply configs per backend in a generic manner
 - Some way of specifying the default backend and backend config (which also configures model):
   - Something like .git/config?
@@ -27,3 +30,5 @@
 - Native support for using another llaundry repo as input context.
 - Global context files, injected into the sessions:
   - In order to be backend agnostic and explicit about context.
+- If work on a node causes followup work which is unrelated to the core task of the node, better if a new node is created for that work
+- In general, I want small pieces of work which can be reviewed in a reasonable way
