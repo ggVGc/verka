@@ -260,6 +260,35 @@ pub struct ResultMeta {
     pub context: Vec<ContextPin>,
 }
 
+/// Durable identity and frozen inputs of one execution attempt.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AttemptMeta {
+    pub schema: u32,
+    pub id: String,
+    pub node: String,
+    pub worker: Author,
+    pub force: bool,
+    pub definition: DefinitionVersion,
+    pub input_commit: String,
+    pub input_tree: String,
+    pub candidate_branch: String,
+    pub worktree: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    pub created_at: i64,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub prepared: bool,
+}
+
+/// Post-session evidence sealing an attempt.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AttemptFinal {
+    pub at: i64,
+    pub backend_succeeded: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::title_of;

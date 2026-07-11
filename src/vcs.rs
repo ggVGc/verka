@@ -77,6 +77,8 @@ pub trait Vcs {
 
     /// Create a linked worktree on a new branch in the project repository.
     fn create_worktree(&self, path: &Path, branch: &str, rev: &str) -> Result<()>;
+    fn worktree_clean(&self, path: &Path) -> Result<bool>;
+    fn remove_worktree(&self, path: &Path) -> Result<()>;
 }
 
 /// In-memory [`Vcs`] for tests. `capture` records the paths and returns `next_id`;
@@ -98,6 +100,7 @@ pub struct FakeVcs {
     pub commits: std::cell::RefCell<std::collections::HashSet<String>>,
     pub refs: std::cell::RefCell<std::collections::HashMap<String, String>>,
     pub current_branch: Option<String>,
+    pub worktree_error: bool,
 }
 
 #[cfg(test)]
@@ -177,10 +180,22 @@ impl Vcs for FakeVcs {
     }
 
     fn create_worktree(&self, path: &Path, branch: &str, rev: &str) -> Result<()> {
+        if self.worktree_error {
+            return Err(anyhow::anyhow!("simulated worktree failure"));
+        }
         std::fs::create_dir_all(path)?;
         self.refs
             .borrow_mut()
             .insert(format!("refs/heads/{branch}"), rev.to_string());
+        Ok(())
+    }
+    fn worktree_clean(&self, _path: &Path) -> Result<bool> {
+        Ok(self.dirty.is_empty())
+    }
+    fn remove_worktree(&self, path: &Path) -> Result<()> {
+        if path.exists() {
+            std::fs::remove_dir_all(path)?;
+        }
         Ok(())
     }
 }

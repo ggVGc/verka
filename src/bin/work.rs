@@ -31,15 +31,11 @@
 //! ([`ops::amend_context`]), marked `observed`. What can't be pinned (web
 //! fetches) still sits verbatim in the log.
 //!
-//! Every session's interaction stream is *streamed* to the node's `work.jsonl`
-//! as it happens, one flushed line per event, so an abrupt exit (Ctrl-C, crash,
+//! Every session's interaction stream is *streamed* to its durable attempt's
+//! `work.jsonl` as it happens, one flushed line per event, so an abrupt exit (Ctrl-C, crash,
 //! kill) loses at most an unflushed tail. The log dirties only the workbench
-//! repository; the store's mutating operations sweep the story-so-far into
-//! their own commits, and the driver commits the tail
-//! when the session ends. Continuity across sessions is mechanical, not left
-//! to agent discipline: when a node is re-worked while still mid-unit (open,
-//! no result — e.g. it paused on a question node), the previous log is
-//! replayed into the new session's prompt so it continues where it left off.
+//! repository; store mutations sweep the story-so-far into their commits, and
+//! attempt finalization commits the remaining tail.
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, ValueEnum};
@@ -153,10 +149,6 @@ fn main() -> Result<()> {
     // launched: the backend runs in the project directory (so every `./**`
     // grant resolves there), and the MCP server gets the store — one level
     // above, outside the granted subtree — by absolute path.
-    let canonical_project = store
-        .project_root()
-        .canonicalize()
-        .with_context(|| format!("resolving project directory of {}", cli.store.display()))?;
     let workbench_abs = store
         .workbench_root()
         .canonicalize()
@@ -169,21 +161,14 @@ fn main() -> Result<()> {
     let run_id = workspace.identity.attempt_id.clone();
     let candidate_branch = workspace.identity.candidate_branch.clone();
     let worktree_path = workspace.path.clone();
-    let mut mcp_args = vec![
+    let mcp_args = vec![
         "--store".into(),
         store_abs.to_string_lossy().into_owned(),
         "--project".into(),
         worktree_path.to_string_lossy().into_owned(),
-        "--node-id".into(),
-        node.clone(),
-        "--attempt-id".into(),
+        "--attempt".into(),
         run_id.clone(),
-        "--candidate-branch".into(),
-        candidate_branch.clone(),
     ];
-    if cli.force {
-        mcp_args.push("--force-execution".into());
-    }
 
     let mut session = Session {
         node_id: node.clone(),
@@ -243,12 +228,11 @@ fn main() -> Result<()> {
 
     // The log is streamed during the session (the one dirty path the clean-tree
     // rule tolerates), so an abrupt exit loses at most an unflushed tail.
-    // Append to a paused unit of work; start over on rework. The attempt header
-    // is stamped at launch: it records which definition this session set out to
-    // work, even if the agent edits the graph during it.
+    // The attempt header supplements the already-durable attempt metadata with
+    // the backend launch facts and begins this attempt's transcript.
     use std::io::Write;
     let started = now_millis();
-    let mut log = store.open_work_log(&node, previous_log.is_some())?;
+    let mut log = store.open_attempt_log(&run_id, false)?;
     writeln!(
         log,
         "{}",
@@ -277,13 +261,13 @@ fn main() -> Result<()> {
         model: backend.model().map(str::to_string),
     };
     let reads = store
-        .read_work_log(&node)?
+        .read_attempt_log(&run_id)?
         .map(|log| observed_reads(&log, &store, Some(&workspace.path)))
         .unwrap_or_default();
     let review = ops::finalize_execution_attempt(
         &store,
         &vcs,
-        &node,
+        &run_id,
         worked_by,
         started,
         &reads,
@@ -299,15 +283,7 @@ fn main() -> Result<()> {
         eprintln!("llaundry-work: awaiting human review in node {review}");
     }
 
-    let produced_project_content = store.read_result(&node)?
-        .is_some_and(|(result, _)| result.output_commit.is_some());
-    if !produced_project_content
-        && store.read_result(&node)?.is_some()
-        && llaundry::git::worktree_clean(&workspace.path)?
-        && !cli.keep_worktree
-    {
-        llaundry::git::remove_worktree(&canonical_project, &workspace.path)?;
-    } else {
+    if !ops::finish_attempt_workspace(&store, &vcs, &run_id, cli.keep_worktree)? {
         eprintln!(
             "llaundry-work: retained candidate worktree {} on {}",
             workspace.path.display(), workspace.identity.candidate_branch
@@ -409,7 +385,7 @@ impl ClaudeCode {
             .arg("--allowedTools")
             .arg(allowed.join(","))
             // One JSON event per line — the session transcript recorded to the
-            // node's work.jsonl (stream-json in print mode requires --verbose).
+            // attempt work.jsonl (stream-json in print mode requires --verbose).
             .arg("--output-format")
             .arg("stream-json")
             .arg("--verbose");
@@ -541,7 +517,7 @@ fn observed_reads(log: &str, store: &Store, execution_root: Option<&std::path::P
 /// (outputs and context declared, notes as the record of what happened) or
 /// `fail_node` — or pauses on a human-assigned question node.
 ///
-/// On continuation, `previous_log` (the node's recorded `work.jsonl`) is replayed
+/// On legacy continuation, `previous_log` is replayed
 /// verbatim so the session picks up exactly where the last one stopped — the
 /// handoff is mechanical, not dependent on the previous agent having left notes.
 fn build_prompt(
@@ -803,6 +779,12 @@ mod tests {
             Ok(false)
         }
         fn create_worktree(&self, _path: &std::path::Path, _branch: &str, _rev: &str) -> Result<()> {
+            Ok(())
+        }
+        fn worktree_clean(&self, _path: &std::path::Path) -> Result<bool> {
+            Ok(true)
+        }
+        fn remove_worktree(&self, _path: &std::path::Path) -> Result<()> {
             Ok(())
         }
     }

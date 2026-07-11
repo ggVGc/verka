@@ -101,7 +101,7 @@ enum Cmd {
         /// Read the notes from a file instead.
         #[arg(long, conflicts_with = "notes")]
         notes_file: Option<PathBuf>,
-        #[arg(long, value_enum, default_value = "machine")]
+        #[arg(long, value_enum, default_value = "human")]
         author: Author,
     },
 
@@ -113,7 +113,7 @@ enum Cmd {
         /// Read the notes from a file instead.
         #[arg(long, conflicts_with = "notes")]
         notes_file: Option<PathBuf>,
-        #[arg(long, value_enum, default_value = "machine")]
+        #[arg(long, value_enum, default_value = "human")]
         author: Author,
     },
 
@@ -145,6 +145,9 @@ enum Cmd {
 
     /// Create a review branch and worktree for proposed edits.
     EditReview { id: String },
+
+    /// Recover safe incomplete phases of a durable execution attempt.
+    RecoverAttempt { id: String },
 
     /// Show a node: definition, derived status, result, and staleness reasons.
     Show { id: String },
@@ -368,6 +371,15 @@ fn main() -> Result<()> {
             println!("review branch: {}", workspace.branch);
             println!("review worktree: {}", workspace.path.display());
             println!("commit proposed edits, then reject with --suggestion-branch {} --suggestion-commit <commit>", workspace.branch);
+        }
+
+        Cmd::RecoverAttempt { id } => {
+            let store = Store::open(store)?;
+            let vcs = GitVcs::for_store(&store);
+            match ops::recover_attempt(&store, &vcs, &id)? {
+                Some(review) => println!("recovered attempt {id}; review {review}"),
+                None => println!("recovered attempt {id}"),
+            }
         }
 
         Cmd::Show { id } => {

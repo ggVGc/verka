@@ -3,9 +3,12 @@ Hierarchical LLM coding
 
 ## Review-gated candidate workflow
 
-`llaundry-work <node>` creates a permanent
+Before changing the project, `llaundry-work <node>` commits a durable execution
+record under `.llaundry/attempts/<attempt-id>/`. It then creates a permanent
 `llaundry/candidates/<attempt-id>` branch and performs the work in its linked
-worktree. A project-producing completion is not merged automatically. Llaundry
+worktree. Results and transcripts are stored with that exact attempt, so an
+older node result cannot be mistaken for newer work and interrupted preparation
+can be recovered. A project-producing completion is not merged automatically. Llaundry
 creates a human-assigned review node that pins the exact candidate branch and
 commit.
 

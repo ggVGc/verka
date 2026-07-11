@@ -43,7 +43,15 @@ pub fn create_worktree(project: &Path, path: PathBuf, branch: &str, rev: &str) -
     }
     let path_arg = path.to_string_lossy().into_owned();
     checked(project, &["check-ref-format", "--branch", branch])?;
-    checked(project, &["worktree", "add", "-b", branch, &path_arg, &input_commit])?;
+    let branch_ref = format!("refs/heads/{branch}");
+    if let Ok(existing) = checked(project, &["rev-parse", "--verify", &branch_ref]) {
+        if existing != input_commit {
+            bail!("candidate branch `{branch}` exists at {existing}, expected {input_commit}");
+        }
+        checked(project, &["worktree", "add", &path_arg, branch])?;
+    } else {
+        checked(project, &["worktree", "add", "-b", branch, &path_arg, &input_commit])?;
+    }
     Ok(Worktree { path, branch: branch.to_string(), input_commit, input_tree })
 }
 
@@ -189,6 +197,12 @@ impl Vcs for GitVcs {
     fn create_worktree(&self, path: &Path, branch: &str, rev: &str) -> Result<()> {
         create_worktree(&self.project, path.to_path_buf(), branch, rev)?;
         Ok(())
+    }
+    fn worktree_clean(&self, path: &Path) -> Result<bool> {
+        worktree_clean(path)
+    }
+    fn remove_worktree(&self, path: &Path) -> Result<()> {
+        remove_worktree(&self.project, path)
     }
 }
 

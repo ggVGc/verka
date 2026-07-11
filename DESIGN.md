@@ -54,10 +54,11 @@ form its definition. Completed or failed work adds `result.toml` and may add
 always Markdown. A node with no `result.toml` is open. Editing either definition
 file revises the definition.
 
-There is one more file a node may carry — `work.jsonl`, the recorded
-interaction log of work sessions (§2.11) — but it is deliberately *not* a third
-kind of state: it is opaque to every derived query, participates in nothing,
-and exists purely as a record.
+Legacy nodes may carry `work.jsonl`. New execution transcripts and immutable
+results live under `attempts/<attempt-id>/`, as specified in
+`designs/DURABLE_EXECUTION_ATTEMPTS.md`. A recorded interaction log is
+deliberately not another kind of graph state: it is opaque to derived queries
+and exists as execution evidence.
 
 ### 2.2 Versions are Git blob ids, computed on demand
 

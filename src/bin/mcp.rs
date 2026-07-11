@@ -42,31 +42,14 @@ struct Cli {
     /// this to their isolated linked worktree.
     #[arg(long)]
     project: Option<PathBuf>,
-    /// Node this execution is authorized to complete or fail.
-    #[arg(long, requires_all = ["attempt_id", "candidate_branch", "project"])]
-    node_id: Option<String>,
-    /// Execution attempt identity supplied by llaundry-work.
-    #[arg(long, requires_all = ["node_id", "candidate_branch", "project"])]
-    attempt_id: Option<String>,
-    /// Permanent candidate branch supplied by llaundry-work.
-    #[arg(long, requires_all = ["node_id", "attempt_id", "project"])]
-    candidate_branch: Option<String>,
-    /// This execution was explicitly authorized to bypass graph readiness.
-    #[arg(long, requires = "node_id")]
-    force_execution: bool,
+    /// Durable execution attempt supplied by llaundry-work.
+    #[arg(long, requires = "project")]
+    attempt: Option<String>,
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let execution = cli.node_id.zip(cli.attempt_id.zip(cli.candidate_branch)).map(
-        |(node_id, (attempt_id, candidate_branch))| ExecutionIdentity {
-            node_id,
-            attempt_id,
-            candidate_branch,
-            force: cli.force_execution,
-        },
-    );
-    Server::new(cli.store, cli.project, execution).serve()
+    Server::new(cli.store, cli.project, cli.attempt).serve()
 }
 
 // --- tools ------------------------------------------------------------------
@@ -89,7 +72,7 @@ trait Tool {
 struct Ctx {
     store_path: PathBuf,
     project_path: Option<PathBuf>,
-    execution: Option<ExecutionIdentity>,
+    attempt_id: Option<String>,
 }
 
 impl Ctx {
@@ -101,6 +84,19 @@ impl Ctx {
             None => GitVcs::for_store(&store),
         };
         Ok((store, vcs))
+    }
+
+    fn execution(&self, store: &Store) -> Result<Option<ExecutionIdentity>> {
+        self.attempt_id
+            .as_deref()
+            .map(|id| store.read_attempt(id))
+            .transpose()
+            .map(|attempt| attempt.map(|a| ExecutionIdentity {
+                node_id: a.node,
+                attempt_id: a.id,
+                candidate_branch: a.candidate_branch,
+                force: a.force,
+            }))
     }
 }
 
@@ -174,7 +170,7 @@ impl Tool for InitStore {
         "init_store"
     }
     fn description(&self) -> &'static str {
-        "Initialise a new llaundry store (creates the store directory skeleton)."
+        "Initialise a complete llaundry workbench: store, Git repositories, project root commit, default config, and project pairing."
     }
     fn input_schema(&self) -> Value {
         obj_schema(json!({}), &[])
@@ -311,7 +307,7 @@ impl Tool for CompleteNode {
         let author = enum_or(args, "author", Author::Machine)?;
         let commit = ops::complete_with_execution(
             &store, &vcs, &id, &outputs, &context, message, &notes, author,
-            ctx.execution.clone(),
+            ctx.execution(&store)?,
         )?;
         Ok(match commit {
             Some(c) => format!("completed {id} (output commit {})", ops::short(&c)),
@@ -343,7 +339,7 @@ impl Tool for FailNode {
         let id = req_str(args, "id")?;
         let notes = opt_str(args, "notes").unwrap_or_default();
         let author = enum_or(args, "author", Author::Machine)?;
-        ops::fail_with_execution(&store, &vcs, &id, &notes, author, ctx.execution.clone())?;
+        ops::fail_with_execution(&store, &vcs, &id, &notes, author, ctx.execution(&store)?)?;
         Ok(format!("{id} -> failed"))
     }
 }
@@ -612,16 +608,16 @@ impl Tool for NodeDependents {
 struct Server {
     store_path: PathBuf,
     project_path: Option<PathBuf>,
-    execution: Option<ExecutionIdentity>,
+    attempt_id: Option<String>,
     tools: Vec<Box<dyn Tool>>,
 }
 
 impl Server {
-    fn new(store_path: PathBuf, project_path: Option<PathBuf>, execution: Option<ExecutionIdentity>) -> Self {
+    fn new(store_path: PathBuf, project_path: Option<PathBuf>, attempt_id: Option<String>) -> Self {
         Server {
             store_path,
             project_path,
-            execution,
+            attempt_id,
             tools: registry(),
         }
     }
@@ -702,7 +698,7 @@ impl Server {
         let ctx = Ctx {
             store_path: self.store_path.clone(),
             project_path: self.project_path.clone(),
-            execution: self.execution.clone(),
+            attempt_id: self.attempt_id.clone(),
         };
         let result = match self.tools.iter().find(|t| t.name() == name) {
             Some(tool) => tool.call(&ctx, &args),
