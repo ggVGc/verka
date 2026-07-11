@@ -24,6 +24,7 @@
       - But this, reasonably, does not play well with other LLM tooling
 
 
+Targets human-driven developer workflow, rather than large-scale fully agentic development with little oversight. I want to accelerate the way I develop software, while still applying the skills and understanding I have developed over the years, keeping quality and design under control.
 
 My wish is for a system where work definition and implementation live as one,
 wich a shared interconnected diffable history.
