@@ -387,6 +387,35 @@ pub fn commit_work_log(store: &Store, vcs: &dyn Vcs, id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Finalize the durable record of one backend session. The driver supplies
+/// observations; the library applies them in the required order and ensures a
+/// successful project-producing execution always gets its review node.
+pub fn finalize_execution_attempt(
+    store: &Store,
+    vcs: &dyn Vcs,
+    id: &str,
+    worked_by: WorkedBy,
+    started: i64,
+    observed_reads: &[String],
+    backend_succeeded: bool,
+) -> Result<Option<String>> {
+    let produced_result = amend_worker(store, vcs, id, worked_by, started)?;
+    if produced_result {
+        amend_context(store, vcs, id, observed_reads)?;
+    }
+    commit_work_log(store, vcs, id)?;
+    if !backend_succeeded {
+        return Ok(None);
+    }
+    let Some((result, _)) = store.read_result(id)? else {
+        bail!("successful execution of node `{id}` produced no result");
+    };
+    if result.output_commit.is_some() {
+        return create_review(store, vcs, id).map(Some);
+    }
+    Ok(None)
+}
+
 /// Append *observed* context pins to a node's recorded result: files a work
 /// session was seen reading (mined from its recorded transcript) that the
 /// worker did not declare in `complete`. Turns input provenance from agent
@@ -1497,6 +1526,32 @@ mod tests {
         )
         .unwrap();
         assert!(prepare_review_edits(&store, &fake, &review).is_err());
+    }
+
+    #[test]
+    fn library_finalization_creates_mandatory_review_after_enrichment() {
+        let (_t, store) = temp_store();
+        let (fake, implementation, _) = candidate(&store);
+        let review = finalize_execution_attempt(
+            &store,
+            &fake,
+            &implementation,
+            WorkedBy {
+                backend: "test".into(),
+                model: Some("model".into()),
+            },
+            0,
+            &[],
+            true,
+        )
+        .unwrap()
+        .unwrap();
+        let target = store.read_node(&review).unwrap().0.review.unwrap();
+        assert_eq!(target.implementation, implementation);
+        assert_eq!(
+            target.reviewed_result,
+            store.result_version(&implementation).unwrap()
+        );
     }
 
     #[test]

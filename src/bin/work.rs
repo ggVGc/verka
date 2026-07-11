@@ -284,38 +284,27 @@ fn main() -> Result<()> {
         backend: backend.name().to_string(),
         model: backend.model().map(str::to_string),
     };
-    match ops::amend_worker(&store, &vcs, &node, worked_by, started) {
-        Ok(_) => {}
-        Err(e) => eprintln!("llaundry-work: could not record the worker: {e:#}"),
-    }
-
-    // Derive input provenance from the recorded session: pin project files the
-    // agent was observed reading but did not declare as context. Best-effort —
-    // the raw log keeps the full story either way.
-    if let Some(log_text) = store.read_work_log(&node)? {
-        let reads = observed_reads(&log_text, &store, Some(&worktree.path));
-        match ops::amend_context(&store, &vcs, &node, &reads) {
-            Ok(n) if n > 0 => eprintln!("llaundry-work: pinned {n} observed context file(s)"),
-            Ok(_) => {}
-            Err(e) => eprintln!("llaundry-work: could not pin observed context: {e:#}"),
-        }
-    }
-
-    // Commit whatever of the story the session's own store commits didn't
-    // already sweep in — before judging the exit status, so even a failed
-    // session's story is kept.
-    ops::commit_work_log(&store, &vcs, &node)?;
+    let reads = store
+        .read_work_log(&node)?
+        .map(|log| observed_reads(&log, &store, Some(&worktree.path)))
+        .unwrap_or_default();
+    let review = ops::finalize_execution_attempt(
+        &store,
+        &vcs,
+        &node,
+        worked_by,
+        started,
+        &reads,
+        success,
+    )?;
 
     if !success {
         eprintln!("llaundry-work: retained worktree {}", worktree.path.display());
         bail!("backend session exited unsuccessfully");
     }
 
-    if let Some((result, _)) = store.read_result(&node)? {
-        if result.output_commit.is_some() {
-            let review = ops::create_review(&store, &vcs, &node)?;
-            eprintln!("llaundry-work: awaiting human review in node {review}");
-        }
+    if let Some(review) = review {
+        eprintln!("llaundry-work: awaiting human review in node {review}");
     }
 
     let produced_project_content = store.read_result(&node)?
