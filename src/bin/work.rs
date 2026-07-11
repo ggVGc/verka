@@ -277,15 +277,28 @@ fn main() -> Result<()> {
     )?;
     log.flush()?;
 
-    let success = backend.run(&session, &mut log)?;
+    let outcome = backend.run(&session, &mut log)?;
     drop(log);
 
     // Stamp which engine did the work onto the result — if this session wrote
     // one (`since` keeps a dead rework session from relabelling the old
-    // result, and a paused session has no result to stamp yet).
+    // result, and a paused session has no result to stamp yet). The model is
+    // the one the backend's stream named as actually running — never "whatever
+    // the default was" — falling back to the pinned request only if the stream
+    // stayed silent.
+    let model = outcome
+        .model
+        .clone()
+        .or_else(|| backend.model().map(str::to_string));
+    if model.is_none() {
+        eprintln!(
+            "llaundry-work: warning: {} did not report which model ran; worked_by records none",
+            backend.name()
+        );
+    }
     let worked_by = WorkedBy {
         backend: backend.name().to_string(),
-        model: backend.model().map(str::to_string),
+        model,
     };
     let reads = store
         .read_attempt_log(&run_id)?
@@ -298,10 +311,10 @@ fn main() -> Result<()> {
         worked_by,
         started,
         &reads,
-        success,
+        outcome.success,
     )?;
 
-    if !success {
+    if !outcome.success {
         eprintln!("llaundry-work: retained worktree {}", workspace.path.display());
         bail!("backend session exited unsuccessfully");
     }

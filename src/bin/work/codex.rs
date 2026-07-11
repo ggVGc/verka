@@ -1,4 +1,4 @@
-use super::backend::{Backend, Session};
+use super::backend::{event_model, Backend, RunOutcome, Session};
 use anyhow::{Context, Result};
 use std::process::Command;
 
@@ -73,7 +73,7 @@ impl Backend for OpenAiCodex {
         self.model.as_deref()
     }
 
-    fn run(&self, session: &Session, log: &mut dyn std::io::Write) -> Result<bool> {
+    fn run(&self, session: &Session, log: &mut dyn std::io::Write) -> Result<RunOutcome> {
         use std::io::{BufRead, BufReader};
         let mut child = self
             .command(session)
@@ -86,13 +86,20 @@ impl Backend for OpenAiCodex {
                 )
             })?;
         let stdout = child.stdout.take().expect("stdout was piped");
+        let mut model = None;
         for line in BufReader::new(stdout).lines() {
             let line = line.context("reading backend output")?;
             println!("{line}");
             writeln!(log, "{line}").context("writing work log")?;
             log.flush().context("flushing work log")?;
+            if model.is_none() {
+                model = event_model(&line);
+            }
         }
-        Ok(child.wait()?.success())
+        Ok(RunOutcome {
+            success: child.wait()?.success(),
+            model,
+        })
     }
 
     fn describe(&self, session: &Session) -> String {

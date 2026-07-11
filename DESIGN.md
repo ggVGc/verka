@@ -334,7 +334,7 @@ description = "7ab92cc1..."       # description.md blob fulfilled
 
 [worked_by]                       # the engine that did the work; optional
 backend = "claude-code"           # stamped by the driver after the session
-model = "opus"                    # absent = the backend's default at the time
+model = "claude-opus-4-1"         # the model the backend reported actually running
 
 [[built_against]]
 id = "node-01J8XQ2A..."
@@ -537,8 +537,13 @@ Which engine did the work is recorded mechanically, like observed context:
 after the session, the driver stamps the resolved backend and model onto the
 result's `worked_by` (guarded by the attempt timestamp, so a rework session
 that died without writing a new result cannot mislabel the old one). The
-worker itself is never asked to know what it runs on. Results recorded by
-hand carry no stamp.
+model is mined from the session's own stream — every known backend names the
+model it runs in its events — so the stamp records what actually ran, never
+"whatever the default was at the time"; the explicitly requested model is
+only a fallback should the stream stay silent. (The attempt header's `model`
+is different: it records the *request* at launch, `null` when none was
+pinned.) The worker itself is never asked to know what it runs on. Results
+recorded by hand carry no stamp.
 
 ---
 
