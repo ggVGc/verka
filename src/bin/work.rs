@@ -37,10 +37,17 @@
 //! repository; store mutations sweep the story-so-far into their commits, and
 //! attempt finalization commits the remaining tail.
 
+#[path = "work/backend.rs"]
+mod backend;
+#[path = "work/claude.rs"]
+mod claude;
+
 use anyhow::{bail, Context, Result};
 use clap::{Parser, ValueEnum};
 use serde_json::{json, Value};
-use std::process::Command;
+
+use backend::{Backend, McpServer, Session};
+use claude::ClaudeCode;
 
 use llaundry::{ops, title_of, Author, Config, GitVcs, NodeMeta, Store, WorkedBy};
 
@@ -191,15 +198,15 @@ fn main() -> Result<()> {
     let backend: Box<dyn Backend> = match backend_kind {
         BackendKind::ClaudeCode => {
             let cc = &config.work.claude_code;
-            Box::new(ClaudeCode {
-                binary: cli
+            Box::new(ClaudeCode::new(
+                cli
                     .claude_bin
                     .clone()
                     .or_else(|| cc.bin.clone())
                     .unwrap_or_else(|| "claude".into()),
-                model: cli.model.clone().or_else(|| cc.model.clone()),
-                network: cli.network,
-            })
+                cli.model.clone().or_else(|| cc.model.clone()),
+                cli.network,
+            ))
         }
     };
 
@@ -296,155 +303,6 @@ fn main() -> Result<()> {
 /// sorted) that is ready and not assigned to a human — the same pool
 /// `llaundry ready --for llm` shows. A human-assigned node is waiting for a
 /// human's answer, never an LLM's to pick up.
-/// One unit of work: an LLM session focused on a single node, together with the MCP
-/// server the model is allowed to use. Deliberately free of any store handle — once
-/// the prompt is built, a backend needs nothing else from the database.
-struct Session {
-    node_id: String,
-    prompt: String,
-    /// Absolute project root (the directory containing the store). The backend
-    /// runs here, so project-scoped tool rules and relative paths resolve
-    /// against the store's location, not the driver's launch directory.
-    project_root: std::path::PathBuf,
-    mcp: McpServer,
-}
-
-/// A stdio MCP server the backend should expose to the model.
-struct McpServer {
-    name: String,
-    command: String,
-    args: Vec<String>,
-}
-
-/// The LLM seam. An implementation runs a [`Session`] to completion, streaming
-/// each JSONL transcript line to `log` as it arrives (flushed per line, so the
-/// story survives an abrupt exit), and returns whether the backend exited
-/// cleanly. `describe` renders the invocation for `--dry-run` without running
-/// anything.
-trait Backend {
-    fn name(&self) -> &str;
-    /// The model this backend will request, if pinned; `None` means the
-    /// backend's own default. Recorded in the attempt header and stamped onto
-    /// the result, so every unit of work names the engine that did it.
-    fn model(&self) -> Option<&str>;
-    fn run(&self, session: &Session, log: &mut dyn std::io::Write) -> Result<bool>;
-    fn describe(&self, session: &Session) -> String;
-}
-
-/// Backend that shells out to Claude Code (`claude -p`): the llaundry MCP for
-/// graph operations, the built-in file tools for real work — no shell, no other
-/// MCP servers, web tools only when `network` is set.
-struct ClaudeCode {
-    binary: String,
-    model: Option<String>,
-    network: bool,
-}
-
-impl ClaudeCode {
-    /// Build the `claude` invocation for a session. Kept separate from [`run`] so it
-    /// can be inspected in tests and printed by `--dry-run` without executing.
-    fn command(&self, session: &Session) -> Command {
-        // `--mcp-config` takes inline JSON; the server name is dynamic, so build the
-        // object rather than using a string-literal key.
-        let mut servers = serde_json::Map::new();
-        servers.insert(
-            session.mcp.name.clone(),
-            json!({ "command": session.mcp.command, "args": session.mcp.args }),
-        );
-        let mcp_config = json!({ "mcpServers": Value::Object(servers) });
-
-        // In `-p` mode any tool not listed here is denied. The graph tools, plus
-        // the built-in file tools — every one scoped to `./**`, which resolves
-        // against the session's working directory, pinned to the project
-        // directory below. This is a pure whitelist: the store and its history
-        // sit *above* the granted subtree, so no rule about them exists to
-        // miswrite (see ISOLATION.md), and the clean-tree rule forces every
-        // write to be declared at completion. No Bash: a shell's reads are
-        // invisible to provenance.
-        let mut allowed = vec![
-            format!("mcp__{}", session.mcp.name),
-            "Read(./**)".into(),
-            "Glob(./**)".into(),
-            "Grep(./**)".into(),
-            "Edit(./**)".into(),
-            "Write(./**)".into(),
-        ];
-        if self.network {
-            allowed.push("WebFetch".into());
-            allowed.push("WebSearch".into());
-        }
-
-        let mut cmd = Command::new(&self.binary);
-        cmd.current_dir(&session.project_root);
-        cmd.arg("-p")
-            .arg(&session.prompt)
-            // Only our MCP server, ignoring any user/project MCP config.
-            .arg("--mcp-config")
-            .arg(mcp_config.to_string())
-            .arg("--strict-mcp-config")
-            .arg("--allowedTools")
-            .arg(allowed.join(","))
-            // One JSON event per line — the session transcript recorded to the
-            // attempt work.jsonl (stream-json in print mode requires --verbose).
-            .arg("--output-format")
-            .arg("stream-json")
-            .arg("--verbose");
-        if let Some(model) = &self.model {
-            cmd.arg("--model").arg(model);
-        }
-        cmd
-    }
-}
-
-impl Backend for ClaudeCode {
-    fn name(&self) -> &str {
-        "claude-code"
-    }
-
-    fn model(&self) -> Option<&str> {
-        self.model.as_deref()
-    }
-
-    fn run(&self, session: &Session, log: &mut dyn std::io::Write) -> Result<bool> {
-        use std::io::{BufRead, BufReader};
-        // Stream stdout (the JSONL event stream) to the log, teeing each line to
-        // the terminal as it arrives; stderr stays inherited.
-        let mut child = self
-            .command(session)
-            .stdout(std::process::Stdio::piped())
-            .spawn()
-            .with_context(|| {
-                format!(
-                    "failed to launch `{}` — is Claude Code installed and on PATH?",
-                    self.binary
-                )
-            })?;
-        let stdout = child.stdout.take().expect("stdout was piped");
-        for line in BufReader::new(stdout).lines() {
-            let line = line.context("reading backend output")?;
-            println!("{line}");
-            writeln!(log, "{line}").context("writing work log")?;
-            log.flush().context("flushing work log")?;
-        }
-        let status = child.wait()?;
-        Ok(status.success())
-    }
-
-    fn describe(&self, session: &Session) -> String {
-        let cmd = self.command(session);
-        // The working directory is part of the invocation: the session runs in
-        // the project root, wherever the driver itself was launched.
-        let mut parts = vec![
-            "cd".into(),
-            shell_quote(&session.project_root.to_string_lossy()),
-            "&&".into(),
-            cmd.get_program().to_string_lossy().into_owned(),
-        ];
-        parts.extend(cmd.get_args().map(|a| shell_quote(&a.to_string_lossy())));
-        parts.join(" ")
-    }
-}
-
 /// Project files the session was observed reading, mined from the recorded
 /// transcript: the `file_path` of every built-in `Read` tool call, relativised
 /// to the project root. Reads outside the project tree cannot happen (the
@@ -593,138 +451,11 @@ fn now_millis() -> i64 {
         .unwrap_or(0)
 }
 
-/// Quote an argument for a copy-pasteable single-line command display.
-fn shell_quote(s: &str) -> String {
-    let safe = !s.is_empty()
-        && s.chars()
-            .all(|c| c.is_ascii_alphanumeric() || "-_./:=".contains(c));
-    if safe {
-        s.to_string()
-    } else {
-        format!("'{}'", s.replace('\'', r"'\''"))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use llaundry::Vcs;
     use llaundry::Author;
-
-    fn sample_session() -> Session {
-        // The workbench geometry: the session's world is /wb/project; the store
-        // sits beside it at /wb/.llaundry, above the granted subtree.
-        Session {
-            node_id: "node-1".into(),
-            prompt: "do the work".into(),
-            project_root: "/wb/project".into(),
-            mcp: McpServer {
-                name: "llaundry".into(),
-                command: "llaundry-mcp".into(),
-                args: vec!["--store".into(), "/wb/.llaundry".into()],
-            },
-        }
-    }
-
-    fn args_of(cmd: &Command) -> Vec<String> {
-        cmd.get_args()
-            .map(|a| a.to_string_lossy().into_owned())
-            .collect()
-    }
-
-    fn backend(network: bool) -> ClaudeCode {
-        ClaudeCode {
-            binary: "claude".into(),
-            model: None,
-            network,
-        }
-    }
-
-    #[test]
-    fn claude_command_grants_scoped_file_tools_but_no_shell() {
-        let cmd = backend(false).command(&sample_session());
-        assert_eq!(cmd.get_program().to_string_lossy(), "claude");
-        // The session runs in the project directory — the workbench's inner
-        // repo, not the driver's launch directory — so every `./**` grant
-        // resolves there, and the store sits above the granted subtree.
-        assert_eq!(
-            cmd.get_current_dir(),
-            Some(std::path::Path::new("/wb/project"))
-        );
-        let args = args_of(&cmd);
-
-        assert!(args.contains(&"-p".to_string()));
-        assert!(args.contains(&"--strict-mcp-config".to_string()));
-
-        // The transcript is captured as one JSON event per line for work.jsonl.
-        let k = args.iter().position(|a| a == "--output-format").unwrap();
-        assert_eq!(args[k + 1], "stream-json");
-        assert!(args.contains(&"--verbose".to_string()));
-
-        // The llaundry MCP server plus the file tools, every one scoped to the
-        // working directory — a pure whitelist, no deny rules. No shell, no web
-        // by default, permissions not bypassed.
-        let i = args.iter().position(|a| a == "--allowedTools").unwrap();
-        let allowed: Vec<&str> = args[i + 1].split(',').collect();
-        assert_eq!(
-            allowed,
-            [
-                "mcp__llaundry",
-                "Read(./**)",
-                "Glob(./**)",
-                "Grep(./**)",
-                "Edit(./**)",
-                "Write(./**)"
-            ]
-        );
-        assert!(!args.iter().any(|a| a.contains("Bash")));
-        assert!(!args.iter().any(|a| a.contains("WebFetch")));
-        assert!(!args.iter().any(|a| a == "--dangerously-skip-permissions"));
-
-        // The MCP config points at the llaundry-mcp binary and passes the store
-        // by absolute path — outside the session's subtree; the server, its own
-        // process, is the one channel to graph state.
-        let j = args.iter().position(|a| a == "--mcp-config").unwrap();
-        let cfg: Value = serde_json::from_str(&args[j + 1]).unwrap();
-        assert_eq!(cfg["mcpServers"]["llaundry"]["command"], "llaundry-mcp");
-        assert_eq!(cfg["mcpServers"]["llaundry"]["args"][0], "--store");
-        assert_eq!(cfg["mcpServers"]["llaundry"]["args"][1], "/wb/.llaundry");
-    }
-
-    #[test]
-    fn web_tools_are_granted_only_with_network() {
-        let args = args_of(&backend(true).command(&sample_session()));
-        let i = args.iter().position(|a| a == "--allowedTools").unwrap();
-        assert!(args[i + 1].split(',').any(|t| t == "WebFetch"));
-        assert!(args[i + 1].split(',').any(|t| t == "WebSearch"));
-        assert!(!args[i + 1].contains("Bash"));
-    }
-
-    #[test]
-    fn model_is_forwarded_only_when_set() {
-        assert!(
-            !args_of(&backend(false).command(&sample_session())).contains(&"--model".to_string())
-        );
-
-        let with = ClaudeCode {
-            binary: "claude".into(),
-            model: Some("opus".into()),
-            network: false,
-        };
-        let args = args_of(&with.command(&sample_session()));
-        let i = args.iter().position(|a| a == "--model").unwrap();
-        assert_eq!(args[i + 1], "opus");
-    }
-
-    #[test]
-    fn describe_is_a_copy_pasteable_command() {
-        let backend = backend(false);
-        let d = backend.describe(&sample_session());
-        assert!(d.starts_with("cd /wb/project && claude "));
-        assert!(d.contains("mcp__llaundry"));
-        // The multi-word prompt gets quoted into a single token.
-        assert!(d.contains("'do the work'"));
-    }
 
     /// Minimal in-memory [`Vcs`] — the library's `FakeVcs` is `cfg(test)` there,
     /// invisible to this crate's tests. Ready-node queries only read, so no-ops do.
