@@ -452,6 +452,7 @@ pub fn create_review(store: &Store, vcs: &dyn Vcs, implementation: &str) -> Resu
 
 /// Complete a review. Acceptance publishes exactly the pinned candidate;
 /// rejection records feedback and permits another implementation attempt.
+#[allow(clippy::too_many_arguments)] // mirrors the accept/reject CLI fields
 pub fn decide_review(
     store: &Store,
     vcs: &dyn Vcs,
