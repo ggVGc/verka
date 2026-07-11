@@ -208,6 +208,10 @@ fn main() -> Result<()> {
                 store_abs.to_string_lossy().into_owned(),
                 "--project".into(),
                 worktree_path.to_string_lossy().into_owned(),
+                "--attempt-id".into(),
+                run_id.clone(),
+                "--candidate-branch".into(),
+                candidate_branch.clone(),
             ],
         },
     };
@@ -294,17 +298,6 @@ fn main() -> Result<()> {
     match ops::amend_worker(&store, &vcs, &node, worked_by, started) {
         Ok(_) => {}
         Err(e) => eprintln!("llaundry-work: could not record the worker: {e:#}"),
-    }
-    match ops::amend_candidate(
-        &store,
-        &vcs,
-        &node,
-        run_id.clone(),
-        worktree.branch.clone(),
-        started,
-    ) {
-        Ok(_) => {}
-        Err(e) => eprintln!("llaundry-work: could not record the candidate branch: {e:#}"),
     }
 
     // Derive input provenance from the recorded session: pin project files the

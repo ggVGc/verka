@@ -198,6 +198,14 @@ pub struct WorkedBy {
     pub model: Option<String>,
 }
 
+/// Identity supplied by an isolated execution driver when machine work is
+/// allowed to produce project content.
+#[derive(Clone, Debug)]
+pub struct ExecutionIdentity {
+    pub attempt_id: String,
+    pub candidate_branch: String,
+}
+
 /// Contents of `result.toml` — the record of the node's one unit of work.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ResultMeta {

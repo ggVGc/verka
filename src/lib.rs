@@ -28,7 +28,7 @@ pub use config::Config;
 pub use pairing::Pairing;
 pub use git::GitVcs;
 pub use model::{
-    title_of, Author, BuiltAgainst, ContextPin, DefinitionVersion, DepKind, NodeMeta, Outcome,
+    title_of, Author, BuiltAgainst, ContextPin, DefinitionVersion, DepKind, ExecutionIdentity, NodeMeta, Outcome,
     ResultMeta, ResultVersion, ReviewDecision, ReviewTarget, Status, WorkedBy,
 };
 pub use store::Store;

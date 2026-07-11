@@ -17,7 +17,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use ulid::Ulid;
 
 use crate::model::{
-    Author, BuiltAgainst, ContextPin, DefinitionVersion, DepKind, NodeMeta, Outcome, ResultMeta,
+    Author, BuiltAgainst, ContextPin, DefinitionVersion, DepKind, ExecutionIdentity, NodeMeta, Outcome, ResultMeta,
     ResultVersion, ReviewDecision, ReviewTarget, Status, WorkedBy,
 };
 use crate::pairing::Pairing;
@@ -110,6 +110,24 @@ pub fn complete(
     notes: &str,
     author: Author,
 ) -> Result<Option<String>> {
+    complete_with_execution(store, vcs, id, outputs, context, message, notes, author, None)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn complete_with_execution(
+    store: &Store,
+    vcs: &dyn Vcs,
+    id: &str,
+    outputs: &[String],
+    context: &[String],
+    message: Option<String>,
+    notes: &str,
+    author: Author,
+    execution: Option<ExecutionIdentity>,
+) -> Result<Option<String>> {
+    if author == Author::Machine && !outputs.is_empty() && execution.is_none() {
+        bail!("machine-produced project content requires an isolated execution identity and candidate branch");
+    }
     // The only uncommitted project changes allowed are the outputs we are about
     // to commit — completion is where output provenance is asserted.
     require_clean_except(vcs, outputs)?;
@@ -148,8 +166,8 @@ pub fn complete(
             publication_pending: false,
             input_commit,
             input_tree,
-            attempt_id: None,
-            candidate_branch: None,
+            attempt_id: execution.as_ref().map(|e| e.attempt_id.clone()),
+            candidate_branch: execution.as_ref().map(|e| e.candidate_branch.clone()),
             review_decision: None,
             suggestion_branch: None,
             suggestion_commit: None,
@@ -378,29 +396,6 @@ pub fn amend_worker(
     result.worked_by = Some(worked_by);
     store.write_result(id, &result, &notes)?;
     vcs.commit_store(&store.store_name(), &format!("llaundry: worked by {id}"))?;
-    Ok(true)
-}
-
-/// Attach the durable execution identity to a result produced by this run.
-/// `since` prevents an unsuccessful rework from relabelling an older result.
-pub fn amend_candidate(
-    store: &Store,
-    vcs: &dyn Vcs,
-    id: &str,
-    attempt_id: String,
-    candidate_branch: String,
-    since: i64,
-) -> Result<bool> {
-    let Some((mut result, notes)) = store.read_result(id)? else {
-        return Ok(false);
-    };
-    if result.at < since || result.output_commit.is_none() {
-        return Ok(false);
-    }
-    result.attempt_id = Some(attempt_id);
-    result.candidate_branch = Some(candidate_branch);
-    store.write_result(id, &result, &notes)?;
-    vcs.commit_store(&store.store_name(), &format!("llaundry: candidate {id}"))?;
     Ok(true)
 }
 
@@ -1221,7 +1216,8 @@ mod tests {
         fake.commits.borrow_mut().insert("base".into());
         fake.refs.borrow_mut().insert("refs/heads/main".into(), "base".into());
         let id = add(store, &fake, new_node("implement it", vec![])).unwrap();
-        complete(
+        let branch = "llaundry/candidates/attempt-1".to_string();
+        complete_with_execution(
             store,
             &fake,
             &id,
@@ -1230,12 +1226,38 @@ mod tests {
             None,
             "candidate",
             Author::Machine,
+            Some(ExecutionIdentity {
+                attempt_id: "attempt-1".into(),
+                candidate_branch: branch.clone(),
+            }),
         )
         .unwrap();
-        let branch = "llaundry/candidates/attempt-1".to_string();
         fake.refs.borrow_mut().insert(format!("refs/heads/{branch}"), "candidate-1".into());
-        amend_candidate(store, &fake, &id, "attempt-1".into(), branch, 0).unwrap();
         (fake, id, "candidate-1".into())
+    }
+
+    #[test]
+    fn library_requires_execution_identity_for_machine_project_output() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs {
+            next_id: "candidate".into(),
+            ..Default::default()
+        };
+        let id = add(&store, &fake, new_node("implement", vec![])).unwrap();
+        let error = complete(
+            &store,
+            &fake,
+            &id,
+            &["file.txt".into()],
+            &[],
+            None,
+            "",
+            Author::Machine,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("execution identity"));
+        assert!(store.read_result(&id).unwrap().is_none());
+        assert!(fake.captured.borrow().is_empty());
     }
 
     #[test]
@@ -1332,7 +1354,7 @@ mod tests {
             &["declared.txt".into()],
             None,
             "done",
-            Author::Machine,
+            Author::Human,
         )
         .unwrap();
 
@@ -1480,7 +1502,7 @@ mod tests {
             &[],
             None,
             "implemented it",
-            Author::Machine,
+            Author::Human,
         )
         .unwrap();
         assert_eq!(commit.as_deref(), Some("commit-abc"));
@@ -1595,7 +1617,7 @@ mod tests {
             &[],
             None,
             "",
-            Author::Machine,
+            Author::Human,
         )
         .unwrap();
         let b = add(&store, &fake, new_node("b", vec![a.clone()])).unwrap();
@@ -1612,7 +1634,7 @@ mod tests {
             &[],
             None,
             "",
-            Author::Machine,
+            Author::Human,
         )
         .unwrap();
         let reasons = staleness(&store, &fake, &b);
@@ -1659,7 +1681,7 @@ mod tests {
             &["helper.rs".into()],
             None,
             "",
-            Author::Machine,
+            Author::Human,
         )
         .unwrap();
         assert!(staleness(&store, &fake, &id).is_empty());
@@ -1699,7 +1721,7 @@ mod tests {
             &[],
             None,
             "",
-            Author::Machine,
+            Author::Human,
         )
         .unwrap();
         assert!(staleness(&store, &fake, &id).is_empty());
@@ -1777,7 +1799,7 @@ mod tests {
             &[],
             None,
             "",
-            Author::Machine,
+            Author::Human,
         )
         .unwrap();
 
@@ -1904,7 +1926,7 @@ mod tests {
             &[],
             None,
             "",
-            Author::Machine,
+            Author::Human,
         )
         .unwrap();
         assert!(unsettled(&store, &fake, &root).unwrap().is_empty());
@@ -2026,7 +2048,7 @@ mod tests {
             &[],
             None,
             "",
-            Author::Machine,
+            Author::Human,
         )
         .unwrap();
     }
@@ -2173,7 +2195,7 @@ mod tests {
             &[],
             None,
             "",
-            Author::Machine,
+            Author::Human,
         )
         .unwrap();
         let b = add(&store, &fake, new_node("b", vec![a.clone()])).unwrap();

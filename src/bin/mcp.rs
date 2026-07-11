@@ -22,7 +22,7 @@ use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 
 use llaundry::ops::{self, NewNode};
-use llaundry::{title_of, Author, DepKind, GitVcs, Store};
+use llaundry::{title_of, Author, DepKind, ExecutionIdentity, GitVcs, Store};
 
 /// The MCP protocol revision we advertise (a client may negotiate its own; we echo
 /// back whatever it asks for when present).
@@ -42,11 +42,20 @@ struct Cli {
     /// this to their isolated linked worktree.
     #[arg(long)]
     project: Option<PathBuf>,
+    /// Execution attempt identity supplied by llaundry-work.
+    #[arg(long, requires = "candidate_branch")]
+    attempt_id: Option<String>,
+    /// Permanent candidate branch supplied by llaundry-work.
+    #[arg(long, requires = "attempt_id")]
+    candidate_branch: Option<String>,
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    Server::new(cli.store, cli.project).serve()
+    let execution = cli.attempt_id.zip(cli.candidate_branch).map(|(attempt_id, candidate_branch)| {
+        ExecutionIdentity { attempt_id, candidate_branch }
+    });
+    Server::new(cli.store, cli.project, execution).serve()
 }
 
 // --- tools ------------------------------------------------------------------
@@ -69,6 +78,7 @@ trait Tool {
 struct Ctx {
     store_path: PathBuf,
     project_path: Option<PathBuf>,
+    execution: Option<ExecutionIdentity>,
 }
 
 impl Ctx {
@@ -284,8 +294,9 @@ impl Tool for CompleteNode {
         let message = opt_str(args, "message");
         let notes = opt_str(args, "notes").unwrap_or_default();
         let author = enum_or(args, "author", Author::Machine)?;
-        let commit = ops::complete(
+        let commit = ops::complete_with_execution(
             &store, &vcs, &id, &outputs, &context, message, &notes, author,
+            ctx.execution.clone(),
         )?;
         if ctx.project_path.is_some() {
             ops::mark_publication_pending(&store, &vcs, &id)?;
@@ -600,14 +611,16 @@ impl Tool for NodeDependents {
 struct Server {
     store_path: PathBuf,
     project_path: Option<PathBuf>,
+    execution: Option<ExecutionIdentity>,
     tools: Vec<Box<dyn Tool>>,
 }
 
 impl Server {
-    fn new(store_path: PathBuf, project_path: Option<PathBuf>) -> Self {
+    fn new(store_path: PathBuf, project_path: Option<PathBuf>, execution: Option<ExecutionIdentity>) -> Self {
         Server {
             store_path,
             project_path,
+            execution,
             tools: registry(),
         }
     }
@@ -688,6 +701,7 @@ impl Server {
         let ctx = Ctx {
             store_path: self.store_path.clone(),
             project_path: self.project_path.clone(),
+            execution: self.execution.clone(),
         };
         let result = match self.tools.iter().find(|t| t.name() == name) {
             Some(tool) => tool.call(&ctx, &args),
@@ -825,7 +839,7 @@ mod tests {
             std::env::temp_dir().join(format!("llaundry-mcp-test-{}-{n}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         let store_path = root.join(".llaundry");
-        (TempDir(root), Server::new(store_path, None))
+        (TempDir(root), Server::new(store_path, None, None))
     }
 
     #[test]
