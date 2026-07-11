@@ -244,7 +244,15 @@ cleanup must never discard uncommitted files.
 reserved for explicit discard after the driver has independently checked and
 reported dirtiness.
 
-## 7. Automatic finalization into the target branch
+## 7. Human-reviewed publication
+
+The automatic integration process originally proposed below has been
+superseded by `HUMAN_REVIEW_GATING.md`. Machine completion creates a durable
+candidate and human review node. Only acceptance of the exact reviewed commit
+may publish it; rebasing or conflict resolution creates new work requiring a
+new review.
+
+### Superseded automatic-finalization proposal
 
 The normal contract of `llaundry-work <node>` is complete only when the work is
 present on the configured target branch (`main` by default). The isolated

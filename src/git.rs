@@ -152,6 +152,30 @@ impl Vcs for GitVcs {
         let url = String::from_utf8_lossy(&out.stdout).trim().to_string();
         Ok((!url.is_empty()).then_some(url))
     }
+
+    fn ref_commit(&self, reference: &str) -> Result<Option<String>> {
+        let out = git(&self.project, &["rev-parse", "--verify", reference])?;
+        if !out.status.success() {
+            return Ok(None);
+        }
+        Ok(Some(String::from_utf8_lossy(&out.stdout).trim().to_string()))
+    }
+
+    fn publish_fast_forward(&self, target: &str, old: &str, new: &str) -> Result<bool> {
+        let target_ref = format!("refs/heads/{target}");
+        checked(&self.project, &["check-ref-format", "--branch", target])?;
+        let checked_out = checked(&self.project, &["symbolic-ref", "-q", "HEAD"]).ok();
+        if checked_out.as_deref() == Some(&target_ref) {
+            if !worktree_clean(&self.project)? {
+                bail!("target checkout is dirty; refusing to publish over local changes");
+            }
+            if checked(&self.project, &["rev-parse", "HEAD"])? != old {
+                return Ok(false);
+            }
+            return Ok(git(&self.project, &["merge", "--ff-only", new])?.status.success());
+        }
+        Ok(git(&self.project, &["update-ref", &target_ref, new, old])?.status.success())
+    }
 }
 
 /// `git init` a directory unless it already is a repository (its own, not a
@@ -335,5 +359,28 @@ mod tests {
             .unwrap()
             .status
             .success());
+    }
+
+    #[test]
+    fn reviewed_candidate_fast_forwards_clean_checked_out_main() {
+        let (_temp, project) = repo();
+        let base = checked(&project, &["rev-parse", "HEAD"]).unwrap();
+        let path = project.parent().unwrap().join(format!(
+            ".llaundry-review-publish-test-{}",
+            ulid::Ulid::new()
+        ));
+        let branch = format!("llaundry/candidates/{}", ulid::Ulid::new());
+        create_worktree(&project, path.clone(), &branch, &base).unwrap();
+        std::fs::write(path.join("file.txt"), "accepted\n").unwrap();
+        checked(&path, &["add", "file.txt"]).unwrap();
+        checked(&path, &["commit", "-m", "candidate"]).unwrap();
+        let candidate = checked(&path, &["rev-parse", "HEAD"]).unwrap();
+
+        let vcs = GitVcs::new(project.clone(), project.parent().unwrap().to_path_buf());
+        assert!(vcs.publish_fast_forward("main", &base, &candidate).unwrap());
+        assert_eq!(checked(&project, &["rev-parse", "HEAD"]).unwrap(), candidate);
+        assert_eq!(std::fs::read_to_string(project.join("file.txt")).unwrap(), "accepted\n");
+        remove_worktree(&project, &path).unwrap();
+        assert_eq!(checked(&project, &["rev-parse", &branch]).unwrap(), candidate);
     }
 }

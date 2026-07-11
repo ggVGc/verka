@@ -10,7 +10,7 @@ use std::io;
 use std::path::PathBuf;
 
 use llaundry::ops::{self, NewNode};
-use llaundry::{Author, DepKind, GitVcs, Store};
+use llaundry::{Author, DepKind, GitVcs, ReviewDecision, Store};
 
 #[derive(Parser)]
 #[command(
@@ -116,6 +116,35 @@ enum Cmd {
         #[arg(long, value_enum, default_value = "machine")]
         author: Author,
     },
+
+    /// Accept an exact reviewed candidate and fast-forward it into the target.
+    AcceptReview {
+        id: String,
+        #[arg(long, default_value = "main")]
+        target: String,
+        #[arg(long)]
+        notes: Option<String>,
+        #[arg(long, conflicts_with = "notes")]
+        notes_file: Option<PathBuf>,
+    },
+
+    /// Reject a reviewed candidate with comments, permitting another attempt.
+    RejectReview {
+        id: String,
+        #[arg(long)]
+        notes: Option<String>,
+        #[arg(long, conflicts_with = "notes")]
+        notes_file: Option<PathBuf>,
+        /// Optional branch containing reviewer-proposed edits.
+        #[arg(long, requires = "suggestion_commit")]
+        suggestion_branch: Option<String>,
+        /// Exact tip of --suggestion-branch.
+        #[arg(long, requires = "suggestion_branch")]
+        suggestion_commit: Option<String>,
+    },
+
+    /// Create a review branch and worktree for proposed edits.
+    EditReview { id: String },
 
     /// Show a node: definition, derived status, result, and staleness reasons.
     Show { id: String },
@@ -297,6 +326,73 @@ fn main() -> Result<()> {
             let notes = resolve_notes(notes, notes_file, &store, &id, "what went wrong?")?;
             ops::fail(&store, &vcs, &id, &notes, author)?;
             println!("{id}  failed");
+        }
+
+        Cmd::AcceptReview { id, target, notes, notes_file } => {
+            let store = Store::open(store)?;
+            let vcs = GitVcs::for_store(&store);
+            let notes = resolve_notes(notes, notes_file, &store, &id, "review notes (optional)")?;
+            ops::decide_review(
+                &store, &vcs, &id, ReviewDecision::Accepted, &notes, &target, None, None,
+            )?;
+            println!("{id}  accepted and integrated into {target}");
+        }
+
+        Cmd::RejectReview {
+            id,
+            notes,
+            notes_file,
+            suggestion_branch,
+            suggestion_commit,
+        } => {
+            let store = Store::open(store)?;
+            let vcs = GitVcs::for_store(&store);
+            let notes = resolve_notes(notes, notes_file, &store, &id, "why is this candidate rejected?")?;
+            let (suggestion_branch, suggestion_commit) = if suggestion_branch.is_none() {
+                let (meta, _) = store.read_node(&id)?;
+                let review = meta.review.context("node is not a review")?;
+                let branch = format!("llaundry/reviews/{id}");
+                let reference = format!("refs/heads/{branch}");
+                match llaundry::Vcs::ref_commit(&vcs, &reference)? {
+                    Some(commit) if commit != review.candidate_commit => (Some(branch), Some(commit)),
+                    _ => (None, None),
+                }
+            } else {
+                (suggestion_branch, suggestion_commit)
+            };
+            ops::decide_review(
+                &store,
+                &vcs,
+                &id,
+                ReviewDecision::Rejected,
+                &notes,
+                "main",
+                suggestion_branch,
+                suggestion_commit,
+            )?;
+            println!("{id}  rejected");
+        }
+
+        Cmd::EditReview { id } => {
+            let store = Store::open(store)?;
+            let (meta, _) = store.read_node(&id)?;
+            let review = meta.review.context("node is not a review")?;
+            if store.read_result(&id)?.is_some() {
+                anyhow::bail!("review `{id}` is already closed");
+            }
+            let project = store.project_root().canonicalize()?;
+            let workbench = store.workbench_root().canonicalize()?;
+            let branch = format!("llaundry/reviews/{id}");
+            let path = workbench.join(".llaundry-worktrees").join(format!("review-{id}"));
+            llaundry::git::create_worktree(
+                &project,
+                path.clone(),
+                &branch,
+                &review.candidate_commit,
+            )?;
+            println!("review branch: {branch}");
+            println!("review worktree: {}", path.display());
+            println!("commit proposed edits, then reject with --suggestion-branch {branch} --suggestion-commit <commit>");
         }
 
         Cmd::Show { id } => {
@@ -518,6 +614,11 @@ fn show_node(store: &Store, vcs: &GitVcs, id: &str) -> Result<String> {
     for src in &meta.derived_from {
         writeln!(out, "derived_from: {src}")?;
     }
+    if let Some(review) = &meta.review {
+        writeln!(out, "review_of: {}", review.implementation)?;
+        writeln!(out, "candidate_branch: {}", review.candidate_branch)?;
+        writeln!(out, "candidate_commit: {}", review.candidate_commit)?;
+    }
 
     if let Some((result, notes)) = store.read_result(id)? {
         writeln!(out, "result:")?;
@@ -531,6 +632,15 @@ fn show_node(store: &Store, vcs: &GitVcs, id: &str) -> Result<String> {
         }
         if let Some(commit) = &result.output_commit {
             writeln!(out, "  output:  commit {}", ops::short(commit))?;
+        }
+        if let Some(decision) = result.review_decision {
+            writeln!(out, "  review:  {:?}", decision)?;
+        }
+        if let Some(branch) = &result.candidate_branch {
+            writeln!(out, "  candidate branch: {branch}")?;
+        }
+        if let Some(branch) = &result.suggestion_branch {
+            writeln!(out, "  suggestions: {branch} @ {}", result.suggestion_commit.as_deref().map(ops::short).unwrap_or("missing"))?;
         }
         for ba in &result.built_against {
             let result_pin = ba

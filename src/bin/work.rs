@@ -92,23 +92,11 @@ struct Cli {
     #[arg(long)]
     force: bool,
     /// Project revision from which to create the isolated execution worktree.
-    #[arg(long, default_value = "HEAD")]
-    base: String,
+    #[arg(long)]
+    base: Option<String>,
     /// Retain the execution worktree even after successful clean completion.
     #[arg(long)]
     keep_worktree: bool,
-    /// Branch that receives the verified result in the normal workflow.
-    #[arg(long, default_value = "main")]
-    target: String,
-    /// Verification command run after finalization and after every rebase.
-    #[arg(long)]
-    verify: Option<String>,
-    /// Produce an isolated output without publishing it to a branch.
-    #[arg(long)]
-    no_integrate: bool,
-    /// Maximum retries when the target branch moves during finalization.
-    #[arg(long, default_value_t = 3)]
-    integration_retries: usize,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -192,14 +180,25 @@ fn main() -> Result<()> {
         .with_context(|| format!("resolving workbench of {}", cli.store.display()))?;
     let store_abs = workbench_abs.join(store.store_name());
 
-    let (input_commit, input_tree) = llaundry::git::resolve_revision(&canonical_project, &cli.base)?;
+    let rejected_feedback = ops::rejected_review_feedback(&store, &node);
+    let base = cli.base.as_deref()
+        .or_else(|| rejected_feedback.as_ref().map(|(_, commit)| commit.as_str()))
+        .unwrap_or("HEAD");
+    let (input_commit, input_tree) = llaundry::git::resolve_revision(&canonical_project, base)?;
     let run_id = ulid::Ulid::new().to_string();
     let candidate_branch = format!("llaundry/candidates/{run_id}");
     let worktree_path = workbench_abs.join(".llaundry-worktrees").join(&run_id);
 
     let mut session = Session {
         node_id: node.clone(),
-        prompt: build_prompt(&node, &meta, &description, previous_log.as_deref()),
+        prompt: {
+            let mut prompt = build_prompt(&node, &meta, &description, previous_log.as_deref());
+            if let Some((feedback, _)) = &rejected_feedback {
+                prompt.push_str("\n\nThe previous candidate was rejected by human review. Address this feedback in the new attempt:\n\n");
+                prompt.push_str(feedback);
+            }
+            prompt
+        },
         project_root: worktree_path.clone(),
         mcp: McpServer {
             name: "llaundry".into(),
@@ -330,189 +329,28 @@ fn main() -> Result<()> {
         bail!("backend session exited unsuccessfully");
     }
 
-    if !cli.no_integrate {
-        finalize_and_publish(
-            &store,
-            &vcs,
-            &canonical_project,
-            &mut session,
-            backend.as_ref(),
-            &node,
-            &cli.target,
-            cli.verify.as_deref(),
-            cli.integration_retries,
-        )?;
-    } else {
-        ops::accept_isolated_result(&store, &vcs, &node)?;
+    if let Some((result, _)) = store.read_result(&node)? {
+        if result.output_commit.is_some() {
+            let review = ops::create_review(&store, &vcs, &node)?;
+            eprintln!("llaundry-work: awaiting human review in node {review}");
+        }
     }
 
-    if store.read_result(&node)?.is_some()
+    let produced_project_content = store.read_result(&node)?
+        .is_some_and(|(result, _)| result.output_commit.is_some());
+    if !produced_project_content
+        && store.read_result(&node)?.is_some()
         && llaundry::git::worktree_clean(&worktree.path)?
         && !cli.keep_worktree
     {
         llaundry::git::remove_worktree(&canonical_project, &worktree.path)?;
     } else {
-        eprintln!("llaundry-work: retained worktree {}", worktree.path.display());
+        eprintln!(
+            "llaundry-work: retained candidate worktree {} on {}",
+            worktree.path.display(), worktree.branch
+        );
     }
     Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-fn finalize_and_publish(
-    store: &Store,
-    vcs: &GitVcs,
-    canonical_project: &std::path::Path,
-    session: &mut Session,
-    backend: &dyn Backend,
-    node: &str,
-    target: &str,
-    verify: Option<&str>,
-    max_retries: usize,
-) -> Result<()> {
-    let target_ref = format!("refs/heads/{target}");
-    git_ok(canonical_project, &["check-ref-format", "--branch", target])?;
-    let Some((result, _)) = store.read_result(node)? else {
-        bail!("worker exited without finalizing node `{node}`");
-    };
-    let Some(mut candidate) = result.output_commit else {
-        return Ok(());
-    };
-
-    for attempt in 0..=max_retries {
-        let target_old = git_output(canonical_project, &["rev-parse", "--verify", &target_ref])?;
-        let parent = git_output(&session.project_root, &["rev-parse", &format!("{candidate}^")])?;
-        if parent != target_old {
-            eprintln!(
-                "llaundry-work: target moved; rebasing isolated work onto {}",
-                ops::short(&target_old)
-            );
-            if !git_status(&session.project_root, &["rebase", &target_old])? {
-                loop {
-                    session.prompt = format!(
-                        "The work for node `{node}` is being rebased onto the current `{target}`. Resolve every conflict in the working files, preserving the node's intended behavior and compatible upstream changes. Do not call complete_node or fail_node; finish after editing all conflict markers away."
-                    );
-                    let mut log = store.open_work_log(node, true)?;
-                    if !backend.run(session, &mut log)? {
-                        bail!("conflict-resolution worker failed; retained {}", session.project_root.display());
-                    }
-                    drop(log);
-                    git_ok(&session.project_root, &["add", "-A"])?;
-                    if git_with_editor(&session.project_root, &["rebase", "--continue"])? {
-                        break;
-                    }
-                    if git_output(&session.project_root, &["diff", "--name-only", "--diff-filter=U"])?.is_empty() {
-                        bail!("rebase continuation failed; retained {}", session.project_root.display());
-                    }
-                }
-            }
-
-            session.prompt = format!(
-                "Re-check the rebased implementation of node `{node}` against the current project. Inspect upstream changes and the implementation together. Make any corrections needed. Do not call complete_node or fail_node; finish when the files are correct."
-            );
-            let mut log = store.open_work_log(node, true)?;
-            if !backend.run(session, &mut log)? {
-                bail!("post-rebase review failed; retained {}", session.project_root.display());
-            }
-            drop(log);
-            if !git_output(&session.project_root, &["status", "--porcelain"])?.is_empty() {
-                git_ok(&session.project_root, &["add", "-A"])?;
-                git_ok(
-                    &session.project_root,
-                    &["commit", "-m", &format!("Re-finalize llaundry node {node}")],
-                )?;
-            }
-            // Re-establish the one-node/one-output-commit invariant after the
-            // rebase and any review corrections.
-            git_ok(&session.project_root, &["reset", "--soft", &target_old])?;
-            git_ok(
-                &session.project_root,
-                &[
-                    "commit",
-                    "--allow-empty",
-                    "-m",
-                    &format!(
-                        "Finalize llaundry node {node}\n\nLlaundry-Node: {node}\nLlaundry-Input: {target_old}"
-                    ),
-                ],
-            )?;
-            candidate = git_output(&session.project_root, &["rev-parse", "HEAD"])?;
-            vcs.retain_output(node, &candidate)?;
-        }
-
-        if let Some(command) = verify {
-            let status = Command::new("sh")
-                .arg("-c")
-                .arg(command)
-                .current_dir(&session.project_root)
-                .status()
-                .with_context(|| format!("running verification `{command}`"))?;
-            if !status.success() {
-                bail!("verification failed; retained {}", session.project_root.display());
-            }
-        }
-
-        if publish_fast_forward(canonical_project, &target_ref, &target_old, &candidate)? {
-            ops::record_publication(
-                store,
-                vcs,
-                node,
-                candidate,
-                target_ref,
-                target_old,
-            )?;
-            return Ok(());
-        }
-        if attempt == max_retries {
-            break;
-        }
-    }
-    bail!(
-        "target kept moving during publication; retained {}",
-        session.project_root.display()
-    )
-}
-
-fn publish_fast_forward(project: &std::path::Path, target_ref: &str, old: &str, new: &str) -> Result<bool> {
-    let checked_out = git_output(project, &["symbolic-ref", "-q", "HEAD"]).ok();
-    if checked_out.as_deref() == Some(target_ref) {
-        if !git_output(project, &["status", "--porcelain"])?.is_empty() {
-            bail!("target checkout is dirty; refusing to publish over local changes");
-        }
-        if git_output(project, &["rev-parse", "HEAD"])? != old {
-            return Ok(false);
-        }
-        return git_status(project, &["merge", "--ff-only", new]);
-    }
-    git_status(project, &["update-ref", target_ref, new, old])
-}
-
-fn git_output(base: &std::path::Path, args: &[&str]) -> Result<String> {
-    let out = Command::new("git").arg("-C").arg(base).args(args).output()?;
-    if !out.status.success() {
-        bail!("git {} failed: {}", args.join(" "), String::from_utf8_lossy(&out.stderr).trim());
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
-}
-
-fn git_status(base: &std::path::Path, args: &[&str]) -> Result<bool> {
-    Ok(Command::new("git").arg("-C").arg(base).args(args).status()?.success())
-}
-
-fn git_ok(base: &std::path::Path, args: &[&str]) -> Result<()> {
-    if !git_status(base, args)? {
-        bail!("git {} failed", args.join(" "));
-    }
-    Ok(())
-}
-
-fn git_with_editor(base: &std::path::Path, args: &[&str]) -> Result<bool> {
-    Ok(Command::new("git")
-        .arg("-C")
-        .arg(base)
-        .args(args)
-        .env("GIT_EDITOR", "true")
-        .status()?
-        .success())
 }
 
 /// The node `--next` picks: the first id (in [`Store::list_ids`] order, i.e.
@@ -1002,6 +840,12 @@ mod tests {
         fn remote_url(&self) -> Result<Option<String>> {
             Ok(None)
         }
+        fn ref_commit(&self, _reference: &str) -> Result<Option<String>> {
+            Ok(None)
+        }
+        fn publish_fast_forward(&self, _target: &str, _old: &str, _new: &str) -> Result<bool> {
+            Ok(false)
+        }
     }
 
     #[test]
@@ -1083,6 +927,7 @@ mod tests {
             assignee: None,
             depends_on: vec!["node-0".into()],
             derived_from: vec![],
+            review: None,
         };
         let prompt = build_prompt("node-1", &meta, "  Write the config parser.  ", None);
 
@@ -1112,6 +957,7 @@ mod tests {
             assignee: None,
             depends_on: vec![],
             derived_from: vec![],
+            review: None,
         };
         let log = "{\"event\":\"attempt\"}\n{\"tool\":\"add_node\"}\n";
         let prompt = build_prompt("node-1", &meta, "", Some(log));
@@ -1122,34 +968,4 @@ mod tests {
         assert!(prompt.contains("{\"event\":\"attempt\"}\n{\"tool\":\"add_node\"}"));
     }
 
-    #[test]
-    fn publication_fast_forwards_a_clean_checked_out_target() {
-        let root = std::env::temp_dir().join(format!(
-            "llaundry-publish-test-{}-{}",
-            std::process::id(),
-            ulid::Ulid::new()
-        ));
-        std::fs::create_dir_all(&root).unwrap();
-        git_ok(&root, &["init", "-b", "main"]).unwrap();
-        git_ok(&root, &["config", "user.name", "llaundry test"]).unwrap();
-        git_ok(&root, &["config", "user.email", "test@llaundry.invalid"]).unwrap();
-        std::fs::write(root.join("file.txt"), "base\n").unwrap();
-        git_ok(&root, &["add", "file.txt"]).unwrap();
-        git_ok(&root, &["commit", "-m", "base"]).unwrap();
-        let old = git_output(&root, &["rev-parse", "HEAD"]).unwrap();
-
-        let worktree = root.parent().unwrap().join(format!("publish-wt-{}", ulid::Ulid::new()));
-        let branch = format!("llaundry/candidates/{}", ulid::Ulid::new());
-        llaundry::git::create_worktree(&root, worktree.clone(), &branch, &old).unwrap();
-        std::fs::write(worktree.join("file.txt"), "new\n").unwrap();
-        git_ok(&worktree, &["add", "file.txt"]).unwrap();
-        git_ok(&worktree, &["commit", "-m", "new"]).unwrap();
-        let new = git_output(&worktree, &["rev-parse", "HEAD"]).unwrap();
-
-        assert!(publish_fast_forward(&root, "refs/heads/main", &old, &new).unwrap());
-        assert_eq!(git_output(&root, &["rev-parse", "HEAD"]).unwrap(), new);
-        assert_eq!(std::fs::read_to_string(root.join("file.txt")).unwrap(), "new\n");
-        llaundry::git::remove_worktree(&root, &worktree).unwrap();
-        let _ = std::fs::remove_dir_all(&root);
-    }
 }

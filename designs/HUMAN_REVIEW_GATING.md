@@ -1,6 +1,6 @@
 # Human review gating and named candidate branches
 
-Status: accepted direction; implementation in progress.
+Status: implemented initial workflow.
 
 ## 1. Purpose
 
@@ -139,4 +139,3 @@ review node; an earlier review is never reopened or overwritten.
 6. Add optional review branches/worktrees for proposed edits.
 7. Feed rejected-review material into subsequent attempts.
 8. Add consistency checks and end-to-end lifecycle tests.
-

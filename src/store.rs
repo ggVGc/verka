@@ -321,6 +321,7 @@ mod tests {
             assignee: None,
             depends_on: vec!["node-a".into()],
             derived_from: vec![],
+            review: None,
         };
         store
             .write_node("node-1", &meta, "hello\n\nthe details")
@@ -350,6 +351,9 @@ mod tests {
             input_tree: None,
             attempt_id: None,
             candidate_branch: None,
+            review_decision: None,
+            suggestion_branch: None,
+            suggestion_commit: None,
             output_commit: Some("abc".into()),
             integrated_commit: None,
             target_ref: None,
@@ -387,6 +391,7 @@ mod tests {
             assignee: None,
             depends_on: vec![],
             derived_from: vec![],
+            review: None,
         };
         store.write_node("node-1", &meta, "").unwrap();
         assert_eq!(store.read_work_log("node-1").unwrap(), None);

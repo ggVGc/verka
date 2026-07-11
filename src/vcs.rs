@@ -61,6 +61,13 @@ pub trait Vcs {
     /// if it has no such remote. Recorded on the pairing as information for
     /// human readers; never checked.
     fn remote_url(&self) -> Result<Option<String>>;
+
+    /// Commit currently named by a project ref, or `None` when it is missing.
+    fn ref_commit(&self, reference: &str) -> Result<Option<String>>;
+
+    /// Move `target` from exactly `old` to `new`, updating a clean checked-out
+    /// target worktree when necessary. Returns false if it cannot fast-forward.
+    fn publish_fast_forward(&self, target: &str, old: &str, new: &str) -> Result<bool>;
 }
 
 /// In-memory [`Vcs`] for tests. `capture` records the paths and returns `next_id`;
@@ -80,6 +87,7 @@ pub struct FakeVcs {
     pub remote: Option<String>,
     /// Commits that exist in the project repo; `capture` adds `next_id`.
     pub commits: std::cell::RefCell<std::collections::HashSet<String>>,
+    pub refs: std::cell::RefCell<std::collections::HashMap<String, String>>,
 }
 
 #[cfg(test)]
@@ -137,5 +145,17 @@ impl Vcs for FakeVcs {
 
     fn remote_url(&self) -> Result<Option<String>> {
         Ok(self.remote.clone())
+    }
+
+    fn ref_commit(&self, reference: &str) -> Result<Option<String>> {
+        Ok(self.refs.borrow().get(reference).cloned())
+    }
+
+    fn publish_fast_forward(&self, _target: &str, old: &str, new: &str) -> Result<bool> {
+        if !self.commits.borrow().contains(old) || !self.commits.borrow().contains(new) {
+            return Ok(false);
+        }
+        self.refs.borrow_mut().insert(format!("refs/heads/{_target}"), new.to_string());
+        Ok(true)
     }
 }

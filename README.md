@@ -1,6 +1,29 @@
 # llaundry
 Hierarchical LLM coding
 
+## Review-gated candidate workflow
+
+`llaundry-work <node>` creates a permanent
+`llaundry/candidates/<attempt-id>` branch and performs the work in its linked
+worktree. A project-producing completion is not merged automatically. Llaundry
+creates a human-assigned review node that pins the exact candidate branch and
+commit.
+
+Inspect it with `llaundry show <review-node>`. To propose edits during review,
+run `llaundry edit-review <review-node>` and commit changes in the printed
+review worktree. Close the review with one of:
+
+```text
+llaundry accept-review <review-node>
+llaundry reject-review <review-node> --notes "what needs to change"
+```
+
+Acceptance fast-forwards `main` to exactly the reviewed commit. If that is no
+longer possible, the candidate must be reconciled as new implementation work
+and reviewed again. Rejection makes the implementation available for another
+attempt; its worker receives the review comments and starts from the proposed
+review edits when they exist, otherwise from the rejected candidate.
+
 
 - All edits and interaction with project are done through MCP which understands the hierarchical layout
 - Structure is based on a tree of:

@@ -87,6 +87,23 @@ pub enum DepKind {
     DerivedFrom,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewDecision {
+    Accepted,
+    Rejected,
+}
+
+/// The exact implementation attempt a review node examines.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ReviewTarget {
+    pub implementation: String,
+    pub attempt_id: String,
+    pub candidate_branch: String,
+    pub candidate_commit: String,
+    pub reviewed_result: ResultVersion,
+}
+
 impl DepKind {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -116,6 +133,9 @@ pub struct NodeMeta {
     /// Ids of nodes this node was derived from (lineage, not a work blocker).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub derived_from: Vec<String>,
+    /// Present only on automatically-created review nodes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review: Option<ReviewTarget>,
 }
 
 /// Git blob ids of the two files that constitute a node definition.
@@ -203,6 +223,13 @@ pub struct ResultMeta {
     pub attempt_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub candidate_branch: Option<String>,
+    /// Present only on completed review nodes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_decision: Option<ReviewDecision>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suggestion_branch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suggestion_commit: Option<String>,
     /// The single git commit encompassing all files this node produced.
     /// Absent when the work produced no files (graph-only work) or failed.
     #[serde(skip_serializing_if = "Option::is_none")]
