@@ -183,6 +183,10 @@ impl Vcs for GitVcs {
         }
         Ok(git(&self.project, &["update-ref", &target_ref, new, old])?.status.success())
     }
+    fn create_worktree(&self, path: &Path, branch: &str, rev: &str) -> Result<()> {
+        create_worktree(&self.project, path.to_path_buf(), branch, rev)?;
+        Ok(())
+    }
 }
 
 /// `git init` a directory unless it already is a repository (its own, not a

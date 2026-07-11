@@ -375,7 +375,7 @@ pub fn amend_context(store: &Store, vcs: &dyn Vcs, id: &str, reads: &[String]) -
 
     let mut node_outputs = std::collections::HashSet::new();
     for other in store.list_ids()? {
-        if let Some(commit) = output_of(store, &other) {
+        if let Some(commit) = output_of(store, &other)? {
             node_outputs.extend(vcs.files_in(&commit)?);
         }
     }
@@ -481,6 +481,44 @@ pub fn create_review(store: &Store, vcs: &dyn Vcs, implementation: &str) -> Resu
     store.write_node(&id, &meta, &description)?;
     vcs.commit_store(&store.store_name(), &format!("llaundry: review {implementation}"))?;
     Ok(id)
+}
+
+pub struct ReviewWorkspace {
+    pub branch: String,
+    pub path: std::path::PathBuf,
+    pub candidate_commit: String,
+}
+
+/// Prepare the canonical branch and linked worktree for reviewer-proposed
+/// edits. The library owns the open-review and exact-candidate checks.
+pub fn prepare_review_edits(
+    store: &Store,
+    vcs: &dyn Vcs,
+    id: &str,
+) -> Result<ReviewWorkspace> {
+    let (meta, _) = store.read_node(id)?;
+    let review = meta.review.with_context(|| format!("node `{id}` is not a review"))?;
+    if store.read_result(id)?.is_some() {
+        bail!("review `{id}` is already closed");
+    }
+    let candidate_ref = format!("refs/heads/{}", review.candidate_branch);
+    if vcs.ref_commit(&candidate_ref)?.as_deref() != Some(&review.candidate_commit) {
+        bail!(
+            "candidate branch `{}` no longer points to reviewed commit {}",
+            review.candidate_branch,
+            short(&review.candidate_commit)
+        );
+    }
+    let branch = format!("llaundry/reviews/{id}");
+    let workbench = store.workbench_root().canonicalize()
+        .with_context(|| format!("resolving workbench {}", store.workbench_root().display()))?;
+    let path = workbench.join(".llaundry-worktrees").join(format!("review-{id}"));
+    vcs.create_worktree(&path, &branch, &review.candidate_commit)?;
+    Ok(ReviewWorkspace {
+        branch,
+        path,
+        candidate_commit: review.candidate_commit,
+    })
 }
 
 /// Complete a review. Acceptance publishes exactly the pinned candidate;
@@ -652,7 +690,7 @@ pub fn staleness(store: &Store, vcs: &dyn Vcs, id: &str) -> Vec<String> {
                 ba.id
             ));
         }
-        let current_output = output_of(store, &ba.id);
+        let current_output = output_of(store, &ba.id).ok().flatten();
         if current_output != ba.output {
             reasons.push(format!(
                 "dependency {}: output changed (built against {}, now {})",
@@ -776,16 +814,18 @@ pub fn origin(store: &Store, commit: &str) -> Result<Option<String>> {
 
 /// A node's current output commit: what its recorded work produced. `None` if it
 /// has no result or the work produced no files.
-pub fn output_of(store: &Store, id: &str) -> Option<String> {
-    store
-        .read_result(id)
-        .ok()
-        .flatten()
-        .and_then(|(r, _)| r.output_commit)
+pub fn output_of(store: &Store, id: &str) -> Result<Option<String>> {
+    if !store.exists(id) {
+        bail!("unknown node `{id}`");
+    }
+    Ok(store.read_result(id)?.and_then(|(r, _)| r.output_commit))
 }
 
 /// Ids of nodes that name `id` in either dependency list.
 pub fn dependents(store: &Store, id: &str) -> Result<Vec<String>> {
+    if !store.exists(id) {
+        bail!("unknown node `{id}`");
+    }
     let mut out = Vec::new();
     for other in store.list_ids()? {
         if other == id {
@@ -1154,7 +1194,7 @@ fn pin_deps(store: &Store, meta: &NodeMeta) -> Result<Vec<BuiltAgainst>> {
                 id: dep.clone(),
                 definition,
                 result,
-                output: output_of(store, dep),
+                output: output_of(store, dep)?,
             })
         })
         .collect()
@@ -1403,6 +1443,41 @@ mod tests {
     }
 
     #[test]
+    fn library_prepares_review_edit_workspace_only_for_open_exact_review() {
+        let (_t, store) = temp_store();
+        let (fake, implementation, commit) = candidate(&store);
+        let review = create_review(&store, &fake, &implementation).unwrap();
+        let workspace = prepare_review_edits(&store, &fake, &review).unwrap();
+        assert_eq!(workspace.branch, format!("llaundry/reviews/{review}"));
+        assert_eq!(workspace.candidate_commit, commit);
+        assert!(workspace.path.ends_with(format!("review-{review}")));
+        assert_eq!(
+            fake.refs.borrow().get(&format!("refs/heads/{}", workspace.branch)),
+            Some(&commit)
+        );
+
+        decide_review(
+            &store,
+            &fake,
+            &review,
+            ReviewDecision::Rejected,
+            "revise",
+            "main",
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(prepare_review_edits(&store, &fake, &review).is_err());
+    }
+
+    #[test]
+    fn output_and_dependent_queries_reject_unknown_nodes() {
+        let (_t, store) = temp_store();
+        assert!(output_of(&store, "missing").is_err());
+        assert!(dependents(&store, "missing").is_err());
+    }
+
+    #[test]
     fn accepted_review_integrates_exact_candidate() {
         let (_t, store) = temp_store();
         let (fake, implementation, commit) = candidate(&store);
@@ -1621,7 +1696,7 @@ mod tests {
         .unwrap();
         assert_eq!(commit.as_deref(), Some("commit-abc"));
         assert_eq!(current_status(&store, &id), Status::Done);
-        assert_eq!(output_of(&store, &id).as_deref(), Some("commit-abc"));
+        assert_eq!(output_of(&store, &id).unwrap().as_deref(), Some("commit-abc"));
 
         let (result, notes) = store.read_result(&id).unwrap().unwrap();
         assert_eq!(result.definition, store.node_version(&id).unwrap());

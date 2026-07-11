@@ -375,24 +375,11 @@ fn main() -> Result<()> {
 
         Cmd::EditReview { id } => {
             let store = Store::open(store)?;
-            let (meta, _) = store.read_node(&id)?;
-            let review = meta.review.context("node is not a review")?;
-            if store.read_result(&id)?.is_some() {
-                anyhow::bail!("review `{id}` is already closed");
-            }
-            let project = store.project_root().canonicalize()?;
-            let workbench = store.workbench_root().canonicalize()?;
-            let branch = format!("llaundry/reviews/{id}");
-            let path = workbench.join(".llaundry-worktrees").join(format!("review-{id}"));
-            llaundry::git::create_worktree(
-                &project,
-                path.clone(),
-                &branch,
-                &review.candidate_commit,
-            )?;
-            println!("review branch: {branch}");
-            println!("review worktree: {}", path.display());
-            println!("commit proposed edits, then reject with --suggestion-branch {branch} --suggestion-commit <commit>");
+            let vcs = GitVcs::for_store(&store);
+            let workspace = ops::prepare_review_edits(&store, &vcs, &id)?;
+            println!("review branch: {}", workspace.branch);
+            println!("review worktree: {}", workspace.path.display());
+            println!("commit proposed edits, then reject with --suggestion-branch {} --suggestion-commit <commit>", workspace.branch);
         }
 
         Cmd::Show { id } => {
@@ -498,10 +485,7 @@ fn main() -> Result<()> {
 
         Cmd::Outputs { id } => {
             let store = Store::open(store)?;
-            if !store.exists(&id) {
-                anyhow::bail!("unknown node `{id}`");
-            }
-            match ops::output_of(&store, &id) {
+            match ops::output_of(&store, &id)? {
                 Some(commit) => println!("{commit}"),
                 None => println!("{id} has produced no output"),
             }
@@ -567,9 +551,6 @@ fn main() -> Result<()> {
 
         Cmd::Dependents { id } => {
             let store = Store::open(store)?;
-            if !store.exists(&id) {
-                anyhow::bail!("unknown node `{id}`");
-            }
             for dep in ops::dependents(&store, &id)? {
                 println!("{dep}");
             }

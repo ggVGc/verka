@@ -831,6 +831,9 @@ mod tests {
         fn publish_fast_forward(&self, _target: &str, _old: &str, _new: &str) -> Result<bool> {
             Ok(false)
         }
+        fn create_worktree(&self, _path: &std::path::Path, _branch: &str, _rev: &str) -> Result<()> {
+            Ok(())
+        }
     }
 
     #[test]

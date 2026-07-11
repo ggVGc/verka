@@ -8,6 +8,7 @@
 //! be unit-tested with no git binary, no repository, and no configured identity.
 
 use anyhow::Result;
+use std::path::Path;
 
 /// The trait's methods split along the workbench's two repositories:
 /// [`commit_store`](Vcs::commit_store) persists graph state to the workbench
@@ -72,6 +73,9 @@ pub trait Vcs {
     /// Move `target` from exactly `old` to `new`, updating a clean checked-out
     /// target worktree when necessary. Returns false if it cannot fast-forward.
     fn publish_fast_forward(&self, target: &str, old: &str, new: &str) -> Result<bool>;
+
+    /// Create a linked worktree on a new branch in the project repository.
+    fn create_worktree(&self, path: &Path, branch: &str, rev: &str) -> Result<()>;
 }
 
 /// In-memory [`Vcs`] for tests. `capture` records the paths and returns `next_id`;
@@ -166,5 +170,13 @@ impl Vcs for FakeVcs {
         }
         self.refs.borrow_mut().insert(format!("refs/heads/{_target}"), new.to_string());
         Ok(true)
+    }
+
+    fn create_worktree(&self, path: &Path, branch: &str, rev: &str) -> Result<()> {
+        std::fs::create_dir_all(path)?;
+        self.refs
+            .borrow_mut()
+            .insert(format!("refs/heads/{branch}"), rev.to_string());
+        Ok(())
     }
 }

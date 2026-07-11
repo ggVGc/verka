@@ -583,10 +583,7 @@ impl Tool for NodeOutputs {
     fn call(&self, ctx: &Ctx, args: &Value) -> Result<String> {
         let (store, _) = ctx.open()?;
         let id = req_str(args, "id")?;
-        if !store.exists(&id) {
-            anyhow::bail!("unknown node `{id}`");
-        }
-        Ok(match ops::output_of(&store, &id) {
+        Ok(match ops::output_of(&store, &id)? {
             Some(commit) => commit,
             None => format!("{id} has produced no output"),
         })
@@ -607,9 +604,6 @@ impl Tool for NodeDependents {
     fn call(&self, ctx: &Ctx, args: &Value) -> Result<String> {
         let (store, _) = ctx.open()?;
         let id = req_str(args, "id")?;
-        if !store.exists(&id) {
-            anyhow::bail!("unknown node `{id}`");
-        }
         Ok(joined(ops::dependents(&store, &id)?, "(no dependents)"))
     }
 }
