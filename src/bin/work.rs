@@ -72,7 +72,7 @@ struct Cli {
     #[arg(long, env = "LLAUNDRY_DIR", default_value = ".llaundry")]
     store: std::path::PathBuf,
     /// Which LLM backend to run the work with.
-    /// Config `work.backend`; built-in default `claude-code`.
+    /// Config `work.backend`; built-in default `openai-codex`.
     #[arg(long, value_enum)]
     backend: Option<BackendKind>,
     /// The Claude Code executable.
@@ -140,7 +140,7 @@ fn main() -> Result<()> {
                 Ok(b) => b,
                 Err(e) => bail!("config work.backend: {e}"),
             },
-            None => BackendKind::ClaudeCode,
+            None => BackendKind::OpenaiCodex,
         },
     };
     let mcp_bin = cli

@@ -9,7 +9,7 @@
 //!
 //! ```toml
 //! [work]
-//! backend = "claude-code"   # default backend when --backend is not given
+//! backend = "openai-codex"  # default backend when --backend is not given
 //! mcp-bin = "llaundry-mcp"  # the MCP server binary the model may use
 //!
 //! [work.claude-code]        # per-backend settings, keyed by backend name
@@ -37,14 +37,14 @@ pub const DEFAULT_CONFIG: &str = "\
 # always wins over this file.
 
 [work]
-backend = \"claude-code\"   # default backend when --backend is not given
+backend = \"openai-codex\"  # default backend when --backend is not given
 mcp-bin = \"llaundry-mcp\"  # the MCP server binary the model may use
 
 [work.claude-code]         # per-backend settings, keyed by backend name
 # model = \"opus\"           # model to request (backend default if unset)
 bin = \"claude\"            # the Claude Code executable
 
-# To use Codex instead, set work.backend = \"openai-codex\" and uncomment:
+# Optional Codex settings:
 # [work.openai-codex]
 # model = \"gpt-5-codex\"     # model to request (backend default if unset)
 # bin = \"codex\"             # the OpenAI Codex executable
@@ -207,7 +207,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         assert!(Config::write_default(&dir).unwrap());
         let cfg = Config::load(&dir).unwrap();
-        assert_eq!(cfg.work.backend.as_deref(), Some("claude-code"));
+        assert_eq!(cfg.work.backend.as_deref(), Some("openai-codex"));
         assert_eq!(cfg.work.mcp_bin.as_deref(), Some("llaundry-mcp"));
         assert!(cfg.work.claude_code.model.is_none());
         assert_eq!(cfg.work.claude_code.bin.as_deref(), Some("claude"));

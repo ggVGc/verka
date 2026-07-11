@@ -512,7 +512,7 @@ every invocation:
 
 ```toml
 [work]
-backend = "claude-code"   # default backend when --backend is not given
+backend = "openai-codex"  # default backend when --backend is not given
 mcp-bin = "llaundry-mcp"  # the MCP server binary the model may use
 
 [work.claude-code]        # per-backend settings, keyed by backend name
