@@ -32,3 +32,6 @@
   - In order to be backend agnostic and explicit about context.
 - If work on a node causes followup work which is unrelated to the core task of the node, better if a new node is created for that work
 - In general, I want small pieces of work which can be reviewed in a reasonable way
+- I don't like the workflow of seeing a scrolling view of code diffs mixed with description text:
+  - I want to be able to view each chunk of work as a a text description, and an associated diff view per file in a separate view
+  - For example in vim, or in the web visualizer
