@@ -42,19 +42,26 @@ struct Cli {
     /// this to their isolated linked worktree.
     #[arg(long)]
     project: Option<PathBuf>,
+    /// Node this execution is authorized to complete or fail.
+    #[arg(long, requires_all = ["attempt_id", "candidate_branch", "project"])]
+    node_id: Option<String>,
     /// Execution attempt identity supplied by llaundry-work.
-    #[arg(long, requires = "candidate_branch")]
+    #[arg(long, requires_all = ["node_id", "candidate_branch", "project"])]
     attempt_id: Option<String>,
     /// Permanent candidate branch supplied by llaundry-work.
-    #[arg(long, requires = "attempt_id")]
+    #[arg(long, requires_all = ["node_id", "attempt_id", "project"])]
     candidate_branch: Option<String>,
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let execution = cli.attempt_id.zip(cli.candidate_branch).map(|(attempt_id, candidate_branch)| {
-        ExecutionIdentity { attempt_id, candidate_branch }
-    });
+    let execution = cli.node_id.zip(cli.attempt_id.zip(cli.candidate_branch)).map(
+        |(node_id, (attempt_id, candidate_branch))| ExecutionIdentity {
+            node_id,
+            attempt_id,
+            candidate_branch,
+        },
+    );
     Server::new(cli.store, cli.project, execution).serve()
 }
 
@@ -328,7 +335,7 @@ impl Tool for FailNode {
         let id = req_str(args, "id")?;
         let notes = opt_str(args, "notes").unwrap_or_default();
         let author = enum_or(args, "author", Author::Machine)?;
-        ops::fail(&store, &vcs, &id, &notes, author)?;
+        ops::fail_with_execution(&store, &vcs, &id, &notes, author, ctx.execution.clone())?;
         Ok(format!("{id} -> failed"))
     }
 }

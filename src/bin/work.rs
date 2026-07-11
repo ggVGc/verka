@@ -208,6 +208,8 @@ fn main() -> Result<()> {
                 store_abs.to_string_lossy().into_owned(),
                 "--project".into(),
                 worktree_path.to_string_lossy().into_owned(),
+                "--node-id".into(),
+                node.clone(),
                 "--attempt-id".into(),
                 run_id.clone(),
                 "--candidate-branch".into(),
@@ -801,6 +803,9 @@ mod tests {
             Ok("id".into())
         }
         fn head_commit(&self) -> Result<Option<String>> {
+            Ok(None)
+        }
+        fn current_branch(&self) -> Result<Option<String>> {
             Ok(None)
         }
         fn tree_id(&self, commit: &str) -> Result<String> {

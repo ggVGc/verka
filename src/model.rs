@@ -202,6 +202,7 @@ pub struct WorkedBy {
 /// allowed to produce project content.
 #[derive(Clone, Debug)]
 pub struct ExecutionIdentity {
+    pub node_id: String,
     pub attempt_id: String,
     pub candidate_branch: String,
 }

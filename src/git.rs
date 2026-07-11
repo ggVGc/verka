@@ -100,6 +100,13 @@ impl Vcs for GitVcs {
         }
         Ok(Some(checked(&self.project, &["rev-parse", "HEAD"])?))
     }
+    fn current_branch(&self) -> Result<Option<String>> {
+        let out = git(&self.project, &["symbolic-ref", "--quiet", "--short", "HEAD"])?;
+        if !out.status.success() {
+            return Ok(None);
+        }
+        Ok(Some(String::from_utf8_lossy(&out.stdout).trim().to_string()))
+    }
     fn tree_id(&self, commit: &str) -> Result<String> {
         let spec = format!("{commit}^{{tree}}");
         checked(&self.project, &["rev-parse", &spec])

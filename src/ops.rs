@@ -128,6 +128,9 @@ pub fn complete_with_execution(
     if author == Author::Machine && !outputs.is_empty() && execution.is_none() {
         bail!("machine-produced project content requires an isolated execution identity and candidate branch");
     }
+    if let Some(execution) = &execution {
+        validate_execution(vcs, id, author, execution)?;
+    }
     // The only uncommitted project changes allowed are the outputs we are about
     // to commit — completion is where output provenance is asserted.
     require_clean_except(vcs, outputs)?;
@@ -231,6 +234,20 @@ pub fn respond(store: &Store, vcs: &dyn Vcs, id: &str, notes: &str, author: Auth
 /// It does not gate on project-tree cleanliness: a failed attempt may well have
 /// left a mess, and recording the failure must not be blocked by it.
 pub fn fail(store: &Store, vcs: &dyn Vcs, id: &str, notes: &str, author: Author) -> Result<()> {
+    fail_with_execution(store, vcs, id, notes, author, None)
+}
+
+pub fn fail_with_execution(
+    store: &Store,
+    vcs: &dyn Vcs,
+    id: &str,
+    notes: &str,
+    author: Author,
+    execution: Option<ExecutionIdentity>,
+) -> Result<()> {
+    if let Some(execution) = &execution {
+        validate_execution(vcs, id, author, execution)?;
+    }
     let (meta, _) = store.read_node(id)?;
     let built_against = pin_deps(store, &meta)?;
     store.write_result(
@@ -259,6 +276,38 @@ pub fn fail(store: &Store, vcs: &dyn Vcs, id: &str, notes: &str, author: Author)
         notes,
     )?;
     vcs.commit_store(&store.store_name(), &format!("llaundry: fail {id}"))?;
+    Ok(())
+}
+
+fn validate_execution(
+    vcs: &dyn Vcs,
+    id: &str,
+    author: Author,
+    execution: &ExecutionIdentity,
+) -> Result<()> {
+    if author != Author::Machine {
+        bail!("an isolated machine execution cannot record work as `{}`", author.as_str());
+    }
+    if execution.node_id != id {
+        bail!(
+            "execution for node `{}` cannot record work on `{id}`",
+            execution.node_id
+        );
+    }
+    let expected = format!("llaundry/candidates/{}", execution.attempt_id);
+    if execution.candidate_branch != expected {
+        bail!(
+            "candidate branch `{}` does not match attempt `{}` (expected `{expected}`)",
+            execution.candidate_branch,
+            execution.attempt_id
+        );
+    }
+    if vcs.current_branch()?.as_deref() != Some(&execution.candidate_branch) {
+        bail!(
+            "execution worktree is not on candidate branch `{}`",
+            execution.candidate_branch
+        );
+    }
     Ok(())
 }
 
@@ -1163,6 +1212,7 @@ mod tests {
         let fake = FakeVcs {
             next_id: "candidate-1".into(),
             root: Some("base".into()),
+            current_branch: Some("llaundry/candidates/attempt-1".into()),
             ..Default::default()
         };
         fake.commits.borrow_mut().insert("base".into());
@@ -1179,6 +1229,7 @@ mod tests {
             "candidate",
             Author::Machine,
             Some(ExecutionIdentity {
+                node_id: id.clone(),
                 attempt_id: "attempt-1".into(),
                 candidate_branch: branch.clone(),
             }),
@@ -1211,6 +1262,55 @@ mod tests {
         assert!(error.to_string().contains("execution identity"));
         assert!(store.read_result(&id).unwrap().is_none());
         assert!(fake.captured.borrow().is_empty());
+    }
+
+    #[test]
+    fn execution_is_bound_to_machine_node_attempt_and_checked_out_branch() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs {
+            current_branch: Some("llaundry/candidates/run-1".into()),
+            ..Default::default()
+        };
+        let a = add(&store, &fake, new_node("a", vec![])).unwrap();
+        let b = add(&store, &fake, new_node("b", vec![])).unwrap();
+        let execution = ExecutionIdentity {
+            node_id: a.clone(),
+            attempt_id: "run-1".into(),
+            candidate_branch: "llaundry/candidates/run-1".into(),
+        };
+        assert!(fail_with_execution(
+            &store,
+            &fake,
+            &b,
+            "wrong node",
+            Author::Machine,
+            Some(execution.clone()),
+        )
+        .is_err());
+        assert!(store.read_result(&b).unwrap().is_none());
+        assert!(fail_with_execution(
+            &store,
+            &fake,
+            &a,
+            "wrong author",
+            Author::Human,
+            Some(execution.clone()),
+        )
+        .is_err());
+
+        let wrong_branch = ExecutionIdentity {
+            candidate_branch: "llaundry/candidates/not-run-1".into(),
+            ..execution
+        };
+        assert!(fail_with_execution(
+            &store,
+            &fake,
+            &a,
+            "wrong branch",
+            Author::Machine,
+            Some(wrong_branch),
+        )
+        .is_err());
     }
 
     #[test]

@@ -22,6 +22,10 @@ pub trait Vcs {
     /// Commit currently checked out in the project/execution tree.
     fn head_commit(&self) -> Result<Option<String>>;
 
+    /// Name of the currently checked-out project branch, or `None` for a
+    /// detached HEAD.
+    fn current_branch(&self) -> Result<Option<String>>;
+
     /// Tree object for `commit`.
     fn tree_id(&self, commit: &str) -> Result<String>;
 
@@ -88,6 +92,7 @@ pub struct FakeVcs {
     /// Commits that exist in the project repo; `capture` adds `next_id`.
     pub commits: std::cell::RefCell<std::collections::HashSet<String>>,
     pub refs: std::cell::RefCell<std::collections::HashMap<String, String>>,
+    pub current_branch: Option<String>,
 }
 
 #[cfg(test)]
@@ -103,6 +108,10 @@ impl Vcs for FakeVcs {
 
     fn head_commit(&self) -> Result<Option<String>> {
         Ok(self.root.clone())
+    }
+
+    fn current_branch(&self) -> Result<Option<String>> {
+        Ok(self.current_branch.clone())
     }
 
     fn tree_id(&self, commit: &str) -> Result<String> {
