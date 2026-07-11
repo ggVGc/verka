@@ -30,6 +30,7 @@ pub struct InitializedWorkbench {
     pub created_workbench_repo: bool,
     pub created_project_repo: bool,
     pub created_project_root: bool,
+    pub created_config: bool,
 }
 
 /// Create a complete usable workbench. Both frontends call this rather than
@@ -39,17 +40,24 @@ pub fn init_workbench(
     name: Option<String>,
 ) -> Result<InitializedWorkbench> {
     let store = Store::init(root)?;
+    let created_config = crate::Config::write_default(store.root())?;
     let created_workbench_repo = crate::git::ensure_repo(&store.workbench_root())?;
     let created_project_repo = crate::git::ensure_repo(&store.project_root())?;
     let created_project_root = crate::git::ensure_root_commit(&store.project_root())?;
     let vcs = crate::git::GitVcs::for_store(&store);
     let pairing = pair(&store, &vcs, name, false)?;
+    if created_config {
+        // Usually already swept up by pair()'s store commit; a no-op then, but
+        // covers re-init of an already-paired store that predates the file.
+        vcs.commit_store(&store.store_name(), "llaundry: add default config")?;
+    }
     Ok(InitializedWorkbench {
         store,
         pairing,
         created_workbench_repo,
         created_project_repo,
         created_project_root,
+        created_config,
     })
 }
 

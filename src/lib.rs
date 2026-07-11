@@ -24,7 +24,7 @@ pub mod pairing;
 pub mod store;
 pub mod vcs;
 
-pub use config::Config;
+pub use config::{Config, CONFIG_FILE};
 pub use pairing::Pairing;
 pub use git::GitVcs;
 pub use model::{

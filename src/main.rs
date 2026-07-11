@@ -225,6 +225,12 @@ fn main() -> Result<()> {
             if initialized.created_project_repo {
                 println!("initialised project repository at {}", store.project_root().display());
             }
+            if initialized.created_config {
+                println!(
+                    "wrote default config to {} (edit it to change backend/model defaults)",
+                    store.root().join(llaundry::CONFIG_FILE).display()
+                );
+            }
             println!(
                 "initialised llaundry workbench (store {}, project {})",
                 store.workbench_root().join(store.store_name()).display(),

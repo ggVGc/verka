@@ -24,6 +24,23 @@ use std::path::Path;
 /// The config file's name inside the store root.
 pub const CONFIG_FILE: &str = "config.toml";
 
+/// The starter `config.toml` written by `llaundry init`: the built-in defaults
+/// spelled out so a user can edit them in place. Removing a line (or the whole
+/// file) falls back to the built-in default; an explicit `--flag` always wins.
+pub const DEFAULT_CONFIG: &str = "\
+# Defaults for the work driver (llaundry-work). Every line is optional:
+# remove one to fall back to the built-in default. An explicit --flag
+# always wins over this file.
+
+[work]
+backend = \"claude-code\"   # default backend when --backend is not given
+mcp-bin = \"llaundry-mcp\"  # the MCP server binary the model may use
+
+[work.claude-code]         # per-backend settings, keyed by backend name
+# model = \"opus\"           # model to request (backend default if unset)
+bin = \"claude\"            # the Claude Code executable
+";
+
 /// The parsed `config.toml`. Absent sections and fields default, so the
 /// all-defaults value (a missing file) is simply `Config::default()`.
 #[derive(Debug, Default, Deserialize)]
@@ -66,6 +83,19 @@ impl Config {
             Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
         };
         toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))
+    }
+
+    /// Write the starter [`DEFAULT_CONFIG`] to `<store_root>/config.toml` so
+    /// users have a file to edit. Leaves an existing file untouched. Returns
+    /// whether the file was created.
+    pub fn write_default(store_root: &Path) -> Result<bool> {
+        let path = store_root.join(CONFIG_FILE);
+        if path.exists() {
+            return Ok(false);
+        }
+        std::fs::write(&path, DEFAULT_CONFIG)
+            .with_context(|| format!("writing {}", path.display()))?;
+        Ok(true)
     }
 }
 
@@ -133,6 +163,31 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         write(&dir, "[work]\nbakend = \"claude-code\"\n"); // typo
         assert!(Config::load(&dir).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn default_config_parses_and_matches_builtin_defaults() {
+        let dir = std::env::temp_dir().join(format!("llaundry-cfg-default-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(Config::write_default(&dir).unwrap());
+        let cfg = Config::load(&dir).unwrap();
+        assert_eq!(cfg.work.backend.as_deref(), Some("claude-code"));
+        assert_eq!(cfg.work.mcp_bin.as_deref(), Some("llaundry-mcp"));
+        assert!(cfg.work.claude_code.model.is_none());
+        assert_eq!(cfg.work.claude_code.bin.as_deref(), Some("claude"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_default_leaves_an_existing_file_untouched() {
+        let dir = std::env::temp_dir().join(format!("llaundry-cfg-keep-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        write(&dir, "[work.claude-code]\nmodel = \"sonnet\"\n");
+        assert!(!Config::write_default(&dir).unwrap());
+        let cfg = Config::load(&dir).unwrap();
+        assert_eq!(cfg.work.claude_code.model.as_deref(), Some("sonnet"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
