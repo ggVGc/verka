@@ -12,4 +12,4 @@
   * [x] Move execution finalization and mandatory review creation into one library workflow.
   * [x] Move execution identity, base, branch, and worktree preparation into the library.
   * [x] Move assignee-aware ready-node selection into library queries.
-  * [ ] Move canonical review-suggestion discovery into the library rejection operation.
+  * [x] Move canonical review-suggestion discovery into the library rejection operation.

@@ -634,8 +634,8 @@ pub fn decide_review(
     decision: ReviewDecision,
     notes: &str,
     target: &str,
-    suggestion_branch: Option<String>,
-    suggestion_commit: Option<String>,
+    mut suggestion_branch: Option<String>,
+    mut suggestion_commit: Option<String>,
 ) -> Result<()> {
     let (meta, _) = store.read_node(id)?;
     let review = meta.review.with_context(|| format!("node `{id}` is not a review"))?;
@@ -644,6 +644,19 @@ pub fn decide_review(
     }
     if decision == ReviewDecision::Rejected && notes.trim().is_empty() {
         bail!("a rejected review needs comments");
+    }
+    if decision == ReviewDecision::Rejected
+        && suggestion_branch.is_none()
+        && suggestion_commit.is_none()
+    {
+        let branch = format!("llaundry/reviews/{id}");
+        let reference = format!("refs/heads/{branch}");
+        if let Some(commit) = vcs.ref_commit(&reference)? {
+            if commit != review.candidate_commit {
+                suggestion_branch = Some(branch);
+                suggestion_commit = Some(commit);
+            }
+        }
     }
     if suggestion_branch.is_some() != suggestion_commit.is_some() {
         bail!("suggestion branch and commit must be supplied together");
@@ -1609,6 +1622,10 @@ mod tests {
             fake.refs.borrow().get(&format!("refs/heads/{}", workspace.branch)),
             Some(&commit)
         );
+        fake.refs.borrow_mut().insert(
+            format!("refs/heads/{}", workspace.branch),
+            "suggestion-commit".into(),
+        );
 
         decide_review(
             &store,
@@ -1621,6 +1638,9 @@ mod tests {
             None,
         )
         .unwrap();
+        let review_result = store.read_result(&review).unwrap().unwrap().0;
+        assert_eq!(review_result.suggestion_branch, Some(workspace.branch));
+        assert_eq!(review_result.suggestion_commit.as_deref(), Some("suggestion-commit"));
         assert!(prepare_review_edits(&store, &fake, &review).is_err());
     }
 

@@ -342,18 +342,6 @@ fn main() -> Result<()> {
             let store = Store::open(store)?;
             let vcs = GitVcs::for_store(&store);
             let notes = resolve_notes(notes, notes_file, &store, &id, "why is this candidate rejected?")?;
-            let (suggestion_branch, suggestion_commit) = if suggestion_branch.is_none() {
-                let (meta, _) = store.read_node(&id)?;
-                let review = meta.review.context("node is not a review")?;
-                let branch = format!("llaundry/reviews/{id}");
-                let reference = format!("refs/heads/{branch}");
-                match llaundry::Vcs::ref_commit(&vcs, &reference)? {
-                    Some(commit) if commit != review.candidate_commit => (Some(branch), Some(commit)),
-                    _ => (None, None),
-                }
-            } else {
-                (suggestion_branch, suggestion_commit)
-            };
             ops::decide_review(
                 &store,
                 &vcs,
