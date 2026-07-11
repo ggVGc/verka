@@ -255,7 +255,8 @@ fn main() -> Result<()> {
     // the backend launch facts and begins this attempt's transcript.
     use std::io::Write;
     let started = now_millis();
-    let mut log = store.open_attempt_log(&run_id, false)?;
+    let attempt_store = llaundry_work::FsAttemptStore::new(store.root());
+    let mut log = attempt_store.open_transcript(&run_id, false)?;
     writeln!(
         log,
         "{}",
@@ -296,8 +297,8 @@ fn main() -> Result<()> {
         backend: backend.name().to_string(),
         model,
     };
-    let reads = store
-        .read_attempt_log(&run_id)?
+    let reads = attempt_store
+        .read_transcript(&run_id)?
         .map(|log| observed_reads(&log, &store, Some(&workspace.path)))
         .unwrap_or_default();
     let review = ops::finalize_execution_attempt(
@@ -412,7 +413,7 @@ fn observed_reads(
 /// (outputs and context declared, notes as the record of what happened) or
 /// `fail_node` — or pauses on a human-assigned question node.
 ///
-/// On legacy continuation, `previous_log` is replayed
+/// On continuation of a paused unit of work, `previous_log` is replayed
 /// verbatim so the session picks up exactly where the last one stopped — the
 /// handoff is mechanical, not dependent on the previous agent having left notes.
 fn build_prompt(
@@ -651,7 +652,7 @@ mod tests {
             assignee: None,
             depends_on: vec!["node-0".into()],
             derived_from: vec![],
-            review: None,
+            extensions: Default::default(),
         };
         let prompt = build_prompt("node-1", &meta, "  Write the config parser.  ", None);
 
@@ -681,7 +682,7 @@ mod tests {
             assignee: None,
             depends_on: vec![],
             derived_from: vec![],
-            review: None,
+            extensions: Default::default(),
         };
         let log = "{\"event\":\"attempt\"}\n{\"tool\":\"add_node\"}\n";
         let prompt = build_prompt("node-1", &meta, "", Some(log));

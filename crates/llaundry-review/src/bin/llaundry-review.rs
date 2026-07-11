@@ -25,6 +25,10 @@ enum Command {
         #[arg(long)]
         subject: String,
         #[arg(long)]
+        attempt: String,
+        #[arg(long)]
+        branch: String,
+        #[arg(long)]
         result_metadata: String,
         #[arg(long)]
         result_notes: Option<String>,
@@ -68,6 +72,8 @@ fn main() -> Result<()> {
         Command::Add {
             id,
             subject,
+            attempt,
+            branch,
             result_metadata,
             result_notes,
             artifact_scheme,
@@ -77,6 +83,8 @@ fn main() -> Result<()> {
             store.create_candidate(&Candidate {
                 id,
                 subject,
+                attempt,
+                branch,
                 result: ResultVersion {
                     metadata: result_metadata,
                     notes: result_notes,

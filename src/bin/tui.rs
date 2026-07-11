@@ -483,16 +483,16 @@ fn result_lines(r: &Row) -> Vec<String> {
         format!("author:  {}", result.author.as_str()),
         format!("version: {}", ops::short_definition(&result.definition)),
     ];
-    if let Some(wb) = &result.worked_by {
+    if let Some(wb) = ops::worked_by(result) {
         lines.push(match &wb.model {
             Some(m) => format!("worked by: {} ({m})", wb.backend),
             None => format!("worked by: {}", wb.backend),
         });
     }
-    if let Some(commit) = &result.output_commit {
+    if let Some(commit) = ops::output_commit(result) {
         lines.push(format!("output:  commit {}", ops::short(commit)));
     }
-    for ba in &result.built_against {
+    for ba in &result.consumed {
         let result_pin = ba
             .result
             .as_ref()
@@ -503,7 +503,7 @@ fn result_lines(r: &Row) -> Vec<String> {
                 ba.id,
                 ops::short_definition(&ba.definition),
                 result_pin,
-                ops::short(o)
+                ops::short(&o.id)
             ),
             None => format!(
                 "built against {} @ {} (result {})",
@@ -518,7 +518,7 @@ fn result_lines(r: &Row) -> Vec<String> {
         lines.push(format!(
             "context {} @ {}{tag}",
             pin.path,
-            ops::short(&pin.blob)
+            ops::short(&pin.identity)
         ));
     }
     let notes = notes.trim_end();
@@ -658,9 +658,7 @@ fn detail_lines(r: &Row) -> Vec<(String, Color)> {
             format!(
                 "result:  {}{}",
                 result.outcome.as_str(),
-                result
-                    .output_commit
-                    .as_ref()
+                ops::output_commit(result)
                     .map(|c| format!(" (output {})", ops::short(c)))
                     .unwrap_or_default()
             ),

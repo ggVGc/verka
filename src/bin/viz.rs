@@ -189,18 +189,18 @@ fn graph_json(store: &Store, vcs: &dyn Vcs) -> Result<Value> {
                 "at": r.at,
                 "author": r.author.as_str(),
                 "outcome": r.outcome.as_str(),
-                "output_commit": r.output_commit,
-                "worked_by": r.worked_by.as_ref().map(|wb| json!({
+                "output_commit": ops::output_commit(&r),
+                "worked_by": ops::worked_by(&r).map(|wb| json!({
                     "backend": wb.backend, "model": wb.model,
                 })),
-                "built_against": r.built_against.iter().map(|ba| json!({
+                "built_against": r.consumed.iter().map(|ba| json!({
                     "id": ba.id,
                     "pin": ops::short_definition(&ba.definition),
                     "result": ba.result.as_ref().map(ops::short_result),
-                    "output": ba.output.as_deref().map(ops::short),
+                    "output": ba.output.as_ref().map(|o| ops::short(&o.id)),
                 })).collect::<Vec<_>>(),
                 "context": r.context.iter().map(|c| json!({
-                    "path": c.path, "blob": ops::short(&c.blob),
+                    "path": c.path, "blob": ops::short(&c.identity),
                 })).collect::<Vec<_>>(),
                 "notes": notes,
             })

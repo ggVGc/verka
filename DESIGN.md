@@ -54,10 +54,10 @@ form its definition. Completed or failed work adds `result.toml` and may add
 always Markdown. A node with no `result.toml` is open. Editing either definition
 file revises the definition.
 
-Legacy nodes may carry `work.jsonl`. New portable execution records live under
-`execution/<attempt-id>/`; compatibility transcripts and immutable results
-remain readable under `attempts/<attempt-id>/`, as specified in
-`designs/DURABLE_EXECUTION_ATTEMPTS.md`. A recorded interaction log is
+A node may carry a `work.jsonl` interaction log. Portable execution records —
+the durable attempt, its transcript, its attempt-scoped result, and the sealed
+final record — live under `execution/<attempt-id>/`, owned by `llaundry-work`
+(see `designs/DURABLE_EXECUTION_ATTEMPTS.md`). A recorded interaction log is
 deliberately not another kind of graph state: it is opaque to derived queries
 and exists as execution evidence.
 
@@ -256,7 +256,7 @@ Three rules keep it honest:
 ### 2.12 What context is: outputs first, files second
 
 Most of what work consumes is *other nodes' outputs* — covered by the
-`built_against` output pins, one hash per dependency. Explicit per-file
+`[[consumed]]` output pins, one artifact per dependency. Explicit per-file
 `[[context]]` pins (blob ids) exist for the remainder: pre-existing files that
 no node produced. They are expected to be the minority case.
 
@@ -314,44 +314,50 @@ needed.
 
 ### 3.2 Result files
 
+A core result answers only what the graph needs: which definition the work
+fulfilled, its outcome, what it consumed, and which artifact it produced.
+Execution and review facts live under their owning namespaces (§3.5), reached
+from the result's `producer` evidence and the reviews store — never inlined
+here.
+
 ```toml
 # result.toml
 at = 1719571200000
 author = "machine"
 outcome = "done"                  # or "failed"
-publication_pending = true        # machine output awaiting human review; normally omitted
-output_commit = "a45ab51c..."     # the one commit with everything produced; optional
-input_commit = "0123abcd..."      # exact project commit the work started from; optional
-input_tree = "4567efab..."        # its tree, for source-state identity; optional
-attempt_id = "01J..."             # execution attempt that produced this candidate
-candidate_branch = "llaundry/candidates/01J..." # permanent project branch
-integrated_commit = "bcdef012..." # human-approved commit published to the target; optional
-target_ref = "refs/heads/main"    # branch receiving the normal work result
-target_previous = "789abcde..."  # target tip used for atomic publication
 
 [definition]
 metadata = "4ec1916e..."          # node.toml blob fulfilled
 description = "7ab92cc1..."       # description.md blob fulfilled
 
-[worked_by]                       # the engine that did the work; optional
-backend = "claude-code"           # stamped by the driver after the session
-model = "claude-opus-4-1"         # the model the backend reported actually running
+[output]                          # the artifact the work produced; optional
+scheme = "git-commit"             # the one commit with everything produced
+repository = ""                   # empty = the paired project repository
+id = "a45ab51c..."
 
-[[built_against]]
+[producer]                        # opaque namespaced producer evidence; optional
+namespace = "llaundry-work"       # only the owning application interprets `data`
+data = { attempt = "01J...", backend = "claude-code", model = "claude-opus-4-1" }
+
+[[consumed]]
 id = "node-01J8XQ2A..."
-output = "86cb1a1..."             # target's output commit at completion; optional
 
-[built_against.definition]
+[consumed.definition]
 metadata = "6102d492..."
 description = "9ca21d31..."
 
-[built_against.result]
+[consumed.result]
 metadata = "11fa90cc..."
 notes = "2b61c040..."
 
+[consumed.output]                 # dependency's output artifact at completion; optional
+scheme = "git-commit"
+repository = ""
+id = "86cb1a1..."
+
 [[context]]
-path = "docs/legacy-format.txt"
-blob = "f44d..."
+path = "docs/config-format.txt"
+identity = "f44d..."              # blob id when pinned
 ```
 
 ```markdown
@@ -361,6 +367,11 @@ Implemented the parser in src/config.rs. Chose serde over hand-rolling because..
 
 The body is the narrative — for an LLM worker, the story of what it did and
 why. (`at` is Unix milliseconds — deliberately dependency-free.)
+
+The producing attempt, the backend/model, the reviewed candidate, the review
+decision, and the publication that integrated the output are **not** core
+result fields: they are `llaundry-work` and `llaundry-review` records under
+their own namespaces (§3.5). Core reads none of them.
 
 ### 3.3 `work.jsonl`
 
@@ -384,6 +395,27 @@ the backend emits, kept verbatim so replay is lossless.
 `node-<ULID>`, e.g. `node-01J8XQ3K7M...`. The ULID is time-sortable and
 collision-free without a central counter, so nodes can be minted concurrently. Uniqueness is enforced by the
 filesystem (the directory either exists or it doesn't).
+
+### 3.5 Application namespaces
+
+Three applications share the store, each owning one top-level directory and
+writing nowhere else (see `designs/SEPARATE_APPLICATIONS.md`):
+
+```text
+.llaundry/nodes/          core graph — definitions and results (§3.1, §3.2)
+.llaundry/execution/      llaundry-work — attempts, transcripts, final records
+.llaundry/reviews/        llaundry-review — candidates and decisions
+.llaundry/publications/   llaundry-review — publisher transaction log
+```
+
+An `execution/<attempt-id>/` record holds the durable attempt (its frozen
+input, candidate branch, and workspace), its `work.jsonl` transcript, an
+attempt-scoped copy of the result, and the sealed backend-exit record. A
+`reviews/<review-id>/` record pins the candidate — subject node, producing
+attempt, candidate branch, reviewed result version, and artifact — alongside
+the reviewer's decision. `publications/<review-id>/` is the recoverable
+compare-and-swap publication log. Core interprets none of these; they are
+reached from a result's `producer` evidence and from the reviews store.
 
 ---
 
@@ -535,9 +567,9 @@ log — a paused unit of work — it replays that log into the prompt so the new
 session continues where the previous one stopped.
 
 Which engine did the work is recorded mechanically, like observed context:
-after the session, the driver stamps the resolved backend and model onto the
-result's `worked_by` (guarded by the attempt timestamp, so a rework session
-that died without writing a new result cannot mislabel the old one). The
+after the session, the driver stamps the resolved backend and model into the
+result's `producer` evidence (guarded by the attempt timestamp, so a rework
+session that died without writing a new result cannot mislabel the old one). The
 model is mined from the session's own stream — every known backend names the
 model it runs in its events — so the stamp records what actually ran, never
 "whatever the default was at the time"; the explicitly requested model is

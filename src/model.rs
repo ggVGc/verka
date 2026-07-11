@@ -1,4 +1,4 @@
-//! On-disk data types.
+//! On-disk data types, re-exported from the owning application crates.
 //!
 //! A node separates structured data from prose: `node.toml` and
 //! `description.md` form its definition, while `result.toml` and the optional
@@ -7,10 +7,18 @@
 //! Status is never stored. It is derived from whether `result.toml` exists,
 //! what its `outcome` says, and whether its definition version still matches.
 
-pub use llaundry_core::{Author, DefinitionVersion, DepKind, Outcome, ResultVersion, Status};
-pub use llaundry_review::{NodeState, PublicationIntent, ReviewDecision, ReviewTarget};
-pub use llaundry_work::{AttemptFinal, AttemptMeta, ExecutionIdentity, WorkedBy};
-use serde::{Deserialize, Serialize};
+pub use llaundry_core::{
+    ArtifactRef, Author, ConsumedNode, ContextPin, DefinitionVersion, DepKind, Outcome,
+    ResultRecord as ResultMeta, ResultVersion, Status,
+};
+pub use llaundry_review::{Candidate, Decision, NodeState, PublicationIntent, ReviewDecision};
+pub use llaundry_work::{Attempt, AttemptFinished, ExecutionIdentity, WorkEvidence, WorkedBy};
+
+/// Contents of `node.toml`. Dependencies are *ids only*: which versions the
+/// work was actually built against is a fact about the work, recorded in the
+/// result's consumed pins at completion, so that updating a pin never counts
+/// as a definition change.
+pub type NodeMeta = llaundry_core::NodeDefinition;
 
 /// A node's display title: the first non-empty line of its description. There
 /// is no stored title — the description is the definition, and its opening
@@ -21,119 +29,6 @@ pub fn title_of(description: &str) -> &str {
         .map(str::trim)
         .find(|l| !l.is_empty())
         .unwrap_or("(no description)")
-}
-
-/// A node's derived lifecycle status. Never stored anywhere: computed from the
-/// presence and content of `result.toml` against the current definition files.
-///
-/// There is deliberately no `in_progress` (a node is worked once, and nothing
-/// records "being worked") and no `blocked` (a fact about dependencies, derived
-/// by the `blockers` query).
-/// Contents of `node.toml`. Dependencies are *ids only*:
-/// which versions the work was actually built against is a fact about the work,
-/// recorded in [`ResultMeta::built_against`] at completion, so that updating a
-/// pin never counts as a definition change.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct NodeMeta {
-    /// On-disk schema version, for forward compatibility.
-    pub schema: u32,
-    pub author: Author,
-    /// Who the work is *for*: a machine-authored question node is assigned to a
-    /// human, whose answer (its result notes) unblocks the asker. Absent means
-    /// anyone may work it. Distinct from `author` — who wrote the definition.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub assignee: Option<Author>,
-    /// Ids of nodes this node needs finished before it can be worked.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub depends_on: Vec<String>,
-    /// Ids of nodes this node was derived from (lineage, not a work blocker).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub derived_from: Vec<String>,
-    /// Present only on automatically-created review nodes.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub review: Option<ReviewTarget>,
-}
-
-/// The exact version of a related node the work was built against, captured at
-/// completion time. Definition and result versions are recorded separately,
-/// along with the target's output commit. Any consumed component moving later
-/// makes this node stale.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct BuiltAgainst {
-    pub id: String,
-    pub definition: DefinitionVersion,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub result: Option<ResultVersion>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output: Option<String>,
-}
-
-/// A file that was consumed during the work but is not any node's output —
-/// pinned by its git blob id so a later change to it flags this node.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ContextPin {
-    /// Path relative to the project root.
-    pub path: String,
-    /// The file's blob id when it was pinned.
-    pub blob: String,
-    /// How the pin got here: `false` for a pin the worker declared at
-    /// completion, `true` for one derived afterwards from the recorded
-    /// session (the worker was observed reading the file but did not
-    /// declare it).
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub observed: bool,
-}
-
-/// Contents of `result.toml` — the record of the node's one unit of work.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ResultMeta {
-    /// Unix milliseconds when the result was recorded.
-    pub at: i64,
-    pub author: Author,
-    /// Version of the definition this work fulfilled. A `done` certifies only
-    /// these exact metadata and description blobs.
-    pub definition: DefinitionVersion,
-    pub outcome: Outcome,
-    /// Machine-produced project content awaiting human review and publication.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub publication_pending: bool,
-    /// Exact project commit and tree the work started from. Optional for
-    /// results written by older versions and for hand-recorded answers/failures.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub input_commit: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub input_tree: Option<String>,
-    /// Execution attempt and permanent project branch that produced this
-    /// candidate. Optional for older and hand-recorded results.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub attempt_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub candidate_branch: Option<String>,
-    /// Present only on completed review nodes.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub review_decision: Option<ReviewDecision>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub suggestion_branch: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub suggestion_commit: Option<String>,
-    /// The single git commit encompassing all files this node produced.
-    /// Absent when the work produced no files (graph-only work) or failed.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_commit: Option<String>,
-    /// Human-approved commit published to the configured target branch.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub integrated_commit: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub target_ref: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub target_previous: Option<String>,
-    /// The backend/model that did the work, stamped by the driver afterwards.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub worked_by: Option<WorkedBy>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub built_against: Vec<BuiltAgainst>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub context: Vec<ContextPin>,
 }
 
 #[cfg(test)]

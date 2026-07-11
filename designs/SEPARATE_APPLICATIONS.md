@@ -1,8 +1,8 @@
 # Separate applications and stable interfaces
 
-Status: implemented. The root `llaundry` package is the compatibility facade
-and integrated frontend; new integrations depend on the three application
-crates directly.
+Status: implemented. The root `llaundry` package composes the three
+application crates into the integrated Git workbench and its frontends; new
+integrations depend on the application crates directly.
 
 ## 1. Decision
 
@@ -101,39 +101,32 @@ operational records; a submitted result contains only portable provenance.
 
 ## 4. Persistence ownership
 
-Each application owns a top-level namespace:
+Each application owns a top-level namespace, and nothing writes outside its
+own:
 
 ```text
-.llaundry/nodes/          core
-.llaundry/execution/      work runner
-.llaundry/reviews/        review decisions and candidates
-.llaundry/publications/   review publisher transaction log
+.llaundry/nodes/          core graph — definitions and results
+.llaundry/execution/      work runner — attempts, transcripts, final records
+.llaundry/reviews/        review — candidates and decisions
+.llaundry/publications/   review — publisher transaction log
 ```
 
-Legacy `attempts/` and review fields remain readable during migration. New
-writes use the owning namespace. Migration must not rewrite historical Git
-commits or make recorded output commits unreachable.
+A core result is the single schema for `nodes/<id>/result.toml`: definition
+version, outcome, consumed pins, context pins, output artifact, and opaque
+namespaced producer evidence. Execution and review state that used to ride
+along inside the node result now live under the owning namespace — the
+producing attempt and backend are `llaundry-work` producer evidence; the
+reviewed candidate, decision, and publication intent are `llaundry-review`
+records. Core never interprets any of it.
 
-## 5. Compatibility and migration
+## 5. Frontends over the applications
 
-The existing command names remain frontends over the new crates. Compatibility
-is provided at command and persisted-data boundaries, not by allowing core to
-depend on runner or review types.
-
-Implemented migration order:
-
-1. Establish the Cargo workspace and one-way crate graph.
-2. Extract generic graph model, persistence, queries, and artifact interfaces.
-3. Extract execution records and workspace lifecycle.
-4. Extract review decisions and publication recovery.
-5. Rewire CLI, MCP, TUI, visualization, and work driver.
-6. Read legacy records and write the separated schema.
-7. Retain compatibility readers until a later schema-major release.
-
-The integrated frontend dual-writes owner-specific execution and review
-records while retaining legacy node/attempt records. `llaundry-core` reads
-legacy node/results directly, and `llaundry-work`/`llaundry-review` fall back
-to the legacy namespaces. No historical commit is rewritten.
+The existing command names are frontends composing the application crates.
+Each frontend reads and writes only through the owning crate's store: the CLI,
+MCP, TUI, and visualization render core results plus `review_info`/`worked_by`
+accessors; the work driver drives `llaundry-work` attempts and
+`llaundry-review` candidates. No frontend reaches across an application
+boundary or reconstructs another application's state from the core node.
 
 ## 6. Architectural tests
 

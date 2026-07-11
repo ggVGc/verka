@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 pub mod store;
-pub use store::{FsGraphStore, NodeDefinition, NodeRecord};
+pub use store::{blob_id, FsGraphStore, NodeDefinition, NodeRecord};
 
 pub const PROTOCOL_VERSION: u32 = 1;
 
@@ -184,11 +184,20 @@ pub struct ProducerEvidence {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ResultRecord {
+    /// Unix milliseconds when the result was recorded.
+    pub at: i64,
+    /// Who recorded the result. Trusting a machine producer is authorization
+    /// at the adapter boundary, not a special meaning in the graph model.
+    pub author: Author,
     pub definition: DefinitionVersion,
     pub outcome: Outcome,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub consumed: Vec<ConsumedNode>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub context: Vec<ContextPin>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output: Option<ArtifactRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub producer: Option<ProducerEvidence>,
 }
 
@@ -382,6 +391,8 @@ mod tests {
             description: "d".into(),
         };
         let result = ResultRecord {
+            at: 0,
+            author: Author::Human,
             definition: version.clone(),
             outcome: Outcome::Done,
             consumed: vec![],

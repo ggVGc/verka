@@ -87,15 +87,16 @@ impl Ctx {
     }
 
     fn execution(&self, store: &Store) -> Result<Option<ExecutionIdentity>> {
+        let attempts = llaundry_work::FsAttemptStore::new(store.root());
         self.attempt_id
             .as_deref()
-            .map(|id| store.read_attempt(id))
+            .map(|id| attempts.read(id))
             .transpose()
             .map(|attempt| {
                 attempt.map(|a| ExecutionIdentity {
-                    node_id: a.node,
+                    node_id: a.work_item,
                     attempt_id: a.id,
-                    candidate_branch: a.candidate_branch,
+                    candidate_branch: a.branch,
                     force: a.force,
                 })
             })
@@ -391,16 +392,16 @@ impl Tool for ShowNode {
             lines.push("result:".into());
             lines.push(format!("  outcome: {}", result.outcome.as_str()));
             lines.push(format!("  author:  {}", result.author.as_str()));
-            if let Some(wb) = &result.worked_by {
+            if let Some(wb) = ops::worked_by(&result) {
                 lines.push(match &wb.model {
                     Some(m) => format!("  worked by: {} ({m})", wb.backend),
                     None => format!("  worked by: {}", wb.backend),
                 });
             }
-            if let Some(commit) = &result.output_commit {
+            if let Some(commit) = ops::output_commit(&result) {
                 lines.push(format!("  output:  commit {}", ops::short(commit)));
             }
-            for ba in &result.built_against {
+            for ba in &result.consumed {
                 let result_pin = ba
                     .result
                     .as_ref()
@@ -411,7 +412,7 @@ impl Tool for ShowNode {
                         ba.id,
                         ops::short_definition(&ba.definition),
                         result_pin,
-                        ops::short(o)
+                        ops::short(&o.id)
                     ),
                     None => format!(
                         "  built against {} @ {} (result {})",
@@ -426,7 +427,7 @@ impl Tool for ShowNode {
                 lines.push(format!(
                     "  context {} @ {}{tag}",
                     pin.path,
-                    ops::short(&pin.blob)
+                    ops::short(&pin.identity)
                 ));
             }
             let notes = notes.trim_end();

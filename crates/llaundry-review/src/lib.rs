@@ -4,10 +4,16 @@ use llaundry_core::{ArtifactRef, ResultVersion};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// A candidate pins the subject node, the exact submitted result version, and
+/// the immutable artifact under review. The producing attempt and the branch
+/// keeping the artifact reachable are recorded so reviews can verify the
+/// candidate has not moved and reworks can start from it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Candidate {
     pub id: String,
     pub subject: String,
+    pub attempt: String,
+    pub branch: String,
     pub result: ResultVersion,
     pub artifact: ArtifactRef,
 }
@@ -20,17 +26,6 @@ pub enum DecisionKind {
 }
 
 pub type ReviewDecision = DecisionKind;
-
-/// Legacy graph adapter target. Kept here, rather than in core, so old review
-/// nodes remain readable without teaching the graph what a review is.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ReviewTarget {
-    pub implementation: String,
-    pub attempt_id: String,
-    pub candidate_branch: String,
-    pub candidate_commit: String,
-    pub reviewed_result: ResultVersion,
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NodeState {
@@ -113,7 +108,8 @@ pub struct PublishRequest {
     pub completed: bool,
 }
 
-/// Compatibility transaction record for the original integrated publisher.
+/// Recoverable publication transaction record: prepared before the target
+/// ref moves, completed after the store reflects the movement.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PublicationIntent {
     pub schema: u32,
@@ -175,8 +171,8 @@ pub trait CandidateStore {
     fn record_decision(&self, decision: &Decision) -> Result<(), Self::Error>;
 }
 
-/// File-backed review state. New decisions are kept outside core node results;
-/// legacy review nodes remain a read-compatible candidate source.
+/// File-backed review state under the `reviews/` and `publications/`
+/// namespaces this application owns. Decisions live outside core node results.
 pub struct FsCandidateStore {
     root: PathBuf,
 }
@@ -188,30 +184,31 @@ impl FsCandidateStore {
     fn dir(&self, id: &str) -> PathBuf {
         self.root.join("reviews").join(id)
     }
-
-    fn read_current(&self, id: &str) -> anyhow::Result<Candidate> {
-        Ok(toml::from_str(&std::fs::read_to_string(
-            self.dir(id).join("candidate.toml"),
-        )?)?)
+    fn publication_path(&self, review: &str) -> PathBuf {
+        self.root
+            .join("publications")
+            .join(review)
+            .join("publication.toml")
     }
 
-    fn read_legacy(&self, id: &str) -> anyhow::Result<Candidate> {
-        let node: LegacyReviewNode = toml::from_str(&std::fs::read_to_string(
-            self.root.join("nodes").join(id).join("node.toml"),
-        )?)?;
-        let review = node
-            .review
-            .ok_or_else(|| anyhow::anyhow!("node `{id}` is not a review"))?;
-        Ok(Candidate {
-            id: id.into(),
-            subject: review.implementation,
-            result: review.reviewed_result,
-            artifact: ArtifactRef {
-                scheme: "git-commit".into(),
-                repository: String::new(),
-                id: review.candidate_commit,
-            },
-        })
+    pub fn is_candidate(&self, id: &str) -> bool {
+        self.dir(id).join("candidate.toml").is_file()
+    }
+
+    pub fn list_candidate_ids(&self) -> anyhow::Result<Vec<String>> {
+        let dir = self.root.join("reviews");
+        if !dir.exists() {
+            return Ok(Vec::new());
+        }
+        let mut ids = Vec::new();
+        for entry in std::fs::read_dir(dir)? {
+            let entry = entry?;
+            if entry.file_type()?.is_dir() {
+                ids.push(entry.file_name().to_string_lossy().into_owned());
+            }
+        }
+        ids.sort();
+        Ok(ids)
     }
 
     pub fn create_candidate(&self, candidate: &Candidate) -> anyhow::Result<()> {
@@ -232,12 +229,46 @@ impl FsCandidateStore {
             Err(error) => Err(error.into()),
         }
     }
+
+    pub fn write_publication(&self, publication: &PublicationIntent) -> anyhow::Result<()> {
+        let path = self.publication_path(&publication.review);
+        std::fs::create_dir_all(path.parent().expect("publication has parent"))?;
+        std::fs::write(&path, toml::to_string_pretty(publication)?)?;
+        Ok(())
+    }
+
+    pub fn read_publication(&self, review: &str) -> anyhow::Result<Option<PublicationIntent>> {
+        let data = match std::fs::read_to_string(self.publication_path(review)) {
+            Ok(data) => data,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        Ok(Some(toml::from_str(&data)?))
+    }
+
+    pub fn list_publication_ids(&self) -> anyhow::Result<Vec<String>> {
+        let dir = self.root.join("publications");
+        if !dir.exists() {
+            return Ok(Vec::new());
+        }
+        let mut ids = Vec::new();
+        for entry in std::fs::read_dir(dir)? {
+            let entry = entry?;
+            if entry.file_type()?.is_dir() {
+                ids.push(entry.file_name().to_string_lossy().into_owned());
+            }
+        }
+        ids.sort();
+        Ok(ids)
+    }
 }
 
 impl CandidateStore for FsCandidateStore {
     type Error = anyhow::Error;
     fn candidate(&self, id: &str) -> Result<Candidate, Self::Error> {
-        self.read_current(id).or_else(|_| self.read_legacy(id))
+        let data = std::fs::read_to_string(self.dir(id).join("candidate.toml"))
+            .map_err(|_| anyhow::anyhow!("unknown candidate `{id}`"))?;
+        Ok(toml::from_str(&data)?)
     }
     fn record_decision(&self, decision: &Decision) -> Result<(), Self::Error> {
         let candidate = self.candidate(&decision.candidate)?;
@@ -247,17 +278,6 @@ impl CandidateStore for FsCandidateStore {
         std::fs::write(dir.join("decision.toml"), toml::to_string_pretty(decision)?)?;
         Ok(())
     }
-}
-
-#[derive(Deserialize)]
-struct LegacyReviewNode {
-    review: Option<LegacyReviewTarget>,
-}
-#[derive(Deserialize)]
-struct LegacyReviewTarget {
-    implementation: String,
-    candidate_commit: String,
-    reviewed_result: ResultVersion,
 }
 
 pub trait Publisher {
@@ -383,31 +403,34 @@ mod tests {
     use crate::CandidateStore;
 
     #[test]
-    fn legacy_review_node_is_a_candidate_but_new_decision_is_separate() {
+    fn candidate_and_decision_round_trip_in_the_reviews_namespace() {
         let root =
             std::env::temp_dir().join(format!("llaundry-review-store-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
-        let node = root.join("nodes/review-1");
-        std::fs::create_dir_all(&node).unwrap();
-        std::fs::write(
-            node.join("node.toml"),
-            r#"
-schema = 1
-author = "machine"
-[review]
-implementation = "node-1"
-attempt_id = "a"
-candidate_branch = "branch"
-candidate_commit = "commit"
-[review.reviewed_result]
-metadata = "rm"
-notes = "rn"
-"#,
-        )
-        .unwrap();
         let store = FsCandidateStore::new(&root);
+        assert!(!store.is_candidate("review-1"));
+        store
+            .create_candidate(&Candidate {
+                id: "review-1".into(),
+                subject: "node-1".into(),
+                attempt: "a".into(),
+                branch: "llaundry/candidates/a".into(),
+                result: ResultVersion {
+                    metadata: "rm".into(),
+                    notes: Some("rn".into()),
+                },
+                artifact: ArtifactRef {
+                    scheme: "git-commit".into(),
+                    repository: String::new(),
+                    id: "commit".into(),
+                },
+            })
+            .unwrap();
+        assert!(store.is_candidate("review-1"));
         let candidate = store.candidate("review-1").unwrap();
         assert_eq!(candidate.subject, "node-1");
+        assert_eq!(candidate.attempt, "a");
+        assert_eq!(store.list_candidate_ids().unwrap(), vec!["review-1"]);
         store
             .record_decision(&Decision {
                 candidate: "review-1".into(),
@@ -417,6 +440,38 @@ notes = "rn"
             })
             .unwrap();
         assert!(root.join("reviews/review-1/decision.toml").is_file());
+        assert_eq!(
+            store.decision("review-1").unwrap().unwrap().kind,
+            DecisionKind::Rejected
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn publication_intents_round_trip_in_the_publications_namespace() {
+        let root =
+            std::env::temp_dir().join(format!("llaundry-review-pubs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let store = FsCandidateStore::new(&root);
+        assert!(store.read_publication("review-1").unwrap().is_none());
+        store
+            .write_publication(&PublicationIntent {
+                schema: 1,
+                review: "review-1".into(),
+                implementation: "node-1".into(),
+                candidate_commit: "commit".into(),
+                target: "main".into(),
+                target_ref: "refs/heads/main".into(),
+                target_previous: "base".into(),
+                notes: "approved".into(),
+                prepared_at: 1,
+                completed_at: None,
+            })
+            .unwrap();
+        assert_eq!(store.list_publication_ids().unwrap(), vec!["review-1"]);
+        let publication = store.read_publication("review-1").unwrap().unwrap();
+        assert_eq!(publication.candidate_commit, "commit");
+        assert!(publication.completed_at.is_none());
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -454,6 +509,8 @@ notes = "rn"
         let candidate = Candidate {
             id: "c".into(),
             subject: "s".into(),
+            attempt: "a".into(),
+            branch: "candidate".into(),
             result: ResultVersion {
                 metadata: "r".into(),
                 notes: None,
@@ -497,6 +554,8 @@ notes = "rn"
         let candidate = Candidate {
             id: "c".into(),
             subject: "s".into(),
+            attempt: "a".into(),
+            branch: "candidate".into(),
             result: ResultVersion {
                 metadata: "m".into(),
                 notes: None,

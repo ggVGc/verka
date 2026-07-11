@@ -15,7 +15,7 @@ The workspace is deliberately split into three applications:
 
 They exchange versioned serializable records through interfaces defined by the
 owning crate. See `designs/SEPARATE_APPLICATIONS.md` for the dependency rules
-and migration guarantees.
+and persistence ownership.
 
 `llaundry-core` also exposes its graph through versioned JSON-lines on stdin
 and stdout. For example:
@@ -34,8 +34,7 @@ the `WorkProvider`, `AttemptStore`, and `WorkspaceManager` interfaces.
 ## Review-gated candidate workflow
 
 Before changing the project, `llaundry-work <node>` commits a durable execution
-record under `.llaundry/execution/<attempt-id>/` (with legacy
-`.llaundry/attempts/` records still readable). It then creates a permanent
+record under `.llaundry/execution/<attempt-id>/`. It then creates a permanent
 `llaundry/candidates/<attempt-id>` branch and performs the work in its linked
 worktree. Results and transcripts are stored with that exact attempt, so an
 older node result cannot be mistaken for newer work and interrupted preparation
@@ -43,12 +42,13 @@ can be recovered. A project-producing completion is not merged automatically. Ll
 creates a human-assigned review node that pins the exact candidate branch and
 commit.
 
-The integrated frontend also records the candidate and decision in
+The integrated frontend records the candidate and decision in
 `.llaundry/reviews/<review-id>/`. The standalone equivalent is:
 
 ```text
 llaundry-review --store .llaundry add candidate-id \
-  --subject external-work-id --result-metadata result-version --artifact commit
+  --subject external-work-id --attempt attempt-id --branch candidate-branch \
+  --result-metadata result-version --artifact commit
 llaundry-review --store .llaundry reject candidate-id --notes "revise this"
 llaundry-review --store .llaundry show candidate-id
 ```

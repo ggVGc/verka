@@ -5,15 +5,55 @@ pub mod config;
 
 pub use config::{Config, CONFIG_FILE};
 
-use llaundry_core::{ArtifactRef, Author, DefinitionVersion, ResultRecord, ResultVersion};
+use llaundry_core::{
+    blob_id, ArtifactRef, Author, DefinitionVersion, ProducerEvidence, ResultRecord, ResultVersion,
+};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+
+/// Producer evidence namespace owned by this application.
+pub const EVIDENCE_NAMESPACE: &str = "llaundry-work";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkedBy {
     pub backend: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+}
+
+/// The execution application's producer evidence carried on a submitted
+/// result: which attempt produced it and, once known, on what backend/model.
+/// Opaque namespaced data to the graph; only this application interprets it.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WorkEvidence {
+    /// The durable attempt that produced the result; absent for work stamped
+    /// outside an isolated execution (e.g. an interactive session).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+}
+
+impl WorkEvidence {
+    pub fn to_producer(&self) -> ProducerEvidence {
+        ProducerEvidence {
+            namespace: EVIDENCE_NAMESPACE.into(),
+            data: serde_json::to_value(self).expect("work evidence serializes"),
+        }
+    }
+    pub fn from_producer(producer: &ProducerEvidence) -> Option<Self> {
+        (producer.namespace == EVIDENCE_NAMESPACE)
+            .then(|| serde_json::from_value(producer.data.clone()).ok())
+            .flatten()
+    }
+    pub fn worked_by(&self) -> Option<WorkedBy> {
+        self.backend.clone().map(|backend| WorkedBy {
+            backend,
+            model: self.model.clone(),
+        })
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -24,26 +64,21 @@ pub struct ExecutionIdentity {
     pub force: bool,
 }
 
+/// The durable execution attempt: identity, frozen inputs, and the local
+/// workspace it runs in. Workspace paths and backend evidence are operational
+/// records owned here; a submitted result carries only portable provenance.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct AttemptFinal {
-    pub at: i64,
-    pub backend_succeeded: bool,
-}
-
-/// Compatibility form of the original durable attempt record. It remains
-/// application-owned even while old stores and frontends use its field layout.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct AttemptMeta {
+pub struct Attempt {
     pub schema: u32,
     pub id: String,
-    pub node: String,
+    pub work_item: String,
     pub worker: Author,
     pub force: bool,
     pub definition: DefinitionVersion,
-    pub input_commit: String,
+    pub input: ArtifactRef,
     pub input_tree: String,
-    pub candidate_branch: String,
-    pub worktree: String,
+    pub branch: String,
+    pub workspace: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -53,17 +88,7 @@ pub struct AttemptMeta {
     pub prepared: bool,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Attempt {
-    pub id: String,
-    pub work_item: String,
-    pub definition: DefinitionVersion,
-    pub input: ArtifactRef,
-    pub executor: String,
-    pub workspace_id: String,
-    pub created_at: i64,
-}
-
+/// Sealed backend-exit evidence for one attempt.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AttemptFinished {
     pub at: i64,
@@ -78,7 +103,7 @@ pub enum Request {
         id: String,
     },
     Prepare {
-        attempt: Attempt,
+        attempt: Box<Attempt>,
     },
     Finish {
         id: String,
@@ -89,7 +114,7 @@ pub enum Request {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "status", content = "value", rename_all = "snake_case")]
 pub enum Response {
-    Attempt(Attempt),
+    Attempt(Box<Attempt>),
     Ok,
     Error(String),
 }
@@ -97,9 +122,9 @@ pub enum Response {
 pub fn handle_request(store: &FsAttemptStore, request: Request) -> Response {
     let result: anyhow::Result<Response> = (|| {
         Ok(match request {
-            Request::Get { id } => Response::Attempt(store.read(&id)?),
+            Request::Get { id } => Response::Attempt(Box::new(store.read(&id)?)),
             Request::Prepare { attempt } => {
-                store.create(&attempt)?;
+                store.write(&attempt)?;
                 Response::Ok
             }
             Request::Finish { id, final_record } => {
@@ -111,8 +136,9 @@ pub fn handle_request(store: &FsAttemptStore, request: Request) -> Response {
     result.unwrap_or_else(|error| Response::Error(format!("{error:#}")))
 }
 
-/// File-backed execution state. New records live under `execution/`; the
-/// legacy `attempts/` namespace remains readable during the schema transition.
+/// File-backed execution state under the `execution/` namespace this
+/// application owns: the attempt record, its transcript, its attempt-scoped
+/// result, and the sealed final record.
 pub struct FsAttemptStore {
     root: PathBuf,
 }
@@ -122,26 +148,109 @@ impl FsAttemptStore {
         Self { root: root.into() }
     }
 
+    pub fn dir(&self, id: &str) -> PathBuf {
+        self.root.join("execution").join(id)
+    }
+
     fn path(&self, id: &str, file: &str) -> PathBuf {
-        self.root.join("execution").join(id).join(file)
+        self.dir(id).join(file)
     }
 
     pub fn read(&self, id: &str) -> anyhow::Result<Attempt> {
-        let current = self.path(id, "attempt.toml");
-        if current.is_file() {
-            return Ok(toml::from_str(&std::fs::read_to_string(current)?)?);
+        let data = std::fs::read_to_string(self.path(id, "attempt.toml"))
+            .map_err(|_| anyhow::anyhow!("unknown attempt `{id}`"))?;
+        Ok(toml::from_str(&data)?)
+    }
+
+    pub fn write(&self, attempt: &Attempt) -> anyhow::Result<()> {
+        let path = self.path(&attempt.id, "attempt.toml");
+        std::fs::create_dir_all(path.parent().expect("execution record has parent"))?;
+        std::fs::write(path, toml::to_string_pretty(attempt)?)?;
+        Ok(())
+    }
+
+    pub fn list_ids(&self) -> anyhow::Result<Vec<String>> {
+        let dir = self.root.join("execution");
+        if !dir.exists() {
+            return Ok(Vec::new());
         }
-        let legacy = self.root.join("attempts").join(id).join("attempt.toml");
-        let old: LegacyAttempt = toml::from_str(&std::fs::read_to_string(&legacy)?)?;
-        Ok(old.into_attempt())
+        let mut ids = Vec::new();
+        for entry in std::fs::read_dir(dir)? {
+            let entry = entry?;
+            if entry.file_type()?.is_dir() {
+                ids.push(entry.file_name().to_string_lossy().into_owned());
+            }
+        }
+        ids.sort();
+        Ok(ids)
+    }
+
+    pub fn write_result(
+        &self,
+        id: &str,
+        result: &ResultRecord,
+        notes: &str,
+    ) -> anyhow::Result<()> {
+        self.read(id)?;
+        std::fs::write(self.path(id, "result.toml"), toml::to_string_pretty(result)?)?;
+        if notes.is_empty() {
+            let _ = std::fs::remove_file(self.path(id, "result.md"));
+        } else {
+            std::fs::write(self.path(id, "result.md"), notes)?;
+        }
+        Ok(())
+    }
+
+    pub fn read_result(&self, id: &str) -> anyhow::Result<Option<(ResultRecord, String)>> {
+        let data = match std::fs::read_to_string(self.path(id, "result.toml")) {
+            Ok(data) => data,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        let result = toml::from_str(&data)?;
+        let notes = std::fs::read_to_string(self.path(id, "result.md")).unwrap_or_default();
+        Ok(Some((result, notes)))
+    }
+
+    pub fn result_version(&self, id: &str) -> anyhow::Result<ResultVersion> {
+        let metadata = std::fs::read(self.path(id, "result.toml"))?;
+        let notes = std::fs::read(self.path(id, "result.md"))
+            .ok()
+            .map(|bytes| blob_id(&bytes));
+        Ok(ResultVersion {
+            metadata: blob_id(&metadata),
+            notes,
+        })
+    }
+
+    pub fn read_final(&self, id: &str) -> anyhow::Result<Option<AttemptFinished>> {
+        let data = match std::fs::read_to_string(self.path(id, "final.toml")) {
+            Ok(data) => data,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        Ok(Some(toml::from_str(&data)?))
     }
 
     pub fn transcript_path(&self, id: &str) -> PathBuf {
-        let current = self.path(id, "work.jsonl");
-        if current.exists() {
-            current
-        } else {
-            self.root.join("attempts").join(id).join("work.jsonl")
+        self.path(id, "work.jsonl")
+    }
+
+    pub fn open_transcript(&self, id: &str, append: bool) -> anyhow::Result<std::fs::File> {
+        self.read(id)?;
+        Ok(std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .append(append)
+            .truncate(!append)
+            .open(self.transcript_path(id))?)
+    }
+
+    pub fn read_transcript(&self, id: &str) -> anyhow::Result<Option<String>> {
+        match std::fs::read_to_string(self.transcript_path(id)) {
+            Ok(log) => Ok(Some(log)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error.into()),
         }
     }
 
@@ -154,192 +263,16 @@ impl AttemptStore for FsAttemptStore {
     type Error = anyhow::Error;
 
     fn create(&self, attempt: &Attempt) -> Result<(), Self::Error> {
-        let path = self.path(&attempt.id, "attempt.toml");
-        std::fs::create_dir_all(path.parent().expect("execution record has parent"))?;
-        std::fs::write(path, toml::to_string_pretty(attempt)?)?;
-        Ok(())
+        self.write(attempt)
     }
 
     fn finish(&self, id: &str, final_record: &AttemptFinished) -> Result<(), Self::Error> {
         self.read(id)?;
-        let path = self.path(id, "final.toml");
-        std::fs::create_dir_all(path.parent().expect("execution record has parent"))?;
-        std::fs::write(path, toml::to_string_pretty(final_record)?)?;
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn reads_legacy_attempts_and_writes_only_the_execution_namespace() {
-        let root = std::env::temp_dir().join(format!("llaundry-work-store-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        let legacy = root.join("attempts/a");
-        std::fs::create_dir_all(&legacy).unwrap();
         std::fs::write(
-            legacy.join("attempt.toml"),
-            r#"
-id = "a"
-node = "node-1"
-worker = "machine"
-force = false
-input_commit = "abc"
-input_tree = "tree"
-candidate_branch = "llaundry/candidates/a"
-worktree = "/tmp/a"
-created_at = 1
-prepared = true
-[definition]
-metadata = "m"
-description = "d"
-"#,
-        )
-        .unwrap();
-        let store = FsAttemptStore::new(&root);
-        let attempt = store.read("a").unwrap();
-        assert_eq!(attempt.work_item, "node-1");
-        assert_eq!(attempt.input.id, "abc");
-        store
-            .finish(
-                "a",
-                &AttemptFinished {
-                    at: 2,
-                    executor_succeeded: true,
-                },
-            )
-            .unwrap();
-        assert!(root.join("execution/a/final.toml").is_file());
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn git_workspace_manager_prepares_and_removes_isolated_branch() {
-        let root = std::env::temp_dir().join(format!("llaundry-work-git-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
-        let git = |args: &[&str]| -> String {
-            let output = std::process::Command::new("git")
-                .arg("-C")
-                .arg(&root)
-                .args(args)
-                .output()
-                .unwrap();
-            assert!(
-                output.status.success(),
-                "{}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-            String::from_utf8_lossy(&output.stdout).trim().into()
-        };
-        git(&["init", "-b", "main"]);
-        git(&["config", "user.name", "test"]);
-        git(&["config", "user.email", "test@example.com"]);
-        std::fs::write(root.join("x"), "one").unwrap();
-        git(&["add", "x"]);
-        git(&["commit", "-m", "one"]);
-        let commit = git(&["rev-parse", "HEAD"]);
-        let path = root.with_extension("workspace");
-        let _ = std::fs::remove_dir_all(&path);
-        let attempt = Attempt {
-            id: "a".into(),
-            work_item: "n".into(),
-            definition: DefinitionVersion {
-                metadata: "m".into(),
-                description: "d".into(),
-            },
-            input: ArtifactRef {
-                scheme: "git-commit".into(),
-                repository: root.to_string_lossy().into(),
-                id: commit.clone(),
-            },
-            executor: "test".into(),
-            workspace_id: path.to_string_lossy().into(),
-            created_at: 0,
-        };
-        let manager = GitWorkspaceManager::new(&root);
-        let workspace = manager.prepare(&attempt).unwrap();
-        assert_eq!(workspace.input_commit, commit);
-        assert!(manager.clean(&workspace).unwrap());
-        manager.remove(&workspace).unwrap();
-        assert!(!path.exists());
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    struct FakeProvider {
-        ready: bool,
-    }
-    impl WorkProvider for FakeProvider {
-        type Error = &'static str;
-        fn definition_version(&self, _id: &str) -> Result<DefinitionVersion, Self::Error> {
-            Ok(DefinitionVersion {
-                metadata: "m".into(),
-                description: "d".into(),
-            })
-        }
-        fn ready(&self, _id: &str) -> Result<bool, Self::Error> {
-            Ok(self.ready)
-        }
-        fn submit(
-            &self,
-            _id: &str,
-            _result: &ResultRecord,
-            _notes: &str,
-        ) -> Result<ResultVersion, Self::Error> {
-            Err("unused")
-        }
-    }
-
-    #[test]
-    fn runner_resolves_work_through_provider_interface() {
-        assert!(resolve_ready_work(&FakeProvider { ready: true }, "external-id").is_ok());
-        assert!(matches!(
-            resolve_ready_work(&FakeProvider { ready: false }, "external-id"),
-            Err(ResolveError::NotReady)
-        ));
-    }
-}
-
-#[derive(Deserialize)]
-struct LegacyAttempt {
-    id: String,
-    node: String,
-    definition: DefinitionVersion,
-    input_commit: String,
-    input_tree: String,
-    candidate_branch: String,
-    worktree: String,
-    #[serde(default)]
-    backend: Option<String>,
-    #[serde(default)]
-    model: Option<String>,
-    created_at: i64,
-}
-
-impl LegacyAttempt {
-    fn into_attempt(self) -> Attempt {
-        Attempt {
-            id: self.id,
-            work_item: self.node,
-            definition: self.definition,
-            input: ArtifactRef {
-                scheme: "git-commit".into(),
-                repository: String::new(),
-                id: self.input_commit,
-            },
-            executor: match (self.backend, self.model) {
-                (Some(backend), Some(model)) => format!("{backend}:{model}"),
-                (Some(backend), None) => backend,
-                _ => "legacy".into(),
-            },
-            workspace_id: format!(
-                "{}|{}|{}",
-                self.worktree, self.candidate_branch, self.input_tree
-            ),
-            created_at: self.created_at,
-        }
+            self.path(id, "final.toml"),
+            toml::to_string_pretty(final_record)?,
+        )?;
+        Ok(())
     }
 }
 
@@ -427,8 +360,7 @@ impl WorkspaceManager for GitWorkspaceManager {
         if attempt.input.scheme != "git-commit" {
             anyhow::bail!("Git workspace requires a git-commit input");
         }
-        let path = PathBuf::from(&attempt.workspace_id);
-        let branch = format!("llaundry/candidates/{}", attempt.id);
+        let path = PathBuf::from(&attempt.workspace);
         let path_arg = path.to_string_lossy();
         self.git(
             &self.repository,
@@ -436,7 +368,7 @@ impl WorkspaceManager for GitWorkspaceManager {
                 "worktree",
                 "add",
                 "-b",
-                &branch,
+                &attempt.branch,
                 &path_arg,
                 &attempt.input.id,
             ],
@@ -448,7 +380,7 @@ impl WorkspaceManager for GitWorkspaceManager {
         }
         Ok(GitWorkspace {
             path,
-            branch,
+            branch: attempt.branch.clone(),
             input_commit,
             input_tree,
         })
@@ -474,4 +406,156 @@ pub fn should_remove_workspace(
     workspace_clean: bool,
 ) -> bool {
     !keep && executor_succeeded && !produced_project_artifact && workspace_clean
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use llaundry_core::Outcome;
+
+    fn attempt(id: &str, root: &Path) -> Attempt {
+        Attempt {
+            schema: 1,
+            id: id.into(),
+            work_item: "node-1".into(),
+            worker: Author::Machine,
+            force: false,
+            definition: DefinitionVersion {
+                metadata: "m".into(),
+                description: "d".into(),
+            },
+            input: ArtifactRef {
+                scheme: "git-commit".into(),
+                repository: root.to_string_lossy().into(),
+                id: "abc".into(),
+            },
+            input_tree: "tree".into(),
+            branch: "llaundry/candidates/a".into(),
+            workspace: "/tmp/a".into(),
+            backend: Some("test".into()),
+            model: None,
+            created_at: 1,
+            prepared: true,
+        }
+    }
+
+    #[test]
+    fn attempt_records_live_only_in_the_execution_namespace() {
+        let root = std::env::temp_dir().join(format!("llaundry-work-store-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let store = FsAttemptStore::new(&root);
+        store.write(&attempt("a", &root)).unwrap();
+        let read = store.read("a").unwrap();
+        assert_eq!(read.work_item, "node-1");
+        assert_eq!(read.input.id, "abc");
+        assert_eq!(store.list_ids().unwrap(), vec!["a".to_string()]);
+        let result = ResultRecord {
+            at: 2,
+            author: Author::Machine,
+            definition: read.definition.clone(),
+            outcome: Outcome::Done,
+            consumed: vec![],
+            context: vec![],
+            output: None,
+            producer: Some(
+                WorkEvidence {
+                    attempt: Some("a".into()),
+                    backend: Some("test".into()),
+                    model: None,
+                }
+                .to_producer(),
+            ),
+        };
+        store.write_result("a", &result, "did it").unwrap();
+        let (read_result, notes) = store.read_result("a").unwrap().unwrap();
+        assert_eq!(notes, "did it");
+        let evidence =
+            WorkEvidence::from_producer(read_result.producer.as_ref().unwrap()).unwrap();
+        assert_eq!(evidence.attempt.as_deref(), Some("a"));
+        store
+            .finish(
+                "a",
+                &AttemptFinished {
+                    at: 2,
+                    executor_succeeded: true,
+                },
+            )
+            .unwrap();
+        assert!(root.join("execution/a/final.toml").is_file());
+        assert!(!root.join("attempts").exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn git_workspace_manager_prepares_and_removes_isolated_branch() {
+        let root = std::env::temp_dir().join(format!("llaundry-work-git-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let git = |args: &[&str]| -> String {
+            let output = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&root)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8_lossy(&output.stdout).trim().into()
+        };
+        git(&["init", "-b", "main"]);
+        git(&["config", "user.name", "test"]);
+        git(&["config", "user.email", "test@example.com"]);
+        std::fs::write(root.join("x"), "one").unwrap();
+        git(&["add", "x"]);
+        git(&["commit", "-m", "one"]);
+        let commit = git(&["rev-parse", "HEAD"]);
+        let path = root.with_extension("workspace");
+        let _ = std::fs::remove_dir_all(&path);
+        let mut attempt = attempt("a", &root);
+        attempt.input.id = commit.clone();
+        attempt.workspace = path.to_string_lossy().into();
+        let manager = GitWorkspaceManager::new(&root);
+        let workspace = manager.prepare(&attempt).unwrap();
+        assert_eq!(workspace.input_commit, commit);
+        assert!(manager.clean(&workspace).unwrap());
+        manager.remove(&workspace).unwrap();
+        assert!(!path.exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    struct FakeProvider {
+        ready: bool,
+    }
+    impl WorkProvider for FakeProvider {
+        type Error = &'static str;
+        fn definition_version(&self, _id: &str) -> Result<DefinitionVersion, Self::Error> {
+            Ok(DefinitionVersion {
+                metadata: "m".into(),
+                description: "d".into(),
+            })
+        }
+        fn ready(&self, _id: &str) -> Result<bool, Self::Error> {
+            Ok(self.ready)
+        }
+        fn submit(
+            &self,
+            _id: &str,
+            _result: &ResultRecord,
+            _notes: &str,
+        ) -> Result<ResultVersion, Self::Error> {
+            Err("unused")
+        }
+    }
+
+    #[test]
+    fn runner_resolves_work_through_provider_interface() {
+        assert!(resolve_ready_work(&FakeProvider { ready: true }, "external-id").is_ok());
+        assert!(matches!(
+            resolve_ready_work(&FakeProvider { ready: false }, "external-id"),
+            Err(ResolveError::NotReady)
+        ));
+    }
 }

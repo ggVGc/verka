@@ -1,8 +1,8 @@
 # Durable execution attempts
 
-Status: implemented through the `llaundry-work` application crate. The
-`attempts/` paths below describe the legacy compatibility record; portable new
-execution records use `.llaundry/execution/<attempt-id>/`.
+Status: implemented through the `llaundry-work` application crate. Execution
+records live under `.llaundry/execution/<attempt-id>/`, owned by
+`FsAttemptStore`.
 
 ## Purpose
 
@@ -18,7 +18,7 @@ This makes every candidate branch and worktree explainable and recoverable.
 ## Storage
 
 ```text
-.llaundry/attempts/<attempt-id>/
+.llaundry/execution/<attempt-id>/
     attempt.toml
     work.jsonl
     result.toml       # optional worker-recorded outcome
@@ -26,13 +26,13 @@ This makes every candidate branch and worktree explainable and recoverable.
     final.toml        # optional sealed post-session evidence
 ```
 
-`attempt.toml` records the node, frozen definition, worker, force authority,
-input commit/tree, candidate branch, worktree path, backend/model, creation
-time, and whether workspace preparation completed.
+`attempt.toml` records the work item (node), frozen definition, worker, force
+authority, input artifact and tree, candidate branch, workspace path,
+backend/model, creation time, and whether workspace preparation completed.
 
-`result.toml` belongs unambiguously to the attempt by location. It contains the
-same structured result currently exposed as the node's latest-result view.
-There may be at most one result per attempt.
+`result.toml` belongs unambiguously to the attempt by location. It is a copy of
+the core result the completion also wrote to the node. There may be at most one
+result per attempt.
 
 `final.toml` records backend exit status and sealing time. Worker identity and
 observed context are applied before sealing. Sealing is idempotent.
@@ -70,18 +70,19 @@ Backend process status is evidence, not result identity:
 * failed or graph-only result: seal without project-content review.
 
 An older node result can never satisfy a newer attempt because finalization
-reads only `attempts/<attempt-id>/result.toml`.
+reads only `execution/<attempt-id>/result.toml`.
 
 ## Reviews and node state
 
-A review pins the attempt ID, candidate branch, output commit, and sealed
-attempt-result version. Project output from a sealed attempt has exactly one
-review regardless of backend exit status.
+A review candidate (owned by `llaundry-review`) pins the producing attempt ID,
+candidate branch, output artifact, and sealed attempt-result version. Project
+output from a sealed attempt has exactly one review regardless of backend exit
+status.
 
-The node's result remains a convenience view of its latest completed attempt
-for compatibility. Historical truth belongs to immutable attempt directories.
-Readiness, rejection feedback, and provenance should progressively derive from
-attempts and their reviews rather than overwritten node results.
+The node's core result is the completion of the latest attempt's work.
+Historical truth belongs to the immutable attempt directories, which keep their
+own result copy even after the node's is replaced. Readiness, rejection
+feedback, and provenance derive from attempts and their reviews.
 
 ## Recovery and checking
 
@@ -98,10 +99,3 @@ Deep checking reports:
 Recovery operations may recreate safe missing workspaces, seal recorded
 results, create missing reviews, or clean completed worktrees. They never
 discard dirty files automatically.
-
-## Migration
-
-Existing node results without attempt records remain readable as legacy
-results. New machine executions always use attempt-scoped storage. A later
-migration may synthesize legacy attempt records where enough provenance is
-available; no history is rewritten merely to adopt the new model.

@@ -660,9 +660,10 @@ fn show_node(store: &Store, vcs: &GitVcs, id: &str) -> Result<String> {
     for src in &meta.derived_from {
         writeln!(out, "derived_from: {src}")?;
     }
-    if let Some(review) = &meta.review {
-        writeln!(out, "review_of: {}", review.implementation)?;
-        writeln!(out, "candidate_branch: {}", review.candidate_branch)?;
+    let review = ops::review_info(store, id)?;
+    if let Some(review) = &review {
+        writeln!(out, "review_of: {}", review.subject)?;
+        writeln!(out, "candidate_branch: {}", review.branch)?;
         writeln!(out, "candidate_commit: {}", review.candidate_commit)?;
     }
 
@@ -670,33 +671,32 @@ fn show_node(store: &Store, vcs: &GitVcs, id: &str) -> Result<String> {
         writeln!(out, "result:")?;
         writeln!(out, "  outcome: {}", result.outcome.as_str())?;
         writeln!(out, "  author:  {}", result.author.as_str())?;
-        if let Some(wb) = &result.worked_by {
+        if let Some(wb) = ops::worked_by(&result) {
             match &wb.model {
                 Some(m) => writeln!(out, "  worked by: {} ({m})", wb.backend)?,
                 None => writeln!(out, "  worked by: {}", wb.backend)?,
             }
         }
-        if let Some(commit) = &result.output_commit {
+        if let Some(commit) = ops::output_commit(&result) {
             writeln!(out, "  output:  commit {}", ops::short(commit))?;
         }
-        if let Some(decision) = result.review_decision {
-            writeln!(out, "  review:  {:?}", decision)?;
+        if let Some(review) = &review {
+            if let Some(decision) = review.decision {
+                writeln!(out, "  review:  {:?}", decision)?;
+            }
+            if let Some(branch) = &review.suggestion_branch {
+                writeln!(
+                    out,
+                    "  suggestions: {branch} @ {}",
+                    review
+                        .suggestion_commit
+                        .as_deref()
+                        .map(ops::short)
+                        .unwrap_or("missing")
+                )?;
+            }
         }
-        if let Some(branch) = &result.candidate_branch {
-            writeln!(out, "  candidate branch: {branch}")?;
-        }
-        if let Some(branch) = &result.suggestion_branch {
-            writeln!(
-                out,
-                "  suggestions: {branch} @ {}",
-                result
-                    .suggestion_commit
-                    .as_deref()
-                    .map(ops::short)
-                    .unwrap_or("missing")
-            )?;
-        }
-        for ba in &result.built_against {
+        for ba in &result.consumed {
             let result_pin = ba
                 .result
                 .as_ref()
@@ -708,7 +708,7 @@ fn show_node(store: &Store, vcs: &GitVcs, id: &str) -> Result<String> {
                     ba.id,
                     ops::short_definition(&ba.definition),
                     result_pin,
-                    ops::short(o)
+                    ops::short(&o.id)
                 )?,
                 None => writeln!(
                     out,
@@ -725,7 +725,7 @@ fn show_node(store: &Store, vcs: &GitVcs, id: &str) -> Result<String> {
                 out,
                 "  context {} @ {}{tag}",
                 pin.path,
-                ops::short(&pin.blob)
+                ops::short(&pin.identity)
             )?;
         }
         let notes = notes.trim_end();
