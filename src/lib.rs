@@ -25,11 +25,12 @@ pub mod store;
 pub mod vcs;
 
 pub use config::{Config, CONFIG_FILE};
-pub use pairing::Pairing;
 pub use git::GitVcs;
 pub use model::{
-    title_of, AttemptFinal, AttemptMeta, Author, BuiltAgainst, ContextPin, DefinitionVersion, DepKind, ExecutionIdentity, NodeMeta, Outcome,
-    NodeState, PublicationIntent, ResultMeta, ResultVersion, ReviewDecision, ReviewTarget, Status, WorkedBy,
+    title_of, AttemptFinal, AttemptMeta, Author, BuiltAgainst, ContextPin, DefinitionVersion,
+    DepKind, ExecutionIdentity, NodeMeta, NodeState, Outcome, PublicationIntent, ResultMeta,
+    ResultVersion, ReviewDecision, ReviewTarget, Status, WorkedBy,
 };
+pub use pairing::Pairing;
 pub use store::Store;
 pub use vcs::Vcs;

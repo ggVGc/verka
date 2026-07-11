@@ -232,10 +232,16 @@ fn main() -> Result<()> {
             let initialized = ops::init_workbench(store, name)?;
             let store = &initialized.store;
             if initialized.created_workbench_repo {
-                println!("initialised workbench repository at {}", store.workbench_root().display());
+                println!(
+                    "initialised workbench repository at {}",
+                    store.workbench_root().display()
+                );
             }
             if initialized.created_project_repo {
-                println!("initialised project repository at {}", store.project_root().display());
+                println!(
+                    "initialised project repository at {}",
+                    store.project_root().display()
+                );
             }
             if initialized.created_config {
                 println!(
@@ -340,12 +346,24 @@ fn main() -> Result<()> {
             println!("{id}  failed");
         }
 
-        Cmd::AcceptReview { id, target, notes, notes_file } => {
+        Cmd::AcceptReview {
+            id,
+            target,
+            notes,
+            notes_file,
+        } => {
             let store = Store::open(store)?;
             let vcs = GitVcs::for_store(&store);
             let notes = resolve_notes(notes, notes_file, &store, &id, "review notes (optional)")?;
             ops::decide_review(
-                &store, &vcs, &id, ReviewDecision::Accepted, &notes, &target, None, None,
+                &store,
+                &vcs,
+                &id,
+                ReviewDecision::Accepted,
+                &notes,
+                &target,
+                None,
+                None,
             )?;
             println!("{id}  accepted and integrated into {target}");
         }
@@ -359,7 +377,13 @@ fn main() -> Result<()> {
         } => {
             let store = Store::open(store)?;
             let vcs = GitVcs::for_store(&store);
-            let notes = resolve_notes(notes, notes_file, &store, &id, "why is this candidate rejected?")?;
+            let notes = resolve_notes(
+                notes,
+                notes_file,
+                &store,
+                &id,
+                "why is this candidate rejected?",
+            )?;
             ops::decide_review(
                 &store,
                 &vcs,
@@ -388,12 +412,15 @@ fn main() -> Result<()> {
             let status = ops::review_workspace_status(&store, &vcs, &id)?;
             println!("review branch: {}", status.branch);
             println!("review worktree: {}", status.path.display());
-            println!("state: {}", match (status.exists, status.clean) {
-                (false, _) => "not-created",
-                (true, Some(true)) => "clean",
-                (true, Some(false)) => "dirty",
-                _ => "unknown",
-            });
+            println!(
+                "state: {}",
+                match (status.exists, status.clean) {
+                    (false, _) => "not-created",
+                    (true, Some(true)) => "clean",
+                    (true, Some(false)) => "dirty",
+                    _ => "unknown",
+                }
+            );
         }
 
         Cmd::CleanupReview { id } => {
@@ -564,7 +591,9 @@ fn main() -> Result<()> {
             if verify {
                 let (recorded, problems) = ops::verify_pairing(&store, &vcs, deep)?;
                 match recorded {
-                    None => println!("store is not paired (run `llaundry pair` to record the project)"),
+                    None => {
+                        println!("store is not paired (run `llaundry pair` to record the project)")
+                    }
                     Some(pairing) if problems.is_empty() => {
                         println!("{} — ok", pairing_line(&pairing));
                     }
@@ -595,7 +624,10 @@ fn main() -> Result<()> {
 /// One human line describing a pairing: the checked root, then whatever
 /// informational fields it carries.
 fn pairing_line(pairing: &llaundry::Pairing) -> String {
-    let mut line = format!("paired to project root {}", ops::short(&pairing.root_commit));
+    let mut line = format!(
+        "paired to project root {}",
+        ops::short(&pairing.root_commit)
+    );
     if let Some(name) = &pairing.name {
         line.push_str(&format!(" ({name})"));
     }
@@ -654,7 +686,15 @@ fn show_node(store: &Store, vcs: &GitVcs, id: &str) -> Result<String> {
             writeln!(out, "  candidate branch: {branch}")?;
         }
         if let Some(branch) = &result.suggestion_branch {
-            writeln!(out, "  suggestions: {branch} @ {}", result.suggestion_commit.as_deref().map(ops::short).unwrap_or("missing"))?;
+            writeln!(
+                out,
+                "  suggestions: {branch} @ {}",
+                result
+                    .suggestion_commit
+                    .as_deref()
+                    .map(ops::short)
+                    .unwrap_or("missing")
+            )?;
         }
         for ba in &result.built_against {
             let result_pin = ba

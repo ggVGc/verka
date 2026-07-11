@@ -17,8 +17,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use ulid::Ulid;
 
 use crate::model::{
-    AttemptFinal, AttemptMeta, Author, BuiltAgainst, ContextPin, DefinitionVersion, DepKind, ExecutionIdentity, NodeMeta, Outcome, ResultMeta,
-    NodeState, PublicationIntent, ResultVersion, ReviewDecision, ReviewTarget, Status, WorkedBy,
+    AttemptFinal, AttemptMeta, Author, BuiltAgainst, ContextPin, DefinitionVersion, DepKind,
+    ExecutionIdentity, NodeMeta, NodeState, Outcome, PublicationIntent, ResultMeta, ResultVersion,
+    ReviewDecision, ReviewTarget, Status, WorkedBy,
 };
 use crate::pairing::Pairing;
 use crate::store::{file_blob, Store};
@@ -147,7 +148,9 @@ pub fn complete(
     notes: &str,
     author: Author,
 ) -> Result<Option<String>> {
-    complete_with_execution(store, vcs, id, outputs, context, message, notes, author, None)
+    complete_with_execution(
+        store, vcs, id, outputs, context, message, notes, author, None,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -200,26 +203,26 @@ pub fn complete_with_execution(
     };
 
     let result = ResultMeta {
-            at: now_millis(),
-            author,
-            definition: store.node_version(id)?,
-            outcome: Outcome::Done,
-            publication_pending: execution.is_some() && output_commit.is_some(),
-            input_commit,
-            input_tree,
-            attempt_id: execution.as_ref().map(|e| e.attempt_id.clone()),
-            candidate_branch: execution.as_ref().map(|e| e.candidate_branch.clone()),
-            review_decision: None,
-            suggestion_branch: None,
-            suggestion_commit: None,
-            output_commit: output_commit.clone(),
-            integrated_commit: None,
-            target_ref: None,
-            target_previous: None,
-            worked_by: None,
-            built_against,
-            context,
-        };
+        at: now_millis(),
+        author,
+        definition: store.node_version(id)?,
+        outcome: Outcome::Done,
+        publication_pending: execution.is_some() && output_commit.is_some(),
+        input_commit,
+        input_tree,
+        attempt_id: execution.as_ref().map(|e| e.attempt_id.clone()),
+        candidate_branch: execution.as_ref().map(|e| e.candidate_branch.clone()),
+        review_decision: None,
+        suggestion_branch: None,
+        suggestion_commit: None,
+        output_commit: output_commit.clone(),
+        integrated_commit: None,
+        target_ref: None,
+        target_previous: None,
+        worked_by: None,
+        built_against,
+        context,
+    };
     if let Some(execution) = &execution {
         store.write_attempt_result(&execution.attempt_id, &result, notes)?;
     }
@@ -241,26 +244,26 @@ pub fn respond(store: &Store, vcs: &dyn Vcs, id: &str, notes: &str, author: Auth
     let (meta, _) = store.read_node(id)?;
     let built_against = pin_deps(store, &meta)?;
     let result = ResultMeta {
-            at: now_millis(),
-            author,
-            definition: store.node_version(id)?,
-            outcome: Outcome::Done,
-            publication_pending: false,
-            input_commit: None,
-            input_tree: None,
-            attempt_id: None,
-            candidate_branch: None,
-            review_decision: None,
-            suggestion_branch: None,
-            suggestion_commit: None,
-            output_commit: None,
-            integrated_commit: None,
-            target_ref: None,
-            target_previous: None,
-            worked_by: None,
-            built_against,
-            context: Vec::new(),
-        };
+        at: now_millis(),
+        author,
+        definition: store.node_version(id)?,
+        outcome: Outcome::Done,
+        publication_pending: false,
+        input_commit: None,
+        input_tree: None,
+        attempt_id: None,
+        candidate_branch: None,
+        review_decision: None,
+        suggestion_branch: None,
+        suggestion_commit: None,
+        output_commit: None,
+        integrated_commit: None,
+        target_ref: None,
+        target_previous: None,
+        worked_by: None,
+        built_against,
+        context: Vec::new(),
+    };
     store.write_result(id, &result, notes)?;
     vcs.commit_store(&store.store_name(), &format!("llaundry: respond {id}"))?;
     Ok(())
@@ -294,26 +297,26 @@ pub fn fail_with_execution(
     let (meta, _) = store.read_node(id)?;
     let built_against = pin_deps(store, &meta)?;
     let result = ResultMeta {
-            at: now_millis(),
-            author,
-            definition: store.node_version(id)?,
-            outcome: Outcome::Failed,
-            publication_pending: false,
-            input_commit: None,
-            input_tree: None,
-            attempt_id: execution.as_ref().map(|e| e.attempt_id.clone()),
-            candidate_branch: execution.as_ref().map(|e| e.candidate_branch.clone()),
-            review_decision: None,
-            suggestion_branch: None,
-            suggestion_commit: None,
-            output_commit: None,
-            integrated_commit: None,
-            target_ref: None,
-            target_previous: None,
-            worked_by: None,
-            built_against,
-            context: Vec::new(),
-        };
+        at: now_millis(),
+        author,
+        definition: store.node_version(id)?,
+        outcome: Outcome::Failed,
+        publication_pending: false,
+        input_commit: None,
+        input_tree: None,
+        attempt_id: execution.as_ref().map(|e| e.attempt_id.clone()),
+        candidate_branch: execution.as_ref().map(|e| e.candidate_branch.clone()),
+        review_decision: None,
+        suggestion_branch: None,
+        suggestion_commit: None,
+        output_commit: None,
+        integrated_commit: None,
+        target_ref: None,
+        target_previous: None,
+        worked_by: None,
+        built_against,
+        context: Vec::new(),
+    };
     if let Some(execution) = &execution {
         store.write_attempt_result(&execution.attempt_id, &result, notes)?;
     }
@@ -330,7 +333,10 @@ fn validate_execution(
     execution: &ExecutionIdentity,
 ) -> Result<()> {
     if author != Author::Machine {
-        bail!("an isolated machine execution cannot record work as `{}`", author.as_str());
+        bail!(
+            "an isolated machine execution cannot record work as `{}`",
+            author.as_str()
+        );
     }
     if execution.node_id != id {
         bail!(
@@ -340,16 +346,25 @@ fn validate_execution(
     }
     let attempt = store.read_attempt(&execution.attempt_id)?;
     if !attempt.prepared {
-        bail!("attempt `{}` has no prepared workspace", execution.attempt_id);
+        bail!(
+            "attempt `{}` has no prepared workspace",
+            execution.attempt_id
+        );
     }
     if attempt.node != id
         || attempt.candidate_branch != execution.candidate_branch
         || attempt.force != execution.force
     {
-        bail!("execution identity does not match durable attempt `{}`", execution.attempt_id);
+        bail!(
+            "execution identity does not match durable attempt `{}`",
+            execution.attempt_id
+        );
     }
     if store.node_version(id)? != attempt.definition {
-        bail!("node definition changed during attempt `{}`", execution.attempt_id);
+        bail!(
+            "node definition changed during attempt `{}`",
+            execution.attempt_id
+        );
     }
     authorize_execution_start(store, vcs, id, Author::Machine, execution.force)?;
     let expected = format!("llaundry/candidates/{}", execution.attempt_id);
@@ -439,7 +454,9 @@ pub fn prepare_execution(
     let (input_commit, input_tree) = vcs.resolve_revision(base)?;
     let attempt_id = Ulid::new().to_string();
     let candidate_branch = format!("llaundry/candidates/{attempt_id}");
-    let workbench = store.workbench_root().canonicalize()
+    let workbench = store
+        .workbench_root()
+        .canonicalize()
         .with_context(|| format!("resolving workbench {}", store.workbench_root().display()))?;
     let path = workbench.join(".llaundry-worktrees").join(&attempt_id);
     let mut attempt = AttemptMeta {
@@ -460,11 +477,17 @@ pub fn prepare_execution(
     };
     if materialize {
         store.write_attempt(&attempt)?;
-        vcs.commit_store(&store.store_name(), &format!("llaundry: begin attempt {attempt_id}"))?;
+        vcs.commit_store(
+            &store.store_name(),
+            &format!("llaundry: begin attempt {attempt_id}"),
+        )?;
         vcs.create_worktree(&path, &candidate_branch, &input_commit)?;
         attempt.prepared = true;
         store.write_attempt(&attempt)?;
-        vcs.commit_store(&store.store_name(), &format!("llaundry: prepare attempt {attempt_id}"))?;
+        vcs.commit_store(
+            &store.store_name(),
+            &format!("llaundry: prepare attempt {attempt_id}"),
+        )?;
     }
     Ok(ExecutionWorkspace {
         identity: ExecutionIdentity {
@@ -522,7 +545,10 @@ pub fn finalize_execution_attempt(
             backend_succeeded,
         },
     )?;
-    vcs.commit_store(&store.store_name(), &format!("llaundry: finalize attempt {attempt_id}"))?;
+    vcs.commit_store(
+        &store.store_name(),
+        &format!("llaundry: finalize attempt {attempt_id}"),
+    )?;
     let Some((result, _)) = store.read_attempt_result(attempt_id)? else {
         if backend_succeeded {
             bail!("successful attempt `{attempt_id}` produced no result");
@@ -546,7 +572,8 @@ pub fn finish_attempt_workspace(
     keep: bool,
 ) -> Result<bool> {
     let attempt = store.read_attempt(attempt_id)?;
-    let final_meta = store.read_attempt_final(attempt_id)?
+    let final_meta = store
+        .read_attempt_final(attempt_id)?
         .with_context(|| format!("attempt `{attempt_id}` is not finalized"))?;
     let has_project_output = store
         .read_attempt_result(attempt_id)?
@@ -644,7 +671,9 @@ pub fn create_review(store: &Store, vcs: &dyn Vcs, implementation: &str) -> Resu
     let Some((result, _)) = store.read_result(implementation)? else {
         bail!("node `{implementation}` has no result to review");
     };
-    let attempt_id = result.attempt_id.clone()
+    let attempt_id = result
+        .attempt_id
+        .clone()
         .with_context(|| format!("node `{implementation}` has no execution attempt id"))?;
     create_review_for_attempt(store, vcs, &attempt_id)
 }
@@ -658,9 +687,13 @@ pub fn create_review_for_attempt(store: &Store, vcs: &dyn Vcs, attempt_id: &str)
     let Some((result, _)) = store.read_attempt_result(attempt_id)? else {
         bail!("attempt `{attempt_id}` has no result to review");
     };
-    let candidate_commit = result.output_commit.clone()
+    let candidate_commit = result
+        .output_commit
+        .clone()
         .with_context(|| format!("node `{implementation}` produced no project content"))?;
-    let candidate_branch = result.candidate_branch.clone()
+    let candidate_branch = result
+        .candidate_branch
+        .clone()
         .with_context(|| format!("node `{implementation}` has no candidate branch"))?;
     let reviewed_result = store.attempt_result_version(attempt_id)?;
 
@@ -692,7 +725,10 @@ pub fn create_review_for_attempt(store: &Store, vcs: &dyn Vcs, attempt_id: &str)
     };
     let description = format!("Review candidate for {implementation}\n\nInspect the exact candidate named in node metadata. Accept it only if this content may be integrated into main; otherwise reject it with actionable comments.");
     store.write_node(&id, &meta, &description)?;
-    vcs.commit_store(&store.store_name(), &format!("llaundry: review {implementation}"))?;
+    vcs.commit_store(
+        &store.store_name(),
+        &format!("llaundry: review {implementation}"),
+    )?;
     Ok(id)
 }
 
@@ -711,9 +747,16 @@ pub struct ReviewWorkspaceStatus {
 
 fn review_workspace_location(store: &Store, id: &str) -> Result<(String, std::path::PathBuf)> {
     let branch = format!("llaundry/reviews/{id}");
-    let workbench = store.workbench_root().canonicalize()
+    let workbench = store
+        .workbench_root()
+        .canonicalize()
         .with_context(|| format!("resolving workbench {}", store.workbench_root().display()))?;
-    Ok((branch, workbench.join(".llaundry-worktrees").join(format!("review-{id}"))))
+    Ok((
+        branch,
+        workbench
+            .join(".llaundry-worktrees")
+            .join(format!("review-{id}")),
+    ))
 }
 
 pub fn review_workspace_status(
@@ -722,22 +765,26 @@ pub fn review_workspace_status(
     id: &str,
 ) -> Result<ReviewWorkspaceStatus> {
     let (meta, _) = store.read_node(id)?;
-    meta.review.with_context(|| format!("node `{id}` is not a review"))?;
+    meta.review
+        .with_context(|| format!("node `{id}` is not a review"))?;
     let (branch, path) = review_workspace_location(store, id)?;
     let exists = path.exists();
     let clean = exists.then(|| vcs.worktree_clean(&path)).transpose()?;
-    Ok(ReviewWorkspaceStatus { branch, path, exists, clean })
+    Ok(ReviewWorkspaceStatus {
+        branch,
+        path,
+        exists,
+        clean,
+    })
 }
 
 /// Prepare the canonical branch and linked worktree for reviewer-proposed
 /// edits. The library owns the open-review and exact-candidate checks.
-pub fn prepare_review_edits(
-    store: &Store,
-    vcs: &dyn Vcs,
-    id: &str,
-) -> Result<ReviewWorkspace> {
+pub fn prepare_review_edits(store: &Store, vcs: &dyn Vcs, id: &str) -> Result<ReviewWorkspace> {
     let (meta, _) = store.read_node(id)?;
-    let review = meta.review.with_context(|| format!("node `{id}` is not a review"))?;
+    let review = meta
+        .review
+        .with_context(|| format!("node `{id}` is not a review"))?;
     if store.read_result(id)?.is_some() {
         bail!("review `{id}` is already closed");
     }
@@ -764,14 +811,20 @@ pub fn prepare_review_edits(
 /// deliberately retained as suggestion history.
 pub fn cleanup_review_workspace(store: &Store, vcs: &dyn Vcs, id: &str) -> Result<bool> {
     let (meta, _) = store.read_node(id)?;
-    meta.review.with_context(|| format!("node `{id}` is not a review"))?;
+    meta.review
+        .with_context(|| format!("node `{id}` is not a review"))?;
     if store.read_result(id)?.is_none() {
         bail!("review `{id}` is still open");
     }
     let status = review_workspace_status(store, vcs, id)?;
-    if !status.exists { return Ok(false); }
+    if !status.exists {
+        return Ok(false);
+    }
     if status.clean != Some(true) {
-        bail!("review worktree {} has uncommitted changes", status.path.display());
+        bail!(
+            "review worktree {} has uncommitted changes",
+            status.path.display()
+        );
     }
     vcs.remove_worktree(&status.path)?;
     Ok(true)
@@ -791,7 +844,9 @@ pub fn decide_review(
     mut suggestion_commit: Option<String>,
 ) -> Result<()> {
     let (meta, _) = store.read_node(id)?;
-    let review = meta.review.with_context(|| format!("node `{id}` is not a review"))?;
+    let review = meta
+        .review
+        .with_context(|| format!("node `{id}` is not a review"))?;
     if store.read_result(id)?.is_some() {
         bail!("review `{id}` is already closed");
     }
@@ -826,8 +881,11 @@ pub fn decide_review(
 
     let candidate_ref = format!("refs/heads/{}", review.candidate_branch);
     if vcs.ref_commit(&candidate_ref)?.as_deref() != Some(&review.candidate_commit) {
-        bail!("candidate branch `{}` no longer points to reviewed commit {}",
-            review.candidate_branch, short(&review.candidate_commit));
+        bail!(
+            "candidate branch `{}` no longer points to reviewed commit {}",
+            review.candidate_branch,
+            short(&review.candidate_commit)
+        );
     }
 
     if decision == ReviewDecision::Accepted {
@@ -835,7 +893,8 @@ pub fn decide_review(
             bail!("accepted reviews cannot carry proposed edits");
         }
         let target_ref = format!("refs/heads/{target}");
-        let target_previous = vcs.ref_commit(&target_ref)?
+        let target_previous = vcs
+            .ref_commit(&target_ref)?
             .with_context(|| format!("target branch `{target}` does not exist"))?;
         let publication = PublicationIntent {
             schema: 1,
@@ -850,7 +909,10 @@ pub fn decide_review(
             completed_at: None,
         };
         store.write_publication(&publication)?;
-        vcs.commit_store(&store.store_name(), &format!("llaundry: prepare publication {id}"))?;
+        vcs.commit_store(
+            &store.store_name(),
+            &format!("llaundry: prepare publication {id}"),
+        )?;
         return recover_publication(store, vcs, id);
     }
 
@@ -870,7 +932,8 @@ pub fn decide_review(
         suggestion_branch,
         suggestion_commit,
         output_commit: None,
-        integrated_commit: (decision == ReviewDecision::Accepted).then(|| review.candidate_commit.clone()),
+        integrated_commit: (decision == ReviewDecision::Accepted)
+            .then(|| review.candidate_commit.clone()),
         target_ref: target_ref.clone(),
         target_previous: target_previous.clone(),
         worked_by: None,
@@ -882,19 +945,25 @@ pub fn decide_review(
     };
     store.write_result(id, &result, notes)?;
 
-    vcs.commit_store(&store.store_name(), &format!("llaundry: {:?} review {id}", decision))
+    vcs.commit_store(
+        &store.store_name(),
+        &format!("llaundry: {:?} review {id}", decision),
+    )
 }
 
 /// Resume or finish a prepared review publication. Safe to call before or
 /// after the target ref has moved; any unrelated target movement is refused.
 pub fn recover_publication(store: &Store, vcs: &dyn Vcs, id: &str) -> Result<()> {
-    let mut publication = store.read_publication(id)?
+    let mut publication = store
+        .read_publication(id)?
         .with_context(|| format!("review `{id}` has no prepared publication"))?;
     if publication.completed_at.is_some() {
         return Ok(());
     }
     let (meta, _) = store.read_node(id)?;
-    let review = meta.review.with_context(|| format!("node `{id}` is not a review"))?;
+    let review = meta
+        .review
+        .with_context(|| format!("node `{id}` is not a review"))?;
     if review.implementation != publication.implementation
         || review.candidate_commit != publication.candidate_commit
     {
@@ -902,10 +971,14 @@ pub fn recover_publication(store: &Store, vcs: &dyn Vcs, id: &str) -> Result<()>
     }
     let candidate_ref = format!("refs/heads/{}", review.candidate_branch);
     if vcs.ref_commit(&candidate_ref)?.as_deref() != Some(&publication.candidate_commit) {
-        bail!("candidate branch `{}` no longer points to reviewed commit {}",
-            review.candidate_branch, short(&publication.candidate_commit));
+        bail!(
+            "candidate branch `{}` no longer points to reviewed commit {}",
+            review.candidate_branch,
+            short(&publication.candidate_commit)
+        );
     }
-    let target_now = vcs.ref_commit(&publication.target_ref)?
+    let target_now = vcs
+        .ref_commit(&publication.target_ref)?
         .with_context(|| format!("target branch `{}` does not exist", publication.target))?;
     if target_now == publication.target_previous {
         if !vcs.publish_fast_forward(
@@ -916,8 +989,12 @@ pub fn recover_publication(store: &Store, vcs: &dyn Vcs, id: &str) -> Result<()>
             bail!("reviewed candidate cannot fast-forward `{}`; create follow-up implementation work and review the changed result", publication.target);
         }
     } else if target_now != publication.candidate_commit {
-        bail!("target `{}` moved from {} to {} while publication was pending",
-            publication.target, short(&publication.target_previous), short(&target_now));
+        bail!(
+            "target `{}` moved from {} to {} while publication was pending",
+            publication.target,
+            short(&publication.target_previous),
+            short(&target_now)
+        );
     }
 
     let result = ResultMeta {
@@ -942,7 +1019,9 @@ pub fn recover_publication(store: &Store, vcs: &dyn Vcs, id: &str) -> Result<()>
         context: Vec::new(),
     };
     store.write_result(id, &result, &publication.notes)?;
-    let Some((mut implementation, implementation_notes)) = store.read_result(&review.implementation)? else {
+    let Some((mut implementation, implementation_notes)) =
+        store.read_result(&review.implementation)?
+    else {
         bail!("reviewed implementation disappeared");
     };
     if implementation.output_commit.as_deref() != Some(&publication.candidate_commit) {
@@ -952,22 +1031,41 @@ pub fn recover_publication(store: &Store, vcs: &dyn Vcs, id: &str) -> Result<()>
     implementation.target_ref = Some(publication.target_ref.clone());
     implementation.target_previous = Some(publication.target_previous.clone());
     implementation.publication_pending = false;
-    store.write_result(&review.implementation, &implementation, &implementation_notes)?;
+    store.write_result(
+        &review.implementation,
+        &implementation,
+        &implementation_notes,
+    )?;
     publication.completed_at = Some(now_millis());
     store.write_publication(&publication)?;
-    vcs.commit_store(&store.store_name(), &format!("llaundry: complete publication {id}"))
+    vcs.commit_store(
+        &store.store_name(),
+        &format!("llaundry: complete publication {id}"),
+    )
 }
 
-fn latest_review_decision(store: &Store, implementation: &str, commit: &str) -> Option<ReviewDecision> {
+fn latest_review_decision(
+    store: &Store,
+    implementation: &str,
+    commit: &str,
+) -> Option<ReviewDecision> {
     let mut matching = Vec::new();
     for id in store.list_ids().ok()? {
-        let Ok((meta, _)) = store.read_node(&id) else { continue };
-        if meta.review.as_ref().is_some_and(|r| r.implementation == implementation && r.candidate_commit == commit) {
+        let Ok((meta, _)) = store.read_node(&id) else {
+            continue;
+        };
+        if meta
+            .review
+            .as_ref()
+            .is_some_and(|r| r.implementation == implementation && r.candidate_commit == commit)
+        {
             matching.push(id);
         }
     }
     matching.sort();
-    matching.last().and_then(|id| store.read_result(id).ok().flatten())
+    matching
+        .last()
+        .and_then(|id| store.read_result(id).ok().flatten())
         .and_then(|(result, _)| result.review_decision)
 }
 
@@ -998,9 +1096,14 @@ pub fn current_status(store: &Store, id: &str) -> Status {
 /// based on [`Status`]; this query explains why an otherwise-open node cannot
 /// or should not be worked.
 pub fn node_state(store: &Store, id: &str) -> NodeState {
-    let Ok((meta, _)) = store.read_node(id) else { return NodeState::Open };
+    let Ok((meta, _)) = store.read_node(id) else {
+        return NodeState::Open;
+    };
     if meta.review.is_some() {
-        return match store.read_result(id).ok().flatten()
+        return match store
+            .read_result(id)
+            .ok()
+            .flatten()
             .and_then(|(result, _)| result.review_decision)
         {
             None => NodeState::AwaitingReview,
@@ -1008,11 +1111,19 @@ pub fn node_state(store: &Store, id: &str) -> NodeState {
             Some(ReviewDecision::Accepted) => NodeState::Integrated,
         };
     }
-    let result = store.read_result(id).ok().flatten().map(|(result, _)| result);
+    let result = store
+        .read_result(id)
+        .ok()
+        .flatten()
+        .map(|(result, _)| result);
     if let Some(result) = &result {
-        if result.integrated_commit.is_some() { return NodeState::Integrated; }
+        if result.integrated_commit.is_some() {
+            return NodeState::Integrated;
+        }
         if result.publication_pending {
-            let decision = result.output_commit.as_deref()
+            let decision = result
+                .output_commit
+                .as_deref()
                 .and_then(|commit| latest_review_decision(store, id, commit));
             return match decision {
                 Some(ReviewDecision::Rejected) => NodeState::Rejected,
@@ -1144,15 +1255,21 @@ pub fn is_ready(store: &Store, vcs: &dyn Vcs, id: &str) -> bool {
     if !blockers(store, vcs, id).is_empty() {
         return false;
     }
-    let Some((result, _)) = store.read_result(id).ok().flatten() else { return true };
+    let Some((result, _)) = store.read_result(id).ok().flatten() else {
+        return true;
+    };
     if result.publication_pending {
-        let Some(commit) = result.output_commit.as_deref() else { return false };
+        let Some(commit) = result.output_commit.as_deref() else {
+            return false;
+        };
         return latest_review_decision(store, id, commit) == Some(ReviewDecision::Rejected);
     }
     if current_status(store, id) != Status::Done {
         return true;
     }
-    let Some(commit) = result.output_commit.as_deref() else { return false };
+    let Some(commit) = result.output_commit.as_deref() else {
+        return false;
+    };
     latest_review_decision(store, id, commit) == Some(ReviewDecision::Rejected)
 }
 
@@ -1182,25 +1299,39 @@ pub fn rejected_review_feedback(store: &Store, implementation: &str) -> Option<(
     let mut attempts = store.list_attempt_ids().ok()?;
     attempts.reverse();
     for attempt_id in attempts {
-        let Ok(attempt) = store.read_attempt(&attempt_id) else { continue };
+        let Ok(attempt) = store.read_attempt(&attempt_id) else {
+            continue;
+        };
         if attempt.node != implementation {
             continue;
         }
-        let Some((attempt_result, _)) = store.read_attempt_result(&attempt_id).ok().flatten() else { continue };
-        let Some(commit) = attempt_result.output_commit else { continue };
+        let Some((attempt_result, _)) = store.read_attempt_result(&attempt_id).ok().flatten()
+        else {
+            continue;
+        };
+        let Some(commit) = attempt_result.output_commit else {
+            continue;
+        };
         let mut reviews = Vec::new();
         for id in store.list_ids().ok()? {
-            let Ok((meta, _)) = store.read_node(&id) else { continue };
-            if meta.review.as_ref().is_some_and(|r| r.attempt_id == attempt_id) {
+            let Ok((meta, _)) = store.read_node(&id) else {
+                continue;
+            };
+            if meta
+                .review
+                .as_ref()
+                .is_some_and(|r| r.attempt_id == attempt_id)
+            {
                 reviews.push(id);
             }
         }
         reviews.sort();
-        let Some(review_id) = reviews.last() else { continue };
+        let Some(review_id) = reviews.last() else {
+            continue;
+        };
         let (result, notes) = store.read_result(review_id).ok().flatten()?;
-        return (result.review_decision == Some(ReviewDecision::Rejected)).then(|| {
-            (notes, result.suggestion_commit.unwrap_or(commit))
-        });
+        return (result.review_decision == Some(ReviewDecision::Rejected))
+            .then(|| (notes, result.suggestion_commit.unwrap_or(commit)));
     }
     None
 }
@@ -1217,10 +1348,15 @@ pub fn recover_attempt(store: &Store, vcs: &dyn Vcs, attempt_id: &str) -> Result
         )?;
         attempt.prepared = true;
         store.write_attempt(&attempt)?;
-        vcs.commit_store(&store.store_name(), &format!("llaundry: recover attempt {attempt_id}"))?;
+        vcs.commit_store(
+            &store.store_name(),
+            &format!("llaundry: recover attempt {attempt_id}"),
+        )?;
     }
     if store.read_attempt_final(attempt_id)?.is_some()
-        && store.read_attempt_result(attempt_id)?.is_some_and(|(r, _)| r.output_commit.is_some())
+        && store
+            .read_attempt_result(attempt_id)?
+            .is_some_and(|(r, _)| r.output_commit.is_some())
     {
         return create_review_for_attempt(store, vcs, attempt_id).map(Some);
     }
@@ -1365,7 +1501,11 @@ pub fn check(store: &Store) -> Result<Vec<String>> {
                     review.implementation
                 ));
             }
-            if !meta.derived_from.iter().any(|node| node == &review.implementation) {
+            if !meta
+                .derived_from
+                .iter()
+                .any(|node| node == &review.implementation)
+            {
                 problems.push(format!(
                     "{id}: review target `{}` is not also a derived_from relationship",
                     review.implementation
@@ -1393,25 +1533,39 @@ pub fn check(store: &Store) -> Result<Vec<String>> {
             }
         };
         if !store.exists(&attempt.node) {
-            problems.push(format!("attempt {attempt_id}: node `{}` is missing", attempt.node));
+            problems.push(format!(
+                "attempt {attempt_id}: node `{}` is missing",
+                attempt.node
+            ));
         }
         let result = store.read_attempt_result(&attempt_id)?;
         if result.is_some() && !attempt.prepared {
-            problems.push(format!("attempt {attempt_id}: result exists before workspace preparation"));
+            problems.push(format!(
+                "attempt {attempt_id}: result exists before workspace preparation"
+            ));
         }
         if let Some((result, _)) = &result {
             if result.attempt_id.as_deref() != Some(&attempt_id) {
-                problems.push(format!("attempt {attempt_id}: result names a different attempt"));
+                problems.push(format!(
+                    "attempt {attempt_id}: result names a different attempt"
+                ));
             }
         }
         if let Some(final_meta) = store.read_attempt_final(&attempt_id)? {
             if final_meta.backend_succeeded && result.is_none() {
-                problems.push(format!("attempt {attempt_id}: successful final record has no result"));
+                problems.push(format!(
+                    "attempt {attempt_id}: successful final record has no result"
+                ));
             }
-            if result.as_ref().is_some_and(|(r, _)| r.output_commit.is_some()) {
+            if result
+                .as_ref()
+                .is_some_and(|(r, _)| r.output_commit.is_some())
+            {
                 let count = reviews_by_attempt.get(&attempt_id).copied().unwrap_or(0);
                 if count != 1 {
-                    problems.push(format!("attempt {attempt_id}: sealed project result has {count} reviews"));
+                    problems.push(format!(
+                        "attempt {attempt_id}: sealed project result has {count} reviews"
+                    ));
                 }
             }
         }
@@ -1426,7 +1580,9 @@ pub fn check(store: &Store) -> Result<Vec<String>> {
             continue;
         }
         if publication.completed_at.is_none() {
-            problems.push(format!("publication {review}: incomplete; run recover-publication"));
+            problems.push(format!(
+                "publication {review}: incomplete; run recover-publication"
+            ));
         }
         if publication.completed_at.is_some() {
             let accepted = store.read_result(&review)?.is_some_and(|(result, _)| {
@@ -1434,7 +1590,9 @@ pub fn check(store: &Store) -> Result<Vec<String>> {
                     && result.integrated_commit.as_deref() == Some(&publication.candidate_commit)
             });
             if !accepted {
-                problems.push(format!("publication {review}: marked complete without matching accepted review"));
+                problems.push(format!(
+                    "publication {review}: marked complete without matching accepted review"
+                ));
             }
         }
     }
@@ -1743,7 +1901,9 @@ fn pin_context(store: &Store, vcs: &dyn Vcs, paths: &[String]) -> Result<Vec<Con
     paths
         .iter()
         .map(|path| {
-            let blob = vcs.file_blob(path)?.or_else(|| file_blob(&root.join(path)))
+            let blob = vcs
+                .file_blob(path)?
+                .or_else(|| file_blob(&root.join(path)))
                 .with_context(|| format!("cannot pin `{path}`: file not found"))?;
             Ok(ContextPin {
                 path: path.clone(),
@@ -1808,7 +1968,9 @@ mod tests {
             ..Default::default()
         };
         fake.commits.borrow_mut().insert("base".into());
-        fake.refs.borrow_mut().insert("refs/heads/main".into(), "base".into());
+        fake.refs
+            .borrow_mut()
+            .insert("refs/heads/main".into(), "base".into());
         let id = add(store, &fake, new_node("implement it", vec![])).unwrap();
         let branch = "llaundry/candidates/attempt-1".to_string();
         store
@@ -1846,7 +2008,14 @@ mod tests {
             }),
         )
         .unwrap();
-        assert!(store.read_result(&id).unwrap().unwrap().0.publication_pending);
+        assert!(
+            store
+                .read_result(&id)
+                .unwrap()
+                .unwrap()
+                .0
+                .publication_pending
+        );
         store
             .write_attempt_final(
                 "attempt-1",
@@ -1856,7 +2025,9 @@ mod tests {
                 },
             )
             .unwrap();
-        fake.refs.borrow_mut().insert(format!("refs/heads/{branch}"), "candidate-1".into());
+        fake.refs
+            .borrow_mut()
+            .insert(format!("refs/heads/{branch}"), "candidate-1".into());
         (fake, id, "candidate-1".into())
     }
 
@@ -1952,7 +2123,9 @@ mod tests {
 
         let dependency = add(&store, &fake, new_node("dependency", vec![])).unwrap();
         let blocked = add(&store, &fake, new_node("blocked", vec![dependency])).unwrap();
-        assert!(authorize_execution_start(&store, &fake, &blocked, Author::Machine, false).is_err());
+        assert!(
+            authorize_execution_start(&store, &fake, &blocked, Author::Machine, false).is_err()
+        );
         assert!(authorize_execution_start(&store, &fake, &blocked, Author::Machine, true).is_ok());
     }
 
@@ -2031,7 +2204,10 @@ mod tests {
             &store,
             &fake,
             &workspace.identity.attempt_id,
-            WorkedBy { backend: "test".into(), model: None },
+            WorkedBy {
+                backend: "test".into(),
+                model: None
+            },
             0,
             &[],
             true,
@@ -2047,7 +2223,10 @@ mod tests {
             &store,
             &fake,
             "attempt-1",
-            WorkedBy { backend: "test".into(), model: None },
+            WorkedBy {
+                backend: "test".into(),
+                model: None,
+            },
             0,
             &[],
             false,
@@ -2055,10 +2234,22 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(
-            store.read_node(&review).unwrap().0.review.unwrap().implementation,
+            store
+                .read_node(&review)
+                .unwrap()
+                .0
+                .review
+                .unwrap()
+                .implementation,
             implementation
         );
-        assert!(!store.read_attempt_final("attempt-1").unwrap().unwrap().backend_succeeded);
+        assert!(
+            !store
+                .read_attempt_final("attempt-1")
+                .unwrap()
+                .unwrap()
+                .backend_succeeded
+        );
     }
 
     #[test]
@@ -2069,7 +2260,10 @@ mod tests {
         let (meta, _) = store.read_node(&review).unwrap();
         assert_eq!(meta.assignee, Some(Author::Human));
         assert_eq!(meta.review.as_ref().unwrap().candidate_commit, commit);
-        assert!(!is_ready(&store, &fake, &implementation), "pending review gates rework");
+        assert!(
+            !is_ready(&store, &fake, &implementation),
+            "pending review gates rework"
+        );
 
         decide_review(
             &store,
@@ -2084,7 +2278,10 @@ mod tests {
         .unwrap();
         assert!(is_ready(&store, &fake, &implementation));
         let (review_result, notes) = store.read_result(&review).unwrap().unwrap();
-        assert_eq!(review_result.review_decision, Some(ReviewDecision::Rejected));
+        assert_eq!(
+            review_result.review_decision,
+            Some(ReviewDecision::Rejected)
+        );
         assert_eq!(notes, "please revise");
         assert_eq!(meta.review.unwrap().candidate_commit, commit);
     }
@@ -2099,7 +2296,9 @@ mod tests {
         assert_eq!(workspace.candidate_commit, commit);
         assert!(workspace.path.ends_with(format!("review-{review}")));
         assert_eq!(
-            fake.refs.borrow().get(&format!("refs/heads/{}", workspace.branch)),
+            fake.refs
+                .borrow()
+                .get(&format!("refs/heads/{}", workspace.branch)),
             Some(&commit)
         );
         fake.refs.borrow_mut().insert(
@@ -2120,7 +2319,10 @@ mod tests {
         .unwrap();
         let review_result = store.read_result(&review).unwrap().unwrap().0;
         assert_eq!(review_result.suggestion_branch, Some(workspace.branch));
-        assert_eq!(review_result.suggestion_commit.as_deref(), Some("suggestion-commit"));
+        assert_eq!(
+            review_result.suggestion_commit.as_deref(),
+            Some("suggestion-commit")
+        );
         assert!(prepare_review_edits(&store, &fake, &review).is_err());
     }
 
@@ -2186,19 +2388,23 @@ mod tests {
         let (_t, store) = temp_store();
         let (fake, implementation, commit) = candidate(&store);
         let review = create_review(&store, &fake, &implementation).unwrap();
-        store.write_publication(&PublicationIntent {
-            schema: 1,
-            review: review.clone(),
-            implementation: implementation.clone(),
-            candidate_commit: commit.clone(),
-            target: "main".into(),
-            target_ref: "refs/heads/main".into(),
-            target_previous: "base".into(),
-            notes: "approved".into(),
-            prepared_at: 1,
-            completed_at: None,
-        }).unwrap();
-        fake.refs.borrow_mut().insert("refs/heads/main".into(), commit.clone());
+        store
+            .write_publication(&PublicationIntent {
+                schema: 1,
+                review: review.clone(),
+                implementation: implementation.clone(),
+                candidate_commit: commit.clone(),
+                target: "main".into(),
+                target_ref: "refs/heads/main".into(),
+                target_previous: "base".into(),
+                notes: "approved".into(),
+                prepared_at: 1,
+                completed_at: None,
+            })
+            .unwrap();
+        fake.refs
+            .borrow_mut()
+            .insert("refs/heads/main".into(), commit.clone());
 
         recover_publication(&store, &fake, &review).unwrap();
         let publication = store.read_publication(&review).unwrap().unwrap();
@@ -2213,8 +2419,27 @@ mod tests {
         let (_t, store) = temp_store();
         let fake = FakeVcs::default();
         let id = add(&store, &fake, new_node("work", vec![])).unwrap();
-        let first = prepare_execution(&store, &fake, &id, Author::Machine, false, Some("base"), true).unwrap();
-        let error = prepare_execution(&store, &fake, &id, Author::Machine, true, Some("base"), true).err().unwrap();
+        let first = prepare_execution(
+            &store,
+            &fake,
+            &id,
+            Author::Machine,
+            false,
+            Some("base"),
+            true,
+        )
+        .unwrap();
+        let error = prepare_execution(
+            &store,
+            &fake,
+            &id,
+            Author::Machine,
+            true,
+            Some("base"),
+            true,
+        )
+        .err()
+        .unwrap();
         assert!(error.to_string().contains(&first.identity.attempt_id));
     }
 
@@ -2224,75 +2449,169 @@ mod tests {
         let (fake, implementation, _) = candidate(&store);
         let review = create_review(&store, &fake, &implementation).unwrap();
         let workspace = prepare_review_edits(&store, &fake, &review).unwrap();
-        assert_eq!(prepare_review_edits(&store, &fake, &review).unwrap().path, workspace.path);
-        decide_review(&store, &fake, &review, ReviewDecision::Rejected, "revise", "main", None, None).unwrap();
+        assert_eq!(
+            prepare_review_edits(&store, &fake, &review).unwrap().path,
+            workspace.path
+        );
+        decide_review(
+            &store,
+            &fake,
+            &review,
+            ReviewDecision::Rejected,
+            "revise",
+            "main",
+            None,
+            None,
+        )
+        .unwrap();
         let status = review_workspace_status(&store, &fake, &review).unwrap();
         assert!(status.exists);
         assert_eq!(status.clean, Some(true));
         assert!(cleanup_review_workspace(&store, &fake, &review).unwrap());
-        assert!(!review_workspace_status(&store, &fake, &review).unwrap().exists);
+        assert!(
+            !review_workspace_status(&store, &fake, &review)
+                .unwrap()
+                .exists
+        );
     }
 
     #[test]
     fn real_repository_rejection_rework_and_acceptance_lifecycle() {
         static E2E_COUNTER: AtomicU32 = AtomicU32::new(0);
         let n = E2E_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let root = std::env::temp_dir().join(format!(
-            "llaundry-review-e2e-{}-{n}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("llaundry-review-e2e-{}-{n}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let _temp = TempDir(root.clone());
         let initialized = init_workbench(root.join(".llaundry"), Some("e2e".into())).unwrap();
         let store = initialized.store;
         let canonical = crate::GitVcs::for_store(&store);
-        let implementation = add(&store, &canonical, new_node("implement reviewed content", vec![])).unwrap();
+        let implementation = add(
+            &store,
+            &canonical,
+            new_node("implement reviewed content", vec![]),
+        )
+        .unwrap();
 
         let first = prepare_execution(
-            &store, &canonical, &implementation, Author::Machine, false, None, true,
-        ).unwrap();
+            &store,
+            &canonical,
+            &implementation,
+            Author::Machine,
+            false,
+            None,
+            true,
+        )
+        .unwrap();
         std::fs::write(first.path.join("feature.txt"), "first\n").unwrap();
         let first_vcs = crate::GitVcs::for_execution(&store, first.path.clone());
         complete_with_execution(
-            &store, &first_vcs, &implementation, &["feature.txt".into()], &[], None,
-            "first candidate", Author::Machine, Some(first.identity.clone()),
-        ).unwrap();
+            &store,
+            &first_vcs,
+            &implementation,
+            &["feature.txt".into()],
+            &[],
+            None,
+            "first candidate",
+            Author::Machine,
+            Some(first.identity.clone()),
+        )
+        .unwrap();
         let first_review = finalize_execution_attempt(
-            &store, &first_vcs, &first.identity.attempt_id,
-            WorkedBy { backend: "test".into(), model: Some("test-model".into()) },
-            0, &[], true,
-        ).unwrap().unwrap();
+            &store,
+            &first_vcs,
+            &first.identity.attempt_id,
+            WorkedBy {
+                backend: "test".into(),
+                model: Some("test-model".into()),
+            },
+            0,
+            &[],
+            true,
+        )
+        .unwrap()
+        .unwrap();
         decide_review(
-            &store, &canonical, &first_review, ReviewDecision::Rejected,
-            "make it second", "main", None, None,
-        ).unwrap();
+            &store,
+            &canonical,
+            &first_review,
+            ReviewDecision::Rejected,
+            "make it second",
+            "main",
+            None,
+            None,
+        )
+        .unwrap();
 
         let second = prepare_execution(
-            &store, &canonical, &implementation, Author::Machine, false, None, true,
-        ).unwrap();
-        assert_eq!(std::fs::read_to_string(second.path.join("feature.txt")).unwrap(), "first\n");
+            &store,
+            &canonical,
+            &implementation,
+            Author::Machine,
+            false,
+            None,
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(second.path.join("feature.txt")).unwrap(),
+            "first\n"
+        );
         std::fs::write(second.path.join("feature.txt"), "second\n").unwrap();
         let second_vcs = crate::GitVcs::for_execution(&store, second.path.clone());
         complete_with_execution(
-            &store, &second_vcs, &implementation, &["feature.txt".into()], &[], None,
-            "second candidate", Author::Machine, Some(second.identity.clone()),
-        ).unwrap();
+            &store,
+            &second_vcs,
+            &implementation,
+            &["feature.txt".into()],
+            &[],
+            None,
+            "second candidate",
+            Author::Machine,
+            Some(second.identity.clone()),
+        )
+        .unwrap();
         let second_review = finalize_execution_attempt(
-            &store, &second_vcs, &second.identity.attempt_id,
-            WorkedBy { backend: "test".into(), model: Some("test-model".into()) },
-            0, &[], true,
-        ).unwrap().unwrap();
+            &store,
+            &second_vcs,
+            &second.identity.attempt_id,
+            WorkedBy {
+                backend: "test".into(),
+                model: Some("test-model".into()),
+            },
+            0,
+            &[],
+            true,
+        )
+        .unwrap()
+        .unwrap();
         decide_review(
-            &store, &canonical, &second_review, ReviewDecision::Accepted,
-            "approved", "main", None, None,
-        ).unwrap();
+            &store,
+            &canonical,
+            &second_review,
+            ReviewDecision::Accepted,
+            "approved",
+            "main",
+            None,
+            None,
+        )
+        .unwrap();
 
         assert_ne!(first_review, second_review);
-        assert!(store.read_attempt_result(&first.identity.attempt_id).unwrap().is_some());
-        assert!(store.read_attempt_result(&second.identity.attempt_id).unwrap().is_some());
+        assert!(store
+            .read_attempt_result(&first.identity.attempt_id)
+            .unwrap()
+            .is_some());
+        assert!(store
+            .read_attempt_result(&second.identity.attempt_id)
+            .unwrap()
+            .is_some());
         assert_eq!(node_state(&store, &implementation), NodeState::Integrated);
-        assert_eq!(std::fs::read_to_string(store.project_root().join("feature.txt")).unwrap(), "second\n");
+        assert_eq!(
+            std::fs::read_to_string(store.project_root().join("feature.txt")).unwrap(),
+            "second\n"
+        );
     }
 
     #[test]
@@ -2492,7 +2811,10 @@ mod tests {
         .unwrap();
         assert_eq!(commit.as_deref(), Some("commit-abc"));
         assert_eq!(current_status(&store, &id), Status::Done);
-        assert_eq!(output_of(&store, &id).unwrap().as_deref(), Some("commit-abc"));
+        assert_eq!(
+            output_of(&store, &id).unwrap().as_deref(),
+            Some("commit-abc")
+        );
 
         let (result, notes) = store.read_result(&id).unwrap().unwrap();
         assert_eq!(result.definition, store.node_version(&id).unwrap());
@@ -3110,7 +3432,10 @@ mod tests {
     #[test]
     fn pair_refuses_an_empty_project_and_a_different_root_without_force() {
         let (_t, store) = temp_store();
-        assert!(pair(&store, &FakeVcs::default(), None, false).is_err(), "no commits");
+        assert!(
+            pair(&store, &FakeVcs::default(), None, false).is_err(),
+            "no commits"
+        );
 
         let first = FakeVcs {
             root: Some("root-1".into()),
@@ -3122,9 +3447,15 @@ mod tests {
             root: Some("root-2".into()),
             ..Default::default()
         };
-        assert!(pair(&store, &other, None, false).is_err(), "mismatched root");
+        assert!(
+            pair(&store, &other, None, false).is_err(),
+            "mismatched root"
+        );
         // A deliberate re-pair (history rewrite) goes through with force.
-        assert_eq!(pair(&store, &other, None, true).unwrap().root_commit, "root-2");
+        assert_eq!(
+            pair(&store, &other, None, true).unwrap().root_commit,
+            "root-2"
+        );
     }
 
     #[test]
@@ -3195,7 +3526,11 @@ mod tests {
         fake.commits.borrow_mut().clear();
         let (_, problems) = verify_pairing(&store, &fake, true).unwrap();
         assert_eq!(problems.len(), 2, "{problems:?}");
-        assert!(problems.iter().any(|p| p.starts_with(&a) && p.contains("output commit")));
-        assert!(problems.iter().any(|p| p.starts_with(&b) && p.contains("built-against")));
+        assert!(problems
+            .iter()
+            .any(|p| p.starts_with(&a) && p.contains("output commit")));
+        assert!(problems
+            .iter()
+            .any(|p| p.starts_with(&b) && p.contains("built-against")));
     }
 }

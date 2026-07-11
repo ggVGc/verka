@@ -42,7 +42,10 @@ use sha1::{Digest, Sha1};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::model::{AttemptFinal, AttemptMeta, DefinitionVersion, NodeMeta, PublicationIntent, ResultMeta, ResultVersion};
+use crate::model::{
+    AttemptFinal, AttemptMeta, DefinitionVersion, NodeMeta, PublicationIntent, ResultMeta,
+    ResultVersion,
+};
 
 /// The project directory inside a workbench, beside the store.
 pub const PROJECT_DIR: &str = "project";
@@ -132,7 +135,10 @@ impl Store {
     }
 
     fn publication_path(&self, review: &str) -> PathBuf {
-        self.root.join("publications").join(review).join("publication.toml")
+        self.root
+            .join("publications")
+            .join(review)
+            .join("publication.toml")
     }
 
     pub fn exists(&self, id: &str) -> bool {
@@ -295,20 +301,29 @@ impl Store {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(e.into()),
         };
-        let meta = toml::from_str(&data).with_context(|| format!("parsing result for attempt `{id}`"))?;
+        let meta =
+            toml::from_str(&data).with_context(|| format!("parsing result for attempt `{id}`"))?;
         let notes = fs::read_to_string(self.attempt_result_path(id)).unwrap_or_default();
         Ok(Some((meta, notes)))
     }
 
     pub fn attempt_result_version(&self, id: &str) -> Result<ResultVersion> {
         let metadata = fs::read(self.attempt_result_meta_path(id))?;
-        let notes = fs::read(self.attempt_result_path(id)).ok().map(|bytes| blob_id(&bytes));
-        Ok(ResultVersion { metadata: blob_id(&metadata), notes })
+        let notes = fs::read(self.attempt_result_path(id))
+            .ok()
+            .map(|bytes| blob_id(&bytes));
+        Ok(ResultVersion {
+            metadata: blob_id(&metadata),
+            notes,
+        })
     }
 
     pub fn write_attempt_final(&self, id: &str, final_meta: &AttemptFinal) -> Result<()> {
         self.read_attempt(id)?;
-        fs::write(self.attempt_final_path(id), toml::to_string_pretty(final_meta)?)?;
+        fs::write(
+            self.attempt_final_path(id),
+            toml::to_string_pretty(final_meta)?,
+        )?;
         Ok(())
     }
 
@@ -354,13 +369,16 @@ impl Store {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
         };
-        Ok(Some(toml::from_str(&data)
-            .with_context(|| format!("parsing publication for review `{review}`"))?))
+        Ok(Some(toml::from_str(&data).with_context(|| {
+            format!("parsing publication for review `{review}`")
+        })?))
     }
 
     pub fn list_publication_ids(&self) -> Result<Vec<String>> {
         let dir = self.root.join("publications");
-        if !dir.exists() { return Ok(Vec::new()); }
+        if !dir.exists() {
+            return Ok(Vec::new());
+        }
         let mut ids = Vec::new();
         for entry in fs::read_dir(dir)? {
             let entry = entry?;

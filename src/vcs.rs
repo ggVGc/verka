@@ -175,7 +175,9 @@ impl Vcs for FakeVcs {
         if !self.commits.borrow().contains(old) || !self.commits.borrow().contains(new) {
             return Ok(false);
         }
-        self.refs.borrow_mut().insert(format!("refs/heads/{_target}"), new.to_string());
+        self.refs
+            .borrow_mut()
+            .insert(format!("refs/heads/{_target}"), new.to_string());
         Ok(true)
     }
 

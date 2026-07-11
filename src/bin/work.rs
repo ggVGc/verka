@@ -172,7 +172,13 @@ fn main() -> Result<()> {
     let store_abs = workbench_abs.join(store.store_name());
 
     let workspace = ops::prepare_execution(
-        &store, &vcs, &node, Author::Machine, cli.force, cli.base.as_deref(), !cli.dry_run,
+        &store,
+        &vcs,
+        &node,
+        Author::Machine,
+        cli.force,
+        cli.base.as_deref(),
+        !cli.dry_run,
     )?;
     let run_id = workspace.identity.attempt_id.clone();
     let candidate_branch = workspace.identity.candidate_branch.clone();
@@ -208,8 +214,7 @@ fn main() -> Result<()> {
         BackendKind::ClaudeCode => {
             let cc = &config.work.claude_code;
             Box::new(ClaudeCode::new(
-                cli
-                    .claude_bin
+                cli.claude_bin
                     .clone()
                     .or_else(|| cc.bin.clone())
                     .unwrap_or_else(|| "claude".into()),
@@ -315,7 +320,10 @@ fn main() -> Result<()> {
     )?;
 
     if !outcome.success {
-        eprintln!("llaundry-work: retained worktree {}", workspace.path.display());
+        eprintln!(
+            "llaundry-work: retained worktree {}",
+            workspace.path.display()
+        );
         bail!("backend session exited unsuccessfully");
     }
 
@@ -326,7 +334,8 @@ fn main() -> Result<()> {
     if !ops::finish_attempt_workspace(&store, &vcs, &run_id, cli.keep_worktree)? {
         eprintln!(
             "llaundry-work: retained candidate worktree {} on {}",
-            workspace.path.display(), workspace.identity.candidate_branch
+            workspace.path.display(),
+            workspace.identity.candidate_branch
         );
     }
     Ok(())
@@ -344,7 +353,11 @@ fn main() -> Result<()> {
 /// pinnable file content. Everything stays visible in the raw log either way.
 /// Deduplicated, transcript order. Unparseable lines are skipped: the log may
 /// hold non-transcript events (the attempt header) and half-written tails.
-fn observed_reads(log: &str, store: &Store, execution_root: Option<&std::path::Path>) -> Vec<String> {
+fn observed_reads(
+    log: &str,
+    store: &Store,
+    execution_root: Option<&std::path::Path>,
+) -> Vec<String> {
     let root = execution_root
         .map(std::path::Path::to_path_buf)
         .unwrap_or_else(|| store.project_root());
@@ -487,8 +500,8 @@ fn now_millis() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use llaundry::Vcs;
     use llaundry::Author;
+    use llaundry::Vcs;
 
     /// Minimal in-memory [`Vcs`] — the library's `FakeVcs` is `cfg(test)` there,
     /// invisible to this crate's tests. Ready-node queries only read, so no-ops do.
@@ -542,7 +555,12 @@ mod tests {
         fn publish_fast_forward(&self, _target: &str, _old: &str, _new: &str) -> Result<bool> {
             Ok(false)
         }
-        fn create_worktree(&self, _path: &std::path::Path, _branch: &str, _rev: &str) -> Result<()> {
+        fn create_worktree(
+            &self,
+            _path: &std::path::Path,
+            _branch: &str,
+            _rev: &str,
+        ) -> Result<()> {
             Ok(())
         }
         fn worktree_clean(&self, _path: &std::path::Path) -> Result<bool> {
@@ -561,7 +579,11 @@ mod tests {
         let store = Store::init(dir.join(".llaundry")).unwrap();
         let vcs = NullVcs;
 
-        assert_eq!(ops::first_ready_for(&store, &vcs, Author::Machine).unwrap(), None, "empty store");
+        assert_eq!(
+            ops::first_ready_for(&store, &vcs, Author::Machine).unwrap(),
+            None,
+            "empty store"
+        );
 
         let node = |description: &str, assignee, depends_on| {
             ops::add(
@@ -587,7 +609,10 @@ mod tests {
         let a = node("do a thing", None, vec![]);
         let _blocked = node("after a", None, vec![a.clone()]);
         let _also_blocked = node("after the question", None, vec![question]);
-        assert_eq!(ops::first_ready_for(&store, &vcs, Author::Machine).unwrap(), Some(a));
+        assert_eq!(
+            ops::first_ready_for(&store, &vcs, Author::Machine).unwrap(),
+            Some(a)
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -620,7 +645,10 @@ mod tests {
         ]
         .join("\n");
 
-        assert_eq!(observed_reads(&log, &store, None), ["README.md", "src/lib.rs"]);
+        assert_eq!(
+            observed_reads(&log, &store, None),
+            ["README.md", "src/lib.rs"]
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -672,5 +700,4 @@ mod tests {
         // The log is included verbatim (sans trailing newline).
         assert!(prompt.contains("{\"event\":\"attempt\"}\n{\"tool\":\"add_node\"}"));
     }
-
 }

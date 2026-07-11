@@ -68,7 +68,9 @@ mod tests {
             Some("claude-opus-4-1".into())
         );
         assert_eq!(
-            event_model(r#"{"type":"assistant","message":{"model":"claude-sonnet-4-5","content":[]}}"#),
+            event_model(
+                r#"{"type":"assistant","message":{"model":"claude-sonnet-4-5","content":[]}}"#
+            ),
             Some("claude-sonnet-4-5".into())
         );
         // Codex: session configuration events.

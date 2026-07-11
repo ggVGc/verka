@@ -311,11 +311,39 @@ dependencies = [
  "anyhow",
  "clap",
  "crossterm",
+ "llaundry-core",
+ "llaundry-review",
+ "llaundry-work",
  "serde",
  "serde_json",
  "sha1",
  "toml",
  "ulid",
+]
+
+[[package]]
+name = "llaundry-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "llaundry-review"
+version = "0.1.0"
+dependencies = [
+ "llaundry-core",
+ "serde",
+]
+
+[[package]]
+name = "llaundry-work"
+version = "0.1.0"
+dependencies = [
+ "llaundry-core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

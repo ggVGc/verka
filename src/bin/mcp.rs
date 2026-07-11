@@ -91,12 +91,14 @@ impl Ctx {
             .as_deref()
             .map(|id| store.read_attempt(id))
             .transpose()
-            .map(|attempt| attempt.map(|a| ExecutionIdentity {
-                node_id: a.node,
-                attempt_id: a.id,
-                candidate_branch: a.candidate_branch,
-                force: a.force,
-            }))
+            .map(|attempt| {
+                attempt.map(|a| ExecutionIdentity {
+                    node_id: a.node,
+                    attempt_id: a.id,
+                    candidate_branch: a.candidate_branch,
+                    force: a.force,
+                })
+            })
     }
 }
 
@@ -306,7 +308,14 @@ impl Tool for CompleteNode {
         let notes = opt_str(args, "notes").unwrap_or_default();
         let author = enum_or(args, "author", Author::Machine)?;
         let commit = ops::complete_with_execution(
-            &store, &vcs, &id, &outputs, &context, message, &notes, author,
+            &store,
+            &vcs,
+            &id,
+            &outputs,
+            &context,
+            message,
+            &notes,
+            author,
             ctx.execution(&store)?,
         )?;
         Ok(match commit {

@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2021"
 description = "A content-addressed, immutable graph database for LLM-assisted development"
 
+[workspace]
+members = ["crates/llaundry-core", "crates/llaundry-work", "crates/llaundry-review"]
+resolver = "2"
+
 [lib]
 name = "llaundry"
 path = "src/lib.rs"
@@ -37,3 +41,6 @@ serde_json = "1"
 sha1 = "0.10"
 toml = "0.8"
 ulid = "1"
+llaundry-core = { path = "crates/llaundry-core" }
+llaundry-work = { path = "crates/llaundry-work" }
+llaundry-review = { path = "crates/llaundry-review" }

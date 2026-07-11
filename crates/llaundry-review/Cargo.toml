@@ -1,0 +1,10 @@
+[package]
+name = "llaundry-review"
+version = "0.1.0"
+edition = "2021"
+description = "Candidate review and publication contracts"
+
+[dependencies]
+llaundry-core = { path = "../llaundry-core" }
+serde = { version = "1", features = ["derive"] }
+

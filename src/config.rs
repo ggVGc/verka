@@ -184,7 +184,10 @@ mod tests {
     fn parses_openai_codex_settings() {
         let dir = std::env::temp_dir().join(format!("llaundry-cfg-codex-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        write(&dir, "[work.openai-codex]\nmodel = \"gpt-5-codex\"\nbin = \"/opt/codex\"\n");
+        write(
+            &dir,
+            "[work.openai-codex]\nmodel = \"gpt-5-codex\"\nbin = \"/opt/codex\"\n",
+        );
         let cfg = Config::load(&dir).unwrap();
         assert_eq!(cfg.work.openai_codex.model.as_deref(), Some("gpt-5-codex"));
         assert_eq!(cfg.work.openai_codex.bin.as_deref(), Some("/opt/codex"));

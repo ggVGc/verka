@@ -50,9 +50,17 @@ pub fn create_worktree(project: &Path, path: PathBuf, branch: &str, rev: &str) -
         }
         checked(project, &["worktree", "add", &path_arg, branch])?;
     } else {
-        checked(project, &["worktree", "add", "-b", branch, &path_arg, &input_commit])?;
+        checked(
+            project,
+            &["worktree", "add", "-b", branch, &path_arg, &input_commit],
+        )?;
     }
-    Ok(Worktree { path, branch: branch.to_string(), input_commit, input_tree })
+    Ok(Worktree {
+        path,
+        branch: branch.to_string(),
+        input_commit,
+        input_tree,
+    })
 }
 
 pub fn worktree_clean(path: &Path) -> Result<bool> {
@@ -109,11 +117,16 @@ impl Vcs for GitVcs {
         Ok(Some(checked(&self.project, &["rev-parse", "HEAD"])?))
     }
     fn current_branch(&self) -> Result<Option<String>> {
-        let out = git(&self.project, &["symbolic-ref", "--quiet", "--short", "HEAD"])?;
+        let out = git(
+            &self.project,
+            &["symbolic-ref", "--quiet", "--short", "HEAD"],
+        )?;
         if !out.status.success() {
             return Ok(None);
         }
-        Ok(Some(String::from_utf8_lossy(&out.stdout).trim().to_string()))
+        Ok(Some(
+            String::from_utf8_lossy(&out.stdout).trim().to_string(),
+        ))
     }
     fn resolve_revision(&self, rev: &str) -> Result<(String, String)> {
         resolve_revision(&self.project, rev)
@@ -142,7 +155,10 @@ impl Vcs for GitVcs {
         // status column from the first line (for example ` M file`).
         let out = git(&self.project, &["status", "--porcelain"])?;
         if !out.status.success() {
-            bail!("`git status --porcelain` failed: {}", String::from_utf8_lossy(&out.stderr).trim());
+            bail!(
+                "`git status --porcelain` failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
         }
         Ok(String::from_utf8_lossy(&out.stdout)
             .lines()
@@ -163,7 +179,9 @@ impl Vcs for GitVcs {
         // `cat-file -e` exits non-zero for a missing object; that is the
         // answer, not an error.
         let probe = format!("{hash}^{{commit}}");
-        Ok(git(&self.project, &["cat-file", "-e", &probe])?.status.success())
+        Ok(git(&self.project, &["cat-file", "-e", &probe])?
+            .status
+            .success())
     }
 
     fn remote_url(&self) -> Result<Option<String>> {
@@ -181,7 +199,9 @@ impl Vcs for GitVcs {
         if !out.status.success() {
             return Ok(None);
         }
-        Ok(Some(String::from_utf8_lossy(&out.stdout).trim().to_string()))
+        Ok(Some(
+            String::from_utf8_lossy(&out.stdout).trim().to_string(),
+        ))
     }
 
     fn publish_fast_forward(&self, target: &str, old: &str, new: &str) -> Result<bool> {
@@ -195,9 +215,13 @@ impl Vcs for GitVcs {
             if checked(&self.project, &["rev-parse", "HEAD"])? != old {
                 return Ok(false);
             }
-            return Ok(git(&self.project, &["merge", "--ff-only", new])?.status.success());
+            return Ok(git(&self.project, &["merge", "--ff-only", new])?
+                .status
+                .success());
         }
-        Ok(git(&self.project, &["update-ref", &target_ref, new, old])?.status.success())
+        Ok(git(&self.project, &["update-ref", &target_ref, new, old])?
+            .status
+            .success())
     }
     fn create_worktree(&self, path: &Path, branch: &str, rev: &str) -> Result<()> {
         create_worktree(&self.project, path.to_path_buf(), branch, rev)?;
@@ -227,10 +251,16 @@ pub fn ensure_repo(dir: &Path) -> Result<bool> {
 /// First-parent keeps the answer single and deterministic even after merges
 /// of unrelated histories.
 pub fn root_commit(base: &Path) -> Result<Option<String>> {
-    if !git(base, &["rev-parse", "--verify", "--quiet", "HEAD"])?.status.success() {
+    if !git(base, &["rev-parse", "--verify", "--quiet", "HEAD"])?
+        .status
+        .success()
+    {
         return Ok(None); // no commits yet
     }
-    let out = checked(base, &["rev-list", "--max-parents=0", "--first-parent", "HEAD"])?;
+    let out = checked(
+        base,
+        &["rev-list", "--max-parents=0", "--first-parent", "HEAD"],
+    )?;
     Ok(out.lines().next().map(str::to_string))
 }
 
@@ -315,7 +345,11 @@ fn commit_files(base: &Path, commit: &str) -> Result<Vec<String>> {
             commit,
         ],
     )?;
-    Ok(out.lines().filter(|l| !l.is_empty()).map(str::to_string).collect())
+    Ok(out
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect())
 }
 
 /// If any file introduced by `commit` differs from its state at that commit,
@@ -363,10 +397,10 @@ mod tests {
     fn isolated_worktree_captures_without_touching_checkout_and_ref_survives_cleanup() {
         let (_temp, project) = repo();
         let original = checked(&project, &["rev-parse", "HEAD"]).unwrap();
-        let path = project.parent().unwrap().join(format!(
-            ".llaundry-worktree-test-{}",
-            ulid::Ulid::new()
-        ));
+        let path = project
+            .parent()
+            .unwrap()
+            .join(format!(".llaundry-worktree-test-{}", ulid::Ulid::new()));
         let branch = format!("llaundry/candidates/{}", ulid::Ulid::new());
         let worktree = create_worktree(&project, path.clone(), &branch, "HEAD").unwrap();
         assert_eq!(worktree.input_commit, original);
@@ -377,7 +411,10 @@ mod tests {
         let output = vcs.capture(&["file.txt".into()], "node output").unwrap();
         vcs.retain_output("node-test", &output).unwrap();
 
-        assert_eq!(std::fs::read_to_string(project.join("file.txt")).unwrap(), "base\n");
+        assert_eq!(
+            std::fs::read_to_string(project.join("file.txt")).unwrap(),
+            "base\n"
+        );
         assert_eq!(checked(&project, &["rev-parse", "HEAD"]).unwrap(), original);
         assert!(worktree_clean(&path).unwrap());
 
@@ -388,10 +425,13 @@ mod tests {
             checked(&project, &["rev-parse", "refs/llaundry/outputs/node-test"]).unwrap(),
             output
         );
-        assert!(git(&project, &["cat-file", "-e", &format!("{output}^{{commit}}")])
-            .unwrap()
-            .status
-            .success());
+        assert!(git(
+            &project,
+            &["cat-file", "-e", &format!("{output}^{{commit}}")]
+        )
+        .unwrap()
+        .status
+        .success());
     }
 
     #[test]
@@ -411,9 +451,18 @@ mod tests {
 
         let vcs = GitVcs::new(project.clone(), project.parent().unwrap().to_path_buf());
         assert!(vcs.publish_fast_forward("main", &base, &candidate).unwrap());
-        assert_eq!(checked(&project, &["rev-parse", "HEAD"]).unwrap(), candidate);
-        assert_eq!(std::fs::read_to_string(project.join("file.txt")).unwrap(), "accepted\n");
+        assert_eq!(
+            checked(&project, &["rev-parse", "HEAD"]).unwrap(),
+            candidate
+        );
+        assert_eq!(
+            std::fs::read_to_string(project.join("file.txt")).unwrap(),
+            "accepted\n"
+        );
         remove_worktree(&project, &path).unwrap();
-        assert_eq!(checked(&project, &["rev-parse", &branch]).unwrap(), candidate);
+        assert_eq!(
+            checked(&project, &["rev-parse", &branch]).unwrap(),
+            candidate
+        );
     }
 }
