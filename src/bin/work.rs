@@ -137,24 +137,7 @@ fn main() -> Result<()> {
         .or_else(|| config.work.mcp_bin.clone())
         .unwrap_or_else(|| "llaundry-mcp".into());
 
-    // A node assigned to a human is not an LLM's to work — it is waiting for a
-    // human's answer (typically a question node minted by a paused worker).
-    if meta.assignee == Some(Author::Human) && !cli.force {
-        bail!(
-            "node `{}` is assigned to a human; answer it (llaundry complete) or pass --force",
-            node
-        );
-    }
-
-    // Don't launch work on a node whose dependencies aren't satisfied, unless forced.
-    let blockers = ops::blockers(&store, &vcs, &node);
-    if !blockers.is_empty() && !cli.force {
-        bail!(
-            "node `{}` is blocked; resolve its dependencies or pass --force:\n  {}",
-            node,
-            blockers.join("\n  ")
-        );
-    }
+    ops::authorize_execution_start(&store, &vcs, &node, Author::Machine, cli.force)?;
 
     // Open with no result and a recorded log means a paused unit of work (it
     // stopped mid-unit, e.g. on a question node): replay the log so the new
@@ -188,6 +171,21 @@ fn main() -> Result<()> {
     let run_id = ulid::Ulid::new().to_string();
     let candidate_branch = format!("llaundry/candidates/{run_id}");
     let worktree_path = workbench_abs.join(".llaundry-worktrees").join(&run_id);
+    let mut mcp_args = vec![
+        "--store".into(),
+        store_abs.to_string_lossy().into_owned(),
+        "--project".into(),
+        worktree_path.to_string_lossy().into_owned(),
+        "--node-id".into(),
+        node.clone(),
+        "--attempt-id".into(),
+        run_id.clone(),
+        "--candidate-branch".into(),
+        candidate_branch.clone(),
+    ];
+    if cli.force {
+        mcp_args.push("--force-execution".into());
+    }
 
     let mut session = Session {
         node_id: node.clone(),
@@ -203,18 +201,7 @@ fn main() -> Result<()> {
         mcp: McpServer {
             name: "llaundry".into(),
             command: mcp_bin,
-            args: vec![
-                "--store".into(),
-                store_abs.to_string_lossy().into_owned(),
-                "--project".into(),
-                worktree_path.to_string_lossy().into_owned(),
-                "--node-id".into(),
-                node.clone(),
-                "--attempt-id".into(),
-                run_id.clone(),
-                "--candidate-branch".into(),
-                candidate_branch.clone(),
-            ],
+            args: mcp_args,
         },
     };
 

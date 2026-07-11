@@ -51,6 +51,9 @@ struct Cli {
     /// Permanent candidate branch supplied by llaundry-work.
     #[arg(long, requires_all = ["node_id", "attempt_id", "project"])]
     candidate_branch: Option<String>,
+    /// This execution was explicitly authorized to bypass graph readiness.
+    #[arg(long, requires = "node_id")]
+    force_execution: bool,
 }
 
 fn main() -> Result<()> {
@@ -60,6 +63,7 @@ fn main() -> Result<()> {
             node_id,
             attempt_id,
             candidate_branch,
+            force: cli.force_execution,
         },
     );
     Server::new(cli.store, cli.project, execution).serve()

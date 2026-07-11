@@ -205,6 +205,7 @@ pub struct ExecutionIdentity {
     pub node_id: String,
     pub attempt_id: String,
     pub candidate_branch: String,
+    pub force: bool,
 }
 
 /// Contents of `result.toml` — the record of the node's one unit of work.

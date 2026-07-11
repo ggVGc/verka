@@ -129,7 +129,7 @@ pub fn complete_with_execution(
         bail!("machine-produced project content requires an isolated execution identity and candidate branch");
     }
     if let Some(execution) = &execution {
-        validate_execution(vcs, id, author, execution)?;
+        validate_execution(store, vcs, id, author, execution)?;
     }
     // The only uncommitted project changes allowed are the outputs we are about
     // to commit — completion is where output provenance is asserted.
@@ -246,7 +246,7 @@ pub fn fail_with_execution(
     execution: Option<ExecutionIdentity>,
 ) -> Result<()> {
     if let Some(execution) = &execution {
-        validate_execution(vcs, id, author, execution)?;
+        validate_execution(store, vcs, id, author, execution)?;
     }
     let (meta, _) = store.read_node(id)?;
     let built_against = pin_deps(store, &meta)?;
@@ -280,6 +280,7 @@ pub fn fail_with_execution(
 }
 
 fn validate_execution(
+    store: &Store,
     vcs: &dyn Vcs,
     id: &str,
     author: Author,
@@ -294,6 +295,7 @@ fn validate_execution(
             execution.node_id
         );
     }
+    authorize_execution_start(store, vcs, id, Author::Machine, execution.force)?;
     let expected = format!("llaundry/candidates/{}", execution.attempt_id);
     if execution.candidate_branch != expected {
         bail!(
@@ -307,6 +309,41 @@ fn validate_execution(
             "execution worktree is not on candidate branch `{}`",
             execution.candidate_branch
         );
+    }
+    Ok(())
+}
+
+/// Enforce the graph policy for starting or finalizing work through an
+/// execution driver. `force` is explicit authorization to bypass readiness or
+/// assignment restrictions; frontends do not reimplement these rules.
+pub fn authorize_execution_start(
+    store: &Store,
+    vcs: &dyn Vcs,
+    id: &str,
+    worker: Author,
+    force: bool,
+) -> Result<()> {
+    let (meta, _) = store.read_node(id)?;
+    if !force {
+        if let Some(assignee) = meta.assignee {
+            if assignee != worker {
+                bail!(
+                    "node `{id}` is assigned to {}; {} may not work it",
+                    assignee.as_str(),
+                    worker.as_str()
+                );
+            }
+        }
+        if !is_ready(store, vcs, id) {
+            let blockers = blockers(store, vcs, id);
+            if blockers.is_empty() {
+                bail!("node `{id}` is not ready to work");
+            }
+            bail!(
+                "node `{id}` is blocked; resolve its dependencies:\n  {}",
+                blockers.join("\n  ")
+            );
+        }
     }
     Ok(())
 }
@@ -1232,6 +1269,7 @@ mod tests {
                 node_id: id.clone(),
                 attempt_id: "attempt-1".into(),
                 candidate_branch: branch.clone(),
+                force: false,
             }),
         )
         .unwrap();
@@ -1277,6 +1315,7 @@ mod tests {
             node_id: a.clone(),
             attempt_id: "run-1".into(),
             candidate_branch: "llaundry/candidates/run-1".into(),
+            force: false,
         };
         assert!(fail_with_execution(
             &store,
@@ -1311,6 +1350,28 @@ mod tests {
             Some(wrong_branch),
         )
         .is_err());
+    }
+
+    #[test]
+    fn library_authorizes_execution_readiness_assignment_and_force() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs::default();
+        let human = add(
+            &store,
+            &fake,
+            NewNode {
+                assignee: Some(Author::Human),
+                ..new_node("human question", vec![])
+            },
+        )
+        .unwrap();
+        assert!(authorize_execution_start(&store, &fake, &human, Author::Machine, false).is_err());
+        assert!(authorize_execution_start(&store, &fake, &human, Author::Machine, true).is_ok());
+
+        let dependency = add(&store, &fake, new_node("dependency", vec![])).unwrap();
+        let blocked = add(&store, &fake, new_node("blocked", vec![dependency])).unwrap();
+        assert!(authorize_execution_start(&store, &fake, &blocked, Author::Machine, false).is_err());
+        assert!(authorize_execution_start(&store, &fake, &blocked, Author::Machine, true).is_ok());
     }
 
     #[test]
