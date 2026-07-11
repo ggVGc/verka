@@ -217,17 +217,13 @@ fn main() -> Result<()> {
     let Cli { store, cmd } = Cli::parse();
     match cmd {
         Cmd::Init { name } => {
-            let store = Store::init(store)?;
-            // Two separate repositories: the workbench holds the store's
-            // history; the project is an ordinary repo of its own (move an
-            // existing checkout into place and its repo is simply kept).
-            for (name, dir) in [
-                ("workbench", store.workbench_root()),
-                ("project", store.project_root()),
-            ] {
-                if llaundry::git::ensure_repo(&dir)? {
-                    println!("initialised {name} repository at {}", dir.display());
-                }
+            let initialized = ops::init_workbench(store, name)?;
+            let store = &initialized.store;
+            if initialized.created_workbench_repo {
+                println!("initialised workbench repository at {}", store.workbench_root().display());
+            }
+            if initialized.created_project_repo {
+                println!("initialised project repository at {}", store.project_root().display());
             }
             println!(
                 "initialised llaundry workbench (store {}, project {})",
@@ -237,12 +233,10 @@ fn main() -> Result<()> {
             // Pair the store to the project by its root commit; a fresh
             // project gets an empty root commit so it has an identity to
             // anchor to (an adopted checkout already has one).
-            if llaundry::git::ensure_root_commit(&store.project_root())? {
+            if initialized.created_project_root {
                 println!("created empty root commit in the project repository");
             }
-            let vcs = GitVcs::for_store(&store);
-            let pairing = ops::pair(&store, &vcs, name, false)?;
-            println!("{}", pairing_line(&pairing));
+            println!("{}", pairing_line(&initialized.pairing));
         }
 
         Cmd::Add {

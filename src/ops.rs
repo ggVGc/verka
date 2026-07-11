@@ -24,6 +24,35 @@ use crate::pairing::Pairing;
 use crate::store::{file_blob, Store};
 use crate::vcs::Vcs;
 
+pub struct InitializedWorkbench {
+    pub store: Store,
+    pub pairing: Pairing,
+    pub created_workbench_repo: bool,
+    pub created_project_repo: bool,
+    pub created_project_root: bool,
+}
+
+/// Create a complete usable workbench. Both frontends call this rather than
+/// exposing the lower-level directory-only `Store::init` as initialization.
+pub fn init_workbench(
+    root: std::path::PathBuf,
+    name: Option<String>,
+) -> Result<InitializedWorkbench> {
+    let store = Store::init(root)?;
+    let created_workbench_repo = crate::git::ensure_repo(&store.workbench_root())?;
+    let created_project_repo = crate::git::ensure_repo(&store.project_root())?;
+    let created_project_root = crate::git::ensure_root_commit(&store.project_root())?;
+    let vcs = crate::git::GitVcs::for_store(&store);
+    let pairing = pair(&store, &vcs, name, false)?;
+    Ok(InitializedWorkbench {
+        store,
+        pairing,
+        created_workbench_repo,
+        created_project_repo,
+        created_project_root,
+    })
+}
+
 /// Parameters for creating a node with [`add`].
 pub struct NewNode {
     /// The definition prose (markdown). Its first line serves as the title.

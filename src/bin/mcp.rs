@@ -180,8 +180,12 @@ impl Tool for InitStore {
         obj_schema(json!({}), &[])
     }
     fn call(&self, ctx: &Ctx, _args: &Value) -> Result<String> {
-        Store::init(ctx.store_path.clone())?;
-        Ok(format!("initialised store at {}", ctx.store_path.display()))
+        let initialized = ops::init_workbench(ctx.store_path.clone(), None)?;
+        Ok(format!(
+            "initialised workbench at {} paired to project root {}",
+            initialized.store.workbench_root().display(),
+            ops::short(&initialized.pairing.root_commit)
+        ))
     }
 }
 
