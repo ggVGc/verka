@@ -35,3 +35,7 @@
 - I don't like the workflow of seeing a scrolling view of code diffs mixed with description text:
   - I want to be able to view each chunk of work as a a text description, and an associated diff view per file in a separate view
   - For example in vim, or in the web visualizer
+- Repeatable tasks could also be modelled as nodes, similar to what people use Skills for:
+  - A node description could be to analyze the codebase for some specific concern.
+  - Node could be re-opened and re-run each time the user wants to re-check
+  - We should not lose previous history because of that, but that matches other repeated outputs as well. We always want to be able to see prior outputs from nodes.
