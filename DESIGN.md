@@ -32,7 +32,7 @@ must answer are:
 * **Everything derivable is derived.** Status, readiness, blockedness,
   staleness, reverse dependencies, and commit→node provenance are all computed
   from the files on each query — never stored, so they can never drift.
-* **Minimal.** The core is a small library; a CLI, a TUI, an MCP server, and a
+* **Minimal.** The core is a small library; a CLI, an MCP server, and a
   work driver are thin shells over it.
 
 ---
@@ -452,7 +452,6 @@ All functionality lives in the `llaundry` library (`llaundry::ops` over
 shell over it:
 
 * `llaundry` — the CLI (below).
-* `llaundry-tui` — an interactive terminal UI over the same operations.
 * `llaundry-mcp` — a Model Context Protocol server (§5.2).
 * `llaundry-work` — the driver that runs an LLM against a node (§5.3).
 

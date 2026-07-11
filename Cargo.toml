@@ -17,10 +17,6 @@ name = "llaundry"
 path = "src/main.rs"
 
 [[bin]]
-name = "llaundry-tui"
-path = "src/bin/tui.rs"
-
-[[bin]]
 name = "llaundry-mcp"
 path = "src/bin/mcp.rs"
 
@@ -36,7 +32,6 @@ path = "src/bin/viz.rs"
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive", "env"] }
-crossterm = "0.28"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha1 = "0.10"
