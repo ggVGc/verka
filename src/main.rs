@@ -298,6 +298,11 @@ fn main() -> Result<()> {
         } => {
             let store = Store::open(store)?;
             let vcs = GitVcs::for_store(&store);
+            if author == Author::Machine && !outputs.is_empty() {
+                anyhow::bail!(
+                    "machine-produced project content must be completed through `llaundry-work` so it receives a candidate branch and human review"
+                );
+            }
             let notes = resolve_notes(notes, notes_file, &store, &id, "what happened?")?;
             let commit = ops::complete(
                 &store,
