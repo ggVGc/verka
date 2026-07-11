@@ -82,7 +82,8 @@ input_tree = "4567efab..."
 output_commit = "89abcdef..."
 ```
 
-`input_commit` is the detached HEAD used to create the worktree. `input_tree`
+`input_commit` is the commit from which the candidate branch and worktree were
+created. `input_tree`
 allows the same source state to be recognized after a history rewrite; it does
 not make rewritten history automatically trusted. `output_commit` has
 `input_commit` as its sole parent in the first implementation.
@@ -135,10 +136,10 @@ The driver performs these steps in order:
 3. Generate the run ID.
 4. Create a durable input ref:
    `refs/llaundry/runs/<run-id>/input`.
-5. Create a detached worktree:
+5. Create a named candidate branch and its worktree:
 
    ```text
-   git -C project worktree add --detach \
+   git -C project worktree add -b llaundry/candidates/<run-id> \
      ../.llaundry-worktrees/<run-id> <input-commit>
    ```
 
@@ -173,9 +174,11 @@ All relative file paths in prompts, transcript mining, and completion are
 resolved against this path. Context pinning still hashes paths from the input
 state, not similarly named files in the mutable user checkout.
 
-The worker starts on detached HEAD. It has no reason to create or switch
-branches. Backend-specific user configuration must not be allowed to change
-the working directory or attach unrelated MCP servers.
+The worker starts on the permanent candidate branch
+`llaundry/candidates/<run-id>`. It has no reason to create or switch branches.
+Backend-specific user configuration must not be allowed to change the working
+directory or attach unrelated MCP servers. See `HUMAN_REVIEW_GATING.md`; this
+named-branch rule supersedes the earlier detached-worktree proposal.
 
 ### 6.3 Complete
 
@@ -456,7 +459,7 @@ creates neither refs nor directories.
 
 ### Stage 1: isolated single runs
 
-* create detached worktree from resolved `HEAD`;
+* create a named candidate branch and worktree from resolved `HEAD`;
 * run backend inside it;
 * commit declared outputs there;
 * record input commit/tree and output commit;

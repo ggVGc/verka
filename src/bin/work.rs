@@ -194,6 +194,7 @@ fn main() -> Result<()> {
 
     let (input_commit, input_tree) = llaundry::git::resolve_revision(&canonical_project, &cli.base)?;
     let run_id = ulid::Ulid::new().to_string();
+    let candidate_branch = format!("llaundry/candidates/{run_id}");
     let worktree_path = workbench_abs.join(".llaundry-worktrees").join(&run_id);
 
     let mut session = Session {
@@ -231,11 +232,17 @@ fn main() -> Result<()> {
         println!("input commit: {input_commit}");
         println!("input tree: {input_tree}");
         println!("worktree: {}", worktree_path.display());
+        println!("candidate branch: {candidate_branch}");
         println!("{}", backend.describe(&session));
         return Ok(());
     }
 
-    let worktree = llaundry::git::create_worktree(&canonical_project, worktree_path, &input_commit)?;
+    let worktree = llaundry::git::create_worktree(
+        &canonical_project,
+        worktree_path,
+        &candidate_branch,
+        &input_commit,
+    )?;
     session.project_root = worktree.path.clone();
 
     eprintln!(
@@ -268,6 +275,7 @@ fn main() -> Result<()> {
             "model": backend.model(),
             "definition_version": store.node_version(&node)?,
             "run_id": run_id,
+            "candidate_branch": worktree.branch,
             "input_commit": worktree.input_commit,
             "input_tree": worktree.input_tree,
         })
@@ -287,6 +295,17 @@ fn main() -> Result<()> {
     match ops::amend_worker(&store, &vcs, &node, worked_by, started) {
         Ok(_) => {}
         Err(e) => eprintln!("llaundry-work: could not record the worker: {e:#}"),
+    }
+    match ops::amend_candidate(
+        &store,
+        &vcs,
+        &node,
+        run_id.clone(),
+        worktree.branch.clone(),
+        started,
+    ) {
+        Ok(_) => {}
+        Err(e) => eprintln!("llaundry-work: could not record the candidate branch: {e:#}"),
     }
 
     // Derive input provenance from the recorded session: pin project files the
@@ -1120,7 +1139,8 @@ mod tests {
         let old = git_output(&root, &["rev-parse", "HEAD"]).unwrap();
 
         let worktree = root.parent().unwrap().join(format!("publish-wt-{}", ulid::Ulid::new()));
-        llaundry::git::create_worktree(&root, worktree.clone(), &old).unwrap();
+        let branch = format!("llaundry/candidates/{}", ulid::Ulid::new());
+        llaundry::git::create_worktree(&root, worktree.clone(), &branch, &old).unwrap();
         std::fs::write(worktree.join("file.txt"), "new\n").unwrap();
         git_ok(&worktree, &["add", "file.txt"]).unwrap();
         git_ok(&worktree, &["commit", "-m", "new"]).unwrap();

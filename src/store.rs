@@ -348,6 +348,8 @@ mod tests {
             publication_pending: false,
             input_commit: None,
             input_tree: None,
+            attempt_id: None,
+            candidate_branch: None,
             output_commit: Some("abc".into()),
             integrated_commit: None,
             target_ref: None,

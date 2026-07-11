@@ -197,6 +197,12 @@ pub struct ResultMeta {
     pub input_commit: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_tree: Option<String>,
+    /// Execution attempt and permanent project branch that produced this
+    /// candidate. Optional for older and hand-recorded results.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub candidate_branch: Option<String>,
     /// The single git commit encompassing all files this node produced.
     /// Absent when the work produced no files (graph-only work) or failed.
     #[serde(skip_serializing_if = "Option::is_none")]

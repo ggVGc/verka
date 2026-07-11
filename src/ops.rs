@@ -147,6 +147,8 @@ pub fn complete(
             publication_pending: false,
             input_commit,
             input_tree,
+            attempt_id: None,
+            candidate_branch: None,
             output_commit: output_commit.clone(),
             integrated_commit: None,
             target_ref: None,
@@ -183,6 +185,8 @@ pub fn respond(store: &Store, vcs: &dyn Vcs, id: &str, notes: &str, author: Auth
             publication_pending: false,
             input_commit: None,
             input_tree: None,
+            attempt_id: None,
+            candidate_branch: None,
             output_commit: None,
             integrated_commit: None,
             target_ref: None,
@@ -214,6 +218,8 @@ pub fn fail(store: &Store, vcs: &dyn Vcs, id: &str, notes: &str, author: Author)
             publication_pending: false,
             input_commit: None,
             input_tree: None,
+            attempt_id: None,
+            candidate_branch: None,
             output_commit: None,
             integrated_commit: None,
             target_ref: None,
@@ -362,6 +368,29 @@ pub fn amend_worker(
     result.worked_by = Some(worked_by);
     store.write_result(id, &result, &notes)?;
     vcs.commit_store(&store.store_name(), &format!("llaundry: worked by {id}"))?;
+    Ok(true)
+}
+
+/// Attach the durable execution identity to a result produced by this run.
+/// `since` prevents an unsuccessful rework from relabelling an older result.
+pub fn amend_candidate(
+    store: &Store,
+    vcs: &dyn Vcs,
+    id: &str,
+    attempt_id: String,
+    candidate_branch: String,
+    since: i64,
+) -> Result<bool> {
+    let Some((mut result, notes)) = store.read_result(id)? else {
+        return Ok(false);
+    };
+    if result.at < since || result.output_commit.is_none() {
+        return Ok(false);
+    }
+    result.attempt_id = Some(attempt_id);
+    result.candidate_branch = Some(candidate_branch);
+    store.write_result(id, &result, &notes)?;
+    vcs.commit_store(&store.store_name(), &format!("llaundry: candidate {id}"))?;
     Ok(true)
 }
 

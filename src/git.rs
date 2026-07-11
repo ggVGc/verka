@@ -12,9 +12,11 @@ use std::process::Command;
 use crate::store::Store;
 use crate::vcs::Vcs;
 
-/// A detached linked worktree prepared for one isolated execution.
+/// A linked worktree on a permanent candidate branch, prepared for one
+/// isolated execution.
 pub struct Worktree {
     pub path: PathBuf,
+    pub branch: String,
     pub input_commit: String,
     pub input_tree: String,
 }
@@ -28,8 +30,9 @@ pub fn resolve_revision(project: &Path, rev: &str) -> Result<(String, String)> {
     Ok((commit, tree))
 }
 
-/// Create a detached linked worktree without moving any project branch.
-pub fn create_worktree(project: &Path, path: PathBuf, rev: &str) -> Result<Worktree> {
+/// Create a linked worktree on a new named branch without moving the user's
+/// checked-out project branch. The candidate branch remains after cleanup.
+pub fn create_worktree(project: &Path, path: PathBuf, branch: &str, rev: &str) -> Result<Worktree> {
     let (input_commit, input_tree) = resolve_revision(project, rev)?;
     if path.exists() {
         bail!("execution worktree path already exists: {}", path.display());
@@ -39,8 +42,9 @@ pub fn create_worktree(project: &Path, path: PathBuf, rev: &str) -> Result<Workt
             .with_context(|| format!("creating worktree directory {}", parent.display()))?;
     }
     let path_arg = path.to_string_lossy().into_owned();
-    checked(project, &["worktree", "add", "--detach", &path_arg, &input_commit])?;
-    Ok(Worktree { path, input_commit, input_tree })
+    checked(project, &["check-ref-format", "--branch", branch])?;
+    checked(project, &["worktree", "add", "-b", branch, &path_arg, &input_commit])?;
+    Ok(Worktree { path, branch: branch.to_string(), input_commit, input_tree })
 }
 
 pub fn worktree_clean(path: &Path) -> Result<bool> {
@@ -306,8 +310,10 @@ mod tests {
             ".llaundry-worktree-test-{}",
             ulid::Ulid::new()
         ));
-        let worktree = create_worktree(&project, path.clone(), "HEAD").unwrap();
+        let branch = format!("llaundry/candidates/{}", ulid::Ulid::new());
+        let worktree = create_worktree(&project, path.clone(), &branch, "HEAD").unwrap();
         assert_eq!(worktree.input_commit, original);
+        assert_eq!(worktree.branch, branch);
 
         std::fs::write(path.join("file.txt"), "isolated\n").unwrap();
         let vcs = GitVcs::new(path.clone(), project.parent().unwrap().to_path_buf());
@@ -320,6 +326,7 @@ mod tests {
 
         remove_worktree(&project, &path).unwrap();
         assert!(!path.exists());
+        assert_eq!(checked(&project, &["rev-parse", &branch]).unwrap(), output);
         assert_eq!(
             checked(&project, &["rev-parse", "refs/llaundry/outputs/node-test"]).unwrap(),
             output
