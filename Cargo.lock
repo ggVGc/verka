@@ -333,17 +333,23 @@ dependencies = [
 name = "llaundry-review"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "clap",
  "llaundry-core",
  "serde",
+ "serde_json",
+ "toml",
 ]
 
 [[package]]
 name = "llaundry-work"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "llaundry-core",
  "serde",
  "serde_json",
+ "toml",
 ]
 
 [[package]]

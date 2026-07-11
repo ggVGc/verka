@@ -16,7 +16,6 @@
 //! * [`ops`] — the operations (add, link, edit, complete, fail) and the derived
 //!   queries (status, staleness, readiness, blockers, origin).
 
-pub mod config;
 pub mod git;
 pub mod model;
 pub mod ops;
@@ -24,8 +23,8 @@ pub mod pairing;
 pub mod store;
 pub mod vcs;
 
-pub use config::{Config, CONFIG_FILE};
 pub use git::GitVcs;
+pub use llaundry_work::{Config, CONFIG_FILE};
 pub use model::{
     title_of, AttemptFinal, AttemptMeta, Author, BuiltAgainst, ContextPin, DefinitionVersion,
     DepKind, ExecutionIdentity, NodeMeta, NodeState, Outcome, PublicationIntent, ResultMeta,

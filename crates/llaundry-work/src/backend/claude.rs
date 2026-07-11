@@ -1,4 +1,4 @@
-use super::backend::{event_model, Backend, RunOutcome, Session};
+use super::{event_model, Backend, RunOutcome, Session};
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 use std::process::Command;
@@ -6,14 +6,14 @@ use std::process::Command;
 /// Backend that shells out to Claude Code (`claude -p`): the llaundry MCP for
 /// graph operations, the built-in file tools for real work — no shell, no other
 /// MCP servers, web tools only when `network` is set.
-pub(crate) struct ClaudeCode {
+pub struct ClaudeCode {
     binary: String,
     model: Option<String>,
     network: bool,
 }
 
 impl ClaudeCode {
-    pub(crate) fn new(binary: String, model: Option<String>, network: bool) -> Self {
+    pub fn new(binary: String, model: Option<String>, network: bool) -> Self {
         Self {
             binary,
             model,

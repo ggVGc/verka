@@ -24,6 +24,8 @@ use crate::model::{
 use crate::pairing::Pairing;
 use crate::store::{file_blob, Store};
 use crate::vcs::Vcs;
+use llaundry_review::CandidateStore as _;
+use llaundry_work::AttemptStore as _;
 
 pub struct InitializedWorkbench {
     pub store: Store,
@@ -408,7 +410,7 @@ pub fn authorize_execution_start(
                 );
             }
         }
-        if !is_ready(store, vcs, id) {
+        if !is_dispatchable(store, vcs, id) {
             let blockers = blockers(store, vcs, id);
             if blockers.is_empty() {
                 bail!("node `{id}` is not ready to work");
@@ -477,6 +479,7 @@ pub fn prepare_execution(
     };
     if materialize {
         store.write_attempt(&attempt)?;
+        write_execution_attempt(store, &attempt)?;
         vcs.commit_store(
             &store.store_name(),
             &format!("llaundry: begin attempt {attempt_id}"),
@@ -484,6 +487,7 @@ pub fn prepare_execution(
         vcs.create_worktree(&path, &candidate_branch, &input_commit)?;
         attempt.prepared = true;
         store.write_attempt(&attempt)?;
+        write_execution_attempt(store, &attempt)?;
         vcs.commit_store(
             &store.store_name(),
             &format!("llaundry: prepare attempt {attempt_id}"),
@@ -543,6 +547,13 @@ pub fn finalize_execution_attempt(
         &AttemptFinal {
             at: now_millis(),
             backend_succeeded,
+        },
+    )?;
+    llaundry_work::FsAttemptStore::new(store.root()).finish(
+        attempt_id,
+        &llaundry_work::AttemptFinished {
+            at: now_millis(),
+            executor_succeeded: backend_succeeded,
         },
     )?;
     vcs.commit_store(
@@ -719,12 +730,20 @@ pub fn create_review_for_attempt(store: &Store, vcs: &dyn Vcs, attempt_id: &str)
             implementation: implementation.to_string(),
             attempt_id: attempt_id.to_string(),
             candidate_branch,
-            candidate_commit,
-            reviewed_result,
+            candidate_commit: candidate_commit.clone(),
+            reviewed_result: reviewed_result.clone(),
         }),
     };
     let description = format!("Review candidate for {implementation}\n\nInspect the exact candidate named in node metadata. Accept it only if this content may be integrated into main; otherwise reject it with actionable comments.");
     store.write_node(&id, &meta, &description)?;
+    llaundry_review::FsCandidateStore::new(store.root()).create_candidate(
+        &llaundry_review::Candidate {
+            id: id.clone(),
+            subject: implementation.to_string(),
+            result: core_result_version(&reviewed_result),
+            artifact: git_artifact(&candidate_commit),
+        },
+    )?;
     vcs.commit_store(
         &store.store_name(),
         &format!("llaundry: review {implementation}"),
@@ -944,6 +963,13 @@ pub fn decide_review(
         context: Vec::new(),
     };
     store.write_result(id, &result, notes)?;
+    record_review_decision(
+        store,
+        id,
+        decision,
+        notes,
+        result.suggestion_commit.as_deref(),
+    )?;
 
     vcs.commit_store(
         &store.store_name(),
@@ -1019,6 +1045,13 @@ pub fn recover_publication(store: &Store, vcs: &dyn Vcs, id: &str) -> Result<()>
         context: Vec::new(),
     };
     store.write_result(id, &result, &publication.notes)?;
+    record_review_decision(
+        store,
+        id,
+        ReviewDecision::Accepted,
+        &publication.notes,
+        None,
+    )?;
     let Some((mut implementation, implementation_notes)) =
         store.read_result(&review.implementation)?
     else {
@@ -1075,20 +1108,18 @@ fn latest_review_decision(
 /// editing the definition after completion reopens the node, because the
 /// completion no longer certifies the current content.
 pub fn current_status(store: &Store, id: &str) -> Status {
-    match store.read_result(id) {
-        Ok(Some((r, _))) => match r.outcome {
-            Outcome::Failed => Status::Failed,
-            Outcome::Done => {
-                if !r.publication_pending
-                    && store.node_version(id).ok().as_ref() == Some(&r.definition)
-                {
-                    Status::Done
-                } else {
-                    Status::Open
-                }
-            }
-        },
-        _ => Status::Open,
+    let Ok(version) = store.node_version(id) else {
+        return Status::Open;
+    };
+    let result = store
+        .read_result(id)
+        .ok()
+        .flatten()
+        .map(|(result, _)| core_result(&result));
+    match llaundry_core::status(&core_definition(&version), result.as_ref()) {
+        llaundry_core::Status::Open => Status::Open,
+        llaundry_core::Status::Done => Status::Done,
+        llaundry_core::Status::Failed => Status::Failed,
     }
 }
 
@@ -1148,80 +1179,54 @@ pub fn node_state(store: &Store, id: &str) -> NodeState {
 ///   * the node's own outputs changed since its output commit, and
 ///   * the definition edited after completion (which also reopens the node).
 pub fn staleness(store: &Store, vcs: &dyn Vcs, id: &str) -> Vec<String> {
-    let mut reasons = Vec::new();
-    let Ok(Some((result, _))) = store.read_result(id) else {
-        return reasons;
-    };
+    llaundry_core::staleness(
+        &CoreGraphAdapter { store },
+        &CoreArtifactAdapter { store, vcs },
+        id,
+    )
+}
 
-    if let Ok(current) = store.node_version(id) {
-        definition_drift(
-            "definition changed since the work",
-            &result.definition,
-            &current,
-            &mut reasons,
-        );
-    } else {
-        reasons.push("definition missing or unreadable since the work".into());
+struct CoreGraphAdapter<'a> {
+    store: &'a Store,
+}
+
+impl llaundry_core::GraphView for CoreGraphAdapter<'_> {
+    type Error = anyhow::Error;
+    fn definition_version(&self, id: &str) -> Result<llaundry_core::DefinitionVersion> {
+        Ok(core_definition(&self.store.node_version(id)?))
     }
-
-    for ba in &result.built_against {
-        match store.node_version(&ba.id) {
-            Ok(current) => definition_drift(
-                &format!("dependency {}: definition moved", ba.id),
-                &ba.definition,
-                &current,
-                &mut reasons,
-            ),
-            Err(_) => reasons.push(format!("dependency {}: missing", ba.id)),
-        }
-        if store.result_version(&ba.id).ok() != ba.result {
-            reasons.push(format!(
-                "dependency {}: result changed since it was consumed",
-                ba.id
-            ));
-        }
-        let current_output = output_of(store, &ba.id).ok().flatten();
-        if current_output != ba.output {
-            reasons.push(format!(
-                "dependency {}: output changed (built against {}, now {})",
-                ba.id,
-                ba.output.as_deref().map_or("none", short),
-                current_output.as_deref().map_or("none", short)
-            ));
-        }
+    fn result(&self, id: &str) -> Result<Option<llaundry_core::ResultRecord>> {
+        self.store
+            .read_result(id)
+            .map(|result| result.map(|(result, _)| core_result(&result)))
     }
-
-    let root = store.project_root();
-    for pin in &result.context {
-        match file_blob(&root.join(&pin.path)) {
-            Some(now) if now != pin.blob => reasons.push(format!(
-                "context {}: content changed (pinned {}, now {})",
-                pin.path,
-                short(&pin.blob),
-                short(&now)
-            )),
-            Some(_) => {}
-            None => reasons.push(format!(
-                "context {}: missing (pinned {})",
-                pin.path,
-                short(&pin.blob)
-            )),
+    fn result_version(&self, id: &str) -> Result<Option<llaundry_core::ResultVersion>> {
+        if self.store.read_result(id)?.is_none() {
+            return Ok(None);
         }
+        Ok(Some(core_result_version(&self.store.result_version(id)?)))
     }
+}
 
-    if let Some(commit) = &result.output_commit {
-        match vcs.drift(commit) {
-            Ok(Some(drift)) => reasons.push(format!(
-                "output changed since {}:\n      {}",
-                short(commit),
-                drift.replace('\n', "\n      ")
-            )),
-            Ok(None) => {}
-            Err(e) => reasons.push(format!("output check failed ({}): {e}", short(commit))),
-        }
+struct CoreArtifactAdapter<'a> {
+    store: &'a Store,
+    vcs: &'a dyn Vcs,
+}
+
+impl llaundry_core::ArtifactResolver for CoreArtifactAdapter<'_> {
+    type Error = anyhow::Error;
+    fn exists(&self, artifact: &llaundry_core::ArtifactRef) -> Result<bool> {
+        self.vcs.commit_exists(&artifact.id)
     }
-
-    reasons
+    fn files(&self, artifact: &llaundry_core::ArtifactRef) -> Result<Vec<String>> {
+        self.vcs.files_in(&artifact.id)
+    }
+    fn drift(&self, artifact: &llaundry_core::ArtifactRef) -> Result<Option<String>> {
+        self.vcs.drift(&artifact.id)
+    }
+    fn context_identity(&self, path: &str) -> Result<Option<String>> {
+        Ok(file_blob(&self.store.project_root().join(path)))
+    }
 }
 
 /// Reasons a node's `depends_on` dependencies are unsatisfied — empty means the
@@ -1255,15 +1260,22 @@ pub fn is_ready(store: &Store, vcs: &dyn Vcs, id: &str) -> bool {
     if !blockers(store, vcs, id).is_empty() {
         return false;
     }
+    current_status(store, id) != Status::Done
+}
+
+/// Review-aware execution policy layered on top of core graph readiness.
+///
+/// A rejected immutable candidate may be reworked even though its core result
+/// remains a valid `done` result. Pending and accepted candidates are not
+/// dispatched. This policy belongs to the work/review composition layer and is
+/// intentionally separate from [`is_ready`].
+pub fn is_dispatchable(store: &Store, vcs: &dyn Vcs, id: &str) -> bool {
+    if !blockers(store, vcs, id).is_empty() {
+        return false;
+    }
     let Some((result, _)) = store.read_result(id).ok().flatten() else {
         return true;
     };
-    if result.publication_pending {
-        let Some(commit) = result.output_commit.as_deref() else {
-            return false;
-        };
-        return latest_review_decision(store, id, commit) == Some(ReviewDecision::Rejected);
-    }
     if current_status(store, id) != Status::Done {
         return true;
     }
@@ -1276,7 +1288,7 @@ pub fn is_ready(store: &Store, vcs: &dyn Vcs, id: &str) -> bool {
 pub fn ready_nodes(store: &Store, vcs: &dyn Vcs, worker: Option<Author>) -> Result<Vec<String>> {
     let mut ready = Vec::new();
     for id in store.list_ids()? {
-        if !is_ready(store, vcs, &id) {
+        if !is_dispatchable(store, vcs, &id) {
             continue;
         }
         let (meta, _) = store.read_node(&id)?;
@@ -1873,28 +1885,6 @@ fn pin_deps(store: &Store, meta: &NodeMeta) -> Result<Vec<BuiltAgainst>> {
         .collect()
 }
 
-fn definition_drift(
-    prefix: &str,
-    pinned: &DefinitionVersion,
-    current: &DefinitionVersion,
-    reasons: &mut Vec<String>,
-) {
-    if pinned.metadata != current.metadata {
-        reasons.push(format!(
-            "{prefix}: node.toml changed (built against {}, now {})",
-            short(&pinned.metadata),
-            short(&current.metadata)
-        ));
-    }
-    if pinned.description != current.description {
-        reasons.push(format!(
-            "{prefix}: description.md changed (built against {}, now {})",
-            short(&pinned.description),
-            short(&current.description)
-        ));
-    }
-}
-
 /// Pin each context path by its current content; errors if a file is missing.
 fn pin_context(store: &Store, vcs: &dyn Vcs, paths: &[String]) -> Result<Vec<ContextPin>> {
     let root = store.project_root();
@@ -1912,6 +1902,98 @@ fn pin_context(store: &Store, vcs: &dyn Vcs, paths: &[String]) -> Result<Vec<Con
             })
         })
         .collect()
+}
+
+fn core_definition(version: &DefinitionVersion) -> llaundry_core::DefinitionVersion {
+    llaundry_core::DefinitionVersion {
+        metadata: version.metadata.clone(),
+        description: version.description.clone(),
+    }
+}
+
+fn core_result_version(version: &ResultVersion) -> llaundry_core::ResultVersion {
+    llaundry_core::ResultVersion {
+        metadata: version.metadata.clone(),
+        notes: version.notes.clone(),
+    }
+}
+
+fn core_result(result: &ResultMeta) -> llaundry_core::ResultRecord {
+    llaundry_core::ResultRecord {
+        definition: core_definition(&result.definition),
+        outcome: match result.outcome {
+            Outcome::Done => llaundry_core::Outcome::Done,
+            Outcome::Failed => llaundry_core::Outcome::Failed,
+        },
+        consumed: result
+            .built_against
+            .iter()
+            .map(|item| llaundry_core::ConsumedNode {
+                id: item.id.clone(),
+                definition: core_definition(&item.definition),
+                result: item.result.as_ref().map(core_result_version),
+                output: item.output.as_deref().map(git_artifact),
+            })
+            .collect(),
+        context: result
+            .context
+            .iter()
+            .map(|pin| llaundry_core::ContextPin {
+                path: pin.path.clone(),
+                identity: pin.blob.clone(),
+                observed: pin.observed,
+            })
+            .collect(),
+        output: result.output_commit.as_deref().map(git_artifact),
+        producer: None,
+    }
+}
+
+fn git_artifact(commit: &str) -> llaundry_core::ArtifactRef {
+    llaundry_core::ArtifactRef {
+        scheme: "git-commit".into(),
+        repository: String::new(),
+        id: commit.into(),
+    }
+}
+
+fn write_execution_attempt(store: &Store, attempt: &AttemptMeta) -> Result<()> {
+    let executor = match (&attempt.backend, &attempt.model) {
+        (Some(backend), Some(model)) => format!("{backend}:{model}"),
+        (Some(backend), None) => backend.clone(),
+        _ => attempt.worker.as_str().into(),
+    };
+    llaundry_work::FsAttemptStore::new(store.root()).create(&llaundry_work::Attempt {
+        id: attempt.id.clone(),
+        work_item: attempt.node.clone(),
+        definition: core_definition(&attempt.definition),
+        input: git_artifact(&attempt.input_commit),
+        executor,
+        workspace_id: attempt.worktree.clone(),
+        created_at: attempt.created_at,
+    })?;
+    Ok(())
+}
+
+fn record_review_decision(
+    store: &Store,
+    id: &str,
+    decision: ReviewDecision,
+    notes: &str,
+    suggestion: Option<&str>,
+) -> Result<()> {
+    llaundry_review::FsCandidateStore::new(store.root()).record_decision(
+        &llaundry_review::Decision {
+            candidate: id.into(),
+            kind: match decision {
+                ReviewDecision::Accepted => llaundry_review::DecisionKind::Accepted,
+                ReviewDecision::Rejected => llaundry_review::DecisionKind::Rejected,
+            },
+            notes: notes.into(),
+            suggestion: suggestion.map(git_artifact),
+        },
+    )?;
+    Ok(())
 }
 
 fn now_millis() -> i64 {
@@ -2152,6 +2234,12 @@ mod tests {
             format!("llaundry/candidates/{}", workspace.identity.attempt_id)
         );
         assert!(workspace.path.is_dir());
+        assert!(store
+            .root()
+            .join("execution")
+            .join(&workspace.identity.attempt_id)
+            .join("attempt.toml")
+            .is_file());
         assert_eq!(
             fake.refs.borrow().get(&format!(
                 "refs/heads/{}",
@@ -2261,7 +2349,7 @@ mod tests {
         assert_eq!(meta.assignee, Some(Author::Human));
         assert_eq!(meta.review.as_ref().unwrap().candidate_commit, commit);
         assert!(
-            !is_ready(&store, &fake, &implementation),
+            !is_dispatchable(&store, &fake, &implementation),
             "pending review gates rework"
         );
 
@@ -2276,7 +2364,7 @@ mod tests {
             None,
         )
         .unwrap();
-        assert!(is_ready(&store, &fake, &implementation));
+        assert!(is_dispatchable(&store, &fake, &implementation));
         let (review_result, notes) = store.read_result(&review).unwrap().unwrap();
         assert_eq!(
             review_result.review_decision,
@@ -2323,6 +2411,12 @@ mod tests {
             review_result.suggestion_commit.as_deref(),
             Some("suggestion-commit")
         );
+        assert!(store
+            .root()
+            .join("reviews")
+            .join(&review)
+            .join("decision.toml")
+            .is_file());
         assert!(prepare_review_edits(&store, &fake, &review).is_err());
     }
 
@@ -2346,6 +2440,12 @@ mod tests {
         .unwrap();
         let target = store.read_node(&review).unwrap().0.review.unwrap();
         assert_eq!(target.implementation, implementation);
+        assert!(store
+            .root()
+            .join("reviews")
+            .join(&review)
+            .join("candidate.toml")
+            .is_file());
         assert_eq!(
             target.reviewed_result,
             store.attempt_result_version("attempt-1").unwrap()

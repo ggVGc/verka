@@ -1,32 +1,38 @@
+mod claude;
+mod codex;
+
+pub use claude::ClaudeCode;
+pub use codex::OpenAiCodex;
+
 use anyhow::Result;
 use std::path::PathBuf;
 
 /// One unit of work: an LLM session focused on a single node, together with the MCP
 /// server the model is allowed to use. Deliberately free of any store handle — once
 /// the prompt is built, a backend needs nothing else from the database.
-pub(crate) struct Session {
-    pub(crate) node_id: String,
-    pub(crate) prompt: String,
+pub struct Session {
+    pub node_id: String,
+    pub prompt: String,
     /// Absolute project root. The backend runs here, so project-scoped tool
     /// rules and relative paths resolve against the execution worktree.
-    pub(crate) project_root: PathBuf,
-    pub(crate) mcp: McpServer,
+    pub project_root: PathBuf,
+    pub mcp: McpServer,
 }
 
 /// A stdio MCP server the backend should expose to the model.
-pub(crate) struct McpServer {
-    pub(crate) name: String,
-    pub(crate) command: String,
-    pub(crate) args: Vec<String>,
+pub struct McpServer {
+    pub name: String,
+    pub command: String,
+    pub args: Vec<String>,
 }
 
 /// What a run produced: whether the backend exited cleanly, and the model its
 /// stream named as actually doing the work. `None` means the stream never
 /// named one — the driver then falls back to the pinned request, so a result
 /// is never stamped with less than what was asked for.
-pub(crate) struct RunOutcome {
-    pub(crate) success: bool,
-    pub(crate) model: Option<String>,
+pub struct RunOutcome {
+    pub success: bool,
+    pub model: Option<String>,
 }
 
 /// The LLM seam. An implementation runs a [`Session`] to completion, streaming
@@ -34,7 +40,7 @@ pub(crate) struct RunOutcome {
 /// story survives an abrupt exit), and returns a [`RunOutcome`]: whether the
 /// backend exited cleanly, and the model observed in its stream. `describe`
 /// renders the invocation for `--dry-run` without running anything.
-pub(crate) trait Backend {
+pub trait Backend {
     fn name(&self) -> &str;
     /// The model this backend will request, if pinned; `None` means the
     /// backend's own default. Recorded in the attempt header as the request;

@@ -37,20 +37,11 @@
 //! repository; store mutations sweep the story-so-far into their commits, and
 //! attempt finalization commits the remaining tail.
 
-#[path = "work/backend.rs"]
-mod backend;
-#[path = "work/claude.rs"]
-mod claude;
-#[path = "work/codex.rs"]
-mod codex;
-
 use anyhow::{bail, Context, Result};
 use clap::{Parser, ValueEnum};
 use serde_json::{json, Value};
 
-use backend::{Backend, McpServer, Session};
-use claude::ClaudeCode;
-use codex::OpenAiCodex;
+use llaundry_work::backend::{Backend, ClaudeCode, McpServer, OpenAiCodex, Session};
 
 use llaundry::{ops, title_of, Author, Config, GitVcs, NodeMeta, Store, WorkedBy};
 

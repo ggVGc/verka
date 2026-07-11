@@ -1,16 +1,43 @@
 # llaundry
 Hierarchical LLM coding
 
+## Applications
+
+The workspace is deliberately split into three applications:
+
+- `llaundry-core` is the review- and execution-agnostic node graph, artifact
+  contract, and derived status/staleness logic.
+- `llaundry-work` owns execution records, isolated agent backends, transcripts,
+  and workspace contracts.
+- `llaundry-review` owns immutable candidates, decisions, and publication
+  contracts. Its `llaundry-review` binary can be used with candidates from any
+  work/state provider.
+
+They exchange versioned serializable records through interfaces defined by the
+owning crate. See `designs/SEPARATE_APPLICATIONS.md` for the dependency rules
+and migration guarantees.
+
 ## Review-gated candidate workflow
 
 Before changing the project, `llaundry-work <node>` commits a durable execution
-record under `.llaundry/attempts/<attempt-id>/`. It then creates a permanent
+record under `.llaundry/execution/<attempt-id>/` (with legacy
+`.llaundry/attempts/` records still readable). It then creates a permanent
 `llaundry/candidates/<attempt-id>` branch and performs the work in its linked
 worktree. Results and transcripts are stored with that exact attempt, so an
 older node result cannot be mistaken for newer work and interrupted preparation
 can be recovered. A project-producing completion is not merged automatically. Llaundry
 creates a human-assigned review node that pins the exact candidate branch and
 commit.
+
+The integrated frontend also records the candidate and decision in
+`.llaundry/reviews/<review-id>/`. The standalone equivalent is:
+
+```text
+llaundry-review --store .llaundry add candidate-id \
+  --subject external-work-id --result-metadata result-version --artifact commit
+llaundry-review --store .llaundry reject candidate-id --notes "revise this"
+llaundry-review --store .llaundry show candidate-id
+```
 
 Inspect it with `llaundry show <review-node>`. To propose edits during review,
 run `llaundry edit-review <review-node>` and commit changes in the printed

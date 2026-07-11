@@ -8,4 +8,5 @@ description = "Execution attempts and isolated workspace contracts for llaundry"
 llaundry-core = { path = "../llaundry-core" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-
+anyhow = "1"
+toml = "0.8"

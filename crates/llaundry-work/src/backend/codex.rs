@@ -1,16 +1,16 @@
-use super::backend::{event_model, Backend, RunOutcome, Session};
+use super::{event_model, Backend, RunOutcome, Session};
 use anyhow::{Context, Result};
 use std::process::Command;
 
 /// Backend that runs OpenAI Codex non-interactively in the execution worktree.
-pub(crate) struct OpenAiCodex {
+pub struct OpenAiCodex {
     binary: String,
     model: Option<String>,
     network: bool,
 }
 
 impl OpenAiCodex {
-    pub(crate) fn new(binary: String, model: Option<String>, network: bool) -> Self {
+    pub fn new(binary: String, model: Option<String>, network: bool) -> Self {
         Self {
             binary,
             model,
