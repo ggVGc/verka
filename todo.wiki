@@ -11,5 +11,5 @@
   * [x] Unify complete workbench initialization behind one library operation used by CLI and MCP.
   * [x] Move execution finalization and mandatory review creation into one library workflow.
   * [x] Move execution identity, base, branch, and worktree preparation into the library.
-  * [ ] Move assignee-aware ready-node selection into library queries.
+  * [x] Move assignee-aware ready-node selection into library queries.
   * [ ] Move canonical review-suggestion discovery into the library rejection operation.

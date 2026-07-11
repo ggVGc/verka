@@ -4,7 +4,7 @@
 //! from it, and hands that to a pluggable [`Backend`]. The backend is the LLM seam,
 //! so different engines can be dropped in without touching the launcher. The
 //! node is named on the command line, or picked with `--next`: the first ready
-//! node that is not a human's to answer ([`first_ready`]).
+//! node that is ready for a machine worker ([`ops::first_ready_for`]).
 //!
 //! Which backend, model, and executables it uses default to the store's
 //! optional [`Config`] (`<store>/config.toml`); an explicit `--flag` always
@@ -46,7 +46,7 @@ use clap::{Parser, ValueEnum};
 use serde_json::{json, Value};
 use std::process::Command;
 
-use llaundry::{ops, title_of, Author, Config, GitVcs, NodeMeta, Store, Vcs, WorkedBy};
+use llaundry::{ops, title_of, Author, Config, GitVcs, NodeMeta, Store, WorkedBy};
 
 #[derive(Parser)]
 #[command(
@@ -111,7 +111,7 @@ fn main() -> Result<()> {
     let vcs = GitVcs::for_store(&store);
     let node = match &cli.node {
         Some(id) => id.clone(),
-        None => match first_ready(&store, &vcs)? {
+        None => match ops::first_ready_for(&store, &vcs, Author::Machine)? {
             Some(id) => id,
             None => bail!("no node is ready to work"),
         },
@@ -320,20 +320,6 @@ fn main() -> Result<()> {
 /// sorted) that is ready and not assigned to a human — the same pool
 /// `llaundry ready --for llm` shows. A human-assigned node is waiting for a
 /// human's answer, never an LLM's to pick up.
-fn first_ready(store: &Store, vcs: &dyn Vcs) -> Result<Option<String>> {
-    for id in store.list_ids()? {
-        if !ops::is_ready(store, vcs, &id) {
-            continue;
-        }
-        let (meta, _) = store.read_node(&id)?;
-        if meta.assignee == Some(Author::Human) {
-            continue;
-        }
-        return Ok(Some(id));
-    }
-    Ok(None)
-}
-
 /// One unit of work: an LLM session focused on a single node, together with the MCP
 /// server the model is allowed to use. Deliberately free of any store handle — once
 /// the prompt is built, a backend needs nothing else from the database.
@@ -646,6 +632,7 @@ fn shell_quote(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use llaundry::Vcs;
     use llaundry::Author;
 
     fn sample_session() -> Session {
@@ -764,7 +751,7 @@ mod tests {
     }
 
     /// Minimal in-memory [`Vcs`] — the library's `FakeVcs` is `cfg(test)` there,
-    /// invisible to this crate's tests. `first_ready` only reads, so no-ops do.
+    /// invisible to this crate's tests. Ready-node queries only read, so no-ops do.
     struct NullVcs;
     impl Vcs for NullVcs {
         fn capture(&self, _paths: &[String], _message: &str) -> Result<String> {
@@ -828,7 +815,7 @@ mod tests {
         let store = Store::init(dir.join(".llaundry")).unwrap();
         let vcs = NullVcs;
 
-        assert_eq!(first_ready(&store, &vcs).unwrap(), None, "empty store");
+        assert_eq!(ops::first_ready_for(&store, &vcs, Author::Machine).unwrap(), None, "empty store");
 
         let node = |description: &str, assignee, depends_on| {
             ops::add(
@@ -846,7 +833,7 @@ mod tests {
         };
         let question = node("Question: which way?", Some(Author::Human), vec![]);
         assert_eq!(
-            first_ready(&store, &vcs).unwrap(),
+            ops::first_ready_for(&store, &vcs, Author::Machine).unwrap(),
             None,
             "a human-assigned node is not an LLM's to pick up"
         );
@@ -854,7 +841,7 @@ mod tests {
         let a = node("do a thing", None, vec![]);
         let _blocked = node("after a", None, vec![a.clone()]);
         let _also_blocked = node("after the question", None, vec![question]);
-        assert_eq!(first_ready(&store, &vcs).unwrap(), Some(a));
+        assert_eq!(ops::first_ready_for(&store, &vcs, Author::Machine).unwrap(), Some(a));
 
         let _ = std::fs::remove_dir_all(&dir);
     }

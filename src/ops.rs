@@ -880,6 +880,25 @@ pub fn is_ready(store: &Store, vcs: &dyn Vcs, id: &str) -> bool {
     latest_review_decision(store, id, commit) == Some(ReviewDecision::Rejected)
 }
 
+pub fn ready_nodes(store: &Store, vcs: &dyn Vcs, worker: Option<Author>) -> Result<Vec<String>> {
+    let mut ready = Vec::new();
+    for id in store.list_ids()? {
+        if !is_ready(store, vcs, &id) {
+            continue;
+        }
+        let (meta, _) = store.read_node(&id)?;
+        if matches!((worker, meta.assignee), (Some(want), Some(has)) if want != has) {
+            continue;
+        }
+        ready.push(id);
+    }
+    Ok(ready)
+}
+
+pub fn first_ready_for(store: &Store, vcs: &dyn Vcs, worker: Author) -> Result<Option<String>> {
+    Ok(ready_nodes(store, vcs, Some(worker))?.into_iter().next())
+}
+
 /// Latest rejected review of the implementation's current candidate. Returns
 /// its prose feedback and the best commit from which to start rework (reviewer
 /// suggestions when present, otherwise the rejected candidate itself).

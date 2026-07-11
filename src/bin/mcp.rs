@@ -514,14 +514,9 @@ impl Tool for ReadyNodes {
         let (store, vcs) = ctx.open()?;
         let want: Option<Author> = enum_or(args, "assignee", None)?;
         let mut lines = Vec::new();
-        for id in store.list_ids()? {
-            if ops::is_ready(&store, &vcs, &id) {
-                let (meta, description) = store.read_node(&id)?;
-                if matches!((want, meta.assignee), (Some(w), Some(has)) if w != has) {
-                    continue;
-                }
-                lines.push(format!("{id}  {}", title_of(&description)));
-            }
+        for id in ops::ready_nodes(&store, &vcs, want)? {
+            let (_, description) = store.read_node(&id)?;
+            lines.push(format!("{id}  {}", title_of(&description)));
         }
         Ok(joined(lines, "(nothing ready)"))
     }

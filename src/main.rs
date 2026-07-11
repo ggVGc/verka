@@ -437,16 +437,9 @@ fn main() -> Result<()> {
         Cmd::Ready { assignee } => {
             let store = Store::open(store)?;
             let vcs = GitVcs::for_store(&store);
-            for id in store.list_ids()? {
-                if ops::is_ready(&store, &vcs, &id) {
-                    let (meta, description) = store.read_node(&id)?;
-                    // With --for, a node assigned to the *other* kind is hidden;
-                    // unassigned nodes are anyone's to pick up.
-                    if matches!((assignee, meta.assignee), (Some(want), Some(has)) if want != has) {
-                        continue;
-                    }
-                    println!("{:<32} {}", id, llaundry::title_of(&description));
-                }
+            for id in ops::ready_nodes(&store, &vcs, assignee)? {
+                let (_, description) = store.read_node(&id)?;
+                println!("{:<32} {}", id, llaundry::title_of(&description));
             }
         }
 
