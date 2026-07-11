@@ -15,6 +15,10 @@
 //! [work.claude-code]        # per-backend settings, keyed by backend name
 //! model = "opus"            # model to request (backend default if unset)
 //! bin   = "claude"          # the Claude Code executable
+//!
+//! [work.openai-codex]
+//! model = "gpt-5-codex"     # model to request (backend default if unset)
+//! bin   = "codex"           # the OpenAI Codex executable
 //! ```
 
 use anyhow::{Context, Result};
@@ -39,6 +43,11 @@ mcp-bin = \"llaundry-mcp\"  # the MCP server binary the model may use
 [work.claude-code]         # per-backend settings, keyed by backend name
 # model = \"opus\"           # model to request (backend default if unset)
 bin = \"claude\"            # the Claude Code executable
+
+# To use Codex instead, set work.backend = \"openai-codex\" and uncomment:
+# [work.openai-codex]
+# model = \"gpt-5-codex\"     # model to request (backend default if unset)
+# bin = \"codex\"             # the OpenAI Codex executable
 ";
 
 /// The parsed `config.toml`. Absent sections and fields default, so the
@@ -59,6 +68,8 @@ pub struct WorkConfig {
     pub mcp_bin: Option<String>,
     /// Settings for the Claude Code backend.
     pub claude_code: ClaudeCodeConfig,
+    /// Settings for the OpenAI Codex backend.
+    pub openai_codex: OpenAiCodexConfig,
 }
 
 /// Defaults for the Claude Code backend.
@@ -68,6 +79,16 @@ pub struct ClaudeCodeConfig {
     /// Model to request (backend default if unset).
     pub model: Option<String>,
     /// The Claude Code executable.
+    pub bin: Option<String>,
+}
+
+/// Defaults for the OpenAI Codex backend.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
+pub struct OpenAiCodexConfig {
+    /// Model to request (backend default if unset).
+    pub model: Option<String>,
+    /// The OpenAI Codex executable.
     pub bin: Option<String>,
 }
 
@@ -118,6 +139,8 @@ mod tests {
         assert!(cfg.work.mcp_bin.is_none());
         assert!(cfg.work.claude_code.model.is_none());
         assert!(cfg.work.claude_code.bin.is_none());
+        assert!(cfg.work.openai_codex.model.is_none());
+        assert!(cfg.work.openai_codex.bin.is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -154,6 +177,17 @@ mod tests {
         assert_eq!(cfg.work.claude_code.model.as_deref(), Some("sonnet"));
         assert!(cfg.work.backend.is_none());
         assert!(cfg.work.claude_code.bin.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn parses_openai_codex_settings() {
+        let dir = std::env::temp_dir().join(format!("llaundry-cfg-codex-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        write(&dir, "[work.openai-codex]\nmodel = \"gpt-5-codex\"\nbin = \"/opt/codex\"\n");
+        let cfg = Config::load(&dir).unwrap();
+        assert_eq!(cfg.work.openai_codex.model.as_deref(), Some("gpt-5-codex"));
+        assert_eq!(cfg.work.openai_codex.bin.as_deref(), Some("/opt/codex"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

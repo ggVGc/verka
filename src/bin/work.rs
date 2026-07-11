@@ -41,6 +41,8 @@
 mod backend;
 #[path = "work/claude.rs"]
 mod claude;
+#[path = "work/codex.rs"]
+mod codex;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, ValueEnum};
@@ -48,6 +50,7 @@ use serde_json::{json, Value};
 
 use backend::{Backend, McpServer, Session};
 use claude::ClaudeCode;
+use codex::OpenAiCodex;
 
 use llaundry::{ops, title_of, Author, Config, GitVcs, NodeMeta, Store, WorkedBy};
 
@@ -76,16 +79,21 @@ struct Cli {
     /// Config `work.claude-code.bin`; built-in default `claude`.
     #[arg(long)]
     claude_bin: Option<String>,
+    /// The OpenAI Codex executable.
+    /// Config `work.openai-codex.bin`; built-in default `codex`.
+    #[arg(long)]
+    codex_bin: Option<String>,
     /// Path to the `llaundry-mcp` executable the model is allowed to use.
     /// Config `work.mcp-bin`; built-in default `llaundry-mcp`.
     #[arg(long)]
     mcp_bin: Option<String>,
     /// Model to request from the backend.
-    /// Config `work.claude-code.model`; backend default if unset.
+    /// Config for the selected backend; backend default if unset.
     #[arg(long)]
     model: Option<String>,
-    /// Also allow the web tools (WebFetch, WebSearch). Web reads cannot be
-    /// pinned as context; they are only visible in the recorded log.
+    /// Allow backend network access. For Claude this grants WebFetch and
+    /// WebSearch; for Codex it enables network access in the workspace sandbox.
+    /// Web reads cannot be pinned as context; they are only visible in the log.
     #[arg(long)]
     network: bool,
     /// Print the backend invocation instead of running it.
@@ -105,6 +113,7 @@ struct Cli {
 #[derive(Clone, Copy, ValueEnum)]
 enum BackendKind {
     ClaudeCode,
+    OpenaiCodex,
 }
 
 fn main() -> Result<()> {
@@ -205,6 +214,17 @@ fn main() -> Result<()> {
                     .or_else(|| cc.bin.clone())
                     .unwrap_or_else(|| "claude".into()),
                 cli.model.clone().or_else(|| cc.model.clone()),
+                cli.network,
+            ))
+        }
+        BackendKind::OpenaiCodex => {
+            let codex = &config.work.openai_codex;
+            Box::new(OpenAiCodex::new(
+                cli.codex_bin
+                    .clone()
+                    .or_else(|| codex.bin.clone())
+                    .unwrap_or_else(|| "codex".into()),
+                cli.model.clone().or_else(|| codex.model.clone()),
                 cli.network,
             ))
         }
