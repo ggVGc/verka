@@ -163,7 +163,7 @@ pub fn complete_with_execution(
             author,
             definition: store.node_version(id)?,
             outcome: Outcome::Done,
-            publication_pending: false,
+            publication_pending: execution.is_some() && output_commit.is_some(),
             input_commit,
             input_tree,
             attempt_id: execution.as_ref().map(|e| e.attempt_id.clone()),
@@ -269,54 +269,6 @@ pub fn fail(store: &Store, vcs: &dyn Vcs, id: &str, notes: &str, author: Author)
 /// A no-op when the log is fully committed.
 pub fn commit_work_log(store: &Store, vcs: &dyn Vcs, id: &str) -> Result<()> {
     vcs.commit_store(&store.store_name(), &format!("llaundry: work log {id}"))?;
-    Ok(())
-}
-
-/// Record the verified commit that was atomically published to a target ref.
-pub fn record_publication(
-    store: &Store,
-    vcs: &dyn Vcs,
-    id: &str,
-    output_commit: String,
-    target_ref: String,
-    target_previous: String,
-) -> Result<()> {
-    let Some((mut result, notes)) = store.read_result(id)? else {
-        bail!("node `{id}` has no provisional result to publish");
-    };
-    result.output_commit = Some(output_commit.clone());
-    result.integrated_commit = Some(output_commit);
-    result.target_ref = Some(target_ref);
-    result.target_previous = Some(target_previous);
-    result.publication_pending = false;
-    store.write_result(id, &result, &notes)?;
-    vcs.commit_store(&store.store_name(), &format!("llaundry: publish {id}"))
-}
-
-pub fn mark_publication_pending(store: &Store, vcs: &dyn Vcs, id: &str) -> Result<()> {
-    let Some((mut result, notes)) = store.read_result(id)? else {
-        bail!("node `{id}` has no result to mark pending");
-    };
-    if result.output_commit.is_some() {
-        result.publication_pending = true;
-        store.write_result(id, &result, &notes)?;
-        vcs.commit_store(
-            &store.store_name(),
-            &format!("llaundry: pending publication {id}"),
-        )?;
-    }
-    Ok(())
-}
-
-pub fn accept_isolated_result(store: &Store, vcs: &dyn Vcs, id: &str) -> Result<()> {
-    let Some((mut result, notes)) = store.read_result(id)? else {
-        return Ok(());
-    };
-    if result.publication_pending {
-        result.publication_pending = false;
-        store.write_result(id, &result, &notes)?;
-        vcs.commit_store(&store.store_name(), &format!("llaundry: accept isolated {id}"))?;
-    }
     Ok(())
 }
 
@@ -1232,6 +1184,7 @@ mod tests {
             }),
         )
         .unwrap();
+        assert!(store.read_result(&id).unwrap().unwrap().0.publication_pending);
         fake.refs.borrow_mut().insert(format!("refs/heads/{branch}"), "candidate-1".into());
         (fake, id, "candidate-1".into())
     }

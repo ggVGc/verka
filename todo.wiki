@@ -1,2 +1,8 @@
 - Should be able to specify some part of some file for a change.
   The node created for that work should be associated with the node which created that output.
+
+= Library policy boundary audit =
+  * [x] Make execution completion set review/publication gating atomically in the library; remove obsolete bypass operations.
+  * [ ] Bind execution identity to its node and actual candidate branch, and scope completion/failure to that node.
+  * [ ] Move worker eligibility and forced-dispatch policy from llaundry-work into library execution operations.
+  * [ ] Move editable-review preparation and duplicated query validation from CLI/MCP into the library.

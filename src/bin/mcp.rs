@@ -298,9 +298,6 @@ impl Tool for CompleteNode {
             &store, &vcs, &id, &outputs, &context, message, &notes, author,
             ctx.execution.clone(),
         )?;
-        if ctx.project_path.is_some() {
-            ops::mark_publication_pending(&store, &vcs, &id)?;
-        }
         Ok(match commit {
             Some(c) => format!("completed {id} (output commit {})", ops::short(&c)),
             None => format!("completed {id} (no output files)"),
