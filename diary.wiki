@@ -1,0 +1,16 @@
+2026-07-11
+Things have gone a bit crazy.
+The core functionality should be a work tracking graph, similar to beads but with much more
+structure and verifiability. It should allow the kind of historical view of the work that is mentioned in other documents.
+
+Performing work using that graph is a separate issue, and the review flow is part of that.
+That is me wanting a better way to interact with agents, and having a tool to process work in the graph with.
+This is essentially my own harness, but where work does not happen through a chat interface, but instead only based on some
+task store.
+This should be a tool that can use, and benefit from, the llaundry core, but should technically be fully functional with any kind
+of store. It just needs to have some abstraction for where to put things like agent interactions, review notes etc. and some way of getting
+information on what work to do, and register completion or failures.
+
+Worktrees are a followup concern altogether, and only relevant for concurrent work.
+Otherwise branches are fine.
+We shold leave this for last, when single-worker/multi-branch workflow works.
