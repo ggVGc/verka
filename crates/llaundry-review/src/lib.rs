@@ -19,6 +19,84 @@ pub enum DecisionKind {
     Rejected,
 }
 
+pub type ReviewDecision = DecisionKind;
+
+/// Legacy graph adapter target. Kept here, rather than in core, so old review
+/// nodes remain readable without teaching the graph what a review is.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ReviewTarget {
+    pub implementation: String,
+    pub attempt_id: String,
+    pub candidate_branch: String,
+    pub candidate_commit: String,
+    pub reviewed_result: ResultVersion,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NodeState {
+    Open,
+    AwaitingReview,
+    Rejected,
+    Integrated,
+    Done,
+    Failed,
+}
+impl NodeState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::AwaitingReview => "awaiting-review",
+            Self::Rejected => "rejected",
+            Self::Integrated => "integrated",
+            Self::Done => "done",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+/// Projection required to derive review presentation state. The graph adapter
+/// supplies generic core status separately, keeping this policy out of core.
+pub trait ReviewStateView {
+    type Error;
+    fn is_review(&self, id: &str) -> Result<bool, Self::Error>;
+    fn decision(&self, id: &str) -> Result<Option<ReviewDecision>, Self::Error>;
+    fn integrated(&self, id: &str) -> Result<bool, Self::Error>;
+    fn pending_artifact(&self, id: &str) -> Result<Option<String>, Self::Error>;
+    fn latest_decision(
+        &self,
+        subject: &str,
+        artifact: &str,
+    ) -> Result<Option<ReviewDecision>, Self::Error>;
+}
+
+pub fn node_state<V: ReviewStateView>(
+    view: &V,
+    id: &str,
+    core: llaundry_core::Status,
+) -> NodeState {
+    if view.is_review(id).unwrap_or(false) {
+        return match view.decision(id).ok().flatten() {
+            None => NodeState::AwaitingReview,
+            Some(ReviewDecision::Rejected) => NodeState::Rejected,
+            Some(ReviewDecision::Accepted) => NodeState::Integrated,
+        };
+    }
+    if view.integrated(id).unwrap_or(false) {
+        return NodeState::Integrated;
+    }
+    if let Some(artifact) = view.pending_artifact(id).ok().flatten() {
+        return match view.latest_decision(id, &artifact).ok().flatten() {
+            Some(ReviewDecision::Rejected) => NodeState::Rejected,
+            _ => NodeState::AwaitingReview,
+        };
+    }
+    match core {
+        llaundry_core::Status::Open => NodeState::Open,
+        llaundry_core::Status::Done => NodeState::Done,
+        llaundry_core::Status::Failed => NodeState::Failed,
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Decision {
     pub candidate: String,
@@ -28,11 +106,27 @@ pub struct Decision {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PublicationIntent {
+pub struct PublishRequest {
     pub candidate: String,
     pub target: String,
     pub expected_previous: ArtifactRef,
     pub completed: bool,
+}
+
+/// Compatibility transaction record for the original integrated publisher.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PublicationIntent {
+    pub schema: u32,
+    pub review: String,
+    pub implementation: String,
+    pub candidate_commit: String,
+    pub target: String,
+    pub target_ref: String,
+    pub target_previous: String,
+    pub notes: String,
+    pub prepared_at: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<i64>,
 }
 
 /// Portable review application messages for JSON-over-stdio adapters.
@@ -42,6 +136,37 @@ pub enum Request {
     AddCandidate { candidate: Candidate },
     Decide { decision: Decision },
     Show { id: String },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "status", content = "value", rename_all = "snake_case")]
+pub enum Response {
+    Review {
+        candidate: Box<Candidate>,
+        decision: Option<Decision>,
+    },
+    Ok,
+    Error(String),
+}
+
+pub fn handle_request(store: &FsCandidateStore, request: Request) -> Response {
+    let result: anyhow::Result<Response> = (|| {
+        Ok(match request {
+            Request::AddCandidate { candidate } => {
+                store.create_candidate(&candidate)?;
+                Response::Ok
+            }
+            Request::Decide { decision } => {
+                store.record_decision(&decision)?;
+                Response::Ok
+            }
+            Request::Show { id } => Response::Review {
+                candidate: Box::new(store.candidate(&id)?),
+                decision: store.decision(&id)?,
+            },
+        })
+    })();
+    result.unwrap_or_else(|error| Response::Error(format!("{error:#}")))
 }
 
 pub trait CandidateStore {
@@ -145,6 +270,100 @@ pub trait Publisher {
     ) -> Result<bool, Self::Error>;
 }
 
+pub struct GitPublisher {
+    repository: PathBuf,
+}
+impl GitPublisher {
+    pub fn new(repository: impl Into<PathBuf>) -> Self {
+        Self {
+            repository: repository.into(),
+        }
+    }
+}
+impl Publisher for GitPublisher {
+    type Error = anyhow::Error;
+    fn publish(
+        &self,
+        candidate: &Candidate,
+        target: &str,
+        expected: &ArtifactRef,
+    ) -> Result<bool, Self::Error> {
+        if candidate.artifact.scheme != "git-commit" || expected.scheme != "git-commit" {
+            anyhow::bail!("Git publisher requires git-commit artifacts");
+        }
+        git_checked(&self.repository, &["check-ref-format", "--branch", target])?;
+        let target_ref = format!("refs/heads/{target}");
+        let symbolic = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&self.repository)
+            .args(["symbolic-ref", "-q", "HEAD"])
+            .output()?;
+        if symbolic.status.success()
+            && String::from_utf8_lossy(&symbolic.stdout).trim() == target_ref
+        {
+            let status = git_checked(&self.repository, &["status", "--porcelain"])?;
+            if !status.is_empty() {
+                anyhow::bail!("target checkout is dirty; refusing publication");
+            }
+            if git_checked(&self.repository, &["rev-parse", "HEAD"])? != expected.id {
+                return Ok(false);
+            }
+            return Ok(std::process::Command::new("git")
+                .arg("-C")
+                .arg(&self.repository)
+                .args(["merge", "--ff-only", &candidate.artifact.id])
+                .status()?
+                .success());
+        }
+        Ok(std::process::Command::new("git")
+            .arg("-C")
+            .arg(&self.repository)
+            .args([
+                "update-ref",
+                &target_ref,
+                &candidate.artifact.id,
+                &expected.id,
+            ])
+            .status()?
+            .success())
+    }
+}
+
+fn git_checked(repository: &std::path::Path, args: &[&str]) -> anyhow::Result<String> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repository)
+        .args(args)
+        .output()?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().into())
+}
+
+pub fn publish_exact<P: Publisher>(
+    publisher: &P,
+    candidate: &Candidate,
+    target: &str,
+    expected_previous: &ArtifactRef,
+) -> Result<(), PublishError<P::Error>> {
+    match publisher.publish(candidate, target, expected_previous) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(PublishError::NotFastForward),
+        Err(error) => Err(PublishError::Backend(error)),
+    }
+}
+
+#[derive(Debug)]
+pub enum PublishError<E> {
+    NotFastForward,
+    Backend(E),
+}
+
 pub fn validate_decision(candidate: &Candidate, decision: &Decision) -> Result<(), &'static str> {
     if candidate.id != decision.candidate {
         return Err("decision targets a different candidate");
@@ -199,5 +418,95 @@ notes = "rn"
             .unwrap();
         assert!(root.join("reviews/review-1/decision.toml").is_file());
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn git_publisher_fast_forwards_exact_expected_target() {
+        let root = std::env::temp_dir().join(format!("llaundry-review-git-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let git = |args: &[&str]| -> String {
+            let output = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&root)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8_lossy(&output.stdout).trim().into()
+        };
+        git(&["init", "-b", "main"]);
+        git(&["config", "user.name", "test"]);
+        git(&["config", "user.email", "test@example.com"]);
+        std::fs::write(root.join("x"), "one").unwrap();
+        git(&["add", "x"]);
+        git(&["commit", "-m", "one"]);
+        let old = git(&["rev-parse", "HEAD"]);
+        git(&["checkout", "-b", "candidate"]);
+        std::fs::write(root.join("x"), "two").unwrap();
+        git(&["commit", "-am", "two"]);
+        let new = git(&["rev-parse", "HEAD"]);
+        git(&["checkout", "main"]);
+        let candidate = Candidate {
+            id: "c".into(),
+            subject: "s".into(),
+            result: ResultVersion {
+                metadata: "r".into(),
+                notes: None,
+            },
+            artifact: ArtifactRef {
+                scheme: "git-commit".into(),
+                repository: root.to_string_lossy().into(),
+                id: new.clone(),
+            },
+        };
+        let expected = ArtifactRef {
+            scheme: "git-commit".into(),
+            repository: root.to_string_lossy().into(),
+            id: old,
+        };
+        publish_exact(&GitPublisher::new(&root), &candidate, "main", &expected).unwrap();
+        assert_eq!(git(&["rev-parse", "main"]), new);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    struct FakePublisher(bool);
+    impl Publisher for FakePublisher {
+        type Error = &'static str;
+        fn publish(
+            &self,
+            _candidate: &Candidate,
+            _target: &str,
+            _expected: &ArtifactRef,
+        ) -> Result<bool, Self::Error> {
+            Ok(self.0)
+        }
+    }
+
+    #[test]
+    fn publication_policy_works_through_publisher_interface() {
+        let artifact = ArtifactRef {
+            scheme: "test".into(),
+            repository: "r".into(),
+            id: "a".into(),
+        };
+        let candidate = Candidate {
+            id: "c".into(),
+            subject: "s".into(),
+            result: ResultVersion {
+                metadata: "m".into(),
+                notes: None,
+            },
+            artifact: artifact.clone(),
+        };
+        assert!(publish_exact(&FakePublisher(true), &candidate, "target", &artifact).is_ok());
+        assert!(matches!(
+            publish_exact(&FakePublisher(false), &candidate, "target", &artifact),
+            Err(PublishError::NotFastForward)
+        ));
     }
 }

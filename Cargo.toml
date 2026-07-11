@@ -2,7 +2,7 @@
 name = "llaundry"
 version = "0.1.0"
 edition = "2021"
-description = "A content-addressed, immutable graph database for LLM-assisted development"
+description = "Compatibility facade and frontends composing llaundry core, work, and review applications"
 
 [workspace]
 members = ["crates/llaundry-core", "crates/llaundry-work", "crates/llaundry-review"]
@@ -27,6 +27,7 @@ path = "src/bin/mcp.rs"
 [[bin]]
 name = "llaundry-work"
 path = "src/bin/work.rs"
+doc = false
 
 [[bin]]
 name = "llaundry-viz"

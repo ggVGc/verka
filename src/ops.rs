@@ -79,22 +79,18 @@ pub struct NewNode {
 
 /// Create a new node. Returns its id.
 pub fn add(store: &Store, vcs: &dyn Vcs, new: NewNode) -> Result<String> {
-    if new.description.trim().is_empty() {
-        bail!("a node needs a description (its first line serves as the title)");
-    }
-    for dep in new.depends_on.iter().chain(&new.derived_from) {
-        check_edge(store, dep)?;
-    }
-    let id = format!("node-{}", Ulid::new());
-    let meta = NodeMeta {
-        schema: 1,
-        author: new.author,
-        assignee: new.assignee,
-        depends_on: new.depends_on,
-        derived_from: new.derived_from,
-        review: None,
-    };
-    store.write_node(&id, &meta, &new.description)?;
+    let graph = llaundry_core::FsGraphStore::open(store.root())?;
+    let id = graph.add(
+        llaundry_core::NodeDefinition {
+            schema: 1,
+            author: new.author,
+            assignee: new.assignee,
+            depends_on: new.depends_on,
+            derived_from: new.derived_from,
+            extensions: Default::default(),
+        },
+        new.description,
+    )?;
     vcs.commit_store(&store.store_name(), &format!("llaundry: add {id}"))?;
     Ok(id)
 }
@@ -102,20 +98,7 @@ pub fn add(store: &Store, vcs: &dyn Vcs, new: NewNode) -> Result<String> {
 /// Add `to` to one of `from`'s dependency lists. A definition change: it moves
 /// `from`'s version.
 pub fn link(store: &Store, vcs: &dyn Vcs, from: &str, to: &str, kind: DepKind) -> Result<()> {
-    if from == to {
-        bail!("cannot link `{from}` to itself");
-    }
-    let (mut meta, description) = store.read_node(from)?;
-    check_edge(store, to)?;
-    let list = match kind {
-        DepKind::DependsOn => &mut meta.depends_on,
-        DepKind::DerivedFrom => &mut meta.derived_from,
-    };
-    if list.iter().any(|d| d == to) {
-        bail!("{from} already has a {} link to {to}", kind.as_str());
-    }
-    list.push(to.to_string());
-    store.write_node(from, &meta, &description)?;
+    llaundry_core::FsGraphStore::open(store.root())?.link(from, to, kind == DepKind::DependsOn)?;
     vcs.commit_store(
         &store.store_name(),
         &format!("llaundry: link {from} -> {to}"),
@@ -126,11 +109,7 @@ pub fn link(store: &Store, vcs: &dyn Vcs, from: &str, to: &str, kind: DepKind) -
 /// Edit a node's description. A definition change: it moves the node's
 /// version, so a prior `done` no longer covers it and dependents' pins go stale.
 pub fn edit(store: &Store, vcs: &dyn Vcs, id: &str, description: String) -> Result<()> {
-    if description.trim().is_empty() {
-        bail!("a node needs a description (its first line serves as the title)");
-    }
-    let (meta, _) = store.read_node(id)?;
-    store.write_node(id, &meta, &description)?;
+    llaundry_core::FsGraphStore::open(store.root())?.edit(id, description)?;
     vcs.commit_store(&store.store_name(), &format!("llaundry: edit {id}"))?;
     Ok(())
 }
@@ -590,7 +569,17 @@ pub fn finish_attempt_workspace(
         .read_attempt_result(attempt_id)?
         .is_some_and(|(result, _)| result.output_commit.is_some());
     let path = std::path::Path::new(&attempt.worktree);
-    if keep || !final_meta.backend_succeeded || has_project_output || !vcs.worktree_clean(path)? {
+    let clean = if keep || !final_meta.backend_succeeded || has_project_output {
+        false
+    } else {
+        vcs.worktree_clean(path)?
+    };
+    if !llaundry_work::should_remove_workspace(
+        keep,
+        final_meta.backend_succeeded,
+        has_project_output,
+        clean,
+    ) {
         return Ok(false);
     }
     vcs.remove_worktree(path)?;
@@ -1007,12 +996,14 @@ pub fn recover_publication(store: &Store, vcs: &dyn Vcs, id: &str) -> Result<()>
         .ref_commit(&publication.target_ref)?
         .with_context(|| format!("target branch `{}` does not exist", publication.target))?;
     if target_now == publication.target_previous {
-        if !vcs.publish_fast_forward(
-            &publication.target,
-            &publication.target_previous,
-            &publication.candidate_commit,
-        )? {
-            bail!("reviewed candidate cannot fast-forward `{}`; create follow-up implementation work and review the changed result", publication.target);
+        let candidate = llaundry_review::FsCandidateStore::new(store.root()).candidate(id)?;
+        let expected = git_artifact(&publication.target_previous);
+        match llaundry_review::publish_exact(
+            &LegacyPublisher { vcs }, &candidate, &publication.target, &expected,
+        ) {
+            Ok(()) => {}
+            Err(llaundry_review::PublishError::NotFastForward) => bail!("reviewed candidate cannot fast-forward `{}`; create follow-up implementation work and review the changed result", publication.target),
+            Err(llaundry_review::PublishError::Backend(error)) => return Err(error),
         }
     } else if target_now != publication.candidate_commit {
         bail!(
@@ -1077,6 +1068,22 @@ pub fn recover_publication(store: &Store, vcs: &dyn Vcs, id: &str) -> Result<()>
     )
 }
 
+struct LegacyPublisher<'a> {
+    vcs: &'a dyn Vcs,
+}
+impl llaundry_review::Publisher for LegacyPublisher<'_> {
+    type Error = anyhow::Error;
+    fn publish(
+        &self,
+        candidate: &llaundry_review::Candidate,
+        target: &str,
+        expected_previous: &llaundry_core::ArtifactRef,
+    ) -> Result<bool> {
+        self.vcs
+            .publish_fast_forward(target, &expected_previous.id, &candidate.artifact.id)
+    }
+}
+
 fn latest_review_decision(
     store: &Store,
     implementation: &str,
@@ -1127,45 +1134,44 @@ pub fn current_status(store: &Store, id: &str) -> Status {
 /// based on [`Status`]; this query explains why an otherwise-open node cannot
 /// or should not be worked.
 pub fn node_state(store: &Store, id: &str) -> NodeState {
-    let Ok((meta, _)) = store.read_node(id) else {
-        return NodeState::Open;
+    let core = match current_status(store, id) {
+        Status::Open => llaundry_core::Status::Open,
+        Status::Done => llaundry_core::Status::Done,
+        Status::Failed => llaundry_core::Status::Failed,
     };
-    if meta.review.is_some() {
-        return match store
-            .read_result(id)
-            .ok()
-            .flatten()
-            .and_then(|(result, _)| result.review_decision)
-        {
-            None => NodeState::AwaitingReview,
-            Some(ReviewDecision::Rejected) => NodeState::Rejected,
-            Some(ReviewDecision::Accepted) => NodeState::Integrated,
-        };
+    llaundry_review::node_state(&LegacyReviewAdapter { store }, id, core)
+}
+
+struct LegacyReviewAdapter<'a> {
+    store: &'a Store,
+}
+impl llaundry_review::ReviewStateView for LegacyReviewAdapter<'_> {
+    type Error = anyhow::Error;
+    fn is_review(&self, id: &str) -> Result<bool> {
+        Ok(self.store.read_node(id)?.0.review.is_some())
     }
-    let result = store
-        .read_result(id)
-        .ok()
-        .flatten()
-        .map(|(result, _)| result);
-    if let Some(result) = &result {
-        if result.integrated_commit.is_some() {
-            return NodeState::Integrated;
-        }
-        if result.publication_pending {
-            let decision = result
-                .output_commit
-                .as_deref()
-                .and_then(|commit| latest_review_decision(store, id, commit));
-            return match decision {
-                Some(ReviewDecision::Rejected) => NodeState::Rejected,
-                _ => NodeState::AwaitingReview,
-            };
-        }
+    fn decision(&self, id: &str) -> Result<Option<ReviewDecision>> {
+        Ok(self
+            .store
+            .read_result(id)?
+            .and_then(|(result, _)| result.review_decision))
     }
-    match current_status(store, id) {
-        Status::Open => NodeState::Open,
-        Status::Done => NodeState::Done,
-        Status::Failed => NodeState::Failed,
+    fn integrated(&self, id: &str) -> Result<bool> {
+        Ok(self
+            .store
+            .read_result(id)?
+            .is_some_and(|(result, _)| result.integrated_commit.is_some()))
+    }
+    fn pending_artifact(&self, id: &str) -> Result<Option<String>> {
+        Ok(self.store.read_result(id)?.and_then(|(result, _)| {
+            result
+                .publication_pending
+                .then_some(result.output_commit)
+                .flatten()
+        }))
+    }
+    fn latest_decision(&self, subject: &str, artifact: &str) -> Result<Option<ReviewDecision>> {
+        Ok(latest_review_decision(self.store, subject, artifact))
     }
 }
 
@@ -1208,6 +1214,15 @@ impl llaundry_core::GraphView for CoreGraphAdapter<'_> {
     }
 }
 
+impl llaundry_core::DependencyView for CoreGraphAdapter<'_> {
+    fn exists(&self, id: &str) -> bool {
+        self.store.exists(id)
+    }
+    fn dependencies(&self, id: &str) -> Result<Vec<String>> {
+        Ok(self.store.read_node(id)?.0.depends_on)
+    }
+}
+
 struct CoreArtifactAdapter<'a> {
     store: &'a Store,
     vcs: &'a dyn Vcs,
@@ -1233,34 +1248,21 @@ impl llaundry_core::ArtifactResolver for CoreArtifactAdapter<'_> {
 /// node can be worked. A dependency is satisfied only if it is `done` (on its
 /// current definition) and its own recorded work is not stale.
 pub fn blockers(store: &Store, vcs: &dyn Vcs, id: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let Ok((meta, _)) = store.read_node(id) else {
-        return out;
-    };
-    for dep in &meta.depends_on {
-        if !store.exists(dep) {
-            out.push(format!("{dep}: missing"));
-            continue;
-        }
-        match current_status(store, dep) {
-            Status::Done => {
-                if !staleness(store, vcs, dep).is_empty() {
-                    out.push(format!("{dep}: stale"));
-                }
-            }
-            other => out.push(format!("{dep}: not done ({})", other.as_str())),
-        }
-    }
-    out
+    llaundry_core::blockers(
+        &CoreGraphAdapter { store },
+        &CoreArtifactAdapter { store, vcs },
+        id,
+    )
 }
 
 /// Whether a node is ready to be worked: not already done, and no unsatisfied
 /// dependencies. (A failed node is ready again — its work can be retried.)
 pub fn is_ready(store: &Store, vcs: &dyn Vcs, id: &str) -> bool {
-    if !blockers(store, vcs, id).is_empty() {
-        return false;
-    }
-    current_status(store, id) != Status::Done
+    llaundry_core::is_ready(
+        &CoreGraphAdapter { store },
+        &CoreArtifactAdapter { store, vcs },
+        id,
+    )
 }
 
 /// Review-aware execution policy layered on top of core graph readiness.
@@ -1855,14 +1857,6 @@ pub fn short_result(version: &ResultVersion) -> String {
         short(&version.metadata),
         version.notes.as_deref().map_or("none", short)
     )
-}
-
-/// Validate that an edge target exists.
-fn check_edge(store: &Store, to: &str) -> Result<()> {
-    store
-        .read_node(to)
-        .with_context(|| format!("cannot link to unknown node `{to}`"))?;
-    Ok(())
 }
 
 /// Pin the current version and output of every node in `meta`'s dependency lists.

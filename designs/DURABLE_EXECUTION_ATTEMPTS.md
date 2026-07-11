@@ -1,6 +1,8 @@
 # Durable execution attempts
 
-Status: accepted design; implementation in progress.
+Status: implemented through the `llaundry-work` application crate. The
+`attempts/` paths below describe the legacy compatibility record; portable new
+execution records use `.llaundry/execution/<attempt-id>/`.
 
 ## Purpose
 

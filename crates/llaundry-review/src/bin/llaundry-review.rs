@@ -1,7 +1,10 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use llaundry_core::{ArtifactRef, ResultVersion};
-use llaundry_review::{Candidate, CandidateStore, Decision, DecisionKind, FsCandidateStore};
+use llaundry_review::{
+    publish_exact, Candidate, CandidateStore, Decision, DecisionKind, FsCandidateStore,
+    GitPublisher,
+};
 
 #[derive(Parser)]
 #[command(
@@ -46,6 +49,15 @@ enum Command {
         notes: String,
         #[arg(long)]
         suggestion: Option<String>,
+    },
+    Publish {
+        id: String,
+        #[arg(long)]
+        repository: std::path::PathBuf,
+        #[arg(long, default_value = "main")]
+        target: String,
+        #[arg(long)]
+        expected: String,
     },
 }
 
@@ -107,6 +119,37 @@ fn main() -> Result<()> {
                     repository: candidate.artifact.repository,
                     id,
                 }),
+            })?;
+        }
+        Command::Publish {
+            id,
+            repository,
+            target,
+            expected,
+        } => {
+            let candidate = store.candidate(&id)?;
+            let decision = store
+                .decision(&id)?
+                .ok_or_else(|| anyhow::anyhow!("candidate has no decision"))?;
+            if decision.kind != DecisionKind::Accepted {
+                anyhow::bail!("only an accepted candidate may be published");
+            }
+            let expected = ArtifactRef {
+                scheme: "git-commit".into(),
+                repository: repository.to_string_lossy().into_owned(),
+                id: expected,
+            };
+            publish_exact(
+                &GitPublisher::new(repository),
+                &candidate,
+                &target,
+                &expected,
+            )
+            .map_err(|error| match error {
+                llaundry_review::PublishError::NotFastForward => {
+                    anyhow::anyhow!("candidate cannot fast-forward `{target}`")
+                }
+                llaundry_review::PublishError::Backend(error) => error,
             })?;
         }
     }

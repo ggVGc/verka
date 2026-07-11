@@ -54,8 +54,9 @@ form its definition. Completed or failed work adds `result.toml` and may add
 always Markdown. A node with no `result.toml` is open. Editing either definition
 file revises the definition.
 
-Legacy nodes may carry `work.jsonl`. New execution transcripts and immutable
-results live under `attempts/<attempt-id>/`, as specified in
+Legacy nodes may carry `work.jsonl`. New portable execution records live under
+`execution/<attempt-id>/`; compatibility transcripts and immutable results
+remain readable under `attempts/<attempt-id>/`, as specified in
 `designs/DURABLE_EXECUTION_ATTEMPTS.md`. A recorded interaction log is
 deliberately not another kind of graph state: it is opaque to derived queries
 and exists as execution evidence.

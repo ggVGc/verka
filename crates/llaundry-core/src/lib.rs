@@ -5,7 +5,40 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod store;
+pub use store::{FsGraphStore, NodeDefinition, NodeRecord};
+
 pub const PROTOCOL_VERSION: u32 = 1;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "snake_case")]
+pub enum Author {
+    Human,
+    Machine,
+}
+impl Author {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Human => "human",
+            Self::Machine => "machine",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "snake_case")]
+pub enum DepKind {
+    DependsOn,
+    DerivedFrom,
+}
+impl DepKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::DependsOn => "depends_on",
+            Self::DerivedFrom => "derived_from",
+        }
+    }
+}
 
 /// Versioned JSON envelope used by out-of-process graph adapters.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -28,6 +61,69 @@ impl<T> Envelope<T> {
             Err(format!("unsupported protocol schema {}", self.schema))
         }
     }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "operation", rename_all = "snake_case")]
+pub enum GraphRequest {
+    Get {
+        id: String,
+    },
+    List,
+    Add {
+        definition: NodeDefinition,
+        description: String,
+    },
+    Link {
+        from: String,
+        to: String,
+        blocking: bool,
+    },
+    Edit {
+        id: String,
+        description: String,
+    },
+    Submit {
+        id: String,
+        result: ResultRecord,
+        notes: String,
+    },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "status", content = "value", rename_all = "snake_case")]
+pub enum GraphResponse {
+    Node(NodeRecord),
+    Nodes(Vec<String>),
+    Id(String),
+    ResultVersion(ResultVersion),
+    Ok,
+    Error(String),
+}
+
+pub fn handle_request(store: &FsGraphStore, request: GraphRequest) -> GraphResponse {
+    let response: anyhow::Result<GraphResponse> = (|| {
+        Ok(match request {
+            GraphRequest::Get { id } => GraphResponse::Node(store.read_node(&id)?),
+            GraphRequest::List => GraphResponse::Nodes(store.list_ids()?),
+            GraphRequest::Add {
+                definition,
+                description,
+            } => GraphResponse::Id(store.add(definition, description)?),
+            GraphRequest::Link { from, to, blocking } => {
+                store.link(&from, &to, blocking)?;
+                GraphResponse::Ok
+            }
+            GraphRequest::Edit { id, description } => {
+                store.edit(&id, description)?;
+                GraphResponse::Ok
+            }
+            GraphRequest::Submit { id, result, notes } => {
+                GraphResponse::ResultVersion(store.write_result(&id, &result, &notes)?)
+            }
+        })
+    })();
+    response.unwrap_or_else(|error| GraphResponse::Error(format!("{error:#}")))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -71,6 +167,14 @@ pub enum Outcome {
     Done,
     Failed,
 }
+impl Outcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Done => "done",
+            Self::Failed => "failed",
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProducerEvidence {
@@ -93,6 +197,15 @@ pub enum Status {
     Open,
     Done,
     Failed,
+}
+impl Status {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Done => "done",
+            Self::Failed => "failed",
+        }
+    }
 }
 
 pub fn status(current: &DefinitionVersion, result: Option<&ResultRecord>) -> Status {
@@ -123,6 +236,11 @@ pub trait GraphView {
     fn definition_version(&self, id: &str) -> Result<DefinitionVersion, Self::Error>;
     fn result(&self, id: &str) -> Result<Option<ResultRecord>, Self::Error>;
     fn result_version(&self, id: &str) -> Result<Option<ResultVersion>, Self::Error>;
+}
+
+pub trait DependencyView: GraphView {
+    fn exists(&self, id: &str) -> bool;
+    fn dependencies(&self, id: &str) -> Result<Vec<String>, Self::Error>;
 }
 
 pub trait ArtifactResolver {
@@ -206,6 +324,52 @@ pub fn staleness<G: GraphView, A: ArtifactResolver>(
         }
     }
     reasons
+}
+
+pub fn blockers<G: DependencyView, A: ArtifactResolver>(
+    graph: &G,
+    artifacts: &A,
+    id: &str,
+) -> Vec<String> {
+    let Ok(dependencies) = graph.dependencies(id) else {
+        return Vec::new();
+    };
+    let mut blockers = Vec::new();
+    for dependency in dependencies {
+        if !graph.exists(&dependency) {
+            blockers.push(format!("{dependency}: missing"));
+            continue;
+        }
+        let Ok(version) = graph.definition_version(&dependency) else {
+            blockers.push(format!("{dependency}: not done (open)"));
+            continue;
+        };
+        let result = graph.result(&dependency).ok().flatten();
+        match status(&version, result.as_ref()) {
+            Status::Done if !staleness(graph, artifacts, &dependency).is_empty() => {
+                blockers.push(format!("{dependency}: stale"))
+            }
+            Status::Done => {}
+            Status::Open => blockers.push(format!("{dependency}: not done (open)")),
+            Status::Failed => blockers.push(format!("{dependency}: not done (failed)")),
+        }
+    }
+    blockers
+}
+
+pub fn is_ready<G: DependencyView, A: ArtifactResolver>(
+    graph: &G,
+    artifacts: &A,
+    id: &str,
+) -> bool {
+    if !blockers(graph, artifacts, id).is_empty() {
+        return false;
+    }
+    let Ok(version) = graph.definition_version(id) else {
+        return false;
+    };
+    let result = graph.result(id).ok().flatten();
+    status(&version, result.as_ref()) != Status::Done
 }
 
 #[cfg(test)]

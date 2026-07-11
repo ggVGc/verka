@@ -1,6 +1,8 @@
 # Separate applications and stable interfaces
 
-Status: accepted target architecture; implementation in this workspace.
+Status: implemented. The root `llaundry` package is the compatibility facade
+and integrated frontend; new integrations depend on the three application
+crates directly.
 
 ## 1. Decision
 
@@ -118,7 +120,7 @@ The existing command names remain frontends over the new crates. Compatibility
 is provided at command and persisted-data boundaries, not by allowing core to
 depend on runner or review types.
 
-Migration order:
+Implemented migration order:
 
 1. Establish the Cargo workspace and one-way crate graph.
 2. Extract generic graph model, persistence, queries, and artifact interfaces.
@@ -126,7 +128,12 @@ Migration order:
 4. Extract review decisions and publication recovery.
 5. Rewire CLI, MCP, TUI, visualization, and work driver.
 6. Read legacy records and write the separated schema.
-7. Remove compatibility readers only in a later schema-major release.
+7. Retain compatibility readers until a later schema-major release.
+
+The integrated frontend dual-writes owner-specific execution and review
+records while retaining legacy node/attempt records. `llaundry-core` reads
+legacy node/results directly, and `llaundry-work`/`llaundry-review` fall back
+to the legacy namespaces. No historical commit is rewritten.
 
 ## 6. Architectural tests
 
@@ -140,4 +147,3 @@ The workspace must ensure:
 * review tests can use a fake candidate source and publisher;
 * Git is one artifact/workspace/publisher implementation, not the interface
   definition itself.
-

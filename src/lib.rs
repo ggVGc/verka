@@ -1,15 +1,16 @@
-//! llaundry — a plain-text node graph for LLM-assisted development, versioned
-//! entirely by git.
+//! Compatibility facade and integrated frontends for the llaundry workspace.
 //!
 //! Each node keeps structured data in TOML and prose in Markdown. `node.toml`
 //! plus `description.md` form the definition; `result.toml` plus optional
 //! `result.md` form the completion record. Status, readiness, and staleness are
 //! all derived, never stored.
 //!
-//! This library holds all of the model and graph functionality; the `llaundry`
-//! binary is a thin CLI over it. See DESIGN.md for the model and reasoning.
+//! New integrations should depend directly on `llaundry-core`,
+//! `llaundry-work`, and/or `llaundry-review`. This crate composes them with the
+//! original Git workbench schema and preserves the existing CLI/MCP API while
+//! legacy records are migrated.
 //!
-//! * [`config`] — optional per-store defaults for the work driver.
+//! * `llaundry_work::config` — optional per-store defaults for the work driver.
 //! * [`model`] — the on-disk data types.
 //! * [`store`] — the two-files-per-node store and blob hashing.
 //! * [`vcs`] — the version-control seam ([`Vcs`]); [`git::GitVcs`] is the real impl.

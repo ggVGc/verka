@@ -4,7 +4,7 @@
 //! of llaundry that need a git repository (versions and pins are blob ids
 //! computed locally). Routing them through this trait keeps that dependency
 //! injectable: the real implementation ([`crate::git::GitVcs`]) shells out to
-//! `git`, while tests use an in-memory [`FakeVcs`] so the rest of the project can
+//! `git`, while tests use an in-memory `FakeVcs` so the rest of the project can
 //! be unit-tested with no git binary, no repository, and no configured identity.
 
 use anyhow::Result;

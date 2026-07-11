@@ -17,6 +17,20 @@ They exchange versioned serializable records through interfaces defined by the
 owning crate. See `designs/SEPARATE_APPLICATIONS.md` for the dependency rules
 and migration guarantees.
 
+`llaundry-core` also exposes its graph through versioned JSON-lines on stdin
+and stdout. For example:
+
+```text
+printf '%s\n' '{"schema":1,"payload":{"operation":"list"}}' |
+  llaundry-core --store .llaundry
+```
+
+`llaundry-exec --store <execution-store> --repository <git-repo>` accepts the
+versioned `llaundry-work::Request` JSON envelope and prepares isolated candidate
+worktrees without requiring a llaundry graph. A different scheduler or state
+database can therefore use the same worktree/backend implementation through
+the `WorkProvider`, `AttemptStore`, and `WorkspaceManager` interfaces.
+
 ## Review-gated candidate workflow
 
 Before changing the project, `llaundry-work <node>` commits a durable execution

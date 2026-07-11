@@ -7,6 +7,9 @@
 //! Status is never stored. It is derived from whether `result.toml` exists,
 //! what its `outcome` says, and whether its definition version still matches.
 
+pub use llaundry_core::{Author, DefinitionVersion, DepKind, Outcome, ResultVersion, Status};
+pub use llaundry_review::{NodeState, PublicationIntent, ReviewDecision, ReviewTarget};
+pub use llaundry_work::{AttemptFinal, AttemptMeta, ExecutionIdentity, WorkedBy};
 use serde::{Deserialize, Serialize};
 
 /// A node's display title: the first non-empty line of its description. There
@@ -20,124 +23,12 @@ pub fn title_of(description: &str) -> &str {
         .unwrap_or("(no description)")
 }
 
-/// Who authored a definition or did the work.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
-#[serde(rename_all = "snake_case")]
-pub enum Author {
-    Human,
-    Machine,
-}
-
-impl Author {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Author::Human => "human",
-            Author::Machine => "machine",
-        }
-    }
-}
-
 /// A node's derived lifecycle status. Never stored anywhere: computed from the
 /// presence and content of `result.toml` against the current definition files.
 ///
 /// There is deliberately no `in_progress` (a node is worked once, and nothing
 /// records "being worked") and no `blocked` (a fact about dependencies, derived
 /// by the `blockers` query).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Status {
-    /// No result yet — or the definition was edited after a `done`, which
-    /// reopens the node (the completion no longer covers the current content).
-    Open,
-    Done,
-    Failed,
-}
-
-/// More informative presentation state derived from generic lifecycle status
-/// plus the review workflow. It is never stored.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum NodeState {
-    Open,
-    AwaitingReview,
-    Rejected,
-    Integrated,
-    Done,
-    Failed,
-}
-
-impl NodeState {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Open => "open",
-            Self::AwaitingReview => "awaiting-review",
-            Self::Rejected => "rejected",
-            Self::Integrated => "integrated",
-            Self::Done => "done",
-            Self::Failed => "failed",
-        }
-    }
-}
-
-impl Status {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Status::Open => "open",
-            Status::Done => "done",
-            Status::Failed => "failed",
-        }
-    }
-}
-
-/// The stored outcome of a node's unit of work.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Outcome {
-    Done,
-    Failed,
-}
-
-impl Outcome {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Outcome::Done => "done",
-            Outcome::Failed => "failed",
-        }
-    }
-}
-
-/// Which dependency list of `node.toml` an id goes into.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
-#[serde(rename_all = "snake_case")]
-pub enum DepKind {
-    DependsOn,
-    DerivedFrom,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ReviewDecision {
-    Accepted,
-    Rejected,
-}
-
-/// The exact implementation attempt a review node examines.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ReviewTarget {
-    pub implementation: String,
-    pub attempt_id: String,
-    pub candidate_branch: String,
-    pub candidate_commit: String,
-    pub reviewed_result: ResultVersion,
-}
-
-impl DepKind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            DepKind::DependsOn => "depends_on",
-            DepKind::DerivedFrom => "derived_from",
-        }
-    }
-}
-
 /// Contents of `node.toml`. Dependencies are *ids only*:
 /// which versions the work was actually built against is a fact about the work,
 /// recorded in [`ResultMeta::built_against`] at completion, so that updating a
@@ -161,22 +52,6 @@ pub struct NodeMeta {
     /// Present only on automatically-created review nodes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review: Option<ReviewTarget>,
-}
-
-/// Git blob ids of the two files that constitute a node definition.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DefinitionVersion {
-    pub metadata: String,
-    pub description: String,
-}
-
-/// Git blob ids of the files that constitute a result. `notes` is absent when
-/// there is no `result.md`.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ResultVersion {
-    pub metadata: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub notes: Option<String>,
 }
 
 /// The exact version of a related node the work was built against, captured at
@@ -207,30 +82,6 @@ pub struct ContextPin {
     /// declare it).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub observed: bool,
-}
-
-/// The engine that produced a result: which backend ran the work, and which
-/// model it was given. Stamped onto `result.toml` by the work driver after the
-/// session (the worker itself does not reliably know what it runs on); absent
-/// on results recorded by hand.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct WorkedBy {
-    /// The backend that ran the session (e.g. `claude-code`).
-    pub backend: String,
-    /// The model the backend was asked for. Absent means the backend's own
-    /// default — whatever that was at the time.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
-}
-
-/// Identity supplied by an isolated execution driver when machine work is
-/// allowed to produce project content.
-#[derive(Clone, Debug)]
-pub struct ExecutionIdentity {
-    pub node_id: String,
-    pub attempt_id: String,
-    pub candidate_branch: String,
-    pub force: bool,
 }
 
 /// Contents of `result.toml` — the record of the node's one unit of work.
@@ -283,53 +134,6 @@ pub struct ResultMeta {
     pub built_against: Vec<BuiltAgainst>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub context: Vec<ContextPin>,
-}
-
-/// Durable identity and frozen inputs of one execution attempt.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct AttemptMeta {
-    pub schema: u32,
-    pub id: String,
-    pub node: String,
-    pub worker: Author,
-    pub force: bool,
-    pub definition: DefinitionVersion,
-    pub input_commit: String,
-    pub input_tree: String,
-    pub candidate_branch: String,
-    pub worktree: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub backend: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
-    pub created_at: i64,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub prepared: bool,
-}
-
-/// Post-session evidence sealing an attempt.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct AttemptFinal {
-    pub at: i64,
-    pub backend_succeeded: bool,
-}
-
-/// Durable record for the cross-repository publication of an accepted review.
-/// Written and committed before the project ref moves, then marked completed
-/// in the same store commit that closes the review.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PublicationIntent {
-    pub schema: u32,
-    pub review: String,
-    pub implementation: String,
-    pub candidate_commit: String,
-    pub target: String,
-    pub target_ref: String,
-    pub target_previous: String,
-    pub notes: String,
-    pub prepared_at: i64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub completed_at: Option<i64>,
 }
 
 #[cfg(test)]
