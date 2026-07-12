@@ -11,6 +11,26 @@
 //! All git interaction goes through `&dyn Vcs`, so the whole module is
 //! unit-testable with an in-memory fake — no git binary, repository, or identity
 //! required. (Blob hashing for versions and pins is computed locally.)
+//!
+//! ## Snapshot/submission protocol for orchestrators
+//!
+//! External callers (an orchestrator such as Orka, or any other tool) work
+//! against a stable, version-checked protocol rather than reimplementing
+//! capture or validation:
+//!
+//! * [`snapshot_work`] freezes the exact graph, context, and project inputs of
+//!   ready work into a [`WorkSnapshot`] — the authoritative frozen input.
+//! * [`capture_submission`] consumes a caller's frozen snapshot, captures the
+//!   declared outputs in the caller's [`Vcs`] execution context, and submits a
+//!   version-checked result (success with or without outputs, or failure). It
+//!   revalidates every frozen field; on a graph conflict it records nothing and
+//!   returns [`SubmissionError::Conflict`] carrying structured
+//!   [`SubmissionConflict`] values.
+//! * [`submit_result`] is the lower-level version-checked write for callers
+//!   that captured their own artifact.
+//!
+//! Producer-specific evidence rides along as a namespaced [`ProducerEvidence`],
+//! which Linka preserves verbatim and never interprets.
 
 use anyhow::{bail, Context, Result};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -18,9 +38,9 @@ use ulid::Ulid;
 
 use crate::model::{
     ArtifactRef, Author, Blocker, BlockerReason, ConsumedNode, ContextPin, Currency,
-    DefinitionVersion, DepKind, NodeMeta, NodeState, Outcome, ProjectSnapshot, RecordedOutcome,
-    ResultMeta, ResultSubmission, ResultVersion, StalenessReason, Status, SubmissionConflict,
-    WorkSnapshot,
+    DefinitionVersion, DepKind, NodeMeta, NodeState, Outcome, ProducerEvidence, ProjectPath,
+    ProjectSnapshot, RecordedOutcome, ResultMeta, ResultSubmission, ResultVersion, StalenessReason,
+    Status, SubmissionConflict, WorkSnapshot,
 };
 use crate::model::{DEFINITION_SCHEMA, OBSERVATION_SCHEMA, RESULT_SCHEMA, SNAPSHOT_SCHEMA};
 use crate::pairing::Pairing;
@@ -692,6 +712,88 @@ pub fn submit_result(
     store.write_result(id, &result, &submission.notes)?;
     vcs.commit_store(&store.store_name(), &format!("linka: result {id}"))?;
     Ok(())
+}
+
+/// Capture work performed in an execution context against a caller's frozen
+/// [`WorkSnapshot`], and submit a version-checked result. This is the entry
+/// point for an orchestrator that snapshots ready work with [`snapshot_work`],
+/// performs it in a separate worktree, and later submits success or failure
+/// against that exact snapshot — Linka still owns output capture, artifact
+/// identity, path validation, and every version check.
+///
+/// `vcs` is the execution context the work happened in (for git, a linked
+/// worktree via [`crate::GitVcs::for_execution`]); graph state still commits to
+/// the store's workbench repository. Returns the captured output commit, or
+/// `None` for graph-only success and for failure.
+///
+/// Ordering guarantee: a graph conflict records no result. For a successful
+/// submission with outputs the output commit is captured *before* the version
+/// check, but its output ref is retained only after the submission is accepted.
+/// A conflict therefore retains no Linka output ref and mutates no graph
+/// state. The caller still owns the execution branch: an orchestrator such as
+/// Orka deliberately retains that branch as attempt evidence, so its captured
+/// commit remains reachable until an explicit caller-side pruning policy
+/// removes it.
+#[allow(clippy::too_many_arguments)]
+pub fn capture_submission(
+    store: &Store,
+    vcs: &dyn Vcs,
+    snapshot: WorkSnapshot,
+    outputs: &[ProjectPath],
+    message: Option<String>,
+    outcome: Outcome,
+    notes: String,
+    author: Author,
+    producer: Option<ProducerEvidence>,
+) -> std::result::Result<Option<String>, SubmissionError> {
+    let id = snapshot.node.as_str().to_string();
+    let output_paths: Vec<String> = outputs.iter().map(ToString::to_string).collect();
+    if outcome == Outcome::Done {
+        // The only uncommitted project changes allowed are the declared
+        // outputs — output provenance is asserted exactly here. This check is
+        // required even for graph-only success: an empty declaration means
+        // the execution tree must have no changes, not that changes may be
+        // silently omitted.
+        require_clean_except(vcs, &output_paths)?;
+    }
+    let output_commit = if outcome == Outcome::Done && !outputs.is_empty() {
+        let message = match message {
+            Some(message) => message,
+            None => {
+                let (_, description) = store.read_node(&id)?;
+                crate::model::title_of(&description).to_string()
+            }
+        };
+        let mut commit_message = format!("{message}\n\nLinka-Node: {id}");
+        if !snapshot.project.revision.is_empty() {
+            commit_message.push_str(&format!("\nLinka-Input: {}", snapshot.project.revision));
+        }
+        Some(vcs.capture(&output_paths, &commit_message)?)
+    } else {
+        None
+    };
+
+    let output = output_commit
+        .as_deref()
+        .map(|commit| git_artifact(store, commit))
+        .transpose()?;
+    submit_result(
+        store,
+        vcs,
+        ResultSubmission {
+            snapshot,
+            outcome,
+            output,
+            notes,
+            author,
+            producer,
+        },
+    )?;
+    // Accepted: keep the output reachable independently of the worktree.
+    if let Some(commit) = &output_commit {
+        vcs.retain_output(&id, commit)?;
+    }
+    Ok(output_commit)
 }
 
 /// The node whose work produced `commit`, if any — the inverse of the output
@@ -2846,5 +2948,171 @@ mod tests {
         assert!(problems
             .iter()
             .any(|p| p.starts_with(&b) && p.contains("built-against")));
+    }
+
+    fn path(p: &str) -> ProjectPath {
+        p.parse().unwrap()
+    }
+
+    #[test]
+    fn capture_submission_records_a_result_and_retains_the_output() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs {
+            next_id: "out-commit".into(),
+            ..Default::default()
+        };
+        let id = add(&store, &fake, new_node("a", vec![])).unwrap();
+        let snapshot = snapshot_work(&store, &fake, &id, &[]).unwrap();
+
+        let producer = ProducerEvidence {
+            namespace: "orka".into(),
+            data: serde_json::json!({ "attempt": "attempt-1" }),
+        };
+        let commit = capture_submission(
+            &store,
+            &fake,
+            snapshot,
+            &[path("src/x.rs")],
+            Some("do it".into()),
+            Outcome::Done,
+            "did it".into(),
+            Author::Machine,
+            Some(producer.clone()),
+        )
+        .unwrap();
+        assert_eq!(commit.as_deref(), Some("out-commit"));
+
+        let (result, notes) = store.read_result(&id).unwrap().unwrap();
+        assert_eq!(notes, "did it");
+        assert_eq!(result.author, Author::Machine);
+        assert_eq!(
+            result.output.as_ref().map(|a| a.id.as_str()),
+            Some("out-commit")
+        );
+        // Producer evidence is preserved verbatim, never interpreted.
+        assert_eq!(result.producer.as_ref(), Some(&producer));
+        // The declared output was captured and its ref retained.
+        assert_eq!(
+            fake.captured.borrow().as_slice(),
+            &[vec!["src/x.rs".to_string()]]
+        );
+        assert!(fake.commits.borrow().contains("out-commit"));
+    }
+
+    #[test]
+    fn capture_submission_supports_graph_only_success() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs::default();
+        let id = add(&store, &fake, new_node("a", vec![])).unwrap();
+        let snapshot = snapshot_work(&store, &fake, &id, &[]).unwrap();
+
+        let commit = capture_submission(
+            &store,
+            &fake,
+            snapshot,
+            &[],
+            None,
+            Outcome::Done,
+            "answered".into(),
+            Author::Machine,
+            None,
+        )
+        .unwrap();
+        assert_eq!(commit, None);
+        assert!(
+            fake.captured.borrow().is_empty(),
+            "no project commit for graph-only work"
+        );
+        assert_eq!(current_status(&store, &fake, &id).unwrap(), Status::Done);
+    }
+
+    #[test]
+    fn capture_submission_refuses_undeclared_changes_for_graph_only_success() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs {
+            dirty: vec!["src/undeclared.rs".into()],
+            ..Default::default()
+        };
+        let id = add(&store, &fake, new_node("a", vec![])).unwrap();
+        let snapshot = snapshot_work(&store, &fake, &id, &[]).unwrap();
+
+        let error = capture_submission(
+            &store,
+            &fake,
+            snapshot,
+            &[],
+            None,
+            Outcome::Done,
+            "claimed graph-only work".into(),
+            Author::Machine,
+            None,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("undeclared"), "{error:#}");
+        assert!(store.read_result(&id).unwrap().is_none());
+        assert!(fake.captured.borrow().is_empty());
+    }
+
+    #[test]
+    fn capture_submission_records_failure_against_the_frozen_snapshot() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs::default();
+        let id = add(&store, &fake, new_node("a", vec![])).unwrap();
+        let snapshot = snapshot_work(&store, &fake, &id, &[]).unwrap();
+
+        let commit = capture_submission(
+            &store,
+            &fake,
+            snapshot,
+            &[],
+            None,
+            Outcome::Failed,
+            "could not".into(),
+            Author::Machine,
+            None,
+        )
+        .unwrap();
+        assert_eq!(commit, None);
+        assert_eq!(current_status(&store, &fake, &id).unwrap(), Status::Failed);
+        assert!(fake.captured.borrow().is_empty());
+    }
+
+    #[test]
+    fn capture_submission_refuses_a_moved_graph_and_records_nothing() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs {
+            next_id: "out-commit".into(),
+            ..Default::default()
+        };
+        let id = add(&store, &fake, new_node("a", vec![])).unwrap();
+        let snapshot = snapshot_work(&store, &fake, &id, &[]).unwrap();
+
+        // The definition moves between freeze and submit.
+        edit(&store, &fake, &id, "a, revised".into()).unwrap();
+
+        let err = capture_submission(
+            &store,
+            &fake,
+            snapshot,
+            &[path("src/x.rs")],
+            None,
+            Outcome::Done,
+            "did it".into(),
+            Author::Machine,
+            None,
+        )
+        .unwrap_err();
+        match err {
+            SubmissionError::Conflict(conflicts) => {
+                assert!(
+                    conflicts.contains(&SubmissionConflict::DefinitionChanged),
+                    "{conflicts:?}"
+                );
+            }
+            other => panic!("expected a conflict, got {other:?}"),
+        }
+        // No result recorded and no output ref retained on a conflict.
+        assert!(store.read_result(&id).unwrap().is_none());
     }
 }
