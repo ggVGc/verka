@@ -2,6 +2,9 @@
 
 Driva runs a command in a disposable Podman container with no host access and
 no network access unless they are explicitly granted.
+The default image is the minimal `docker.io/library/busybox:latest`; configure
+a tool-specific image when the command needs more than BusyBox provides. The
+zero-configuration working directory is `/tmp`, which exists in BusyBox.
 
 ```sh
 cargo run -- run --write . -- cargo test

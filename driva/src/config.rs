@@ -61,10 +61,10 @@ impl Default for DockerConfig {
     }
 }
 fn default_image() -> String {
-    "rust:latest".into()
+    "docker.io/library/busybox:latest".into()
 }
 fn default_workdir() -> PathBuf {
-    PathBuf::from("/workspace")
+    PathBuf::from("/tmp")
 }
 fn default_docker() -> PathBuf {
     PathBuf::from("docker")
