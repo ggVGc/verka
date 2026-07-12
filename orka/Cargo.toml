@@ -1,0 +1,17 @@
+[package]
+name = "orka"
+version = "0.1.0"
+edition = "2021"
+description = "Graph-driven agent orchestration over Linka and Driva"
+
+[lib]
+name = "orka"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+ulid = "1"
+linka = { path = "../linka" }
+driva = { path = "../driva" }
