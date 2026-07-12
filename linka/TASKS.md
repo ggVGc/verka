@@ -143,22 +143,22 @@ Acceptance criteria:
 
 ## 7. Add frozen work snapshots
 
-- [ ] Add a graph-owned `WorkSnapshot` containing the node ID, definition
+- [x] Add a graph-owned `WorkSnapshot` containing the node ID, definition
   version, dependency/lineage pins, and explicit context pins.
-- [ ] Represent the project input revision as a generic artifact/project
+- [x] Represent the project input revision as a generic artifact/project
   snapshot, separate from graph identity.
-- [ ] Add a `snapshot_work` operation that rejects unknown, blocked, corrupt,
+- [x] Add a `snapshot_work` operation that rejects unknown, blocked, corrupt,
   or unreadable nodes.
-- [ ] Permit snapshotting a stale node when its current dependencies are
+- [x] Permit snapshotting a stale node when its current dependencies are
   complete.
-- [ ] Keep attempt IDs, sessions, branches, worktree paths, and backend details
+- [x] Keep attempt IDs, sessions, branches, worktree paths, and backend details
   out of snapshot types.
 
 Tests:
 
-- [ ] Snapshots contain exact definition, dependency result/output, lineage,
+- [x] Snapshots contain exact definition, dependency result/output, lineage,
   context, and project revision identities.
-- [ ] Blocked and corrupt nodes cannot be snapshotted.
+- [x] Blocked and corrupt nodes cannot be snapshotted.
 
 ## 8. Add compare-and-record result submission
 

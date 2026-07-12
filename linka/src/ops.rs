@@ -18,8 +18,8 @@ use ulid::Ulid;
 
 use crate::model::{
     ArtifactRef, Author, Blocker, BlockerReason, ConsumedNode, ContextPin, Currency,
-    DefinitionVersion, DepKind, NodeMeta, NodeState, Outcome, RecordedOutcome, ResultMeta,
-    ResultVersion, StalenessReason, Status,
+    DefinitionVersion, DepKind, NodeMeta, NodeState, Outcome, ProjectSnapshot, RecordedOutcome,
+    ResultMeta, ResultVersion, StalenessReason, Status, WorkSnapshot,
 };
 use crate::pairing::Pairing;
 use crate::store::{file_blob, Store};
@@ -495,6 +495,49 @@ pub fn ready_nodes(store: &Store, vcs: &dyn Vcs, worker: Option<Author>) -> Resu
 
 pub fn first_ready_for(store: &Store, vcs: &dyn Vcs, worker: Author) -> Result<Option<String>> {
     Ok(ready_nodes(store, vcs, Some(worker))?.into_iter().next())
+}
+
+/// Freeze the exact graph, context, and project inputs for ready work.
+pub fn snapshot_work(
+    store: &Store,
+    vcs: &dyn Vcs,
+    id: &str,
+    context: &[String],
+) -> Result<WorkSnapshot> {
+    let state = node_state(store, vcs, id)?;
+    if !state.is_ready() {
+        bail!("node `{id}` is not ready");
+    }
+    let (meta, _) = store.read_node(id)?;
+    let dependencies = pin_node_list(store, &meta.depends_on)?;
+    let lineage = pin_node_list(store, &meta.derived_from)?;
+    let context = pin_context(store, vcs, context)?;
+    let revision = vcs
+        .head_commit()?
+        .context("cannot snapshot work in a project with no revision")?;
+    let tree = vcs.tree_id(&revision)?;
+    let repository = Pairing::load(store.root())?
+        .map(|pairing| pairing.root_commit)
+        .unwrap_or_default();
+    let previous_result = store
+        .read_result(id)?
+        .is_some()
+        .then(|| store.result_version(id))
+        .transpose()?;
+    Ok(WorkSnapshot {
+        node: id.parse().map_err(anyhow::Error::msg)?,
+        definition: store.node_version(id)?,
+        dependencies,
+        lineage,
+        context,
+        project: ProjectSnapshot {
+            scheme: "git".into(),
+            repository,
+            revision,
+            tree,
+        },
+        previous_result,
+    })
 }
 
 /// The node whose work produced `commit`, if any — the inverse of the output
@@ -974,6 +1017,27 @@ fn pin_deps(store: &Store, meta: &NodeMeta) -> Result<Vec<ConsumedNode>> {
                 result,
                 outcome: store.read_result(dep)?.map(|(result, _)| result.outcome),
                 output: output_of(store, dep)?.as_deref().map(git_artifact),
+            })
+        })
+        .collect()
+}
+
+fn pin_node_list(store: &Store, nodes: &[crate::model::NodeId]) -> Result<Vec<ConsumedNode>> {
+    nodes
+        .iter()
+        .map(|dep| {
+            let definition = store.node_version(dep)?;
+            let current = store.read_result(dep)?;
+            let result = current
+                .is_some()
+                .then(|| store.result_version(dep))
+                .transpose()?;
+            Ok(ConsumedNode {
+                id: dep.clone(),
+                definition,
+                result,
+                outcome: current.as_ref().map(|(result, _)| result.outcome),
+                output: current.and_then(|(result, _)| result.output),
             })
         })
         .collect()
@@ -1644,6 +1708,44 @@ mod tests {
                 reason: BlockerReason::Stale,
             }]
         );
+    }
+
+    #[test]
+    fn work_snapshots_freeze_exact_inputs_and_reject_blocked_or_corrupt_nodes() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs {
+            root: Some("project-revision".into()),
+            ..Default::default()
+        };
+        let dependency = add(&store, &fake, new_node("dependency", vec![])).unwrap();
+        done(&store, &fake, &dependency);
+        let lineage = add(&store, &fake, new_node("lineage", vec![])).unwrap();
+        let mut work = new_node("work", vec![dependency.clone()]);
+        work.derived_from = vec![lineage.clone()];
+        let work = add(&store, &fake, work).unwrap();
+        std::fs::write(store.project_root().join("input"), "content").unwrap();
+
+        let snapshot = snapshot_work(&store, &fake, &work, &["input".into()]).unwrap();
+        assert_eq!(snapshot.node.as_str(), work);
+        assert_eq!(snapshot.definition, store.node_version(&work).unwrap());
+        assert_eq!(snapshot.dependencies[0].id.as_str(), dependency);
+        assert_eq!(snapshot.dependencies[0].outcome, Some(Outcome::Done));
+        assert_eq!(snapshot.lineage[0].id.as_str(), lineage);
+        assert_eq!(snapshot.context[0].path.as_str(), "input");
+        assert_eq!(snapshot.project.revision, "project-revision");
+        assert_eq!(snapshot.project.tree, "tree-project-revision");
+
+        done(&store, &fake, &work);
+        edit(&store, &fake, &work, "changed work".into()).unwrap();
+        assert!(
+            snapshot_work(&store, &fake, &work, &[]).is_ok(),
+            "stale ready work can be snapshotted"
+        );
+
+        let blocked = add(&store, &fake, new_node("blocked", vec![lineage.clone()])).unwrap();
+        assert!(snapshot_work(&store, &fake, &blocked, &[]).is_err());
+        std::fs::write(store.node_dir(&lineage).join("node.toml"), "bad = [toml").unwrap();
+        assert!(snapshot_work(&store, &fake, &lineage, &[]).is_err());
     }
 
     #[test]

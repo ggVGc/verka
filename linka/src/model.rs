@@ -328,6 +328,25 @@ pub struct NodeState {
     pub blockers: Vec<Blocker>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectSnapshot {
+    pub scheme: String,
+    pub repository: String,
+    pub revision: String,
+    pub tree: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkSnapshot {
+    pub node: NodeId,
+    pub definition: DefinitionVersion,
+    pub dependencies: Vec<ConsumedNode>,
+    pub lineage: Vec<ConsumedNode>,
+    pub context: Vec<ContextPin>,
+    pub project: ProjectSnapshot,
+    pub previous_result: Option<ResultVersion>,
+}
+
 impl NodeState {
     pub fn is_complete(&self) -> bool {
         self.outcome == RecordedOutcome::Succeeded && self.currency == Currency::Current
