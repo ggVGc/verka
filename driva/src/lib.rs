@@ -2,9 +2,11 @@
 
 mod config;
 mod docker;
+mod podman;
 
-pub use config::{Config, DockerConfig, IsolationConfig, MountConfig, NetworkConfig};
+pub use config::{Config, DockerConfig, IsolationConfig, MountConfig, NetworkConfig, PodmanConfig};
 pub use docker::DockerIsolation;
+pub use podman::PodmanIsolation;
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};

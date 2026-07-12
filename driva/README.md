@@ -1,6 +1,6 @@
 # Driva
 
-Driva runs a command in a disposable Docker container with no host access and
+Driva runs a command in a disposable Podman container with no host access and
 no network access unless they are explicitly granted.
 
 ```sh
@@ -12,15 +12,15 @@ cargo run -- shell --write .
 Mount arguments accept `SOURCE` or `SOURCE:DESTINATION`. A relative source with
 no destination is placed below the configured container working directory;
 `.` is mounted at the working directory. Mount sources must exist. Use
-`--dry-run` to inspect the effective grants and Docker invocation.
+`--dry-run` to inspect the effective grants and backend invocation.
 
 Projects can provide `driva.toml`:
 
 ```toml
 [isolation]
-backend = "docker"
+backend = "podman"
 
-[isolation.docker]
+[isolation.podman]
 image = "rust:1.88"
 workdir = "/workspace"
 
@@ -36,3 +36,6 @@ enabled = false
 The library exposes the backend-independent `ExecutionRequest` and `Isolation`
 interface. `validate_request` resolves host sources and rejects invalid or
 conflicting grants; `execute` validates before dispatching to a backend.
+
+Podman is the default backend. Docker remains available by setting
+`isolation.backend = "docker"` and configuring `[isolation.docker]`.

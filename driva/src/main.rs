@@ -2,11 +2,12 @@ use anyhow::{bail, Result};
 use clap::{Args, Parser, Subcommand};
 use driva::{
     execute, validate_request, Config, DockerIsolation, ExecutionIo, ExecutionRequest, Mount,
-    MountAccess,
+    MountAccess, PodmanIsolation,
 };
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 #[derive(Parser)]
 #[command(about = "Run a command with explicit, deny-by-default isolation")]
@@ -48,10 +49,10 @@ struct PolicyArgs {
     /// Allocate an interactive terminal.
     #[arg(short, long)]
     interactive: bool,
-    /// Print the validated request and Docker invocation without executing it.
+    /// Print the validated request and backend invocation without executing it.
     #[arg(long)]
     dry_run: bool,
-    /// Override the configured Docker image.
+    /// Override the configured container image.
     #[arg(long)]
     image: Option<String>,
     /// Override the isolated working directory.
@@ -75,13 +76,6 @@ fn real_main() -> Result<()> {
         Some(ref path) => Config::load(path)?,
         None => Config::discover()?,
     };
-    if config.isolation.backend != "docker" {
-        bail!(
-            "unsupported isolation backend {:?}",
-            config.isolation.backend
-        );
-    }
-
     let (policy, command, shell) = match cli.command {
         Operation::Run { policy, command } => (policy, command, false),
         Operation::Shell { mut policy } => {
@@ -89,10 +83,15 @@ fn real_main() -> Result<()> {
             (policy, vec![OsString::from("/bin/sh")], true)
         }
     };
+    let configured_workdir = match config.isolation.backend.as_str() {
+        "podman" => &config.isolation.podman.workdir,
+        "docker" => &config.isolation.docker.workdir,
+        backend => bail!("unsupported isolation backend {backend:?}"),
+    };
     let workdir = policy
         .workdir
         .clone()
-        .unwrap_or_else(|| config.isolation.docker.workdir.clone());
+        .unwrap_or_else(|| configured_workdir.clone());
     let mut mounts: Vec<Mount> = config
         .mounts
         .into_iter()
@@ -119,16 +118,41 @@ fn real_main() -> Result<()> {
         interactive: policy.interactive || shell,
     };
     let request = validate_request(&request)?;
-    let backend = DockerIsolation {
-        executable: config.isolation.docker.executable,
-        image: policy.image.unwrap_or(config.isolation.docker.image),
-    };
-    if policy.dry_run {
-        print_dry_run(&backend, &request);
-        return Ok(());
+    match config.isolation.backend.as_str() {
+        "podman" => {
+            let backend = PodmanIsolation {
+                executable: config.isolation.podman.executable,
+                image: policy.image.unwrap_or(config.isolation.podman.image),
+            };
+            let invocation = backend.command(&request);
+            finish("podman", &backend, invocation, &request, policy.dry_run)
+        }
+        "docker" => {
+            let backend = DockerIsolation {
+                executable: config.isolation.docker.executable,
+                image: policy.image.unwrap_or(config.isolation.docker.image),
+            };
+            let invocation = backend.command(&request);
+            finish("docker", &backend, invocation, &request, policy.dry_run)
+        }
+        _ => unreachable!("backend was validated above"),
     }
-    let outcome = execute(&backend, &request, ExecutionIo::inherited()?)?;
-    std::process::exit(outcome.exit.code());
+}
+
+fn finish(
+    name: &str,
+    backend: &dyn driva::Isolation,
+    invocation: Command,
+    request: &ExecutionRequest,
+    dry_run: bool,
+) -> Result<()> {
+    if dry_run {
+        print_dry_run(name, invocation, request);
+        Ok(())
+    } else {
+        let outcome = execute(backend, request, ExecutionIo::inherited()?)?;
+        std::process::exit(outcome.exit.code());
+    }
 }
 
 fn parse_environment(value: &str) -> Result<(OsString, OsString), String> {
@@ -168,8 +192,8 @@ fn parse_mount(spec: &str, access: MountAccess, workdir: &Path) -> Result<Mount>
     })
 }
 
-fn print_dry_run(backend: &DockerIsolation, request: &ExecutionRequest) {
-    println!("backend: docker");
+fn print_dry_run(name: &str, command: Command, request: &ExecutionRequest) {
+    println!("backend: {name}");
     println!(
         "network: {}",
         if request.network {
@@ -192,7 +216,6 @@ fn print_dry_run(backend: &DockerIsolation, request: &ExecutionRequest) {
             }
         );
     }
-    let command = backend.command(request);
     print!("invocation:");
     for arg in std::iter::once(command.get_program()).chain(command.get_args()) {
         print!(" {:?}", arg);

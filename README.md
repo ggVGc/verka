@@ -12,7 +12,8 @@ single framework.
   other applications.
 - `driva/` — a standalone isolated command runner. It exposes only explicit
   host mounts, disables networking by default, and delegates execution to a
-  replaceable isolation backend. Docker is the initial backend.
+  replaceable isolation backend. Podman is the default; Docker is also
+  supported.
 - `orka/` — the orchestrator. It uses Linka to find and track work and Driva to
   execute agent commands in isolation. It owns orchestration policy and durable attempts,
   but no review workflow.
@@ -28,7 +29,7 @@ application.
 ```text
 Orka ----> Linka
   |
-  +------> Driva ----> Docker
+  +------> Driva ----> Podman / Docker
 
 Nota ----> ReviewStore <---- repository files
                        <---- Linka adapter ----> Linka

@@ -7,8 +7,9 @@ environment. It provides a convenient, reusable interface for both manual use
 and programmatic callers such as Orka.
 
 Driva does not implement isolation itself. Its core validates a portable
-execution request and delegates it to an isolation backend. Docker is the
-first backend, but Docker concepts are not part of the core interface.
+execution request and delegates it to an isolation backend. Podman is the
+default backend and Docker is also supported, but container-engine concepts
+are not part of the core interface.
 
 The distinguishing policy is deny by default:
 
@@ -53,9 +54,9 @@ like:
 
 ```toml
 [isolation]
-backend = "docker"
+backend = "podman"
 
-[isolation.docker]
+[isolation.podman]
 image = "rust:1.88"
 workdir = "/workspace"
 
@@ -152,10 +153,11 @@ There are no implicit mounts for the current directory, home directory,
 credentials, SSH agent, Git configuration, or isolation-engine socket.
 Configuration must name every capability that crosses the isolation boundary.
 
-## Initial Docker backend
+## Initial container backends
 
-The first production implementation translates an `ExecutionRequest` into a
-synchronous `docker run --rm` invocation. It is responsible for:
+The production adapters translate an `ExecutionRequest` into a synchronous
+`podman run --rm` or `docker run --rm` invocation. Podman is selected by
+default. Each adapter is responsible for:
 
 - selecting the configured image and isolated working directory;
 - translating read-only and read-write mounts;
@@ -164,9 +166,9 @@ synchronous `docker run --rm` invocation. It is responsible for:
 - forwarding termination as well as the backend permits; and
 - returning the isolated command's exit status.
 
-Docker-specific image names, flags, identifiers, and error details remain in
-this adapter. A future Podman, Bubblewrap, or other backend can implement the
-same portable contract where its semantics match.
+Engine-specific image names, flags, identifiers, and error details remain in
+their adapters. A future Bubblewrap or other backend can implement the same
+portable contract where its semantics match.
 
 Tests for Driva's policy use a fake `Isolation` implementation. Each production
 backend also has focused integration tests for its request translation, I/O,

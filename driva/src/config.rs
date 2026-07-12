@@ -19,23 +19,26 @@ pub struct Config {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct IsolationConfig {
-    #[serde(default = "docker_backend")]
+    #[serde(default = "podman_backend")]
     pub backend: String,
     #[serde(default)]
     pub docker: DockerConfig,
+    #[serde(default)]
+    pub podman: PodmanConfig,
 }
 
 impl Default for IsolationConfig {
     fn default() -> Self {
         Self {
-            backend: docker_backend(),
+            backend: podman_backend(),
             docker: DockerConfig::default(),
+            podman: PodmanConfig::default(),
         }
     }
 }
 
-fn docker_backend() -> String {
-    "docker".into()
+fn podman_backend() -> String {
+    "podman".into()
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -65,6 +68,30 @@ fn default_workdir() -> PathBuf {
 }
 fn default_docker() -> PathBuf {
     PathBuf::from("docker")
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct PodmanConfig {
+    #[serde(default = "default_image")]
+    pub image: String,
+    #[serde(default = "default_workdir")]
+    pub workdir: PathBuf,
+    #[serde(default = "default_podman")]
+    pub executable: PathBuf,
+}
+
+impl Default for PodmanConfig {
+    fn default() -> Self {
+        Self {
+            image: default_image(),
+            workdir: default_workdir(),
+            executable: default_podman(),
+        }
+    }
+}
+
+fn default_podman() -> PathBuf {
+    PathBuf::from("podman")
 }
 
 #[derive(Clone, Debug, Deserialize)]
