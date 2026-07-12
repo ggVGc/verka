@@ -1,0 +1,29 @@
+use anyhow::{Context, Result};
+use clap::Parser;
+use linka_core::{handle_request, Envelope, FsGraphStore, GraphRequest};
+use std::io::BufRead;
+
+#[derive(Parser)]
+#[command(
+    name = "linka-core",
+    about = "Versioned JSON-lines interface to a linka work graph"
+)]
+struct Cli {
+    #[arg(long, default_value = ".linka")]
+    store: std::path::PathBuf,
+}
+
+fn main() -> Result<()> {
+    let store = FsGraphStore::open(Cli::parse().store)?;
+    for line in std::io::BufReader::new(std::io::stdin()).lines() {
+        let line = line?;
+        let request: Envelope<GraphRequest> =
+            serde_json::from_str(&line).context("parsing request envelope")?;
+        let response = request
+            .validate()
+            .map(|request| handle_request(&store, request))
+            .unwrap_or_else(linka_core::GraphResponse::Error);
+        println!("{}", serde_json::to_string(&Envelope::new(response))?);
+    }
+    Ok(())
+}

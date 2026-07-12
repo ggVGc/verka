@@ -1,16 +1,19 @@
 # Isolated worktree execution
 
-Status: proposed feature design.
+Status: historical combined-harness design being split. Orka owns attempt and
+workspace policy; Driva owns Docker lifecycle, explicit mounts, network
+policy, resumable stdio, and container cleanup. Review sections belong to
+Nota integrations rather than Orka.
 
 ## 1. Purpose
 
-Each `llaundry-work` invocation runs in a dedicated Git worktree created from
+Each `orka` invocation runs in a dedicated Git worktree created from
 an exact input commit. The worker never edits the user's `project/` checkout,
 two workers never share writable project state, and a successful run leaves
 one independently addressable output commit.
 
 This is execution isolation, not security isolation. The workbench geometry in
-`ISOLATION.md` still keeps the llaundry store outside the worker's file-tool
+`ISOLATION.md` still keeps the linka store outside the worker's file-tool
 grant. A worktree prevents accidental interference between runs; it does not
 confine arbitrary native processes. Bubblewrap remains an optional hardening
 layer.
@@ -37,12 +40,12 @@ layer.
 The current two-repository workbench remains:
 
 ```text
-workbench/                         outer llaundry repository
+workbench/                         outer linka repository
   .git/
-  .llaundry/
+  .linka/
   project/                         ordinary project checkout
     .git/
-  .llaundry-worktrees/             ignored by the outer repository
+  .orkatrees/             ignored by the outer repository
     <run-id>/                       linked project worktree
 ```
 
@@ -51,12 +54,12 @@ normal non-bare repository, Git keeps it under
 `project/.git/worktrees/<generated-name>/`; the directory above contains the
 working files.
 
-`.llaundry-worktrees/` is a sibling of `project/`, not a child. This has two
+`.orkatrees/` is a sibling of `project/`, not a child. This has two
 useful consequences: project-wide searches from the user's checkout cannot
 walk into active sessions, and a worktree cannot accidentally see another
 worktree through `./**`.
 
-The backend receives only `<workbench>/.llaundry-worktrees/<run-id>` as its
+The backend receives only `<workbench>/.orkatrees/<run-id>` as its
 working directory and file-tool root. The MCP process receives the absolute
 store path as it does today.
 
@@ -105,7 +108,7 @@ deterministic:
 
 1. An explicit `--base <commit>` wins.
 2. A dispatcher-created attempt uses the base frozen by the dispatch operation.
-3. Otherwise `llaundry-work` resolves the paired project's current `HEAD`.
+3. Otherwise `orka` resolves the paired project's current `HEAD`.
 
 The resolved name is immediately peeled to a full commit ID and its tree ID.
 The symbolic branch name is not retained as provenance.
@@ -135,12 +138,12 @@ The driver performs these steps in order:
 2. Resolve and record the input commit and tree.
 3. Generate the run ID.
 4. Create a durable input ref:
-   `refs/llaundry/runs/<run-id>/input`.
+   `refs/linka/runs/<run-id>/input`.
 5. Create a named candidate branch and its worktree:
 
    ```text
-   git -C project worktree add -b llaundry/candidates/<run-id> \
-     ../.llaundry-worktrees/<run-id> <input-commit>
+   git -C project worktree add -b linka/candidates/<run-id> \
+     ../.orkatrees/<run-id> <input-commit>
    ```
 
 6. Verify the new worktree's `HEAD` and tree equal the recorded input.
@@ -151,7 +154,7 @@ The input ref prevents garbage collection between resolution and completion.
 The run is considered recoverable once the attempt header is durable. If an
 earlier preparation step fails, cleanup may simply remove what was created.
 
-Git serializes updates to shared repository metadata internally. llaundry also
+Git serializes updates to shared repository metadata internally. linka also
 uses a short project-repository lock around worktree add/remove/prune and ref
 transactions so its own cleanup cannot race another launcher. The lock is not
 held while the backend runs.
@@ -175,7 +178,7 @@ resolved against this path. Context pinning still hashes paths from the input
 state, not similarly named files in the mutable user checkout.
 
 The worker starts on the permanent candidate branch
-`llaundry/candidates/<run-id>`. It has no reason to create or switch branches.
+`linka/candidates/<run-id>`. It has no reason to create or switch branches.
 Backend-specific user configuration must not be allowed to change the working
 directory or attach unrelated MCP servers. See `HUMAN_REVIEW_GATING.md`; this
 named-branch rule supersedes the earlier detached-worktree proposal.
@@ -190,7 +193,7 @@ Under a per-run completion lock, the MCP completion operation:
 
 1. Confirms it was invoked for the run's node and worktree.
 2. Confirms `HEAD == input_commit`. Worker-created commits are rejected in the
-   first implementation; llaundry owns the single output commit invariant.
+   first implementation; linka owns the single output commit invariant.
 3. Reads porcelain status including untracked files.
 4. Normalizes and validates every declared output path: relative to the
    worktree, no `..`, no absolute paths, no `.git`, no out-of-tree symlink
@@ -204,13 +207,13 @@ Under a per-run completion lock, the MCP completion operation:
 8. Creates one commit with parent `input_commit`, including trailers:
 
    ```text
-   Llaundry-Node: <node-id>
-   Llaundry-Run: <run-id>
-   Llaundry-Input: <input-commit>
+   Linka-Node: <node-id>
+   Linka-Run: <run-id>
+   Linka-Input: <input-commit>
    ```
 
 9. Atomically creates
-   `refs/llaundry/outputs/<node-id>` at the new commit, requiring that the ref
+   `refs/linka/outputs/<node-id>` at the new commit, requiring that the ref
    did not previously exist for a first completion. Rework policy may replace
    it only with an explicit expected-old value.
 10. Writes `result.toml`/`result.md`, including input commit/tree, output
@@ -292,11 +295,11 @@ The ordered publication protocol has intentional intermediate states:
 
 Operational run metadata should live outside node definitions, either as
 attempt events plus Git/worktree discovery or in a dedicated
-`.llaundry/runs/<run-id>.toml` journal excluded from graph semantics. If a run
+`.linka/runs/<run-id>.toml` journal excluded from graph semantics. If a run
 journal is introduced, every transition is an atomic rewrite followed by a
 store commit; it is not used to derive node status.
 
-Provide an idempotent command such as `llaundry worktree recover` that:
+Provide an idempotent command such as `linka worktree recover` that:
 
 1. lists registered worktrees, run refs, attempt headers, output refs, and
    results;
@@ -331,7 +334,7 @@ operation after review; it is never silently attached to changed work.
 
 ### 11.1 Execution workspace
 
-`llaundry-work` currently sets `Session.project_root` to `store.project_root()`.
+`orka` currently sets `Session.project_root` to `store.project_root()`.
 Replace this with a prepared workspace object and run the backend there.
 Transcript path normalization must use the workspace root while context blob
 lookup uses the recorded input commit/tree.
@@ -389,14 +392,14 @@ its files.
 Names are illustrative:
 
 ```text
-llaundry-work <node>
-llaundry edit-review <review-node>
-llaundry review-workspace <review-node>
-llaundry cleanup-review <review-node>
-llaundry accept-review <review-node> [--target main]
-llaundry reject-review <review-node>
-llaundry recover-attempt <attempt-id>
-llaundry recover-publication <review-node>
+orka <node>
+linka edit-review <review-node>
+linka review-workspace <review-node>
+linka cleanup-review <review-node>
+linka accept-review <review-node> [--target main]
+linka reject-review <review-node>
+linka recover-attempt <attempt-id>
+linka recover-publication <review-node>
 ```
 
 `--dry-run` shows the resolved input commit and intended worktree path but
@@ -409,7 +412,7 @@ creates neither refs nor directories.
 * Preflight committed symlinks whose resolved targets escape the worktree; this
   complements the backend's path-scoped permission enforcement.
 * Never pass user-controlled IDs directly as ref or directory components.
-* Disable repository-local hooks for llaundry-owned commits, or invoke commits
+* Disable repository-local hooks for linka-owned commits, or invoke commits
   with a controlled hooks directory. Hooks can mutate unrelated files or
   produce extra commits and violate the lifecycle.
 * Use `--literal-pathspecs` or equivalent path validation so output names cannot

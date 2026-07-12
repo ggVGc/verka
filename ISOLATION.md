@@ -31,9 +31,9 @@ store. The workbench layout instead arranges reality so the store was never
 inside the view:
 
 ```
-workbench/               outer repo — the llaundry repo
+workbench/               outer repo — the linka repo
   .git/                  store history
-  .llaundry/             the store
+  .linka/             the store
   project/               inner repo — the actual project, ordinary in every way
     .git/                project history (legitimate context, readable)
     src/, data/, ...
@@ -57,15 +57,15 @@ good (history is context). Store history lives in the outer `.git`, outside
 the subtree, and — with the store's own history in the outer repo — one
 directory level above anything the session can name.
 
-**The project repo is completely ordinary.** No `.llaundry`, no gitignore
-entry, no `llaundry:` commit noise, no awareness of being orchestrated.
-Other tooling can run in `project/` and sees a plain repo. Adopting llaundry
+**The project repo is completely ordinary.** No `.linka`, no gitignore
+entry, no `linka:` commit noise, no awareness of being orchestrated.
+Other tooling can run in `project/` and sees a plain repo. Adopting linka
 for an existing project means moving its checkout into a workbench, not
 modifying it.
 
 **The MCP server stays a plain stdio child.** Tool permission rules
 constrain the model's tool calls, not subprocess filesystem access — so the
-`llaundry-mcp` child spawned by the backend reads `../.llaundry` normally
+`linka-mcp` child spawned by the backend reads `../.linka` normally
 while the model's own file tools cannot. No daemon, no socket.
 
 ## Consequences for the model
@@ -81,7 +81,7 @@ while the model's own file tools cannot. No daemon, no socket.
   checks the project tree, because only completion asserts output
   provenance.
 - The store's history is a linear journal regardless of project branching:
-  branching the project no longer forks the database, and llaundry can
+  branching the project no longer forks the database, and linka can
   treat the project repo as a plain object of work (rebases included)
   without rewriting its own home.
 - Completion is a two-repo sequence (commit outputs in the project repo,
@@ -97,13 +97,13 @@ while the model's own file tools cannot. No daemon, no socket.
   detectable and relinkable, and stamp the observed project HEAD into every
   store commit as a trailer.)
 - Project → store: stable keys. Output commits can carry a
-  `Llaundry-Node: <id>` trailer; the id resolves through the store. A code
+  `Linka-Node: <id>` trailer; the id resolves through the store. A code
   checkout without the store cannot tell the story — that is the point.
-- Repo pairing is positional — the store lives at `../.llaundry` relative to
+- Repo pairing is positional — the store lives at `../.linka` relative to
   the project root — and recorded: the store's `pairing.toml` holds the
   project's root commit (the first-parent root of HEAD, the one hash that
   identifies the repository rather than a point in its history). `init`
-  records it (minting an empty root commit for a fresh project); `llaundry
+  records it (minting an empty root commit for a fresh project); `linka
   pair` records it for an adopted checkout, and refuses a mismatch unless
   `--force`d. The pairing may also carry a descriptive short-name and the
   project's `origin` remote URL — reference for human readers, never

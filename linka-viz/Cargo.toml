@@ -1,0 +1,15 @@
+[package]
+name = "linka-viz"
+version = "0.1.0"
+edition = "2021"
+description = "A small web server that visualises a linka node graph"
+
+[[bin]]
+name = "linka-viz"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive", "env"] }
+serde_json = "1"
+linka = { path = "../linka" }

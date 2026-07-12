@@ -9,18 +9,18 @@
 
 
 = Open questions: =
-  == Should we keep .llaundry in same repo, or separate?: ==
+  == Should we keep .linka in same repo, or separate?: ==
     - Same offers simplicity and clear single source of truth.
-    - Creates some complexities around work on the actual git repo, for example using llaundry itself to resolve conflicts and doing rebases.
+    - Creates some complexities around work on the actual git repo, for example using linka itself to resolve conflicts and doing rebases.
 
   == How can agent actions really be restricted and tracked, without too much constaints ==
-    - Core issue, currently, is that .git is a store of all of the llaundry state, which we want to deny access to.
+    - Core issue, currently, is that .git is a store of all of the linka state, which we want to deny access to.
       This means we cannot allow full access to git, but we must allow the worker to read work history, since this is a crucial part of development.
-      It seems the llaundry MCP server must provide some way of getting historical versions of the repo, without including .llaundry, and we must
+      It seems the linka MCP server must provide some way of getting historical versions of the repo, without including .linka, and we must
       track if old versions of repository files were read, and at which version.
 
     - Forcing the model to work through custom rules reasonably worsens results since it differs from training. This assumption should be verified.
-    - Making all work to go through the llaundry MCP is one approach.
+    - Making all work to go through the linka MCP is one approach.
       - But this, reasonably, does not play well with other LLM tooling
 
 
@@ -38,7 +38,7 @@ properly behave as a terminal program.
 
 
 I want to be able to look through code in an editor, go to some line, and do the equivalent of a git blame, but instead viewing the
-work that led up to this part of the code through llaundry.
+work that led up to this part of the code through linka.
 
 = Core philosophy =
 The output code is no longer the story. The prompt history is the story.
@@ -78,7 +78,7 @@ access to any other context than the planned implementation steps and the files 
     - etc.
 
 - If any code is manually edited, that should invalidate some node/nodes
-- A common workflow can be that a test is edited, the llaundry graph is partially invalidated, agents are triggered to make tests pass by editing code/specs of the nodes that were invalidated, eventually leading to the graph being consistent again.
+- A common workflow can be that a test is edited, the linka graph is partially invalidated, agents are triggered to make tests pass by editing code/specs of the nodes that were invalidated, eventually leading to the graph being consistent again.
 
 = Data modelling =
 08:02:24      ggVGc | cakebox: my core point of the question is related to that I think the start of good software is good data modelling, and my theory is that if the human does data modelling then the       │
@@ -102,12 +102,12 @@ Can do a few things:
 
 = Use git as the graph =
 Git is fundamentally an acyclic graph, where each hash is a snapshot.
-We could model the nodes of llaundry within the git graph and benefit from all the associated git tooling.
+We could model the nodes of linka within the git graph and benefit from all the associated git tooling.
 
 
 = Representation of Code/Implementation =
-Note: This idea is orthogonal to the core of llaundry, I think.
-      The graph language can be an implementation category supported byh the build and verification tools in the llaundry MCP.
+Note: This idea is orthogonal to the core of linka, I think.
+      The graph language can be an implementation category supported byh the build and verification tools in the linka MCP.
 
 Instead of storing code as text, leverage a graph database.
 Programming langauges are a connected graph of nodes carrying semantic meaning,
@@ -138,4 +138,4 @@ A language where the main constituents are:
 
 
 = Platform =
--=At some future time, when there is such a thing as a "llaundry repo", there could be a collaborative platform like GH, but for llaundry.
+-=At some future time, when there is such a thing as a "linka repo", there could be a collaborative platform like GH, but for linka.

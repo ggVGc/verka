@@ -1,8 +1,10 @@
 # Durable execution attempts
 
-Status: implemented through the `llaundry-work` application crate. Execution
-records live under `.llaundry/execution/<attempt-id>/`, owned by
-`FsAttemptStore`.
+Status: historical implementation design; being revised for the application
+split. Durable attempts are owned by Orka. Container session evidence comes
+from Driva, and review creation is an optional Nota integration rather than an
+Orka finalization requirement. Records currently live under
+`.linka/execution/<attempt-id>/` during migration, owned by `FsAttemptStore`.
 
 ## Purpose
 
@@ -12,13 +14,13 @@ even when the node's convenience result is replaced. Process exit status,
 timestamps, candidate branches, and mutable node results must never be used to
 infer which execution produced a result.
 
-The attempt record is written before llaundry mutates the project repository.
+The attempt record is written before linka mutates the project repository.
 This makes every candidate branch and worktree explainable and recoverable.
 
 ## Storage
 
 ```text
-.llaundry/execution/<attempt-id>/
+.linka/execution/<attempt-id>/
     attempt.toml
     work.jsonl
     result.toml       # optional worker-recorded outcome
@@ -42,7 +44,7 @@ observed context are applied before sealing. Sealing is idempotent.
 1. Authorize the node and freeze graph inputs.
 2. Resolve the exact project input commit and tree.
 3. Allocate the attempt ID and candidate branch.
-4. Commit `attempt.toml` to the llaundry repository.
+4. Commit `attempt.toml` to the linka repository.
 5. Create the candidate branch and linked worktree.
 6. Mark preparation complete and commit that fact.
 7. Run the backend with MCP authorized by only the attempt ID.
@@ -74,7 +76,7 @@ reads only `execution/<attempt-id>/result.toml`.
 
 ## Reviews and node state
 
-A review candidate (owned by `llaundry-review`) pins the producing attempt ID,
+A review candidate (owned by `nota`) pins the producing attempt ID,
 candidate branch, output artifact, and sealed attempt-result version. Project
 output from a sealed attempt has exactly one review regardless of backend exit
 status.

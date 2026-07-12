@@ -1,14 +1,17 @@
 # Human review gating and named candidate branches
 
-Status: implemented initial workflow.
+Status: historical workflow being adapted to Nota. Nota owns comments,
+suggested edits, decisions, and follow-up requests behind its `ReviewStore`
+trait. Linka-specific nodes and branches are adapter behavior; Orka does not
+automatically create or interpret reviews.
 
 ## 1. Purpose
 
 Every machine-produced project change requires explicit human approval before
 it reaches `main`. Automated tests are part of responsible human review, but
-llaundry does not yet model automated verification as a separate graph concept.
+linka does not yet model automated verification as a separate graph concept.
 
-Git remains the source of truth for project content and history. Llaundry uses
+Git remains the source of truth for project content and history. Linka uses
 ordinary named branches and worktrees for candidates and review suggestions,
 while graph nodes record why those branches exist and how their contents were
 reviewed.
@@ -16,7 +19,7 @@ reviewed.
 ## 2. Core rules
 
 1. Every implementation attempt runs in a worktree on a unique named branch.
-2. Candidate branches are permanent historical records. Llaundry never reuses,
+2. Candidate branches are permanent historical records. Linka never reuses,
    resets, or automatically deletes them.
 3. Completing machine work does not integrate it into `main`.
 4. A completion that produces a project commit automatically creates a review
@@ -35,7 +38,7 @@ reviewed.
 Implementation attempts use branches in this namespace:
 
 ```text
-llaundry/candidates/<attempt-id>
+linka/candidates/<attempt-id>
 ```
 
 `attempt-id` is an opaque ULID generated before the branch or worktree is
@@ -46,16 +49,16 @@ HEAD. Removing the worktree does not remove the branch.
 Review suggestion work uses:
 
 ```text
-llaundry/reviews/<review-node-id>
+linka/reviews/<review-node-id>
 ```
 
 The review branch starts at the reviewed candidate commit and is created only
 when the reviewer elects to edit files. The original candidate branch remains
 unchanged.
 
-Branches are project history, not llaundry-store content. Preserving or sharing
+Branches are project history, not linka-store content. Preserving or sharing
 old candidates therefore means preserving or publishing the corresponding
-project branches. Llaundry should eventually provide explicit synchronization
+project branches. Linka should eventually provide explicit synchronization
 help, but must not push unfinished work without user authorization.
 
 ## 4. Graph lifecycle
@@ -87,7 +90,7 @@ relationship to the implementation node. Its definition pins:
 ```toml
 review_of = "implementation-node-id"
 attempt_id = "01..."
-candidate_branch = "llaundry/candidates/01..."
+candidate_branch = "linka/candidates/01..."
 candidate_commit = "abc123..."
 reviewed_result = { metadata = "...", notes = "..." }
 ```
@@ -109,15 +112,15 @@ publishes that content to the configured target branch.
 The initial implementation only accepts a candidate when the target can be
 fast-forwarded to the reviewed commit. If the target has moved, acceptance
 does not silently rebase, merge, invoke an agent, or otherwise change approved
-content. Llaundry instead creates or requests follow-up implementation or
+content. Linka instead creates or requests follow-up implementation or
 reconciliation work. Its result is a new candidate with a new review.
 
 After successful publication, the review and implementation result record the
 integrated commit, target ref, and prior target commit. Candidate and review
 branches remain as history.
 
-Because the project and llaundry stores are separate repositories, acceptance
-is a recoverable transaction rather than an atomic write. Llaundry commits a
+Because the project and linka stores are separate repositories, acceptance
+is a recoverable transaction rather than an atomic write. Linka commits a
 publication intent before moving the target. It then closes the review, updates
 the implementation view, and marks the intent complete in one store commit.
 `recover-publication` safely resumes either before or after the target move.

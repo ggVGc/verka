@@ -1,10 +1,11 @@
 # Parallel variants, selection, and switching
 
-Status: proposed feature design.
+Status: retained orchestration design. Execution is Orka policy implemented
+through Driva sessions; review behavior belongs to Nota.
 
 ## 1. Purpose
 
-A unit of work may have several valid implementations. llaundry should allow
+A unit of work may have several valid implementations. linka should allow
 multiple workers to start from the same definition and project state, preserve
 all of their results, continue developing any result after another has been
 chosen, and change the chosen result later without rewriting history.
@@ -76,9 +77,9 @@ Fan-out should be an explicit operation rather than a race between repeated
 `work T` calls. A possible interface is:
 
 ```text
-llaundry branch T --name A --name B
-llaundry-work A1 &
-llaundry-work B1 &
+linka branch T --name A --name B
+orka A1 &
+orka B1 &
 ```
 
 Names are human labels and need not be globally unique. Node IDs remain the
@@ -107,7 +108,7 @@ Selection has no effect on readiness or permission to create descendants.
 A convenience command may create the continuation node and its worktree:
 
 ```text
-llaundry continue B1 --description fix-b-memory-use.md
+linka continue B1 --description fix-b-memory-use.md
 ```
 
 The resulting node should record both the semantic derivation from `B1` and
@@ -171,7 +172,7 @@ records construction of an integrated project commit from:
 
 Its output commit is the exact project state exposed as the current integrated
 branch. The workbench may maintain a convenience ref such as
-`refs/llaundry/projection` pointing to that commit. The ref is a cache: it can
+`refs/linka/projection` pointing to that commit. The ref is a cache: it can
 be reconstructed from the latest projection node and moving it does not alter
 graph history.
 
@@ -188,7 +189,7 @@ The operation has three phases.
 ### 6.1 Analyze
 
 Given current projection `P1`, current selection `S1 -> A3`, and proposed
-candidate `B2`, llaundry determines:
+candidate `B2`, linka determines:
 
 * the common input commit or merge base of A and B;
 * commits introduced by the selected A lineage;
@@ -211,7 +212,7 @@ If no downstream work exists and B2 is based on the same projection as A, a
 new projection can directly use B2.
 
 If downstream work has accumulated on A, a raw ref move to B2 would discard or
-strand that work. llaundry must instead require one of:
+strand that work. linka must instead require one of:
 
 * **replace**: intentionally construct a projection from B2 without the
   A-dependent descendants, recording those descendants as excluded;
@@ -242,7 +243,7 @@ while the reconciliation result is a new descendant that can become the
 projection.
 
 Git merge and rebase are implementation techniques, not provenance semantics.
-Even when Git can cherry-pick or merge cleanly, llaundry should record which
+Even when Git can cherry-pick or merge cleanly, linka should record which
 node authorized that integration and what exact inputs were combined. A clean
 textual merge does not prove semantic compatibility, so affected verification
 must still be rerun.
@@ -285,12 +286,12 @@ implementation sequence:
 2. Create a temporary branch or detached worktree at that commit.
 3. Run the worker with access only to that worktree and declared context.
 4. On completion, reject undeclared dirty files as in the existing design.
-5. Create one output commit carrying `Llaundry-Node: <id>`.
+5. Create one output commit carrying `Linka-Node: <id>`.
 6. Record the output commit and all input pins in the node result.
 7. Retain the commit even if the worktree is removed.
 
 Commits must remain reachable. The project repository should maintain internal
-refs for recorded outputs, for example `refs/llaundry/outputs/<node-id>`, or
+refs for recorded outputs, for example `refs/linka/outputs/<node-id>`, or
 another reachability mechanism derived from the store. These refs protect
 unselected variants from garbage collection. They are indexes over result
 records and can be checked or reconstructed; they are not the decision model.
@@ -317,17 +318,17 @@ This is the same explicit-merge rule used for divergent variant continuations.
 Names are illustrative:
 
 ```text
-llaundry branch <node> --name <label> [--name <label> ...]
-llaundry continue <variant-head> --description <file>
-llaundry candidates <node>
-llaundry lineage <attempt-or-result>
-llaundry select --candidate <node> [--compare <node> ...]
-llaundry selection [--at <projection>]
-llaundry switch --candidate <node> --analyze
-llaundry switch --selection <node> --strategy replace|replay|reconcile|defer
-llaundry impact <selection-or-projection>
-llaundry project <selection> --verify
-llaundry publish <projection> --branch main
+linka branch <node> --name <label> [--name <label> ...]
+linka continue <variant-head> --description <file>
+linka candidates <node>
+linka lineage <attempt-or-result>
+linka select --candidate <node> [--compare <node> ...]
+linka selection [--at <projection>]
+linka switch --candidate <node> --analyze
+linka switch --selection <node> --strategy replace|replay|reconcile|defer
+linka impact <selection-or-projection>
+linka project <selection> --verify
+linka publish <projection> --branch main
 ```
 
 `switch --analyze` and `impact` are read-only. Commands that create decisions,

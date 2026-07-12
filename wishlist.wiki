@@ -12,7 +12,7 @@
   - More?
 - Some way of performing the work of a node in parallel by multiple agents:
   - Seems to force the inclusion of special output nodes.
-- Associate llaundry repo with target project repo through root commit hash:
+- Associate linka repo with target project repo through root commit hash:
   - Later maybe multiple project repos
 - Make each node work happen in new worktree. Same basic idea as kuro.
 - Start an interactive session on a node:
@@ -27,7 +27,7 @@
   - This is probably more of an editor integration, that in the end just creates a node
   - Similar to "start a review" but based on the current state of the repo. More comments and edits can be added after the first one, until explicitly done.
   - Maybe all done in a new worktree, so that each edit and comment is a new commit which is then used to build the node
-- Native support for using another llaundry repo as input context.
+- Native support for using another linka repo as input context.
 - Global context files, injected into the sessions:
   - In order to be backend agnostic and explicit about context.
 - If work on a node causes followup work which is unrelated to the core task of the node, better if a new node is created for that work
