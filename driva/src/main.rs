@@ -208,7 +208,7 @@ fn lifecycle(config: &Config, operation: Operation) -> Result<()> {
         }
         Operation::Inspect { session } => {
             let s = runner.inspect(&session)?;
-            println!("{} {} {:?}", s.record.id, s.record.backend, s.observed);
+            println!("{} {} {}", s.record.id, s.record.backend, s.observed);
         }
         Operation::Wait { session } => {
             let o = runner.wait(&session)?;
@@ -216,28 +216,47 @@ fn lifecycle(config: &Config, operation: Operation) -> Result<()> {
         }
         Operation::Terminate { session, grace } => {
             let o = runner.terminate(&session, std::time::Duration::from_secs(grace))?;
+            println!(
+                "session {session} stopped (exit {}); use `driva remove {session}` to delete it",
+                o.exit.code()
+            );
             std::process::exit(o.exit.code())
         }
         Operation::Remove { session } => {
             let o = runner.remove(&session)?;
             if o.state != driva::ObservedProcessState::Missing {
-                bail!("backend resource still present: {:?}", o.state)
+                bail!("backend resource still present: {}", o.state)
             }
+            println!("session {session} removed");
         }
         Operation::List => {
             for r in runner.store.list()? {
                 let state = runner.inspect(&r.id)?.observed;
-                println!("{}\t{}\t{:?}", r.id, r.backend, state)
+                println!("{}\t{}\t{}{}", r.id, r.backend, state, incomplete_note(&r))
             }
         }
         Operation::Recover => {
             for s in runner.recover()? {
-                println!("{}\t{}\t{:?}", s.record.id, s.record.backend, s.observed)
+                println!(
+                    "{}\t{}\t{}{}",
+                    s.record.id,
+                    s.record.backend,
+                    s.observed,
+                    incomplete_note(&s.record)
+                )
             }
         }
         _ => unreachable!(),
     }
     Ok(())
+}
+
+fn incomplete_note(record: &driva::SessionRecord) -> &'static str {
+    if record.metadata_incomplete {
+        "\t(recovered; metadata incomplete)"
+    } else {
+        ""
+    }
 }
 
 fn start_session(

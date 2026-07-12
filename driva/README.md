@@ -12,6 +12,12 @@ cargo run -- run --read ~/.cargo/registry --write . --network -- cargo update
 cargo run -- shell --write .
 ```
 
+The full command-line reference — every subcommand, option, the mount
+grammar, and the `driva.toml` schema — lives in [`docs/cli.md`](docs/cli.md).
+Its help-text blocks are checked against the compiled binary by
+`tests/cli_docs.rs`; regenerate them with
+`DRIVA_UPDATE_DOCS=1 cargo test --test cli_docs` after changing the CLI.
+
 Mount arguments accept `SOURCE` or `SOURCE:DESTINATION`. A relative source with
 no destination is placed below the configured container working directory;
 `.` is mounted at the working directory. Mount sources must exist. Use

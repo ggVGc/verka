@@ -18,22 +18,6 @@ pub struct DockerIsolation {
     pub image: String,
 }
 
-struct DockerConnection {
-    executable: PathBuf,
-    reference: BackendReference,
-}
-impl ProcessConnection for DockerConnection {
-    fn connect(self: Box<Self>, io: ExecutionIo) -> Result<ProcessExit> {
-        Ok(Command::new(&self.executable)
-            .arg("attach")
-            .arg(&self.reference.0)
-            .stdin(Stdio::from(io.stdin))
-            .stdout(Stdio::from(io.stdout))
-            .stderr(Stdio::from(io.stderr))
-            .status()?
-            .into())
-    }
-}
 impl DurableIsolation for DockerIsolation {
     fn backend_name(&self) -> &'static str {
         "docker"
@@ -74,10 +58,10 @@ impl DurableIsolation for DockerIsolation {
         crate::podman::inspect_engine(&self.executable, r)
     }
     fn attach(&self, r: &BackendReference) -> Result<Box<dyn ProcessConnection>> {
-        Ok(Box::new(DockerConnection {
-            executable: self.executable.clone(),
-            reference: r.clone(),
-        }))
+        Ok(crate::podman::attach_engine(&self.executable, r))
+    }
+    fn resume(&self, r: &BackendReference) -> Result<Box<dyn ProcessConnection>> {
+        Ok(crate::podman::resume_engine(&self.executable, r))
     }
     fn wait(&self, r: &BackendReference) -> Result<ProcessExit> {
         crate::podman::wait_engine(&self.executable, r)

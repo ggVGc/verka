@@ -133,6 +133,18 @@ pub enum ObservedProcessState {
     Missing,
     Unknown { error: String },
 }
+impl std::fmt::Display for ObservedProcessState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Created => f.write_str("created (never started)"),
+            Self::Running => f.write_str("running"),
+            Self::Exited(ProcessExit::Code(code)) => write!(f, "exited({code})"),
+            Self::Exited(ProcessExit::Signaled) => f.write_str("killed by signal"),
+            Self::Missing => f.write_str("missing"),
+            Self::Unknown { error } => write!(f, "unknown: {error}"),
+        }
+    }
+}
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Observation {
     #[serde(default = "schema_version")]
@@ -171,6 +183,11 @@ pub trait DurableIsolation {
     }
     fn inspect(&self, reference: &BackendReference) -> Result<ObservedProcessState>;
     fn attach(&self, reference: &BackendReference) -> Result<Box<dyn ProcessConnection>>;
+    /// Start a created-but-never-started resource with the terminal connected.
+    fn resume(&self, reference: &BackendReference) -> Result<Box<dyn ProcessConnection>> {
+        let _ = reference;
+        bail!("this backend cannot start a created session")
+    }
     fn wait(&self, reference: &BackendReference) -> Result<ProcessExit>;
     fn terminate(&self, reference: &BackendReference, grace: Duration) -> Result<()>;
     fn remove(&self, reference: &BackendReference) -> Result<()>;
@@ -380,30 +397,63 @@ impl<'a> SessionRunner<'a> {
     pub fn attach(&self, id: &SessionId, io: ExecutionIo) -> Result<ProcessExit> {
         let r = self.store.load(id)?;
         self.ensure_backend(&r)?;
-        self.backend.attach(Self::reference(&r)?)?.connect(io)
+        let reference = Self::reference(&r)?;
+        match self.backend.inspect(reference)? {
+            ObservedProcessState::Running => self.backend.attach(reference)?.connect(io),
+            ObservedProcessState::Created => self.backend.resume(reference)?.connect(io),
+            state @ ObservedProcessState::Exited(_) => bail!(
+                "session {id} already {state}; use `driva remove {id}` to delete it"
+            ),
+            ObservedProcessState::Missing => bail!(
+                "session {id} has no backend container; run `driva recover` or `driva remove {id}`"
+            ),
+            ObservedProcessState::Unknown { error } => {
+                bail!("session {id} state is unknown: {error}")
+            }
+        }
+    }
+    fn outcome(&self, record: &SessionRecord, exit: ProcessExit) -> ExecutionOutcome {
+        ExecutionOutcome {
+            exit,
+            evidence: ExecutionEvidence {
+                isolation_backend: record.backend.clone(),
+                backend_reference: record.backend_reference.as_ref().map(|r| r.0.clone()),
+                effective_policy: record.effective_policy.clone(),
+                started_at: UNIX_EPOCH + Duration::from_millis(record.created_at_ms),
+                finished_at: SystemTime::now(),
+            },
+        }
     }
     pub fn wait(&self, id: &SessionId) -> Result<ExecutionOutcome> {
         let r = self.store.load(id)?;
         self.ensure_backend(&r)?;
-        let reference = Self::reference(&r)?;
-        let exit = self.backend.wait(reference)?;
+        let exit = self.backend.wait(Self::reference(&r)?)?;
         self.observe(&r, ObservedProcessState::Exited(exit.clone()))?;
-        Ok(ExecutionOutcome {
-            exit,
-            evidence: ExecutionEvidence {
-                isolation_backend: r.backend.clone(),
-                backend_reference: Some(reference.0.clone()),
-                effective_policy: r.effective_policy,
-                started_at: UNIX_EPOCH + Duration::from_millis(r.created_at_ms),
-                finished_at: SystemTime::now(),
-            },
-        })
+        Ok(self.outcome(&r, exit))
     }
     pub fn terminate(&self, id: &SessionId, grace: Duration) -> Result<ExecutionOutcome> {
         let r = self.store.load(id)?;
         self.ensure_backend(&r)?;
-        self.backend.terminate(Self::reference(&r)?, grace)?;
-        self.wait(id)
+        let reference = Self::reference(&r)?;
+        match self.backend.inspect(reference)? {
+            ObservedProcessState::Running => {
+                self.backend.terminate(reference, grace)?;
+                self.wait(id)
+            }
+            ObservedProcessState::Exited(exit) => {
+                self.observe(&r, ObservedProcessState::Exited(exit.clone()))?;
+                Ok(self.outcome(&r, exit))
+            }
+            ObservedProcessState::Created => bail!(
+                "session {id} was created but never ran; use `driva attach {id}` to start it or `driva remove {id}` to delete it"
+            ),
+            ObservedProcessState::Missing => bail!(
+                "session {id} has no backend container; use `driva remove {id}` to delete the record"
+            ),
+            ObservedProcessState::Unknown { error } => {
+                bail!("session {id} state is unknown: {error}")
+            }
+        }
     }
     pub fn remove(&self, id: &SessionId) -> Result<CleanupObservation> {
         let mut r = self.store.load(id)?;

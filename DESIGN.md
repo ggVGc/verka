@@ -12,6 +12,8 @@ The authoritative application designs live beside their applications:
 
 - [`linka/DESIGN.md`](linka/DESIGN.md)
 - [`driva/DESIGN.md`](driva/DESIGN.md)
+- [`driva/STAGE2_IMPLEMENTATION.md`](driva/STAGE2_IMPLEMENTATION.md) — durable
+  session production-hardening plan
 - [`orka/DESIGN.md`](orka/DESIGN.md)
 - [`nota/DESIGN.md`](nota/DESIGN.md)
 

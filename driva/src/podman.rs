@@ -19,21 +19,33 @@ pub struct PodmanIsolation {
     pub image: String,
 }
 
-struct PodmanConnection {
-    executable: PathBuf,
-    reference: BackendReference,
+pub(crate) struct EngineConnection {
+    pub(crate) command: Command,
 }
-impl ProcessConnection for PodmanConnection {
-    fn connect(self: Box<Self>, io: ExecutionIo) -> Result<ProcessExit> {
-        let status = Command::new(&self.executable)
-            .arg("attach")
-            .arg(&self.reference.0)
+impl ProcessConnection for EngineConnection {
+    fn connect(mut self: Box<Self>, io: ExecutionIo) -> Result<ProcessExit> {
+        let status = self
+            .command
             .stdin(Stdio::from(io.stdin))
             .stdout(Stdio::from(io.stdout))
             .stderr(Stdio::from(io.stderr))
             .status()?;
         Ok(status.into())
     }
+}
+pub(crate) fn attach_engine(exe: &PathBuf, r: &BackendReference) -> Box<dyn ProcessConnection> {
+    let mut command = Command::new(exe);
+    command.arg("attach").arg(&r.0);
+    Box::new(EngineConnection { command })
+}
+pub(crate) fn resume_engine(exe: &PathBuf, r: &BackendReference) -> Box<dyn ProcessConnection> {
+    let mut command = Command::new(exe);
+    command
+        .arg("start")
+        .arg("--attach")
+        .arg("--interactive")
+        .arg(&r.0);
+    Box::new(EngineConnection { command })
 }
 
 impl DurableIsolation for PodmanIsolation {
@@ -76,10 +88,10 @@ impl DurableIsolation for PodmanIsolation {
         inspect_engine(&self.executable, r)
     }
     fn attach(&self, r: &BackendReference) -> Result<Box<dyn ProcessConnection>> {
-        Ok(Box::new(PodmanConnection {
-            executable: self.executable.clone(),
-            reference: r.clone(),
-        }))
+        Ok(attach_engine(&self.executable, r))
+    }
+    fn resume(&self, r: &BackendReference) -> Result<Box<dyn ProcessConnection>> {
+        Ok(resume_engine(&self.executable, r))
     }
     fn wait(&self, r: &BackendReference) -> Result<ProcessExit> {
         wait_engine(&self.executable, r)

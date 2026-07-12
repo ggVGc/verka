@@ -1,9 +1,10 @@
 use driva::{
-    BackendReference, DurableIsolation, ExecutionRequest, ObservedProcessState, ProcessConnection,
-    ProcessExit, SessionId, SessionRunner, SessionStore,
+    BackendReference, DurableIsolation, ExecutionIo, ExecutionRequest, ObservedProcessState,
+    ProcessConnection, ProcessExit, SessionId, SessionRunner, SessionStore,
 };
 use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::fs::File;
 use std::time::Duration;
 
 struct Fake {
@@ -67,6 +68,80 @@ impl DurableIsolation for Fake {
     }
 }
 
+struct ImmediateExit;
+impl ProcessConnection for ImmediateExit {
+    fn connect(self: Box<Self>, _: ExecutionIo) -> anyhow::Result<ProcessExit> {
+        Ok(ProcessExit::Code(0))
+    }
+}
+
+/// A backend whose observed state is fixed by the test; `terminate` and
+/// `resume` record whether they were invoked.
+struct Stateful {
+    state: ObservedProcessState,
+    terminated: RefCell<bool>,
+    resumed: RefCell<bool>,
+}
+impl Stateful {
+    fn new(state: ObservedProcessState) -> Self {
+        Self {
+            state,
+            terminated: RefCell::new(false),
+            resumed: RefCell::new(false),
+        }
+    }
+}
+impl DurableIsolation for Stateful {
+    fn backend_name(&self) -> &'static str {
+        "fake"
+    }
+    fn start(&self, _: &SessionId, _: &ExecutionRequest) -> anyhow::Result<BackendReference> {
+        Ok(BackendReference("native-1".into()))
+    }
+    fn find(&self, _: &SessionId) -> anyhow::Result<Option<BackendReference>> {
+        Ok(None)
+    }
+    fn inspect(&self, _: &BackendReference) -> anyhow::Result<ObservedProcessState> {
+        Ok(self.state.clone())
+    }
+    fn attach(&self, _: &BackendReference) -> anyhow::Result<Box<dyn ProcessConnection>> {
+        Ok(Box::new(ImmediateExit))
+    }
+    fn resume(&self, _: &BackendReference) -> anyhow::Result<Box<dyn ProcessConnection>> {
+        *self.resumed.borrow_mut() = true;
+        Ok(Box::new(ImmediateExit))
+    }
+    fn wait(&self, _: &BackendReference) -> anyhow::Result<ProcessExit> {
+        anyhow::bail!("unused")
+    }
+    fn terminate(&self, _: &BackendReference, _: Duration) -> anyhow::Result<()> {
+        *self.terminated.borrow_mut() = true;
+        Ok(())
+    }
+    fn remove(&self, _: &BackendReference) -> anyhow::Result<()> {
+        anyhow::bail!("unused")
+    }
+}
+
+fn null_io() -> ExecutionIo {
+    ExecutionIo {
+        stdin: File::open("/dev/null").unwrap(),
+        stdout: File::options().write(true).open("/dev/null").unwrap(),
+        stderr: File::options().write(true).open("/dev/null").unwrap(),
+    }
+}
+
+fn stateful_runner<'a>(
+    backend: &'a Stateful,
+    test: &str,
+) -> (SessionRunner<'a>, SessionId, std::path::PathBuf) {
+    let root = std::env::temp_dir().join(format!("driva-{test}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let runner = SessionRunner::new(backend, SessionStore::new(&root));
+    let id = runner.start(request()).unwrap().record.id;
+    (runner, id, root)
+}
+
 #[test]
 fn ids_are_canonical_uuid_v4_and_noncanonical_ids_are_rejected() {
     let id = SessionId::new();
@@ -128,4 +203,60 @@ fn records_redacted_requests_and_observes_backend_state() {
     );
     assert!(runner.store.list().unwrap().is_empty());
     let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn terminate_on_exited_session_reports_exit_without_stopping() {
+    let backend = Stateful::new(ObservedProcessState::Exited(ProcessExit::Code(3)));
+    let (runner, id, root) = stateful_runner(&backend, "terminate-exited");
+    let outcome = runner.terminate(&id, Duration::from_secs(1)).unwrap();
+    assert_eq!(outcome.exit, ProcessExit::Code(3));
+    assert!(!*backend.terminated.borrow());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn terminate_on_created_session_explains_next_steps() {
+    let backend = Stateful::new(ObservedProcessState::Created);
+    let (runner, id, root) = stateful_runner(&backend, "terminate-created");
+    let error = runner.terminate(&id, Duration::from_secs(1)).unwrap_err();
+    assert!(error.to_string().contains("never ran"), "{error}");
+    assert!(error.to_string().contains("driva remove"), "{error}");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn attach_on_exited_session_suggests_removal() {
+    let backend = Stateful::new(ObservedProcessState::Exited(ProcessExit::Code(0)));
+    let (runner, id, root) = stateful_runner(&backend, "attach-exited");
+    let error = runner.attach(&id, null_io()).unwrap_err();
+    assert!(error.to_string().contains("exited(0)"), "{error}");
+    assert!(error.to_string().contains("driva remove"), "{error}");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn attach_on_created_session_resumes_it() {
+    let backend = Stateful::new(ObservedProcessState::Created);
+    let (runner, id, root) = stateful_runner(&backend, "attach-created");
+    assert_eq!(runner.attach(&id, null_io()).unwrap(), ProcessExit::Code(0));
+    assert!(*backend.resumed.borrow());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn observed_states_render_for_humans() {
+    assert_eq!(
+        ObservedProcessState::Exited(ProcessExit::Code(0)).to_string(),
+        "exited(0)"
+    );
+    assert_eq!(ObservedProcessState::Running.to_string(), "running");
+    assert_eq!(
+        ObservedProcessState::Created.to_string(),
+        "created (never started)"
+    );
+    assert_eq!(
+        ObservedProcessState::Unknown { error: "boom".into() }.to_string(),
+        "unknown: boom"
+    );
 }
