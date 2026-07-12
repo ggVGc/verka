@@ -747,11 +747,16 @@ pub fn capture_submission(
     producer: Option<ProducerEvidence>,
 ) -> std::result::Result<Option<String>, SubmissionError> {
     let id = snapshot.node.as_str().to_string();
-    let output_commit = if outcome == Outcome::Done && !outputs.is_empty() {
-        let output_paths: Vec<String> = outputs.iter().map(ToString::to_string).collect();
+    let output_paths: Vec<String> = outputs.iter().map(ToString::to_string).collect();
+    if outcome == Outcome::Done {
         // The only uncommitted project changes allowed are the declared
-        // outputs — output provenance is asserted exactly here.
+        // outputs — output provenance is asserted exactly here. This check is
+        // required even for graph-only success: an empty declaration means
+        // the execution tree must have no changes, not that changes may be
+        // silently omitted.
         require_clean_except(vcs, &output_paths)?;
+    }
+    let output_commit = if outcome == Outcome::Done && !outputs.is_empty() {
         let message = match message {
             Some(message) => message,
             None => {
@@ -3019,6 +3024,34 @@ mod tests {
             "no project commit for graph-only work"
         );
         assert_eq!(current_status(&store, &fake, &id).unwrap(), Status::Done);
+    }
+
+    #[test]
+    fn capture_submission_refuses_undeclared_changes_for_graph_only_success() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs {
+            dirty: vec!["src/undeclared.rs".into()],
+            ..Default::default()
+        };
+        let id = add(&store, &fake, new_node("a", vec![])).unwrap();
+        let snapshot = snapshot_work(&store, &fake, &id, &[]).unwrap();
+
+        let error = capture_submission(
+            &store,
+            &fake,
+            snapshot,
+            &[],
+            None,
+            Outcome::Done,
+            "claimed graph-only work".into(),
+            Author::Machine,
+            None,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("undeclared"), "{error:#}");
+        assert!(store.read_result(&id).unwrap().is_none());
+        assert!(fake.captured.borrow().is_empty());
     }
 
     #[test]

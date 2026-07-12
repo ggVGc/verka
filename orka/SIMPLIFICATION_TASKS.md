@@ -12,7 +12,7 @@ follow-ups are tracked here explicitly.
 
 ## Post-implementation audit follow-ups
 
-- [ ] Require a clean execution worktree for successful graph-only submissions;
+- [x] Require a clean execution worktree for successful graph-only submissions;
       an empty output list must not allow undeclared changes to be omitted.
 - [ ] Make prompt prose reads version-consistent with the persisted
       `WorkSnapshot`, or document and test the conflict behavior if Linka state

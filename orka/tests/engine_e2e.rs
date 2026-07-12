@@ -183,6 +183,35 @@ fn graph_only_success_records_a_result_with_no_project_commit() {
 }
 
 #[test]
+fn graph_only_success_refuses_undeclared_workspace_changes() {
+    let (_temp, root) = workbench();
+    let node = add_node(&root, "Claimed graph-only work", vec![]);
+    let (store, workspaces, attempts) = parts(&root);
+    let executor = FakeExecutor {
+        on_run: Some(Box::new(|spec: &ExecutionSpec| {
+            std::fs::write(mount(spec, "/workspace").join("undeclared.txt"), "hidden\n")?;
+            std::fs::write(
+                mount(spec, "/orka").join("outcome.toml"),
+                "outcome = \"succeeded\"\nnotes = \"graph only\"\n",
+            )?;
+            Ok(())
+        })),
+        ..Default::default()
+    };
+    let engine = engine!(&root, store, executor, workspaces, attempts);
+
+    let error = engine.run_node(&node.parse().unwrap()).unwrap_err();
+    assert!(error.to_string().contains("undeclared"), "{error:#}");
+    assert!(store.read_result(&node).unwrap().is_none());
+
+    let attempt = attempts.list().unwrap().into_iter().next().unwrap();
+    let snapshot = attempts.load(&attempt).unwrap();
+    assert_eq!(snapshot.phase(), AttemptPhase::Executed);
+    let workspace = snapshot.workspace.unwrap();
+    assert!(workspace.path.join("undeclared.txt").is_file());
+}
+
+#[test]
 fn a_declared_failure_is_recorded_as_evidence() {
     let (_temp, root) = workbench();
     let node = add_node(&root, "Doomed", vec![]);
