@@ -2448,6 +2448,60 @@ mod tests {
     }
 
     #[test]
+    fn end_to_end_snapshot_conflict_resnapshot_submit_and_dependency_rework() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs::default();
+        let dependency = add(&store, &fake, new_node("dependency", vec![])).unwrap();
+        done(&store, &fake, &dependency);
+        let consumer = add(
+            &store,
+            &fake,
+            new_node("consumer", vec![dependency.clone()]),
+        )
+        .unwrap();
+        std::fs::write(store.project_root().join("input"), "one").unwrap();
+        let stale_snapshot = snapshot_work(&store, &fake, &consumer, &["input".into()]).unwrap();
+        std::fs::write(store.project_root().join("input"), "two").unwrap();
+        let stale_submission = ResultSubmission {
+            snapshot: stale_snapshot,
+            outcome: Outcome::Done,
+            output: None,
+            notes: "old work".into(),
+            author: Author::Machine,
+            producer: None,
+        };
+        assert!(matches!(
+            submit_result(&store, &fake, stale_submission),
+            Err(SubmissionError::Conflict(_))
+        ));
+
+        let fresh = snapshot_work(&store, &fake, &consumer, &["input".into()]).unwrap();
+        submit_result(
+            &store,
+            &fake,
+            ResultSubmission {
+                snapshot: fresh,
+                outcome: Outcome::Done,
+                output: None,
+                notes: "fresh work".into(),
+                author: Author::Machine,
+                producer: None,
+            },
+        )
+        .unwrap();
+        assert!(node_state(&store, &fake, &consumer).unwrap().is_complete());
+
+        edit(&store, &fake, &dependency, "dependency changed".into()).unwrap();
+        done(&store, &fake, &dependency);
+        let state = node_state(&store, &fake, &consumer).unwrap();
+        assert_eq!(state.currency, Currency::Stale);
+        assert!(
+            state.is_ready(),
+            "consumer is selected for rework after dependency refresh"
+        );
+    }
+
+    #[test]
     fn check_finds_multi_node_cycles() {
         let (_t, store) = temp_store();
         let fake = FakeVcs::default();

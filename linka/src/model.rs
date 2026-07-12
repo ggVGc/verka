@@ -296,7 +296,8 @@ pub enum Status {
 }
 
 /// The result evidence currently recorded for a node.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RecordedOutcome {
     Open,
     Succeeded,
@@ -304,14 +305,16 @@ pub enum RecordedOutcome {
 }
 
 /// Whether recorded evidence still covers the current graph and project facts.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Currency {
     Current,
     Stale,
 }
 
 /// A machine-readable reason that recorded evidence is stale.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum StalenessReason {
     DefinitionChanged { metadata: bool, description: bool },
     ConsumedDefinitionChanged { id: String },
@@ -324,7 +327,8 @@ pub enum StalenessReason {
 }
 
 /// Why one required dependency does not satisfy a node.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum BlockerReason {
     Missing,
     Open,
@@ -332,14 +336,14 @@ pub enum BlockerReason {
     Stale,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Blocker {
     pub id: String,
     pub reason: BlockerReason,
 }
 
 /// The complete derived state of one node at a point in time.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct NodeState {
     pub outcome: RecordedOutcome,
     pub currency: Currency,

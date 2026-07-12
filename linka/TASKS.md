@@ -347,13 +347,13 @@ Acceptance criteria:
 
 ## Final verification
 
-- [ ] Add an end-to-end test covering: create graph, snapshot ready work,
+- [x] Add an end-to-end test covering: create graph, snapshot ready work,
   change an input, reject stale submission, resnapshot, submit successfully,
   make a dependency change, and select the consumer for rework.
-- [ ] Add an end-to-end crash-recovery test spanning artifact capture and graph
+- [x] Add an end-to-end crash-recovery test spanning artifact capture and graph
   submission.
-- [ ] Run `cargo test` and clippy for Linka and every in-repository consumer.
-- [ ] Verify Linka's public API contains no attempt, session, worktree, review,
+- [x] Run `cargo test` and clippy for Linka and every in-repository consumer.
+- [x] Verify Linka's public API contains no attempt, session, worktree, review,
   retry, or publication policy.
-- [ ] Verify every statement in `linka/DESIGN.md` has a corresponding test or
+- [x] Verify every statement in `linka/DESIGN.md` has a corresponding test or
   documented external responsibility.

@@ -115,26 +115,6 @@ fn handle(mut stream: TcpStream, store: &Store, vcs: &dyn Vcs) -> Result<()> {
                 ),
             }
         }
-        ("GET", p) if p.starts_with("/api/log/") => {
-            let id = &p["/api/log/".len()..];
-            match store.read_work_log(id) {
-                Ok(Some(log)) => (
-                    "200 OK",
-                    "application/json",
-                    json!({ "id": id, "log": log }).to_string(),
-                ),
-                Ok(None) => (
-                    "404 Not Found",
-                    "application/json",
-                    json!({ "error": format!("no work log recorded for `{id}`") }).to_string(),
-                ),
-                Err(e) => (
-                    "500 Internal Server Error",
-                    "application/json",
-                    json!({ "error": format!("{e:#}") }).to_string(),
-                ),
-            }
-        }
         _ => (
             "404 Not Found",
             "text/plain; charset=utf-8",
@@ -181,9 +161,24 @@ fn graph_json(store: &Store, vcs: &dyn Vcs) -> Result<Value> {
                 continue;
             }
         };
-        let status = ops::current_status(store, &id);
-        let stale = ops::staleness(store, vcs, &id);
-        let blockers = ops::blockers(store, vcs, &id);
+        let state = match ops::node_state(store, vcs, &id) {
+            Ok(state) => state,
+            Err(error) => {
+                nodes.push(json!({
+                    "id": id,
+                    "title": title_of(&description),
+                    "error": format!("{error:#}"),
+                }));
+                continue;
+            }
+        };
+        let status = if state.is_complete() {
+            "complete"
+        } else if state.is_ready() {
+            "ready"
+        } else {
+            "blocked"
+        };
         let result = store.read_result(&id).ok().flatten().map(|(r, notes)| {
             json!({
                 "at": r.at,
@@ -217,11 +212,12 @@ fn graph_json(store: &Store, vcs: &dyn Vcs) -> Result<Value> {
             "assignee": meta.assignee.map(|a| a.as_str()),
             "depends_on": meta.depends_on,
             "derived_from": meta.derived_from,
-            "status": status.as_str(),
-            "ready": ops::is_ready(store, vcs, &id),
-            "has_log": matches!(store.read_work_log(&id), Ok(Some(_))),
-            "stale": stale,
-            "blockers": blockers,
+            "status": status,
+            "ready": state.is_ready(),
+            "outcome": state.outcome,
+            "currency": state.currency,
+            "stale": state.staleness,
+            "blockers": state.blockers,
             "result": result,
         }));
     }
