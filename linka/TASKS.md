@@ -282,26 +282,26 @@ Acceptance criteria:
 
 ## 13. Add recoverable cross-repository completion
 
-- [ ] Put a submission journal in the coordinating application layer (Orka or
+- [x] Put a submission journal in the coordinating application layer (Orka or
   the human CLI workflow), not in Linka's graph semantics.
-- [ ] Record a submission ID, node, frozen snapshot, intended result, output
+- [x] Record a submission ID, node, frozen snapshot, intended result, output
   artifact, and phase.
-- [ ] Define phases such as prepared, artifact retained, result written, store
+- [x] Define phases such as prepared, artifact retained, result written, store
   committed, and finalized.
-- [ ] Make every phase idempotent.
-- [ ] Add recovery that distinguishes finalized, already finalized, conflict,
+- [x] Make every phase idempotent.
+- [x] Add recovery that distinguishes finalized, already finalized, conflict,
   artifact-only, store-write-pending, and corrupt states.
-- [ ] Ensure recovery rechecks the expected result and graph snapshot before
+- [x] Ensure recovery rechecks the expected result and graph snapshot before
   finalization.
-- [ ] Do not silently discard an output artifact when graph submission fails.
+- [x] Do not silently discard an output artifact when graph submission fails.
 
 Tests:
 
-- [ ] Inject a failure before and after every phase and recover successfully.
-- [ ] Run recovery repeatedly and get the same final state.
-- [ ] Handle two submissions from the same snapshot without overwriting the
+- [x] Inject a failure before and after every phase and recover successfully.
+- [x] Run recovery repeatedly and get the same final state.
+- [x] Handle two submissions from the same snapshot without overwriting the
   winner.
-- [ ] Preserve recoverable evidence when graph state changes before submission.
+- [x] Preserve recoverable evidence when graph state changes before submission.
 
 ## 14. Update CLI state presentation
 
