@@ -2,17 +2,54 @@
 //! branches.
 //!
 //! Orka owns workspace *policy* — where trees live, how branches are named,
-//! when they may be removed. Each attempt gets a fresh worktree anchored to
-//! its frozen input commit, so the user's checkout, branch, index, and
-//! uncommitted changes are never touched, and concurrent attempts share no
-//! writable state. The candidate branch (and the output ref completion
-//! retains) outlives worktree cleanup, so recorded output commits stay
-//! reachable.
+//! when they may be removed — and the git mechanics that implement it. Each
+//! attempt gets a fresh worktree anchored to its frozen input commit, so the
+//! user's checkout, branch, index, and uncommitted changes are never touched,
+//! and concurrent attempts share no writable state. The candidate branch (and
+//! the output ref Linka retains on completion) outlives worktree cleanup, so
+//! recorded output commits stay reachable.
+//!
+//! Substituting a different workspace mechanism is genuinely useful (a plain
+//! copy, an overlay, a remote checkout), so this stays a narrow Orka-owned
+//! trait with the git implementation as one concrete adapter.
 
-use crate::ports::{CleanupOutcome, PreparedWorkspace, WorkspaceManager};
-use anyhow::{Context, Result};
-use std::path::PathBuf;
+use anyhow::{bail, Context, Result};
+use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 use std::process::Command;
+
+/// An isolated working tree prepared for one attempt.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PreparedWorkspace {
+    pub path: PathBuf,
+    /// The candidate branch the workspace is checked out on.
+    pub branch: String,
+    pub input_commit: String,
+}
+
+/// What cleanup observed. A dirty workspace is retained, never discarded.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CleanupOutcome {
+    Removed,
+    RetainedDirty,
+    AlreadyAbsent,
+}
+
+/// Preparing and cleaning isolated per-attempt working trees.
+pub trait WorkspaceManager {
+    /// Where `prepare` would put the attempt's workspace — pure, so the plan
+    /// can be durably recorded before anything is created.
+    fn plan(&self, attempt: &str, input_commit: &str) -> PreparedWorkspace;
+
+    /// Create a fresh working tree at `input_commit` on a candidate branch
+    /// named for `attempt`. Fails if the workspace already exists.
+    fn prepare(&self, attempt: &str, input_commit: &str) -> Result<PreparedWorkspace>;
+
+    /// Remove a workspace whose attempt is sealed. Refuses to discard
+    /// uncommitted changes, reporting `RetainedDirty` instead.
+    fn cleanup(&self, workspace: &PreparedWorkspace) -> Result<CleanupOutcome>;
+}
 
 pub struct GitWorkspaces {
     /// The project repository worktrees are linked to.
@@ -54,14 +91,8 @@ impl WorkspaceManager for GitWorkspaces {
         // branch at a different commit, and reuses a branch already at the
         // input commit — exactly the recovery semantics we want when a crash
         // left the branch but not the tree.
-        let worktree =
-            linka::git::create_worktree(&self.project, path, &branch, input_commit)
-                .with_context(|| format!("preparing workspace for {attempt}"))?;
-        Ok(PreparedWorkspace {
-            path: worktree.path,
-            branch: worktree.branch,
-            input_commit: worktree.input_commit,
-        })
+        create_worktree(&self.project, path, &branch, input_commit)
+            .with_context(|| format!("preparing workspace for {attempt}"))
     }
 
     fn cleanup(&self, workspace: &PreparedWorkspace) -> Result<CleanupOutcome> {
@@ -75,12 +106,85 @@ impl WorkspaceManager for GitWorkspaces {
                 .status();
             return Ok(CleanupOutcome::AlreadyAbsent);
         }
-        if !linka::git::worktree_clean(&workspace.path)? {
+        if !worktree_clean(&workspace.path)? {
             return Ok(CleanupOutcome::RetainedDirty);
         }
-        linka::git::remove_worktree(&self.project, &workspace.path)?;
+        remove_worktree(&self.project, &workspace.path)?;
         Ok(CleanupOutcome::Removed)
     }
+}
+
+// --- git worktree mechanics --------------------------------------------------
+
+/// Create a linked worktree at `path` on a candidate `branch` anchored to
+/// `rev`. Reuses `branch` when it already sits at the same commit (crash
+/// recovery); refuses it when it has moved, so an attempt never silently
+/// re-anchors.
+fn create_worktree(
+    project: &Path,
+    path: PathBuf,
+    branch: &str,
+    rev: &str,
+) -> Result<PreparedWorkspace> {
+    let input_commit = checked(
+        project,
+        &["rev-parse", "--verify", &format!("{rev}^{{commit}}")],
+    )?;
+    if path.exists() {
+        bail!("execution worktree path already exists: {}", path.display());
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating worktree directory {}", parent.display()))?;
+    }
+    let path_arg = path.to_string_lossy().into_owned();
+    checked(project, &["check-ref-format", "--branch", branch])?;
+    let branch_ref = format!("refs/heads/{branch}");
+    if let Ok(existing) = checked(project, &["rev-parse", "--verify", &branch_ref]) {
+        if existing != input_commit {
+            bail!("candidate branch `{branch}` exists at {existing}, expected {input_commit}");
+        }
+        checked(project, &["worktree", "add", &path_arg, branch])?;
+    } else {
+        checked(
+            project,
+            &["worktree", "add", "-b", branch, &path_arg, &input_commit],
+        )?;
+    }
+    Ok(PreparedWorkspace {
+        path,
+        branch: branch.to_string(),
+        input_commit,
+    })
+}
+
+/// Whether a worktree has no uncommitted changes.
+fn worktree_clean(path: &Path) -> Result<bool> {
+    Ok(checked(path, &["status", "--porcelain"])?.is_empty())
+}
+
+fn remove_worktree(project: &Path, path: &Path) -> Result<()> {
+    let path_arg = path.to_string_lossy().into_owned();
+    checked(project, &["worktree", "remove", &path_arg])?;
+    Ok(())
+}
+
+/// Run a git command, returning trimmed stdout or an error carrying stderr.
+fn checked(base: &Path, args: &[&str]) -> Result<String> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(base)
+        .args(args)
+        .output()
+        .with_context(|| format!("failed to run `git {}`", args.join(" ")))?;
+    if !out.status.success() {
+        bail!(
+            "`git {}` failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
 #[cfg(test)]
@@ -168,10 +272,7 @@ mod tests {
         assert!(!ws.path.exists());
         // The output stays reachable through the candidate branch.
         assert_eq!(git(&project, &["rev-parse", &ws.branch]), output);
-        assert_eq!(
-            manager.cleanup(&ws).unwrap(),
-            CleanupOutcome::AlreadyAbsent
-        );
+        assert_eq!(manager.cleanup(&ws).unwrap(), CleanupOutcome::AlreadyAbsent);
     }
 
     #[test]
@@ -181,10 +282,7 @@ mod tests {
         let ws = manager.prepare("attempt-1", &head).unwrap();
         std::fs::write(ws.path.join("scratch.txt"), "unsaved\n").unwrap();
 
-        assert_eq!(
-            manager.cleanup(&ws).unwrap(),
-            CleanupOutcome::RetainedDirty
-        );
+        assert_eq!(manager.cleanup(&ws).unwrap(), CleanupOutcome::RetainedDirty);
         assert_eq!(
             std::fs::read_to_string(ws.path.join("scratch.txt")).unwrap(),
             "unsaved\n"
@@ -199,10 +297,7 @@ mod tests {
 
         // Simulate a crash that lost the tree but kept the branch.
         std::fs::remove_dir_all(&ws.path).unwrap();
-        assert_eq!(
-            manager.cleanup(&ws).unwrap(),
-            CleanupOutcome::AlreadyAbsent
-        );
+        assert_eq!(manager.cleanup(&ws).unwrap(), CleanupOutcome::AlreadyAbsent);
 
         // Re-preparation reuses the branch because it still sits at the
         // frozen input commit.

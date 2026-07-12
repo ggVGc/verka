@@ -1,19 +1,20 @@
-//! The `orka` CLI: run graph work through isolated agent attempts.
+//! The `orka` CLI: orchestrate isolated agent attempts for work in a Linka
+//! store.
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
+use linka::{NodeId, Store};
 use orka::attempt::{AttemptId, FsAttemptStore, SealedState};
 use orka::config::{Config, CONFIG_FILE};
 use orka::engine::{Engine, RunReport};
-use orka::linka_graph::LinkaWorkGraph;
-use orka::ports::NodeId;
+use orka::linka_work::LinkaWork;
 use orka::workspace::GitWorkspaces;
 use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(
     name = "orka",
-    about = "Orchestrate graph work: freeze a ready node, run an isolated agent attempt, submit a version-checked result"
+    about = "Orchestrate isolated agent attempts for work in a Linka store: snapshot a ready node, run an agent, submit a version-checked result"
 )]
 struct Cli {
     /// Workbench root (holds .linka/, project/, orka.toml). Defaults to the
@@ -72,16 +73,17 @@ impl Workbench {
         }
     }
 
-    fn graph(&self) -> Result<LinkaWorkGraph> {
-        LinkaWorkGraph::open(self.root.join(".linka"))
+    /// Open the Linka store Orka orchestrates.
+    fn linka_store(&self) -> Result<Store> {
+        Store::open(self.root.join(".linka"))
     }
 
     fn attempts(&self) -> FsAttemptStore {
         FsAttemptStore::new(self.root.join(".orka"))
     }
 
-    fn workspaces(&self, graph: &LinkaWorkGraph) -> GitWorkspaces {
-        GitWorkspaces::new(graph.project_root(), self.root.join(".orka/worktrees"))
+    fn workspaces(&self, store: &Store) -> GitWorkspaces {
+        GitWorkspaces::new(store.project_root(), self.root.join(".orka/worktrees"))
     }
 
     fn config(&self) -> Result<Config> {
@@ -95,24 +97,31 @@ impl Workbench {
     }
 }
 
+/// Parse a CLI node argument as a Linka node id, reporting Linka's validation
+/// error at the command boundary.
+fn parse_node(arg: String) -> Result<NodeId> {
+    arg.parse()
+        .map_err(|e| anyhow::anyhow!("invalid node id: {e}"))
+}
+
 fn run(cli: Cli) -> Result<()> {
     let workbench = Workbench::locate(cli.workbench)?;
     match cli.command {
         Command::Run { node } => {
             let config = workbench.config()?;
-            let graph = workbench.graph()?;
+            let store = workbench.linka_store()?;
             let executor = config.executor()?;
-            let workspaces = workbench.workspaces(&graph);
+            let workspaces = workbench.workspaces(&store);
             let attempts = workbench.attempts();
             let engine = Engine {
-                graph: &graph,
+                linka: LinkaWork::new(&store),
                 executor: &executor,
                 workspaces: &workspaces,
                 attempts: &attempts,
                 policy: config.policy(),
             };
             let report = match node {
-                Some(id) => Some(engine.run_node(&NodeId(id))?),
+                Some(arg) => Some(engine.run_node(&parse_node(arg)?)?),
                 None => engine.run_next()?,
             };
             match report {
@@ -121,13 +130,14 @@ fn run(cli: Cli) -> Result<()> {
             }
         }
         Command::Ready => {
-            let graph = workbench.graph()?;
-            let ready = orka::ports::WorkGraph::select_ready(&graph)?;
+            let store = workbench.linka_store()?;
+            let linka = LinkaWork::new(&store);
+            let ready = linka.ready_for_machine()?;
             if ready.is_empty() {
                 println!("nothing ready");
             }
             for item in ready {
-                println!("{}  {}", item.id, item.title);
+                println!("{}  {}", item.node, item.title);
             }
         }
         Command::Attempts => {
@@ -137,7 +147,7 @@ fn run(cli: Cli) -> Result<()> {
                 println!(
                     "{}  {}  {:?}",
                     id,
-                    snapshot.record.frozen.node,
+                    snapshot.record.input.node(),
                     snapshot.phase()
                 );
             }
@@ -146,10 +156,11 @@ fn run(cli: Cli) -> Result<()> {
             let attempts = workbench.attempts();
             let id = AttemptId(attempt);
             let snapshot = attempts.load(&id)?;
+            let input = &snapshot.record.input;
             println!("attempt   {id}");
-            println!("node      {}", snapshot.record.frozen.node);
+            println!("node      {}", input.node());
             println!("phase     {:?}", snapshot.phase());
-            println!("input     {}", snapshot.record.frozen.input_commit);
+            println!("input     {}", input.input_commit());
             if let Some(ws) = &snapshot.workspace {
                 println!("workspace {} (branch {})", ws.path.display(), ws.branch);
             }
@@ -169,12 +180,12 @@ fn run(cli: Cli) -> Result<()> {
         }
         Command::Recover => {
             let config = workbench.config()?;
-            let graph = workbench.graph()?;
+            let store = workbench.linka_store()?;
             let executor = config.executor()?;
-            let workspaces = workbench.workspaces(&graph);
+            let workspaces = workbench.workspaces(&store);
             let attempts = workbench.attempts();
             let engine = Engine {
-                graph: &graph,
+                linka: LinkaWork::new(&store),
                 executor: &executor,
                 workspaces: &workspaces,
                 attempts: &attempts,
@@ -208,8 +219,8 @@ fn seal_line(state: &SealedState) -> String {
             Some(commit) => format!("submitted (output commit {commit})"),
             None => "submitted (no project output)".into(),
         },
-        SealedState::StaleAtSubmit { reasons } => {
-            format!("stale at submit:\n  {}", reasons.join("\n  "))
+        SealedState::StaleAtSubmit { conflicts } => {
+            format!("stale at submit: {conflicts:?}")
         }
         SealedState::FailureRecorded => "failure recorded".into(),
         SealedState::Interrupted { reason } => format!("interrupted: {reason}"),

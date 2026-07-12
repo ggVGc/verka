@@ -307,6 +307,7 @@ dependencies = [
  "driva",
  "linka",
  "serde",
+ "serde_json",
  "toml",
  "ulid",
 ]

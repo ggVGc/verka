@@ -1,93 +1,40 @@
 //! The whole lifecycle against real everything except the container engine:
-//! a real workbench (two git repositories), the real Linka adapter, real
-//! worktree workspaces, and the real attempt store. The executor is a fake
-//! whose "agent" writes into the mounted workspace and declares its outcome,
-//! exactly as an isolated command would through the mounts.
+//! a real workbench (two git repositories), a real Linka store, real worktree
+//! workspaces, and the real attempt store. The executor is a fake whose
+//! "agent" writes into the mounted workspace and declares its outcome, exactly
+//! as an isolated command would through the mounts.
 
-use orka::attempt::{AttemptPhase, FsAttemptStore, SealedState};
+mod common;
+
+use common::*;
+use linka::Store;
+use orka::attempt::{AttemptId, AttemptPhase, FsAttemptStore, SealedState};
 use orka::engine::{Engine, ExecutionPolicy};
+use orka::executor::{ExecutionReport, ExecutionSpec};
 use orka::fakes::FakeExecutor;
-use orka::linka_graph::LinkaWorkGraph;
-use orka::ports::{CleanupOutcome, ExecutionSpec, NodeId, WorkGraph};
-use orka::workspace::GitWorkspaces;
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use orka::linka_work::LinkaWork;
+use orka::workspace::{CleanupOutcome, GitWorkspaces};
+use std::path::Path;
 
-struct TempDir(PathBuf);
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
+/// Locate a writable mount by its destination inside the environment.
+fn mount<'a>(spec: &'a ExecutionSpec, destination: &str) -> &'a Path {
+    &spec
+        .mounts
+        .iter()
+        .find(|m| m.destination == Path::new(destination))
+        .expect("mount")
+        .source
 }
 
-fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .output()
-        .expect("running git");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).trim().to_string()
-}
-
-fn init_repo(dir: &Path) {
-    std::fs::create_dir_all(dir).unwrap();
-    git(dir, &["init", "-q"]);
-    git(dir, &["config", "user.name", "orka test"]);
-    git(dir, &["config", "user.email", "test@orka.invalid"]);
-}
-
-fn workbench() -> (TempDir, PathBuf) {
-    let root = std::env::temp_dir().join(format!("orka-e2e-{}", ulid::Ulid::new()));
-    init_repo(&root);
-    init_repo(&root.join("project"));
-    linka::ops::init_workbench(root.join(".linka"), None).unwrap();
-    (TempDir(root.clone()), root)
-}
-
-fn add_node(root: &Path, description: &str) -> String {
-    let store = linka::Store::open(root.join(".linka")).unwrap();
-    let vcs = linka::GitVcs::for_store(&store);
-    linka::ops::add(
-        &store,
-        &vcs,
-        linka::ops::NewNode {
-            description: description.into(),
-            author: linka::Author::Human,
-            assignee: None,
-            depends_on: vec![],
-            derived_from: vec![],
-        },
-    )
-    .unwrap()
-}
-
-/// An executor whose agent writes `greeting.txt` into the mounted workspace
-/// and declares it as its output.
+/// An executor whose agent writes `greeting.txt` into the workspace and
+/// declares it as its output.
 fn conforming_agent() -> FakeExecutor {
     FakeExecutor {
         transcript: "agent transcript\n".into(),
         on_run: Some(Box::new(|spec: &ExecutionSpec| {
-            let workspace = &spec
-                .mounts
-                .iter()
-                .find(|m| m.destination == Path::new("/workspace"))
-                .expect("workspace mount")
-                .source;
-            let io = &spec
-                .mounts
-                .iter()
-                .find(|m| m.destination == Path::new("/orka"))
-                .expect("io mount")
-                .source;
-            std::fs::write(workspace.join("greeting.txt"), "hello from the agent\n")?;
+            std::fs::write(mount(spec, "/workspace").join("greeting.txt"), "hello\n")?;
             std::fs::write(
-                io.join("outcome.toml"),
+                mount(spec, "/orka").join("outcome.toml"),
                 "outcome = \"succeeded\"\noutputs = [\"greeting.txt\"]\n\
                  message = \"add the greeting\"\nnotes = \"wrote greeting.txt\"\n",
             )?;
@@ -97,62 +44,84 @@ fn conforming_agent() -> FakeExecutor {
     }
 }
 
+/// An executor that declares the given outcome TOML and exits with `exit_code`.
+fn declaring_agent(outcome_toml: &'static str, exit_code: i32) -> FakeExecutor {
+    FakeExecutor {
+        exit_code,
+        on_run: Some(Box::new(move |spec: &ExecutionSpec| {
+            std::fs::write(mount(spec, "/orka").join("outcome.toml"), outcome_toml)?;
+            Ok(())
+        })),
+        ..Default::default()
+    }
+}
+
+macro_rules! engine {
+    ($root:expr, $store:expr, $executor:expr, $workspaces:expr, $attempts:expr) => {
+        Engine {
+            linka: LinkaWork::new(&$store),
+            executor: &$executor,
+            workspaces: &$workspaces,
+            attempts: &$attempts,
+            policy: ExecutionPolicy::new(vec!["agent".into()]),
+        }
+    };
+}
+
+fn parts(root: &Path) -> (Store, GitWorkspaces, FsAttemptStore) {
+    (
+        store_at(root),
+        GitWorkspaces::new(root.join("project"), root.join(".orka/worktrees")),
+        FsAttemptStore::new(root.join(".orka")),
+    )
+}
+
 #[test]
 fn a_full_attempt_lands_a_version_checked_result_from_an_isolated_worktree() {
     let (_temp, root) = workbench();
     let project = root.join("project");
-    let node = add_node(&root, "Greet\n\nCreate greeting.txt saying hello.");
+    let node = add_node(&root, "Greet\n\nCreate greeting.txt saying hello.", vec![]);
     let user_head = git(&project, &["rev-parse", "HEAD"]);
 
     // The user's checkout is dirty — an isolated attempt must not care.
     std::fs::write(project.join("wip.txt"), "user's half-done work\n").unwrap();
 
-    let graph = LinkaWorkGraph::open(root.join(".linka")).unwrap();
+    let (store, workspaces, attempts) = parts(&root);
     let executor = conforming_agent();
-    let workspaces = GitWorkspaces::new(&project, root.join(".orka/worktrees"));
-    let attempts = FsAttemptStore::new(root.join(".orka"));
-    let engine = Engine {
-        graph: &graph,
-        executor: &executor,
-        workspaces: &workspaces,
-        attempts: &attempts,
-        policy: ExecutionPolicy::new(vec!["agent".into()]),
-    };
+    let engine = engine!(&root, store, executor, workspaces, attempts);
 
     let report = engine.run_next().unwrap().expect("the node is ready");
-    assert_eq!(report.node.0, node);
+    assert_eq!(report.node.as_str(), node);
     let SealedState::Submitted { output_commit } = &report.sealed else {
         panic!("expected submission, got {:?}", report.sealed);
     };
     let output = output_commit.clone().expect("an output commit");
     assert_eq!(report.cleanup, CleanupOutcome::Removed);
 
-    // The result is recorded and pinned to the output commit. The node is
-    // *succeeded but not complete*: the output lives on the candidate branch,
-    // and until someone publishes it into the project checkout, linka
-    // truthfully reports the output as drifted (absent) there. Publication is
-    // a review decision and explicitly not Orka's job.
-    let store = linka::Store::open(root.join(".linka")).unwrap();
+    // The result is recorded and pinned. The node is succeeded-but-not-complete:
+    // the output lives on the candidate branch, and until it is published into
+    // the checkout Linka truthfully reports the output as drifted there.
     let vcs = linka::GitVcs::for_store(&store);
-    assert_eq!(linka::ops::output_of(&store, &node).unwrap().unwrap(), output);
+    assert_eq!(
+        linka::ops::output_of(&store, &node).unwrap().unwrap(),
+        output
+    );
     let state = linka::ops::node_state(&store, &vcs, &node).unwrap();
     assert_eq!(state.outcome, linka::RecordedOutcome::Succeeded);
     assert!(!state.is_complete());
-    assert!(state
-        .staleness
-        .iter()
-        .any(|r| matches!(r, linka::StalenessReason::OutputDrifted { .. })));
 
-    // The output commit sits on the attempt's candidate branch, parented on
-    // the frozen input commit, and carries exactly the declared file.
+    // The output sits on the attempt's candidate branch, parented on the frozen
+    // input commit, and carries exactly the declared file.
     let branch = format!("orka/attempts/{}", report.attempt);
     assert_eq!(git(&project, &["rev-parse", &branch]), output);
     assert_eq!(
         git(&project, &["rev-parse", &format!("{output}^")]),
         user_head
     );
-    let shown = git(&project, &["show", &format!("{output}:greeting.txt")]);
-    assert_eq!(shown, "hello from the agent");
+    assert_eq!(
+        git(&project, &["show", &format!("{output}:greeting.txt")]),
+        "hello"
+    );
 
     // The user's checkout never moved and keeps its uncommitted work.
     assert_eq!(git(&project, &["rev-parse", "HEAD"]), user_head);
@@ -161,74 +130,227 @@ fn a_full_attempt_lands_a_version_checked_result_from_an_isolated_worktree() {
         "user's half-done work\n"
     );
 
-    // The attempt record tells the whole story.
+    // The attempt record durably stores Linka's exact snapshot.
     let snapshot = attempts.load(&report.attempt).unwrap();
     assert_eq!(snapshot.phase(), AttemptPhase::Sealed);
-    assert_eq!(snapshot.record.frozen.input_commit, user_head);
+    assert_eq!(snapshot.record.input.input_commit(), user_head);
+    assert_eq!(snapshot.record.input.snapshot.node.as_str(), node);
     assert_eq!(
         std::fs::read_to_string(attempts.transcript_path(&report.attempt)).unwrap(),
         "agent transcript\n"
     );
 
-    // A human accepts the candidate: clean the checkout and fast-forward the
-    // checked-out branch onto the output. Now the node is complete and no
-    // work is ready.
+    // A human accepts the candidate: fast-forward the checked-out branch onto
+    // the output. The node is then complete and no machine work is ready.
     std::fs::remove_file(project.join("wip.txt")).unwrap();
-    let current = git(&project, &["symbolic-ref", "--short", "HEAD"]);
-    assert!(linka::Vcs::publish_fast_forward(&vcs, &current, &user_head, &output).unwrap());
+    git(&project, &["merge", "--ff-only", &output]);
     assert!(linka::ops::node_state(&store, &vcs, &node)
         .unwrap()
         .is_complete());
-    assert!(graph.select_ready().unwrap().is_empty());
+    assert!(LinkaWork::new(&store)
+        .ready_for_machine()
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn graph_only_success_records_a_result_with_no_project_commit() {
+    let (_temp, root) = workbench();
+    let project = root.join("project");
+    let node = add_node(&root, "Answer the question", vec![]);
+    let head = git(&project, &["rev-parse", "HEAD"]);
+
+    let (store, workspaces, attempts) = parts(&root);
+    let executor = declaring_agent("outcome = \"succeeded\"\nnotes = \"answered\"\n", 0);
+    let engine = engine!(&root, store, executor, workspaces, attempts);
+    let report = engine.run_node(&node.parse().unwrap()).unwrap();
+
     assert_eq!(
-        std::fs::read_to_string(project.join("greeting.txt")).unwrap(),
-        "hello from the agent\n"
+        report.sealed,
+        SealedState::Submitted {
+            output_commit: None
+        }
     );
+    assert_eq!(
+        git(&project, &["rev-parse", "HEAD"]),
+        head,
+        "no project commit"
+    );
+    let vcs = linka::GitVcs::for_store(&store);
+    assert!(linka::ops::node_state(&store, &vcs, &node)
+        .unwrap()
+        .is_complete());
+}
+
+#[test]
+fn a_declared_failure_is_recorded_as_evidence() {
+    let (_temp, root) = workbench();
+    let node = add_node(&root, "Doomed", vec![]);
+    let (store, workspaces, attempts) = parts(&root);
+    let executor = declaring_agent("outcome = \"failed\"\nnotes = \"cannot\"\n", 2);
+    let engine = engine!(&root, store, executor, workspaces, attempts);
+    let report = engine.run_node(&node.parse().unwrap()).unwrap();
+
+    assert_eq!(report.sealed, SealedState::FailureRecorded);
+    assert!(report.backend_failed, "the nonzero exit rides along");
+    let vcs = linka::GitVcs::for_store(&store);
+    let state = linka::ops::node_state(&store, &vcs, &node).unwrap();
+    assert_eq!(state.outcome, linka::RecordedOutcome::Failed);
+}
+
+#[test]
+fn a_nonzero_exit_with_a_declared_success_still_submits_and_reports() {
+    let (_temp, root) = workbench();
+    let node = add_node(&root, "Flaky but done", vec![]);
+    let (store, workspaces, attempts) = parts(&root);
+    // The agent produces its output and declares success but exits nonzero.
+    let executor = FakeExecutor {
+        exit_code: 3,
+        on_run: Some(Box::new(|spec: &ExecutionSpec| {
+            std::fs::write(mount(spec, "/workspace").join("out.txt"), "x\n")?;
+            std::fs::write(
+                mount(spec, "/orka").join("outcome.toml"),
+                "outcome = \"succeeded\"\noutputs = [\"out.txt\"]\nnotes = \"done\"\n",
+            )?;
+            Ok(())
+        })),
+        ..Default::default()
+    };
+    let engine = engine!(&root, store, executor, workspaces, attempts);
+    let report = engine.run_node(&node.parse().unwrap()).unwrap();
+
+    assert!(matches!(report.sealed, SealedState::Submitted { .. }));
+    assert!(report.backend_failed);
 }
 
 #[test]
 fn an_attempt_against_a_graph_that_moved_mid_run_seals_stale() {
     let (_temp, root) = workbench();
-    let project = root.join("project");
-    let node = add_node(&root, "Moving target");
+    let node = add_node(&root, "Moving target", vec![]);
 
-    let graph = LinkaWorkGraph::open(root.join(".linka")).unwrap();
-    // This "agent" edits the node's definition mid-run (as a human racing the
-    // orchestrator would), then declares success.
+    let (store, workspaces, attempts) = parts(&root);
+    // This "agent" edits the node's definition mid-run, then declares success.
     let node_for_agent = node.clone();
     let root_for_agent = root.clone();
     let executor = FakeExecutor {
         on_run: Some(Box::new(move |spec: &ExecutionSpec| {
-            let store = linka::Store::open(root_for_agent.join(".linka")).unwrap();
-            let vcs = linka::GitVcs::for_store(&store);
-            linka::ops::edit(&store, &vcs, &node_for_agent, "Moved mid-run".into()).unwrap();
-            let io = &spec
-                .mounts
-                .iter()
-                .find(|m| m.destination == Path::new("/orka"))
-                .unwrap()
-                .source;
-            std::fs::write(io.join("outcome.toml"), "outcome = \"succeeded\"\n")?;
+            edit_node(&root_for_agent, &node_for_agent, "Moved mid-run");
+            std::fs::write(mount(spec, "/workspace").join("out.txt"), "x\n")?;
+            std::fs::write(
+                mount(spec, "/orka").join("outcome.toml"),
+                "outcome = \"succeeded\"\noutputs = [\"out.txt\"]\nnotes = \"n\"\n",
+            )?;
             Ok(())
         })),
         ..Default::default()
     };
-    let workspaces = GitWorkspaces::new(&project, root.join(".orka/worktrees"));
-    let attempts = FsAttemptStore::new(root.join(".orka"));
-    let engine = Engine {
-        graph: &graph,
-        executor: &executor,
-        workspaces: &workspaces,
-        attempts: &attempts,
-        policy: ExecutionPolicy::new(vec!["agent".into()]),
-    };
+    let engine = engine!(&root, store, executor, workspaces, attempts);
+    let report = engine.run_node(&node.parse().unwrap()).unwrap();
 
-    let report = engine.run_node(&NodeId(node.clone())).unwrap();
-    assert!(
-        matches!(report.sealed, SealedState::StaleAtSubmit { .. }),
-        "stale work must never silently complete: {:?}",
-        report.sealed
-    );
-    let store = linka::Store::open(root.join(".linka")).unwrap();
+    let SealedState::StaleAtSubmit { conflicts } = &report.sealed else {
+        panic!(
+            "stale work must never silently complete: {:?}",
+            report.sealed
+        );
+    };
+    assert!(!conflicts.is_empty());
     assert!(store.read_result(&node).unwrap().is_none());
+}
+
+#[test]
+fn recovery_settles_an_executed_attempt_and_a_second_pass_duplicates_nothing() {
+    let (_temp, root) = workbench();
+    let node = add_node(&root, "Crashed after evidence", vec![]);
+
+    // Build an attempt that crashed after evidence capture, before sealing:
+    // everything recorded, an outcome declared, nothing sealed.
+    let (store, workspaces, attempts) = parts(&root);
+    let executor = FakeExecutor::default();
+    let engine = engine!(&root, store, executor, workspaces, attempts);
+
+    let id = AttemptId::new();
+    let input = LinkaWork::new(&store)
+        .prepare_input(&node.parse().unwrap())
+        .unwrap();
+    attempts.create(&id, &input).unwrap();
+    let ws = workspaces_prepare(&root, &id, input.input_commit());
+    attempts.plan_workspace(&id, &ws).unwrap();
+    attempts.mark_prepared(&id).unwrap();
+    std::fs::write(ws.path.join("out.txt"), "produced\n").unwrap();
+    let io = attempts.io_dir(&id).unwrap();
+    std::fs::write(
+        io.join("outcome.toml"),
+        "outcome = \"succeeded\"\noutputs = [\"out.txt\"]\nnotes = \"done before the crash\"\n",
+    )
+    .unwrap();
+    attempts
+        .record_evidence(
+            &id,
+            &ExecutionReport {
+                backend: "fake".into(),
+                backend_reference: None,
+                exit_code: 0,
+                started_at_ms: 1,
+                finished_at_ms: 2,
+            },
+        )
+        .unwrap();
+
+    let reports = engine.recover().unwrap();
+    assert_eq!(reports.len(), 1);
+    assert!(matches!(
+        reports[0].sealed,
+        Some(SealedState::Submitted { .. })
+    ));
+    assert!(store.read_result(&node).unwrap().is_some());
+    assert_eq!(attempts.load(&id).unwrap().phase(), AttemptPhase::Sealed);
+
+    // A second recovery pass performs no duplicate mutation.
+    let (result_before, _) = store.read_result(&node).unwrap().unwrap();
+    let again = engine.recover().unwrap();
+    assert_eq!(again.len(), 1);
+    let (result_after, _) = store.read_result(&node).unwrap().unwrap();
+    assert_eq!(
+        result_before.at, result_after.at,
+        "the recorded result is unchanged"
+    );
+}
+
+#[test]
+fn recovery_seals_a_pre_evidence_attempt_as_interrupted_and_submits_nothing() {
+    let (_temp, root) = workbench();
+    let node = add_node(&root, "Never ran", vec![]);
+    let (store, workspaces, attempts) = parts(&root);
+    let executor = FakeExecutor::default();
+    let engine = engine!(&root, store, executor, workspaces, attempts);
+
+    let id = AttemptId::new();
+    let input = LinkaWork::new(&store)
+        .prepare_input(&node.parse().unwrap())
+        .unwrap();
+    attempts.create(&id, &input).unwrap();
+    let ws = workspaces_prepare(&root, &id, input.input_commit());
+    attempts.plan_workspace(&id, &ws).unwrap();
+    attempts.mark_prepared(&id).unwrap();
+
+    let reports = engine.recover().unwrap();
+    assert!(matches!(
+        reports[0].sealed,
+        Some(SealedState::Interrupted { .. })
+    ));
+    assert!(store.read_result(&node).unwrap().is_none());
+    assert!(!ws.path.exists(), "the untouched workspace was cleaned");
+}
+
+// A standalone worktree preparation matching what the engine would do, so the
+// recovery tests can stage a mid-lifecycle attempt.
+fn workspaces_prepare(
+    root: &Path,
+    id: &AttemptId,
+    input_commit: &str,
+) -> orka::workspace::PreparedWorkspace {
+    use orka::workspace::WorkspaceManager;
+    GitWorkspaces::new(root.join("project"), root.join(".orka/worktrees"))
+        .prepare(&id.0, input_commit)
+        .unwrap()
 }

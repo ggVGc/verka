@@ -6,7 +6,7 @@
 //! stdout/stderr streams into the attempt's transcript file as it runs, and
 //! the returned report carries only harness-observed evidence.
 
-use crate::ports::{ExecutionReport, ExecutionSpec, IsolatedExecutor};
+use crate::executor::{ExecutionReport, ExecutionSpec, IsolatedExecutor};
 use anyhow::{Context, Result};
 use driva::{ExecutionIo, Isolation, Mount, MountAccess};
 use std::ffi::OsString;
@@ -102,7 +102,7 @@ fn unix_millis(at: SystemTime) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ports::MountSpec;
+    use crate::executor::MountSpec;
     use driva::{ExecutionOutcome, ExecutionRequest, ProcessExit};
     use std::collections::BTreeMap;
     use std::io::Write;
@@ -186,7 +186,10 @@ mod tests {
         assert_eq!(request.mounts[0].access, MountAccess::ReadWrite);
         assert_eq!(request.mounts[1].access, MountAccess::ReadOnly);
         // driva validated (canonicalised) the sources.
-        assert_eq!(request.mounts[0].source, dir.join("ws").canonicalize().unwrap());
+        assert_eq!(
+            request.mounts[0].source,
+            dir.join("ws").canonicalize().unwrap()
+        );
         assert_eq!(
             request.environment.get(&OsString::from("ORKA_OUTCOME")),
             Some(&OsString::from("/orka/outcome.toml"))
@@ -220,7 +223,11 @@ mod tests {
         std::fs::create_dir_all(dir.join("ws")).unwrap();
         let executor = DrivaExecutor::podman("podman", "docker.io/library/busybox:latest");
         let spec = ExecutionSpec {
-            command: vec!["sh".into(), "-c".into(), "echo ran > /workspace/out.txt".into()],
+            command: vec![
+                "sh".into(),
+                "-c".into(),
+                "echo ran > /workspace/out.txt".into(),
+            ],
             working_directory: "/workspace".into(),
             mounts: vec![MountSpec {
                 source: dir.join("ws"),

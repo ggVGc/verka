@@ -27,7 +27,7 @@
 
 use crate::driva_exec::DrivaExecutor;
 use crate::engine::ExecutionPolicy;
-use crate::ports::MountSpec;
+use crate::executor::MountSpec;
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -111,8 +111,8 @@ pub struct MountConfig {
 
 impl Config {
     pub fn load(path: &Path) -> Result<Self> {
-        let text = std::fs::read_to_string(path)
-            .with_context(|| format!("reading {}", path.display()))?;
+        let text =
+            std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
         let config: Config =
             toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
         if config.agent.command.is_empty() {
@@ -190,10 +190,8 @@ mod tests {
 
     #[test]
     fn an_unknown_backend_is_refused() {
-        let config: Config = toml::from_str(
-            "[agent]\ncommand = [\"a\"]\n[isolation]\nbackend = \"vm\"\n",
-        )
-        .unwrap();
+        let config: Config =
+            toml::from_str("[agent]\ncommand = [\"a\"]\n[isolation]\nbackend = \"vm\"\n").unwrap();
         assert!(config.executor().is_err());
     }
 }

@@ -7,7 +7,7 @@
 //!
 //! ```text
 //! .orka/attempts/<attempt-id>/
-//!     attempt.toml     frozen graph input (written at creation)
+//!     attempt.toml     the durable attempt input (written at creation)
 //!     workspace.toml   the planned workspace, before it is created
 //!     prepared         marker: workspace creation completed
 //!     request.toml     the exact execution spec, before the command starts
@@ -19,11 +19,18 @@
 //!
 //! The phase of an attempt is derived from which files exist, never stored.
 
-use crate::ports::{ExecutionReport, ExecutionSpec, FrozenInput, PreparedWorkspace};
+use crate::executor::{ExecutionReport, ExecutionSpec};
+use crate::input::AttemptInput;
+use crate::workspace::PreparedWorkspace;
 use anyhow::{bail, Context, Result};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+/// The current attempt-record schema. Schema 1 predated Orka's move onto
+/// Linka's `WorkSnapshot`; schema 2 embeds it. The break is intentional and
+/// there are no schema-1 records outside development.
+pub const ATTEMPT_SCHEMA: u32 = 2;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -49,14 +56,15 @@ impl std::fmt::Display for AttemptId {
     }
 }
 
-/// Contents of `attempt.toml`: the work frozen for this attempt.
+/// Contents of `attempt.toml`: the durable input to this attempt — Linka's
+/// authoritative work snapshot plus the prompt prose Orka owns.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AttemptRecord {
     pub schema: u32,
     pub id: AttemptId,
     /// Unix milliseconds when the attempt was created.
     pub created_at_ms: i64,
-    pub frozen: FrozenInput,
+    pub input: AttemptInput,
 }
 
 /// Contents of `seal.toml`: how the attempt concluded. Sealing is terminal
@@ -77,8 +85,11 @@ pub enum SealedState {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         output_commit: Option<String>,
     },
-    /// The graph moved between freeze and submit; nothing was recorded.
-    StaleAtSubmit { reasons: Vec<String> },
+    /// The graph moved between snapshot and submit; nothing was recorded.
+    /// The structured conflicts are Linka's, persisted verbatim.
+    StaleAtSubmit {
+        conflicts: Vec<linka::SubmissionConflict>,
+    },
     /// Failure evidence was recorded in the graph.
     FailureRecorded,
     /// Execution ended without a usable outcome; nothing was recorded.
@@ -162,24 +173,23 @@ impl FsAttemptStore {
     /// environment (prompt in, declared outcome out), created on demand.
     pub fn io_dir(&self, id: &AttemptId) -> Result<PathBuf> {
         let dir = self.attempt_dir(id).join("io");
-        std::fs::create_dir_all(&dir)
-            .with_context(|| format!("creating io directory for {id}"))?;
+        std::fs::create_dir_all(&dir).with_context(|| format!("creating io directory for {id}"))?;
         Ok(dir)
     }
 
     /// Durably record a new attempt. Refuses an existing id: attempts are
     /// never reused.
-    pub fn create(&self, id: &AttemptId, frozen: &FrozenInput) -> Result<AttemptRecord> {
+    pub fn create(&self, id: &AttemptId, input: &AttemptInput) -> Result<AttemptRecord> {
         let dir = self.attempt_dir(id);
         if dir.exists() {
             bail!("attempt `{id}` already exists");
         }
         std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
         let record = AttemptRecord {
-            schema: 1,
+            schema: ATTEMPT_SCHEMA,
             id: id.clone(),
             created_at_ms: now_millis(),
-            frozen: frozen.clone(),
+            input: input.clone(),
         };
         write_toml(&dir.join("attempt.toml"), &record)?;
         Ok(record)
@@ -241,6 +251,12 @@ impl FsAttemptStore {
         let dir = self.attempt_dir(id);
         let record: AttemptRecord = read_toml(&dir.join("attempt.toml"))
             .with_context(|| format!("unknown or unreadable attempt `{id}`"))?;
+        if record.schema != ATTEMPT_SCHEMA {
+            bail!(
+                "attempt `{id}` uses unsupported schema {} (this build reads schema {ATTEMPT_SCHEMA})",
+                record.schema
+            );
+        }
         Ok(AttemptSnapshot {
             record,
             workspace: read_toml_optional(&dir.join("workspace.toml"))?,
@@ -279,8 +295,8 @@ impl FsAttemptStore {
 }
 
 fn write_toml<T: Serialize>(path: &Path, value: &T) -> Result<()> {
-    let text = toml::to_string_pretty(value)
-        .with_context(|| format!("serialising {}", path.display()))?;
+    let text =
+        toml::to_string_pretty(value).with_context(|| format!("serialising {}", path.display()))?;
     write_atomic(path, text.as_bytes())
 }
 
@@ -295,14 +311,13 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
         path.file_name().unwrap_or_default().to_string_lossy()
     ));
     std::fs::write(&temp, bytes).with_context(|| format!("writing {}", temp.display()))?;
-    std::fs::rename(&temp, path)
-        .with_context(|| format!("committing {}", path.display()))?;
+    std::fs::rename(&temp, path).with_context(|| format!("committing {}", path.display()))?;
     Ok(())
 }
 
 fn read_toml<T: DeserializeOwned>(path: &Path) -> Result<T> {
-    let text = std::fs::read_to_string(path)
-        .with_context(|| format!("reading {}", path.display()))?;
+    let text =
+        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))
 }
 
@@ -326,7 +341,8 @@ pub(crate) fn now_millis() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ports::{DefinitionFingerprint, MountSpec, NodeId};
+    use crate::executor::MountSpec;
+    use crate::input::sample_input;
     use std::collections::BTreeMap;
 
     struct TempDir(PathBuf);
@@ -341,17 +357,8 @@ mod tests {
         (TempDir(dir.clone()), FsAttemptStore::new(dir.join(".orka")))
     }
 
-    fn frozen() -> FrozenInput {
-        FrozenInput {
-            node: NodeId("node-1".into()),
-            definition: DefinitionFingerprint {
-                metadata: "m".into(),
-                description: "d".into(),
-            },
-            description: "Do the thing".into(),
-            dependencies: vec![],
-            input_commit: "c0ffee".into(),
-        }
+    fn input() -> AttemptInput {
+        sample_input("node-1")
     }
 
     fn workspace() -> PreparedWorkspace {
@@ -394,7 +401,7 @@ mod tests {
         let id = AttemptId::new();
 
         assert!(store.load(&id).is_err());
-        store.create(&id, &frozen()).unwrap();
+        store.create(&id, &input()).unwrap();
         assert_eq!(store.load(&id).unwrap().phase(), AttemptPhase::Created);
 
         store.plan_workspace(&id, &workspace()).unwrap();
@@ -413,19 +420,26 @@ mod tests {
         assert_eq!(store.load(&id).unwrap().phase(), AttemptPhase::Executed);
 
         store
-            .seal(&id, SealedState::Submitted { output_commit: Some("beef".into()) })
+            .seal(
+                &id,
+                SealedState::Submitted {
+                    output_commit: Some("beef".into()),
+                },
+            )
             .unwrap();
         let snapshot = store.load(&id).unwrap();
         assert_eq!(snapshot.phase(), AttemptPhase::Sealed);
 
         // The snapshot carries every frozen fact back out.
-        assert_eq!(snapshot.record.frozen, frozen());
+        assert_eq!(snapshot.record.input, input());
         assert_eq!(snapshot.workspace.unwrap(), workspace());
         assert_eq!(snapshot.request.unwrap(), spec());
         assert_eq!(snapshot.evidence.unwrap(), report());
         assert_eq!(
             snapshot.seal.unwrap().state,
-            SealedState::Submitted { output_commit: Some("beef".into()) }
+            SealedState::Submitted {
+                output_commit: Some("beef".into())
+            }
         );
     }
 
@@ -433,11 +447,11 @@ mod tests {
     fn attempts_are_never_reused_and_ids_list_in_order() {
         let (_temp, store) = store();
         let id = AttemptId::new();
-        store.create(&id, &frozen()).unwrap();
-        assert!(store.create(&id, &frozen()).is_err());
+        store.create(&id, &input()).unwrap();
+        assert!(store.create(&id, &input()).is_err());
 
         let second = AttemptId::new();
-        store.create(&second, &frozen()).unwrap();
+        store.create(&second, &input()).unwrap();
         // Ids minted in the same millisecond have no defined ULID order;
         // listing promises lexicographic order, so compare against that.
         let mut expected = vec![id, second];
@@ -455,13 +469,23 @@ mod tests {
     fn sealing_is_idempotent_but_never_rewrites_history() {
         let (_temp, store) = store();
         let id = AttemptId::new();
-        store.create(&id, &frozen()).unwrap();
+        store.create(&id, &input()).unwrap();
 
         let first = store
-            .seal(&id, SealedState::Interrupted { reason: "backend died".into() })
+            .seal(
+                &id,
+                SealedState::Interrupted {
+                    reason: "backend died".into(),
+                },
+            )
             .unwrap();
         let again = store
-            .seal(&id, SealedState::Interrupted { reason: "backend died".into() })
+            .seal(
+                &id,
+                SealedState::Interrupted {
+                    reason: "backend died".into(),
+                },
+            )
             .unwrap();
         assert_eq!(first, again);
 
@@ -469,7 +493,9 @@ mod tests {
         assert!(conflict.is_err());
         assert_eq!(
             store.load(&id).unwrap().seal.unwrap().state,
-            SealedState::Interrupted { reason: "backend died".into() }
+            SealedState::Interrupted {
+                reason: "backend died".into()
+            }
         );
     }
 
@@ -477,7 +503,7 @@ mod tests {
     fn corrupt_records_are_errors_not_degraded_phases() {
         let (_temp, store) = store();
         let id = AttemptId::new();
-        store.create(&id, &frozen()).unwrap();
+        store.create(&id, &input()).unwrap();
         let dir = store.root().join("attempts").join(&id.0);
         std::fs::write(dir.join("evidence.toml"), "not toml [").unwrap();
         assert!(store.load(&id).is_err());

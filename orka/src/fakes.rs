@@ -1,56 +1,15 @@
-//! In-memory test doubles for the ports.
+//! In-memory test doubles for the replaceable boundaries.
 //!
 //! Public (not `cfg(test)`) so integration tests and downstream harnesses can
-//! drive the orchestration engine without a graph store, a container engine,
-//! or a git repository.
+//! drive the orchestration engine without a container engine or a git
+//! repository. The Linka store is not faked — Orka orchestrates Linka
+//! specifically, so tests that touch selection or submission use a real store.
 
-use crate::ports::{
-    CleanupOutcome, ExecutionReport, ExecutionSpec, FrozenInput, IsolatedExecutor, NodeId,
-    PreparedWorkspace, SubmitOutcome, Submission, WorkGraph, WorkItem, WorkspaceManager,
-};
+use crate::executor::{ExecutionReport, ExecutionSpec, IsolatedExecutor};
+use crate::workspace::{CleanupOutcome, PreparedWorkspace, WorkspaceManager};
 use anyhow::{anyhow, Result};
 use std::cell::RefCell;
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-
-/// A [`WorkGraph`] over fixed frozen inputs. `submit` records submissions and
-/// answers `Stale` for nodes listed in `stale`, mimicking a graph that moved
-/// between freeze and submit.
-#[derive(Default)]
-pub struct FakeWorkGraph {
-    pub items: Vec<WorkItem>,
-    pub frozen: BTreeMap<String, FrozenInput>,
-    pub stale: Vec<String>,
-    pub submissions: RefCell<Vec<(NodeId, crate::ports::WorkOutcome)>>,
-    pub output_commit: Option<String>,
-}
-
-impl WorkGraph for FakeWorkGraph {
-    fn select_ready(&self) -> Result<Vec<WorkItem>> {
-        Ok(self.items.clone())
-    }
-
-    fn freeze(&self, id: &NodeId) -> Result<FrozenInput> {
-        self.frozen
-            .get(&id.0)
-            .cloned()
-            .ok_or_else(|| anyhow!("unknown node `{id}`"))
-    }
-
-    fn submit(&self, submission: &Submission) -> Result<SubmitOutcome> {
-        if self.stale.contains(&submission.frozen.node.0) {
-            return Ok(SubmitOutcome::Stale {
-                reasons: vec!["definition changed since freeze".into()],
-            });
-        }
-        self.submissions
-            .borrow_mut()
-            .push((submission.frozen.node.clone(), submission.outcome.clone()));
-        Ok(SubmitOutcome::Accepted {
-            output_commit: self.output_commit.clone(),
-        })
-    }
-}
 
 /// An [`IsolatedExecutor`] that writes a canned transcript and returns a
 /// canned report. `on_run` can mutate the filesystem the way a real agent
