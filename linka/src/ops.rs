@@ -251,30 +251,20 @@ pub fn fail(store: &Store, vcs: &dyn Vcs, id: &str, notes: &str, author: Author)
     Ok(())
 }
 
-/// Commit whatever of the node's streamed interaction log (`work.jsonl`) is not
-/// yet in git. The log is written line by line *during* a session, dirtying only
-/// the workbench repository, and each store commit the session makes already
-/// sweeps the story-so-far in; this picks up the tail after the session ends.
-/// A no-op when the log is fully committed.
-pub fn commit_work_log(store: &Store, vcs: &dyn Vcs, id: &str) -> Result<()> {
-    vcs.commit_store(&store.store_name(), &format!("linka: work log {id}"))?;
-    Ok(())
-}
-
-/// Append *observed* context pins to a node's recorded result: files a work
-/// session was seen reading (mined from its recorded transcript) that the
-/// worker did not declare in `complete`. Turns input provenance from agent
-/// discipline into a derived fact.
-///
-/// Skips paths already pinned, paths inside any node's output commit (those
-/// are covered by `consumed` pins — context is for files no node produced),
-/// and files that no longer exist. Returns how many pins were added; a no-op
-/// when the node has no result yet (a paused unit's reads are amended once it
-/// completes, from the full replayed log).
-pub fn amend_context(store: &Store, vcs: &dyn Vcs, id: &str, reads: &[String]) -> Result<usize> {
-    let Some((mut result, notes)) = store.read_result(id)? else {
-        return Ok(0);
+/// Record immutable, producer-neutral context observations for one exact result.
+pub fn record_context_observation(
+    store: &Store,
+    vcs: &dyn Vcs,
+    id: &str,
+    expected_result: &ResultVersion,
+    paths: &[String],
+) -> Result<usize> {
+    let Some((result, _)) = store.read_result(id)? else {
+        bail!("node `{id}` has no result");
     };
+    if &store.result_version(id)? != expected_result {
+        bail!("result changed before context observation was recorded");
+    }
 
     let mut node_outputs = std::collections::HashSet::new();
     for other in store.list_ids()? {
@@ -286,8 +276,18 @@ pub fn amend_context(store: &Store, vcs: &dyn Vcs, id: &str, reads: &[String]) -
     let root = store.project_root();
     let mut pinned: std::collections::HashSet<String> =
         result.context.iter().map(|p| p.path.to_string()).collect();
-    let mut added = 0;
-    for path in reads {
+    for observation in store.read_context_observations(id)? {
+        if &observation.result == expected_result {
+            pinned.extend(
+                observation
+                    .context
+                    .into_iter()
+                    .map(|pin| pin.path.to_string()),
+            );
+        }
+    }
+    let mut context = Vec::new();
+    for path in paths {
         if pinned.contains(path) || node_outputs.contains(path) {
             continue;
         }
@@ -299,20 +299,27 @@ pub fn amend_context(store: &Store, vcs: &dyn Vcs, id: &str, reads: &[String]) -
             continue;
         };
         pinned.insert(path.clone());
-        result.context.push(ContextPin {
-            path: path.parse().map_err(anyhow::Error::msg)?,
+        context.push(ContextPin {
+            path: project_path,
             identity: blob,
             observed: true,
         });
-        added += 1;
     }
-    if added == 0 {
+    if context.is_empty() {
         return Ok(0);
     }
-    store.write_result(id, &result, &notes)?;
+    let added = context.len();
+    store.write_context_observation(
+        id,
+        &crate::model::ContextObservation {
+            schema: 1,
+            result: expected_result.clone(),
+            context,
+        },
+    )?;
     vcs.commit_store(
         &store.store_name(),
-        &format!("linka: observed context {id}"),
+        &format!("linka: context observation {id}"),
     )?;
     Ok(added)
 }
@@ -443,7 +450,13 @@ fn staleness_for_result(
         }
     }
     let root = store.project_root();
-    for pin in &result.context {
+    let result_version = store.result_version(id)?;
+    let observations = store.read_context_observations(id)?;
+    let observed_context = observations
+        .iter()
+        .filter(|observation| observation.result == result_version)
+        .flat_map(|observation| observation.context.iter());
+    for pin in result.context.iter().chain(observed_context) {
         let current = match revision {
             Some(revision) => vcs.file_blob_at(revision, pin.path.as_str())?,
             None => project_file_blob(&root, &pin.path)?,
@@ -809,6 +822,21 @@ pub fn check(store: &Store) -> Result<Vec<String>> {
                 validate_result_semantics(&id, &meta, &result, repository.as_deref(), &mut problems)
             }
             Ok(None) => {}
+        }
+        match store.read_context_observations(&id) {
+            Err(error) => {
+                problems.push(format!("{id}: unreadable context observation ({error:#})"))
+            }
+            Ok(observations) => {
+                for observation in observations {
+                    if observation.schema != 1 {
+                        problems.push(format!(
+                            "{id}: unsupported context observation schema {}",
+                            observation.schema
+                        ));
+                    }
+                }
+            }
         }
         for (kind, list) in [
             ("depends_on", &meta.depends_on),
@@ -1326,7 +1354,7 @@ mod tests {
     }
 
     #[test]
-    fn amend_context_pins_observed_reads_only() {
+    fn context_observations_are_immutable_and_result_versioned() {
         let (_t, store) = temp_store();
         let fake = FakeVcs {
             next_id: "c1".into(),
@@ -1361,11 +1389,16 @@ mod tests {
         ]
         .map(String::from)
         .to_vec();
-        assert_eq!(amend_context(&store, &fake, &id, &reads).unwrap(), 1);
+        let version = store.result_version(&id).unwrap();
+        assert_eq!(
+            record_context_observation(&store, &fake, &id, &version, &reads).unwrap(),
+            1
+        );
 
         let (result, notes) = store.read_result(&id).unwrap().unwrap();
-        assert_eq!(notes, "done", "amending keeps the narrative");
-        let pin = result
+        assert_eq!(notes, "done", "observation keeps the narrative");
+        let observations = store.read_context_observations(&id).unwrap();
+        let pin = observations[0]
             .context
             .iter()
             .find(|p| p.path == "read.txt")
@@ -1383,20 +1416,26 @@ mod tests {
             .any(|p| p.path == "out.txt" || p.path == "missing.txt"));
 
         // Re-running with the same reads adds nothing.
-        assert_eq!(amend_context(&store, &fake, &id, &reads).unwrap(), 0);
+        assert_eq!(
+            record_context_observation(&store, &fake, &id, &version, &reads).unwrap(),
+            0
+        );
+        assert_eq!(store.result_version(&id).unwrap(), version);
     }
 
     #[test]
-    fn amend_context_is_a_no_op_without_a_result() {
+    fn context_observation_rejects_a_node_without_a_result() {
         let (_t, store) = temp_store();
         let fake = FakeVcs::default();
         let id = add(&store, &fake, new_node("a", vec![])).unwrap();
-        let commits_before = *fake.store_commits.borrow();
-        assert_eq!(
-            amend_context(&store, &fake, &id, &["x.txt".into()]).unwrap(),
-            0
+        let nonexistent = ResultVersion {
+            metadata: "none".into(),
+            notes: None,
+        };
+        assert!(
+            record_context_observation(&store, &fake, &id, &nonexistent, &["x.txt".into()])
+                .is_err()
         );
-        assert_eq!(*fake.store_commits.borrow(), commits_before);
     }
 
     #[test]
@@ -1408,8 +1447,9 @@ mod tests {
 
         let id = add(&store, &fake, new_node("a", vec![])).unwrap();
         done(&store, &fake, &id);
+        let version = store.result_version(&id).unwrap();
         assert_eq!(
-            amend_context(&store, &fake, &id, &["read.txt".into()]).unwrap(),
+            record_context_observation(&store, &fake, &id, &version, &["read.txt".into()]).unwrap(),
             1
         );
         assert!(staleness(&store, &fake, &id).unwrap().is_empty());
@@ -2417,7 +2457,6 @@ mod tests {
         let b = add(&store, &dirty, new_node("b", vec![])).unwrap();
         link(&store, &dirty, &b, &a, DepKind::DependsOn).unwrap();
         edit(&store, &dirty, &a, "revised".into()).unwrap();
-        commit_work_log(&store, &dirty, &a).unwrap();
 
         // A failed attempt may have left the mess; recording it must not block.
         fail(&store, &dirty, &a, "broke", Author::Human).unwrap();

@@ -263,15 +263,15 @@ Acceptance criteria:
 
 ## 12. Move execution logs and transcript interpretation to Orka
 
-- [ ] Move `work.jsonl`, `read_work_log`, `open_work_log`, and
+- [x] Move `work.jsonl`, `read_work_log`, `open_work_log`, and
   `commit_work_log` to Orka's attempt/session storage.
-- [ ] Provide a compatibility reader or migration for existing logs.
-- [ ] Replace transcript-specific `amend_context` with a neutral context
+- [x] Provide a compatibility reader or migration for existing logs.
+- [x] Replace transcript-specific `amend_context` with a neutral context
   observation input, if Linka needs such an operation at all.
-- [ ] Prefer immutable observation records keyed by result version over
+- [x] Prefer immutable observation records keyed by result version over
   rewriting an existing result after completion.
-- [ ] Make Orka responsible for mining transcripts and submitting observations.
-- [ ] Confirm observations cannot change a definition or silently replace the
+- [x] Make Orka responsible for mining transcripts and submitting observations.
+- [x] Confirm observations cannot change a definition or silently replace the
   result they refer to.
 
 Acceptance criteria:

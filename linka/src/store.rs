@@ -10,7 +10,7 @@
 //!     description.md  definition prose
 //!     result.toml     structured completion record (optional)
 //!     result.md       completion narrative (optional)
-//!     work.jsonl      recorded interaction log of work sessions (optional)
+//!     work.jsonl      legacy execution log (read-only compatibility only)
 //! ```
 //!
 //! Applications layered on top (execution harnesses, review tools) may keep
@@ -40,7 +40,9 @@ use sha1::{Digest, Sha1};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::model::{DefinitionVersion, NodeId, NodeMeta, ResultMeta, ResultVersion};
+use crate::model::{
+    ContextObservation, DefinitionVersion, NodeId, NodeMeta, ResultMeta, ResultVersion,
+};
 
 /// Git's blob id for `bytes`, computed locally so version identity needs no
 /// git invocation.
@@ -231,9 +233,9 @@ impl Store {
         })
     }
 
-    // --- work.jsonl (the interaction log) ----------------------------------------
+    // --- legacy compatibility and immutable observations -------------------------
 
-    fn work_log_path(&self, id: &str) -> PathBuf {
+    fn legacy_work_log_path(&self, id: &str) -> PathBuf {
         self.node_dir(id).join("work.jsonl")
     }
 
@@ -242,32 +244,59 @@ impl Store {
     /// of the work (what the worker said and did, one JSON event per line),
     /// never state — status, staleness, and readiness must not read it. It does
     /// not participate in the node's version.
+    #[deprecated(note = "compatibility reader only; execution logs belong to the coordinator")]
     pub fn read_work_log(&self, id: &str) -> Result<Option<String>> {
-        match fs::read_to_string(self.work_log_path(id)) {
+        match fs::read_to_string(self.legacy_work_log_path(id)) {
             Ok(t) => Ok(Some(t)),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(e).with_context(|| format!("reading work log for `{id}`")),
         }
     }
 
-    /// Open the node's interaction log for streaming. `append` extends the log
-    /// (a continuation of a paused unit of work); `!append` starts it over
-    /// (rework — git history keeps the previous story, like an overwritten
-    /// `result.md`). The caller writes events line by line, flushing each, so
-    /// an abrupt exit at any point loses at most an unflushed tail.
-    pub fn open_work_log(&self, id: &str, append: bool) -> Result<fs::File> {
-        if !self.exists(id) {
-            bail!("unknown node `{id}`");
+    pub fn write_context_observation(
+        &self,
+        id: &str,
+        observation: &ContextObservation,
+    ) -> Result<()> {
+        validate_node_id(id)?;
+        let data =
+            toml::to_string_pretty(observation).context("serialising context observation")?;
+        let identity = blob_id(data.as_bytes());
+        let dir = self.node_dir(id).join("observations");
+        fs::create_dir_all(&dir)?;
+        let path = dir.join(format!("{identity}.toml"));
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut file) => {
+                use std::io::Write;
+                file.write_all(data.as_bytes())?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error).with_context(|| format!("writing {}", path.display())),
         }
-        let mut opts = fs::OpenOptions::new();
-        opts.create(true);
-        if append {
-            opts.append(true);
-        } else {
-            opts.write(true).truncate(true);
+        Ok(())
+    }
+
+    pub fn read_context_observations(&self, id: &str) -> Result<Vec<ContextObservation>> {
+        validate_node_id(id)?;
+        let dir = self.node_dir(id).join("observations");
+        let entries = match fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error).with_context(|| format!("reading {}", dir.display())),
+        };
+        let mut observations = Vec::new();
+        for entry in entries {
+            let path = entry?.path();
+            let data = fs::read_to_string(&path)?;
+            observations.push(
+                toml::from_str(&data).with_context(|| format!("parsing {}", path.display()))?,
+            );
         }
-        opts.open(self.work_log_path(id))
-            .with_context(|| format!("opening work log for `{id}`"))
+        Ok(observations)
     }
 
     // --- listing -----------------------------------------------------------------
@@ -408,14 +437,11 @@ mod tests {
     }
 
     #[test]
-    fn work_log_appends_and_starts_over() {
-        use std::io::Write;
+    #[allow(deprecated)]
+    fn legacy_work_log_has_a_read_only_compatibility_reader() {
         let dir = std::env::temp_dir().join(format!("linka-worklog-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let store = Store::init(dir.join(".linka")).unwrap();
-
-        // Only existing nodes can carry a log.
-        assert!(store.open_work_log("node-nope", true).is_err());
 
         let meta = NodeMeta {
             schema: 1,
@@ -428,34 +454,18 @@ mod tests {
         store.write_node("node-1", &meta, "").unwrap();
         assert_eq!(store.read_work_log("node-1").unwrap(), None);
 
-        // Streamed writes accumulate across sessions and leave the version alone.
+        // A pre-migration log remains readable but Linka exposes no writer.
         let v = store.node_version("node-1").unwrap();
-        writeln!(
-            store.open_work_log("node-1", true).unwrap(),
-            r#"{{"event":"a"}}"#
-        )
-        .unwrap();
-        writeln!(
-            store.open_work_log("node-1", true).unwrap(),
-            r#"{{"event":"b"}}"#
+        std::fs::write(
+            store.node_dir("node-1").join("work.jsonl"),
+            "{\"event\":\"a\"}\n",
         )
         .unwrap();
         assert_eq!(
             store.read_work_log("node-1").unwrap().unwrap(),
-            "{\"event\":\"a\"}\n{\"event\":\"b\"}\n"
+            "{\"event\":\"a\"}\n"
         );
         assert_eq!(store.node_version("node-1").unwrap(), v);
-
-        // Rework starts the log over.
-        writeln!(
-            store.open_work_log("node-1", false).unwrap(),
-            r#"{{"event":"c"}}"#
-        )
-        .unwrap();
-        assert_eq!(
-            store.read_work_log("node-1").unwrap().unwrap(),
-            "{\"event\":\"c\"}\n"
-        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -225,6 +225,13 @@ pub struct ContextPin {
     pub observed: bool,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContextObservation {
+    pub schema: u32,
+    pub result: ResultVersion,
+    pub context: Vec<ContextPin>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Outcome {
