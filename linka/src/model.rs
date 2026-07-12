@@ -258,6 +258,8 @@ pub struct ResultMeta {
     pub author: Author,
     pub definition: DefinitionVersion,
     pub outcome: Outcome,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<ProjectSnapshot>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub consumed: Vec<ConsumedNode>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -439,6 +441,7 @@ mod tests {
             author: Author::Human,
             definition: version.clone(),
             outcome: Outcome::Done,
+            project: None,
             consumed: vec![],
             context: vec![],
             output: None,

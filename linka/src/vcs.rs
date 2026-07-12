@@ -36,6 +36,8 @@ pub trait Vcs {
 
     /// Blob id of a path in the project/execution tree, if it is a file.
     fn file_blob(&self, path: &str) -> Result<Option<String>>;
+    /// Blob identity for a path in an explicit project revision.
+    fn file_blob_at(&self, revision: &str, path: &str) -> Result<Option<String>>;
 
     /// Persist a store change (commit the given path, e.g. the store directory)
     /// to the workbench repository.
@@ -90,6 +92,7 @@ pub struct FakeVcs {
     pub dirty: Vec<String>,
     pub drift_for: std::collections::HashMap<String, String>,
     pub drift_error: Option<String>,
+    pub revision_blobs: std::collections::HashMap<(String, String), String>,
     pub captured: std::cell::RefCell<Vec<Vec<String>>>,
     pub store_commits: std::cell::RefCell<usize>,
     pub files_for: std::cell::RefCell<std::collections::HashMap<String, Vec<String>>>,
@@ -137,6 +140,12 @@ impl Vcs for FakeVcs {
 
     fn file_blob(&self, _path: &str) -> Result<Option<String>> {
         Ok(None)
+    }
+    fn file_blob_at(&self, revision: &str, path: &str) -> Result<Option<String>> {
+        Ok(self
+            .revision_blobs
+            .get(&(revision.into(), path.into()))
+            .cloned())
     }
 
     fn commit_store(&self, _path: &str, _message: &str) -> Result<()> {

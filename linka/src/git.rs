@@ -143,6 +143,16 @@ impl Vcs for GitVcs {
     fn file_blob(&self, path: &str) -> Result<Option<String>> {
         crate::store::file_blob(&self.project.join(path))
     }
+    fn file_blob_at(&self, revision: &str, path: &str) -> Result<Option<String>> {
+        let spec = format!("{revision}:{path}");
+        let output = git(&self.project, &["rev-parse", "--verify", &spec])?;
+        if !output.status.success() {
+            return Ok(None);
+        }
+        Ok(Some(
+            String::from_utf8_lossy(&output.stdout).trim().to_string(),
+        ))
+    }
     fn commit_store(&self, path: &str, message: &str) -> Result<()> {
         commit_path(&self.workbench, path, message)
     }

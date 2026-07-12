@@ -385,6 +385,7 @@ mod tests {
             author: Author::Machine,
             definition: v2.clone(),
             outcome: Outcome::Done,
+            project: None,
             consumed: vec![],
             context: vec![],
             output: Some(ArtifactRef {

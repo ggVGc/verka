@@ -188,7 +188,10 @@ pub fn complete(
         ResultSubmission {
             snapshot,
             outcome: Outcome::Done,
-            output: output_commit.as_deref().map(git_artifact),
+            output: output_commit
+                .as_deref()
+                .map(|commit| git_artifact(store, commit))
+                .transpose()?,
             notes: notes.into(),
             author,
             producer: None,
@@ -237,6 +240,7 @@ pub fn fail(store: &Store, vcs: &dyn Vcs, id: &str, notes: &str, author: Author)
         author,
         definition: store.node_version(id)?,
         outcome: Outcome::Failed,
+        project: current_project_snapshot(store, vcs)?,
         consumed,
         context: Vec::new(),
         output: None,
@@ -316,13 +320,19 @@ pub fn amend_context(store: &Store, vcs: &dyn Vcs, id: &str, reads: &[String]) -
 /// Derive all graph state through one fallible evaluation.
 pub fn node_state(store: &Store, vcs: &dyn Vcs, id: &str) -> Result<NodeState> {
     let mut visiting = std::collections::HashSet::new();
-    node_state_inner(store, vcs, id, &mut visiting)
+    node_state_inner(store, vcs, id, None, &mut visiting)
+}
+
+pub fn node_state_at(store: &Store, vcs: &dyn Vcs, id: &str, revision: &str) -> Result<NodeState> {
+    let mut visiting = std::collections::HashSet::new();
+    node_state_inner(store, vcs, id, Some(revision), &mut visiting)
 }
 
 fn node_state_inner(
     store: &Store,
     vcs: &dyn Vcs,
     id: &str,
+    revision: Option<&str>,
     visiting: &mut std::collections::HashSet<String>,
 ) -> Result<NodeState> {
     let (meta, _) = store
@@ -340,7 +350,10 @@ fn node_state_inner(
                     Outcome::Done => RecordedOutcome::Succeeded,
                     Outcome::Failed => RecordedOutcome::Failed,
                 };
-                (outcome, staleness_for_result(store, vcs, id, result)?)
+                (
+                    outcome,
+                    staleness_for_result(store, vcs, id, result, revision)?,
+                )
             }
         };
         let currency = if staleness.is_empty() {
@@ -357,7 +370,7 @@ fn node_state_inner(
                 });
                 continue;
             }
-            let dependency_state = node_state_inner(store, vcs, dependency, visiting)?;
+            let dependency_state = node_state_inner(store, vcs, dependency, revision, visiting)?;
             if !dependency_state.is_complete() {
                 let reason = if dependency_state.currency == Currency::Stale {
                     BlockerReason::Stale
@@ -390,6 +403,7 @@ fn staleness_for_result(
     vcs: &dyn Vcs,
     id: &str,
     result: &ResultMeta,
+    revision: Option<&str>,
 ) -> Result<Vec<StalenessReason>> {
     let mut reasons = Vec::new();
     let current = store.node_version(id)?;
@@ -430,7 +444,11 @@ fn staleness_for_result(
     }
     let root = store.project_root();
     for pin in &result.context {
-        match project_file_blob(&root, &pin.path)? {
+        let current = match revision {
+            Some(revision) => vcs.file_blob_at(revision, pin.path.as_str())?,
+            None => project_file_blob(&root, &pin.path)?,
+        };
+        match current {
             Some(now) if now != pin.identity => reasons.push(StalenessReason::ContextChanged {
                 path: pin.path.to_string(),
             }),
@@ -507,8 +525,13 @@ pub fn snapshot_work(
     let (meta, _) = store.read_node(id)?;
     let dependencies = pin_node_list(store, &meta.depends_on)?;
     let lineage = pin_node_list(store, &meta.derived_from)?;
-    let context = pin_context(store, vcs, context)?;
     let revision = vcs.head_commit()?.unwrap_or_default();
+    let context = pin_context(
+        store,
+        vcs,
+        (!revision.is_empty()).then_some(revision.as_str()),
+        context,
+    )?;
     let tree = if revision.is_empty() {
         String::new()
     } else {
@@ -568,6 +591,13 @@ pub fn submit_result(
     let snapshot = &submission.snapshot;
     let id = snapshot.node.as_str();
     let mut conflicts = Vec::new();
+    if let Some(output) = &submission.output {
+        if !output.repository.is_empty() && output.repository != snapshot.project.repository {
+            return Err(SubmissionError::Evaluation(anyhow::anyhow!(
+                "output artifact belongs to a different project repository"
+            )));
+        }
+    }
     let (meta, _) = store.read_node(id)?;
     if store.node_version(id)? != snapshot.definition {
         conflicts.push(SubmissionConflict::DefinitionChanged);
@@ -578,12 +608,29 @@ pub fn submit_result(
     if pin_node_list(store, &meta.derived_from)? != snapshot.lineage {
         conflicts.push(SubmissionConflict::LineageChanged);
     }
+    let current_revision = vcs.head_commit()?.unwrap_or_default();
     for pin in &snapshot.context {
-        if project_file_blob(&store.project_root(), &pin.path)?.as_deref() != Some(&pin.identity) {
+        let current = if current_revision.is_empty() {
+            project_file_blob(&store.project_root(), &pin.path)?
+        } else {
+            vcs.file_blob_at(&current_revision, pin.path.as_str())?
+        };
+        if current.as_deref() != Some(&pin.identity) {
             conflicts.push(SubmissionConflict::ContextChanged {
                 path: pin.path.clone(),
             });
         }
+    }
+    let expected_revision = submission
+        .output
+        .as_ref()
+        .map(|output| output.id.as_str())
+        .unwrap_or(snapshot.project.revision.as_str());
+    if !snapshot.project.revision.is_empty()
+        && current_revision != expected_revision
+        && current_revision != snapshot.project.revision
+    {
+        conflicts.push(SubmissionConflict::ProjectChanged);
     }
     if !node_state(store, vcs, id)?.is_ready() {
         conflicts.push(SubmissionConflict::ReadinessChanged);
@@ -621,6 +668,7 @@ pub fn submit_result(
         author: submission.author,
         definition: snapshot.definition.clone(),
         outcome: submission.outcome,
+        project: Some(snapshot.project.clone()),
         consumed,
         context: snapshot.context.clone(),
         output: submission.output,
@@ -738,6 +786,7 @@ pub fn unsettled(store: &Store, vcs: &dyn Vcs, id: &str) -> Result<Vec<String>> 
 /// cycle waiting on another).
 pub fn check(store: &Store) -> Result<Vec<String>> {
     let mut problems = Vec::new();
+    let repository = Pairing::load(store.root())?.map(|pairing| pairing.root_commit);
     let mut depends_on: std::collections::BTreeMap<String, Vec<String>> = Default::default();
 
     for id in store.list_ids()? {
@@ -756,7 +805,9 @@ pub fn check(store: &Store) -> Result<Vec<String>> {
         }
         match store.read_result(&id) {
             Err(e) => problems.push(format!("{id}: unreadable result ({e:#})")),
-            Ok(Some((result, _))) => validate_result_semantics(&id, &meta, &result, &mut problems),
+            Ok(Some((result, _))) => {
+                validate_result_semantics(&id, &meta, &result, repository.as_deref(), &mut problems)
+            }
             Ok(None) => {}
         }
         for (kind, list) in [
@@ -788,6 +839,7 @@ fn validate_result_semantics(
     id: &str,
     meta: &NodeMeta,
     result: &ResultMeta,
+    repository: Option<&str>,
     problems: &mut Vec<String>,
 ) {
     if result.schema != 1 {
@@ -816,7 +868,7 @@ fn validate_result_semantics(
             ));
         }
         if let Some(output) = &pin.output {
-            validate_artifact(id, output, problems);
+            validate_artifact(id, output, repository, problems);
         }
     }
     if result.outcome == Outcome::Done {
@@ -835,11 +887,16 @@ fn validate_result_semantics(
         }
     }
     if let Some(output) = &result.output {
-        validate_artifact(id, output, problems);
+        validate_artifact(id, output, repository, problems);
     }
 }
 
-fn validate_artifact(id: &str, artifact: &ArtifactRef, problems: &mut Vec<String>) {
+fn validate_artifact(
+    id: &str,
+    artifact: &ArtifactRef,
+    repository: Option<&str>,
+    problems: &mut Vec<String>,
+) {
     if artifact.scheme != "git-commit" {
         problems.push(format!(
             "{id}: unsupported artifact scheme `{}`",
@@ -857,6 +914,11 @@ fn validate_artifact(id: &str, artifact: &ArtifactRef, problems: &mut Vec<String
             "{id}: invalid artifact repository identity `{}`",
             artifact.repository
         ));
+    }
+    if let Some(expected) = repository {
+        if !artifact.repository.is_empty() && artifact.repository != expected {
+            problems.push(format!("{id}: artifact belongs to a different repository"));
+        }
     }
 }
 
@@ -1107,7 +1169,10 @@ fn pin_deps(store: &Store, meta: &NodeMeta) -> Result<Vec<ConsumedNode>> {
                 definition,
                 result,
                 outcome: store.read_result(dep)?.map(|(result, _)| result.outcome),
-                output: output_of(store, dep)?.as_deref().map(git_artifact),
+                output: output_of(store, dep)?
+                    .as_deref()
+                    .map(|commit| git_artifact(store, commit))
+                    .transpose()?,
             })
         })
         .collect()
@@ -1135,16 +1200,24 @@ fn pin_node_list(store: &Store, nodes: &[crate::model::NodeId]) -> Result<Vec<Co
 }
 
 /// Pin each context path by its current content; errors if a file is missing.
-fn pin_context(store: &Store, vcs: &dyn Vcs, paths: &[String]) -> Result<Vec<ContextPin>> {
+fn pin_context(
+    store: &Store,
+    vcs: &dyn Vcs,
+    revision: Option<&str>,
+    paths: &[String],
+) -> Result<Vec<ContextPin>> {
     let root = store.project_root();
     paths
         .iter()
         .map(|path| {
             let path: crate::model::ProjectPath = path.parse().map_err(anyhow::Error::msg)?;
-            let blob = vcs
-                .file_blob(path.as_str())?
-                .or(project_file_blob(&root, &path)?)
-                .with_context(|| format!("cannot pin `{path}`: file not found"))?;
+            let blob = match revision {
+                Some(revision) => vcs.file_blob_at(revision, path.as_str())?,
+                None => vcs
+                    .file_blob(path.as_str())?
+                    .or(project_file_blob(&root, &path)?),
+            }
+            .with_context(|| format!("cannot pin `{path}`: file not found"))?;
             Ok(ContextPin {
                 path,
                 identity: blob,
@@ -1172,12 +1245,30 @@ fn project_file_blob(
     }
 }
 
-fn git_artifact(commit: &str) -> ArtifactRef {
-    ArtifactRef {
+fn current_project_snapshot(store: &Store, vcs: &dyn Vcs) -> Result<Option<ProjectSnapshot>> {
+    let Some(revision) = vcs.head_commit()? else {
+        return Ok(None);
+    };
+    let repository = Pairing::load(store.root())?
+        .map(|pairing| pairing.root_commit)
+        .unwrap_or_default();
+    Ok(Some(ProjectSnapshot {
+        scheme: "git".into(),
+        repository,
+        tree: vcs.tree_id(&revision)?,
+        revision,
+    }))
+}
+
+fn git_artifact(store: &Store, commit: &str) -> Result<ArtifactRef> {
+    let repository = Pairing::load(store.root())?
+        .map(|pairing| pairing.root_commit)
+        .unwrap_or_default();
+    Ok(ArtifactRef {
         scheme: "git-commit".into(),
-        repository: String::new(),
+        repository,
         id: commit.into(),
-    }
+    })
 }
 
 fn now_millis() -> i64 {
@@ -1574,6 +1665,54 @@ mod tests {
     }
 
     #[test]
+    fn revision_based_context_ignores_worktree_dirt_and_tracks_revision_blobs() {
+        let (_t, store) = temp_store();
+        let mut fake = FakeVcs {
+            root: Some("rev-a".into()),
+            revision_blobs: [
+                (
+                    ("rev-a".into(), "input".into()),
+                    crate::store::blob_id(b"one"),
+                ),
+                (
+                    ("rev-b".into(), "input".into()),
+                    crate::store::blob_id(b"one"),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+        let id = add(&store, &fake, new_node("revision context", vec![])).unwrap();
+        std::fs::write(store.project_root().join("input"), "one").unwrap();
+        complete(
+            &store,
+            &fake,
+            &id,
+            &[],
+            &["input".into()],
+            None,
+            "",
+            Author::Human,
+        )
+        .unwrap();
+
+        std::fs::write(store.project_root().join("input"), "dirty worktree").unwrap();
+        assert!(node_state_at(&store, &fake, &id, "rev-a")
+            .unwrap()
+            .is_complete());
+        assert!(node_state_at(&store, &fake, &id, "rev-b")
+            .unwrap()
+            .is_complete());
+        fake.revision_blobs
+            .remove(&("rev-b".into(), "input".into()));
+        assert_eq!(
+            node_state_at(&store, &fake, &id, "rev-b").unwrap().currency,
+            Currency::Stale
+        );
+    }
+
+    #[test]
     fn own_output_drift_uses_the_vcs() {
         let (_t, store) = temp_store();
         let mut fake = FakeVcs {
@@ -1805,6 +1944,12 @@ mod tests {
         let (_t, store) = temp_store();
         let fake = FakeVcs {
             root: Some("project-revision".into()),
+            revision_blobs: [(
+                ("project-revision".into(), "input".into()),
+                crate::store::blob_id(b"content"),
+            )]
+            .into_iter()
+            .collect(),
             ..Default::default()
         };
         let dependency = add(&store, &fake, new_node("dependency", vec![])).unwrap();
@@ -1841,8 +1986,14 @@ mod tests {
     #[test]
     fn submissions_revalidate_snapshots_and_preserve_previous_results_on_conflict() {
         let (_t, store) = temp_store();
-        let fake = FakeVcs {
+        let mut fake = FakeVcs {
             root: Some("revision".into()),
+            revision_blobs: [(
+                ("revision".into(), "input".into()),
+                crate::store::blob_id(b"one"),
+            )]
+            .into_iter()
+            .collect(),
             ..Default::default()
         };
         let node = add(&store, &fake, new_node("work", vec![])).unwrap();
@@ -1856,6 +2007,19 @@ mod tests {
             author: Author::Human,
             producer: None,
         };
+        let foreign = ResultSubmission {
+            output: Some(ArtifactRef {
+                scheme: "git-commit".into(),
+                repository: "foreign-repository".into(),
+                id: "output".into(),
+            }),
+            ..submission.clone()
+        };
+        assert!(matches!(
+            submit_result(&store, &fake, foreign),
+            Err(SubmissionError::Evaluation(_))
+        ));
+        assert!(store.read_result(&node).unwrap().is_none());
 
         edit(&store, &fake, &node, "changed".into()).unwrap();
         assert!(matches!(
@@ -1889,6 +2053,10 @@ mod tests {
 
         let fresh = snapshot_work(&store, &fake, &node, &["input".into()]).unwrap();
         std::fs::write(store.project_root().join("input"), "two").unwrap();
+        fake.revision_blobs.insert(
+            ("revision".into(), "input".into()),
+            crate::store::blob_id(b"two"),
+        );
         let context_submission = ResultSubmission {
             snapshot: fresh,
             ..submission.clone()
@@ -1900,6 +2068,10 @@ mod tests {
         ));
 
         std::fs::write(store.project_root().join("input"), "one").unwrap();
+        fake.revision_blobs.insert(
+            ("revision".into(), "input".into()),
+            crate::store::blob_id(b"one"),
+        );
         let concurrent = snapshot_work(&store, &fake, &node, &["input".into()]).unwrap();
         fail(&store, &fake, &node, "other producer", Author::Machine).unwrap();
         let previous = store.result_version(&node).unwrap();

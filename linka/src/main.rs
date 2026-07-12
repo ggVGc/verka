@@ -645,6 +645,9 @@ fn show_node(store: &Store, vcs: &GitVcs, id: &str) -> Result<String> {
         writeln!(out, "result:")?;
         writeln!(out, "  outcome: {}", result.outcome.as_str())?;
         writeln!(out, "  author:  {}", result.author.as_str())?;
+        if result.project.is_none() {
+            writeln!(out, "  warning: legacy result has no project revision")?;
+        }
         if let Some(producer) = &result.producer {
             writeln!(out, "  producer: {} {}", producer.namespace, producer.data)?;
         }

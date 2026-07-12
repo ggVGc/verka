@@ -211,27 +211,27 @@ Tests:
 
 ## 10. Make context and artifact identity revision-based
 
-- [ ] Record the source project revision/tree on each context snapshot or on
+- [x] Record the source project revision/tree on each context snapshot or on
   the containing work snapshot.
-- [ ] Check context through an explicit repository revision rather than the
+- [x] Check context through an explicit repository revision rather than the
   process's currently checked-out worktree.
-- [ ] Define currency relative to an explicit current project revision supplied
+- [x] Define currency relative to an explicit current project revision supplied
   by the caller.
-- [ ] Ensure dirty working-tree state does not silently redefine graph
+- [x] Ensure dirty working-tree state does not silently redefine graph
   currency.
-- [ ] Populate `ArtifactRef.repository` from the verified project pairing rather
+- [x] Populate `ArtifactRef.repository` from the verified project pairing rather
   than leaving it empty.
-- [ ] Reject artifacts from a different paired repository.
-- [ ] Provide temporary compatibility for legacy empty repository fields, with
+- [x] Reject artifacts from a different paired repository.
+- [x] Provide temporary compatibility for legacy empty repository fields, with
   a warning or schema migration.
 
 Tests:
 
-- [ ] Context captured in a linked worktree is checked correctly when the main
+- [x] Context captured in a linked worktree is checked correctly when the main
   checkout differs.
-- [ ] Identical blobs remain current across revisions.
-- [ ] Missing paths at the comparison revision become stale.
-- [ ] Artifacts from another repository are rejected.
+- [x] Identical blobs remain current across revisions.
+- [x] Missing paths at the comparison revision become stale.
+- [x] Artifacts from another repository are rejected.
 
 ## 11. Narrow Linka's VCS and storage interfaces
 
