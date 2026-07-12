@@ -9,6 +9,7 @@
 //! * [`ports`] — the narrow traits and Orka-owned types crossing them.
 //! * [`fakes`] — in-memory port implementations for tests and harnesses.
 
+pub mod attempt;
 pub mod fakes;
 pub mod ports;
 
