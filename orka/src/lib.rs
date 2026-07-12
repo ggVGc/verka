@@ -10,6 +10,7 @@
 //! * [`fakes`] — in-memory port implementations for tests and harnesses.
 
 pub mod attempt;
+pub mod driva_exec;
 pub mod fakes;
 pub mod linka_graph;
 pub mod ports;

@@ -438,7 +438,11 @@ mod tests {
 
         let second = AttemptId::new();
         store.create(&second, &frozen()).unwrap();
-        assert_eq!(store.list().unwrap(), vec![id, second]);
+        // Ids minted in the same millisecond have no defined ULID order;
+        // listing promises lexicographic order, so compare against that.
+        let mut expected = vec![id, second];
+        expected.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(store.list().unwrap(), expected);
     }
 
     #[test]
