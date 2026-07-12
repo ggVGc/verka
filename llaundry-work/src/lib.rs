@@ -1,13 +1,20 @@
 //! Execution is an application consuming a work graph, not graph state.
+//!
+//! PARKED: this project collects everything execution- and review-related
+//! from the old composed workspace (see README.md). It is not expected to
+//! build yet — the plan is a `TaskStore` trait implemented by an adapter for
+//! the llaundry library, replacing the direct `llaundry_core` paths below.
 
 pub mod backend;
 pub mod config;
+pub mod harness;
+pub mod protocol;
+pub mod review;
 
 pub use config::{Config, CONFIG_FILE};
 
-use llaundry_core::{
-    blob_id, ArtifactRef, Author, DefinitionVersion, ProducerEvidence, ResultRecord, ResultVersion,
-};
+use llaundry::store::blob_id;
+use llaundry::{ArtifactRef, Author, DefinitionVersion, ProducerEvidence, ResultMeta as ResultRecord, ResultVersion};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 

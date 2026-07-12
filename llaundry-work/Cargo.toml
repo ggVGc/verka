@@ -1,0 +1,30 @@
+# PARKED: this project is not expected to build yet. It holds everything
+# execution- and review-related while llaundry itself stays a small,
+# self-contained library + CLI. See README.md.
+
+[package]
+name = "llaundry-work"
+version = "0.1.0"
+edition = "2021"
+description = "Execution harness/orchestrator for llaundry task graphs (parked)"
+
+[[bin]]
+name = "llaundry-work"
+path = "src/bin/llaundry-work.rs"
+
+[[bin]]
+name = "llaundry-exec"
+path = "src/bin/llaundry-exec.rs"
+
+[[bin]]
+name = "llaundry-review"
+path = "src/bin/llaundry-review.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive", "env"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+ulid = "1"
+llaundry = { path = "../llaundry" }

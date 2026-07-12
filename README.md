@@ -1,78 +1,25 @@
 # llaundry
 Hierarchical LLM coding
 
-## Applications
+## Projects
 
-The workspace is deliberately split into three applications:
+Three separate, self-contained projects live in this repository:
 
-- `llaundry-core` is the review- and execution-agnostic node graph, artifact
-  contract, and derived status/staleness logic.
-- `llaundry-work` owns execution records, isolated agent backends, transcripts,
-  and workspace contracts.
-- `llaundry-review` owns immutable candidates, decisions, and publication
-  contracts. Its `llaundry-review` binary can be used with candidates from any
-  work/state provider.
+- `llaundry/` — the core: a git-versioned graph of work nodes, as a library
+  and the `llaundry` CLI. Definitions and results are plain TOML/Markdown
+  files; status, readiness, and staleness are always derived, never stored.
+  Self-contained; agents drive it through the CLI.
+- `llaundry-viz/` — a small web server that visualises a llaundry node graph.
+  Depends only on the `llaundry` library.
+- `llaundry-work/` — the execution harness/orchestrator (durable attempts,
+  isolated worktrees, LLM backends, review-gated publication). **Parked**: it
+  does not build yet. The plan is a task-store trait implemented by an
+  adapter for llaundry; see `llaundry-work/README.md`.
 
-They exchange versioned serializable records through interfaces defined by the
-owning crate. See `designs/SEPARATE_APPLICATIONS.md` for the dependency rules
-and persistence ownership.
+Each project builds on its own (`cargo build` inside its directory); there is
+no shared workspace.
 
-`llaundry-core` also exposes its graph through versioned JSON-lines on stdin
-and stdout. For example:
-
-```text
-printf '%s\n' '{"schema":1,"payload":{"operation":"list"}}' |
-  llaundry-core --store .llaundry
-```
-
-`llaundry-exec --store <execution-store> --repository <git-repo>` accepts the
-versioned `llaundry-work::Request` JSON envelope and prepares isolated candidate
-worktrees without requiring a llaundry graph. A different scheduler or state
-database can therefore use the same worktree/backend implementation through
-the `WorkProvider`, `AttemptStore`, and `WorkspaceManager` interfaces.
-
-## Review-gated candidate workflow
-
-Before changing the project, `llaundry-work <node>` commits a durable execution
-record under `.llaundry/execution/<attempt-id>/`. It then creates a permanent
-`llaundry/candidates/<attempt-id>` branch and performs the work in its linked
-worktree. Results and transcripts are stored with that exact attempt, so an
-older node result cannot be mistaken for newer work and interrupted preparation
-can be recovered. A project-producing completion is not merged automatically. Llaundry
-creates a human-assigned review node that pins the exact candidate branch and
-commit.
-
-The integrated frontend records the candidate and decision in
-`.llaundry/reviews/<review-id>/`. The standalone equivalent is:
-
-```text
-llaundry-review --store .llaundry add candidate-id \
-  --subject external-work-id --attempt attempt-id --branch candidate-branch \
-  --result-metadata result-version --artifact commit
-llaundry-review --store .llaundry reject candidate-id --notes "revise this"
-llaundry-review --store .llaundry show candidate-id
-```
-
-Inspect it with `llaundry show <review-node>`. To propose edits during review,
-run `llaundry edit-review <review-node>` and commit changes in the printed
-review worktree. Close the review with one of:
-
-```text
-llaundry accept-review <review-node>
-llaundry reject-review <review-node> --notes "what needs to change"
-```
-
-Acceptance fast-forwards `main` to exactly the reviewed commit. If that is no
-longer possible, the candidate must be reconciled as new implementation work
-and reviewed again. Rejection makes the implementation available for another
-attempt; its worker receives the review comments and starts from the proposed
-review edits when they exist, otherwise from the rejected candidate.
-
-Acceptance is journaled before `main` moves. If it is interrupted, resume it
-with `llaundry recover-publication <review-node>`. Review edit worktrees can be
-inspected with `llaundry review-workspace <review-node>` and clean, closed ones
-removed with `llaundry cleanup-review <review-node>`.
-
+## Notes
 
 - All edits and interaction with project are done through MCP which understands the hierarchical layout
 - Structure is based on a tree of:

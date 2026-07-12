@@ -10,7 +10,7 @@ use std::io;
 use std::path::PathBuf;
 
 use llaundry::ops::{self, NewNode};
-use llaundry::{Author, DepKind, GitVcs, ReviewDecision, Store};
+use llaundry::{Author, DepKind, GitVcs, Store};
 
 #[derive(Parser)]
 #[command(
@@ -117,47 +117,6 @@ enum Cmd {
         author: Author,
     },
 
-    /// Accept an exact reviewed candidate and fast-forward it into the target.
-    AcceptReview {
-        id: String,
-        #[arg(long, default_value = "main")]
-        target: String,
-        #[arg(long)]
-        notes: Option<String>,
-        #[arg(long, conflicts_with = "notes")]
-        notes_file: Option<PathBuf>,
-    },
-
-    /// Reject a reviewed candidate with comments, permitting another attempt.
-    RejectReview {
-        id: String,
-        #[arg(long)]
-        notes: Option<String>,
-        #[arg(long, conflicts_with = "notes")]
-        notes_file: Option<PathBuf>,
-        /// Optional branch containing reviewer-proposed edits.
-        #[arg(long, requires = "suggestion_commit")]
-        suggestion_branch: Option<String>,
-        /// Exact tip of --suggestion-branch.
-        #[arg(long, requires = "suggestion_branch")]
-        suggestion_commit: Option<String>,
-    },
-
-    /// Create a review branch and worktree for proposed edits.
-    EditReview { id: String },
-
-    /// Show whether a review has an editable worktree and whether it is clean.
-    ReviewWorkspace { id: String },
-
-    /// Remove a clean worktree belonging to a closed review.
-    CleanupReview { id: String },
-
-    /// Recover safe incomplete phases of a durable execution attempt.
-    RecoverAttempt { id: String },
-
-    /// Recover a review acceptance interrupted while publishing to its target.
-    RecoverPublication { id: String },
-
     /// Show a node: definition, derived status, result, and staleness reasons.
     Show { id: String },
 
@@ -241,12 +200,6 @@ fn main() -> Result<()> {
                 println!(
                     "initialised project repository at {}",
                     store.project_root().display()
-                );
-            }
-            if initialized.created_config {
-                println!(
-                    "wrote default config to {} (edit it to change backend/model defaults)",
-                    store.root().join(llaundry::CONFIG_FILE).display()
                 );
             }
             println!(
@@ -346,109 +299,6 @@ fn main() -> Result<()> {
             println!("{id}  failed");
         }
 
-        Cmd::AcceptReview {
-            id,
-            target,
-            notes,
-            notes_file,
-        } => {
-            let store = Store::open(store)?;
-            let vcs = GitVcs::for_store(&store);
-            let notes = resolve_notes(notes, notes_file, &store, &id, "review notes (optional)")?;
-            ops::decide_review(
-                &store,
-                &vcs,
-                &id,
-                ReviewDecision::Accepted,
-                &notes,
-                &target,
-                None,
-                None,
-            )?;
-            println!("{id}  accepted and integrated into {target}");
-        }
-
-        Cmd::RejectReview {
-            id,
-            notes,
-            notes_file,
-            suggestion_branch,
-            suggestion_commit,
-        } => {
-            let store = Store::open(store)?;
-            let vcs = GitVcs::for_store(&store);
-            let notes = resolve_notes(
-                notes,
-                notes_file,
-                &store,
-                &id,
-                "why is this candidate rejected?",
-            )?;
-            ops::decide_review(
-                &store,
-                &vcs,
-                &id,
-                ReviewDecision::Rejected,
-                &notes,
-                "main",
-                suggestion_branch,
-                suggestion_commit,
-            )?;
-            println!("{id}  rejected");
-        }
-
-        Cmd::EditReview { id } => {
-            let store = Store::open(store)?;
-            let vcs = GitVcs::for_store(&store);
-            let workspace = ops::prepare_review_edits(&store, &vcs, &id)?;
-            println!("review branch: {}", workspace.branch);
-            println!("review worktree: {}", workspace.path.display());
-            println!("commit proposed edits, then reject with --suggestion-branch {} --suggestion-commit <commit>", workspace.branch);
-        }
-
-        Cmd::ReviewWorkspace { id } => {
-            let store = Store::open(store)?;
-            let vcs = GitVcs::for_store(&store);
-            let status = ops::review_workspace_status(&store, &vcs, &id)?;
-            println!("review branch: {}", status.branch);
-            println!("review worktree: {}", status.path.display());
-            println!(
-                "state: {}",
-                match (status.exists, status.clean) {
-                    (false, _) => "not-created",
-                    (true, Some(true)) => "clean",
-                    (true, Some(false)) => "dirty",
-                    _ => "unknown",
-                }
-            );
-        }
-
-        Cmd::CleanupReview { id } => {
-            let store = Store::open(store)?;
-            let vcs = GitVcs::for_store(&store);
-            if ops::cleanup_review_workspace(&store, &vcs, &id)? {
-                println!("removed review worktree for {id}");
-            } else {
-                println!("review {id} has no worktree");
-            }
-        }
-
-        Cmd::RecoverAttempt { id } => {
-            let store = Store::open(store)?;
-            let vcs = GitVcs::for_store(&store);
-            match ops::recover_attempt(&store, &vcs, &id)? {
-                Some(review) => println!("recovered attempt {id}; review {review}"),
-                None => println!("recovered attempt {id}"),
-            }
-        }
-
-        Cmd::RecoverPublication { id } => {
-            let store = Store::open(store)?;
-            let vcs = GitVcs::for_store(&store);
-            ops::recover_publication(&store, &vcs, &id)?;
-            println!("recovered publication for review {id}");
-        }
-
         Cmd::Show { id } => {
             let store = Store::open(store)?;
             let vcs = GitVcs::for_store(&store);
@@ -459,7 +309,7 @@ fn main() -> Result<()> {
             let store = Store::open(store)?;
             for id in store.list_ids()? {
                 let (_, description) = store.read_node(&id)?;
-                let status = ops::node_state(&store, &id);
+                let status = ops::current_status(&store, &id);
                 println!(
                     "{:<32} {:<8} {}",
                     id,
@@ -637,14 +487,14 @@ fn pairing_line(pairing: &llaundry::Pairing) -> String {
     line
 }
 
-/// The `show` view, shared in spirit with the MCP server's `show_node`.
+/// The `show` view.
 fn show_node(store: &Store, vcs: &GitVcs, id: &str) -> Result<String> {
     let (meta, description) = store.read_node(id)?;
     let mut out = String::new();
     use std::fmt::Write;
 
     writeln!(out, "id:      {id}")?;
-    writeln!(out, "status:  {}", ops::node_state(store, id).as_str())?;
+    writeln!(out, "status:  {}", ops::current_status(store, id).as_str())?;
     writeln!(out, "author:  {}", meta.author.as_str())?;
     if let Some(assignee) = meta.assignee {
         writeln!(out, "assignee: {}", assignee.as_str())?;
@@ -660,41 +510,16 @@ fn show_node(store: &Store, vcs: &GitVcs, id: &str) -> Result<String> {
     for src in &meta.derived_from {
         writeln!(out, "derived_from: {src}")?;
     }
-    let review = ops::review_info(store, id)?;
-    if let Some(review) = &review {
-        writeln!(out, "review_of: {}", review.subject)?;
-        writeln!(out, "candidate_branch: {}", review.branch)?;
-        writeln!(out, "candidate_commit: {}", review.candidate_commit)?;
-    }
 
     if let Some((result, notes)) = store.read_result(id)? {
         writeln!(out, "result:")?;
         writeln!(out, "  outcome: {}", result.outcome.as_str())?;
         writeln!(out, "  author:  {}", result.author.as_str())?;
-        if let Some(wb) = ops::worked_by(&result) {
-            match &wb.model {
-                Some(m) => writeln!(out, "  worked by: {} ({m})", wb.backend)?,
-                None => writeln!(out, "  worked by: {}", wb.backend)?,
-            }
+        if let Some(producer) = &result.producer {
+            writeln!(out, "  producer: {} {}", producer.namespace, producer.data)?;
         }
         if let Some(commit) = ops::output_commit(&result) {
             writeln!(out, "  output:  commit {}", ops::short(commit))?;
-        }
-        if let Some(review) = &review {
-            if let Some(decision) = review.decision {
-                writeln!(out, "  review:  {:?}", decision)?;
-            }
-            if let Some(branch) = &review.suggestion_branch {
-                writeln!(
-                    out,
-                    "  suggestions: {branch} @ {}",
-                    review
-                        .suggestion_commit
-                        .as_deref()
-                        .map(ops::short)
-                        .unwrap_or("missing")
-                )?;
-            }
         }
         for ba in &result.consumed {
             let result_pin = ba

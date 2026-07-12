@@ -11,10 +11,11 @@
 //!     result.toml     structured completion record (optional)
 //!     result.md       completion narrative (optional)
 //!     work.jsonl      recorded interaction log of work sessions (optional)
-//!   execution/<id>/   execution application (`llaundry_work::FsAttemptStore`)
-//!   reviews/<id>/     review application (`llaundry_review::FsCandidateStore`)
-//!   publications/<id>/ review publisher transaction log (same store)
 //! ```
+//!
+//! Applications layered on top (execution harnesses, review tools) may keep
+//! their own namespaces beside `nodes/`; this library neither reads nor
+//! interprets them.
 //!
 //! There is no object store, no refs, and no status log: git is the only
 //! versioning layer. A node's version is the pair of Git blob ids for
@@ -35,28 +36,26 @@
 //! graph says it is without any deny rules.
 
 use anyhow::{bail, Context, Result};
+use sha1::{Digest, Sha1};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::model::{DefinitionVersion, NodeMeta, ResultMeta, ResultVersion};
 
-pub use llaundry_core::blob_id;
+/// Git's blob id for `bytes`, computed locally so version identity needs no
+/// git invocation.
+pub fn blob_id(bytes: &[u8]) -> String {
+    let mut hash = Sha1::new();
+    hash.update(format!("blob {}\0", bytes.len()).as_bytes());
+    hash.update(bytes);
+    format!("{:x}", hash.finalize())
+}
 
 /// The project directory inside a workbench, beside the store.
 pub const PROJECT_DIR: &str = "project";
 
 pub struct Store {
     root: PathBuf,
-}
-
-pub struct ExecutionLock {
-    path: PathBuf,
-}
-
-impl Drop for ExecutionLock {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir(&self.path);
-    }
 }
 
 impl Store {
@@ -201,21 +200,6 @@ impl Store {
             metadata: blob_id(&metadata),
             notes,
         })
-    }
-
-    /// Serialize the short authorization-and-recording phase for one logical
-    /// node. The directory creation is atomic across processes.
-    pub fn lock_execution(&self, node: &str) -> Result<ExecutionLock> {
-        let name = blob_id(node.as_bytes());
-        let path = self.root.join("locks/executions").join(name);
-        fs::create_dir_all(path.parent().expect("lock has parent"))?;
-        match fs::create_dir(&path) {
-            Ok(()) => Ok(ExecutionLock { path }),
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                bail!("another process is starting work on node `{node}`")
-            }
-            Err(e) => Err(e).with_context(|| format!("locking execution of `{node}`")),
-        }
     }
 
     // --- work.jsonl (the interaction log) ----------------------------------------

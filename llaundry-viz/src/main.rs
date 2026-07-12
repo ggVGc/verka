@@ -190,9 +190,13 @@ fn graph_json(store: &Store, vcs: &dyn Vcs) -> Result<Value> {
                 "author": r.author.as_str(),
                 "outcome": r.outcome.as_str(),
                 "output_commit": ops::output_commit(&r),
-                "worked_by": ops::worked_by(&r).map(|wb| json!({
-                    "backend": wb.backend, "model": wb.model,
-                })),
+                // Producer evidence is namespaced application data (e.g. an
+                // execution harness records backend/model); pass it through.
+                "worked_by": r.producer.as_ref().and_then(|p| {
+                    p.data.get("backend").map(|backend| json!({
+                        "backend": backend, "model": p.data.get("model"),
+                    }))
+                }),
                 "built_against": r.consumed.iter().map(|ba| json!({
                     "id": ba.id,
                     "pin": ops::short_definition(&ba.definition),

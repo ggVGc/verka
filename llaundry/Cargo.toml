@@ -1,0 +1,22 @@
+[package]
+name = "llaundry"
+version = "0.1.0"
+edition = "2021"
+description = "A git-versioned graph of LLM-development nodes: library and CLI"
+
+[lib]
+name = "llaundry"
+path = "src/lib.rs"
+
+[[bin]]
+name = "llaundry"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive", "env"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha1 = "0.10"
+toml = "0.8"
+ulid = "1"
