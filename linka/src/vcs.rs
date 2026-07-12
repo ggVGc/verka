@@ -89,6 +89,7 @@ pub struct FakeVcs {
     pub next_id: String,
     pub dirty: Vec<String>,
     pub drift_for: std::collections::HashMap<String, String>,
+    pub drift_error: Option<String>,
     pub captured: std::cell::RefCell<Vec<Vec<String>>>,
     pub store_commits: std::cell::RefCell<usize>,
     pub files_for: std::cell::RefCell<std::collections::HashMap<String, Vec<String>>>,
@@ -144,6 +145,9 @@ impl Vcs for FakeVcs {
     }
 
     fn drift(&self, id: &str) -> Result<Option<String>> {
+        if let Some(error) = &self.drift_error {
+            anyhow::bail!("{error}");
+        }
         Ok(self.drift_for.get(id).cloned())
     }
 

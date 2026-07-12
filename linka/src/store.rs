@@ -283,9 +283,13 @@ impl Store {
     }
 }
 
-/// The blob id of a file on disk, or `None` if it does not exist.
-pub fn file_blob(path: &Path) -> Option<String> {
-    fs::read(path).ok().map(|bytes| blob_id(&bytes))
+/// The blob id of a file on disk, or `None` only when it is proven absent.
+pub fn file_blob(path: &Path) -> Result<Option<String>> {
+    match fs::read(path) {
+        Ok(bytes) => Ok(Some(blob_id(&bytes))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error).with_context(|| format!("reading context {}", path.display())),
+    }
 }
 
 #[cfg(test)]

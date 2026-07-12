@@ -77,24 +77,24 @@ Tests:
 
 ## 4. Stop converting failures into graph facts
 
-- [ ] Change derived queries to return `Result`.
-- [ ] Distinguish legitimate absence, staleness, corruption, and backend
+- [x] Change derived queries to return `Result`.
+- [x] Distinguish legitimate absence, staleness, corruption, and backend
   failure.
-- [ ] Treat a missing context file as staleness, but a permission or I/O error
+- [x] Treat a missing context file as staleness, but a permission or I/O error
   as an error.
-- [ ] Treat a proven-missing artifact as staleness, but an artifact-backend
+- [x] Treat a proven-missing artifact as staleness, but an artifact-backend
   failure as an error.
-- [ ] Update list-oriented CLI commands to report per-node errors and exit
+- [x] Update list-oriented CLI commands to report per-node errors and exit
   nonzero if any node could not be evaluated.
-- [ ] Ensure `stale`, `ready`, and `blocked` never print a clean result after
+- [x] Ensure `stale`, `ready`, and `blocked` never print a clean result after
   silently skipping errors.
 
 Tests:
 
-- [ ] Malformed definitions and results are not reported as open or ready.
-- [ ] Context read failures are not reported as missing files.
-- [ ] Artifact lookup failures are not reported as drift or absence.
-- [ ] A missing target node is distinguished from an unreadable target node.
+- [x] Malformed definitions and results are not reported as open or ready.
+- [x] Context read failures are not reported as missing files.
+- [x] Artifact lookup failures are not reported as drift or absence.
+- [x] A missing target node is distinguished from an unreadable target node.
 
 ## 5. Add validated graph identifiers and project paths
 

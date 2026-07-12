@@ -270,7 +270,7 @@ pub fn amend_context(store: &Store, vcs: &dyn Vcs, id: &str, reads: &[String]) -
         if pinned.contains(path) || node_outputs.contains(path) {
             continue;
         }
-        let Some(blob) = vcs.file_blob(path)?.or_else(|| file_blob(&root.join(path))) else {
+        let Some(blob) = vcs.file_blob(path)?.or(file_blob(&root.join(path))?) else {
             continue;
         };
         pinned.insert(path.clone());
@@ -409,7 +409,7 @@ fn staleness_for_result(
     }
     let root = store.project_root();
     for pin in &result.context {
-        match file_blob(&root.join(&pin.path)) {
+        match file_blob(&root.join(&pin.path))? {
             Some(now) if now != pin.identity => reasons.push(StalenessReason::ContextChanged {
                 path: pin.path.clone(),
             }),
@@ -836,7 +836,11 @@ fn pin_deps(store: &Store, meta: &NodeMeta) -> Result<Vec<ConsumedNode>> {
             let definition = store
                 .node_version(dep)
                 .with_context(|| format!("cannot pin unknown dependency `{dep}`"))?;
-            let result = store.result_version(dep).ok();
+            let result = store
+                .read_result(dep)?
+                .is_some()
+                .then(|| store.result_version(dep))
+                .transpose()?;
             Ok(ConsumedNode {
                 id: dep.clone(),
                 definition,
@@ -855,7 +859,7 @@ fn pin_context(store: &Store, vcs: &dyn Vcs, paths: &[String]) -> Result<Vec<Con
         .map(|path| {
             let blob = vcs
                 .file_blob(path)?
-                .or_else(|| file_blob(&root.join(path)))
+                .or(file_blob(&root.join(path))?)
                 .with_context(|| format!("cannot pin `{path}`: file not found"))?;
             Ok(ContextPin {
                 path: path.clone(),
@@ -1297,6 +1301,81 @@ mod tests {
             [StalenessReason::OutputDrifted { .. }]
         ));
         assert!(node_state(&store, &fake, &id).unwrap().is_ready());
+    }
+
+    #[test]
+    fn state_errors_are_not_converted_to_graph_facts() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs::default();
+        let malformed = add(&store, &fake, new_node("malformed", vec![])).unwrap();
+        std::fs::write(store.node_dir(&malformed).join("node.toml"), "not = [toml").unwrap();
+        assert!(node_state(&store, &fake, &malformed).is_err());
+        assert!(is_ready(&store, &fake, &malformed).is_err());
+
+        let bad_result = add(&store, &fake, new_node("bad result", vec![])).unwrap();
+        std::fs::write(
+            store.node_dir(&bad_result).join("result.toml"),
+            "outcome = ???",
+        )
+        .unwrap();
+        assert!(node_state(&store, &fake, &bad_result).is_err());
+
+        let target = add(&store, &fake, new_node("target", vec![])).unwrap();
+        let consumer = add(&store, &fake, new_node("consumer", vec![target.clone()])).unwrap();
+        std::fs::remove_dir_all(store.node_dir(&target)).unwrap();
+        assert_eq!(
+            node_state(&store, &fake, &consumer).unwrap().blockers,
+            vec![Blocker {
+                id: target.clone(),
+                reason: BlockerReason::Missing,
+            }]
+        );
+        std::fs::create_dir_all(store.node_dir(&target)).unwrap();
+        std::fs::write(store.node_dir(&target).join("node.toml"), "not = [toml").unwrap();
+        std::fs::write(store.node_dir(&target).join("description.md"), "target").unwrap();
+        assert!(node_state(&store, &fake, &consumer).is_err());
+    }
+
+    #[test]
+    fn context_and_artifact_inspection_failures_are_errors() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs::default();
+        let context_node = add(&store, &fake, new_node("context", vec![])).unwrap();
+        std::fs::write(store.project_root().join("input"), "content").unwrap();
+        complete(
+            &store,
+            &fake,
+            &context_node,
+            &[],
+            &["input".into()],
+            None,
+            "",
+            Author::Human,
+        )
+        .unwrap();
+        std::fs::remove_file(store.project_root().join("input")).unwrap();
+        std::fs::create_dir(store.project_root().join("input")).unwrap();
+        assert!(node_state(&store, &fake, &context_node).is_err());
+
+        let failing_vcs = FakeVcs {
+            next_id: "output".into(),
+            drift_error: Some("artifact backend unavailable".into()),
+            ..Default::default()
+        };
+        let output_node = add(&store, &failing_vcs, new_node("output", vec![])).unwrap();
+        complete(
+            &store,
+            &failing_vcs,
+            &output_node,
+            &["out".into()],
+            &[],
+            None,
+            "",
+            Author::Human,
+        )
+        .unwrap();
+        let error = node_state(&store, &failing_vcs, &output_node).unwrap_err();
+        assert!(format!("{error:#}").contains("artifact backend unavailable"));
     }
 
     #[test]

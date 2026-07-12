@@ -309,9 +309,24 @@ fn main() -> Result<()> {
         Cmd::List => {
             let store = Store::open(store)?;
             let vcs = GitVcs::for_store(&store);
+            let mut errors = 0;
             for id in store.list_ids()? {
-                let (_, description) = store.read_node(&id)?;
-                let state = ops::node_state(&store, &vcs, &id)?;
+                let (_, description) = match store.read_node(&id) {
+                    Ok(node) => node,
+                    Err(error) => {
+                        report_node_error(&id, &error);
+                        errors += 1;
+                        continue;
+                    }
+                };
+                let state = match ops::node_state(&store, &vcs, &id) {
+                    Ok(state) => state,
+                    Err(error) => {
+                        report_node_error(&id, &error);
+                        errors += 1;
+                        continue;
+                    }
+                };
                 println!(
                     "{:<32} {:<8} {}",
                     id,
@@ -319,6 +334,7 @@ fn main() -> Result<()> {
                     linka::title_of(&description)
                 );
             }
+            finish_node_queries(errors)?;
         }
 
         Cmd::Log { id } => {
@@ -344,8 +360,16 @@ fn main() -> Result<()> {
             let store = Store::open(store)?;
             let vcs = GitVcs::for_store(&store);
             let mut found = false;
+            let mut errors = 0;
             for id in store.list_ids()? {
-                let reasons = ops::staleness(&store, &vcs, &id)?;
+                let reasons = match ops::staleness(&store, &vcs, &id) {
+                    Ok(reasons) => reasons,
+                    Err(error) => {
+                        report_node_error(&id, &error);
+                        errors += 1;
+                        continue;
+                    }
+                };
                 if !reasons.is_empty() {
                     found = true;
                     println!("{id}:");
@@ -354,26 +378,56 @@ fn main() -> Result<()> {
                     }
                 }
             }
-            if !found {
+            if !found && errors == 0 {
                 println!("all nodes up to date");
             }
+            finish_node_queries(errors)?;
         }
 
         Cmd::Ready { assignee } => {
             let store = Store::open(store)?;
             let vcs = GitVcs::for_store(&store);
-            for id in ops::ready_nodes(&store, &vcs, assignee)? {
-                let (_, description) = store.read_node(&id)?;
-                println!("{:<32} {}", id, linka::title_of(&description));
+            let mut errors = 0;
+            for id in store.list_ids()? {
+                let (meta, description) = match store.read_node(&id) {
+                    Ok(node) => node,
+                    Err(error) => {
+                        report_node_error(&id, &error);
+                        errors += 1;
+                        continue;
+                    }
+                };
+                match ops::node_state(&store, &vcs, &id) {
+                    Ok(state)
+                        if state.is_ready()
+                            && !matches!((assignee, meta.assignee), (Some(want), Some(has)) if want != has) =>
+                    {
+                        println!("{:<32} {}", id, linka::title_of(&description));
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        report_node_error(&id, &error);
+                        errors += 1;
+                    }
+                }
             }
+            finish_node_queries(errors)?;
         }
 
         Cmd::Blocked => {
             let store = Store::open(store)?;
             let vcs = GitVcs::for_store(&store);
             let mut any = false;
+            let mut errors = 0;
             for id in store.list_ids()? {
-                let blockers = ops::blockers(&store, &vcs, &id)?;
+                let blockers = match ops::blockers(&store, &vcs, &id) {
+                    Ok(blockers) => blockers,
+                    Err(error) => {
+                        report_node_error(&id, &error);
+                        errors += 1;
+                        continue;
+                    }
+                };
                 if !blockers.is_empty() {
                     any = true;
                     println!("{id}:");
@@ -382,9 +436,10 @@ fn main() -> Result<()> {
                     }
                 }
             }
-            if !any {
+            if !any && errors == 0 {
                 println!("nothing blocked");
             }
+            finish_node_queries(errors)?;
         }
 
         Cmd::Origin { commit } => {
@@ -487,6 +542,17 @@ fn pairing_line(pairing: &linka::Pairing) -> String {
         line.push_str(&format!(", remote {remote}"));
     }
     line
+}
+
+fn report_node_error(id: &str, error: &anyhow::Error) {
+    eprintln!("{id}: error: {error:#}");
+}
+
+fn finish_node_queries(errors: usize) -> Result<()> {
+    if errors > 0 {
+        anyhow::bail!("could not evaluate {errors} node(s)");
+    }
+    Ok(())
 }
 
 fn state_label(state: &NodeState) -> &'static str {

@@ -141,7 +141,7 @@ impl Vcs for GitVcs {
         Ok(())
     }
     fn file_blob(&self, path: &str) -> Result<Option<String>> {
-        Ok(crate::store::file_blob(&self.project.join(path)))
+        crate::store::file_blob(&self.project.join(path))
     }
     fn commit_store(&self, path: &str, message: &str) -> Result<()> {
         commit_path(&self.workbench, path, message)
