@@ -4,6 +4,9 @@ The execution harness / orchestrator for llaundry task graphs. This project
 collects everything execution- and review-related that used to be woven
 through the composed llaundry workspace:
 
+The intended architecture, including its attempt-scoped MCP server and
+capability model, is recorded in [DESIGN.md](DESIGN.md).
+
 * `src/lib.rs`, `src/config.rs`, `src/backend*` — the former
   `crates/llaundry-work` crate: durable execution attempts, worktree
   workspaces, backends (`claude`, `codex`), driver config.
