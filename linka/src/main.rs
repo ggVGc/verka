@@ -11,7 +11,7 @@ use std::path::PathBuf;
 
 use linka::model::{Blocker, BlockerReason, NodeState, StalenessReason};
 use linka::ops::{self, NewNode};
-use linka::{Author, DepKind, GitVcs, Store};
+use linka::{Author, DepKind, GitVcs, NodeId, ProjectPath, Store};
 
 #[derive(Parser)]
 #[command(
@@ -53,18 +53,18 @@ enum Cmd {
         assignee: Option<Author>,
         /// Another node this one depends on (repeatable), by id.
         #[arg(long = "depends-on")]
-        depends_on: Vec<String>,
+        depends_on: Vec<NodeId>,
         /// Another node this one is derived from (repeatable), by id.
         #[arg(long = "derived-from")]
-        derived_from: Vec<String>,
+        derived_from: Vec<NodeId>,
     },
 
     /// Add <to> to one of <from>'s dependency lists (a definition change).
     Link {
         /// Source node (the one that gains the dependency).
-        from: String,
+        from: NodeId,
         /// Target node.
-        to: String,
+        to: NodeId,
         #[arg(long, value_enum, default_value = "depends-on")]
         rel: DepKind,
     },
@@ -72,7 +72,7 @@ enum Cmd {
     /// Edit a node's description (a definition change: reopens a done node
     /// and makes dependents' pins stale).
     Edit {
-        id: String,
+        id: NodeId,
         /// The new description; its first line serves as the title.
         #[arg(long, required_unless_present = "file")]
         description: Option<String>,
@@ -83,15 +83,15 @@ enum Cmd {
     /// Record a node's work as done: commit the produced files as one output
     /// commit, pin what the work was built against, and write its result files.
     Complete {
-        id: String,
+        id: NodeId,
         /// A produced file, relative to the project root (repeatable). May be
         /// omitted entirely for graph-only work that produces no files.
         #[arg(long = "output", short = 'o')]
-        outputs: Vec<PathBuf>,
+        outputs: Vec<ProjectPath>,
         /// A consumed file that is not any node's output (repeatable). Pinned by
         /// content, so a later change to it flags this node.
         #[arg(long = "context", short = 'c')]
-        context: Vec<PathBuf>,
+        context: Vec<ProjectPath>,
         /// Message for the output commit (defaults to the first line of the
         /// node's description).
         #[arg(long, short = 'm')]
@@ -108,7 +108,7 @@ enum Cmd {
 
     /// Record a node's work as failed, with notes on what went wrong.
     Fail {
-        id: String,
+        id: NodeId,
         #[arg(long)]
         notes: Option<String>,
         /// Read the notes from a file instead.
@@ -119,13 +119,13 @@ enum Cmd {
     },
 
     /// Show a node: definition, derived status, result, and staleness reasons.
-    Show { id: String },
+    Show { id: NodeId },
 
     /// List every node with its derived status.
     List,
 
     /// Show a node's git history (every definition and result change).
-    Log { id: String },
+    Log { id: NodeId },
 
     /// Report nodes whose recorded work has been invalidated, with reasons.
     Stale,
@@ -148,10 +148,10 @@ enum Cmd {
     },
 
     /// Show the output commit a node produced, if any.
-    Outputs { id: String },
+    Outputs { id: NodeId },
 
     /// List the nodes that depend on (or derive from) a node.
-    Dependents { id: String },
+    Dependents { id: NodeId },
 
     /// Integrity-check the store (fsck): parse errors, missing edge targets,
     /// duplicates, self-references, and dependency cycles. Exits non-zero if
@@ -160,7 +160,7 @@ enum Cmd {
 
     /// Check whether a node is settled: done, not stale, and all work derived
     /// from it (transitively) also done and not stale. Exits non-zero if not.
-    Settled { id: String },
+    Settled { id: NodeId },
 
     /// Record which project repository this store describes, keyed by the
     /// project's root commit — or, with --verify, check the recorded pairing.
@@ -234,8 +234,8 @@ fn main() -> Result<()> {
                     description: read_description(description, file)?,
                     author,
                     assignee,
-                    depends_on,
-                    derived_from,
+                    depends_on: depends_on.into_iter().map(Into::into).collect(),
+                    derived_from: derived_from.into_iter().map(Into::into).collect(),
                 },
             )?;
             println!("{id}");
@@ -767,11 +767,8 @@ fn read_description(description: Option<String>, file: Option<PathBuf>) -> Resul
 }
 
 /// Convert CLI path arguments to project-root-relative strings.
-fn to_strings(paths: &[PathBuf]) -> Vec<String> {
-    paths
-        .iter()
-        .map(|p| p.to_string_lossy().into_owned())
-        .collect()
+fn to_strings(paths: &[ProjectPath]) -> Vec<String> {
+    paths.iter().map(ToString::to_string).collect()
 }
 
 #[cfg(test)]

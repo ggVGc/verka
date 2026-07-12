@@ -98,22 +98,22 @@ Tests:
 
 ## 5. Add validated graph identifiers and project paths
 
-- [ ] Introduce `NodeId` and `ProjectPath` newtypes.
-- [ ] Reject empty, absolute, traversal, control-character, and platform-prefix
+- [x] Introduce `NodeId` and `ProjectPath` newtypes.
+- [x] Reject empty, absolute, traversal, control-character, and platform-prefix
   forms.
-- [ ] Define whether `.git` paths are always forbidden; default to forbidding
+- [x] Define whether `.git` paths are always forbidden; default to forbidding
   them.
-- [ ] Normalize portable path separators before persistence.
-- [ ] Validate values at CLI parsing, public library entry points,
+- [x] Normalize portable path separators before persistence.
+- [x] Validate values at CLI parsing, public library entry points,
   deserialization, and store directory discovery.
-- [ ] Prevent symlink-based escape when reading working-tree files, or avoid it
+- [x] Prevent symlink-based escape when reading working-tree files, or avoid it
   by resolving context through repository objects.
 
 Tests:
 
-- [ ] Reject `..`, `../secret`, absolute paths, backslash traversal, `.git`
+- [x] Reject `..`, `../secret`, absolute paths, backslash traversal, `.git`
   internals, and symlinks escaping the project root.
-- [ ] Accept valid node IDs and nested project-relative paths.
+- [x] Accept valid node IDs and nested project-relative paths.
 
 ## 6. Expand `linka check` into semantic fsck
 

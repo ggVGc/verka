@@ -89,6 +89,14 @@ Definitions and results are never overwritten as hidden mutable state. Stored
 facts are minimal; readiness, blockers, dependents, provenance, and staleness
 are computed from them.
 
+Node identifiers are single portable path components. Project paths are
+normalized to `/` separators and are always relative to the paired project
+root. Empty components, absolute and platform-prefixed paths, traversal,
+control characters, and any `.git` component are invalid. `.git` is forbidden
+without exception so graph input and output paths cannot address repository
+internals. Working-tree reads must also reject symlinks that resolve outside
+the project root.
+
 ## Interfaces
 
 The Rust library is the reference interface. The `linka` CLI exposes the same

@@ -82,8 +82,18 @@ pub fn add(store: &Store, vcs: &dyn Vcs, new: NewNode) -> Result<String> {
         schema: 1,
         author: new.author,
         assignee: new.assignee,
-        depends_on: new.depends_on,
-        derived_from: new.derived_from,
+        depends_on: new
+            .depends_on
+            .into_iter()
+            .map(|id| id.parse())
+            .collect::<std::result::Result<_, String>>()
+            .map_err(anyhow::Error::msg)?,
+        derived_from: new
+            .derived_from
+            .into_iter()
+            .map(|id| id.parse())
+            .collect::<std::result::Result<_, String>>()
+            .map_err(anyhow::Error::msg)?,
         extensions: Default::default(),
     };
     store.write_node(&id, &meta, &new.description)?;
@@ -105,10 +115,10 @@ pub fn link(store: &Store, vcs: &dyn Vcs, from: &str, to: &str, kind: DepKind) -
         DepKind::DependsOn => &mut meta.depends_on,
         DepKind::DerivedFrom => &mut meta.derived_from,
     };
-    if edges.iter().any(|id| id == to) {
+    if edges.iter().any(|id| id.as_str() == to) {
         bail!("duplicate edge");
     }
-    edges.push(to.into());
+    edges.push(to.parse().map_err(anyhow::Error::msg)?);
     store.write_node(from, &meta, &description)?;
     vcs.commit_store(&store.store_name(), &format!("linka: link {from} -> {to}"))?;
     Ok(())
@@ -142,9 +152,17 @@ pub fn complete(
     notes: &str,
     author: Author,
 ) -> Result<Option<String>> {
+    let outputs: Vec<String> = outputs
+        .iter()
+        .map(|path| {
+            path.parse::<crate::model::ProjectPath>()
+                .map(|path| path.to_string())
+                .map_err(anyhow::Error::msg)
+        })
+        .collect::<Result<_>>()?;
     // The only uncommitted project changes allowed are the outputs we are about
     // to commit — completion is where output provenance is asserted.
-    require_clean_except(vcs, outputs)?;
+    require_clean_except(vcs, &outputs)?;
     let (meta, description) = store.read_node(id)?;
 
     let input_commit = vcs.head_commit()?;
@@ -161,7 +179,7 @@ pub fn complete(
         if let Some(input) = &input_commit {
             commit_message.push_str(&format!("\nLinka-Input: {input}"));
         }
-        let commit = vcs.capture(outputs, &commit_message)?;
+        let commit = vcs.capture(&outputs, &commit_message)?;
         vcs.retain_output(id, &commit)?;
         Some(commit)
     };
@@ -264,18 +282,22 @@ pub fn amend_context(store: &Store, vcs: &dyn Vcs, id: &str, reads: &[String]) -
 
     let root = store.project_root();
     let mut pinned: std::collections::HashSet<String> =
-        result.context.iter().map(|p| p.path.clone()).collect();
+        result.context.iter().map(|p| p.path.to_string()).collect();
     let mut added = 0;
     for path in reads {
         if pinned.contains(path) || node_outputs.contains(path) {
             continue;
         }
-        let Some(blob) = vcs.file_blob(path)?.or(file_blob(&root.join(path))?) else {
+        let project_path: crate::model::ProjectPath = path.parse().map_err(anyhow::Error::msg)?;
+        let Some(blob) = vcs
+            .file_blob(project_path.as_str())?
+            .or(project_file_blob(&root, &project_path)?)
+        else {
             continue;
         };
         pinned.insert(path.clone());
         result.context.push(ContextPin {
-            path: path.clone(),
+            path: path.parse().map_err(anyhow::Error::msg)?,
             identity: blob,
             observed: true,
         });
@@ -331,7 +353,7 @@ fn node_state_inner(
         for dependency in &meta.depends_on {
             if !store.exists(dependency) {
                 blockers.push(Blocker {
-                    id: dependency.clone(),
+                    id: dependency.to_string(),
                     reason: BlockerReason::Missing,
                 });
                 continue;
@@ -348,7 +370,7 @@ fn node_state_inner(
                     }
                 };
                 blockers.push(Blocker {
-                    id: dependency.clone(),
+                    id: dependency.to_string(),
                     reason,
                 });
             }
@@ -381,13 +403,13 @@ fn staleness_for_result(
     for consumed in &result.consumed {
         if !store.exists(&consumed.id) {
             reasons.push(StalenessReason::ConsumedNodeMissing {
-                id: consumed.id.clone(),
+                id: consumed.id.to_string(),
             });
             continue;
         }
         if store.node_version(&consumed.id)? != consumed.definition {
             reasons.push(StalenessReason::ConsumedDefinitionChanged {
-                id: consumed.id.clone(),
+                id: consumed.id.to_string(),
             });
         }
         let current_result = store.read_result(&consumed.id)?;
@@ -397,24 +419,24 @@ fn staleness_for_result(
             .transpose()?;
         if current_version != consumed.result {
             reasons.push(StalenessReason::ConsumedResultChanged {
-                id: consumed.id.clone(),
+                id: consumed.id.to_string(),
             });
         }
         let current_output = current_result.and_then(|(r, _)| r.output);
         if current_output != consumed.output {
             reasons.push(StalenessReason::ConsumedOutputChanged {
-                id: consumed.id.clone(),
+                id: consumed.id.to_string(),
             });
         }
     }
     let root = store.project_root();
     for pin in &result.context {
-        match file_blob(&root.join(&pin.path))? {
+        match project_file_blob(&root, &pin.path)? {
             Some(now) if now != pin.identity => reasons.push(StalenessReason::ContextChanged {
-                path: pin.path.clone(),
+                path: pin.path.to_string(),
             }),
             None => reasons.push(StalenessReason::ContextMissing {
-                path: pin.path.clone(),
+                path: pin.path.to_string(),
             }),
             _ => {}
         }
@@ -512,7 +534,7 @@ pub fn dependents(store: &Store, id: &str) -> Result<Vec<String>> {
             .depends_on
             .iter()
             .chain(&meta.derived_from)
-            .any(|d| d == id)
+            .any(|d| d.as_str() == id)
         {
             out.push(other);
         }
@@ -537,7 +559,7 @@ pub fn unsettled(store: &Store, vcs: &dyn Vcs, id: &str) -> Result<Vec<String>> 
     for other in store.list_ids()? {
         let (meta, _) = store.read_node(&other)?;
         for dep in meta.depends_on.iter().chain(&meta.derived_from) {
-            rev.entry(dep.clone()).or_default().push(other.clone());
+            rev.entry(dep.to_string()).or_default().push(other.clone());
         }
     }
 
@@ -601,7 +623,7 @@ pub fn check(store: &Store) -> Result<Vec<String>> {
                 if !seen.insert(dep.as_str()) {
                     problems.push(format!("{id}: duplicate {kind} entry `{dep}`"));
                 }
-                if dep == &id {
+                if dep.as_str() == id {
                     problems.push(format!("{id}: {kind} refers to the node itself"));
                     continue;
                 }
@@ -610,7 +632,7 @@ pub fn check(store: &Store) -> Result<Vec<String>> {
                 }
             }
         }
-        depends_on.insert(id, meta.depends_on);
+        depends_on.insert(id, meta.depends_on.into_iter().map(Into::into).collect());
     }
 
     problems.extend(find_cycles(&depends_on));
@@ -857,17 +879,36 @@ fn pin_context(store: &Store, vcs: &dyn Vcs, paths: &[String]) -> Result<Vec<Con
     paths
         .iter()
         .map(|path| {
+            let path: crate::model::ProjectPath = path.parse().map_err(anyhow::Error::msg)?;
             let blob = vcs
-                .file_blob(path)?
-                .or(file_blob(&root.join(path))?)
+                .file_blob(path.as_str())?
+                .or(project_file_blob(&root, &path)?)
                 .with_context(|| format!("cannot pin `{path}`: file not found"))?;
             Ok(ContextPin {
-                path: path.clone(),
+                path,
                 identity: blob,
                 observed: false,
             })
         })
         .collect()
+}
+
+fn project_file_blob(
+    root: &std::path::Path,
+    path: &crate::model::ProjectPath,
+) -> Result<Option<String>> {
+    let candidate = root.join(path.as_str());
+    match std::fs::canonicalize(&candidate) {
+        Ok(resolved) => {
+            let root = std::fs::canonicalize(root)?;
+            if !resolved.starts_with(&root) {
+                bail!("project path `{path}` escapes the project root through a symlink");
+            }
+            file_blob(&resolved)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error).with_context(|| format!("resolving project path `{path}`")),
+    }
 }
 
 fn git_artifact(commit: &str) -> ArtifactRef {
@@ -1378,6 +1419,30 @@ mod tests {
         assert!(format!("{error:#}").contains("artifact backend unavailable"));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn context_symlink_cannot_escape_project_root() {
+        use std::os::unix::fs::symlink;
+        let (_t, store) = temp_store();
+        let fake = FakeVcs::default();
+        let id = add(&store, &fake, new_node("context", vec![])).unwrap();
+        let outside = store.workbench_root().join("outside-secret");
+        std::fs::write(&outside, "secret").unwrap();
+        symlink(&outside, store.project_root().join("escape")).unwrap();
+        let error = complete(
+            &store,
+            &fake,
+            &id,
+            &[],
+            &["escape".into()],
+            None,
+            "",
+            Author::Human,
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("escapes the project root"));
+    }
+
     #[test]
     fn blockers_follow_dependency_status() {
         let (_t, store) = temp_store();
@@ -1530,7 +1595,7 @@ mod tests {
         assert!(link(&store, &fake, &a, &b, DepKind::DependsOn).is_err());
 
         let (meta, _) = store.read_node(&a).unwrap();
-        assert_eq!(meta.depends_on, vec![b]);
+        assert_eq!(meta.depends_on, vec![b.parse().unwrap()]);
     }
 
     #[test]
@@ -1546,7 +1611,11 @@ mod tests {
         // Damage entered "sideways" (direct writes, as a hand edit or merge would):
         // give `node` a self-reference, a duplicate, and a missing target.
         let (mut meta, body) = store.read_node(&node).unwrap();
-        meta.depends_on = vec![node.clone(), node.clone(), "node-gone".into()];
+        meta.depends_on = vec![
+            node.parse().unwrap(),
+            node.parse().unwrap(),
+            "node-gone".parse().unwrap(),
+        ];
         store.write_node(&node, &meta, &body).unwrap();
 
         let problems = check(&store).unwrap();
@@ -1577,7 +1646,7 @@ mod tests {
         // Close the loop sideways: a -> b (write-time link would allow a -> b;
         // the *cycle* is only visible to check).
         let (mut meta, body) = store.read_node(&a).unwrap();
-        meta.depends_on = vec![b.clone()];
+        meta.depends_on = vec![b.parse().unwrap()];
         store.write_node(&a, &meta, &body).unwrap();
 
         let problems = check(&store).unwrap();

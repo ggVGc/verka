@@ -8,6 +8,129 @@
 //! what its `outcome` says, and whether its definition version still matches.
 
 use serde::{Deserialize, Serialize};
+use std::fmt;
+use std::str::FromStr;
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct NodeId(String);
+
+impl NodeId {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+impl fmt::Display for NodeId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+impl AsRef<str> for NodeId {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+impl std::ops::Deref for NodeId {
+    type Target = str;
+    fn deref(&self) -> &str {
+        self.as_str()
+    }
+}
+impl From<NodeId> for String {
+    fn from(value: NodeId) -> Self {
+        value.0
+    }
+}
+impl TryFrom<String> for NodeId {
+    type Error = String;
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        value.parse()
+    }
+}
+impl FromStr for NodeId {
+    type Err = String;
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        if value.is_empty() || value == "." || value == ".." {
+            return Err("node id must be a non-empty name".into());
+        }
+        if value.contains(['/', '\\']) || value.chars().any(char::is_control) {
+            return Err("node id must not contain separators or control characters".into());
+        }
+        if value.eq_ignore_ascii_case(".git") || (value.len() >= 2 && value.as_bytes()[1] == b':') {
+            return Err("node id uses a forbidden platform name or prefix".into());
+        }
+        Ok(Self(value.into()))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct ProjectPath(String);
+
+impl ProjectPath {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+impl fmt::Display for ProjectPath {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+impl AsRef<str> for ProjectPath {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+impl PartialEq<str> for ProjectPath {
+    fn eq(&self, other: &str) -> bool {
+        self.as_str() == other
+    }
+}
+impl PartialEq<&str> for ProjectPath {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
+}
+impl AsRef<std::path::Path> for ProjectPath {
+    fn as_ref(&self) -> &std::path::Path {
+        std::path::Path::new(self.as_str())
+    }
+}
+impl From<ProjectPath> for String {
+    fn from(value: ProjectPath) -> Self {
+        value.0
+    }
+}
+impl TryFrom<String> for ProjectPath {
+    type Error = String;
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        value.parse()
+    }
+}
+impl FromStr for ProjectPath {
+    type Err = String;
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let normalized = value.replace('\\', "/");
+        if normalized.is_empty()
+            || normalized.starts_with('/')
+            || (normalized.len() >= 2 && normalized.as_bytes()[1] == b':')
+            || normalized.chars().any(char::is_control)
+        {
+            return Err("project path must be a non-empty relative path".into());
+        }
+        for component in normalized.split('/') {
+            if component.is_empty()
+                || component == "."
+                || component == ".."
+                || component.eq_ignore_ascii_case(".git")
+            {
+                return Err("project path contains a forbidden component".into());
+            }
+        }
+        Ok(Self(normalized))
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "snake_case")]
@@ -50,9 +173,9 @@ pub struct NodeMeta {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assignee: Option<Author>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub depends_on: Vec<String>,
+    pub depends_on: Vec<NodeId>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub derived_from: Vec<String>,
+    pub derived_from: Vec<NodeId>,
     /// Namespaced application metadata (e.g. from an execution harness) is
     /// preserved but never interpreted here.
     #[serde(default, flatten)]
@@ -85,7 +208,7 @@ pub struct ArtifactRef {
 /// the work was built against.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConsumedNode {
-    pub id: String,
+    pub id: NodeId,
     pub definition: DefinitionVersion,
     pub result: Option<ResultVersion>,
     pub output: Option<ArtifactRef>,
@@ -94,7 +217,7 @@ pub struct ConsumedNode {
 /// A consumed file that is no node's output, pinned by content.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContextPin {
-    pub path: String,
+    pub path: ProjectPath,
     pub identity: String,
     #[serde(default)]
     pub observed: bool,
@@ -289,5 +412,50 @@ mod tests {
             ..result
         };
         assert_eq!(status(&version, Some(&failed)), Status::Failed);
+    }
+
+    #[test]
+    fn graph_identifiers_and_project_paths_are_validated_and_normalized() {
+        for invalid in [
+            "",
+            ".",
+            "..",
+            "../secret",
+            "/absolute",
+            r"..\secret",
+            ".git",
+            "C:node",
+            "bad\nnode",
+        ] {
+            assert!(
+                invalid.parse::<NodeId>().is_err(),
+                "accepted node id {invalid:?}"
+            );
+        }
+        assert_eq!("node-good".parse::<NodeId>().unwrap().as_str(), "node-good");
+
+        for invalid in [
+            "",
+            "..",
+            "../secret",
+            "/absolute",
+            r"..\secret",
+            ".git/config",
+            "src/.git/config",
+            "C:/windows",
+            "bad\npath",
+        ] {
+            assert!(
+                invalid.parse::<ProjectPath>().is_err(),
+                "accepted project path {invalid:?}"
+            );
+        }
+        assert_eq!(
+            r"src\nested\file.rs"
+                .parse::<ProjectPath>()
+                .unwrap()
+                .as_str(),
+            "src/nested/file.rs"
+        );
     }
 }

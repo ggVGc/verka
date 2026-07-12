@@ -40,7 +40,7 @@ use sha1::{Digest, Sha1};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::model::{DefinitionVersion, NodeMeta, ResultMeta, ResultVersion};
+use crate::model::{DefinitionVersion, NodeId, NodeMeta, ResultMeta, ResultVersion};
 
 /// Git's blob id for `bytes`, computed locally so version identity needs no
 /// git invocation.
@@ -89,7 +89,10 @@ impl Store {
     }
 
     pub fn node_dir(&self, id: &str) -> PathBuf {
-        self.root.join("nodes").join(id)
+        match id.parse::<NodeId>() {
+            Ok(id) => self.root.join("nodes").join(id.as_str()),
+            Err(_) => self.root.join("nodes").join(".invalid-node-id"),
+        }
     }
     fn node_path(&self, id: &str) -> PathBuf {
         self.node_dir(id).join("node.toml")
@@ -111,6 +114,7 @@ impl Store {
     // --- definition ------------------------------------------------------------
 
     pub fn write_node(&self, id: &str, meta: &NodeMeta, description: &str) -> Result<()> {
+        validate_node_id(id)?;
         fs::create_dir_all(self.node_dir(id))?;
         let data = toml::to_string_pretty(meta).context("serialising node metadata")?;
         fs::write(self.node_path(id), data).with_context(|| format!("writing node `{id}`"))?;
@@ -120,6 +124,7 @@ impl Store {
     }
 
     pub fn read_node(&self, id: &str) -> Result<(NodeMeta, String)> {
+        validate_node_id(id)?;
         let data = fs::read_to_string(self.node_path(id))
             .with_context(|| format!("unknown node `{id}`"))?;
         let meta =
@@ -131,6 +136,7 @@ impl Store {
 
     /// The node's version: Git blob ids of its structured metadata and prose.
     pub fn node_version(&self, id: &str) -> Result<DefinitionVersion> {
+        validate_node_id(id)?;
         let metadata =
             fs::read(self.node_path(id)).with_context(|| format!("unknown node `{id}`"))?;
         let description = fs::read(self.description_path(id))
@@ -144,6 +150,7 @@ impl Store {
     // --- result (structured record plus optional prose) -------------------------
 
     pub fn write_result(&self, id: &str, meta: &ResultMeta, notes: &str) -> Result<()> {
+        validate_node_id(id)?;
         if !self.exists(id) {
             bail!("unknown node `{id}`");
         }
@@ -168,6 +175,7 @@ impl Store {
 
     /// The node's completion record, or `None` if it has not been worked yet.
     pub fn read_result(&self, id: &str) -> Result<Option<(ResultMeta, String)>> {
+        validate_node_id(id)?;
         let data = match fs::read_to_string(self.result_meta_path(id)) {
             Ok(t) => t,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -189,6 +197,7 @@ impl Store {
     }
 
     pub fn result_version(&self, id: &str) -> Result<ResultVersion> {
+        validate_node_id(id)?;
         let metadata = fs::read(self.result_meta_path(id))
             .with_context(|| format!("node `{id}` has no result"))?;
         let notes = match fs::read(self.result_path(id)) {
@@ -248,7 +257,13 @@ impl Store {
         for entry in fs::read_dir(self.root.join("nodes"))? {
             let entry = entry?;
             if entry.file_type()?.is_dir() {
-                ids.push(entry.file_name().to_string_lossy().into_owned());
+                let name = entry
+                    .file_name()
+                    .into_string()
+                    .map_err(|_| anyhow::anyhow!("node directory name is not UTF-8"))?;
+                validate_node_id(&name)
+                    .with_context(|| format!("invalid node directory `{name}`"))?;
+                ids.push(name);
             }
         }
         ids.sort();
@@ -281,6 +296,10 @@ impl Store {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| self.root.to_string_lossy().into_owned())
     }
+}
+
+fn validate_node_id(id: &str) -> Result<NodeId> {
+    id.parse().map_err(anyhow::Error::msg)
 }
 
 /// The blob id of a file on disk, or `None` only when it is proven absent.
@@ -318,7 +337,7 @@ mod tests {
             schema: 1,
             author: Author::Human,
             assignee: None,
-            depends_on: vec!["node-a".into()],
+            depends_on: vec!["node-a".parse().unwrap()],
             derived_from: vec![],
             extensions: Default::default(),
         };
@@ -326,7 +345,7 @@ mod tests {
             .write_node("node-1", &meta, "hello\n\nthe details")
             .unwrap();
         let (got, description) = store.read_node("node-1").unwrap();
-        assert_eq!(got.depends_on, vec!["node-a".to_string()]);
+        assert_eq!(got.depends_on, vec!["node-a".parse().unwrap()]);
         assert_eq!(description, "hello\n\nthe details");
         assert_eq!(crate::model::title_of(&description), "hello");
 
@@ -369,8 +388,7 @@ mod tests {
     #[test]
     fn work_log_appends_and_starts_over() {
         use std::io::Write;
-        let dir =
-            std::env::temp_dir().join(format!("linka-worklog-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("linka-worklog-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let store = Store::init(dir.join(".linka")).unwrap();
 
@@ -417,6 +435,17 @@ mod tests {
             "{\"event\":\"c\"}\n"
         );
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn invalid_node_directory_is_rejected_during_discovery() {
+        let dir =
+            std::env::temp_dir().join(format!("linka-invalid-id-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = Store::init(dir.join(".linka")).unwrap();
+        std::fs::create_dir_all(store.root().join("nodes/.git")).unwrap();
+        assert!(store.list_ids().is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
