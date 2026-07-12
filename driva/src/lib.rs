@@ -9,9 +9,9 @@ pub use config::{Config, DockerConfig, IsolationConfig, MountConfig, NetworkConf
 pub use docker::DockerIsolation;
 pub use podman::PodmanIsolation;
 pub use session::{
-    BackendReference, CleanupObservation, DurableIsolation, Observation, ObservedProcessState,
-    ProcessConnection, RedactedExecutionRequest, SessionId, SessionRecord, SessionRunner,
-    SessionSnapshot, SessionStore, StartedSession,
+    BackendReference, CleanupObservation, DiscoveredResource, DurableIsolation, Observation,
+    ObservedProcessState, ProcessConnection, RedactedExecutionRequest, SessionId, SessionRecord,
+    SessionRunner, SessionSnapshot, SessionStore, StartedSession,
 };
 
 use anyhow::{bail, Context, Result};

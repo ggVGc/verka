@@ -3,7 +3,8 @@ use crate::{
     Isolation, MountAccess, ProcessExit,
 };
 use crate::{
-    BackendReference, DurableIsolation, ObservedProcessState, ProcessConnection, SessionId,
+    BackendReference, DiscoveredResource, DurableIsolation, ObservedProcessState,
+    ProcessConnection, SessionId,
 };
 use anyhow::{Context, Result};
 use std::path::PathBuf;
@@ -46,6 +47,8 @@ impl DurableIsolation for DockerIsolation {
             .arg("--name")
             .arg(format!("driva-{}", id.0))
             .arg("--label")
+            .arg("io.driva.managed=true")
+            .arg("--label")
             .arg(format!("io.driva.session={}", id.0));
         for a in args.into_iter().skip(2) {
             c.arg(a);
@@ -63,6 +66,9 @@ impl DurableIsolation for DockerIsolation {
     }
     fn find(&self, id: &SessionId) -> Result<Option<BackendReference>> {
         crate::podman::find_engine(&self.executable, id)
+    }
+    fn enumerate_managed(&self) -> Result<Vec<DiscoveredResource>> {
+        crate::podman::enumerate_engine(&self.executable)
     }
     fn inspect(&self, r: &BackendReference) -> Result<ObservedProcessState> {
         crate::podman::inspect_engine(&self.executable, r)

@@ -3,7 +3,8 @@ use crate::{
     Isolation, MountAccess, ProcessExit,
 };
 use crate::{
-    BackendReference, DurableIsolation, ObservedProcessState, ProcessConnection, SessionId,
+    BackendReference, DiscoveredResource, DurableIsolation, ObservedProcessState,
+    ProcessConnection, SessionId,
 };
 use anyhow::{Context, Result};
 use std::path::PathBuf;
@@ -48,6 +49,8 @@ impl DurableIsolation for PodmanIsolation {
             .arg("--name")
             .arg(format!("driva-{}", id.0))
             .arg("--label")
+            .arg("io.driva.managed=true")
+            .arg("--label")
             .arg(format!("io.driva.session={}", id.0));
         for a in args.into_iter().skip(2) {
             c.arg(a);
@@ -65,6 +68,9 @@ impl DurableIsolation for PodmanIsolation {
     }
     fn find(&self, id: &SessionId) -> Result<Option<BackendReference>> {
         find_engine(&self.executable, id)
+    }
+    fn enumerate_managed(&self) -> Result<Vec<DiscoveredResource>> {
+        enumerate_engine(&self.executable)
     }
     fn inspect(&self, r: &BackendReference) -> Result<ObservedProcessState> {
         inspect_engine(&self.executable, r)
@@ -140,7 +146,24 @@ pub(crate) fn inspect_engine(exe: &PathBuf, r: &BackendReference) -> Result<Obse
         ])
         .output()?;
     if !o.status.success() {
-        return Ok(ObservedProcessState::Missing);
+        // A successful exact lookup is the only portable confirmation that an
+        // inspect failure means absence. Engine/permission failures stay errors.
+        let lookup = Command::new(exe)
+            .args([
+                "ps",
+                "-aq",
+                "--no-trunc",
+                "--filter",
+                &format!("id={}", r.0),
+            ])
+            .output()?;
+        if lookup.status.success() && String::from_utf8_lossy(&lookup.stdout).trim().is_empty() {
+            return Ok(ObservedProcessState::Missing);
+        }
+        anyhow::bail!(
+            "container inspect failed: {}",
+            String::from_utf8_lossy(&o.stderr).trim()
+        )
     }
     let text = String::from_utf8_lossy(&o.stdout);
     let mut p = text.split_whitespace();
@@ -154,6 +177,41 @@ pub(crate) fn inspect_engine(exe: &PathBuf, r: &BackendReference) -> Result<Obse
             error: format!("unrecognized backend state {s:?}"),
         },
     })
+}
+
+pub(crate) fn enumerate_engine(exe: &PathBuf) -> Result<Vec<DiscoveredResource>> {
+    let o = Command::new(exe)
+        .args([
+            "ps",
+            "-aq",
+            "--no-trunc",
+            "--filter",
+            "label=io.driva.managed=true",
+            "--format",
+            "{{.ID}} {{.Label \"io.driva.session\"}}",
+        ])
+        .output()?;
+    if !o.status.success() {
+        anyhow::bail!(
+            "container enumeration failed: {}",
+            String::from_utf8_lossy(&o.stderr).trim()
+        )
+    }
+    let mut resources = vec![];
+    for line in String::from_utf8_lossy(&o.stdout).lines() {
+        let mut fields = line.split_whitespace();
+        let Some(reference) = fields.next() else {
+            continue;
+        };
+        let Some(id) = fields.next() else { continue };
+        if let Ok(session_id) = id.parse() {
+            resources.push(DiscoveredResource {
+                session_id,
+                reference: BackendReference(reference.into()),
+            });
+        }
+    }
+    Ok(resources)
 }
 pub(crate) fn wait_engine(exe: &PathBuf, r: &BackendReference) -> Result<ProcessExit> {
     let o = Command::new(exe).arg("wait").arg(&r.0).output()?;

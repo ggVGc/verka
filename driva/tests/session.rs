@@ -9,6 +9,34 @@ use std::time::Duration;
 struct Fake {
     state: RefCell<ObservedProcessState>,
 }
+
+struct FailingStart;
+impl DurableIsolation for FailingStart {
+    fn backend_name(&self) -> &'static str {
+        "fake"
+    }
+    fn start(&self, _: &SessionId, _: &ExecutionRequest) -> anyhow::Result<BackendReference> {
+        anyhow::bail!("creation failed")
+    }
+    fn find(&self, _: &SessionId) -> anyhow::Result<Option<BackendReference>> {
+        Ok(None)
+    }
+    fn inspect(&self, _: &BackendReference) -> anyhow::Result<ObservedProcessState> {
+        Ok(ObservedProcessState::Missing)
+    }
+    fn attach(&self, _: &BackendReference) -> anyhow::Result<Box<dyn ProcessConnection>> {
+        anyhow::bail!("unused")
+    }
+    fn wait(&self, _: &BackendReference) -> anyhow::Result<ProcessExit> {
+        anyhow::bail!("unused")
+    }
+    fn terminate(&self, _: &BackendReference, _: Duration) -> anyhow::Result<()> {
+        anyhow::bail!("unused")
+    }
+    fn remove(&self, _: &BackendReference) -> anyhow::Result<()> {
+        anyhow::bail!("unused")
+    }
+}
 impl DurableIsolation for Fake {
     fn backend_name(&self) -> &'static str {
         "fake"
@@ -37,6 +65,29 @@ impl DurableIsolation for Fake {
         *self.state.borrow_mut() = ObservedProcessState::Missing;
         Ok(())
     }
+}
+
+#[test]
+fn ids_are_canonical_uuid_v4_and_noncanonical_ids_are_rejected() {
+    let id = SessionId::new();
+    assert_eq!(id.0.len(), 36);
+    assert_eq!(&id.0[14..15], "4");
+    assert_eq!(id.0.parse::<SessionId>().unwrap(), id);
+    assert!(id.0.to_uppercase().parse::<SessionId>().is_err());
+    assert!("legacy-id".parse::<SessionId>().is_err());
+}
+
+#[test]
+fn prepared_record_survives_backend_creation_failure() {
+    let root = std::env::temp_dir().join(format!("driva-prepared-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let runner = SessionRunner::new(&FailingStart, SessionStore::new(&root));
+    assert!(runner.start(request()).is_err());
+    let records = runner.store.list().unwrap();
+    assert_eq!(records.len(), 1);
+    assert!(records[0].backend_reference.is_none());
+    assert_eq!(records[0].schema_version, 1);
+    let _ = std::fs::remove_dir_all(root);
 }
 
 fn request() -> ExecutionRequest {
