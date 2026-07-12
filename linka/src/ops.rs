@@ -18,9 +18,9 @@ use ulid::Ulid;
 
 use crate::model::{
     ArtifactRef, Author, Blocker, BlockerReason, ConsumedNode, ContextPin, Currency,
-    DefinitionVersion, DepKind, NodeMeta, NodeState, Outcome, ProjectSnapshot, RecordedOutcome,
-    ResultMeta, ResultSubmission, ResultVersion, StalenessReason, Status, SubmissionConflict,
-    WorkSnapshot,
+    DefinitionVersion, DepKind, NodeMeta, NodeState, Outcome, ProducerEvidence, ProjectPath,
+    ProjectSnapshot, RecordedOutcome, ResultMeta, ResultSubmission, ResultVersion, StalenessReason,
+    Status, SubmissionConflict, WorkSnapshot,
 };
 use crate::model::{DEFINITION_SCHEMA, OBSERVATION_SCHEMA, RESULT_SCHEMA, SNAPSHOT_SCHEMA};
 use crate::pairing::Pairing;
@@ -200,109 +200,6 @@ pub fn complete(
     )
     .map_err(|error| anyhow::anyhow!(error))?;
     Ok(output_commit)
-}
-
-/// The graph input a caller froze before starting work, for version-checked
-/// completion: the node's definition version and the pinned state of every
-/// dependency, exactly as [`pin_dependencies`] returned them at freeze time.
-#[derive(Clone, Debug, PartialEq)]
-pub struct ExpectedInput {
-    pub definition: DefinitionVersion,
-    pub consumed: Vec<ConsumedNode>,
-}
-
-/// The answer to a version-checked completion. `Stale` is an answer, not an
-/// error: the graph moved between freeze and submit, and nothing was recorded.
-#[derive(Clone, Debug, PartialEq)]
-pub enum CheckedCompletion {
-    Accepted { output_commit: Option<String> },
-    Stale { reasons: Vec<String> },
-}
-
-/// Pin the current version and output of every dependency of `id`, as
-/// [`complete`] would. Public so a caller can freeze a node's input before
-/// working and later submit through [`complete_checked`].
-pub fn pin_dependencies(store: &Store, id: &str) -> Result<Vec<ConsumedNode>> {
-    let (meta, _) = store.read_node(id)?;
-    pin_deps(store, &meta)
-}
-
-/// Human-readable reasons the node no longer matches `expected` — its
-/// definition or any dependency's pinned state changed since the caller froze
-/// them. Empty means the frozen input still describes the graph.
-pub fn verify_frozen(store: &Store, id: &str, expected: &ExpectedInput) -> Result<Vec<String>> {
-    let mut reasons = Vec::new();
-    if store.node_version(id)? != expected.definition {
-        reasons.push(format!("definition of `{id}` changed since freeze"));
-    }
-    let current = pin_dependencies(store, id)?;
-    let frozen: std::collections::BTreeMap<&str, &ConsumedNode> =
-        expected.consumed.iter().map(|c| (c.id.as_str(), c)).collect();
-    let mut seen = std::collections::HashSet::new();
-    for now in &current {
-        seen.insert(now.id.as_str());
-        match frozen.get(now.id.as_str()) {
-            None => reasons.push(format!("dependency `{}` added since freeze", now.id)),
-            Some(then) if *then != now => {
-                let mut what = Vec::new();
-                if then.definition != now.definition {
-                    what.push("definition");
-                }
-                if then.result != now.result {
-                    what.push("result");
-                }
-                if then.output != now.output {
-                    what.push("output");
-                }
-                reasons.push(format!(
-                    "dependency `{}` changed since freeze ({})",
-                    now.id,
-                    what.join(", ")
-                ));
-            }
-            Some(_) => {}
-        }
-    }
-    for then in &expected.consumed {
-        if !seen.contains(then.id.as_str()) {
-            reasons.push(format!("dependency `{}` removed since freeze", then.id));
-        }
-    }
-    Ok(reasons)
-}
-
-/// [`complete`], accepted only while the graph still matches the input the
-/// caller froze before working: the node's definition and dependency pins are
-/// unchanged and the node is still ready. Anything else is answered as
-/// [`CheckedCompletion::Stale`] with nothing recorded — stale work must never
-/// silently complete.
-#[allow(clippy::too_many_arguments)] // mirrors `complete` plus the frozen input
-pub fn complete_checked(
-    store: &Store,
-    vcs: &dyn Vcs,
-    id: &str,
-    outputs: &[String],
-    context: &[String],
-    message: Option<String>,
-    notes: &str,
-    author: Author,
-    expected: &ExpectedInput,
-) -> Result<CheckedCompletion> {
-    let mut reasons = verify_frozen(store, id, expected)?;
-    let state = node_state(store, vcs, id)?;
-    if !state.is_ready() {
-        if state.is_complete() {
-            reasons.push(format!("`{id}` is already complete"));
-        }
-        for blocker in &state.blockers {
-            reasons.push(format!("`{id}` is blocked by `{}`", blocker.id));
-        }
-    }
-    if !reasons.is_empty() {
-        return Ok(CheckedCompletion::Stale { reasons });
-    }
-    let output_commit = complete(store, vcs, id, outputs, context, message, notes, author)?;
-    Ok(CheckedCompletion::Accepted { output_commit })
 }
 
 /// Answer a node: record it done with the response as its result notes,
@@ -795,6 +692,81 @@ pub fn submit_result(
     store.write_result(id, &result, &submission.notes)?;
     vcs.commit_store(&store.store_name(), &format!("linka: result {id}"))?;
     Ok(())
+}
+
+/// Capture work performed in an execution context against a caller's frozen
+/// [`WorkSnapshot`], and submit a version-checked result. This is the entry
+/// point for an orchestrator that snapshots ready work with [`snapshot_work`],
+/// performs it in a separate worktree, and later submits success or failure
+/// against that exact snapshot — Linka still owns output capture, artifact
+/// identity, path validation, and every version check.
+///
+/// `vcs` is the execution context the work happened in (for git, a linked
+/// worktree via [`crate::GitVcs::for_execution`]); graph state still commits to
+/// the store's workbench repository. Returns the captured output commit, or
+/// `None` for graph-only success and for failure.
+///
+/// Ordering guarantee: a graph conflict records no result. For a successful
+/// submission with outputs the output commit is captured *before* the version
+/// check, but its output ref is retained only after the submission is accepted.
+/// A conflict therefore retains no ref and mutates no graph state; the
+/// unreferenced commit is left dangling in the project repository (reachable
+/// only through the caller's execution branch) and reclaimed by normal git gc.
+#[allow(clippy::too_many_arguments)]
+pub fn capture_submission(
+    store: &Store,
+    vcs: &dyn Vcs,
+    snapshot: WorkSnapshot,
+    outputs: &[ProjectPath],
+    message: Option<String>,
+    outcome: Outcome,
+    notes: String,
+    author: Author,
+    producer: Option<ProducerEvidence>,
+) -> std::result::Result<Option<String>, SubmissionError> {
+    let id = snapshot.node.as_str().to_string();
+    let output_commit = if outcome == Outcome::Done && !outputs.is_empty() {
+        let output_paths: Vec<String> = outputs.iter().map(ToString::to_string).collect();
+        // The only uncommitted project changes allowed are the declared
+        // outputs — output provenance is asserted exactly here.
+        require_clean_except(vcs, &output_paths)?;
+        let message = match message {
+            Some(message) => message,
+            None => {
+                let (_, description) = store.read_node(&id)?;
+                crate::model::title_of(&description).to_string()
+            }
+        };
+        let mut commit_message = format!("{message}\n\nLinka-Node: {id}");
+        if !snapshot.project.revision.is_empty() {
+            commit_message.push_str(&format!("\nLinka-Input: {}", snapshot.project.revision));
+        }
+        Some(vcs.capture(&output_paths, &commit_message)?)
+    } else {
+        None
+    };
+
+    let output = output_commit
+        .as_deref()
+        .map(|commit| git_artifact(store, commit))
+        .transpose()?;
+    submit_result(
+        store,
+        vcs,
+        ResultSubmission {
+            snapshot,
+            outcome,
+            output,
+            notes,
+            author,
+            producer,
+        },
+    )?;
+    // Accepted: keep the output reachable independently of the worktree.
+    if let Some(commit) = &output_commit {
+        vcs.retain_output(&id, commit)?;
+    }
+    Ok(output_commit)
 }
 
 /// The node whose work produced `commit`, if any — the inverse of the output
@@ -2951,122 +2923,141 @@ mod tests {
             .any(|p| p.starts_with(&b) && p.contains("built-against")));
     }
 
+    fn path(p: &str) -> ProjectPath {
+        p.parse().unwrap()
+    }
+
     #[test]
-    fn checked_completion_accepts_only_the_frozen_graph() {
+    fn capture_submission_records_a_result_and_retains_the_output() {
         let (_t, store) = temp_store();
         let fake = FakeVcs {
-            next_id: "out1".into(),
+            next_id: "out-commit".into(),
             ..Default::default()
         };
-        let dep = add(&store, &fake, new_node("the dependency", vec![])).unwrap();
-        done(&store, &fake, &dep);
-        let id = add(&store, &fake, new_node("the work", vec![dep.clone()])).unwrap();
+        let id = add(&store, &fake, new_node("a", vec![])).unwrap();
+        let snapshot = snapshot_work(&store, &fake, &id, &[]).unwrap();
 
-        // Freeze, as an orchestrator would before starting work.
-        let expected = ExpectedInput {
-            definition: store.node_version(&id).unwrap(),
-            consumed: pin_dependencies(&store, &id).unwrap(),
+        let producer = ProducerEvidence {
+            namespace: "orka".into(),
+            data: serde_json::json!({ "attempt": "attempt-1" }),
         };
-        assert!(verify_frozen(&store, &id, &expected).unwrap().is_empty());
-
-        // The graph unchanged: the submission is accepted and recorded.
-        std::fs::write(store.project_root().join("out.txt"), "o").unwrap();
-        let accepted = complete_checked(
+        let commit = capture_submission(
             &store,
             &fake,
-            &id,
-            &["out.txt".into()],
+            snapshot,
+            &[path("src/x.rs")],
+            Some("do it".into()),
+            Outcome::Done,
+            "did it".into(),
+            Author::Machine,
+            Some(producer.clone()),
+        )
+        .unwrap();
+        assert_eq!(commit.as_deref(), Some("out-commit"));
+
+        let (result, notes) = store.read_result(&id).unwrap().unwrap();
+        assert_eq!(notes, "did it");
+        assert_eq!(result.author, Author::Machine);
+        assert_eq!(
+            result.output.as_ref().map(|a| a.id.as_str()),
+            Some("out-commit")
+        );
+        // Producer evidence is preserved verbatim, never interpreted.
+        assert_eq!(result.producer.as_ref(), Some(&producer));
+        // The declared output was captured and its ref retained.
+        assert_eq!(
+            fake.captured.borrow().as_slice(),
+            &[vec!["src/x.rs".to_string()]]
+        );
+        assert!(fake.commits.borrow().contains("out-commit"));
+    }
+
+    #[test]
+    fn capture_submission_supports_graph_only_success() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs::default();
+        let id = add(&store, &fake, new_node("a", vec![])).unwrap();
+        let snapshot = snapshot_work(&store, &fake, &id, &[]).unwrap();
+
+        let commit = capture_submission(
+            &store,
+            &fake,
+            snapshot,
             &[],
             None,
-            "did it",
+            Outcome::Done,
+            "answered".into(),
             Author::Machine,
-            &expected,
+            None,
         )
         .unwrap();
-        assert_eq!(
-            accepted,
-            CheckedCompletion::Accepted {
-                output_commit: Some("out1".into())
+        assert_eq!(commit, None);
+        assert!(
+            fake.captured.borrow().is_empty(),
+            "no project commit for graph-only work"
+        );
+        assert_eq!(current_status(&store, &fake, &id).unwrap(), Status::Done);
+    }
+
+    #[test]
+    fn capture_submission_records_failure_against_the_frozen_snapshot() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs::default();
+        let id = add(&store, &fake, new_node("a", vec![])).unwrap();
+        let snapshot = snapshot_work(&store, &fake, &id, &[]).unwrap();
+
+        let commit = capture_submission(
+            &store,
+            &fake,
+            snapshot,
+            &[],
+            None,
+            Outcome::Failed,
+            "could not".into(),
+            Author::Machine,
+            None,
+        )
+        .unwrap();
+        assert_eq!(commit, None);
+        assert_eq!(current_status(&store, &fake, &id).unwrap(), Status::Failed);
+        assert!(fake.captured.borrow().is_empty());
+    }
+
+    #[test]
+    fn capture_submission_refuses_a_moved_graph_and_records_nothing() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs {
+            next_id: "out-commit".into(),
+            ..Default::default()
+        };
+        let id = add(&store, &fake, new_node("a", vec![])).unwrap();
+        let snapshot = snapshot_work(&store, &fake, &id, &[]).unwrap();
+
+        // The definition moves between freeze and submit.
+        edit(&store, &fake, &id, "a, revised".into()).unwrap();
+
+        let err = capture_submission(
+            &store,
+            &fake,
+            snapshot,
+            &[path("src/x.rs")],
+            None,
+            Outcome::Done,
+            "did it".into(),
+            Author::Machine,
+            None,
+        )
+        .unwrap_err();
+        match err {
+            SubmissionError::Conflict(conflicts) => {
+                assert!(
+                    conflicts.contains(&SubmissionConflict::DefinitionChanged),
+                    "{conflicts:?}"
+                );
             }
-        );
-        assert!(node_state(&store, &fake, &id).unwrap().is_complete());
-    }
-
-    #[test]
-    fn checked_completion_refuses_a_moved_graph_and_records_nothing() {
-        let (_t, store) = temp_store();
-        let fake = FakeVcs::default();
-        let dep = add(&store, &fake, new_node("the dependency", vec![])).unwrap();
-        done(&store, &fake, &dep);
-        let id = add(&store, &fake, new_node("the work", vec![dep.clone()])).unwrap();
-        let expected = ExpectedInput {
-            definition: store.node_version(&id).unwrap(),
-            consumed: pin_dependencies(&store, &id).unwrap(),
-        };
-
-        // The node's own definition moves.
-        edit(&store, &fake, &id, "the work, redefined".into()).unwrap();
-        let reasons = verify_frozen(&store, &id, &expected).unwrap();
-        assert!(reasons.iter().any(|r| r.contains("definition")), "{reasons:?}");
-        let stale = complete_checked(
-            &store, &fake, &id, &[], &[], None, "n", Author::Machine, &expected,
-        )
-        .unwrap();
-        assert!(matches!(stale, CheckedCompletion::Stale { .. }));
-        assert!(store.read_result(&id).unwrap().is_none(), "nothing recorded");
-
-        // Re-freeze, then a dependency's result moves: also refused.
-        let expected = ExpectedInput {
-            definition: store.node_version(&id).unwrap(),
-            consumed: pin_dependencies(&store, &id).unwrap(),
-        };
-        // Re-record the dependency's result with new notes: its version moves.
-        complete(&store, &fake, &dep, &[], &[], None, "done again", Author::Human).unwrap();
-        let reasons = verify_frozen(&store, &id, &expected).unwrap();
-        assert!(
-            reasons.iter().any(|r| r.contains(&dep) && r.contains("result")),
-            "{reasons:?}"
-        );
-
-        // Re-freeze, then the dependency reopens (edited): the node is no
-        // longer ready, so even matching pins do not complete it.
-        let expected = ExpectedInput {
-            definition: store.node_version(&id).unwrap(),
-            consumed: pin_dependencies(&store, &id).unwrap(),
-        };
-        edit(&store, &fake, &dep, "the dependency, redefined".into()).unwrap();
-        let stale = complete_checked(
-            &store, &fake, &id, &[], &[], None, "n", Author::Machine, &expected,
-        )
-        .unwrap();
-        let CheckedCompletion::Stale { reasons } = stale else {
-            panic!("expected stale");
-        };
-        assert!(reasons.iter().any(|r| r.contains("blocked")), "{reasons:?}");
+            other => panic!("expected a conflict, got {other:?}"),
+        }
+        // No result recorded and no output ref retained on a conflict.
         assert!(store.read_result(&id).unwrap().is_none());
-    }
-
-    #[test]
-    fn checked_completion_reports_edge_changes_since_freeze() {
-        let (_t, store) = temp_store();
-        let fake = FakeVcs::default();
-        let dep = add(&store, &fake, new_node("dep", vec![])).unwrap();
-        done(&store, &fake, &dep);
-        let id = add(&store, &fake, new_node("work", vec![dep.clone()])).unwrap();
-        let expected = ExpectedInput {
-            definition: store.node_version(&id).unwrap(),
-            consumed: pin_dependencies(&store, &id).unwrap(),
-        };
-
-        // An edge added after freeze is reported as such (the definition
-        // change is reported too — linking moves the node's version).
-        let extra = add(&store, &fake, new_node("extra", vec![])).unwrap();
-        link(&store, &fake, &id, &extra, DepKind::DependsOn).unwrap();
-        let reasons = verify_frozen(&store, &id, &expected).unwrap();
-        assert!(
-            reasons.iter().any(|r| r.contains(&extra) && r.contains("added")),
-            "{reasons:?}"
-        );
-        assert!(reasons.iter().any(|r| r.contains("definition")));
     }
 }
