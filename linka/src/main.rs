@@ -350,7 +350,7 @@ fn main() -> Result<()> {
                 println!(
                     "{:<32} {:<8} {}",
                     id,
-                    state_label(&state),
+                    state_summary(&state),
                     linka::title_of(&description)
                 );
             }
@@ -422,7 +422,12 @@ fn main() -> Result<()> {
                         if state.is_ready()
                             && !matches!((assignee, meta.assignee), (Some(want), Some(has)) if want != has) =>
                     {
-                        println!("{:<32} {}", id, linka::title_of(&description));
+                        println!(
+                            "{:<32} {}  {}",
+                            id,
+                            state_summary(&state),
+                            linka::title_of(&description)
+                        );
                     }
                     Ok(_) => {}
                     Err(error) => {
@@ -580,13 +585,27 @@ fn finish_node_queries(errors: usize) -> Result<()> {
     Ok(())
 }
 
-fn state_label(state: &NodeState) -> &'static str {
+fn state_summary(state: &NodeState) -> String {
     if state.is_complete() {
-        "complete"
-    } else if state.is_ready() {
-        "ready"
-    } else {
-        "blocked"
+        return "complete".into();
+    }
+    if state.is_ready() {
+        if state.currency == linka::Currency::Stale {
+            let reason = state
+                .staleness
+                .first()
+                .map(format_staleness)
+                .unwrap_or_else(|| "recorded evidence changed".into());
+            return format!("ready (previous result stale: {reason})");
+        }
+        if state.outcome == linka::RecordedOutcome::Failed {
+            return "ready (previous attempt failed)".into();
+        }
+        return "ready".into();
+    }
+    match state.blockers.first() {
+        Some(blocker) => format!("blocked by {}", format_blocker(blocker)),
+        None => "blocked".into(),
     }
 }
 
@@ -640,7 +659,7 @@ fn show_node(store: &Store, vcs: &GitVcs, id: &str) -> Result<String> {
 
     writeln!(out, "id:      {id}")?;
     let state = ops::node_state(store, vcs, id)?;
-    writeln!(out, "status:  {}", state_label(&state))?;
+    writeln!(out, "status:  {}", state_summary(&state))?;
     writeln!(out, "author:  {}", meta.author.as_str())?;
     if let Some(assignee) = meta.assignee {
         writeln!(out, "assignee: {}", assignee.as_str())?;
@@ -801,7 +820,8 @@ fn to_strings(paths: &[ProjectPath]) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::strip_comment_lines;
+    use super::{state_summary, strip_comment_lines};
+    use linka::{Blocker, BlockerReason, Currency, NodeState, RecordedOutcome, StalenessReason};
 
     #[test]
     fn strip_comment_lines_follows_the_git_template_convention() {
@@ -809,5 +829,36 @@ mod tests {
         assert_eq!(strip_comment_lines(text), "Did the work.\n\nMore detail.");
         assert_eq!(strip_comment_lines("# only comments\n#\n"), "");
         assert_eq!(strip_comment_lines(""), "");
+    }
+
+    #[test]
+    fn state_summary_distinguishes_prior_evidence_and_blocking() {
+        let stale = NodeState {
+            outcome: RecordedOutcome::Succeeded,
+            currency: Currency::Stale,
+            staleness: vec![StalenessReason::ContextMissing {
+                path: "input".into(),
+            }],
+            blockers: vec![],
+        };
+        assert!(state_summary(&stale).starts_with("ready (previous result stale:"));
+        let failed = NodeState {
+            outcome: RecordedOutcome::Failed,
+            currency: Currency::Current,
+            staleness: vec![],
+            blockers: vec![],
+        };
+        assert_eq!(state_summary(&failed), "ready (previous attempt failed)");
+        let blocked = NodeState {
+            blockers: vec![Blocker {
+                id: "dependency".into(),
+                reason: BlockerReason::Stale,
+            }],
+            ..failed
+        };
+        assert_eq!(
+            state_summary(&blocked),
+            "blocked by dependency: not complete (stale)"
+        );
     }
 }

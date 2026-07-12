@@ -305,14 +305,14 @@ Tests:
 
 ## 14. Update CLI state presentation
 
-- [ ] Show complete, ready, blocked, stale prior result, failed prior attempt,
+- [x] Show complete, ready, blocked, stale prior result, failed prior attempt,
   and corruption as distinct conditions.
-- [ ] Include concise structured reasons for readiness, blocking, and
+- [x] Include concise structured reasons for readiness, blocking, and
   staleness.
-- [ ] Keep `stale` as a historical-result query even though stale nodes also
+- [x] Keep `stale` as a historical-result query even though stale nodes also
   appear in `ready` or `blocked`.
-- [ ] Ensure all commands use the authoritative `NodeState` derivation.
-- [ ] Define stable nonzero exit behavior for corruption, backend failure,
+- [x] Ensure all commands use the authoritative `NodeState` derivation.
+- [x] Define stable nonzero exit behavior for corruption, backend failure,
   conflicts, failed checks, and unsettled nodes.
 
 Example output shape:
