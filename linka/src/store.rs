@@ -360,6 +360,7 @@ mod tests {
         assert!(store.read_result("node-1").unwrap().is_none());
         let v2 = store.node_version("node-1").unwrap();
         let result = ResultMeta {
+            schema: 1,
             at: 0,
             author: Author::Machine,
             definition: v2.clone(),

@@ -156,7 +156,11 @@ enum Cmd {
     /// Integrity-check the store (fsck): parse errors, missing edge targets,
     /// duplicates, self-references, and dependency cycles. Exits non-zero if
     /// problems are found.
-    Check,
+    Check {
+        /// Also verify that referenced output artifacts exist and are retained.
+        #[arg(long)]
+        artifacts: bool,
+    },
 
     /// Check whether a node is settled: done, not stale, and all work derived
     /// from it (transitively) also done and not stale. Exits non-zero if not.
@@ -458,9 +462,14 @@ fn main() -> Result<()> {
             }
         }
 
-        Cmd::Check => {
+        Cmd::Check { artifacts } => {
             let store = Store::open(store)?;
-            let problems = ops::check(&store)?;
+            let problems = if artifacts {
+                let vcs = GitVcs::for_store(&store);
+                ops::check_artifacts(&store, &vcs)?
+            } else {
+                ops::check(&store)?
+            };
             if problems.is_empty() {
                 println!("store is consistent");
             } else {

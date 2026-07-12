@@ -185,6 +185,7 @@ pub fn complete(
     };
 
     let result = ResultMeta {
+        schema: 1,
         at: now_millis(),
         author,
         definition: store.node_version(id)?,
@@ -212,6 +213,7 @@ pub fn respond(store: &Store, vcs: &dyn Vcs, id: &str, notes: &str, author: Auth
     let (meta, _) = store.read_node(id)?;
     let consumed = pin_deps(store, &meta)?;
     let result = ResultMeta {
+        schema: 1,
         at: now_millis(),
         author,
         definition: store.node_version(id)?,
@@ -234,6 +236,7 @@ pub fn fail(store: &Store, vcs: &dyn Vcs, id: &str, notes: &str, author: Author)
     let (meta, _) = store.read_node(id)?;
     let consumed = pin_deps(store, &meta)?;
     let result = ResultMeta {
+        schema: 1,
         at: now_millis(),
         author,
         definition: store.node_version(id)?,
@@ -611,8 +614,16 @@ pub fn check(store: &Store) -> Result<Vec<String>> {
                 continue;
             }
         };
-        if let Err(e) = store.read_result(&id) {
-            problems.push(format!("{id}: unreadable result ({e:#})"));
+        if meta.schema != 1 {
+            problems.push(format!(
+                "{id}: unsupported definition schema {}",
+                meta.schema
+            ));
+        }
+        match store.read_result(&id) {
+            Err(e) => problems.push(format!("{id}: unreadable result ({e:#})")),
+            Ok(Some((result, _))) => validate_result_semantics(&id, &meta, &result, &mut problems),
+            Ok(None) => {}
         }
         for (kind, list) in [
             ("depends_on", &meta.depends_on),
@@ -636,6 +647,100 @@ pub fn check(store: &Store) -> Result<Vec<String>> {
     }
 
     problems.extend(find_cycles(&depends_on));
+    Ok(problems)
+}
+
+fn validate_result_semantics(
+    id: &str,
+    meta: &NodeMeta,
+    result: &ResultMeta,
+    problems: &mut Vec<String>,
+) {
+    if result.schema != 1 {
+        problems.push(format!("{id}: unsupported result schema {}", result.schema));
+    }
+    let mut seen = std::collections::HashSet::new();
+    for pin in &result.consumed {
+        if !seen.insert(pin.id.as_str()) {
+            problems.push(format!("{id}: duplicate consumed-node pin `{}`", pin.id));
+        }
+        let required = meta.depends_on.contains(&pin.id);
+        let lineage = meta.derived_from.contains(&pin.id);
+        if !required && !lineage {
+            problems.push(format!(
+                "{id}: consumed pin `{}` has no declared edge",
+                pin.id
+            ));
+        }
+        if required
+            && result.outcome == Outcome::Done
+            && (pin.result.is_none() || pin.outcome != Some(Outcome::Done))
+        {
+            problems.push(format!(
+                "{id}: successful result has no successful evidence for required dependency `{}`",
+                pin.id
+            ));
+        }
+        if let Some(output) = &pin.output {
+            validate_artifact(id, output, problems);
+        }
+    }
+    if result.outcome == Outcome::Done {
+        for edge in meta.depends_on.iter().chain(&meta.derived_from) {
+            if !result.consumed.iter().any(|pin| &pin.id == edge) {
+                problems.push(format!(
+                    "{id}: successful result is missing pin for `{edge}`"
+                ));
+            }
+        }
+    }
+    let mut context = std::collections::HashSet::new();
+    for pin in &result.context {
+        if !context.insert(pin.path.as_str()) {
+            problems.push(format!("{id}: duplicate context pin `{}`", pin.path));
+        }
+    }
+    if let Some(output) = &result.output {
+        validate_artifact(id, output, problems);
+    }
+}
+
+fn validate_artifact(id: &str, artifact: &ArtifactRef, problems: &mut Vec<String>) {
+    if artifact.scheme != "git-commit" {
+        problems.push(format!(
+            "{id}: unsupported artifact scheme `{}`",
+            artifact.scheme
+        ));
+    }
+    if !artifact.repository.is_empty()
+        && (artifact.repository.len() != 40
+            || !artifact
+                .repository
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit()))
+    {
+        problems.push(format!(
+            "{id}: invalid artifact repository identity `{}`",
+            artifact.repository
+        ));
+    }
+}
+
+pub fn check_artifacts(store: &Store, vcs: &dyn Vcs) -> Result<Vec<String>> {
+    let mut problems = check(store)?;
+    for id in store.list_ids()? {
+        if let Some((result, _)) = store.read_result(&id)? {
+            for artifact in result
+                .output
+                .iter()
+                .chain(result.consumed.iter().filter_map(|pin| pin.output.as_ref()))
+            {
+                if artifact.scheme == "git-commit" && !vcs.commit_exists(&artifact.id)? {
+                    problems.push(format!("{id}: artifact {} is not retained", artifact.id));
+                }
+            }
+        }
+    }
     Ok(problems)
 }
 
@@ -867,6 +972,7 @@ fn pin_deps(store: &Store, meta: &NodeMeta) -> Result<Vec<ConsumedNode>> {
                 id: dep.clone(),
                 definition,
                 result,
+                outcome: store.read_result(dep)?.map(|(result, _)| result.outcome),
                 output: output_of(store, dep)?.as_deref().map(git_artifact),
             })
         })
@@ -1635,6 +1741,51 @@ mod tests {
             problems.iter().any(|p| p.contains("unreadable definition")),
             "{problems:?}"
         );
+    }
+
+    #[test]
+    fn check_rejects_semantically_impossible_results() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs::default();
+        let dependency = add(&store, &fake, new_node("dependency", vec![])).unwrap();
+        done(&store, &fake, &dependency);
+        let consumer = add(&store, &fake, new_node("consumer", vec![dependency])).unwrap();
+        done(&store, &fake, &consumer);
+
+        let (mut result, notes) = store.read_result(&consumer).unwrap().unwrap();
+        result.schema = 99;
+        result.consumed[0].outcome = None;
+        result.consumed.push(result.consumed[0].clone());
+        result.consumed.push(ConsumedNode {
+            id: "undeclared".parse().unwrap(),
+            definition: result.definition.clone(),
+            result: None,
+            outcome: None,
+            output: Some(ArtifactRef {
+                scheme: "unknown".into(),
+                repository: String::new(),
+                id: "artifact".into(),
+            }),
+        });
+        result.context.push(crate::model::ContextPin {
+            path: "input".parse().unwrap(),
+            identity: "one".into(),
+            observed: false,
+        });
+        result.context.push(crate::model::ContextPin {
+            path: "input".parse().unwrap(),
+            identity: "two".into(),
+            observed: false,
+        });
+        store.write_result(&consumer, &result, &notes).unwrap();
+
+        let problems = check(&store).unwrap().join("\n");
+        assert!(problems.contains("unsupported result schema"));
+        assert!(problems.contains("duplicate consumed-node pin"));
+        assert!(problems.contains("no declared edge"));
+        assert!(problems.contains("no successful evidence"));
+        assert!(problems.contains("duplicate context pin"));
+        assert!(problems.contains("unsupported artifact scheme"));
     }
 
     #[test]

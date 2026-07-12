@@ -117,22 +117,22 @@ Tests:
 
 ## 6. Expand `linka check` into semantic fsck
 
-- [ ] Validate supported definition and result schema versions.
-- [ ] Validate node IDs, required files, paired result files, and normalized
+- [x] Validate supported definition and result schema versions.
+- [x] Validate node IDs, required files, paired result files, and normalized
   paths.
-- [ ] Retain edge checks for missing targets, duplicates, self-links, and
+- [x] Retain edge checks for missing targets, duplicates, self-links, and
   `depends_on` cycles.
-- [ ] Validate unique consumed-node and context pins.
-- [ ] Validate that result pins correspond to declared relationship edges.
-- [ ] Require successful `depends_on` pins to contain successful result
+- [x] Validate unique consumed-node and context pins.
+- [x] Validate that result pins correspond to declared relationship edges.
+- [x] Require successful `depends_on` pins to contain successful result
   evidence.
-- [ ] Define and validate the weaker `derived_from` pin invariant.
-- [ ] Validate supported artifact schemes and repository identities.
-- [ ] Keep historical pin mismatches out of fsck: those are staleness, not
+- [x] Define and validate the weaker `derived_from` pin invariant.
+- [x] Validate supported artifact schemes and repository identities.
+- [x] Keep historical pin mismatches out of fsck: those are staleness, not
   corruption.
-- [ ] Add an artifact-aware check mode that verifies referenced commits and
+- [x] Add an artifact-aware check mode that verifies referenced commits and
   retained output refs.
-- [ ] Keep `check` read-only; make any future repair operations explicit.
+- [x] Keep `check` read-only; make any future repair operations explicit.
 
 Acceptance criteria:
 

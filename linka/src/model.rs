@@ -211,6 +211,8 @@ pub struct ConsumedNode {
     pub id: NodeId,
     pub definition: DefinitionVersion,
     pub result: Option<ResultVersion>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<Outcome>,
     pub output: Option<ArtifactRef>,
 }
 
@@ -249,6 +251,7 @@ pub struct ProducerEvidence {
 /// Contents of `result.toml`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ResultMeta {
+    pub schema: u32,
     /// Unix milliseconds when the result was recorded.
     pub at: i64,
     /// Who recorded the result.
@@ -391,6 +394,7 @@ mod tests {
             description: "d".into(),
         };
         let result = ResultMeta {
+            schema: 1,
             at: 0,
             author: Author::Human,
             definition: version.clone(),
