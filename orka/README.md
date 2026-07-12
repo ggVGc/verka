@@ -1,23 +1,27 @@
 # Orka
 
-Orka is the orchestrator: it uses Linka to discover and track work and Driva
-to run agent commands in isolation. See [`DESIGN.md`](DESIGN.md) for the
-accepted boundary and attempt lifecycle, and [`TASKS.md`](TASKS.md) for the
-implementation plan this code follows.
+Orka orchestrates isolated agent attempts for work in a Linka store: it uses
+Linka's public API to discover, freeze, and record work, and Driva to run agent
+commands in isolation. Orka orchestrates Linka specifically — it has no generic
+graph backend. See [`DESIGN.md`](DESIGN.md) for the ownership boundary and
+attempt lifecycle. [`SIMPLIFICATION_TASKS.md`](SIMPLIFICATION_TASKS.md) is the
+plan this code follows; [`TASKS.md`](TASKS.md) is superseded history.
 
 ## What an attempt does
 
 ```text
-select ready node ──► freeze graph input ──► record attempt (.orka/attempts/<id>/)
-      ──► prepare worktree (orka/attempts/<id> branch at the frozen commit)
+select Linka-ready node ──► snapshot Linka work input ──► record attempt (.orka/attempts/<id>/)
+      ──► prepare worktree (orka/attempts/<id> branch at the frozen revision)
       ──► record request ──► run agent via Driva (podman/docker, deny-by-default)
       ──► capture transcript + exit evidence ──► read declared outcome
       ──► version-checked submit to Linka ──► seal ──► clean up (never dirty trees)
 ```
 
-Every step is durably recorded before its side effect, so `orka recover`
-can classify any crash from the files present and finish the idempotent
-remainder. Stale work — a graph that moved between freeze and submit — is
+The attempt durably stores Linka's exact `WorkSnapshot`, and success or failure
+is submitted against that snapshot through Linka's version-checked
+`capture_submission`. Every step is recorded before its side effect, so `orka
+recover` can classify any crash from the files present and finish the idempotent
+remainder. Stale work — a graph that moved between snapshot and submit — is
 refused and sealed as such, never silently completed.
 
 ## Use

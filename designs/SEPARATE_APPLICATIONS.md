@@ -41,7 +41,9 @@ File and Linka-backed persistence are adapters, not assumptions in the model.
 ## Dependency rules
 
 1. Linka and Driva are standalone and depend on none of the other applications.
-2. Orka depends on Linka and Driva through narrow application interfaces.
+2. Orka depends on Linka's public library API and value types directly (it
+   orchestrates Linka specifically, with no backend-neutral graph interface),
+   and on Driva through a narrow Orka-owned executor interface.
 3. Nota's core depends only on `ReviewStore`; its optional Linka adapter may
    depend on Linka.
 4. Linka does not interpret Orka attempts or Nota review records.
@@ -51,11 +53,12 @@ File and Linka-backed persistence are adapters, not assumptions in the model.
 
 ## Information flow
 
-Orka reads a ready node and its permitted context from Linka, freezes that
-input in an attempt, and asks Driva to run an agent with precisely selected
-mounts and network policy. Driva returns session evidence and an exit outcome.
-Orka validates that the Linka inputs are still current before submitting the
-result.
+Orka reads a ready node and its permitted context from Linka and freezes that
+input as a `linka::WorkSnapshot` in an attempt, then asks Driva to run an agent
+with precisely selected mounts and network policy. Driva returns session
+evidence and an exit outcome. Orka submits success or failure against that exact
+snapshot through Linka's version-checked `capture_submission`, which revalidates
+every frozen input before recording anything.
 
 Nota loads a review through `ReviewStore`, records comments or suggested
 edits, and may mark an item as requiring follow-up. With the Linka adapter,
@@ -88,7 +91,8 @@ nota/        standalone review application
 
 - Linka builds and tests without Driva, Orka, or Nota.
 - Driva policy tests use a fake isolation backend and no Linka types.
-- Orka tests can substitute fake graph and isolated-executor implementations.
+- Orka tests use a real Linka store (Orka orchestrates Linka directly) and can
+  substitute fake isolated-executor and workspace implementations.
 - Nota domain tests run against an in-memory `ReviewStore` contract suite;
   file and Linka adapters run the same persistence contract tests.
 - Dependency checks reject imports that reverse the arrows above.

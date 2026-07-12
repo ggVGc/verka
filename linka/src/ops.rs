@@ -11,6 +11,26 @@
 //! All git interaction goes through `&dyn Vcs`, so the whole module is
 //! unit-testable with an in-memory fake — no git binary, repository, or identity
 //! required. (Blob hashing for versions and pins is computed locally.)
+//!
+//! ## Snapshot/submission protocol for orchestrators
+//!
+//! External callers (an orchestrator such as Orka, or any other tool) work
+//! against a stable, version-checked protocol rather than reimplementing
+//! capture or validation:
+//!
+//! * [`snapshot_work`] freezes the exact graph, context, and project inputs of
+//!   ready work into a [`WorkSnapshot`] — the authoritative frozen input.
+//! * [`capture_submission`] consumes a caller's frozen snapshot, captures the
+//!   declared outputs in the caller's [`Vcs`] execution context, and submits a
+//!   version-checked result (success with or without outputs, or failure). It
+//!   revalidates every frozen field; on a graph conflict it records nothing and
+//!   returns [`SubmissionError::Conflict`] carrying structured
+//!   [`SubmissionConflict`] values.
+//! * [`submit_result`] is the lower-level version-checked write for callers
+//!   that captured their own artifact.
+//!
+//! Producer-specific evidence rides along as a namespaced [`ProducerEvidence`],
+//! which Linka preserves verbatim and never interprets.
 
 use anyhow::{bail, Context, Result};
 use std::time::{SystemTime, UNIX_EPOCH};

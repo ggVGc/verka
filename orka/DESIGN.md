@@ -2,63 +2,120 @@
 
 ## Purpose
 
-Orka orchestrates graph-driven agent work. It uses Linka to discover and track
-work and Driva to execute agent commands in isolation. Orka owns coordination and
-durable attempts; it does not implement Docker execution or human review.
+Orka orchestrates isolated agent attempts for work in a Linka store. It uses
+Linka to discover, freeze, and record work, and Driva to execute agent commands
+in isolation. Orka owns coordination and durable attempts; it does not implement
+container execution or human review.
+
+Orka is specifically a Linka orchestrator. It depends on Linka's public library
+API and value types directly — it does not maintain a backend-neutral graph port
+or a duplicate graph model, and it does not pretend other graph backends are
+supported. The dependency direction is one-way: Orka depends on Linka; Linka
+never depends on Orka.
+
+## Ownership
+
+- Linka owns graph definitions, readiness, staleness, work snapshots, result
+  validation, graph mutations, and project/output provenance.
+- Orka owns agent selection policy, execution policy, prompts, durable
+  attempts, transcripts, outcome interpretation, recovery, and cleanup.
+- Orka calls Linka's public operations but never reads or mutates Linka's
+  on-disk representation directly.
+- Linka stores only namespaced producer evidence about Orka (namespace `orka`);
+  it never interprets attempts, agents, executors, or recovery state.
+- `.linka/` and `.orka/` are separately owned stores in the workbench.
+
+## Linka protocol
+
+Orka uses one documented Linka protocol:
+
+- `linka::WorkSnapshot` is the authoritative frozen work input. It freezes node
+  identity, definition version, dependency and lineage pins with outcomes,
+  explicit context pins, the project repository/revision/tree, and the previous
+  result version. `ops::snapshot_work` produces it; Orka persists it verbatim.
+- `ops::capture_submission` consumes a caller's frozen snapshot, captures the
+  declared outputs in the supplied `Vcs` execution context, and submits a
+  version-checked result (success with or without outputs, or failure). It
+  revalidates every frozen field and, on a conflict, records nothing and
+  retains no output ref — stale work never silently completes. Conflicts come
+  back as `SubmissionError::Conflict(Vec<SubmissionConflict>)`; other errors are
+  reserved for evaluation, storage, git, or invariant failures.
 
 ## Boundaries
 
-Orka depends on two narrow capabilities:
+Only two dependencies are genuinely replaceable, so only these stay narrow
+Orka-owned traits:
 
 ```rust
-trait WorkGraph {
-    // Read ready work and pinned context; submit a version-checked outcome.
-}
-
 trait IsolatedExecutor {
     // Run a command with a concrete filesystem and network capability grant.
 }
+
+trait WorkspaceManager {
+    // Prepare and clean isolated per-attempt working trees.
+}
 ```
 
-Production adapters use Linka and Driva. Tests can use fakes. Orchestration
-logic must not reach into either application's on-disk representation.
+Production adapters use Driva and git worktrees; tests substitute fakes for both
+(the Linka store is always real). Everything else — selection, snapshotting, and
+submission — goes through `linka_work::LinkaWork`, a concrete integration with
+Linka, not a backend-neutral port.
 
 ## Attempt lifecycle
 
-1. Select eligible work from Linka according to orchestration policy.
-2. Freeze the node definition, dependency results, explicit context, and
-   project input version in a durable attempt.
-3. Choose the exact context mounts, network policy, agent command, and prior
-   context needed for the attempt, then construct a Driva execution request.
-4. Durably record that request before starting the command.
-5. Capture transcript, exit evidence, declared outputs, and agent outcome.
-6. Re-check the frozen Linka versions. Never silently complete stale work.
-7. Submit a version-checked result to Linka or retain a recoverable failed or
-   interrupted attempt.
-
-Retries and resumed agent conversations remain linked to their attempt. Each
-one is a new Driva execution; any prior agent context is prepared by Orka and
-passed through the command or explicitly mounted files. A later execution does
-not broaden mounts, network access, or graph authority without a new policy
-decision.
+1. Select Linka-ready, machine-assignable work (`ops::ready_nodes(..,
+   Some(Author::Machine))`). Orka chooses among Linka-ready results; it does not
+   derive readiness.
+2. Ask Linka to validate and snapshot the node, and gather the prompt prose, as
+   one durable `AttemptInput` (Linka's `WorkSnapshot` plus the description and
+   related-work prose). Record it before any side effect.
+3. Prepare an isolated worktree at `snapshot.project.revision`.
+4. Choose the exact mounts, network policy, agent command, and context, then
+   record the Driva execution request before starting the command.
+5. Capture transcript and harness-observed exit evidence.
+6. Interpret the agent's declared outcome (Orka's `AgentOutcome`), then submit
+   through Linka against the exact persisted snapshot, attaching the executor
+   report as `orka`-namespaced producer evidence.
+7. Seal accepted success, accepted failure, or a submission conflict
+   (stale-at-submit). Operational failures stay unsealed and recoverable.
 
 ## Agent authority
 
 Orka turns graph context into a concrete capability grant. An agent sees only
-the nodes, files, tools, mounts, and network access needed for its attempt.
-Authorization is enforced by adapters and scoped tools, not merely described
-in a prompt. Backend/model evidence comes from the harness rather than from
-agent claims.
+the files, mounts, and network access needed for its attempt. Authorization is
+enforced by adapters and scoped tools, not merely described in a prompt. Backend
+and model evidence come from the harness (the executor report), never from agent
+claims. Only trusted Orka code translates an `AgentOutcome` into a Linka
+mutation; agent-written TOML is never deserialized into a Linka submission.
 
 ## Durability and recovery
 
-An attempt is written before external side effects. It records frozen inputs,
-the Driva request, transcript references, exit evidence, and final submission
-state. Orka records enough around the synchronous execution to recover its own
-attempt and makes completion idempotent.
+An attempt is written before external side effects, one file per step, so its
+phase is derived from which files exist. Recovery classifies each attempt by its
+files and finishes the idempotent remainder:
+
+- Never invent an outcome without exit evidence: a pre-evidence attempt seals
+  interrupted.
+- Resubmit executed-but-unsealed attempts against the persisted snapshot;
+  Linka's version check makes re-submission safe and non-duplicating.
+- Never discard a dirty workspace; clean only sealed attempts or attempts that
+  cannot have a result.
+
+## Producer evidence
+
+Every submitted result carries `linka::ProducerEvidence` in the stable `orka`
+namespace: the attempt id and the executor-observed backend, backend reference,
+start/finish timestamps, and exit code. The transcript and mutable filesystem
+paths stay in `.orka/`. Linka preserves this verbatim and never interprets it.
 
 ## Non-goals
 
 - Implementing isolation mechanics or process stdio (Driva).
 - Owning node-graph semantics or storage (Linka).
+- A generic, backend-neutral graph interface. Orka orchestrates Linka.
 - Review comments, suggested edits, approval, or publication (Nota).
+
+## Configuration
+
+Orka configuration (`orka.toml`) decides the agent command, mounts, network
+policy, and executor backend/image. None of these belong in Linka.

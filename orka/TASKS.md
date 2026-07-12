@@ -1,5 +1,12 @@
 # Orka implementation tasks
 
+> **Historical.** This plan built the original backend-neutral `WorkGraph`
+> port and duplicate graph model. It is superseded by
+> [`SIMPLIFICATION_TASKS.md`](SIMPLIFICATION_TASKS.md), under which Orka
+> orchestrates a Linka store directly through Linka's public snapshot/submission
+> API — no generic graph port, no mirrored version model. Kept as
+> implementation history; the current architecture is in [`DESIGN.md`](DESIGN.md).
+
 Implementation plan for Orka per [`DESIGN.md`](DESIGN.md),
 [`../designs/SEPARATE_APPLICATIONS.md`](../designs/SEPARATE_APPLICATIONS.md),
 [`../designs/DURABLE_EXECUTION_ATTEMPTS.md`](../designs/DURABLE_EXECUTION_ATTEMPTS.md),
