@@ -1,0 +1,20 @@
+[package]
+name = "driva"
+version = "0.1.0"
+edition = "2021"
+description = "A deny-by-default isolated command runner"
+
+[lib]
+name = "driva"
+path = "src/lib.rs"
+
+[[bin]]
+name = "driva"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+
