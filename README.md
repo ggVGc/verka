@@ -10,12 +10,11 @@ single framework.
   TOML/Markdown files; status, readiness, and staleness are derived rather than
   stored. Linka is usable as a library or CLI and has no dependency on the
   other applications.
-- `driva/` — a standalone agent-session runner. It starts an agent inside a
-  Docker container with explicit context mounts and optional network access,
-  supports prior context and resumable stdio sessions, and removes the
-  container when the session ends.
+- `driva/` — a standalone isolated command runner. It exposes only explicit
+  host mounts, disables networking by default, and delegates execution to a
+  replaceable isolation backend. Docker is the initial backend.
 - `orka/` — the orchestrator. It uses Linka to find and track work and Driva to
-  execute agent sessions. It owns orchestration policy and durable attempts,
+  execute agent commands in isolation. It owns orchestration policy and durable attempts,
   but no review workflow.
 - `nota/` — a standalone review application for comments and suggested edits.
   Review persistence is behind a storage trait. Initial backends store records

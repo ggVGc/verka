@@ -25,12 +25,12 @@ The repository is a suite of four independently usable applications:
 results, consumed-input pins, output references, and derived status,
 readiness, blockers, provenance, and staleness.
 
-**Driva** owns one containerized agent session: Docker lifecycle, explicit
-mounts, network policy, process I/O, prior agent context, session continuation,
-and cleanup. It has no knowledge of tasks, graphs, attempts, or reviews.
+**Driva** owns one isolated command execution: explicit mounts, network policy,
+process I/O, exit status, and cleanup through a replaceable isolation backend.
+It has no knowledge of agents, tasks, graphs, attempts, or reviews.
 
 **Orka** owns multi-session orchestration: selecting Linka work, freezing its
-inputs, creating durable attempts, constructing a Driva session request,
+inputs, creating durable attempts, constructing a Driva execution request,
 handling its outcome, and version-safely reporting results to Linka. It does
 not own Docker mechanics or review state.
 
@@ -45,8 +45,8 @@ File and Linka-backed persistence are adapters, not assumptions in the model.
 3. Nota's core depends only on `ReviewStore`; its optional Linka adapter may
    depend on Linka.
 4. Linka does not interpret Orka attempts or Nota review records.
-5. Driva does not receive Linka node IDs or Orka policy unless they are opaque
-   user-provided context.
+5. Driva does not receive Linka node IDs or interpret Orka policy; it receives
+   only the concrete command and capability grant chosen by its caller.
 6. Orka contains no review decisions, candidate publication, or review UI.
 
 ## Information flow
@@ -67,8 +67,7 @@ it remains ordinary versionable files in the reviewed repository.
 Each application writes only through storage it owns or an explicit adapter:
 
 - Linka owns its graph store (default `.linka/`).
-- Driva owns ephemeral container/session runtime data and any explicitly
-  configured retained transcript or continuation state.
+- Driva owns ephemeral isolation runtime data until command cleanup completes.
 - Orka owns durable orchestration attempts and audit evidence.
 - Nota owns review records through `ReviewStore`.
 
@@ -88,8 +87,8 @@ nota/        standalone review application
 ## Architectural verification
 
 - Linka builds and tests without Driva, Orka, or Nota.
-- Driva tests use fake container/process drivers and no Linka types.
-- Orka tests can substitute fake graph and session-runner implementations.
+- Driva policy tests use a fake isolation backend and no Linka types.
+- Orka tests can substitute fake graph and isolated-executor implementations.
 - Nota domain tests run against an in-memory `ReviewStore` contract suite;
   file and Linka adapters run the same persistence contract tests.
 - Dependency checks reject imports that reverse the arrows above.

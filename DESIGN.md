@@ -3,7 +3,7 @@
 The accepted architecture is four applications with explicit boundaries:
 
 - **Linka** stores the versioned node graph.
-- **Driva** runs one isolated agent session in Docker.
+- **Driva** runs one command through a replaceable isolation backend.
 - **Orka** uses Linka and Driva to orchestrate work.
 - **Nota** records review comments, suggested edits, and follow-up requests
   through a pluggable storage backend.

@@ -1,7 +1,7 @@
 # Parallel variants, selection, and switching
 
 Status: retained orchestration design. Execution is Orka policy implemented
-through Driva sessions; review behavior belongs to Nota.
+through Driva executions; review behavior belongs to Nota.
 
 ## 1. Purpose
 
