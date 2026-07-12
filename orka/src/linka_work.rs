@@ -38,6 +38,16 @@ pub enum Settled {
     Conflict(Vec<SubmissionConflict>),
 }
 
+/// A result Linka already recorded, attributed to a specific Orka attempt by
+/// its producer evidence. Lets recovery recognize its own accepted result in
+/// the crash window between Linka accepting and Orka sealing, instead of
+/// re-submitting (which the now-complete node would reject as stale).
+#[derive(Clone, Debug)]
+pub struct RecordedResult {
+    pub outcome: Outcome,
+    pub output_commit: Option<String>,
+}
+
 pub struct LinkaWork<'a> {
     store: &'a Store,
 }
@@ -93,6 +103,32 @@ impl<'a> LinkaWork<'a> {
             dependency_context,
             lineage_context,
         })
+    }
+
+    /// The result Linka currently records for `node`, if it was produced by
+    /// the given Orka attempt (matched by namespaced producer evidence). Used
+    /// by recovery to settle idempotently across the accept-before-seal crash
+    /// window without a spurious stale conflict.
+    pub fn result_by_attempt(
+        &self,
+        node: &NodeId,
+        attempt_id: &str,
+    ) -> Result<Option<RecordedResult>> {
+        let Some((result, _)) = self.store.read_result(node.as_str())? else {
+            return Ok(None);
+        };
+        let Some(producer) = &result.producer else {
+            return Ok(None);
+        };
+        if producer.namespace != "orka"
+            || producer.data.get("attempt").and_then(|v| v.as_str()) != Some(attempt_id)
+        {
+            return Ok(None);
+        }
+        Ok(Some(RecordedResult {
+            outcome: result.outcome,
+            output_commit: result.output.map(|artifact| artifact.id),
+        }))
     }
 
     /// Read the prompt prose for a set of pinned related nodes.

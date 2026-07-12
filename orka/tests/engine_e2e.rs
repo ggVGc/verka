@@ -317,6 +317,61 @@ fn recovery_settles_an_executed_attempt_and_a_second_pass_duplicates_nothing() {
 }
 
 #[test]
+fn recovery_after_linka_accepted_but_before_seal_recognizes_its_own_result() {
+    // The crash window: Linka accepted the result but Orka never sealed. The
+    // node is now complete, so a naive resubmit would look stale — recovery
+    // must instead recognize its own accepted result (by producer evidence).
+    let (_temp, root) = workbench();
+    let node = add_node(&root, "Accepted then crashed", vec![]);
+    let (store, workspaces, attempts) = parts(&root);
+    let executor = FakeExecutor::default();
+    let engine = engine!(&root, store, executor, workspaces, attempts);
+
+    let id = AttemptId::new();
+    let linka = LinkaWork::new(&store);
+    let input = linka.prepare_input(&node.parse().unwrap()).unwrap();
+    attempts.create(&id, &input).unwrap();
+    let ws = workspaces_prepare(&root, &id, input.input_commit());
+    attempts.plan_workspace(&id, &ws).unwrap();
+    attempts.mark_prepared(&id).unwrap();
+    let io = attempts.io_dir(&id).unwrap();
+    std::fs::write(
+        io.join("outcome.toml"),
+        "outcome = \"succeeded\"\nnotes = \"done\"\n",
+    )
+    .unwrap();
+    let evidence = ExecutionReport {
+        backend: "fake".into(),
+        backend_reference: None,
+        exit_code: 0,
+        started_at_ms: 1,
+        finished_at_ms: 2,
+    };
+    attempts.record_evidence(&id, &evidence).unwrap();
+
+    // Linka accepts the (graph-only) result, attributed to this attempt — then
+    // "the crash" happens before Orka seals.
+    linka
+        .submit_success(
+            &input,
+            &ws.path,
+            &[],
+            None,
+            "done".into(),
+            orka::linka_work::producer_evidence(&id, &evidence),
+        )
+        .unwrap();
+    assert!(attempts.load(&id).unwrap().seal.is_none(), "not yet sealed");
+
+    let reports = engine.recover().unwrap();
+    assert!(
+        matches!(reports[0].sealed, Some(SealedState::Submitted { .. })),
+        "recovery recognized its own accepted result: {:?}",
+        reports[0].sealed
+    );
+}
+
+#[test]
 fn recovery_seals_a_pre_evidence_attempt_as_interrupted_and_submits_nothing() {
     let (_temp, root) = workbench();
     let node = add_node(&root, "Never ran", vec![]);

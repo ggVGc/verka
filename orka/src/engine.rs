@@ -202,6 +202,20 @@ impl Engine<'_> {
                 outcome,
                 backend_failed,
             } => {
+                // Idempotency across the accept-before-seal crash window: if
+                // Linka already holds a result this attempt produced, seal from
+                // it rather than resubmitting into a now-complete (and so
+                // stale-looking) node.
+                if let Some(recorded) = self.linka.result_by_attempt(input.node(), &attempt.0)? {
+                    let sealed = match recorded.outcome {
+                        linka::Outcome::Done => SealedState::Submitted {
+                            output_commit: recorded.output_commit,
+                        },
+                        linka::Outcome::Failed => SealedState::FailureRecorded,
+                    };
+                    self.attempts.seal(attempt, sealed.clone())?;
+                    return Ok((sealed, backend_failed));
+                }
                 let producer = linka_work::producer_evidence(attempt, report);
                 let (settled, succeeded) = match outcome {
                     AgentOutcome::Succeeded {
