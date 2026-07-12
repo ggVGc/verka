@@ -208,22 +208,20 @@ pub fn respond(store: &Store, vcs: &dyn Vcs, id: &str, notes: &str, author: Auth
     if notes.trim().is_empty() {
         bail!("a response needs some text");
     }
-    let (meta, _) = store.read_node(id)?;
-    let consumed = pin_deps(store, &meta)?;
-    let result = ResultMeta {
-        schema: 1,
-        at: now_millis(),
-        author,
-        definition: store.node_version(id)?,
-        outcome: Outcome::Done,
-        consumed,
-        context: Vec::new(),
-        output: None,
-        producer: None,
-    };
-    store.write_result(id, &result, notes)?;
-    vcs.commit_store(&store.store_name(), &format!("linka: respond {id}"))?;
-    Ok(())
+    let snapshot = snapshot_work(store, vcs, id, &[])?;
+    submit_result(
+        store,
+        vcs,
+        ResultSubmission {
+            snapshot,
+            outcome: Outcome::Done,
+            output: None,
+            notes: notes.into(),
+            author,
+            producer: None,
+        },
+    )
+    .map_err(|error| anyhow::anyhow!(error))
 }
 
 /// Record that a node's work was attempted and failed. Like [`complete`] it pins
@@ -589,6 +587,20 @@ pub fn submit_result(
     }
     if !node_state(store, vcs, id)?.is_ready() {
         conflicts.push(SubmissionConflict::ReadinessChanged);
+    }
+    if submission.outcome == Outcome::Done {
+        for dependency in &snapshot.dependencies {
+            let state = node_state(store, vcs, &dependency.id)?;
+            if !state.is_complete()
+                || dependency.outcome != Some(Outcome::Done)
+                || dependency.result.is_none()
+            {
+                if !conflicts.contains(&SubmissionConflict::ReadinessChanged) {
+                    conflicts.push(SubmissionConflict::ReadinessChanged);
+                }
+                break;
+            }
+        }
     }
     let previous = store
         .read_result(id)?
@@ -1508,12 +1520,10 @@ mod tests {
         done(&store, &fake, &consumer);
         assert!(staleness(&store, &fake, &consumer).unwrap().is_empty());
 
+        edit(&store, &fake, &answer, "answer, revised".into()).unwrap();
         respond(&store, &fake, &answer, "use option B", Author::Human).unwrap();
         let reasons = staleness(&store, &fake, &consumer).unwrap();
-        assert_eq!(
-            reasons,
-            vec![StalenessReason::ConsumedResultChanged { id: answer }]
-        );
+        assert!(reasons.contains(&StalenessReason::ConsumedResultChanged { id: answer }));
         assert!(node_state(&store, &fake, &consumer).unwrap().is_ready());
         let state = node_state(&store, &fake, &consumer).unwrap();
         assert_eq!(state.currency, Currency::Stale);
@@ -1864,6 +1874,7 @@ mod tests {
         )
         .unwrap();
         let dependency_snapshot = snapshot_work(&store, &fake, &consumer, &[]).unwrap();
+        edit(&store, &fake, &dependency, "dependency, revised".into()).unwrap();
         respond(&store, &fake, &dependency, "new evidence", Author::Human).unwrap();
         let dependency_submission = ResultSubmission {
             snapshot: dependency_snapshot,
@@ -1906,6 +1917,37 @@ mod tests {
             store.read_result(&node).unwrap().unwrap().1,
             "other producer"
         );
+    }
+
+    #[test]
+    fn successful_results_require_ready_dependencies_but_lineage_does_not_block() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs::default();
+        let dependency = add(&store, &fake, new_node("dependency", vec![])).unwrap();
+        let blocked = add(&store, &fake, new_node("blocked", vec![dependency.clone()])).unwrap();
+        assert!(complete(&store, &fake, &blocked, &[], &[], None, "", Author::Human).is_err());
+        assert!(respond(&store, &fake, &blocked, "answer", Author::Human).is_err());
+        assert!(store.read_result(&blocked).unwrap().is_none());
+
+        fail(&store, &fake, &blocked, "blocked attempt", Author::Machine).unwrap();
+        assert_eq!(
+            store.read_result(&blocked).unwrap().unwrap().0.outcome,
+            Outcome::Failed
+        );
+
+        let lineage = add(&store, &fake, new_node("lineage", vec![])).unwrap();
+        let mut derived = new_node("derived", vec![]);
+        derived.derived_from = vec![lineage];
+        let derived = add(&store, &fake, derived).unwrap();
+        respond(
+            &store,
+            &fake,
+            &derived,
+            "lineage does not block",
+            Author::Human,
+        )
+        .unwrap();
+        assert!(node_state(&store, &fake, &derived).unwrap().is_complete());
     }
 
     #[test]

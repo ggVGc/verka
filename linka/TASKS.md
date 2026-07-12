@@ -189,25 +189,25 @@ Tests:
 
 ## 9. Enforce valid successful results
 
-- [ ] Require a successful submission to match its snapshot and have all
+- [x] Require a successful submission to match its snapshot and have all
   current `depends_on` nodes complete.
-- [ ] Forbid a successful `depends_on` pin with no result or with failed/stale
+- [x] Forbid a successful `depends_on` pin with no result or with failed/stale
   evidence.
-- [ ] Separate required dependency pins from weaker lineage pins if that makes
+- [x] Separate required dependency pins from weaker lineage pins if that makes
   their invariants explicit.
-- [ ] Define `derived_from` behavior: it does not block readiness, but observed
+- [x] Define `derived_from` behavior: it does not block readiness, but observed
   lineage versions participate in provenance and later staleness.
-- [ ] Make `respond` an output-free convenience over ordinary checked result
+- [x] Make `respond` an output-free convenience over ordinary checked result
   submission rather than a special graph concept.
-- [ ] Continue allowing failed evidence to be recorded without falsely marking
+- [x] Continue allowing failed evidence to be recorded without falsely marking
   the node complete.
 
 Tests:
 
-- [ ] A blocked node cannot receive a successful result.
-- [ ] Failed, stale, and result-less required dependencies prevent success.
-- [ ] Output-free success follows the same validation as output-producing work.
-- [ ] Lineage does not accidentally become a scheduling dependency.
+- [x] A blocked node cannot receive a successful result.
+- [x] Failed, stale, and result-less required dependencies prevent success.
+- [x] Output-free success follows the same validation as output-producing work.
+- [x] Lineage does not accidentally become a scheduling dependency.
 
 ## 10. Make context and artifact identity revision-based
 
