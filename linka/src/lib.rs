@@ -27,4 +27,4 @@ pub use model::{
 };
 pub use pairing::Pairing;
 pub use store::Store;
-pub use vcs::Vcs;
+pub use vcs::{ArtifactStore, ContextIdentity, RepositoryIdentity, StoreHistory, Vcs};

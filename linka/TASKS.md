@@ -235,14 +235,14 @@ Tests:
 
 ## 11. Narrow Linka's VCS and storage interfaces
 
-- [ ] Split the broad `Vcs` trait into narrow graph-facing capabilities for
+- [x] Split the broad `Vcs` trait into narrow graph-facing capabilities for
   store history, artifact inspection/retention, and context identity.
-- [ ] Remove branch, revision-resolution, worktree, and publication methods
+- [x] Remove branch, revision-resolution, worktree, and publication methods
   from Linka's public traits.
-- [ ] Move `Worktree`, candidate-branch helpers, worktree cleanup, ref
+- [x] Move `Worktree`, candidate-branch helpers, worktree cleanup, ref
   publication, and their tests into Orka or a project adapter owned by Orka.
-- [ ] Keep only generic artifact facts and inspection in Linka.
-- [ ] Add dependency/architecture checks ensuring Linka does not import Orka,
+- [x] Keep only generic artifact facts and inspection in Linka.
+- [x] Add dependency/architecture checks ensuring Linka does not import Orka,
   review, worktree, session, or publication concepts.
 
 Methods to move out of Linka include:

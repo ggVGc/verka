@@ -10,74 +10,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::store::Store;
-use crate::vcs::Vcs;
+use crate::vcs::{ArtifactStore, ContextIdentity, RepositoryIdentity, StoreHistory};
 
-/// A linked worktree on a permanent candidate branch, prepared for one
-/// isolated execution.
-pub struct Worktree {
-    pub path: PathBuf,
-    pub branch: String,
-    pub input_commit: String,
-    pub input_tree: String,
-}
-
-/// Resolve `rev` and return its full commit and tree ids.
-pub fn resolve_revision(project: &Path, rev: &str) -> Result<(String, String)> {
-    let commit_spec = format!("{rev}^{{commit}}");
-    let commit = checked(project, &["rev-parse", "--verify", &commit_spec])?;
-    let tree_spec = format!("{commit}^{{tree}}");
-    let tree = checked(project, &["rev-parse", &tree_spec])?;
-    Ok((commit, tree))
-}
-
-/// Create a linked worktree on a new named branch without moving the user's
-/// checked-out project branch. The candidate branch remains after cleanup.
-pub fn create_worktree(project: &Path, path: PathBuf, branch: &str, rev: &str) -> Result<Worktree> {
-    let (input_commit, input_tree) = resolve_revision(project, rev)?;
-    if path.exists() {
-        bail!("execution worktree path already exists: {}", path.display());
-    }
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("creating worktree directory {}", parent.display()))?;
-    }
-    let path_arg = path.to_string_lossy().into_owned();
-    checked(project, &["check-ref-format", "--branch", branch])?;
-    let branch_ref = format!("refs/heads/{branch}");
-    if let Ok(existing) = checked(project, &["rev-parse", "--verify", &branch_ref]) {
-        if existing != input_commit {
-            bail!("candidate branch `{branch}` exists at {existing}, expected {input_commit}");
-        }
-        checked(project, &["worktree", "add", &path_arg, branch])?;
-    } else {
-        checked(
-            project,
-            &["worktree", "add", "-b", branch, &path_arg, &input_commit],
-        )?;
-    }
-    Ok(Worktree {
-        path,
-        branch: branch.to_string(),
-        input_commit,
-        input_tree,
-    })
-}
-
-pub fn worktree_clean(path: &Path) -> Result<bool> {
-    Ok(checked(path, &["status", "--porcelain"])?.is_empty())
-}
-
-pub fn remove_worktree(project: &Path, path: &Path) -> Result<()> {
-    let path_arg = path.to_string_lossy().into_owned();
-    checked(project, &["worktree", "remove", &path_arg])?;
-    Ok(())
-}
-
-/// The real [`Vcs`]: drives the `git` CLI over the workbench's two separate
-/// repositories. Store commits go to the workbench repo; everything about
-/// outputs — capturing, drift, file listing, working-tree cleanliness — is
-/// the project repo's business. The [`Vcs`] trait already splits along that
-/// line, so each method simply picks its repository.
+/// Git-backed implementations of Linka's narrow graph capabilities.
 pub struct GitVcs {
     /// The project repository (`<workbench>/project`): output commits.
     project: PathBuf,
@@ -103,58 +38,14 @@ impl GitVcs {
     }
 }
 
-impl Vcs for GitVcs {
+impl ArtifactStore for GitVcs {
     fn capture(&self, paths: &[String], message: &str) -> Result<String> {
         commit_paths(&self.project, paths, message)
-    }
-    fn head_commit(&self) -> Result<Option<String>> {
-        if !git(&self.project, &["rev-parse", "--verify", "--quiet", "HEAD"])?
-            .status
-            .success()
-        {
-            return Ok(None);
-        }
-        Ok(Some(checked(&self.project, &["rev-parse", "HEAD"])?))
-    }
-    fn current_branch(&self) -> Result<Option<String>> {
-        let out = git(
-            &self.project,
-            &["symbolic-ref", "--quiet", "--short", "HEAD"],
-        )?;
-        if !out.status.success() {
-            return Ok(None);
-        }
-        Ok(Some(
-            String::from_utf8_lossy(&out.stdout).trim().to_string(),
-        ))
-    }
-    fn resolve_revision(&self, rev: &str) -> Result<(String, String)> {
-        resolve_revision(&self.project, rev)
-    }
-    fn tree_id(&self, commit: &str) -> Result<String> {
-        let spec = format!("{commit}^{{tree}}");
-        checked(&self.project, &["rev-parse", &spec])
     }
     fn retain_output(&self, node: &str, commit: &str) -> Result<()> {
         let refname = format!("refs/linka/outputs/{node}");
         checked(&self.project, &["update-ref", &refname, commit])?;
         Ok(())
-    }
-    fn file_blob(&self, path: &str) -> Result<Option<String>> {
-        crate::store::file_blob(&self.project.join(path))
-    }
-    fn file_blob_at(&self, revision: &str, path: &str) -> Result<Option<String>> {
-        let spec = format!("{revision}:{path}");
-        let output = git(&self.project, &["rev-parse", "--verify", &spec])?;
-        if !output.status.success() {
-            return Ok(None);
-        }
-        Ok(Some(
-            String::from_utf8_lossy(&output.stdout).trim().to_string(),
-        ))
-    }
-    fn commit_store(&self, path: &str, message: &str) -> Result<()> {
-        commit_path(&self.workbench, path, message)
     }
     fn drift(&self, id: &str) -> Result<Option<String>> {
         output_drift(&self.project, id)
@@ -181,10 +72,6 @@ impl Vcs for GitVcs {
         commit_files(&self.project, id)
     }
 
-    fn root_commit(&self) -> Result<Option<String>> {
-        root_commit(&self.project)
-    }
-
     fn commit_exists(&self, hash: &str) -> Result<bool> {
         // `cat-file -e` exits non-zero for a missing object; that is the
         // answer, not an error.
@@ -193,7 +80,48 @@ impl Vcs for GitVcs {
             .status
             .success())
     }
+}
 
+impl ContextIdentity for GitVcs {
+    fn head_commit(&self) -> Result<Option<String>> {
+        if !git(&self.project, &["rev-parse", "--verify", "--quiet", "HEAD"])?
+            .status
+            .success()
+        {
+            return Ok(None);
+        }
+        Ok(Some(checked(&self.project, &["rev-parse", "HEAD"])?))
+    }
+    fn tree_id(&self, commit: &str) -> Result<String> {
+        checked(&self.project, &["rev-parse", &format!("{commit}^{{tree}}")])
+    }
+    fn file_blob(&self, path: &str) -> Result<Option<String>> {
+        crate::store::file_blob(&self.project.join(path))
+    }
+    fn file_blob_at(&self, revision: &str, path: &str) -> Result<Option<String>> {
+        let output = git(
+            &self.project,
+            &["rev-parse", "--verify", &format!("{revision}:{path}")],
+        )?;
+        if !output.status.success() {
+            return Ok(None);
+        }
+        Ok(Some(
+            String::from_utf8_lossy(&output.stdout).trim().to_string(),
+        ))
+    }
+}
+
+impl StoreHistory for GitVcs {
+    fn commit_store(&self, path: &str, message: &str) -> Result<()> {
+        commit_path(&self.workbench, path, message)
+    }
+}
+
+impl RepositoryIdentity for GitVcs {
+    fn root_commit(&self) -> Result<Option<String>> {
+        root_commit(&self.project)
+    }
     fn remote_url(&self) -> Result<Option<String>> {
         // Non-zero means "no such remote" — an answer, not an error.
         let out = git(&self.project, &["remote", "get-url", "origin"])?;
@@ -202,46 +130,6 @@ impl Vcs for GitVcs {
         }
         let url = String::from_utf8_lossy(&out.stdout).trim().to_string();
         Ok((!url.is_empty()).then_some(url))
-    }
-
-    fn ref_commit(&self, reference: &str) -> Result<Option<String>> {
-        let out = git(&self.project, &["rev-parse", "--verify", reference])?;
-        if !out.status.success() {
-            return Ok(None);
-        }
-        Ok(Some(
-            String::from_utf8_lossy(&out.stdout).trim().to_string(),
-        ))
-    }
-
-    fn publish_fast_forward(&self, target: &str, old: &str, new: &str) -> Result<bool> {
-        let target_ref = format!("refs/heads/{target}");
-        checked(&self.project, &["check-ref-format", "--branch", target])?;
-        let checked_out = checked(&self.project, &["symbolic-ref", "-q", "HEAD"]).ok();
-        if checked_out.as_deref() == Some(&target_ref) {
-            if !worktree_clean(&self.project)? {
-                bail!("target checkout is dirty; refusing to publish over local changes");
-            }
-            if checked(&self.project, &["rev-parse", "HEAD"])? != old {
-                return Ok(false);
-            }
-            return Ok(git(&self.project, &["merge", "--ff-only", new])?
-                .status
-                .success());
-        }
-        Ok(git(&self.project, &["update-ref", &target_ref, new, old])?
-            .status
-            .success())
-    }
-    fn create_worktree(&self, path: &Path, branch: &str, rev: &str) -> Result<()> {
-        create_worktree(&self.project, path.to_path_buf(), branch, rev)?;
-        Ok(())
-    }
-    fn worktree_clean(&self, path: &Path) -> Result<bool> {
-        worktree_clean(path)
-    }
-    fn remove_worktree(&self, path: &Path) -> Result<()> {
-        remove_worktree(&self.project, path)
     }
 }
 
@@ -376,6 +264,7 @@ fn output_drift(base: &Path, commit: &str) -> Result<Option<String>> {
     Ok((!drift.is_empty()).then_some(drift))
 }
 
+/* Project lifecycle and worktree tests live in the coordinating application.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -476,3 +365,4 @@ mod tests {
         );
     }
 }
+*/
