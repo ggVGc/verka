@@ -3,10 +3,16 @@
 mod config;
 mod docker;
 mod podman;
+mod session;
 
 pub use config::{Config, DockerConfig, IsolationConfig, MountConfig, NetworkConfig, PodmanConfig};
 pub use docker::DockerIsolation;
 pub use podman::PodmanIsolation;
+pub use session::{
+    BackendReference, CleanupObservation, DurableIsolation, Observation, ObservedProcessState,
+    ProcessConnection, RedactedExecutionRequest, SessionId, SessionRecord, SessionRunner,
+    SessionSnapshot, SessionStore, StartedSession,
+};
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -27,7 +33,7 @@ pub struct ExecutionRequest {
     pub interactive: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct Mount {
     pub source: PathBuf,
     pub destination: PathBuf,
@@ -44,7 +50,7 @@ pub enum MountAccess {
     ReadWrite,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct EffectivePolicy {
     pub working_directory: PathBuf,
     pub mounts: Vec<Mount>,
@@ -52,7 +58,7 @@ pub struct EffectivePolicy {
     pub interactive: bool,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ExecutionOutcome {
     pub exit: ProcessExit,
     pub evidence: ExecutionEvidence,
@@ -67,7 +73,7 @@ pub struct ExecutionEvidence {
     pub finished_at: SystemTime,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub enum ProcessExit {
     Code(i32),
     Signaled,

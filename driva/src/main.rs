@@ -33,6 +33,31 @@ enum Operation {
         #[command(flatten)]
         policy: PolicyArgs,
     },
+    /// Start a durable isolated session and print its id.
+    Start {
+        #[command(flatten)]
+        policy: PolicyArgs,
+        #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
+        command: Vec<OsString>,
+    },
+    /// Attach the terminal to a durable session.
+    Attach { session: driva::SessionId },
+    /// Inspect backend-authoritative session state.
+    Inspect { session: driva::SessionId },
+    /// Wait for a session and return its exit status.
+    Wait { session: driva::SessionId },
+    /// Gracefully terminate a session and return its exit status.
+    Terminate {
+        session: driva::SessionId,
+        #[arg(long, default_value_t = 10)]
+        grace: u64,
+    },
+    /// Remove a session resource and its local record after confirming absence.
+    Remove { session: driva::SessionId },
+    /// List recorded sessions and their current backend states.
+    List,
+    /// Rediscover and inspect recorded sessions.
+    Recover,
 }
 
 #[derive(Args, Default)]
@@ -76,12 +101,21 @@ fn real_main() -> Result<()> {
         Some(ref path) => Config::load(path)?,
         None => Config::discover()?,
     };
-    let (policy, command, shell) = match cli.command {
-        Operation::Run { policy, command } => (policy, command, false),
+    let operation = cli.command;
+    if !matches!(
+        operation,
+        Operation::Run { .. } | Operation::Shell { .. } | Operation::Start { .. }
+    ) {
+        return lifecycle(&config, operation);
+    }
+    let (policy, command, shell, durable) = match operation {
+        Operation::Run { policy, command } => (policy, command, false, false),
         Operation::Shell { mut policy } => {
             policy.interactive = true;
-            (policy, vec![OsString::from("/bin/sh")], true)
+            (policy, vec![OsString::from("/bin/sh")], true, false)
         }
+        Operation::Start { policy, command } => (policy, command, false, true),
+        _ => unreachable!(),
     };
     let configured_workdir = match config.isolation.backend.as_str() {
         "podman" => &config.isolation.podman.workdir,
@@ -125,7 +159,11 @@ fn real_main() -> Result<()> {
                 image: policy.image.unwrap_or(config.isolation.podman.image),
             };
             let invocation = backend.command(&request);
-            finish("podman", &backend, invocation, &request, policy.dry_run)
+            if durable {
+                start_session(&backend, request, policy.dry_run, invocation)
+            } else {
+                finish("podman", &backend, invocation, &request, policy.dry_run)
+            }
         }
         "docker" => {
             let backend = DockerIsolation {
@@ -133,10 +171,91 @@ fn real_main() -> Result<()> {
                 image: policy.image.unwrap_or(config.isolation.docker.image),
             };
             let invocation = backend.command(&request);
-            finish("docker", &backend, invocation, &request, policy.dry_run)
+            if durable {
+                start_session(&backend, request, policy.dry_run, invocation)
+            } else {
+                finish("docker", &backend, invocation, &request, policy.dry_run)
+            }
         }
         _ => unreachable!("backend was validated above"),
     }
+}
+
+fn runner_backend(config: &Config) -> Result<Box<dyn driva::DurableIsolation>> {
+    Ok(match config.isolation.backend.as_str() {
+        "podman" => Box::new(PodmanIsolation {
+            executable: config.isolation.podman.executable.clone(),
+            image: config.isolation.podman.image.clone(),
+        }),
+        "docker" => Box::new(DockerIsolation {
+            executable: config.isolation.docker.executable.clone(),
+            image: config.isolation.docker.image.clone(),
+        }),
+        b => bail!("unsupported isolation backend {b:?}"),
+    })
+}
+
+fn lifecycle(config: &Config, operation: Operation) -> Result<()> {
+    let backend = runner_backend(config)?;
+    let runner = driva::SessionRunner::new(
+        backend.as_ref(),
+        driva::SessionStore::new(driva::SessionStore::default_path()),
+    );
+    match operation {
+        Operation::Attach { session } => {
+            let exit = runner.attach(&session, ExecutionIo::inherited()?)?;
+            std::process::exit(exit.code())
+        }
+        Operation::Inspect { session } => {
+            let s = runner.inspect(&session)?;
+            println!("{} {} {:?}", s.record.id, s.record.backend, s.observed);
+        }
+        Operation::Wait { session } => {
+            let o = runner.wait(&session)?;
+            std::process::exit(o.exit.code())
+        }
+        Operation::Terminate { session, grace } => {
+            let o = runner.terminate(&session, std::time::Duration::from_secs(grace))?;
+            std::process::exit(o.exit.code())
+        }
+        Operation::Remove { session } => {
+            let o = runner.remove(&session)?;
+            if o.state != driva::ObservedProcessState::Missing {
+                bail!("backend resource still present: {:?}", o.state)
+            }
+        }
+        Operation::List => {
+            for r in runner.store.list()? {
+                let state = runner.inspect(&r.id)?.observed;
+                println!("{}\t{}\t{:?}", r.id, r.backend, state)
+            }
+        }
+        Operation::Recover => {
+            for s in runner.recover()? {
+                println!("{}\t{}\t{:?}", s.record.id, s.record.backend, s.observed)
+            }
+        }
+        _ => unreachable!(),
+    }
+    Ok(())
+}
+
+fn start_session(
+    backend: &dyn driva::DurableIsolation,
+    request: ExecutionRequest,
+    dry_run: bool,
+    invocation: Command,
+) -> Result<()> {
+    if dry_run {
+        print_dry_run(backend.backend_name(), invocation, &request);
+        return Ok(());
+    }
+    let runner = driva::SessionRunner::new(
+        backend,
+        driva::SessionStore::new(driva::SessionStore::default_path()),
+    );
+    println!("{}", runner.start(request)?.record.id);
+    Ok(())
 }
 
 fn finish(

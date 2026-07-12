@@ -42,3 +42,31 @@ conflicting grants; `execute` validates before dispatching to a backend.
 
 Podman is the default backend. Docker remains available by setting
 `isolation.backend = "docker"` and configuring `[isolation.docker]`.
+
+## Durable sessions
+
+Long-running commands can be detached and managed later. Both Podman and
+Docker sessions are labelled with their Driva session id so recovery can
+rediscover the backend resource:
+
+```sh
+id=$(cargo run -- start --write . -- make watch)
+cargo run -- inspect "$id"
+cargo run -- attach "$id"
+cargo run -- wait "$id"
+cargo run -- terminate "$id" --grace 10
+cargo run -- remove "$id"
+cargo run -- list
+cargo run -- recover
+```
+
+Session records and append-only observations are stored below
+`$DRIVA_STATE_DIR`, `$XDG_STATE_HOME/driva`, or `~/.local/state/driva` (in
+that order). Records retain the effective grant and environment variable
+names, but deliberately omit environment values. Current process state is
+always queried from the container backend; a missing resource is never
+reported as a successful exit.
+
+The production-hardening roadmap, lifecycle invariants, storage protocol, and
+phase acceptance criteria are specified in
+[`STAGE2_IMPLEMENTATION.md`](STAGE2_IMPLEMENTATION.md).
