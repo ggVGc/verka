@@ -149,6 +149,72 @@ pub enum Status {
     Done,
     Failed,
 }
+
+/// The result evidence currently recorded for a node.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecordedOutcome {
+    Open,
+    Succeeded,
+    Failed,
+}
+
+/// Whether recorded evidence still covers the current graph and project facts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Currency {
+    Current,
+    Stale,
+}
+
+/// A machine-readable reason that recorded evidence is stale.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StalenessReason {
+    DefinitionChanged { metadata: bool, description: bool },
+    ConsumedDefinitionChanged { id: String },
+    ConsumedNodeMissing { id: String },
+    ConsumedResultChanged { id: String },
+    ConsumedOutputChanged { id: String },
+    ContextChanged { path: String },
+    ContextMissing { path: String },
+    OutputDrifted { artifact: String, detail: String },
+}
+
+/// Why one required dependency does not satisfy a node.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BlockerReason {
+    Missing,
+    Open,
+    Failed,
+    Stale,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Blocker {
+    pub id: String,
+    pub reason: BlockerReason,
+}
+
+/// The complete derived state of one node at a point in time.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NodeState {
+    pub outcome: RecordedOutcome,
+    pub currency: Currency,
+    pub staleness: Vec<StalenessReason>,
+    pub blockers: Vec<Blocker>,
+}
+
+impl NodeState {
+    pub fn is_complete(&self) -> bool {
+        self.outcome == RecordedOutcome::Succeeded && self.currency == Currency::Current
+    }
+
+    pub fn is_ready(&self) -> bool {
+        !self.is_complete() && self.blockers.is_empty()
+    }
+
+    pub fn is_blocked(&self) -> bool {
+        !self.is_complete() && !self.blockers.is_empty()
+    }
+}
 impl Status {
     pub fn as_str(self) -> &'static str {
         match self {

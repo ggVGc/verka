@@ -37,17 +37,17 @@ Acceptance criteria:
 
 ## 2. Introduce one authoritative derived-state API
 
-- [ ] Add structured types for recorded outcome, currency, blockers, and
+- [x] Add structured types for recorded outcome, currency, blockers, and
   staleness reasons.
-- [ ] Add a `NodeState` type with `is_complete`, `is_ready`, and `is_blocked`
+- [x] Add a `NodeState` type with `is_complete`, `is_ready`, and `is_blocked`
   helpers.
-- [ ] Implement a single fallible `node_state` derivation that reads the
+- [x] Implement a single fallible `node_state` derivation that reads the
   definition and result, checks all pins and output validity, evaluates
   blockers, and returns structured state.
-- [ ] Reimplement `current_status`, `staleness`, `blockers`, `is_ready`,
+- [x] Reimplement `current_status`, `staleness`, `blockers`, `is_ready`,
   `ready_nodes`, and `unsettled` as projections over that derivation.
-- [ ] Move human-readable reason formatting into the CLI.
-- [ ] Deprecate APIs whose return types cannot represent stale or corrupt state.
+- [x] Move human-readable reason formatting into the CLI.
+- [x] Deprecate APIs whose return types cannot represent stale or corrupt state.
 
 Acceptance criteria:
 

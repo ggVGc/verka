@@ -17,8 +17,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use ulid::Ulid;
 
 use crate::model::{
-    ArtifactRef, Author, ConsumedNode, ContextPin, DefinitionVersion, DepKind, NodeMeta, Outcome,
-    ResultMeta, ResultVersion, Status,
+    ArtifactRef, Author, Blocker, BlockerReason, ConsumedNode, ContextPin, Currency,
+    DefinitionVersion, DepKind, NodeMeta, NodeState, Outcome, RecordedOutcome, ResultMeta,
+    ResultVersion, StalenessReason, Status,
 };
 use crate::pairing::Pairing;
 use crate::store::{file_blob, Store};
@@ -109,10 +110,7 @@ pub fn link(store: &Store, vcs: &dyn Vcs, from: &str, to: &str, kind: DepKind) -
     }
     edges.push(to.into());
     store.write_node(from, &meta, &description)?;
-    vcs.commit_store(
-        &store.store_name(),
-        &format!("linka: link {from} -> {to}"),
-    )?;
+    vcs.commit_store(&store.store_name(), &format!("linka: link {from} -> {to}"))?;
     Ok(())
 }
 
@@ -294,139 +292,171 @@ pub fn amend_context(store: &Store, vcs: &dyn Vcs, id: &str, reads: &[String]) -
     Ok(added)
 }
 
-/// A node's derived status.
-///
-/// `done` holds only while the result's definition version still matches:
-/// editing the definition after completion reopens the node, because the
-/// completion no longer certifies the current content.
-pub fn current_status(store: &Store, id: &str) -> Status {
-    let Ok(version) = store.node_version(id) else {
-        return Status::Open;
-    };
-    let result = store.read_result(id).ok().flatten().map(|(result, _)| result);
-    crate::model::status(&version, result.as_ref())
+/// Derive all graph state through one fallible evaluation.
+pub fn node_state(store: &Store, vcs: &dyn Vcs, id: &str) -> Result<NodeState> {
+    let mut visiting = std::collections::HashSet::new();
+    node_state_inner(store, vcs, id, &mut visiting)
 }
 
-/// Collect explicit reasons a node's recorded work is stale, if any. A node with
-/// no result cannot be stale (there is no work to invalidate).
-///
-/// Independent sources of staleness:
-///   * a pinned dependency whose definition has moved (or that vanished),
-///   * a pinned dependency whose output commit has changed since,
-///   * a pinned context file whose content has drifted,
-///   * the node's own outputs changed since its output commit, and
-///   * the definition edited after completion (which also reopens the node).
-pub fn staleness(store: &Store, vcs: &dyn Vcs, id: &str) -> Vec<String> {
-    let Ok(Some((result, _))) = store.read_result(id) else {
-        return Vec::new();
-    };
-    let mut reasons = Vec::new();
-    match store.node_version(id) {
-        Ok(current) if current != result.definition => {
-            let mut detail = Vec::new();
-            if current.metadata != result.definition.metadata {
-                detail.push("node.toml changed");
+fn node_state_inner(
+    store: &Store,
+    vcs: &dyn Vcs,
+    id: &str,
+    visiting: &mut std::collections::HashSet<String>,
+) -> Result<NodeState> {
+    let (meta, _) = store
+        .read_node(id)
+        .with_context(|| format!("reading definition for `{id}`"))?;
+    if !visiting.insert(id.to_string()) {
+        bail!("dependency cycle while deriving state at `{id}`");
+    }
+    let result = (|| {
+        let result = store.read_result(id)?;
+        let (outcome, staleness) = match result.as_ref() {
+            None => (RecordedOutcome::Open, Vec::new()),
+            Some((result, _)) => {
+                let outcome = match result.outcome {
+                    Outcome::Done => RecordedOutcome::Succeeded,
+                    Outcome::Failed => RecordedOutcome::Failed,
+                };
+                (outcome, staleness_for_result(store, vcs, id, result)?)
             }
-            if current.description != result.definition.description {
-                detail.push("description.md changed");
+        };
+        let currency = if staleness.is_empty() {
+            Currency::Current
+        } else {
+            Currency::Stale
+        };
+        let mut blockers = Vec::new();
+        for dependency in &meta.depends_on {
+            if !store.exists(dependency) {
+                blockers.push(Blocker {
+                    id: dependency.clone(),
+                    reason: BlockerReason::Missing,
+                });
+                continue;
             }
-            reasons.push(format!(
-                "definition changed since the work ({})",
-                detail.join(", ")
-            ));
+            let dependency_state = node_state_inner(store, vcs, dependency, visiting)?;
+            if !dependency_state.is_complete() {
+                let reason = if dependency_state.currency == Currency::Stale {
+                    BlockerReason::Stale
+                } else {
+                    match dependency_state.outcome {
+                        RecordedOutcome::Open => BlockerReason::Open,
+                        RecordedOutcome::Failed => BlockerReason::Failed,
+                        RecordedOutcome::Succeeded => BlockerReason::Stale,
+                    }
+                };
+                blockers.push(Blocker {
+                    id: dependency.clone(),
+                    reason,
+                });
+            }
         }
-        Err(_) => reasons.push("definition missing or unreadable since the work".into()),
-        _ => {}
+        Ok(NodeState {
+            outcome,
+            currency,
+            staleness,
+            blockers,
+        })
+    })();
+    visiting.remove(id);
+    result
+}
+
+fn staleness_for_result(
+    store: &Store,
+    vcs: &dyn Vcs,
+    id: &str,
+    result: &ResultMeta,
+) -> Result<Vec<StalenessReason>> {
+    let mut reasons = Vec::new();
+    let current = store.node_version(id)?;
+    if current != result.definition {
+        reasons.push(StalenessReason::DefinitionChanged {
+            metadata: current.metadata != result.definition.metadata,
+            description: current.description != result.definition.description,
+        });
     }
     for consumed in &result.consumed {
-        match store.node_version(&consumed.id) {
-            Ok(current) if current != consumed.definition => {
-                reasons.push(format!("dependency {}: definition moved", consumed.id))
-            }
-            Err(_) => reasons.push(format!("dependency {}: missing", consumed.id)),
-            _ => {}
+        if !store.exists(&consumed.id) {
+            reasons.push(StalenessReason::ConsumedNodeMissing {
+                id: consumed.id.clone(),
+            });
+            continue;
         }
-        let current_result = store.read_result(&consumed.id).ok().flatten();
+        if store.node_version(&consumed.id)? != consumed.definition {
+            reasons.push(StalenessReason::ConsumedDefinitionChanged {
+                id: consumed.id.clone(),
+            });
+        }
+        let current_result = store.read_result(&consumed.id)?;
         let current_version = current_result
             .is_some()
-            .then(|| store.result_version(&consumed.id).ok())
-            .flatten();
+            .then(|| store.result_version(&consumed.id))
+            .transpose()?;
         if current_version != consumed.result {
-            reasons.push(format!(
-                "dependency {}: result changed since it was consumed",
-                consumed.id
-            ));
+            reasons.push(StalenessReason::ConsumedResultChanged {
+                id: consumed.id.clone(),
+            });
         }
         let current_output = current_result.and_then(|(r, _)| r.output);
         if current_output != consumed.output {
-            reasons.push(format!("dependency {}: output changed", consumed.id));
+            reasons.push(StalenessReason::ConsumedOutputChanged {
+                id: consumed.id.clone(),
+            });
         }
     }
     let root = store.project_root();
     for pin in &result.context {
         match file_blob(&root.join(&pin.path)) {
-            Some(now) if now != pin.identity => {
-                reasons.push(format!("context {}: content changed", pin.path))
-            }
-            None => reasons.push(format!("context {}: missing", pin.path)),
+            Some(now) if now != pin.identity => reasons.push(StalenessReason::ContextChanged {
+                path: pin.path.clone(),
+            }),
+            None => reasons.push(StalenessReason::ContextMissing {
+                path: pin.path.clone(),
+            }),
             _ => {}
         }
     }
     if let Some(output) = &result.output {
-        match vcs.drift(&output.id) {
-            Ok(Some(reason)) => reasons.push(format!(
-                "output changed since {}:\n      {}",
-                output.id,
-                reason.replace('\n', "\n      ")
-            )),
-            Err(error) => reasons.push(format!("output check failed ({}): {error}", output.id)),
-            _ => {}
+        if let Some(detail) = vcs.drift(&output.id)? {
+            reasons.push(StalenessReason::OutputDrifted {
+                artifact: output.id.clone(),
+                detail,
+            });
         }
     }
-    reasons
+    Ok(reasons)
 }
 
-/// Reasons a node's `depends_on` dependencies are unsatisfied — empty means the
-/// node can be worked. A dependency is satisfied only if it is `done` (on its
-/// current definition) and its own recorded work is not stale.
-pub fn blockers(store: &Store, vcs: &dyn Vcs, id: &str) -> Vec<String> {
-    let Ok((meta, _)) = store.read_node(id) else {
-        return Vec::new();
-    };
-    let mut blockers = Vec::new();
-    for dependency in &meta.depends_on {
-        if !store.exists(dependency) {
-            blockers.push(format!("{dependency}: missing"));
-            continue;
-        }
-        match current_status(store, dependency) {
-            Status::Done if !staleness(store, vcs, dependency).is_empty() => {
-                blockers.push(format!("{dependency}: stale"))
-            }
-            Status::Done => {}
-            Status::Open => blockers.push(format!("{dependency}: not done (open)")),
-            Status::Failed => blockers.push(format!("{dependency}: not done (failed)")),
-        }
-    }
-    blockers
+#[deprecated(note = "use node_state; Status cannot represent stale or evaluation errors")]
+pub fn current_status(store: &Store, vcs: &dyn Vcs, id: &str) -> Result<Status> {
+    let state = node_state(store, vcs, id)?;
+    Ok(match state.outcome {
+        RecordedOutcome::Open => Status::Open,
+        RecordedOutcome::Failed => Status::Failed,
+        RecordedOutcome::Succeeded if state.currency == Currency::Current => Status::Done,
+        RecordedOutcome::Succeeded => Status::Open,
+    })
 }
 
-/// Whether a node is ready to be worked: not already done, and no unsatisfied
-/// dependencies. (A failed node is ready again — its work can be retried.)
-pub fn is_ready(store: &Store, vcs: &dyn Vcs, id: &str) -> bool {
-    if !store.exists(id) {
-        return false;
-    }
-    if !blockers(store, vcs, id).is_empty() {
-        return false;
-    }
-    current_status(store, id) != Status::Done
+pub fn staleness(store: &Store, vcs: &dyn Vcs, id: &str) -> Result<Vec<StalenessReason>> {
+    Ok(node_state(store, vcs, id)?.staleness)
+}
+
+pub fn blockers(store: &Store, vcs: &dyn Vcs, id: &str) -> Result<Vec<Blocker>> {
+    Ok(node_state(store, vcs, id)?.blockers)
+}
+
+pub fn is_ready(store: &Store, vcs: &dyn Vcs, id: &str) -> Result<bool> {
+    Ok(node_state(store, vcs, id)?.is_ready())
 }
 
 pub fn ready_nodes(store: &Store, vcs: &dyn Vcs, worker: Option<Author>) -> Result<Vec<String>> {
     let mut ready = Vec::new();
     for id in store.list_ids()? {
-        if !is_ready(store, vcs, &id) {
+        if !node_state(store, vcs, &id)?.is_ready() {
             continue;
         }
         let (meta, _) = store.read_node(&id)?;
@@ -518,13 +548,18 @@ pub fn unsettled(store: &Store, vcs: &dyn Vcs, id: &str) -> Result<Vec<String>> 
         if !seen.insert(node.clone()) {
             continue;
         }
-        match current_status(store, &node) {
-            Status::Done => {
-                if !staleness(store, vcs, &node).is_empty() {
-                    reasons.push(format!("{node}: done but stale"));
-                }
+        let state = node_state(store, vcs, &node)?;
+        if !state.is_complete() {
+            if state.outcome == RecordedOutcome::Succeeded {
+                reasons.push(format!("{node}: done but stale"));
+            } else {
+                let outcome = match state.outcome {
+                    RecordedOutcome::Open => "open",
+                    RecordedOutcome::Failed => "failed",
+                    RecordedOutcome::Succeeded => unreachable!(),
+                };
+                reasons.push(format!("{node}: not done ({outcome})"));
             }
-            other => reasons.push(format!("{node}: not done ({})", other.as_str())),
         }
         for dependent in rev.get(&node).into_iter().flatten() {
             queue.push_back(dependent.clone());
@@ -847,6 +882,7 @@ fn now_millis() -> i64 {
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
     use crate::vcs::FakeVcs;
@@ -979,12 +1015,14 @@ mod tests {
             amend_context(&store, &fake, &id, &["read.txt".into()]).unwrap(),
             1
         );
-        assert!(staleness(&store, &fake, &id).is_empty());
+        assert!(staleness(&store, &fake, &id).unwrap().is_empty());
 
         std::fs::write(root.join("read.txt"), "v2").unwrap();
-        let reasons = staleness(&store, &fake, &id);
+        let reasons = staleness(&store, &fake, &id).unwrap();
         assert!(
-            reasons.iter().any(|r| r.contains("read.txt")),
+            reasons
+                .iter()
+                .any(|r| format!("{r:?}").contains("read.txt")),
             "{reasons:?}"
         );
     }
@@ -998,9 +1036,9 @@ mod tests {
 
         let id = add(&store, &fake, new_node("a", vec![])).unwrap();
         assert!(store.exists(&id));
-        assert_eq!(current_status(&store, &id), Status::Open);
+        assert_eq!(current_status(&store, &fake, &id).unwrap(), Status::Open);
         assert!(
-            staleness(&store, &fake, &id).is_empty(),
+            staleness(&store, &fake, &id).unwrap().is_empty(),
             "no result, nothing to invalidate"
         );
     }
@@ -1026,7 +1064,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(commit.as_deref(), Some("commit-abc"));
-        assert_eq!(current_status(&store, &id), Status::Done);
+        assert_eq!(current_status(&store, &fake, &id).unwrap(), Status::Done);
         assert_eq!(
             output_of(&store, &id).unwrap().as_deref(),
             Some("commit-abc")
@@ -1062,7 +1100,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(commit, None);
-        assert_eq!(current_status(&store, &id), Status::Done);
+        assert_eq!(current_status(&store, &fake, &id).unwrap(), Status::Done);
         assert!(fake.captured.borrow().is_empty(), "nothing captured");
     }
 
@@ -1072,17 +1110,18 @@ mod tests {
         let fake = FakeVcs::default();
         let id = add(&store, &fake, new_node("a", vec![])).unwrap();
         done(&store, &fake, &id);
-        assert_eq!(current_status(&store, &id), Status::Done);
+        assert_eq!(current_status(&store, &fake, &id).unwrap(), Status::Done);
 
         edit(&store, &fake, &id, "revised".into()).unwrap();
-        assert_eq!(current_status(&store, &id), Status::Open);
-        let reasons = staleness(&store, &fake, &id);
-        assert!(
-            reasons
-                .iter()
-                .any(|r| r.contains("definition changed since the work")),
-            "{reasons:?}"
-        );
+        assert_eq!(current_status(&store, &fake, &id).unwrap(), Status::Open);
+        let reasons = staleness(&store, &fake, &id).unwrap();
+        assert!(matches!(
+            reasons.as_slice(),
+            [StalenessReason::DefinitionChanged {
+                description: true,
+                ..
+            }]
+        ));
     }
 
     #[test]
@@ -1096,12 +1135,12 @@ mod tests {
         meta.assignee = Some(Author::Human);
         store.write_node(&id, &meta, &description).unwrap();
 
-        assert_eq!(current_status(&store, &id), Status::Open);
-        let reasons = staleness(&store, &fake, &id);
-        assert!(
-            reasons.iter().any(|r| r.contains("node.toml changed")),
-            "{reasons:?}"
-        );
+        assert_eq!(current_status(&store, &fake, &id).unwrap(), Status::Open);
+        let reasons = staleness(&store, &fake, &id).unwrap();
+        assert!(matches!(
+            reasons.as_slice(),
+            [StalenessReason::DefinitionChanged { metadata: true, .. }]
+        ));
     }
 
     #[test]
@@ -1112,15 +1151,13 @@ mod tests {
         done(&store, &fake, &a);
         let b = add(&store, &fake, new_node("b", vec![a.clone()])).unwrap();
         done(&store, &fake, &b);
-        assert!(staleness(&store, &fake, &b).is_empty());
+        assert!(staleness(&store, &fake, &b).unwrap().is_empty());
 
         edit(&store, &fake, &a, "revised".into()).unwrap();
-        let reasons = staleness(&store, &fake, &b);
-        assert!(
-            reasons
-                .iter()
-                .any(|r| r.contains(&a) && r.contains("definition moved")),
-            "{reasons:?}"
+        let reasons = staleness(&store, &fake, &b).unwrap();
+        assert_eq!(
+            reasons,
+            vec![StalenessReason::ConsumedDefinitionChanged { id: a }]
         );
     }
 
@@ -1145,7 +1182,7 @@ mod tests {
         .unwrap();
         let b = add(&store, &fake, new_node("b", vec![a.clone()])).unwrap();
         done(&store, &fake, &b);
-        assert!(staleness(&store, &fake, &b).is_empty());
+        assert!(staleness(&store, &fake, &b).unwrap().is_empty());
 
         // A is re-worked and produces a new output commit -> B is stale.
         fake.next_id = "commit-2".into();
@@ -1160,13 +1197,8 @@ mod tests {
             Author::Human,
         )
         .unwrap();
-        let reasons = staleness(&store, &fake, &b);
-        assert!(
-            reasons
-                .iter()
-                .any(|r| r.contains(&a) && r.contains("output changed")),
-            "{reasons:?}"
-        );
+        let reasons = staleness(&store, &fake, &b).unwrap();
+        assert!(reasons.contains(&StalenessReason::ConsumedOutputChanged { id: a }));
     }
 
     #[test]
@@ -1177,15 +1209,19 @@ mod tests {
         respond(&store, &fake, &answer, "use option A", Author::Human).unwrap();
         let consumer = add(&store, &fake, new_node("consumer", vec![answer.clone()])).unwrap();
         done(&store, &fake, &consumer);
-        assert!(staleness(&store, &fake, &consumer).is_empty());
+        assert!(staleness(&store, &fake, &consumer).unwrap().is_empty());
 
         respond(&store, &fake, &answer, "use option B", Author::Human).unwrap();
-        let reasons = staleness(&store, &fake, &consumer);
+        let reasons = staleness(&store, &fake, &consumer).unwrap();
+        assert_eq!(
+            reasons,
+            vec![StalenessReason::ConsumedResultChanged { id: answer }]
+        );
+        let state = node_state(&store, &fake, &consumer).unwrap();
+        assert_eq!(state.currency, Currency::Stale);
         assert!(
-            reasons
-                .iter()
-                .any(|r| r.contains(&answer) && r.contains("result changed")),
-            "{reasons:?}"
+            !state.is_complete(),
+            "changed consumed evidence invalidates success"
         );
     }
 
@@ -1207,24 +1243,24 @@ mod tests {
             Author::Human,
         )
         .unwrap();
-        assert!(staleness(&store, &fake, &id).is_empty());
+        assert!(staleness(&store, &fake, &id).unwrap().is_empty());
 
         std::fs::write(store.project_root().join("helper.rs"), "v2").unwrap();
-        let reasons = staleness(&store, &fake, &id);
-        assert!(
-            reasons
-                .iter()
-                .any(|r| r.contains("context helper.rs") && r.contains("content changed")),
-            "{reasons:?}"
+        let reasons = staleness(&store, &fake, &id).unwrap();
+        assert_eq!(
+            reasons,
+            vec![StalenessReason::ContextChanged {
+                path: "helper.rs".into()
+            }]
         );
 
         std::fs::remove_file(store.project_root().join("helper.rs")).unwrap();
-        let reasons = staleness(&store, &fake, &id);
-        assert!(
-            reasons
-                .iter()
-                .any(|r| r.contains("context helper.rs") && r.contains("missing")),
-            "{reasons:?}"
+        let reasons = staleness(&store, &fake, &id).unwrap();
+        assert_eq!(
+            reasons,
+            vec![StalenessReason::ContextMissing {
+                path: "helper.rs".into()
+            }]
         );
     }
 
@@ -1247,15 +1283,15 @@ mod tests {
             Author::Human,
         )
         .unwrap();
-        assert!(staleness(&store, &fake, &id).is_empty());
+        assert!(staleness(&store, &fake, &id).unwrap().is_empty());
 
         fake.drift_for
             .insert("commit-x".into(), "M\tsrc/x.rs".into());
-        let reasons = staleness(&store, &fake, &id);
-        assert!(
-            reasons.iter().any(|r| r.contains("output changed since")),
-            "{reasons:?}"
-        );
+        let reasons = staleness(&store, &fake, &id).unwrap();
+        assert!(matches!(
+            reasons.as_slice(),
+            [StalenessReason::OutputDrifted { .. }]
+        ));
     }
 
     #[test]
@@ -1266,24 +1302,30 @@ mod tests {
         let b = add(&store, &fake, new_node("b", vec![a.clone()])).unwrap();
 
         // A not done -> B blocked, not ready.
-        let blocked = blockers(&store, &fake, &b);
-        assert!(
-            blocked.iter().any(|r| r.contains("not done")),
-            "{blocked:?}"
+        let blocked = blockers(&store, &fake, &b).unwrap();
+        assert_eq!(
+            blocked,
+            vec![Blocker {
+                id: a.clone(),
+                reason: BlockerReason::Open
+            }]
         );
-        assert!(!is_ready(&store, &fake, &b));
+        assert!(!is_ready(&store, &fake, &b).unwrap());
 
         // A done -> B ready.
         done(&store, &fake, &a);
-        assert!(blockers(&store, &fake, &b).is_empty());
-        assert!(is_ready(&store, &fake, &b));
+        assert!(blockers(&store, &fake, &b).unwrap().is_empty());
+        assert!(is_ready(&store, &fake, &b).unwrap());
 
         // A edited after done -> reopened -> B blocked again.
         edit(&store, &fake, &a, "revised".into()).unwrap();
-        let blocked = blockers(&store, &fake, &b);
-        assert!(
-            blocked.iter().any(|r| r.contains("not done")),
-            "{blocked:?}"
+        let blocked = blockers(&store, &fake, &b).unwrap();
+        assert_eq!(
+            blocked,
+            vec![Blocker {
+                id: a,
+                reason: BlockerReason::Stale
+            }]
         );
     }
 
@@ -1295,14 +1337,20 @@ mod tests {
         let b = add(&store, &fake, new_node("b", vec![a.clone()])).unwrap();
 
         fail(&store, &fake, &a, "build broke", Author::Human).unwrap();
-        assert_eq!(current_status(&store, &a), Status::Failed);
-        assert!(is_ready(&store, &fake, &a), "a failed node can be retried");
-        assert!(!is_ready(&store, &fake, &b), "its dependents stay blocked");
+        assert_eq!(current_status(&store, &fake, &a).unwrap(), Status::Failed);
+        assert!(
+            is_ready(&store, &fake, &a).unwrap(),
+            "a failed node can be retried"
+        );
+        assert!(
+            !is_ready(&store, &fake, &b).unwrap(),
+            "its dependents stay blocked"
+        );
 
         // Retry succeeds: the result is overwritten, B unblocks.
         done(&store, &fake, &a);
-        assert_eq!(current_status(&store, &a), Status::Done);
-        assert!(is_ready(&store, &fake, &b));
+        assert_eq!(current_status(&store, &fake, &a).unwrap(), Status::Done);
+        assert!(is_ready(&store, &fake, &b).unwrap());
     }
 
     #[test]
@@ -1458,12 +1506,12 @@ mod tests {
             "leaves settle too"
         );
 
-        // Editing the sub-task reopens it and flags the branch again, twice over:
-        // the sub-task is no longer done, and the impl is done-but-stale.
+        // Editing the sub-task makes both its success and the implementation
+        // that consumed it stale.
         edit(&store, &fake, &sub, "revised".into()).unwrap();
         let reasons = unsettled(&store, &fake, &root).unwrap();
         assert!(
-            reasons.contains(&format!("{sub}: not done (open)")),
+            reasons.contains(&format!("{sub}: done but stale")),
             "{reasons:?}"
         );
         assert!(
@@ -1521,16 +1569,12 @@ mod tests {
         );
         respond(&store, &dirty, &q, "concept A", Author::Human).unwrap();
 
-        assert_eq!(current_status(&store, &q), Status::Done);
+        assert_eq!(current_status(&store, &dirty, &q).unwrap(), Status::Done);
         let (result, notes) = store.read_result(&q).unwrap().unwrap();
         assert_eq!(notes, "concept A");
         assert_eq!(result.author, Author::Human);
         assert_eq!(result.output, None);
-        assert_eq!(
-            result.consumed.len(),
-            1,
-            "the answer pins its dependencies"
-        );
+        assert_eq!(result.consumed.len(), 1, "the answer pins its dependencies");
         assert!(
             dirty.captured.borrow().is_empty(),
             "no output commit is minted"
@@ -1538,7 +1582,7 @@ mod tests {
 
         // Editing the question afterwards invalidates the answer as usual.
         edit(&store, &dirty, &q, "Question: revised".into()).unwrap();
-        assert_eq!(current_status(&store, &q), Status::Open);
+        assert_eq!(current_status(&store, &dirty, &q).unwrap(), Status::Open);
     }
 
     #[test]

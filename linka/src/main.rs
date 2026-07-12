@@ -9,6 +9,7 @@ use clap::{Parser, Subcommand};
 use std::io;
 use std::path::PathBuf;
 
+use linka::model::{Blocker, BlockerReason, NodeState, StalenessReason};
 use linka::ops::{self, NewNode};
 use linka::{Author, DepKind, GitVcs, Store};
 
@@ -307,13 +308,14 @@ fn main() -> Result<()> {
 
         Cmd::List => {
             let store = Store::open(store)?;
+            let vcs = GitVcs::for_store(&store);
             for id in store.list_ids()? {
                 let (_, description) = store.read_node(&id)?;
-                let status = ops::current_status(&store, &id);
+                let state = ops::node_state(&store, &vcs, &id)?;
                 println!(
                     "{:<32} {:<8} {}",
                     id,
-                    status.as_str(),
+                    state_label(&state),
                     linka::title_of(&description)
                 );
             }
@@ -343,12 +345,12 @@ fn main() -> Result<()> {
             let vcs = GitVcs::for_store(&store);
             let mut found = false;
             for id in store.list_ids()? {
-                let reasons = ops::staleness(&store, &vcs, &id);
+                let reasons = ops::staleness(&store, &vcs, &id)?;
                 if !reasons.is_empty() {
                     found = true;
                     println!("{id}:");
                     for r in &reasons {
-                        println!("  {r}");
+                        println!("  {}", format_staleness(r));
                     }
                 }
             }
@@ -371,12 +373,12 @@ fn main() -> Result<()> {
             let vcs = GitVcs::for_store(&store);
             let mut any = false;
             for id in store.list_ids()? {
-                let blockers = ops::blockers(&store, &vcs, &id);
+                let blockers = ops::blockers(&store, &vcs, &id)?;
                 if !blockers.is_empty() {
                     any = true;
                     println!("{id}:");
                     for b in &blockers {
-                        println!("  blocked by {b}");
+                        println!("  blocked by {}", format_blocker(b));
                     }
                 }
             }
@@ -487,6 +489,58 @@ fn pairing_line(pairing: &linka::Pairing) -> String {
     line
 }
 
+fn state_label(state: &NodeState) -> &'static str {
+    if state.is_complete() {
+        "complete"
+    } else if state.is_ready() {
+        "ready"
+    } else {
+        "blocked"
+    }
+}
+
+fn format_blocker(blocker: &Blocker) -> String {
+    let reason = match blocker.reason {
+        BlockerReason::Missing => "missing",
+        BlockerReason::Open => "not complete (open)",
+        BlockerReason::Failed => "not complete (failed)",
+        BlockerReason::Stale => "not complete (stale)",
+    };
+    format!("{}: {reason}", blocker.id)
+}
+
+fn format_staleness(reason: &StalenessReason) -> String {
+    match reason {
+        StalenessReason::DefinitionChanged {
+            metadata,
+            description,
+        } => {
+            let mut files = Vec::new();
+            if *metadata {
+                files.push("node.toml");
+            }
+            if *description {
+                files.push("description.md");
+            }
+            format!("definition changed since the work ({})", files.join(", "))
+        }
+        StalenessReason::ConsumedDefinitionChanged { id } => {
+            format!("dependency {id}: definition moved")
+        }
+        StalenessReason::ConsumedNodeMissing { id } => format!("dependency {id}: missing"),
+        StalenessReason::ConsumedResultChanged { id } => {
+            format!("dependency {id}: result changed since it was consumed")
+        }
+        StalenessReason::ConsumedOutputChanged { id } => format!("dependency {id}: output changed"),
+        StalenessReason::ContextChanged { path } => format!("context {path}: content changed"),
+        StalenessReason::ContextMissing { path } => format!("context {path}: missing"),
+        StalenessReason::OutputDrifted { artifact, detail } => format!(
+            "output changed since {artifact}:\n      {}",
+            detail.replace('\n', "\n      ")
+        ),
+    }
+}
+
 /// The `show` view.
 fn show_node(store: &Store, vcs: &GitVcs, id: &str) -> Result<String> {
     let (meta, description) = store.read_node(id)?;
@@ -494,7 +548,8 @@ fn show_node(store: &Store, vcs: &GitVcs, id: &str) -> Result<String> {
     use std::fmt::Write;
 
     writeln!(out, "id:      {id}")?;
-    writeln!(out, "status:  {}", ops::current_status(store, id).as_str())?;
+    let state = ops::node_state(store, vcs, id)?;
+    writeln!(out, "status:  {}", state_label(&state))?;
     writeln!(out, "author:  {}", meta.author.as_str())?;
     if let Some(assignee) = meta.assignee {
         writeln!(out, "assignee: {}", assignee.as_str())?;
@@ -562,11 +617,11 @@ fn show_node(store: &Store, vcs: &GitVcs, id: &str) -> Result<String> {
         }
     }
 
-    let reasons = ops::staleness(store, vcs, id);
+    let reasons = state.staleness;
     if !reasons.is_empty() {
         writeln!(out, "stale:")?;
         for r in &reasons {
-            writeln!(out, "  {r}")?;
+            writeln!(out, "  {}", format_staleness(r))?;
         }
     }
     let description = description.trim_end();

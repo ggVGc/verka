@@ -20,8 +20,9 @@ pub mod vcs;
 
 pub use git::GitVcs;
 pub use model::{
-    title_of, ArtifactRef, Author, ConsumedNode, ContextPin, DefinitionVersion, DepKind, NodeMeta,
-    Outcome, ProducerEvidence, ResultMeta, ResultVersion, Status,
+    title_of, ArtifactRef, Author, Blocker, BlockerReason, ConsumedNode, ContextPin, Currency,
+    DefinitionVersion, DepKind, NodeMeta, NodeState, Outcome, ProducerEvidence, RecordedOutcome,
+    ResultMeta, ResultVersion, StalenessReason, Status,
 };
 pub use pairing::Pairing;
 pub use store::Store;
