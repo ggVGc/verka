@@ -1122,6 +1122,7 @@ mod tests {
                 ..
             }]
         ));
+        assert!(node_state(&store, &fake, &id).unwrap().is_ready());
     }
 
     #[test]
@@ -1199,6 +1200,7 @@ mod tests {
         .unwrap();
         let reasons = staleness(&store, &fake, &b).unwrap();
         assert!(reasons.contains(&StalenessReason::ConsumedOutputChanged { id: a }));
+        assert!(node_state(&store, &fake, &b).unwrap().is_ready());
     }
 
     #[test]
@@ -1217,6 +1219,7 @@ mod tests {
             reasons,
             vec![StalenessReason::ConsumedResultChanged { id: answer }]
         );
+        assert!(node_state(&store, &fake, &consumer).unwrap().is_ready());
         let state = node_state(&store, &fake, &consumer).unwrap();
         assert_eq!(state.currency, Currency::Stale);
         assert!(
@@ -1253,6 +1256,7 @@ mod tests {
                 path: "helper.rs".into()
             }]
         );
+        assert!(node_state(&store, &fake, &id).unwrap().is_ready());
 
         std::fs::remove_file(store.project_root().join("helper.rs")).unwrap();
         let reasons = staleness(&store, &fake, &id).unwrap();
@@ -1292,6 +1296,7 @@ mod tests {
             reasons.as_slice(),
             [StalenessReason::OutputDrifted { .. }]
         ));
+        assert!(node_state(&store, &fake, &id).unwrap().is_ready());
     }
 
     #[test]
@@ -1351,6 +1356,44 @@ mod tests {
         done(&store, &fake, &a);
         assert_eq!(current_status(&store, &fake, &a).unwrap(), Status::Done);
         assert!(is_ready(&store, &fake, &b).unwrap());
+    }
+
+    #[test]
+    fn stale_node_with_incomplete_dependency_is_blocked_and_blocks_dependents() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs::default();
+        let dependency = add(&store, &fake, new_node("dependency", vec![])).unwrap();
+        done(&store, &fake, &dependency);
+        let stale = add(
+            &store,
+            &fake,
+            new_node("consumer", vec![dependency.clone()]),
+        )
+        .unwrap();
+        done(&store, &fake, &stale);
+        let dependent = add(&store, &fake, new_node("dependent", vec![stale.clone()])).unwrap();
+
+        edit(&store, &fake, &dependency, "changed dependency".into()).unwrap();
+
+        let stale_state = node_state(&store, &fake, &stale).unwrap();
+        assert_eq!(stale_state.currency, Currency::Stale);
+        assert!(stale_state.is_blocked());
+        assert_eq!(
+            stale_state.blockers,
+            vec![Blocker {
+                id: dependency,
+                reason: BlockerReason::Stale,
+            }]
+        );
+        let dependent_state = node_state(&store, &fake, &dependent).unwrap();
+        assert!(dependent_state.is_blocked());
+        assert_eq!(
+            dependent_state.blockers,
+            vec![Blocker {
+                id: stale,
+                reason: BlockerReason::Stale,
+            }]
+        );
     }
 
     #[test]

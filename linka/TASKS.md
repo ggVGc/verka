@@ -58,22 +58,22 @@ Acceptance criteria:
 
 ## 3. Make stale work selectable for rework
 
-- [ ] Change readiness so a successful-but-stale node is ready when its current
+- [x] Change readiness so a successful-but-stale node is ready when its current
   `depends_on` dependencies are complete.
-- [ ] Keep a stale node blocked when any required dependency is incomplete.
-- [ ] Make dependents of stale nodes remain blocked.
-- [ ] Present the previous stale result as evidence without treating it as a
+- [x] Keep a stale node blocked when any required dependency is incomplete.
+- [x] Make dependents of stale nodes remain blocked.
+- [x] Present the previous stale result as evidence without treating it as a
   current completion.
 
 Tests:
 
-- [ ] Changed definition makes a previously successful node stale and ready.
-- [ ] Changed dependency result/output makes its consumer stale and ready once
+- [x] Changed definition makes a previously successful node stale and ready.
+- [x] Changed dependency result/output makes its consumer stale and ready once
   dependencies are complete.
-- [ ] Changed context and drifted output make a node stale and ready.
-- [ ] A stale node with an incomplete dependency is blocked.
-- [ ] A dependent of a stale node is blocked.
-- [ ] A failed node is ready only when its dependencies are complete.
+- [x] Changed context and drifted output make a node stale and ready.
+- [x] A stale node with an incomplete dependency is blocked.
+- [x] A dependent of a stale node is blocked.
+- [x] A failed node is ready only when its dependencies are complete.
 
 ## 4. Stop converting failures into graph facts
 
