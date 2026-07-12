@@ -101,6 +101,14 @@ files and finishes the idempotent remainder:
 - Never discard a dirty workspace; clean only sealed attempts or attempts that
   cannot have a result.
 
+Removing a clean execution worktree does not remove its candidate branch.
+Orka deliberately retains `orka/attempts/<attempt-id>` branches for accepted,
+failed, stale, and otherwise sealed attempts so their candidate state remains
+available for inspection, recovery, or later review. These branches are part
+of the attempt's evidence and are not garbage-collection candidates. Any
+future deletion must be an explicit pruning operation with a visible retention
+policy; ordinary run and recovery cleanup never deletes them.
+
 ## Producer evidence
 
 Every submitted result carries `linka::ProducerEvidence` in the stable `orka`

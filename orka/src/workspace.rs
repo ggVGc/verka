@@ -109,6 +109,10 @@ impl WorkspaceManager for GitWorkspaces {
         if !worktree_clean(&workspace.path)? {
             return Ok(CleanupOutcome::RetainedDirty);
         }
+        // Remove only the checked-out worktree. The candidate branch is
+        // durable attempt evidence for accepted, failed, and stale attempts;
+        // ordinary cleanup never deletes it. Branch removal belongs to a
+        // future explicit pruning policy coordinated with attempt retention.
         remove_worktree(&self.project, &workspace.path)?;
         Ok(CleanupOutcome::Removed)
     }

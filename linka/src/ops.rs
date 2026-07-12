@@ -729,9 +729,11 @@ pub fn submit_result(
 /// Ordering guarantee: a graph conflict records no result. For a successful
 /// submission with outputs the output commit is captured *before* the version
 /// check, but its output ref is retained only after the submission is accepted.
-/// A conflict therefore retains no ref and mutates no graph state; the
-/// unreferenced commit is left dangling in the project repository (reachable
-/// only through the caller's execution branch) and reclaimed by normal git gc.
+/// A conflict therefore retains no Linka output ref and mutates no graph
+/// state. The caller still owns the execution branch: an orchestrator such as
+/// Orka deliberately retains that branch as attempt evidence, so its captured
+/// commit remains reachable until an explicit caller-side pruning policy
+/// removes it.
 #[allow(clippy::too_many_arguments)]
 pub fn capture_submission(
     store: &Store,

@@ -53,6 +53,11 @@ writing `outcome.toml`; see `src/outcome.rs` for the contract. Publication of
 an accepted candidate branch into the project checkout is review's decision,
 not Orka's.
 
+Worktree cleanup retains the `orka/attempts/<attempt-id>` candidate branch for
+every sealed attempt, including stale submissions and recorded failures. This
+keeps attempted work available for later inspection or recovery. Orka does not
+currently prune attempt records or their candidate branches implicitly.
+
 ## Source
 
 Source from the former combined execution/review application
