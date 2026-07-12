@@ -14,6 +14,7 @@ pub mod driva_exec;
 pub mod fakes;
 pub mod linka_graph;
 pub mod ports;
+pub mod workspace;
 
 #[cfg(test)]
 mod tests {
