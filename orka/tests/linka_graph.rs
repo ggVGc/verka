@@ -3,7 +3,7 @@
 
 use orka::linka_graph::LinkaWorkGraph;
 use orka::ports::{NodeId, SubmitOutcome, Submission, WorkGraph, WorkOutcome};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 struct TempDir(PathBuf);
@@ -44,7 +44,7 @@ fn workbench() -> (TempDir, PathBuf) {
     (TempDir(root.clone()), root)
 }
 
-fn add_node(root: &PathBuf, description: &str, depends_on: Vec<String>) -> String {
+fn add_node(root: &Path, description: &str, depends_on: Vec<String>) -> String {
     let store = linka::Store::open(root.join(".linka")).unwrap();
     let vcs = linka::GitVcs::for_store(&store);
     linka::ops::add(
@@ -61,7 +61,7 @@ fn add_node(root: &PathBuf, description: &str, depends_on: Vec<String>) -> Strin
     .unwrap()
 }
 
-fn complete_node(root: &PathBuf, id: &str, outputs: &[String], notes: &str) {
+fn complete_node(root: &Path, id: &str, outputs: &[String], notes: &str) {
     let store = linka::Store::open(root.join(".linka")).unwrap();
     let vcs = linka::GitVcs::for_store(&store);
     linka::ops::complete(

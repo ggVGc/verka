@@ -110,17 +110,24 @@ impl FakeWorkspaces {
 }
 
 impl WorkspaceManager for FakeWorkspaces {
-    fn prepare(&self, attempt: &str, input_commit: &str) -> Result<PreparedWorkspace> {
-        let path = self.root.join(attempt);
-        if path.exists() {
-            return Err(anyhow!("workspace already exists: {}", path.display()));
-        }
-        std::fs::create_dir_all(&path)?;
-        Ok(PreparedWorkspace {
-            path,
+    fn plan(&self, attempt: &str, input_commit: &str) -> PreparedWorkspace {
+        PreparedWorkspace {
+            path: self.root.join(attempt),
             branch: format!("orka/attempts/{attempt}"),
             input_commit: input_commit.to_string(),
-        })
+        }
+    }
+
+    fn prepare(&self, attempt: &str, input_commit: &str) -> Result<PreparedWorkspace> {
+        let planned = self.plan(attempt, input_commit);
+        if planned.path.exists() {
+            return Err(anyhow!(
+                "workspace already exists: {}",
+                planned.path.display()
+            ));
+        }
+        std::fs::create_dir_all(&planned.path)?;
+        Ok(planned)
     }
 
     fn cleanup(&self, workspace: &PreparedWorkspace) -> Result<CleanupOutcome> {

@@ -8,8 +8,13 @@ description = "Graph-driven agent orchestration over Linka and Driva"
 name = "orka"
 path = "src/lib.rs"
 
+[[bin]]
+name = "orka"
+path = "src/main.rs"
+
 [dependencies]
 anyhow = "1"
+clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 ulid = "1"

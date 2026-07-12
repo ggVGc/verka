@@ -39,6 +39,14 @@ impl GitWorkspaces {
 }
 
 impl WorkspaceManager for GitWorkspaces {
+    fn plan(&self, attempt: &str, input_commit: &str) -> PreparedWorkspace {
+        PreparedWorkspace {
+            path: self.path_for(attempt),
+            branch: Self::branch_for(attempt),
+            input_commit: input_commit.to_string(),
+        }
+    }
+
     fn prepare(&self, attempt: &str, input_commit: &str) -> Result<PreparedWorkspace> {
         let branch = Self::branch_for(attempt);
         let path = self.path_for(attempt);

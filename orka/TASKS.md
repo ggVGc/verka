@@ -17,9 +17,9 @@ and [`../designs/ISOLATED_WORKTREE_EXECUTION.md`](../designs/ISOLATED_WORKTREE_E
 
 ## Phase 0 — Crate skeleton and boundary ports
 
-- [ ] `orka/Cargo.toml` with path dependencies on the `linka` and `driva`
+- [x] `orka/Cargo.toml` with path dependencies on the `linka` and `driva`
       libraries.
-- [ ] `src/ports.rs` defining Orka's two ports. All types crossing them are
+- [x] `src/ports.rs` defining Orka's two ports. All types crossing them are
       Orka-owned; adapters translate. No `linka::model` or
       `driva::ExecutionRequest` in port signatures.
 
@@ -35,19 +35,19 @@ and [`../designs/ISOLATED_WORKTREE_EXECUTION.md`](../designs/ISOLATED_WORKTREE_E
   }
   ```
 
-- [ ] `FakeWorkGraph` and `FakeExecutor` test doubles so every later phase is
+- [x] `FakeWorkGraph` and `FakeExecutor` test doubles so every later phase is
       testable without podman or a real graph.
-- [ ] Dependency rule holds: orchestration logic never reads `.linka/` or
+- [x] Dependency rule holds: orchestration logic never reads `.linka/` or
       invokes a container engine directly.
 
 ## Phase 1 — Durable attempt store
 
 An attempt is written before external side effects; build durability first.
 
-- [ ] `AttemptStore` trait plus `FsAttemptStore` under
+- [x] `AttemptStore` trait plus `FsAttemptStore` under
       `.orka/attempts/<attempt-id>/` (Orka-owned storage; no migration from
       `.linka/execution/` since orka starts fresh).
-- [ ] Per-attempt layout:
+- [x] Per-attempt layout:
   - `attempt.toml` — frozen Linka input, chosen mounts/network/command,
     workspace path, candidate branch, preparation markers.
   - `request.toml` — the exact Driva request, recorded before start.
@@ -55,34 +55,34 @@ An attempt is written before external side effects; build durability first.
   - `evidence.toml` — Driva `ExecutionEvidence` plus exit status.
   - `submission.toml` — sealed final state: submitted, failed, interrupted,
     or stale-at-submit.
-- [ ] State advances by writing new files, never rewriting old ones; sealing
+- [x] State advances by writing new files, never rewriting old ones; sealing
       is idempotent.
-- [ ] Tests simulate a crash after each lifecycle step and assert the attempt
+- [x] Tests simulate a crash after each lifecycle step and assert the attempt
       is classifiable and recoverable (compensated-transaction property).
 
 ## Phase 2 — Linka adapter for `WorkGraph`
 
-- [ ] `select_ready` / `freeze` over existing ops (`ready_nodes`,
+- [x] `select_ready` / `freeze` over existing ops (`ready_nodes`,
       `node_version`, the same pinning `complete` performs).
-- [ ] Version-checked submit. Gap: `linka::ops::complete` takes no expected
+- [x] Version-checked submit. Gap: `linka::ops::complete` takes no expected
       versions. Preferred fix: add a linka op (`complete_checked` or an
       `expected` parameter) returning a typed `Stale` error when current
       definition/dependency versions differ from the frozen ones, so the
       check happens where the store lock lives (no TOCTOU window).
       Fallback: adapter-side check-then-complete, acceptable only while Orka
       is the sole writer.
-- [ ] Failed/interrupted outcomes map to `ops::fail`.
-- [ ] Contract tests run identically against `FakeWorkGraph` and the real
+- [x] Failed/interrupted outcomes map to `ops::fail`.
+- [x] Contract tests run identically against `FakeWorkGraph` and the real
       adapter over a throwaway git repo + `.linka/` store, including the
       stale-at-submit path (mutate the node between freeze and submit).
 
 ## Phase 3 — Driva adapter for `IsolatedExecutor`
 
-- [ ] Wrap Stage 1 `driva::execute()` synchronously; translate
+- [x] Wrap Stage 1 `driva::execute()` synchronously; translate
       `ExecutionSpec` into `ExecutionRequest`.
-- [ ] Capture stdout/stderr into the attempt's `transcript.log` via
+- [x] Capture stdout/stderr into the attempt's `transcript.log` via
       `ExecutionIo` — Orka owns the authoritative transcript.
-- [ ] Persist `ExecutionEvidence` (backend, reference, effective policy,
+- [x] Persist `ExecutionEvidence` (backend, reference, effective policy,
       timestamps) into `evidence.toml`; backend/model evidence comes from the
       harness, not agent claims.
 - [ ] Later, isolated change: adopt Driva Stage 2 `SessionRunner` for
@@ -92,20 +92,20 @@ An attempt is written before external side effects; build durability first.
 
 Orka, not Driva, owns workspace geometry.
 
-- [ ] Create a linked worktree from the frozen input commit on a candidate
+- [x] Create a linked worktree from the frozen input commit on a candidate
       branch named by attempt id; record it in `attempt.toml` before
       creation, mark preparation complete after.
-- [ ] The Driva request mounts only the worktree read-write plus explicitly
+- [x] The Driva request mounts only the worktree read-write plus explicitly
       chosen read-only context; `.linka/` and the user's `project/` checkout
       are never mounted.
-- [ ] On success, capture declared outputs as one commit parented on the
+- [x] On success, capture declared outputs as one commit parented on the
       input commit; retain the ref so cleanup cannot orphan it.
-- [ ] Cleanup removes worktrees only for sealed attempts and never deletes
+- [x] Cleanup removes worktrees only for sealed attempts and never deletes
       dirty trees.
 
 ## Phase 5 — Outcome contract, orchestration loop, and CLI
 
-- [ ] Agent outcome contract (Orka-internal): the agent writes a well-known
+- [x] Agent outcome contract (Orka-internal): the agent writes a well-known
       `outcome.toml` (outcome, notes, declared output paths) inside a
       designated writable mount. Orka combines it with exit evidence:
   - outcome present + exit 0 → submit;
@@ -113,21 +113,21 @@ Orka, not Driva, owns workspace geometry.
   - no outcome + exit 0 → contract violation (finalization error);
   - no outcome + nonzero exit → seal interrupted attempt;
   - failed/graph-only outcome → seal without project-output submission.
-- [ ] `orka run [NODE]` — full lifecycle: select → freeze → record attempt →
+- [x] `orka run [NODE]` — full lifecycle: select → freeze → record attempt →
       prepare worktree → record Driva request → execute → capture evidence →
       re-check frozen versions → submit or seal as stale/failed.
-- [ ] `orka attempts` / `orka show ATTEMPT` — list and inspect attempts.
-- [ ] `orka recover` — classify each attempt (prepared-but-not-run,
+- [x] `orka attempts` / `orka show ATTEMPT` — list and inspect attempts.
+- [x] `orka recover` — classify each attempt (prepared-but-not-run,
       ran-but-unsealed, sealed-but-unsubmitted, submitted) and complete the
       remaining idempotent steps; recreate safe missing workspaces; never
       invent results or discard dirty files.
-- [ ] `orka.toml` — agent command template, image/backend selection, default
+- [x] `orka.toml` — agent command template, image/backend selection, default
       read-only context mounts, network policy. Orka config decides policy;
       driva config stays mechanism.
 
 ## Phase 6 — Scoped agent authority (deferrable)
 
-- [ ] Initially: the file-mount grant plus the outcome-file contract gives
+- [x] Initially: the file-mount grant plus the outcome-file contract gives
       the agent zero graph access.
 - [ ] Later: an attempt-scoped graph proxy (MCP authorized only by attempt
       id) if agents need to read node context or ask questions mid-run —

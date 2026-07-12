@@ -212,6 +212,10 @@ pub enum CleanupOutcome {
 
 /// Preparing and cleaning isolated per-attempt working trees.
 pub trait WorkspaceManager {
+    /// Where `prepare` would put the attempt's workspace — pure, so the plan
+    /// can be durably recorded before anything is created.
+    fn plan(&self, attempt: &str, input_commit: &str) -> PreparedWorkspace;
+
     /// Create a fresh working tree at `input_commit` on a candidate branch
     /// named for `attempt`. Fails if the workspace already exists.
     fn prepare(&self, attempt: &str, input_commit: &str) -> Result<PreparedWorkspace>;
