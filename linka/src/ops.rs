@@ -202,6 +202,109 @@ pub fn complete(
     Ok(output_commit)
 }
 
+/// The graph input a caller froze before starting work, for version-checked
+/// completion: the node's definition version and the pinned state of every
+/// dependency, exactly as [`pin_dependencies`] returned them at freeze time.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ExpectedInput {
+    pub definition: DefinitionVersion,
+    pub consumed: Vec<ConsumedNode>,
+}
+
+/// The answer to a version-checked completion. `Stale` is an answer, not an
+/// error: the graph moved between freeze and submit, and nothing was recorded.
+#[derive(Clone, Debug, PartialEq)]
+pub enum CheckedCompletion {
+    Accepted { output_commit: Option<String> },
+    Stale { reasons: Vec<String> },
+}
+
+/// Pin the current version and output of every dependency of `id`, as
+/// [`complete`] would. Public so a caller can freeze a node's input before
+/// working and later submit through [`complete_checked`].
+pub fn pin_dependencies(store: &Store, id: &str) -> Result<Vec<ConsumedNode>> {
+    let (meta, _) = store.read_node(id)?;
+    pin_deps(store, &meta)
+}
+
+/// Human-readable reasons the node no longer matches `expected` — its
+/// definition or any dependency's pinned state changed since the caller froze
+/// them. Empty means the frozen input still describes the graph.
+pub fn verify_frozen(store: &Store, id: &str, expected: &ExpectedInput) -> Result<Vec<String>> {
+    let mut reasons = Vec::new();
+    if store.node_version(id)? != expected.definition {
+        reasons.push(format!("definition of `{id}` changed since freeze"));
+    }
+    let current = pin_dependencies(store, id)?;
+    let frozen: std::collections::BTreeMap<&str, &ConsumedNode> =
+        expected.consumed.iter().map(|c| (c.id.as_str(), c)).collect();
+    let mut seen = std::collections::HashSet::new();
+    for now in &current {
+        seen.insert(now.id.as_str());
+        match frozen.get(now.id.as_str()) {
+            None => reasons.push(format!("dependency `{}` added since freeze", now.id)),
+            Some(then) if *then != now => {
+                let mut what = Vec::new();
+                if then.definition != now.definition {
+                    what.push("definition");
+                }
+                if then.result != now.result {
+                    what.push("result");
+                }
+                if then.output != now.output {
+                    what.push("output");
+                }
+                reasons.push(format!(
+                    "dependency `{}` changed since freeze ({})",
+                    now.id,
+                    what.join(", ")
+                ));
+            }
+            Some(_) => {}
+        }
+    }
+    for then in &expected.consumed {
+        if !seen.contains(then.id.as_str()) {
+            reasons.push(format!("dependency `{}` removed since freeze", then.id));
+        }
+    }
+    Ok(reasons)
+}
+
+/// [`complete`], accepted only while the graph still matches the input the
+/// caller froze before working: the node's definition and dependency pins are
+/// unchanged and the node is still ready. Anything else is answered as
+/// [`CheckedCompletion::Stale`] with nothing recorded — stale work must never
+/// silently complete.
+#[allow(clippy::too_many_arguments)] // mirrors `complete` plus the frozen input
+pub fn complete_checked(
+    store: &Store,
+    vcs: &dyn Vcs,
+    id: &str,
+    outputs: &[String],
+    context: &[String],
+    message: Option<String>,
+    notes: &str,
+    author: Author,
+    expected: &ExpectedInput,
+) -> Result<CheckedCompletion> {
+    let mut reasons = verify_frozen(store, id, expected)?;
+    let state = node_state(store, vcs, id)?;
+    if !state.is_ready() {
+        if state.is_complete() {
+            reasons.push(format!("`{id}` is already complete"));
+        }
+        for blocker in &state.blockers {
+            reasons.push(format!("`{id}` is blocked by `{}`", blocker.id));
+        }
+    }
+    if !reasons.is_empty() {
+        return Ok(CheckedCompletion::Stale { reasons });
+    }
+    let output_commit = complete(store, vcs, id, outputs, context, message, notes, author)?;
+    Ok(CheckedCompletion::Accepted { output_commit })
+}
+
 /// Answer a node: record it done with the response as its result notes,
 /// producing no output commit. Unlike [`complete`] this does not gate on
 /// project-tree cleanliness: an answer asserts no output provenance, and a
@@ -2846,5 +2949,124 @@ mod tests {
         assert!(problems
             .iter()
             .any(|p| p.starts_with(&b) && p.contains("built-against")));
+    }
+
+    #[test]
+    fn checked_completion_accepts_only_the_frozen_graph() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs {
+            next_id: "out1".into(),
+            ..Default::default()
+        };
+        let dep = add(&store, &fake, new_node("the dependency", vec![])).unwrap();
+        done(&store, &fake, &dep);
+        let id = add(&store, &fake, new_node("the work", vec![dep.clone()])).unwrap();
+
+        // Freeze, as an orchestrator would before starting work.
+        let expected = ExpectedInput {
+            definition: store.node_version(&id).unwrap(),
+            consumed: pin_dependencies(&store, &id).unwrap(),
+        };
+        assert!(verify_frozen(&store, &id, &expected).unwrap().is_empty());
+
+        // The graph unchanged: the submission is accepted and recorded.
+        std::fs::write(store.project_root().join("out.txt"), "o").unwrap();
+        let accepted = complete_checked(
+            &store,
+            &fake,
+            &id,
+            &["out.txt".into()],
+            &[],
+            None,
+            "did it",
+            Author::Machine,
+            &expected,
+        )
+        .unwrap();
+        assert_eq!(
+            accepted,
+            CheckedCompletion::Accepted {
+                output_commit: Some("out1".into())
+            }
+        );
+        assert!(node_state(&store, &fake, &id).unwrap().is_complete());
+    }
+
+    #[test]
+    fn checked_completion_refuses_a_moved_graph_and_records_nothing() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs::default();
+        let dep = add(&store, &fake, new_node("the dependency", vec![])).unwrap();
+        done(&store, &fake, &dep);
+        let id = add(&store, &fake, new_node("the work", vec![dep.clone()])).unwrap();
+        let expected = ExpectedInput {
+            definition: store.node_version(&id).unwrap(),
+            consumed: pin_dependencies(&store, &id).unwrap(),
+        };
+
+        // The node's own definition moves.
+        edit(&store, &fake, &id, "the work, redefined".into()).unwrap();
+        let reasons = verify_frozen(&store, &id, &expected).unwrap();
+        assert!(reasons.iter().any(|r| r.contains("definition")), "{reasons:?}");
+        let stale = complete_checked(
+            &store, &fake, &id, &[], &[], None, "n", Author::Machine, &expected,
+        )
+        .unwrap();
+        assert!(matches!(stale, CheckedCompletion::Stale { .. }));
+        assert!(store.read_result(&id).unwrap().is_none(), "nothing recorded");
+
+        // Re-freeze, then a dependency's result moves: also refused.
+        let expected = ExpectedInput {
+            definition: store.node_version(&id).unwrap(),
+            consumed: pin_dependencies(&store, &id).unwrap(),
+        };
+        // Re-record the dependency's result with new notes: its version moves.
+        complete(&store, &fake, &dep, &[], &[], None, "done again", Author::Human).unwrap();
+        let reasons = verify_frozen(&store, &id, &expected).unwrap();
+        assert!(
+            reasons.iter().any(|r| r.contains(&dep) && r.contains("result")),
+            "{reasons:?}"
+        );
+
+        // Re-freeze, then the dependency reopens (edited): the node is no
+        // longer ready, so even matching pins do not complete it.
+        let expected = ExpectedInput {
+            definition: store.node_version(&id).unwrap(),
+            consumed: pin_dependencies(&store, &id).unwrap(),
+        };
+        edit(&store, &fake, &dep, "the dependency, redefined".into()).unwrap();
+        let stale = complete_checked(
+            &store, &fake, &id, &[], &[], None, "n", Author::Machine, &expected,
+        )
+        .unwrap();
+        let CheckedCompletion::Stale { reasons } = stale else {
+            panic!("expected stale");
+        };
+        assert!(reasons.iter().any(|r| r.contains("blocked")), "{reasons:?}");
+        assert!(store.read_result(&id).unwrap().is_none());
+    }
+
+    #[test]
+    fn checked_completion_reports_edge_changes_since_freeze() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs::default();
+        let dep = add(&store, &fake, new_node("dep", vec![])).unwrap();
+        done(&store, &fake, &dep);
+        let id = add(&store, &fake, new_node("work", vec![dep.clone()])).unwrap();
+        let expected = ExpectedInput {
+            definition: store.node_version(&id).unwrap(),
+            consumed: pin_dependencies(&store, &id).unwrap(),
+        };
+
+        // An edge added after freeze is reported as such (the definition
+        // change is reported too — linking moves the node's version).
+        let extra = add(&store, &fake, new_node("extra", vec![])).unwrap();
+        link(&store, &fake, &id, &extra, DepKind::DependsOn).unwrap();
+        let reasons = verify_frozen(&store, &id, &expected).unwrap();
+        assert!(
+            reasons.iter().any(|r| r.contains(&extra) && r.contains("added")),
+            "{reasons:?}"
+        );
+        assert!(reasons.iter().any(|r| r.contains("definition")));
     }
 }

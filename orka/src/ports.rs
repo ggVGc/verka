@@ -48,6 +48,16 @@ pub struct ResultFingerprint {
     pub notes: Option<String>,
 }
 
+/// A pinned reference to content in an artifact system (for git: a commit).
+/// Stored with full fidelity so a submission compares exactly what freeze saw.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArtifactPin {
+    pub scheme: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub repository: String,
+    pub id: String,
+}
+
 /// A dependency's state as frozen for one attempt: exactly what the graph
 /// pinned, plus the prose the agent may be given as context.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -57,7 +67,7 @@ pub struct FrozenDependency {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result: Option<ResultFingerprint>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub output_commit: Option<String>,
+    pub output: Option<ArtifactPin>,
     pub title: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub result_notes: String,

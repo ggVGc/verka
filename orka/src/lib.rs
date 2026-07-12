@@ -11,6 +11,7 @@
 
 pub mod attempt;
 pub mod fakes;
+pub mod linka_graph;
 pub mod ports;
 
 #[cfg(test)]
@@ -45,7 +46,11 @@ mod tests {
                     metadata: "rm".into(),
                     notes: None,
                 }),
-                output_commit: Some("beef".into()),
+                output: Some(ArtifactPin {
+                    scheme: "git-commit".into(),
+                    repository: String::new(),
+                    id: "beef".into(),
+                }),
                 title: "the dependency".into(),
                 result_notes: "it worked".into(),
             }],
