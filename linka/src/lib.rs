@@ -22,8 +22,8 @@ pub use git::GitVcs;
 pub use model::{
     title_of, ArtifactRef, Author, Blocker, BlockerReason, ConsumedNode, ContextPin, Currency,
     DefinitionVersion, DepKind, NodeId, NodeMeta, NodeState, Outcome, ProducerEvidence,
-    ProjectPath, ProjectSnapshot, RecordedOutcome, ResultMeta, ResultVersion, StalenessReason,
-    Status, WorkSnapshot,
+    ProjectPath, ProjectSnapshot, RecordedOutcome, ResultMeta, ResultSubmission, ResultVersion,
+    StalenessReason, Status, SubmissionConflict, WorkSnapshot,
 };
 pub use pairing::Pairing;
 pub use store::Store;

@@ -108,6 +108,13 @@ versioned input, and submitting version-checked results. Nota may use an
 optional adapter to persist or link review records, but Linka never interprets
 their schema.
 
+Long-running workers must call `snapshot_work` before starting and
+`submit_result` when finished. Submission compares the frozen definition,
+dependency, lineage, context, readiness, and previous-result versions under the
+store mutation lock. `complete` is only a short-lived convenience that performs
+that snapshot/capture/submission sequence without handing control back to a
+caller between its steps.
+
 ## Non-goals
 
 - Starting or supervising agent processes.

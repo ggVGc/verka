@@ -19,7 +19,8 @@ use ulid::Ulid;
 use crate::model::{
     ArtifactRef, Author, Blocker, BlockerReason, ConsumedNode, ContextPin, Currency,
     DefinitionVersion, DepKind, NodeMeta, NodeState, Outcome, ProjectSnapshot, RecordedOutcome,
-    ResultMeta, ResultVersion, StalenessReason, Status, WorkSnapshot,
+    ResultMeta, ResultSubmission, ResultVersion, StalenessReason, Status, SubmissionConflict,
+    WorkSnapshot,
 };
 use crate::pairing::Pairing;
 use crate::store::{file_blob, Store};
@@ -163,13 +164,10 @@ pub fn complete(
     // The only uncommitted project changes allowed are the outputs we are about
     // to commit — completion is where output provenance is asserted.
     require_clean_except(vcs, &outputs)?;
-    let (meta, description) = store.read_node(id)?;
+    let (_, description) = store.read_node(id)?;
 
     let input_commit = vcs.head_commit()?;
-
-    // Pin everything the work saw, before committing anything.
-    let context = pin_context(store, vcs, context)?;
-    let consumed = pin_deps(store, &meta)?;
+    let snapshot = snapshot_work(store, vcs, id, context)?;
 
     let output_commit = if outputs.is_empty() {
         None
@@ -184,19 +182,19 @@ pub fn complete(
         Some(commit)
     };
 
-    let result = ResultMeta {
-        schema: 1,
-        at: now_millis(),
-        author,
-        definition: store.node_version(id)?,
-        outcome: Outcome::Done,
-        consumed,
-        context,
-        output: output_commit.as_deref().map(git_artifact),
-        producer: None,
-    };
-    store.write_result(id, &result, notes)?;
-    vcs.commit_store(&store.store_name(), &format!("linka: complete {id}"))?;
+    submit_result(
+        store,
+        vcs,
+        ResultSubmission {
+            snapshot,
+            outcome: Outcome::Done,
+            output: output_commit.as_deref().map(git_artifact),
+            notes: notes.into(),
+            author,
+            producer: None,
+        },
+    )
+    .map_err(|error| anyhow::anyhow!(error))?;
     Ok(output_commit)
 }
 
@@ -512,10 +510,12 @@ pub fn snapshot_work(
     let dependencies = pin_node_list(store, &meta.depends_on)?;
     let lineage = pin_node_list(store, &meta.derived_from)?;
     let context = pin_context(store, vcs, context)?;
-    let revision = vcs
-        .head_commit()?
-        .context("cannot snapshot work in a project with no revision")?;
-    let tree = vcs.tree_id(&revision)?;
+    let revision = vcs.head_commit()?.unwrap_or_default();
+    let tree = if revision.is_empty() {
+        String::new()
+    } else {
+        vcs.tree_id(&revision)?
+    };
     let repository = Pairing::load(store.root())?
         .map(|pairing| pairing.root_commit)
         .unwrap_or_default();
@@ -538,6 +538,85 @@ pub fn snapshot_work(
         },
         previous_result,
     })
+}
+
+#[derive(Debug)]
+pub enum SubmissionError {
+    Conflict(Vec<SubmissionConflict>),
+    Evaluation(anyhow::Error),
+}
+
+impl std::fmt::Display for SubmissionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Conflict(conflicts) => write!(f, "result submission conflicts: {conflicts:?}"),
+            Self::Evaluation(error) => error.fmt(f),
+        }
+    }
+}
+impl std::error::Error for SubmissionError {}
+impl From<anyhow::Error> for SubmissionError {
+    fn from(error: anyhow::Error) -> Self {
+        Self::Evaluation(error)
+    }
+}
+
+pub fn submit_result(
+    store: &Store,
+    vcs: &dyn Vcs,
+    submission: ResultSubmission,
+) -> std::result::Result<(), SubmissionError> {
+    let _lock = store.mutation_lock()?;
+    let snapshot = &submission.snapshot;
+    let id = snapshot.node.as_str();
+    let mut conflicts = Vec::new();
+    let (meta, _) = store.read_node(id)?;
+    if store.node_version(id)? != snapshot.definition {
+        conflicts.push(SubmissionConflict::DefinitionChanged);
+    }
+    if pin_node_list(store, &meta.depends_on)? != snapshot.dependencies {
+        conflicts.push(SubmissionConflict::DependenciesChanged);
+    }
+    if pin_node_list(store, &meta.derived_from)? != snapshot.lineage {
+        conflicts.push(SubmissionConflict::LineageChanged);
+    }
+    for pin in &snapshot.context {
+        if project_file_blob(&store.project_root(), &pin.path)?.as_deref() != Some(&pin.identity) {
+            conflicts.push(SubmissionConflict::ContextChanged {
+                path: pin.path.clone(),
+            });
+        }
+    }
+    if !node_state(store, vcs, id)?.is_ready() {
+        conflicts.push(SubmissionConflict::ReadinessChanged);
+    }
+    let previous = store
+        .read_result(id)?
+        .is_some()
+        .then(|| store.result_version(id))
+        .transpose()?;
+    if previous != snapshot.previous_result {
+        conflicts.push(SubmissionConflict::PreviousResultChanged);
+    }
+    if !conflicts.is_empty() {
+        return Err(SubmissionError::Conflict(conflicts));
+    }
+    let mut consumed = snapshot.dependencies.clone();
+    consumed.extend(snapshot.lineage.clone());
+    let result = ResultMeta {
+        schema: 1,
+        at: now_millis(),
+        author: submission.author,
+        definition: snapshot.definition.clone(),
+        outcome: submission.outcome,
+        consumed,
+        context: snapshot.context.clone(),
+        output: submission.output,
+        producer: submission.producer,
+    };
+    store.write_result(id, &result, &submission.notes)?;
+    vcs.commit_store(&store.store_name(), &format!("linka: result {id}"))?;
+    Ok(())
 }
 
 /// The node whose work produced `commit`, if any — the inverse of the output
@@ -1402,6 +1481,7 @@ mod tests {
 
         // A is re-worked and produces a new output commit -> B is stale.
         fake.next_id = "commit-2".into();
+        edit(&store, &fake, &a, "a, revised".into()).unwrap();
         complete(
             &store,
             &fake,
@@ -1746,6 +1826,86 @@ mod tests {
         assert!(snapshot_work(&store, &fake, &blocked, &[]).is_err());
         std::fs::write(store.node_dir(&lineage).join("node.toml"), "bad = [toml").unwrap();
         assert!(snapshot_work(&store, &fake, &lineage, &[]).is_err());
+    }
+
+    #[test]
+    fn submissions_revalidate_snapshots_and_preserve_previous_results_on_conflict() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs {
+            root: Some("revision".into()),
+            ..Default::default()
+        };
+        let node = add(&store, &fake, new_node("work", vec![])).unwrap();
+        std::fs::write(store.project_root().join("input"), "one").unwrap();
+        let snapshot = snapshot_work(&store, &fake, &node, &["input".into()]).unwrap();
+        let submission = ResultSubmission {
+            snapshot,
+            outcome: Outcome::Done,
+            output: None,
+            notes: "finished".into(),
+            author: Author::Human,
+            producer: None,
+        };
+
+        edit(&store, &fake, &node, "changed".into()).unwrap();
+        assert!(matches!(
+            submit_result(&store, &fake, submission.clone()),
+            Err(SubmissionError::Conflict(ref conflicts))
+                if conflicts.contains(&SubmissionConflict::DefinitionChanged)
+        ));
+        assert!(store.read_result(&node).unwrap().is_none());
+
+        let dependency = add(&store, &fake, new_node("dependency", vec![])).unwrap();
+        done(&store, &fake, &dependency);
+        let consumer = add(
+            &store,
+            &fake,
+            new_node("consumer", vec![dependency.clone()]),
+        )
+        .unwrap();
+        let dependency_snapshot = snapshot_work(&store, &fake, &consumer, &[]).unwrap();
+        respond(&store, &fake, &dependency, "new evidence", Author::Human).unwrap();
+        let dependency_submission = ResultSubmission {
+            snapshot: dependency_snapshot,
+            ..submission.clone()
+        };
+        assert!(matches!(
+            submit_result(&store, &fake, dependency_submission),
+            Err(SubmissionError::Conflict(ref conflicts))
+                if conflicts.contains(&SubmissionConflict::DependenciesChanged)
+        ));
+        assert!(store.read_result(&consumer).unwrap().is_none());
+
+        let fresh = snapshot_work(&store, &fake, &node, &["input".into()]).unwrap();
+        std::fs::write(store.project_root().join("input"), "two").unwrap();
+        let context_submission = ResultSubmission {
+            snapshot: fresh,
+            ..submission.clone()
+        };
+        assert!(matches!(
+            submit_result(&store, &fake, context_submission),
+            Err(SubmissionError::Conflict(ref conflicts))
+                if conflicts.iter().any(|conflict| matches!(conflict, SubmissionConflict::ContextChanged { .. }))
+        ));
+
+        std::fs::write(store.project_root().join("input"), "one").unwrap();
+        let concurrent = snapshot_work(&store, &fake, &node, &["input".into()]).unwrap();
+        fail(&store, &fake, &node, "other producer", Author::Machine).unwrap();
+        let previous = store.result_version(&node).unwrap();
+        let concurrent_submission = ResultSubmission {
+            snapshot: concurrent,
+            ..submission
+        };
+        assert!(matches!(
+            submit_result(&store, &fake, concurrent_submission),
+            Err(SubmissionError::Conflict(ref conflicts))
+                if conflicts.contains(&SubmissionConflict::PreviousResultChanged)
+        ));
+        assert_eq!(store.result_version(&node).unwrap(), previous);
+        assert_eq!(
+            store.read_result(&node).unwrap().unwrap().1,
+            "other producer"
+        );
     }
 
     #[test]

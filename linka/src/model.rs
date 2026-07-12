@@ -347,6 +347,27 @@ pub struct WorkSnapshot {
     pub previous_result: Option<ResultVersion>,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ResultSubmission {
+    pub snapshot: WorkSnapshot,
+    pub outcome: Outcome,
+    pub output: Option<ArtifactRef>,
+    pub notes: String,
+    pub author: Author,
+    pub producer: Option<ProducerEvidence>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SubmissionConflict {
+    DefinitionChanged,
+    DependenciesChanged,
+    LineageChanged,
+    ContextChanged { path: ProjectPath },
+    ProjectChanged,
+    ReadinessChanged,
+    PreviousResultChanged,
+}
+
 impl NodeState {
     pub fn is_complete(&self) -> bool {
         self.outcome == RecordedOutcome::Succeeded && self.currency == Currency::Current

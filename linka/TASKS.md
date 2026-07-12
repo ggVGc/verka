@@ -162,30 +162,30 @@ Tests:
 
 ## 8. Add compare-and-record result submission
 
-- [ ] Add `ResultSubmission`, carrying a frozen snapshot, outcome, optional
+- [x] Add `ResultSubmission`, carrying a frozen snapshot, outcome, optional
   output artifact, notes, author, and optional opaque producer evidence.
-- [ ] Add `submit_result`, which rechecks every frozen graph and context version
+- [x] Add `submit_result`, which rechecks every frozen graph and context version
   immediately before writing.
-- [ ] Return structured conflicts for definition, dependency, context, and
+- [x] Return structured conflicts for definition, dependency, context, and
   readiness changes.
-- [ ] Include the expected previous result version to prevent concurrent
+- [x] Include the expected previous result version to prevent concurrent
   overwrites.
-- [ ] Perform snapshot revalidation and result replacement under a store
+- [x] Perform snapshot revalidation and result replacement under a store
   mutation lock.
-- [ ] Reject a conflicting submission without overwriting the prior result.
-- [ ] Keep `complete` temporarily as a short-lived convenience wrapper that
+- [x] Reject a conflicting submission without overwriting the prior result.
+- [x] Keep `complete` temporarily as a short-lived convenience wrapper that
   snapshots, captures, and submits within one call.
-- [ ] Document that long-running workers must use the explicit snapshot and
+- [x] Document that long-running workers must use the explicit snapshot and
   submission operations.
 
 Tests:
 
-- [ ] Reject submission after changes to definition metadata or description.
-- [ ] Reject submission after dependency definition, result, or output changes.
-- [ ] Reject submission after context changes or a new required dependency is
+- [x] Reject submission after changes to definition metadata or description.
+- [x] Reject submission after dependency definition, result, or output changes.
+- [x] Reject submission after context changes or a new required dependency is
   added.
-- [ ] Reject concurrent submission when the expected previous result changed.
-- [ ] Preserve the previous result on every rejection.
+- [x] Reject concurrent submission when the expected previous result changed.
+- [x] Preserve the previous result on every rejection.
 
 ## 9. Enforce valid successful results
 

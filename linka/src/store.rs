@@ -58,7 +58,27 @@ pub struct Store {
     root: PathBuf,
 }
 
+pub struct MutationLock {
+    path: PathBuf,
+    _file: fs::File,
+}
+
+impl Drop for MutationLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
 impl Store {
+    pub fn mutation_lock(&self) -> Result<MutationLock> {
+        let path = self.root.join("mutation.lock");
+        let file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .with_context(|| format!("acquiring store mutation lock {}", path.display()))?;
+        Ok(MutationLock { path, _file: file })
+    }
     /// Open an existing store, erroring if it has not been initialised.
     pub fn open(root: PathBuf) -> Result<Self> {
         if !root.join("nodes").is_dir() {
