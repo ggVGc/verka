@@ -167,6 +167,13 @@ enum Cmd {
         artifacts: bool,
     },
 
+    /// Preview or apply deterministic stored-schema upgrades.
+    Migrate {
+        /// Preview required changes without writing them.
+        #[arg(long)]
+        check: bool,
+    },
+
     /// Check whether a node is settled: done, not stale, and all work derived
     /// from it (transitively) also done and not stale. Exits non-zero if not.
     Settled { id: NodeId },
@@ -499,6 +506,26 @@ fn main() -> Result<()> {
                 }
                 eprintln!("{} problem(s) found", problems.len());
                 std::process::exit(1);
+            }
+        }
+
+        Cmd::Migrate { check } => {
+            let store = Store::open(store)?;
+            let changes = if check {
+                ops::migration_plan(&store)?
+            } else {
+                let vcs = GitVcs::for_store(&store);
+                ops::migrate(&store, &vcs)?
+            };
+            if changes.is_empty() {
+                println!("store schema is current");
+            } else {
+                for change in &changes {
+                    println!("{change}");
+                }
+                if check {
+                    std::process::exit(1);
+                }
             }
         }
 

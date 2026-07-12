@@ -11,6 +11,14 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
 
+pub const DEFINITION_SCHEMA: u32 = 2;
+pub const RESULT_SCHEMA: u32 = 2;
+pub const SNAPSHOT_SCHEMA: u32 = 2;
+pub const OBSERVATION_SCHEMA: u32 = 2;
+fn legacy_schema() -> u32 {
+    1
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct NodeId(String);
@@ -227,6 +235,7 @@ pub struct ContextPin {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContextObservation {
+    #[serde(default = "legacy_schema")]
     pub schema: u32,
     pub result: ResultVersion,
     pub context: Vec<ContextPin>,
@@ -258,6 +267,7 @@ pub struct ProducerEvidence {
 /// Contents of `result.toml`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ResultMeta {
+    #[serde(default = "legacy_schema")]
     pub schema: u32,
     /// Unix milliseconds when the result was recorded.
     pub at: i64,
@@ -347,6 +357,8 @@ pub struct ProjectSnapshot {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkSnapshot {
+    #[serde(default = "legacy_schema")]
+    pub schema: u32,
     pub node: NodeId,
     pub definition: DefinitionVersion,
     pub dependencies: Vec<ConsumedNode>,

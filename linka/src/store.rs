@@ -299,6 +299,23 @@ impl Store {
         Ok(observations)
     }
 
+    pub fn replace_context_observations(
+        &self,
+        id: &str,
+        observations: &[ContextObservation],
+    ) -> Result<()> {
+        let dir = self.node_dir(id).join("observations");
+        match fs::remove_dir_all(&dir) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        for observation in observations {
+            self.write_context_observation(id, observation)?;
+        }
+        Ok(())
+    }
+
     // --- listing -----------------------------------------------------------------
 
     pub fn list_ids(&self) -> Result<Vec<String>> {

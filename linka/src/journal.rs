@@ -44,7 +44,7 @@ pub fn complete(
     let snapshot = ops::snapshot_work(store, vcs, node, context)?;
     let id = ulid::Ulid::new().to_string();
     let mut journal = SubmissionJournal {
-        schema: 1,
+        schema: 2,
         id,
         phase: Phase::Prepared,
         submission: ResultSubmission {
@@ -108,7 +108,12 @@ pub fn load(store: &Store, id: &str) -> Result<SubmissionJournal> {
     let path = path(store, id);
     let text =
         std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
-    toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))
+    let journal: SubmissionJournal =
+        toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+    if !(1..=2).contains(&journal.schema) {
+        bail!("unsupported submission journal schema {}", journal.schema);
+    }
+    Ok(journal)
 }
 
 fn save(store: &Store, journal: &SubmissionJournal) -> Result<()> {

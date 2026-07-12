@@ -327,17 +327,17 @@ node-...  error: malformed result.toml
 
 ## 15. Version and migrate the stored schema
 
-- [ ] Introduce explicit supported schema versions for definitions, results,
+- [x] Introduce explicit supported schema versions for definitions, results,
   snapshots, and any observation records.
-- [ ] Make readers accept the old and new schemas during migration.
-- [ ] Make writers emit only the new schema.
-- [ ] Add `linka migrate --check` to preview deterministic changes.
-- [ ] Add `linka migrate` to apply them in one explicit store commit.
-- [ ] Interpret legacy empty artifact repository fields through the current
+- [x] Make readers accept the old and new schemas during migration.
+- [x] Make writers emit only the new schema.
+- [x] Add `linka migrate --check` to preview deterministic changes.
+- [x] Add `linka migrate` to apply them in one explicit store commit.
+- [x] Interpret legacy empty artifact repository fields through the current
   pairing during the compatibility window.
-- [ ] Provide compatibility projections for old `Status` and `complete` APIs
+- [x] Provide compatibility projections for old `Status` and `complete` APIs
   until Orka and other consumers migrate.
-- [ ] Remove compatibility APIs only after all in-repository consumers use the
+- [x] Remove compatibility APIs only after all in-repository consumers use the
   new interfaces.
 
 Acceptance criteria:

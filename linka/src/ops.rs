@@ -22,6 +22,7 @@ use crate::model::{
     ResultMeta, ResultSubmission, ResultVersion, StalenessReason, Status, SubmissionConflict,
     WorkSnapshot,
 };
+use crate::model::{DEFINITION_SCHEMA, OBSERVATION_SCHEMA, RESULT_SCHEMA, SNAPSHOT_SCHEMA};
 use crate::pairing::Pairing;
 use crate::store::{file_blob, Store};
 use crate::vcs::Vcs;
@@ -80,7 +81,7 @@ pub fn add(store: &Store, vcs: &dyn Vcs, new: NewNode) -> Result<String> {
     }
     let id = format!("node-{}", Ulid::new());
     let meta = NodeMeta {
-        schema: 1,
+        schema: DEFINITION_SCHEMA,
         author: new.author,
         assignee: new.assignee,
         depends_on: new
@@ -235,7 +236,7 @@ pub fn fail(store: &Store, vcs: &dyn Vcs, id: &str, notes: &str, author: Author)
     let (meta, _) = store.read_node(id)?;
     let consumed = pin_deps(store, &meta)?;
     let result = ResultMeta {
-        schema: 1,
+        schema: RESULT_SCHEMA,
         at: now_millis(),
         author,
         definition: store.node_version(id)?,
@@ -312,7 +313,7 @@ pub fn record_context_observation(
     store.write_context_observation(
         id,
         &crate::model::ContextObservation {
-            schema: 1,
+            schema: OBSERVATION_SCHEMA,
             result: expected_result.clone(),
             context,
         },
@@ -559,6 +560,7 @@ pub fn snapshot_work(
         .then(|| store.result_version(id))
         .transpose()?;
     Ok(WorkSnapshot {
+        schema: SNAPSHOT_SCHEMA,
         node: id.parse().map_err(anyhow::Error::msg)?,
         definition: store.node_version(id)?,
         dependencies,
@@ -676,7 +678,7 @@ pub fn submit_result(
     let mut consumed = snapshot.dependencies.clone();
     consumed.extend(snapshot.lineage.clone());
     let result = ResultMeta {
-        schema: 1,
+        schema: RESULT_SCHEMA,
         at: now_millis(),
         author: submission.author,
         definition: snapshot.definition.clone(),
@@ -810,7 +812,7 @@ pub fn check(store: &Store) -> Result<Vec<String>> {
                 continue;
             }
         };
-        if meta.schema != 1 {
+        if !(1..=DEFINITION_SCHEMA).contains(&meta.schema) {
             problems.push(format!(
                 "{id}: unsupported definition schema {}",
                 meta.schema
@@ -829,7 +831,7 @@ pub fn check(store: &Store) -> Result<Vec<String>> {
             }
             Ok(observations) => {
                 for observation in observations {
-                    if observation.schema != 1 {
+                    if !(1..=OBSERVATION_SCHEMA).contains(&observation.schema) {
                         problems.push(format!(
                             "{id}: unsupported context observation schema {}",
                             observation.schema
@@ -870,7 +872,7 @@ fn validate_result_semantics(
     repository: Option<&str>,
     problems: &mut Vec<String>,
 ) {
-    if result.schema != 1 {
+    if !(1..=RESULT_SCHEMA).contains(&result.schema) {
         problems.push(format!("{id}: unsupported result schema {}", result.schema));
     }
     let mut seen = std::collections::HashSet::new();
@@ -966,6 +968,106 @@ pub fn check_artifacts(store: &Store, vcs: &dyn Vcs) -> Result<Vec<String>> {
         }
     }
     Ok(problems)
+}
+
+pub fn migration_plan(store: &Store) -> Result<Vec<String>> {
+    let repository = Pairing::load(store.root())?.map(|pairing| pairing.root_commit);
+    let mut changes = Vec::new();
+    for id in store.list_ids()? {
+        let (meta, _) = store.read_node(&id)?;
+        if meta.schema != DEFINITION_SCHEMA {
+            changes.push(format!(
+                "{id}: definition schema {} -> {DEFINITION_SCHEMA}",
+                meta.schema
+            ));
+        }
+        if let Some((result, _)) = store.read_result(&id)? {
+            if result.schema != RESULT_SCHEMA {
+                changes.push(format!(
+                    "{id}: result schema {} -> {RESULT_SCHEMA}",
+                    result.schema
+                ));
+            }
+            if repository.is_some()
+                && result
+                    .output
+                    .iter()
+                    .chain(result.consumed.iter().filter_map(|pin| pin.output.as_ref()))
+                    .any(|artifact| artifact.repository.is_empty())
+            {
+                changes.push(format!("{id}: fill legacy artifact repository identity"));
+            }
+        }
+        if store
+            .read_context_observations(&id)?
+            .iter()
+            .any(|observation| observation.schema != OBSERVATION_SCHEMA)
+        {
+            changes.push(format!(
+                "{id}: context observation schema -> {OBSERVATION_SCHEMA}"
+            ));
+        }
+    }
+    Ok(changes)
+}
+
+pub fn migrate(store: &Store, vcs: &dyn Vcs) -> Result<Vec<String>> {
+    let changes = migration_plan(store)?;
+    if changes.is_empty() {
+        return Ok(changes);
+    }
+    let _lock = store.mutation_lock()?;
+    let ids = store.list_ids()?;
+    let old_versions: std::collections::HashMap<_, _> = ids
+        .iter()
+        .map(|id| Ok((id.clone(), store.node_version(id)?)))
+        .collect::<Result<_>>()?;
+    for id in &ids {
+        let (mut meta, description) = store.read_node(id)?;
+        meta.schema = DEFINITION_SCHEMA;
+        store.write_node(id, &meta, &description)?;
+    }
+    let new_versions: std::collections::HashMap<_, _> = ids
+        .iter()
+        .map(|id| Ok((id.clone(), store.node_version(id)?)))
+        .collect::<Result<_>>()?;
+    let repository = Pairing::load(store.root())?.map(|pairing| pairing.root_commit);
+    for id in &ids {
+        if let Some((mut result, notes)) = store.read_result(id)? {
+            result.schema = RESULT_SCHEMA;
+            if result.definition == old_versions[id] {
+                result.definition = new_versions[id].clone();
+            }
+            for pin in &mut result.consumed {
+                if let (Some(old), Some(new)) = (
+                    old_versions.get(pin.id.as_str()),
+                    new_versions.get(pin.id.as_str()),
+                ) {
+                    if &pin.definition == old {
+                        pin.definition = new.clone();
+                    }
+                }
+                if let (Some(repository), Some(output)) = (&repository, &mut pin.output) {
+                    if output.repository.is_empty() {
+                        output.repository = repository.clone();
+                    }
+                }
+            }
+            if let (Some(repository), Some(output)) = (&repository, &mut result.output) {
+                if output.repository.is_empty() {
+                    output.repository = repository.clone();
+                }
+            }
+            store.write_result(id, &result, &notes)?;
+        }
+        let mut observations = store.read_context_observations(id)?;
+        for observation in &mut observations {
+            observation.schema = OBSERVATION_SCHEMA;
+        }
+        store.replace_context_observations(id, &observations)?;
+    }
+    vcs.commit_store(&store.store_name(), "linka: migrate schema")?;
+    Ok(changes)
 }
 
 /// Report each `depends_on` cycle once, as an explicit `a -> b -> a` path.
@@ -2302,6 +2404,47 @@ mod tests {
         assert!(problems.contains("no successful evidence"));
         assert!(problems.contains("duplicate context pin"));
         assert!(problems.contains("unsupported artifact scheme"));
+    }
+
+    #[test]
+    fn schema_migration_is_previewable_deterministic_and_idempotent() {
+        let (_t, store) = temp_store();
+        let root = "a".repeat(40);
+        let fake = FakeVcs {
+            root: Some(root.clone()),
+            next_id: "output".into(),
+            ..Default::default()
+        };
+        pair(&store, &fake, None, false).unwrap();
+        let id = add(&store, &fake, new_node("legacy", vec![])).unwrap();
+        complete(
+            &store,
+            &fake,
+            &id,
+            &["out".into()],
+            &[],
+            None,
+            "legacy",
+            Author::Human,
+        )
+        .unwrap();
+        let (mut meta, description) = store.read_node(&id).unwrap();
+        meta.schema = 1;
+        store.write_node(&id, &meta, &description).unwrap();
+        let (mut result, notes) = store.read_result(&id).unwrap().unwrap();
+        result.schema = 1;
+        result.output.as_mut().unwrap().repository.clear();
+        store.write_result(&id, &result, &notes).unwrap();
+
+        let preview = migration_plan(&store).unwrap();
+        assert!(!preview.is_empty());
+        assert_eq!(migrate(&store, &fake).unwrap(), preview);
+        assert!(migration_plan(&store).unwrap().is_empty());
+        assert!(migrate(&store, &fake).unwrap().is_empty());
+        assert_eq!(store.read_node(&id).unwrap().0.schema, DEFINITION_SCHEMA);
+        let migrated = store.read_result(&id).unwrap().unwrap().0;
+        assert_eq!(migrated.schema, RESULT_SCHEMA);
+        assert_eq!(migrated.output.unwrap().repository, root);
     }
 
     #[test]
