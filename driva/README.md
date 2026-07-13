@@ -18,6 +18,7 @@ ships interactive and non-interactive Codex templates:
 cargo run -- templates
 cargo run -- run --template codex
 cargo run -- run --template codex-exec -- "fix the failing tests"
+cargo run -- run --template codex --no-network
 ```
 
 These templates use Podman with Node 22, mount the current project writable at

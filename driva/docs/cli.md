@@ -69,6 +69,7 @@ Options:
       --read <MOUNT>       Add a read-only mount as SOURCE or SOURCE:DESTINATION
       --write <MOUNT>      Add a writable mount as SOURCE or SOURCE:DESTINATION
       --network            Permit networking (disabled otherwise)
+      --no-network         Disable networking, overriding configuration and templates
   -i, --interactive        Allocate an interactive terminal
       --dry-run            Print the validated request and backend invocation without executing it
       --image <IMAGE>      Override the configured container image
@@ -95,6 +96,7 @@ Policy options (shared by `run`, `shell`, and `start`):
 | `--read <MOUNT>` | Bind-mount a host path read-only. Repeatable. |
 | `--write <MOUNT>` | Bind-mount a host path read-write. Repeatable. |
 | `--network` | Enable networking (otherwise the container has none). |
+| `--no-network` | Disable networking, overriding global configuration and templates. |
 | `-i`, `--interactive` | Allocate an interactive terminal (stdin + TTY). |
 | `--dry-run` | Print the validated request and the exact backend invocation without executing anything. |
 | `--image <IMAGE>` | Override the configured container image for this run (Podman/Docker only). |
@@ -103,10 +105,11 @@ Policy options (shared by `run`, `shell`, and `start`):
 
 Template settings overlay the global configuration, and one-off CLI values
 overlay the template. Mounts are appended in global, template, then CLI order;
-environment values use the same precedence. Networking and interactivity are
-enabled if any layer enables them. Arguments after `--` are appended to a
-template's command. Without a template, at least one command argument remains
-required at runtime.
+environment values use the same precedence. Networking is enabled if any layer
+enables it unless the CLI specifies `--no-network`; `--network` and
+`--no-network` are mutually exclusive. Interactivity is enabled if any layer
+enables it. Arguments after `--` are appended to a template's command. Without
+a template, at least one command argument remains required at runtime.
 
 ### Execution templates
 
@@ -174,6 +177,7 @@ Options:
       --read <MOUNT>       Add a read-only mount as SOURCE or SOURCE:DESTINATION
       --write <MOUNT>      Add a writable mount as SOURCE or SOURCE:DESTINATION
       --network            Permit networking (disabled otherwise)
+      --no-network         Disable networking, overriding configuration and templates
   -i, --interactive        Allocate an interactive terminal
       --dry-run            Print the validated request and backend invocation without executing it
       --image <IMAGE>      Override the configured container image
@@ -227,6 +231,7 @@ Options:
       --read <MOUNT>       Add a read-only mount as SOURCE or SOURCE:DESTINATION
       --write <MOUNT>      Add a writable mount as SOURCE or SOURCE:DESTINATION
       --network            Permit networking (disabled otherwise)
+      --no-network         Disable networking, overriding configuration and templates
   -i, --interactive        Allocate an interactive terminal
       --dry-run            Print the validated request and backend invocation without executing it
       --image <IMAGE>      Override the configured container image

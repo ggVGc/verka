@@ -74,8 +74,11 @@ struct PolicyArgs {
     #[arg(long = "write", value_name = "MOUNT")]
     writes: Vec<String>,
     /// Permit networking (disabled otherwise).
-    #[arg(long)]
+    #[arg(long, conflicts_with = "no_network")]
     network: bool,
+    /// Disable networking, overriding configuration and templates.
+    #[arg(long, conflicts_with = "network")]
+    no_network: bool,
     /// Allocate an interactive terminal.
     #[arg(short, long)]
     interactive: bool,
@@ -193,9 +196,10 @@ fn real_main() -> Result<()> {
         working_directory: workdir,
         mounts,
         environment,
-        network: policy.network
-            || template.as_ref().is_some_and(|value| value.network)
-            || config.network.enabled,
+        network: !policy.no_network
+            && (policy.network
+                || template.as_ref().is_some_and(|value| value.network)
+                || config.network.enabled),
         interactive: policy.interactive
             || template.as_ref().is_some_and(|value| value.interactive)
             || shell,

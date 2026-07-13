@@ -136,6 +136,28 @@ access = "write"
     assert!(!stdout.contains("\"BASE=template\""));
     assert!(stdout.contains("\"cargo\" \"clippy\" \"--all-targets\""));
 
+    let output = Command::new(env!("CARGO_BIN_EXE_driva"))
+        .current_dir(&directory)
+        .args([
+            "--config",
+            config_path.to_str().unwrap(),
+            "run",
+            "--template",
+            "lint",
+            "--no-network",
+            "--dry-run",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8(output.stdout)
+        .unwrap()
+        .contains("network: disabled"));
+
     fs::remove_dir_all(directory).unwrap();
 }
 
