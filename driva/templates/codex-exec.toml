@@ -1,5 +1,5 @@
 description = "Run OpenAI Codex non-interactively against the current project"
-command = ["npx", "--yes", "@openai/codex@latest", "exec"]
+command = ["npx", "--yes", "@openai/codex@latest", "-c", 'projects."/workspace".trust_level="trusted"', "exec"]
 backend = "podman"
 image = "docker.io/library/node:22-bookworm"
 workdir = "/workspace"

@@ -125,9 +125,12 @@ codex-exec	Run OpenAI Codex non-interactively against the current project
 
 The built-in `codex` template runs `npx --yes @openai/codex@latest`
 interactively; `codex-exec` inserts the `exec` subcommand for automation. Both
-select Podman and `node:22-bookworm`, mount the current directory writable at
-`/workspace`, enable networking, and mount only `~/.codex/auth.json` writable
-at `/root/.codex/auth.json`. This lets Codex persist credential refreshes while
+mark the fixed container workspace path as trusted, select Podman and
+`node:22-bookworm`, mount the current directory writable at `/workspace`,
+enable networking, and mount only `~/.codex/auth.json` writable at
+`/root/.codex/auth.json`. Trusting `/workspace` avoids Codex's directory trust
+prompt and enables project-scoped `.codex` configuration inside the isolated
+container. The auth mount lets Codex persist credential refreshes while
 configuration, history, logs, caches, and other `CODEX_HOME` state remain in
 the disposable container. The auth file is exposed to the selected project,
 so use the template only with trusted code. [OpenAI's authentication

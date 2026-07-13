@@ -18,7 +18,16 @@ fn temporary_directory(name: &str) -> PathBuf {
 fn provides_codex_templates() {
     let config = Config::default();
     let codex = config.template("codex").unwrap();
-    assert_eq!(codex.command, ["npx", "--yes", "@openai/codex@latest"]);
+    assert_eq!(
+        codex.command,
+        [
+            "npx",
+            "--yes",
+            "@openai/codex@latest",
+            "-c",
+            "projects.\"/workspace\".trust_level=\"trusted\"",
+        ]
+    );
     assert_eq!(codex.backend.as_deref(), Some("podman"));
     assert_eq!(codex.workdir.unwrap(), PathBuf::from("/workspace"));
     assert!(codex.network);
@@ -33,7 +42,17 @@ fn provides_codex_templates() {
     assert_eq!(codex.mounts[1].access, MountAccess::ReadWrite);
 
     let codex_exec = config.template("codex-exec").unwrap();
-    assert_eq!(codex_exec.command.last().unwrap(), "exec");
+    assert_eq!(
+        codex_exec.command,
+        [
+            "npx",
+            "--yes",
+            "@openai/codex@latest",
+            "-c",
+            "projects.\"/workspace\".trust_level=\"trusted\"",
+            "exec",
+        ]
+    );
     assert!(!codex_exec.interactive);
 }
 
@@ -141,6 +160,7 @@ fn builtin_codex_selects_podman_and_works_without_arguments() {
     assert!(stdout.contains("backend: podman"));
     assert!(stdout.contains("docker.io/library/node:22-bookworm"));
     assert!(stdout.contains("\"npx\" \"--yes\" \"@openai/codex@latest\""));
+    assert!(stdout.contains("projects.\\\"/workspace\\\".trust_level=\\\"trusted\\\""));
     assert!(stdout.contains("/.codex/auth.json -> /root/.codex/auth.json (read-write)"));
     assert!(!stdout.contains(" -> /root/.codex (read-write)"));
 
