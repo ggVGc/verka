@@ -149,17 +149,31 @@ pub fn link(store: &Store, vcs: &dyn Vcs, from: &str, to: &str, kind: DepKind) -
     Ok(())
 }
 
+/// What an [`edit`] did: whether the description actually moved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EditOutcome {
+    Edited,
+    /// The submitted description matched the stored one byte-for-byte, so the
+    /// node's version did not move: no commit, no reopening, no stale pins.
+    Unchanged,
+}
+
 /// Edit a node's description. A definition change: it moves the node's
-/// version, so a prior `done` no longer covers it and dependents' pins go stale.
-pub fn edit(store: &Store, vcs: &dyn Vcs, id: &str, description: String) -> Result<()> {
+/// version, so a prior `done` no longer covers it and dependents' pins go
+/// stale. Submitting the description a node already has is a successful no-op
+/// (retries and sync-style callers converge instead of erroring).
+pub fn edit(store: &Store, vcs: &dyn Vcs, id: &str, description: String) -> Result<EditOutcome> {
     if description.trim().is_empty() {
         bail!("a node needs a description");
     }
     let mutation = store.mutation_lock(vcs)?;
-    let (meta, _) = store.read_node(id)?;
+    let (meta, current) = store.read_node(id)?;
+    if current == description {
+        return Ok(EditOutcome::Unchanged);
+    }
     store.write_node(id, &meta, &description)?;
     mutation.commit(vcs, &format!("linka: edit {id}"))?;
-    Ok(())
+    Ok(EditOutcome::Edited)
 }
 
 /// Complete a node's work: commit all produced files as one output commit, pin
@@ -1768,6 +1782,24 @@ mod tests {
             }]
         ));
         assert!(node_state(&store, &fake, &id).unwrap().is_ready());
+    }
+
+    #[test]
+    fn editing_with_the_stored_description_is_a_no_op() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs::default();
+        let id = add(&store, &fake, new_node("a", vec![])).unwrap();
+        done(&store, &fake, &id);
+        let version = store.node_version(&id).unwrap();
+        let commits = *fake.store_commits.borrow();
+        let (_, description) = store.read_node(&id).unwrap();
+
+        let outcome = edit(&store, &fake, &id, description).unwrap();
+
+        assert_eq!(outcome, EditOutcome::Unchanged);
+        assert_eq!(*fake.store_commits.borrow(), commits);
+        assert_eq!(store.node_version(&id).unwrap(), version);
+        assert_eq!(current_status(&store, &fake, &id).unwrap(), Status::Done);
     }
 
     #[test]

@@ -271,8 +271,12 @@ fn main() -> Result<()> {
         } => {
             let store = Store::open(store)?;
             let vcs = GitVcs::for_store(&store);
-            ops::edit(&store, &vcs, &id, read_description(description, file)?)?;
-            println!("{id}  {}", ops::short_definition(&store.node_version(&id)?));
+            let outcome = ops::edit(&store, &vcs, &id, read_description(description, file)?)?;
+            let version = ops::short_definition(&store.node_version(&id)?);
+            match outcome {
+                ops::EditOutcome::Edited => println!("{id}  {version}"),
+                ops::EditOutcome::Unchanged => println!("{id}  {version}  (unchanged)"),
+            }
         }
 
         Cmd::Complete {
