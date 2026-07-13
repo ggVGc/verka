@@ -114,10 +114,22 @@ impl ContextIdentity for GitVcs {
 
 impl StoreHistory for GitVcs {
     fn require_clean_store(&self, path: &str) -> Result<()> {
-        let out = git(&self.workbench, &["status", "--porcelain", "--", path])?;
+        // The store is entirely Linka-owned, so surrounding repository ignore
+        // rules must not hide store state from the transaction boundary.
+        let out = git(
+            &self.workbench,
+            &[
+                "status",
+                "--porcelain=v1",
+                "--untracked-files=all",
+                "--ignored",
+                "--",
+                path,
+            ],
+        )?;
         if !out.status.success() {
             bail!(
-                "`git status --porcelain -- {path}` failed: {}",
+                "`git status --porcelain=v1 --untracked-files=all --ignored -- {path}` failed: {}",
                 String::from_utf8_lossy(&out.stderr).trim()
             );
         }
@@ -242,7 +254,9 @@ fn commit_paths(base: &Path, paths: &[String], message: &str) -> Result<String> 
 /// has already established a clean baseline, so no staged change means the
 /// purported mutation did not produce an atomic operation.
 fn commit_path(base: &Path, path: &str, message: &str) -> Result<()> {
-    checked(base, &["add", "--", path])?;
+    // Ignore rules in the workbench must never exclude part of an atomic
+    // store operation. `--all` also stages deletions.
+    checked(base, &["add", "--force", "--all", "--", path])?;
     if nothing_staged(base, std::slice::from_ref(&path.to_string()))? {
         bail!("store mutation produced no changes to commit");
     }
@@ -372,6 +386,64 @@ mod store_mutation_tests {
             before
         );
         assert_eq!(store.list_ids().unwrap(), vec![id]);
+    }
+
+    #[test]
+    fn ignored_store_files_are_included_in_the_mutation_commit() {
+        let (_temp, store, vcs) = workbench();
+        std::fs::write(
+            store.workbench_root().join(".gitignore"),
+            "description.md\n",
+        )
+        .unwrap();
+        checked(&store.workbench_root(), &["add", ".gitignore"]).unwrap();
+        checked(
+            &store.workbench_root(),
+            &["commit", "-m", "ignore descriptions"],
+        )
+        .unwrap();
+
+        let id = ops::add(&store, &vcs, new_node("must be committed")).unwrap();
+
+        let changed = checked(
+            &store.workbench_root(),
+            &["diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"],
+        )
+        .unwrap();
+        assert_eq!(
+            changed.lines().collect::<Vec<_>>(),
+            vec![
+                format!(".linka/nodes/{id}/description.md"),
+                format!(".linka/nodes/{id}/node.toml")
+            ]
+        );
+        vcs.require_clean_store(&store.store_name()).unwrap();
+    }
+
+    #[test]
+    fn preexisting_ignored_store_content_blocks_mutation() {
+        let (_temp, store, vcs) = workbench();
+        std::fs::write(store.workbench_root().join(".gitignore"), "*.tmp\n").unwrap();
+        checked(&store.workbench_root(), &["add", ".gitignore"]).unwrap();
+        checked(
+            &store.workbench_root(),
+            &["commit", "-m", "ignore temporary files"],
+        )
+        .unwrap();
+        std::fs::write(store.root().join("leftover.tmp"), "incomplete mutation\n").unwrap();
+        let before = checked(&store.workbench_root(), &["rev-parse", "HEAD"]).unwrap();
+
+        let error = ops::add(&store, &vcs, new_node("must not be created")).unwrap_err();
+
+        assert!(
+            format!("{error:#}").contains("!! .linka/leftover.tmp"),
+            "{error:#}"
+        );
+        assert_eq!(
+            checked(&store.workbench_root(), &["rev-parse", "HEAD"]).unwrap(),
+            before
+        );
+        assert!(store.list_ids().unwrap().is_empty());
     }
 
     #[test]
