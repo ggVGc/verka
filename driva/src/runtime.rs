@@ -105,6 +105,7 @@ impl RuntimeStore {
             .with_context(|| format!("failed to create runtime store {}", family.display()))?;
         let requested_destination = family.join(&spec.version);
         if !spec.is_floating() && requested_destination.exists() {
+            prepare_mount_targets(&requested_destination.join("rootfs"))?;
             self.activate(spec)?;
             return Ok(spec.clone());
         }
@@ -127,6 +128,7 @@ impl RuntimeStore {
         let destination = family.join(&resolved.version);
         if destination.exists() {
             fs::remove_dir_all(&staging)?;
+            prepare_mount_targets(&destination.join("rootfs"))?;
             self.activate(&resolved)?;
             return Ok(resolved);
         }
@@ -341,7 +343,16 @@ impl RuntimeStore {
 }
 
 fn prepare_mount_targets(rootfs: &Path) -> Result<()> {
-    for directory in ["proc", "dev", "tmp", "workspace", "root/.codex", "etc"] {
+    for directory in [
+        "proc",
+        "dev",
+        "tmp",
+        "workspace",
+        "root/.codex",
+        "etc",
+        "etc/driva",
+        "usr/local/bin",
+    ] {
         fs::create_dir_all(rootfs.join(directory))?;
     }
     for file in ["root/.codex/auth.json", "etc/resolv.conf"] {
@@ -359,7 +370,31 @@ fn prepare_mount_targets(rootfs: &Path) -> Result<()> {
     if !codex.is_file() {
         bail!("prepared runtime does not contain {}", codex.display());
     }
+    fs::write(
+        rootfs.join("etc/driva/codex-config.toml"),
+        "[projects.\"/workspace\"]\ntrust_level = \"trusted\"\n",
+    )?;
+    let wrapper = rootfs.join("usr/local/bin/driva-codex");
+    fs::write(
+        &wrapper,
+        "#!/bin/sh\nset -eu\ncp /etc/driva/codex-config.toml /root/.codex/config.toml\nexec /usr/local/bin/codex \"$@\"\n",
+    )?;
+    set_executable(&wrapper)?;
     Ok(())
+}
+
+#[cfg(unix)]
+fn set_executable(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let mut permissions = fs::metadata(path)?.permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(path, permissions)?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn set_executable(_path: &Path) -> Result<()> {
+    bail!("prepared Bubblewrap runtimes are supported only on Unix")
 }
 
 fn remove_path_if_present(path: &Path) -> Result<()> {

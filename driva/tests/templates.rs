@@ -32,6 +32,7 @@ fn prepare_codex_runtime(home: &Path) {
     fs::write(rootfs.join("root/.codex/auth.json"), "").unwrap();
     fs::write(rootfs.join("etc/resolv.conf"), "").unwrap();
     fs::write(rootfs.join("usr/local/bin/codex"), "").unwrap();
+    fs::write(rootfs.join("usr/local/bin/driva-codex"), "").unwrap();
     #[cfg(unix)]
     std::os::unix::fs::symlink("0.144.3", family.join("current")).unwrap();
 }
@@ -43,9 +44,7 @@ fn provides_codex_templates() {
     assert_eq!(
         codex.command,
         [
-            "/usr/local/bin/codex",
-            "-c",
-            "projects.\"/workspace\".trust_level=\"trusted\"",
+            "/usr/local/bin/driva-codex",
             "--sandbox",
             "danger-full-access",
         ]
@@ -84,9 +83,7 @@ fn provides_codex_templates() {
     assert_eq!(
         codex_exec.command,
         [
-            "/usr/local/bin/codex",
-            "-c",
-            "projects.\"/workspace\".trust_level=\"trusted\"",
+            "/usr/local/bin/driva-codex",
             "--sandbox",
             "danger-full-access",
             "exec",
@@ -134,7 +131,7 @@ fn builtin_template_assets_use_the_public_toml_schema() {
         let template: TemplateConfig = toml::from_str(&source).unwrap();
         assert!(matches!(
             template.command.first().map(String::as_str),
-            Some("npx" | "/usr/local/bin/codex")
+            Some("npx" | "/usr/local/bin/driva-codex")
         ));
         let expected_mounts = if name.starts_with("codex") { 3 } else { 2 };
         assert_eq!(template.mounts.len(), expected_mounts);
@@ -203,11 +200,10 @@ fn builtin_codex_selects_bwrap_and_works_without_arguments() {
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("backend: bwrap"));
-    assert!(stdout.contains("\"/usr/local/bin/codex\""));
+    assert!(stdout.contains("\"/usr/local/bin/driva-codex\""));
     assert!(stdout.contains("--ro-bind"));
     assert!(stdout.contains("\"--tmpfs\" \"/root/.codex\""));
     assert!(stdout.contains("/.local/share/driva/runtimes/codex/0.144.3/rootfs"));
-    assert!(stdout.contains("projects.\\\"/workspace\\\".trust_level=\\\"trusted\\\""));
     assert!(stdout.contains("\"--sandbox\" \"danger-full-access\""));
     assert!(stdout.contains("/etc/resolv.conf -> /etc/resolv.conf (read-only)"));
     assert!(stdout.contains("/.codex/auth.json -> /root/.codex/auth.json (read-write)"));

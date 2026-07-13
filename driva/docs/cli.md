@@ -132,10 +132,12 @@ a complete filesystem under
 `~/.local/share/driva/runtimes/codex/VERSION`; normal executions expose the
 active version read-only through Bubblewrap and do not use Podman.
 
-Both templates mark `/workspace` as trusted and disable Codex's inner sandbox,
-relying on Driva's outer Bubblewrap isolation. They mount the current directory
-writable at `/workspace`, enable networking, and put `/root/.codex` on a
-private writable tmpfs for disposable Codex state. They then mount
+Both templates seed an ephemeral user-level Codex configuration that marks
+`/workspace` as trusted, avoiding the directory trust prompt before
+project-scoped configuration is loaded. They disable Codex's inner sandbox and
+rely on Driva's outer Bubblewrap isolation. They mount the current directory
+writable at `/workspace`, enable networking, and put `/root/.codex` on a private
+writable tmpfs for disposable Codex state. They then mount
 `/etc/resolv.conf` read-only for DNS and `~/.codex/auth.json` writable at
 `/root/.codex/auth.json`, allowing credential refreshes to persist. The auth
 file is exposed to the selected project. The templates also establish stable

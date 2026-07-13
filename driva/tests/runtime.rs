@@ -94,6 +94,25 @@ fn installs_an_exported_rootfs_and_publishes_it_atomically() {
         fs::read_to_string(store.rootfs(&spec).join("usr/local/bin/codex")).unwrap(),
         "prepared"
     );
+    assert!(
+        fs::read_to_string(store.rootfs(&spec).join("etc/driva/codex-config.toml"))
+            .unwrap()
+            .contains("trust_level = \"trusted\"")
+    );
+    assert!(
+        fs::read_to_string(store.rootfs(&spec).join("usr/local/bin/driva-codex"))
+            .unwrap()
+            .contains("/root/.codex/config.toml")
+    );
+    fs::remove_file(store.rootfs(&spec).join("usr/local/bin/driva-codex")).unwrap();
+    fs::remove_file(store.rootfs(&spec).join("etc/driva/codex-config.toml")).unwrap();
+    store
+        .install_codex(&spec, "example/node:22", &fake_podman)
+        .unwrap();
+    assert!(store
+        .rootfs(&spec)
+        .join("usr/local/bin/driva-codex")
+        .is_file());
     assert!(store
         .rootfs(&spec)
         .parent()
