@@ -45,7 +45,7 @@ use crate::model::{
 };
 use crate::model::{DEFINITION_SCHEMA, OBSERVATION_SCHEMA, RESULT_SCHEMA, SNAPSHOT_SCHEMA};
 use crate::pairing::Pairing;
-use crate::store::{file_blob, Store};
+use crate::store::{file_blob, MutationLock, Store};
 use crate::vcs::Vcs;
 
 pub struct InitializedWorkbench {
@@ -200,6 +200,12 @@ pub fn complete(
                 .map_err(anyhow::Error::msg)
         })
         .collect::<Result<_>>()?;
+    // Short-lived completion owns the whole store-side transaction. Establish
+    // a clean, stable store before inspecting or changing the project so a
+    // prior interrupted completion cannot be silently built upon and a dirty
+    // store cannot leave a new project commit behind before being rejected.
+    let mutation = store.mutation_lock(vcs)?;
+    require_consistent_project_head(store, vcs)?;
     // The only uncommitted project changes allowed are the outputs we are about
     // to commit — completion is where output provenance is asserted.
     require_clean_except(vcs, &outputs)?;
@@ -221,7 +227,7 @@ pub fn complete(
         Some(commit)
     };
 
-    let submitted = submit_result(
+    let submitted = submit_result_locked(
         store,
         vcs,
         ResultSubmission {
@@ -235,6 +241,7 @@ pub fn complete(
             author,
             producer: None,
         },
+        mutation,
     );
     if let Err(error) = submitted {
         if let Some(commit) = &output_commit {
@@ -688,6 +695,15 @@ pub fn submit_result(
     submission: ResultSubmission,
 ) -> std::result::Result<(), SubmissionError> {
     let mutation = store.mutation_lock(vcs)?;
+    submit_result_locked(store, vcs, submission, mutation)
+}
+
+fn submit_result_locked(
+    store: &Store,
+    vcs: &dyn Vcs,
+    submission: ResultSubmission,
+    mutation: MutationLock,
+) -> std::result::Result<(), SubmissionError> {
     let snapshot = &submission.snapshot;
     let id = snapshot.node.as_str();
     let mut conflicts = Vec::new();
@@ -3236,7 +3252,7 @@ mod tests {
     }
 
     #[test]
-    fn completion_reports_an_output_commit_left_without_a_store_result() {
+    fn completion_refuses_a_dirty_store_before_capturing_project_output() {
         let (_t, store) = temp_store();
         let fake = FakeVcs {
             next_id: "dangling-output".into(),
@@ -3257,11 +3273,40 @@ mod tests {
         )
         .unwrap_err();
 
+        assert!(error.to_string().contains("must be clean"), "{error:#}");
+        assert!(fake.captured.borrow().is_empty());
+        assert!(store.read_result(&id).unwrap().is_none());
+    }
+
+    #[test]
+    fn library_completion_refuses_an_unrecorded_linka_output_before_capture() {
+        let (_t, store) = temp_store();
+        let setup = FakeVcs::default();
+        let id = add(&store, &setup, new_node("a", vec![])).unwrap();
+        let fake = FakeVcs {
+            root: Some("unrecorded-output".into()),
+            next_id: "must-not-be-captured".into(),
+            linka_nodes: [("unrecorded-output".into(), id.clone())].into(),
+            ..Default::default()
+        };
+
+        let error = complete(
+            &store,
+            &fake,
+            &id,
+            &["out.txt".into()],
+            &[],
+            None,
+            "",
+            Author::Human,
+        )
+        .unwrap_err();
+
         assert!(
-            error.to_string().contains("inconsistent completion"),
+            error.to_string().contains("has never recorded"),
             "{error:#}"
         );
-        assert!(error.to_string().contains("dangling-output"), "{error:#}");
+        assert!(fake.captured.borrow().is_empty());
         assert!(store.read_result(&id).unwrap().is_none());
     }
 }

@@ -198,11 +198,6 @@ enum Cmd {
 
 fn main() -> Result<()> {
     let Cli { store, cmd } = Cli::parse();
-    if !matches!(&cmd, Cmd::Init { .. }) {
-        let opened = Store::open(store.clone())?;
-        let vcs = GitVcs::for_store(&opened);
-        ops::require_consistent_project_head(&opened, &vcs)?;
-    }
     match cmd {
         Cmd::Init { name } => {
             let initialized = ops::init_workbench(store, name)?;

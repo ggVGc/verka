@@ -94,12 +94,15 @@ lock, so it never enters a store commit and is released if a process exits.
 Failed writes or commits may leave evidence in the working tree, but that dirty
 state blocks every later mutation until it is explicitly resolved.
 
-Short-lived completion commits declared outputs in the separate project
-repository before recording the result in the store. There is deliberately no
-procedural submission journal. If recording the result fails, Linka reports the
-created output commit; if the process is interrupted, the CLI refuses a project
-`HEAD` carrying a `Linka-Node` trailer that has never appeared in committed
-store history. Previously recorded historical outputs remain valid evidence.
+Short-lived completion holds the store mutation lock from its clean-store
+precondition through result commit. It commits declared outputs in the separate
+project repository before recording the result in the store. There is
+deliberately no procedural submission journal. If recording the result fails,
+Linka reports the created output commit; if the process is interrupted, the
+library refuses a later short-lived completion from a project `HEAD` carrying a
+`Linka-Node` trailer that has never appeared in committed store history.
+Previously recorded historical outputs remain valid evidence. Read-only
+inspection remains available while resolving such an interrupted completion.
 
 Definitions and results are never overwritten as hidden mutable state. Stored
 facts are minimal; readiness, blockers, dependents, provenance, and staleness
