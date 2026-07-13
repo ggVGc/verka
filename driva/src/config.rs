@@ -212,35 +212,15 @@ impl Config {
 }
 
 fn builtin_templates() -> BTreeMap<String, TemplateConfig> {
-    let codex = TemplateConfig {
-        description: "Run OpenAI Codex interactively against the current project".into(),
-        command: ["npx", "--yes", "@openai/codex@latest"]
-            .map(String::from)
-            .to_vec(),
-        backend: Some("podman".into()),
-        image: Some("docker.io/library/node:22-bookworm".into()),
-        workdir: Some(PathBuf::from("/workspace")),
-        mounts: vec![
-            MountConfig {
-                source: PathBuf::from("."),
-                destination: PathBuf::from("/workspace"),
-                access: MountAccess::ReadWrite,
-            },
-            MountConfig {
-                source: PathBuf::from("~/.codex/auth.json"),
-                destination: PathBuf::from("/root/.codex/auth.json"),
-                access: MountAccess::ReadWrite,
-            },
-        ],
-        network: true,
-        interactive: true,
-        environment: BTreeMap::new(),
-    };
-    let mut codex_exec = codex.clone();
-    codex_exec.description =
-        "Run OpenAI Codex non-interactively against the current project".into();
-    codex_exec.command.push(String::from("exec"));
-    codex_exec.interactive = false;
-
-    BTreeMap::from([("codex".into(), codex), ("codex-exec".into(), codex_exec)])
+    [
+        ("codex", include_str!("../templates/codex.toml")),
+        ("codex-exec", include_str!("../templates/codex-exec.toml")),
+    ]
+    .into_iter()
+    .map(|(name, source)| {
+        let template = toml::from_str(source)
+            .unwrap_or_else(|error| panic!("invalid built-in template {name:?}: {error}"));
+        (name.into(), template)
+    })
+    .collect()
 }

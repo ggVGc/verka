@@ -1,0 +1,17 @@
+description = "Run OpenAI Codex non-interactively against the current project"
+command = ["npx", "--yes", "@openai/codex@latest", "exec"]
+backend = "podman"
+image = "docker.io/library/node:22-bookworm"
+workdir = "/workspace"
+network = true
+interactive = false
+
+[[mount]]
+source = "."
+destination = "/workspace"
+access = "write"
+
+[[mount]]
+source = "~/.codex/auth.json"
+destination = "/root/.codex/auth.json"
+access = "write"

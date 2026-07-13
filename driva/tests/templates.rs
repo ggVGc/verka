@@ -1,4 +1,4 @@
-use driva::{Config, MountAccess};
+use driva::{Config, MountAccess, TemplateConfig};
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
@@ -35,6 +35,19 @@ fn provides_codex_templates() {
     let codex_exec = config.template("codex-exec").unwrap();
     assert_eq!(codex_exec.command.last().unwrap(), "exec");
     assert!(!codex_exec.interactive);
+}
+
+#[test]
+fn builtin_template_assets_use_the_public_toml_schema() {
+    for name in ["codex", "codex-exec"] {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("templates")
+            .join(format!("{name}.toml"));
+        let source = fs::read_to_string(path).unwrap();
+        let template: TemplateConfig = toml::from_str(&source).unwrap();
+        assert_eq!(template.command.first().unwrap(), "npx");
+        assert_eq!(template.mounts.len(), 2);
+    }
 }
 
 #[test]

@@ -24,6 +24,10 @@ agents, Linka nodes, Orka attempts, prompts, transcripts, or reviews. The CLI
 may provide named policy-and-command templates for common tools, but they
 compile to the same backend-independent `ExecutionRequest`.
 
+Built-in templates are TOML files under `templates/`. They are embedded in the
+binary for reliable distribution and deserialized through the same
+`TemplateConfig` schema as project-defined templates.
+
 ## User interface
 
 The initial CLI has two operations:
