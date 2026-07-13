@@ -22,11 +22,13 @@ cargo run -- run --template codex --no-network
 ```
 
 These templates use Podman with Node 22, mount the current project writable at
-`/workspace`, enable networking, and mount `~/.codex` writable so Codex can use
-and refresh an existing login. That directory can contain access tokens; only
-select the template for code you trust. It can reuse a file-backed host login;
-otherwise run `driva run --template codex -- login --device-auth`, or override
-the built-in with a project template for another authentication scheme.
+`/workspace`, enable networking, and mount only `~/.codex/auth.json` writable
+at `/root/.codex/auth.json` so Codex can use and refresh an existing file-backed
+login. All other Codex state lives in the disposable container. The auth file
+contains access tokens, so select the template only for code you trust. Hosts
+using an OS keyring must create a file-backed Codex login before using the
+built-in template, or replace it with a project template using another
+authentication scheme.
 
 The full command-line reference — every subcommand, option, the mount
 grammar, and the `driva.toml` schema — lives in [`docs/cli.md`](docs/cli.md).

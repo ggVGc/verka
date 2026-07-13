@@ -124,17 +124,17 @@ codex-exec	Run OpenAI Codex non-interactively against the current project
 The built-in `codex` template runs `npx --yes @openai/codex@latest`
 interactively; `codex-exec` inserts the `exec` subcommand for automation. Both
 select Podman and `node:22-bookworm`, mount the current directory writable at
-`/workspace`, enable networking, and mount `~/.codex` writable at
-`/root/.codex`. The latter mount exposes Codex configuration and potentially
-its plaintext login cache to the selected project, so use it only with trusted
-code. [OpenAI's authentication documentation](https://developers.openai.com/codex/auth/)
-identifies `~/.codex` as the default `CODEX_HOME` and warns that `auth.json`
-contains access tokens.
+`/workspace`, enable networking, and mount only `~/.codex/auth.json` writable
+at `/root/.codex/auth.json`. This lets Codex persist credential refreshes while
+configuration, history, logs, caches, and other `CODEX_HOME` state remain in
+the disposable container. The auth file is exposed to the selected project,
+so use the template only with trusted code. [OpenAI's authentication
+documentation](https://developers.openai.com/codex/auth/) warns that
+`auth.json` contains access tokens.
 
-The mount can reuse a file-backed host login. If the host uses an OS keyring,
-authenticate the container with `driva run --template codex -- login
---device-auth`, or define a project replacement using another authentication
-scheme.
+The built-in requires a file-backed host login at `~/.codex/auth.json`. If the
+host uses an OS keyring, create a file-backed login first or define a project
+replacement using another authentication scheme.
 
 ```sh
 driva run --template codex

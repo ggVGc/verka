@@ -25,6 +25,12 @@ fn provides_codex_templates() {
     assert!(codex.interactive);
     assert_eq!(codex.mounts.len(), 2);
     assert_eq!(codex.mounts[0].access, MountAccess::ReadWrite);
+    assert_eq!(codex.mounts[1].source, PathBuf::from("~/.codex/auth.json"));
+    assert_eq!(
+        codex.mounts[1].destination,
+        PathBuf::from("/root/.codex/auth.json")
+    );
+    assert_eq!(codex.mounts[1].access, MountAccess::ReadWrite);
 
     let codex_exec = config.template("codex-exec").unwrap();
     assert_eq!(codex_exec.command.last().unwrap(), "exec");
@@ -52,6 +58,7 @@ image = "example/codex:pinned"
 fn builtin_codex_selects_podman_and_works_without_arguments() {
     let directory = temporary_directory("builtin-codex");
     fs::create_dir(directory.join(".codex")).unwrap();
+    fs::write(directory.join(".codex/auth.json"), "{}").unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_driva"))
         .current_dir(&directory)
         .env("HOME", &directory)
@@ -67,6 +74,8 @@ fn builtin_codex_selects_podman_and_works_without_arguments() {
     assert!(stdout.contains("backend: podman"));
     assert!(stdout.contains("docker.io/library/node:22-bookworm"));
     assert!(stdout.contains("\"npx\" \"--yes\" \"@openai/codex@latest\""));
+    assert!(stdout.contains("/.codex/auth.json -> /root/.codex/auth.json (read-write)"));
+    assert!(!stdout.contains(" -> /root/.codex (read-write)"));
 
     fs::remove_dir_all(directory).unwrap();
 }

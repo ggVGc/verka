@@ -227,8 +227,8 @@ fn builtin_templates() -> BTreeMap<String, TemplateConfig> {
                 access: MountAccess::ReadWrite,
             },
             MountConfig {
-                source: PathBuf::from("~/.codex"),
-                destination: PathBuf::from("/root/.codex"),
+                source: PathBuf::from("~/.codex/auth.json"),
+                destination: PathBuf::from("/root/.codex/auth.json"),
                 access: MountAccess::ReadWrite,
             },
         ],
