@@ -1,0 +1,1 @@
+- [ ] Use openai SDK instead of codex. Should still work with subscription plan.
