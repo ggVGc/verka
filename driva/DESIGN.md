@@ -8,8 +8,9 @@ and programmatic callers such as Orka.
 
 Driva does not implement isolation itself. Its core validates a portable
 execution request and delegates it to an isolation backend. Podman is the
-default backend and Docker is also supported, but container-engine concepts
-are not part of the core interface.
+default backend, Docker is also supported, and Bubblewrap provides lightweight
+synchronous Linux execution. Backend-specific concepts are not part of the
+core interface.
 
 The distinguishing policy is deny by default:
 
@@ -153,7 +154,7 @@ There are no implicit mounts for the current directory, home directory,
 credentials, SSH agent, Git configuration, or isolation-engine socket.
 Configuration must name every capability that crosses the isolation boundary.
 
-## Initial container backends
+## Isolation backends
 
 The production adapters translate an `ExecutionRequest` into a synchronous
 `podman run --rm` or `docker run --rm` invocation. Podman is selected by
@@ -167,8 +168,16 @@ default. Each adapter is responsible for:
 - returning the isolated command's exit status.
 
 Engine-specific image names, flags, identifiers, and error details remain in
-their adapters. A future Bubblewrap or other backend can implement the same
-portable contract where its semantics match.
+their adapters. Other backends can implement the same portable contract where
+their semantics match.
+
+The Bubblewrap adapter translates synchronous requests into unprivileged Linux
+namespaces. It mounts an explicitly configured, prepared rootfs read-only,
+adds fresh `/proc`, `/dev`, and `/tmp` mounts, clears the inherited host
+environment, and shares the host network namespace only when networking is
+granted. Requiring an explicit rootfs prevents a lightweight backend from
+silently exposing the host's system tree. Bubblewrap is not a durable backend;
+session lifecycle operations continue to require Podman or Docker.
 
 Tests for Driva's policy use a fake `Isolation` implementation. Each production
 backend also has focused integration tests for its request translation, I/O,

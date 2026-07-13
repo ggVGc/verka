@@ -25,6 +25,8 @@ pub struct IsolationConfig {
     pub docker: DockerConfig,
     #[serde(default)]
     pub podman: PodmanConfig,
+    #[serde(default)]
+    pub bwrap: BwrapConfig,
 }
 
 impl Default for IsolationConfig {
@@ -33,6 +35,7 @@ impl Default for IsolationConfig {
             backend: podman_backend(),
             docker: DockerConfig::default(),
             podman: PodmanConfig::default(),
+            bwrap: BwrapConfig::default(),
         }
     }
 }
@@ -92,6 +95,33 @@ impl Default for PodmanConfig {
 
 fn default_podman() -> PathBuf {
     PathBuf::from("podman")
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct BwrapConfig {
+    /// A prepared filesystem tree to expose as the sandbox root.
+    ///
+    /// There is deliberately no default: selecting Bubblewrap must not
+    /// silently expose the host root filesystem.
+    pub rootfs: Option<PathBuf>,
+    #[serde(default = "default_workdir")]
+    pub workdir: PathBuf,
+    #[serde(default = "default_bwrap")]
+    pub executable: PathBuf,
+}
+
+impl Default for BwrapConfig {
+    fn default() -> Self {
+        Self {
+            rootfs: None,
+            workdir: default_workdir(),
+            executable: default_bwrap(),
+        }
+    }
+}
+
+fn default_bwrap() -> PathBuf {
+    PathBuf::from("bwrap")
 }
 
 #[derive(Clone, Debug, Deserialize)]

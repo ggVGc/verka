@@ -1,11 +1,15 @@
 //! Portable policy and execution interface for isolated commands.
 
+mod bwrap;
 mod config;
 mod docker;
 mod podman;
 mod session;
 
-pub use config::{Config, DockerConfig, IsolationConfig, MountConfig, NetworkConfig, PodmanConfig};
+pub use bwrap::BwrapIsolation;
+pub use config::{
+    BwrapConfig, Config, DockerConfig, IsolationConfig, MountConfig, NetworkConfig, PodmanConfig,
+};
 pub use docker::DockerIsolation;
 pub use podman::PodmanIsolation;
 pub use session::{

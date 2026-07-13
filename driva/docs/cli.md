@@ -1,9 +1,9 @@
 # Driva command-line reference
 
-Driva runs a command in a disposable Podman (or Docker) container with
-explicit, deny-by-default isolation: the command gets no host filesystem
-access and no network unless each grant is stated on the command line or in
-`driva.toml`.
+Driva runs a command in a disposable isolated environment using Podman,
+Docker, or Bubblewrap with explicit, deny-by-default isolation: the command
+gets no host filesystem access and no network unless each grant is stated on
+the command line or in `driva.toml`.
 
 The `console` blocks below are verified against the compiled binary by
 `tests/cli_docs.rs`. If a flag or help text changes, that test fails; run
@@ -93,7 +93,7 @@ Policy options (shared by `run`, `shell`, and `start`):
 | `--network` | Enable networking (otherwise the container has none). |
 | `-i`, `--interactive` | Allocate an interactive terminal (stdin + TTY). |
 | `--dry-run` | Print the validated request and the exact backend invocation without executing anything. |
-| `--image <IMAGE>` | Override the configured container image for this run. |
+| `--image <IMAGE>` | Override the configured container image for this run (Podman/Docker only). |
 | `--workdir <WORKDIR>` | Override the isolated working directory (must be absolute). |
 | `--env NAME=VALUE` | Set an environment variable inside the container. Repeatable. |
 
@@ -153,6 +153,9 @@ stored under `$DRIVA_STATE_DIR`, `$XDG_STATE_HOME/driva`, or
 `~/.local/state/driva`, in that order of preference. Process state is always
 queried from the container backend — a missing container is never reported
 as a successful exit.
+
+Durable sessions require Podman or Docker. The Bubblewrap backend supports
+only disposable `run` and `shell` execution.
 
 ```sh
 id=$(driva start --write . -- make watch)
@@ -332,7 +335,7 @@ optional; defaults are shown below.
 
 ```toml
 [isolation]
-backend = "podman"                # or "docker"
+backend = "podman"                # or "docker" or "bwrap"
 
 [isolation.podman]
 image = "docker.io/library/busybox:latest"
@@ -344,6 +347,11 @@ image = "docker.io/library/busybox:latest"
 workdir = "/tmp"
 executable = "docker"
 
+[isolation.bwrap]
+rootfs = "/var/lib/driva/rootfs/busybox" # required when backend = "bwrap"
+workdir = "/tmp"
+executable = "bwrap"
+
 # Zero or more pre-granted mounts. destination is required and absolute.
 [[mount]]
 source = "."
@@ -354,8 +362,15 @@ access = "write"                  # "read"/"ro" or "write"/"rw"; default read-on
 enabled = false                   # --network also enables it per run
 
 [environment]
-# NAME = "value" pairs set inside every container; --env overrides per run.
+# NAME = "value" pairs set inside every sandbox; --env overrides per run.
 ```
+
+Bubblewrap uses `rootfs` as a prepared filesystem tree rather than pulling an
+OCI image. The tree must contain `/proc`, `/dev`, `/tmp`, the configured
+working directory, and every mount destination. Driva exposes it read-only,
+creates private `/proc` and `/dev` mounts and a writable tmpfs at `/tmp`, and
+clears the inherited host environment. `--image` and durable session commands
+are not supported with this backend.
 
 ## Further reading
 

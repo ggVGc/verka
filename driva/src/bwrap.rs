@@ -1,0 +1,136 @@
+use crate::{
+    effective_policy, ExecutionEvidence, ExecutionIo, ExecutionOutcome, ExecutionRequest,
+    Isolation, MountAccess, ProcessExit,
+};
+use anyhow::{bail, Context, Result};
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::time::SystemTime;
+
+const DEFAULT_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+
+/// A synchronous Bubblewrap backend using a prepared filesystem tree.
+#[derive(Clone, Debug)]
+pub struct BwrapIsolation {
+    pub executable: PathBuf,
+    pub rootfs: PathBuf,
+}
+
+impl BwrapIsolation {
+    /// Translate a portable request into a Bubblewrap invocation.
+    ///
+    /// Bubblewrap cannot create bind destinations below a read-only root, so
+    /// the working directory, `/proc`, `/dev`, and every mount destination
+    /// must already exist in the configured rootfs.
+    pub fn command(&self, request: &ExecutionRequest) -> Result<Command> {
+        let rootfs = self
+            .rootfs
+            .canonicalize()
+            .with_context(|| format!("invalid Bubblewrap rootfs {}", self.rootfs.display()))?;
+        if !rootfs.is_dir() {
+            bail!("Bubblewrap rootfs is not a directory: {}", rootfs.display());
+        }
+
+        self.require_rootfs_directory(&rootfs, Path::new("/proc"), "proc mount point")?;
+        self.require_rootfs_directory(&rootfs, Path::new("/dev"), "device mount point")?;
+        self.require_rootfs_directory(&rootfs, Path::new("/tmp"), "temporary directory")?;
+        self.require_rootfs_directory(&rootfs, &request.working_directory, "working directory")?;
+        for mount in &request.mounts {
+            self.require_rootfs_path(&rootfs, &mount.destination, "mount destination")?;
+        }
+
+        let mut command = Command::new(&self.executable);
+        command
+            .arg("--unshare-all")
+            .arg("--new-session")
+            .arg("--die-with-parent");
+        if request.network {
+            command.arg("--share-net");
+        }
+        command
+            .arg("--clearenv")
+            .arg("--setenv")
+            .arg("PATH")
+            .arg(DEFAULT_PATH);
+        for (key, value) in &request.environment {
+            command.arg("--setenv").arg(key).arg(value);
+        }
+        command
+            .arg("--ro-bind")
+            .arg(&rootfs)
+            .arg("/")
+            .arg("--proc")
+            .arg("/proc")
+            .arg("--dev")
+            .arg("/dev")
+            .arg("--tmpfs")
+            .arg("/tmp");
+        for mount in &request.mounts {
+            command.arg(match mount.access {
+                MountAccess::ReadOnly => "--ro-bind",
+                MountAccess::ReadWrite => "--bind",
+            });
+            command.arg(&mount.source).arg(&mount.destination);
+        }
+        command
+            .arg("--chdir")
+            .arg(&request.working_directory)
+            .arg("--")
+            .args(&request.command);
+        Ok(command)
+    }
+
+    fn require_rootfs_directory(&self, rootfs: &Path, path: &Path, label: &str) -> Result<()> {
+        let resolved = self.require_rootfs_path(rootfs, path, label)?;
+        if !resolved.is_dir() {
+            bail!(
+                "Bubblewrap {label} is not a directory in the rootfs: {}",
+                path.display()
+            );
+        }
+        Ok(())
+    }
+
+    fn require_rootfs_path(&self, rootfs: &Path, path: &Path, label: &str) -> Result<PathBuf> {
+        let relative = path
+            .strip_prefix("/")
+            .with_context(|| format!("Bubblewrap {label} must be absolute: {}", path.display()))?;
+        let candidate = rootfs.join(relative);
+        let resolved = candidate.canonicalize().with_context(|| {
+            format!(
+                "Bubblewrap {label} does not exist in the rootfs: {}",
+                path.display()
+            )
+        })?;
+        if !resolved.starts_with(rootfs) {
+            bail!(
+                "Bubblewrap {label} escapes the rootfs through a symlink: {}",
+                path.display()
+            );
+        }
+        Ok(resolved)
+    }
+}
+
+impl Isolation for BwrapIsolation {
+    fn run(&self, request: &ExecutionRequest, io: ExecutionIo) -> Result<ExecutionOutcome> {
+        let started_at = SystemTime::now();
+        let status = self
+            .command(request)?
+            .stdin(Stdio::from(io.stdin))
+            .stdout(Stdio::from(io.stdout))
+            .stderr(Stdio::from(io.stderr))
+            .status()
+            .with_context(|| format!("failed to start {}", self.executable.display()))?;
+        Ok(ExecutionOutcome {
+            exit: ProcessExit::from(status),
+            evidence: ExecutionEvidence {
+                isolation_backend: "bwrap".into(),
+                backend_reference: None,
+                effective_policy: effective_policy(request),
+                started_at,
+                finished_at: SystemTime::now(),
+            },
+        })
+    }
+}

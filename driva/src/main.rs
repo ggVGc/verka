@@ -1,8 +1,8 @@
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
 use driva::{
-    execute, validate_request, Config, DockerIsolation, ExecutionIo, ExecutionRequest, Mount,
-    MountAccess, PodmanIsolation,
+    execute, validate_request, BwrapIsolation, Config, DockerIsolation, ExecutionIo,
+    ExecutionRequest, Mount, MountAccess, PodmanIsolation,
 };
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -120,6 +120,7 @@ fn real_main() -> Result<()> {
     let configured_workdir = match config.isolation.backend.as_str() {
         "podman" => &config.isolation.podman.workdir,
         "docker" => &config.isolation.docker.workdir,
+        "bwrap" => &config.isolation.bwrap.workdir,
         backend => bail!("unsupported isolation backend {backend:?}"),
     };
     let workdir = policy
@@ -177,6 +178,24 @@ fn real_main() -> Result<()> {
                 finish("docker", &backend, invocation, &request, policy.dry_run)
             }
         }
+        "bwrap" => {
+            if durable {
+                bail!("Bubblewrap does not support durable sessions; use `driva run` or `driva shell`");
+            }
+            if policy.image.is_some() {
+                bail!("--image is not supported by the Bubblewrap backend; configure isolation.bwrap.rootfs");
+            }
+            let backend = BwrapIsolation {
+                executable: config.isolation.bwrap.executable,
+                rootfs: config
+                    .isolation
+                    .bwrap
+                    .rootfs
+                    .context("Bubblewrap requires isolation.bwrap.rootfs")?,
+            };
+            let invocation = backend.command(&request)?;
+            finish("bwrap", &backend, invocation, &request, policy.dry_run)
+        }
         _ => unreachable!("backend was validated above"),
     }
 }
@@ -191,6 +210,9 @@ fn runner_backend(config: &Config) -> Result<Box<dyn driva::DurableIsolation>> {
             executable: config.isolation.docker.executable.clone(),
             image: config.isolation.docker.image.clone(),
         }),
+        "bwrap" => bail!(
+            "Bubblewrap does not support durable session commands; use `driva run` or `driva shell`"
+        ),
         b => bail!("unsupported isolation backend {b:?}"),
     })
 }
