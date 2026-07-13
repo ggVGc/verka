@@ -26,6 +26,8 @@ fn provides_codex_templates() {
             "@openai/codex@latest",
             "-c",
             "projects.\"/workspace\".trust_level=\"trusted\"",
+            "--sandbox",
+            "danger-full-access",
         ]
     );
     assert_eq!(codex.backend.as_deref(), Some("podman"));
@@ -50,6 +52,8 @@ fn provides_codex_templates() {
             "@openai/codex@latest",
             "-c",
             "projects.\"/workspace\".trust_level=\"trusted\"",
+            "--sandbox",
+            "danger-full-access",
             "exec",
         ]
     );
@@ -161,6 +165,7 @@ fn builtin_codex_selects_podman_and_works_without_arguments() {
     assert!(stdout.contains("docker.io/library/node:22-bookworm"));
     assert!(stdout.contains("\"npx\" \"--yes\" \"@openai/codex@latest\""));
     assert!(stdout.contains("projects.\\\"/workspace\\\".trust_level=\\\"trusted\\\""));
+    assert!(stdout.contains("\"--sandbox\" \"danger-full-access\""));
     assert!(stdout.contains("/.codex/auth.json -> /root/.codex/auth.json (read-write)"));
     assert!(!stdout.contains(" -> /root/.codex (read-write)"));
 
