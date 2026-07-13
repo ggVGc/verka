@@ -14,6 +14,7 @@ const DEFAULT_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/s
 pub struct BwrapIsolation {
     pub executable: PathBuf,
     pub rootfs: PathBuf,
+    pub tmpfs: Vec<PathBuf>,
 }
 
 impl BwrapIsolation {
@@ -23,8 +24,8 @@ impl BwrapIsolation {
     /// the working directory, `/proc`, `/dev`, and every mount destination
     /// must already exist in the configured rootfs.
     pub fn command(&self, request: &ExecutionRequest) -> Result<Command> {
-        let rootfs = self
-            .rootfs
+        let configured_rootfs = expand_home(&self.rootfs)?;
+        let rootfs = configured_rootfs
             .canonicalize()
             .with_context(|| format!("invalid Bubblewrap rootfs {}", self.rootfs.display()))?;
         if !rootfs.is_dir() {
@@ -35,6 +36,9 @@ impl BwrapIsolation {
         self.require_rootfs_directory(&rootfs, Path::new("/dev"), "device mount point")?;
         self.require_rootfs_directory(&rootfs, Path::new("/tmp"), "temporary directory")?;
         self.require_rootfs_directory(&rootfs, &request.working_directory, "working directory")?;
+        for destination in &self.tmpfs {
+            self.require_rootfs_directory(&rootfs, destination, "tmpfs mount point")?;
+        }
         for mount in &request.mounts {
             self.require_rootfs_path(&rootfs, &mount.destination, "mount destination")?;
         }
@@ -65,6 +69,9 @@ impl BwrapIsolation {
             .arg("/dev")
             .arg("--tmpfs")
             .arg("/tmp");
+        for destination in &self.tmpfs {
+            command.arg("--tmpfs").arg(destination);
+        }
         for mount in &request.mounts {
             command.arg(match mount.access {
                 MountAccess::ReadOnly => "--ro-bind",
@@ -109,6 +116,15 @@ impl BwrapIsolation {
             );
         }
         Ok(resolved)
+    }
+}
+
+fn expand_home(path: &Path) -> Result<PathBuf> {
+    if path == Path::new("~") || path.starts_with("~/") {
+        let home = std::env::var_os("HOME").context("HOME is not set; cannot expand rootfs")?;
+        Ok(PathBuf::from(home).join(path.strip_prefix("~").expect("prefix checked")))
+    } else {
+        Ok(path.to_path_buf())
     }
 }
 

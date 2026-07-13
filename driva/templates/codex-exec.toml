@@ -1,15 +1,25 @@
 description = "Run OpenAI Codex non-interactively against the current project"
-command = ["npx", "--yes", "@openai/codex@latest", "-c", 'projects."/workspace".trust_level="trusted"', "--sandbox", "danger-full-access", "exec"]
-backend = "podman"
-image = "docker.io/library/node:22-bookworm"
+command = ["/usr/local/bin/codex", "-c", 'projects."/workspace".trust_level="trusted"', "--sandbox", "danger-full-access", "exec"]
+backend = "bwrap"
+rootfs = "~/.local/share/driva/runtimes/codex/current/rootfs"
+tmpfs = ["/root/.codex"]
 workdir = "/workspace"
 network = true
 interactive = false
+
+[environment]
+HOME = "/root"
+TERM = "xterm-256color"
 
 [[mount]]
 source = "."
 destination = "/workspace"
 access = "write"
+
+[[mount]]
+source = "/etc/resolv.conf"
+destination = "/etc/resolv.conf"
+access = "read"
 
 [[mount]]
 source = "~/.codex/auth.json"

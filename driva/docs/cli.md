@@ -30,6 +30,7 @@ Commands:
   list       List recorded sessions and their current backend states
   recover    Rediscover and inspect recorded sessions
   templates  List built-in and project-defined execution templates
+  runtime    Manage prepared read-only runtimes for Bubblewrap templates
   help       Print this message or the help of the given subcommand(s)
 
 Options:
@@ -123,20 +124,22 @@ codex	Run OpenAI Codex interactively against the current project
 codex-exec	Run OpenAI Codex non-interactively against the current project
 ```
 
-The built-in `codex` template runs `npx --yes @openai/codex@latest`
-interactively; `codex-exec` inserts the `exec` subcommand for automation. Both
-mark the fixed container workspace path as trusted and disable Codex's inner
-sandbox, relying on the outer Podman isolation instead. Both select Podman and
-`node:22-bookworm`, mount the current directory writable at `/workspace`,
-enable networking, and mount only `~/.codex/auth.json` writable at
-`/root/.codex/auth.json`. Trusting `/workspace` avoids Codex's directory trust
-prompt and enables project-scoped `.codex` configuration inside the isolated
-container. Disabling the inner sandbox lets Codex use the writable project
-mount without requiring Bubblewrap inside the container. The auth mount lets
-Codex persist credential refreshes while
-configuration, history, logs, caches, and other `CODEX_HOME` state remain in
-the disposable container. The auth file is exposed to the selected project,
-so use the template only with trusted code. [OpenAI's authentication
+The built-in `codex` template runs a pinned, prepared Codex installation
+interactively; `codex-exec` inserts the `exec` subcommand for automation. Run
+`driva runtime install codex@VERSION` before using either template. Installation
+uses Podman and `node:22-bookworm` once to build a complete filesystem under
+`~/.local/share/driva/runtimes/codex/VERSION`; normal executions expose the
+active version read-only through Bubblewrap and do not use Podman.
+
+Both templates mark `/workspace` as trusted and disable Codex's inner sandbox,
+relying on Driva's outer Bubblewrap isolation. They mount the current directory
+writable at `/workspace`, enable networking, and put `/root/.codex` on a
+private writable tmpfs for disposable Codex state. They then mount
+`/etc/resolv.conf` read-only for DNS and `~/.codex/auth.json` writable at
+`/root/.codex/auth.json`, allowing credential refreshes to persist. The auth
+file is exposed to the selected project. The templates also establish stable
+`HOME` and `TERM` values because Bubblewrap clears the inherited environment.
+Use them only with trusted code. [OpenAI's authentication
 documentation](https://developers.openai.com/codex/auth/) warns that
 `auth.json` contains access tokens.
 
@@ -146,8 +149,8 @@ replacement using another authentication scheme.
 
 The built-in `claude` template runs `npx --yes
 @anthropic-ai/claude-code@latest` interactively; `claude-exec` adds `--print`
-for non-interactive use. Both use the same Podman, Node, workspace, and network
-policy as the Codex templates. On Linux they mount only
+for non-interactive use. Both use Podman with Node 22, mount the project at
+`/workspace`, and enable networking. On Linux they mount only
 `~/.claude/.credentials.json` writable at
 `/root/.claude/.credentials.json`, leaving other Claude configuration and
 session state disposable. [Anthropic's authentication
@@ -165,6 +168,87 @@ driva run --template claude-exec -- "update the dependencies and run tests"
 
 A `[template.<name>]` entry with a built-in name completely replaces that
 built-in, allowing images and package versions to be pinned locally.
+
+### Prepared runtimes
+
+```console
+$ driva runtime --help
+Manage prepared read-only runtimes for Bubblewrap templates
+
+Usage: driva runtime [OPTIONS] <COMMAND>
+
+Commands:
+  install  Build and install a pinned runtime such as codex@0.144.3
+  list     List installed runtime versions
+  remove   Remove an installed runtime version
+  help     Print this message or the help of the given subcommand(s)
+
+Options:
+      --config <CONFIG>  Configuration file (defaults to ./driva.toml when present)
+  -h, --help             Print help
+```
+
+Install an exact Codex version before the first Bubblewrap-backed Codex run:
+
+```sh
+driva runtime install codex@0.144.3
+driva runtime list
+```
+
+The installer uses the configured Podman executable to create a temporary
+container, installs the exact `@openai/codex` version, exports and extracts its
+filesystem, and removes the build container. Publication is atomic. Reinstalling
+an existing version makes it current without rebuilding it; installing another
+version atomically moves the `current` link. A custom preparation image can be
+selected with `--image`.
+
+```console
+$ driva runtime install --help
+Build and install a pinned runtime such as codex@0.144.3
+
+Usage: driva runtime install [OPTIONS] <RUNTIME>
+
+Arguments:
+  <RUNTIME>  Pinned runtime in NAME@VERSION form
+
+Options:
+      --config <CONFIG>  Configuration file (defaults to ./driva.toml when present)
+      --image <IMAGE>    Container image used to prepare the runtime filesystem [default: docker.io/library/node:22-bookworm]
+  -h, --help             Print help
+```
+
+```sh
+driva runtime install codex@0.144.3 --image registry.example/node:22
+driva runtime remove codex@0.144.3
+```
+
+Removing the current version also removes the `current` link. Install or
+reinstall another version before running the built-in Codex templates.
+
+```console
+$ driva runtime list --help
+List installed runtime versions
+
+Usage: driva runtime list [OPTIONS]
+
+Options:
+      --config <CONFIG>  Configuration file (defaults to ./driva.toml when present)
+  -h, --help             Print help
+```
+
+```console
+$ driva runtime remove --help
+Remove an installed runtime version
+
+Usage: driva runtime remove [OPTIONS] <RUNTIME>
+
+Arguments:
+  <RUNTIME>  Pinned runtime in NAME@VERSION form
+
+Options:
+      --config <CONFIG>  Configuration file (defaults to ./driva.toml when present)
+  -h, --help             Print help
+```
 
 ### Mount grammar
 
@@ -438,6 +522,8 @@ description = "Run the Rust linter"
 command = ["cargo", "clippy"]
 backend = "podman"               # optional: "bwrap", "podman", or "docker"
 image = "rust:1.88"              # optional; Podman/Docker only
+rootfs = "/srv/driva/rootfs/rust" # optional; Bubblewrap only
+tmpfs = ["/root/.cache"]          # optional; Bubblewrap only
 workdir = "/workspace"           # optional
 network = false
 interactive = false
@@ -453,6 +539,11 @@ access = "write"
 
 Template fields are optional except that the effective command must be
 non-empty. `command` is an array of the executable and its initial arguments.
+`rootfs` overrides `[isolation.bwrap].rootfs` when the template selects
+Bubblewrap; `~` is expanded using `$HOME` and the tree is mounted read-only.
+`tmpfs` replaces listed rootfs directories with private writable temporary
+filesystems before template mounts are applied, allowing a writable file mount
+inside otherwise-disposable state.
 Template mounts use the same shape and validation as global `[[mount]]`
 entries. Project templates appear in `driva templates`; project definitions
 replace built-ins with the same name.

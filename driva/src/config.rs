@@ -148,6 +148,11 @@ pub struct TemplateConfig {
     pub command: Vec<String>,
     pub backend: Option<String>,
     pub image: Option<String>,
+    /// Prepared filesystem tree used when this template selects Bubblewrap.
+    pub rootfs: Option<PathBuf>,
+    /// Rootfs directories replaced with private writable tmpfs mounts.
+    #[serde(default)]
+    pub tmpfs: Vec<PathBuf>,
     pub workdir: Option<PathBuf>,
     #[serde(default, rename = "mount")]
     pub mounts: Vec<MountConfig>,

@@ -32,6 +32,7 @@ fn translates_request_without_implicit_host_access() {
     let backend = BwrapIsolation {
         executable: "bwrap".into(),
         rootfs: rootfs.0.clone(),
+        tmpfs: vec![],
     };
     let request = ExecutionRequest {
         command: vec!["printf".into(), "hello".into()],
@@ -91,6 +92,7 @@ fn shares_network_only_when_granted() {
     let backend = BwrapIsolation {
         executable: "bwrap".into(),
         rootfs: rootfs.0.clone(),
+        tmpfs: vec![],
     };
     let request = ExecutionRequest {
         command: vec!["true".into()],
@@ -106,11 +108,49 @@ fn shares_network_only_when_granted() {
 }
 
 #[test]
+fn creates_private_tmpfs_before_nested_file_mounts() {
+    let rootfs = TestRootfs::new();
+    std::fs::create_dir_all(rootfs.0.join("state")).unwrap();
+    std::fs::write(rootfs.0.join("state/auth.json"), "").unwrap();
+    let backend = BwrapIsolation {
+        executable: "bwrap".into(),
+        rootfs: rootfs.0.clone(),
+        tmpfs: vec!["/state".into()],
+    };
+    let request = ExecutionRequest {
+        command: vec!["true".into()],
+        working_directory: "/work".into(),
+        mounts: vec![Mount {
+            source: "/host/auth.json".into(),
+            destination: "/state/auth.json".into(),
+            access: MountAccess::ReadWrite,
+        }],
+        environment: BTreeMap::new(),
+        network: false,
+        interactive: false,
+    };
+
+    let command = backend.command(&request).unwrap();
+    let args: Vec<_> = command
+        .get_args()
+        .map(|value| value.to_string_lossy().into_owned())
+        .collect();
+    let tmpfs = args
+        .windows(2)
+        .position(|args| args == ["--tmpfs", "/state"]);
+    let bind = args
+        .windows(3)
+        .position(|args| args == ["--bind", "/host/auth.json", "/state/auth.json"]);
+    assert!(tmpfs.unwrap() < bind.unwrap());
+}
+
+#[test]
 fn rejects_destinations_missing_from_read_only_rootfs() {
     let rootfs = TestRootfs::new();
     let backend = BwrapIsolation {
         executable: "bwrap".into(),
         rootfs: rootfs.0.clone(),
+        tmpfs: vec![],
     };
     let request = ExecutionRequest {
         command: vec!["true".into()],

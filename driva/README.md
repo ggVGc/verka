@@ -11,11 +11,13 @@ cargo run -- run --read ~/.cargo/registry --write . --network -- cargo update
 cargo run -- shell --write .
 ```
 
-Named templates bundle a command, backend, image, mounts, and policy. Driva
-ships interactive and non-interactive templates for Codex and Claude Code:
+Named templates bundle a command, backend, image or rootfs, mounts, and
+policy. Driva ships interactive and non-interactive templates for Codex and
+Claude Code:
 
 ```sh
 cargo run -- templates
+cargo run -- runtime install codex@0.144.3
 cargo run -- run --template codex
 cargo run -- run --template codex-exec -- "fix the failing tests"
 cargo run -- run --template codex --no-network
@@ -23,17 +25,20 @@ cargo run -- run --template claude
 cargo run -- run --template claude-exec -- "fix the failing tests"
 ```
 
-These templates use Podman with Node 22, mount the current project writable at
-`/workspace`, enable networking, and mount only `~/.codex/auth.json` writable
-at `/root/.codex/auth.json` so Codex can use and refresh an existing file-backed
-login. All other Codex state lives in the disposable container. The auth file
+The Codex templates use a pinned runtime prepared by `driva runtime install`
+and expose it read-only through Bubblewrap. Installation uses Podman once to
+install Node and Codex into a complete versioned filesystem under
+`~/.local/share/driva/runtimes`; normal Codex runs do not use Podman. The
+templates mount the current project writable at `/workspace`, enable
+networking, give Codex a private writable tmpfs for disposable state, mount
+the host resolver configuration read-only, and mount `~/.codex/auth.json`
+writable at `/root/.codex/auth.json`. The auth file
 contains access tokens, so select the template only for code you trust. Hosts
-using an OS keyring must create a file-backed Codex login before using the
-built-in template, or replace it with a project template using another
-authentication scheme.
+using an OS keyring must create a file-backed Codex login first or replace the
+template's authentication scheme.
 
-The Claude Code templates use the same container policy and mount only the
-Linux credential file `~/.claude/.credentials.json` at
+The Claude Code templates continue to use Podman with Node 22 and mount only
+the Linux credential file `~/.claude/.credentials.json` at
 `/root/.claude/.credentials.json`; all other Claude state is disposable. They
 require a host login created by Claude Code on Linux.
 

@@ -60,6 +60,33 @@ enum Operation {
     Recover,
     /// List built-in and project-defined execution templates.
     Templates,
+    /// Manage prepared read-only runtimes for Bubblewrap templates.
+    Runtime {
+        #[command(subcommand)]
+        command: RuntimeOperation,
+    },
+}
+
+#[derive(Subcommand)]
+enum RuntimeOperation {
+    /// Build and install a pinned runtime such as codex@0.144.3.
+    Install {
+        /// Pinned runtime in NAME@VERSION form.
+        runtime: String,
+        /// Container image used to prepare the runtime filesystem.
+        #[arg(
+            long,
+            default_value_t = driva::RuntimeStore::default_build_image().to_owned()
+        )]
+        image: String,
+    },
+    /// List installed runtime versions.
+    List,
+    /// Remove an installed runtime version.
+    Remove {
+        /// Pinned runtime in NAME@VERSION form.
+        runtime: String,
+    },
 }
 
 #[derive(Args, Default)]
@@ -249,13 +276,23 @@ fn real_main() -> Result<()> {
             }
             let backend = BwrapIsolation {
                 executable: config.isolation.bwrap.executable,
-                rootfs: config
-                    .isolation
-                    .bwrap
-                    .rootfs
+                rootfs: template
+                    .as_ref()
+                    .and_then(|value| value.rootfs.clone())
+                    .or(config.isolation.bwrap.rootfs)
                     .context("Bubblewrap requires isolation.bwrap.rootfs")?,
+                tmpfs: template
+                    .as_ref()
+                    .map(|value| value.tmpfs.clone())
+                    .unwrap_or_default(),
             };
-            let invocation = backend.command(&request)?;
+            let invocation = backend.command(&request).with_context(|| {
+                if matches!(policy.template.as_deref(), Some("codex" | "codex-exec")) {
+                    "Codex runtime is unavailable; run `driva runtime install codex@VERSION`"
+                } else {
+                    "failed to construct Bubblewrap invocation"
+                }
+            })?;
             finish("bwrap", &backend, invocation, &request, policy.dry_run)
         }
         _ => unreachable!("backend was validated above"),
@@ -285,6 +322,9 @@ fn lifecycle(config: &Config, operation: Operation) -> Result<()> {
             println!("{name}\t{}", template.description);
         }
         return Ok(());
+    }
+    if let Operation::Runtime { command } = operation {
+        return runtime_command(config, command);
     }
     let backend = runner_backend(config)?;
     let runner = driva::SessionRunner::new(
@@ -337,6 +377,33 @@ fn lifecycle(config: &Config, operation: Operation) -> Result<()> {
             }
         }
         _ => unreachable!(),
+    }
+    Ok(())
+}
+
+fn runtime_command(config: &Config, command: RuntimeOperation) -> Result<()> {
+    let store = driva::RuntimeStore::new(driva::RuntimeStore::default_path()?);
+    match command {
+        RuntimeOperation::Install { runtime, image } => {
+            let spec = driva::RuntimeSpec::parse(&runtime)?;
+            println!("Preparing {} from {image}...", spec.display());
+            store.install_codex(&spec, &image, &config.isolation.podman.executable)?;
+            println!("Installed and activated {}", spec.display());
+        }
+        RuntimeOperation::List => {
+            for (spec, active) in store.list()? {
+                println!(
+                    "{}{}",
+                    spec.display(),
+                    if active { "\tcurrent" } else { "" }
+                );
+            }
+        }
+        RuntimeOperation::Remove { runtime } => {
+            let spec = driva::RuntimeSpec::parse(&runtime)?;
+            store.remove(&spec)?;
+            println!("Removed {}", spec.display());
+        }
     }
     Ok(())
 }

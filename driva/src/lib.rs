@@ -4,6 +4,7 @@ mod bwrap;
 mod config;
 mod docker;
 mod podman;
+mod runtime;
 mod session;
 
 pub use bwrap::BwrapIsolation;
@@ -13,6 +14,7 @@ pub use config::{
 };
 pub use docker::DockerIsolation;
 pub use podman::PodmanIsolation;
+pub use runtime::{RuntimeSpec, RuntimeStore};
 pub use session::{
     BackendReference, CleanupObservation, DiscoveredResource, DurableIsolation, Observation,
     ObservedProcessState, ProcessConnection, RedactedExecutionRequest, SessionId, SessionRecord,

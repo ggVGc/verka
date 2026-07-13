@@ -1,6 +1,6 @@
 use driva::{Config, MountAccess, TemplateConfig};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -14,6 +14,28 @@ fn temporary_directory(name: &str) -> PathBuf {
     path
 }
 
+fn prepare_codex_runtime(home: &Path) {
+    let family = home.join(".local/share/driva/runtimes/codex");
+    let version = family.join("0.144.3");
+    let rootfs = version.join("rootfs");
+    for directory in [
+        "proc",
+        "dev",
+        "tmp",
+        "workspace",
+        "etc",
+        "root/.codex",
+        "usr/local/bin",
+    ] {
+        fs::create_dir_all(rootfs.join(directory)).unwrap();
+    }
+    fs::write(rootfs.join("root/.codex/auth.json"), "").unwrap();
+    fs::write(rootfs.join("etc/resolv.conf"), "").unwrap();
+    fs::write(rootfs.join("usr/local/bin/codex"), "").unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("0.144.3", family.join("current")).unwrap();
+}
+
 #[test]
 fn provides_codex_templates() {
     let config = Config::default();
@@ -21,35 +43,48 @@ fn provides_codex_templates() {
     assert_eq!(
         codex.command,
         [
-            "npx",
-            "--yes",
-            "@openai/codex@latest",
+            "/usr/local/bin/codex",
             "-c",
             "projects.\"/workspace\".trust_level=\"trusted\"",
             "--sandbox",
             "danger-full-access",
         ]
     );
-    assert_eq!(codex.backend.as_deref(), Some("podman"));
+    assert_eq!(codex.backend.as_deref(), Some("bwrap"));
+    assert_eq!(
+        codex.rootfs.as_deref(),
+        Some(std::path::Path::new(
+            "~/.local/share/driva/runtimes/codex/current/rootfs"
+        ))
+    );
+    assert_eq!(codex.tmpfs, [PathBuf::from("/root/.codex")]);
+    assert_eq!(
+        codex.environment.get("HOME").map(String::as_str),
+        Some("/root")
+    );
+    assert_eq!(
+        codex.environment.get("TERM").map(String::as_str),
+        Some("xterm-256color")
+    );
     assert_eq!(codex.workdir.unwrap(), PathBuf::from("/workspace"));
     assert!(codex.network);
     assert!(codex.interactive);
-    assert_eq!(codex.mounts.len(), 2);
+    assert_eq!(codex.mounts.len(), 3);
     assert_eq!(codex.mounts[0].access, MountAccess::ReadWrite);
-    assert_eq!(codex.mounts[1].source, PathBuf::from("~/.codex/auth.json"));
+    assert_eq!(codex.mounts[1].source, PathBuf::from("/etc/resolv.conf"));
+    assert_eq!(codex.mounts[1].access, MountAccess::ReadOnly);
+    assert_eq!(codex.mounts[2].source, PathBuf::from("~/.codex/auth.json"));
     assert_eq!(
-        codex.mounts[1].destination,
+        codex.mounts[2].destination,
         PathBuf::from("/root/.codex/auth.json")
     );
-    assert_eq!(codex.mounts[1].access, MountAccess::ReadWrite);
+    assert_eq!(codex.mounts[2].access, MountAccess::ReadWrite);
 
     let codex_exec = config.template("codex-exec").unwrap();
     assert_eq!(
         codex_exec.command,
         [
-            "npx",
-            "--yes",
-            "@openai/codex@latest",
+            "/usr/local/bin/codex",
             "-c",
             "projects.\"/workspace\".trust_level=\"trusted\"",
             "--sandbox",
@@ -96,8 +131,12 @@ fn builtin_template_assets_use_the_public_toml_schema() {
             .join(format!("{name}.toml"));
         let source = fs::read_to_string(path).unwrap();
         let template: TemplateConfig = toml::from_str(&source).unwrap();
-        assert_eq!(template.command.first().unwrap(), "npx");
-        assert_eq!(template.mounts.len(), 2);
+        assert!(matches!(
+            template.command.first().map(String::as_str),
+            Some("npx" | "/usr/local/bin/codex")
+        ));
+        let expected_mounts = if name.starts_with("codex") { 3 } else { 2 };
+        assert_eq!(template.mounts.len(), expected_mounts);
     }
 }
 
@@ -145,8 +184,9 @@ image = "example/codex:pinned"
 }
 
 #[test]
-fn builtin_codex_selects_podman_and_works_without_arguments() {
+fn builtin_codex_selects_bwrap_and_works_without_arguments() {
     let directory = temporary_directory("builtin-codex");
+    prepare_codex_runtime(&directory);
     fs::create_dir(directory.join(".codex")).unwrap();
     fs::write(directory.join(".codex/auth.json"), "{}").unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_driva"))
@@ -161,13 +201,33 @@ fn builtin_codex_selects_podman_and_works_without_arguments() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("backend: podman"));
-    assert!(stdout.contains("docker.io/library/node:22-bookworm"));
-    assert!(stdout.contains("\"npx\" \"--yes\" \"@openai/codex@latest\""));
+    assert!(stdout.contains("backend: bwrap"));
+    assert!(stdout.contains("\"/usr/local/bin/codex\""));
+    assert!(stdout.contains("--ro-bind"));
+    assert!(stdout.contains("\"--tmpfs\" \"/root/.codex\""));
+    assert!(stdout.contains("/.local/share/driva/runtimes/codex/0.144.3/rootfs"));
     assert!(stdout.contains("projects.\\\"/workspace\\\".trust_level=\\\"trusted\\\""));
     assert!(stdout.contains("\"--sandbox\" \"danger-full-access\""));
+    assert!(stdout.contains("/etc/resolv.conf -> /etc/resolv.conf (read-only)"));
     assert!(stdout.contains("/.codex/auth.json -> /root/.codex/auth.json (read-write)"));
     assert!(!stdout.contains(" -> /root/.codex (read-write)"));
+
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn builtin_codex_explains_how_to_install_a_missing_runtime() {
+    let directory = temporary_directory("missing-codex-runtime");
+    fs::create_dir(directory.join(".codex")).unwrap();
+    fs::write(directory.join(".codex/auth.json"), "{}").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_driva"))
+        .current_dir(&directory)
+        .env("HOME", &directory)
+        .args(["run", "--template", "codex-exec", "--dry-run"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("driva runtime install codex@VERSION"));
 
     fs::remove_dir_all(directory).unwrap();
 }
