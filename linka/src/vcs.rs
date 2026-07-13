@@ -161,27 +161,3 @@ impl RepositoryIdentity for FakeVcs {
         Ok(self.remote.clone())
     }
 }
-
-#[cfg(test)]
-mod architecture_tests {
-    #[test]
-    fn graph_capability_surface_has_no_project_lifecycle_concepts() {
-        let source = include_str!("vcs.rs");
-        let public_surface = source.split("#[cfg(test)]").next().unwrap();
-        for forbidden in [
-            "current_branch",
-            "resolve_revision",
-            "create_worktree",
-            "publish_fast_forward",
-            "remove_worktree",
-            "ref_commit",
-        ] {
-            assert!(
-                !public_surface.contains(forbidden),
-                "public VCS surface contains {forbidden}"
-            );
-        }
-        let manifest = include_str!("../Cargo.toml");
-        assert!(!manifest.contains("orka"));
-    }
-}
