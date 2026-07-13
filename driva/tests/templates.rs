@@ -90,6 +90,7 @@ fn provides_codex_templates() {
             "--sandbox",
             "danger-full-access",
             "exec",
+            "--skip-git-repo-check",
         ]
     );
     assert!(!codex_exec.interactive);

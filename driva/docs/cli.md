@@ -126,8 +126,9 @@ codex-exec	Run OpenAI Codex non-interactively against the current project
 
 The built-in `codex` template runs a pinned, prepared Codex installation
 interactively; `codex-exec` inserts the `exec` subcommand for automation. Run
-`driva runtime install codex@VERSION` before using either template. Installation
-uses Podman and `node:22-bookworm` once to build a complete filesystem under
+`driva runtime install codex@latest` or select an exact version before using
+either template. Installation uses Podman and `node:22-bookworm` once to build
+a complete filesystem under
 `~/.local/share/driva/runtimes/codex/VERSION`; normal executions expose the
 active version read-only through Bubblewrap and do not use Podman.
 
@@ -178,7 +179,7 @@ Manage prepared read-only runtimes for Bubblewrap templates
 Usage: driva runtime [OPTIONS] <COMMAND>
 
 Commands:
-  install  Build and install a pinned runtime such as codex@0.144.3
+  install  Build and install a runtime such as codex@latest
   list     List installed runtime versions
   remove   Remove an installed runtime version
   help     Print this message or the help of the given subcommand(s)
@@ -188,28 +189,30 @@ Options:
   -h, --help             Print help
 ```
 
-Install an exact Codex version before the first Bubblewrap-backed Codex run:
+Install the current Codex release before the first Bubblewrap-backed Codex run:
 
 ```sh
-driva runtime install codex@0.144.3
+driva runtime install codex@latest
 driva runtime list
 ```
 
 The installer uses the configured Podman executable to create a temporary
-container, installs the exact `@openai/codex` version, exports and extracts its
-filesystem, and removes the build container. Publication is atomic. Reinstalling
-an existing version makes it current without rebuilding it; installing another
-version atomically moves the `current` link. A custom preparation image can be
-selected with `--image`.
+container, resolves npm's `latest` tag, installs that exact `@openai/codex`
+version, exports and extracts its filesystem, and removes the build container.
+The artifact is stored under the resolved concrete version, never under
+`latest`, so installed runtimes remain immutable and reproducible. Publication
+is atomic. Reinstalling an existing concrete version makes it current without
+rebuilding it; installing another version atomically moves the `current` link.
+A custom preparation image can be selected with `--image`.
 
 ```console
 $ driva runtime install --help
-Build and install a pinned runtime such as codex@0.144.3
+Build and install a runtime such as codex@latest
 
 Usage: driva runtime install [OPTIONS] <RUNTIME>
 
 Arguments:
-  <RUNTIME>  Pinned runtime in NAME@VERSION form
+  <RUNTIME>  Runtime selector in NAME@VERSION form; VERSION may be latest
 
 Options:
       --config <CONFIG>  Configuration file (defaults to ./driva.toml when present)
@@ -218,12 +221,14 @@ Options:
 ```
 
 ```sh
-driva runtime install codex@0.144.3 --image registry.example/node:22
+driva runtime install codex@latest --image registry.example/node:22
 driva runtime remove codex@0.144.3
 ```
 
 Removing the current version also removes the `current` link. Install or
-reinstall another version before running the built-in Codex templates.
+reinstall another version before running the built-in Codex templates. Removal
+requires the concrete version shown by `driva runtime list`; `codex@latest` is
+accepted only by `runtime install`.
 
 ```console
 $ driva runtime list --help

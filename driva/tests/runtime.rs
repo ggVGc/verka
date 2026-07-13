@@ -15,11 +15,11 @@ fn temporary_directory(name: &str) -> PathBuf {
 }
 
 #[test]
-fn parses_only_pinned_codex_runtimes() {
+fn parses_pinned_and_latest_codex_runtimes() {
     let spec = RuntimeSpec::parse("codex@0.144.3").unwrap();
     assert_eq!(spec.name, "codex");
     assert_eq!(spec.version, "0.144.3");
-    assert!(RuntimeSpec::parse("codex@latest").is_err());
+    assert!(RuntimeSpec::parse("codex@latest").unwrap().is_floating());
     assert!(RuntimeSpec::parse("codex").is_err());
     assert!(RuntimeSpec::parse("other@1.0.0").is_err());
     assert!(RuntimeSpec::parse("codex@1.0.0/../../escape").is_err());
@@ -77,7 +77,7 @@ fn installs_an_exported_rootfs_and_publishes_it_atomically() {
     fs::write(
         &fake_podman,
         format!(
-            "#!/bin/sh\ncase \"$1\" in\n  create) echo test-container > \"$3\" ;;\n  start) exit 0 ;;\n  export) tar -cf \"$3\" -C \"{}\" . ;;\n  rm) exit 0 ;;\n  *) exit 2 ;;\nesac\n",
+            "#!/bin/sh\ncase \"$1\" in\n  create) echo test-container > \"$3\" ;;\n  start) exit 0 ;;\n  cp) echo 0.144.3 > \"$3\" ;;\n  export) tar -cf \"$3\" -C \"{}\" . ;;\n  rm) exit 0 ;;\n  *) exit 2 ;;\nesac\n",
             fixture.display()
         ),
     )
@@ -85,10 +85,11 @@ fn installs_an_exported_rootfs_and_publishes_it_atomically() {
     fs::set_permissions(&fake_podman, fs::Permissions::from_mode(0o755)).unwrap();
 
     let store = RuntimeStore::new(directory.join("store"));
-    let spec = RuntimeSpec::parse("codex@0.144.3").unwrap();
-    store
-        .install_codex(&spec, "example/node:22", &fake_podman)
+    let requested = RuntimeSpec::parse("codex@latest").unwrap();
+    let spec = store
+        .install_codex(&requested, "example/node:22", &fake_podman)
         .unwrap();
+    assert_eq!(spec, RuntimeSpec::parse("codex@0.144.3").unwrap());
     assert_eq!(
         fs::read_to_string(store.rootfs(&spec).join("usr/local/bin/codex")).unwrap(),
         "prepared"
@@ -99,6 +100,14 @@ fn installs_an_exported_rootfs_and_publishes_it_atomically() {
         .unwrap()
         .join("manifest.toml")
         .is_file());
+    assert!(!store
+        .rootfs(&RuntimeSpec::parse("codex@latest").unwrap())
+        .exists());
+    assert!(
+        fs::read_to_string(store.rootfs(&spec).parent().unwrap().join("manifest.toml"))
+            .unwrap()
+            .contains("version = \"0.144.3\"")
+    );
     assert_eq!(store.list().unwrap(), vec![(spec, true)]);
 
     fs::remove_dir_all(directory).unwrap();
@@ -124,6 +133,15 @@ fn runtime_cli_lists_and_removes_versions() {
         String::from_utf8(output.stdout).unwrap(),
         "codex@0.144.3\tcurrent\n"
     );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_driva"))
+        .current_dir(&home)
+        .env("HOME", &home)
+        .args(["runtime", "remove", "codex@latest"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("remove requires a concrete version"));
 
     let output = Command::new(env!("CARGO_BIN_EXE_driva"))
         .current_dir(&home)

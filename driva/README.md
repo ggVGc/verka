@@ -17,7 +17,7 @@ Claude Code:
 
 ```sh
 cargo run -- templates
-cargo run -- runtime install codex@0.144.3
+cargo run -- runtime install codex@latest
 cargo run -- run --template codex
 cargo run -- run --template codex-exec -- "fix the failing tests"
 cargo run -- run --template codex --no-network

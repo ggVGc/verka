@@ -23,13 +23,8 @@ impl RuntimeSpec {
         if name != "codex" {
             bail!("unsupported runtime {name:?}; only codex@VERSION is currently supported");
         }
-        if version.is_empty()
-            || !version.starts_with(|character: char| character.is_ascii_digit())
-            || !version.chars().all(|character| {
-                character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '+')
-            })
-        {
-            bail!("runtime version must be a pinned version, got {version:?}");
+        if version != "latest" && !is_pinned_version(version) {
+            bail!("runtime version must be an exact version or latest, got {version:?}");
         }
         Ok(Self {
             name: name.into(),
@@ -40,6 +35,28 @@ impl RuntimeSpec {
     pub fn display(&self) -> String {
         format!("{}@{}", self.name, self.version)
     }
+
+    pub fn is_floating(&self) -> bool {
+        self.version == "latest"
+    }
+
+    fn resolved(name: &str, version: &str) -> Result<Self> {
+        if !is_pinned_version(version) {
+            bail!("npm resolved an invalid runtime version {version:?}");
+        }
+        Ok(Self {
+            name: name.into(),
+            version: version.into(),
+        })
+    }
+}
+
+fn is_pinned_version(version: &str) -> bool {
+    !version.is_empty()
+        && version.starts_with(|character: char| character.is_ascii_digit())
+        && version.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '+')
+        })
 }
 
 /// Versioned prepared runtime artifacts used as read-only Bubblewrap roots.
@@ -74,17 +91,22 @@ impl RuntimeStore {
         self.root.join(name).join("current/rootfs")
     }
 
-    pub fn install_codex(&self, spec: &RuntimeSpec, image: &str, podman: &Path) -> Result<()> {
+    pub fn install_codex(
+        &self,
+        spec: &RuntimeSpec,
+        image: &str,
+        podman: &Path,
+    ) -> Result<RuntimeSpec> {
         if spec.name != "codex" {
             bail!("unsupported runtime {:?}", spec.name);
         }
         let family = self.root.join(&spec.name);
         fs::create_dir_all(&family)
             .with_context(|| format!("failed to create runtime store {}", family.display()))?;
-        let destination = family.join(&spec.version);
-        if destination.exists() {
+        let requested_destination = family.join(&spec.version);
+        if !spec.is_floating() && requested_destination.exists() {
             self.activate(spec)?;
-            return Ok(());
+            return Ok(spec.clone());
         }
 
         let nonce = SystemTime::now()
@@ -95,22 +117,31 @@ impl RuntimeStore {
         fs::create_dir(&staging)
             .with_context(|| format!("failed to create staging directory {}", staging.display()))?;
 
-        let result = self.build_codex_rootfs(spec, image, podman, &staging);
-        if let Err(error) = result {
-            let _ = fs::remove_dir_all(&staging);
-            return Err(error);
+        let resolved = match self.build_codex_rootfs(spec, image, podman, &staging) {
+            Ok(resolved) => resolved,
+            Err(error) => {
+                let _ = fs::remove_dir_all(&staging);
+                return Err(error);
+            }
+        };
+        let destination = family.join(&resolved.version);
+        if destination.exists() {
+            fs::remove_dir_all(&staging)?;
+            self.activate(&resolved)?;
+            return Ok(resolved);
         }
         if let Err(error) = fs::rename(&staging, &destination) {
             let _ = fs::remove_dir_all(&staging);
             return Err(error).with_context(|| {
                 format!(
                     "failed to publish runtime {} to {}",
-                    spec.display(),
+                    resolved.display(),
                     destination.display()
                 )
             });
         }
-        self.activate(spec)
+        self.activate(&resolved)?;
+        Ok(resolved)
     }
 
     fn build_codex_rootfs(
@@ -119,12 +150,18 @@ impl RuntimeStore {
         image: &str,
         podman: &Path,
         staging: &Path,
-    ) -> Result<()> {
+    ) -> Result<RuntimeSpec> {
+        let selector = if spec.is_floating() {
+            format!("{CODEX_PACKAGE}@latest")
+        } else {
+            format!("{CODEX_PACKAGE}@{}", spec.version)
+        };
         let script = format!(
-            "npm install --global --prefix /usr/local {CODEX_PACKAGE}@{} && \
+            "resolved=$(npm view {selector} version) && \
+             npm install --global --prefix /usr/local \"{CODEX_PACKAGE}@$resolved\" && \
+             printf '%s' \"$resolved\" > /driva-runtime-version && \
              mkdir -p /workspace /root/.codex /proc /dev /tmp && \
-             touch /root/.codex/auth.json && rm -rf /root/.npm",
-            spec.version
+             touch /root/.codex/auth.json && rm -rf /root/.npm"
         );
         let cidfile = staging.join("container.cid");
         let created = Command::new(podman)
@@ -155,6 +192,21 @@ impl RuntimeStore {
                 bail!("Codex runtime installation failed with {status}");
             }
 
+            let resolved_path = staging.join("resolved-version");
+            let container_version = format!("{container}:/driva-runtime-version");
+            let status = Command::new(podman)
+                .arg("cp")
+                .arg(&container_version)
+                .arg(&resolved_path)
+                .status()
+                .context("failed to read the resolved Codex version")?;
+            if !status.success() {
+                bail!("Codex version resolution failed with {status}");
+            }
+            let resolved_version = fs::read_to_string(&resolved_path)?;
+            fs::remove_file(&resolved_path)?;
+            let resolved = RuntimeSpec::resolved(&spec.name, resolved_version.trim())?;
+
             let archive = staging.join("rootfs.tar");
             let status = Command::new(podman)
                 .arg("export")
@@ -181,14 +233,18 @@ impl RuntimeStore {
             }
             fs::remove_file(&archive)?;
             prepare_mount_targets(&rootfs)?;
+            let marker = rootfs.join("driva-runtime-version");
+            if marker.exists() {
+                fs::remove_file(marker)?;
+            }
             fs::write(
                 staging.join("manifest.toml"),
                 format!(
                     "name = {:?}\nversion = {:?}\nimage = {:?}\npackage = {:?}\n",
-                    spec.name, spec.version, image, CODEX_PACKAGE
+                    resolved.name, resolved.version, image, CODEX_PACKAGE
                 ),
             )?;
-            Ok(())
+            Ok(resolved)
         })();
 
         let cleanup = Command::new(podman)

@@ -69,9 +69,9 @@ enum Operation {
 
 #[derive(Subcommand)]
 enum RuntimeOperation {
-    /// Build and install a pinned runtime such as codex@0.144.3.
+    /// Build and install a runtime such as codex@latest.
     Install {
-        /// Pinned runtime in NAME@VERSION form.
+        /// Runtime selector in NAME@VERSION form; VERSION may be latest.
         runtime: String,
         /// Container image used to prepare the runtime filesystem.
         #[arg(
@@ -387,8 +387,9 @@ fn runtime_command(config: &Config, command: RuntimeOperation) -> Result<()> {
         RuntimeOperation::Install { runtime, image } => {
             let spec = driva::RuntimeSpec::parse(&runtime)?;
             println!("Preparing {} from {image}...", spec.display());
-            store.install_codex(&spec, &image, &config.isolation.podman.executable)?;
-            println!("Installed and activated {}", spec.display());
+            let resolved =
+                store.install_codex(&spec, &image, &config.isolation.podman.executable)?;
+            println!("Installed and activated {}", resolved.display());
         }
         RuntimeOperation::List => {
             for (spec, active) in store.list()? {
@@ -401,6 +402,9 @@ fn runtime_command(config: &Config, command: RuntimeOperation) -> Result<()> {
         }
         RuntimeOperation::Remove { runtime } => {
             let spec = driva::RuntimeSpec::parse(&runtime)?;
+            if spec.is_floating() {
+                bail!("runtime remove requires a concrete version, not latest");
+            }
             store.remove(&spec)?;
             println!("Removed {}", spec.display());
         }
