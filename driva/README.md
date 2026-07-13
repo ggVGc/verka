@@ -11,6 +11,22 @@ cargo run -- run --read ~/.cargo/registry --write . --network -- cargo update
 cargo run -- shell --write .
 ```
 
+Named templates bundle a command, backend, image, mounts, and policy. Driva
+ships interactive and non-interactive Codex templates:
+
+```sh
+cargo run -- templates
+cargo run -- run --template codex
+cargo run -- run --template codex-exec -- "fix the failing tests"
+```
+
+These templates use Podman with Node 22, mount the current project writable at
+`/workspace`, enable networking, and mount `~/.codex` writable so Codex can use
+and refresh an existing login. That directory can contain access tokens; only
+select the template for code you trust. It can reuse a file-backed host login;
+otherwise run `driva run --template codex -- login --device-auth`, or override
+the built-in with a project template for another authentication scheme.
+
 The full command-line reference — every subcommand, option, the mount
 grammar, and the `driva.toml` schema — lives in [`docs/cli.md`](docs/cli.md).
 Its help-text blocks are checked against the compiled binary by
@@ -39,6 +55,18 @@ access = "write"
 
 [network]
 enabled = false
+
+[template.test]
+description = "Run this project's tests"
+command = ["cargo", "test"]
+backend = "podman"
+image = "rust:1.88"
+workdir = "/workspace"
+
+[[template.test.mount]]
+source = "."
+destination = "/workspace"
+access = "write"
 ```
 
 The library exposes the backend-independent `ExecutionRequest` and `Isolation`

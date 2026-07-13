@@ -29,6 +29,7 @@ Commands:
   remove     Remove a session resource and its local record after confirming absence
   list       List recorded sessions and their current backend states
   recover    Rediscover and inspect recorded sessions
+  templates  List built-in and project-defined execution templates
   help       Print this message or the help of the given subcommand(s)
 
 Options:
@@ -57,13 +58,14 @@ Runs a command in a fresh container that is removed when the command exits.
 $ driva run --help
 Run a command in a disposable isolated environment
 
-Usage: driva run [OPTIONS] <COMMAND>...
+Usage: driva run [OPTIONS] [COMMAND]...
 
 Arguments:
-  <COMMAND>...  
+  [COMMAND]...  
 
 Options:
       --config <CONFIG>    Configuration file (defaults to ./driva.toml when present)
+      --template <NAME>    Apply a named execution template
       --read <MOUNT>       Add a read-only mount as SOURCE or SOURCE:DESTINATION
       --write <MOUNT>      Add a writable mount as SOURCE or SOURCE:DESTINATION
       --network            Permit networking (disabled otherwise)
@@ -89,6 +91,7 @@ Policy options (shared by `run`, `shell`, and `start`):
 
 | Option | Effect |
 | --- | --- |
+| `--template <NAME>` | Apply a built-in or project-defined execution template. |
 | `--read <MOUNT>` | Bind-mount a host path read-only. Repeatable. |
 | `--write <MOUNT>` | Bind-mount a host path read-write. Repeatable. |
 | `--network` | Enable networking (otherwise the container has none). |
@@ -98,9 +101,46 @@ Policy options (shared by `run`, `shell`, and `start`):
 | `--workdir <WORKDIR>` | Override the isolated working directory (must be absolute). |
 | `--env NAME=VALUE` | Set an environment variable inside the container. Repeatable. |
 
-Command-line mounts are appended after any `[[mount]]` entries from the
-configuration; `--env` values override configured `[environment]` entries
-with the same name; `--network` is OR-ed with `[network] enabled`.
+Template settings overlay the global configuration, and one-off CLI values
+overlay the template. Mounts are appended in global, template, then CLI order;
+environment values use the same precedence. Networking and interactivity are
+enabled if any layer enables them. Arguments after `--` are appended to a
+template's command. Without a template, at least one command argument remains
+required at runtime.
+
+### Execution templates
+
+List effective built-in and project-defined templates with:
+
+```console
+$ driva templates
+codex	Run OpenAI Codex interactively against the current project
+codex-exec	Run OpenAI Codex non-interactively against the current project
+```
+
+The built-in `codex` template runs `npx --yes @openai/codex@latest`
+interactively; `codex-exec` inserts the `exec` subcommand for automation. Both
+select Podman and `node:22-bookworm`, mount the current directory writable at
+`/workspace`, enable networking, and mount `~/.codex` writable at
+`/root/.codex`. The latter mount exposes Codex configuration and potentially
+its plaintext login cache to the selected project, so use it only with trusted
+code. [OpenAI's authentication documentation](https://developers.openai.com/codex/auth/)
+identifies `~/.codex` as the default `CODEX_HOME` and warns that `auth.json`
+contains access tokens.
+
+The mount can reuse a file-backed host login. If the host uses an OS keyring,
+authenticate the container with `driva run --template codex -- login
+--device-auth`, or define a project replacement using another authentication
+scheme.
+
+```sh
+driva run --template codex
+driva run --template codex-exec -- "update the dependencies and run tests"
+driva run --template codex -- --model MODEL
+```
+
+A `[template.<name>]` entry with a built-in name completely replaces that
+built-in, allowing images and package versions to be pinned locally.
 
 ### Mount grammar
 
@@ -130,6 +170,7 @@ Usage: driva shell [OPTIONS]
 
 Options:
       --config <CONFIG>    Configuration file (defaults to ./driva.toml when present)
+      --template <NAME>    Apply a named execution template
       --read <MOUNT>       Add a read-only mount as SOURCE or SOURCE:DESTINATION
       --write <MOUNT>      Add a writable mount as SOURCE or SOURCE:DESTINATION
       --network            Permit networking (disabled otherwise)
@@ -175,13 +216,14 @@ driva recover
 $ driva start --help
 Start a durable isolated session and print its id
 
-Usage: driva start [OPTIONS] <COMMAND>...
+Usage: driva start [OPTIONS] [COMMAND]...
 
 Arguments:
-  <COMMAND>...  
+  [COMMAND]...  
 
 Options:
       --config <CONFIG>    Configuration file (defaults to ./driva.toml when present)
+      --template <NAME>    Apply a named execution template
       --read <MOUNT>       Add a read-only mount as SOURCE or SOURCE:DESTINATION
       --write <MOUNT>      Add a writable mount as SOURCE or SOURCE:DESTINATION
       --network            Permit networking (disabled otherwise)
@@ -364,7 +406,30 @@ enabled = false                   # --network also enables it per run
 
 [environment]
 # NAME = "value" pairs set inside every sandbox; --env overrides per run.
+
+[template.lint]
+description = "Run the Rust linter"
+command = ["cargo", "clippy"]
+backend = "podman"               # optional: "bwrap", "podman", or "docker"
+image = "rust:1.88"              # optional; Podman/Docker only
+workdir = "/workspace"           # optional
+network = false
+interactive = false
+
+[template.lint.environment]
+RUST_LOG = "info"
+
+[[template.lint.mount]]
+source = "."
+destination = "/workspace"
+access = "write"
 ```
+
+Template fields are optional except that the effective command must be
+non-empty. `command` is an array of the executable and its initial arguments.
+Template mounts use the same shape and validation as global `[[mount]]`
+entries. Project templates appear in `driva templates`; project definitions
+replace built-ins with the same name.
 
 Bubblewrap uses `rootfs` as a prepared filesystem tree rather than pulling an
 OCI image. The tree must contain `/proc`, `/dev`, `/tmp`, the configured

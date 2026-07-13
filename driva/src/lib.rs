@@ -9,6 +9,7 @@ mod session;
 pub use bwrap::BwrapIsolation;
 pub use config::{
     BwrapConfig, Config, DockerConfig, IsolationConfig, MountConfig, NetworkConfig, PodmanConfig,
+    TemplateConfig,
 };
 pub use docker::DockerIsolation;
 pub use podman::PodmanIsolation;

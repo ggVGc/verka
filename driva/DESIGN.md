@@ -19,8 +19,10 @@ The distinguishing policy is deny by default:
 - networking is disabled unless explicitly enabled; and
 - the isolated environment is removed when the command finishes.
 
-Driva is a general command runner. It has no knowledge of code agents, Linka
-nodes, Orka attempts, prompts, transcripts, or reviews.
+Driva's execution core is a general command runner with no knowledge of code
+agents, Linka nodes, Orka attempts, prompts, transcripts, or reviews. The CLI
+may provide named policy-and-command templates for common tools, but they
+compile to the same backend-independent `ExecutionRequest`.
 
 ## User interface
 

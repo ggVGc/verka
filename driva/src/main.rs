@@ -25,7 +25,7 @@ enum Operation {
     Run {
         #[command(flatten)]
         policy: PolicyArgs,
-        #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         command: Vec<OsString>,
     },
     /// Open /bin/sh in a disposable isolated environment.
@@ -37,7 +37,7 @@ enum Operation {
     Start {
         #[command(flatten)]
         policy: PolicyArgs,
-        #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         command: Vec<OsString>,
     },
     /// Attach the terminal to a durable session.
@@ -58,10 +58,15 @@ enum Operation {
     List,
     /// Rediscover and inspect recorded sessions.
     Recover,
+    /// List built-in and project-defined execution templates.
+    Templates,
 }
 
 #[derive(Args, Default)]
 struct PolicyArgs {
+    /// Apply a named execution template.
+    #[arg(long, value_name = "NAME")]
+    template: Option<String>,
     /// Add a read-only mount as SOURCE or SOURCE:DESTINATION.
     #[arg(long = "read", value_name = "MOUNT")]
     reads: Vec<String>,
@@ -108,7 +113,7 @@ fn real_main() -> Result<()> {
     ) {
         return lifecycle(&config, operation);
     }
-    let (policy, command, shell, durable) = match operation {
+    let (policy, mut command, shell, durable) = match operation {
         Operation::Run { policy, command } => (policy, command, false, false),
         Operation::Shell { mut policy } => {
             policy.interactive = true;
@@ -117,7 +122,30 @@ fn real_main() -> Result<()> {
         Operation::Start { policy, command } => (policy, command, false, true),
         _ => unreachable!(),
     };
-    let configured_workdir = match config.isolation.backend.as_str() {
+    let template = policy
+        .template
+        .as_deref()
+        .map(|name| {
+            config.template(name).with_context(|| {
+                format!(
+                    "unknown template {name:?}; run `driva templates` to list available templates"
+                )
+            })
+        })
+        .transpose()?;
+    if !shell {
+        if let Some(template) = &template {
+            let mut template_command: Vec<OsString> =
+                template.command.iter().map(OsString::from).collect();
+            template_command.append(&mut command);
+            command = template_command;
+        }
+    }
+    let backend_name = template
+        .as_ref()
+        .and_then(|value| value.backend.as_deref())
+        .unwrap_or(&config.isolation.backend);
+    let configured_workdir = match backend_name {
         "podman" => &config.isolation.podman.workdir,
         "docker" => &config.isolation.docker.workdir,
         "bwrap" => &config.isolation.bwrap.workdir,
@@ -126,6 +154,7 @@ fn real_main() -> Result<()> {
     let workdir = policy
         .workdir
         .clone()
+        .or_else(|| template.as_ref().and_then(|value| value.workdir.clone()))
         .unwrap_or_else(|| configured_workdir.clone());
     let mut mounts: Vec<Mount> = config
         .mounts
@@ -136,6 +165,13 @@ fn real_main() -> Result<()> {
             access: mount.access,
         })
         .collect();
+    if let Some(template) = &template {
+        mounts.extend(template.mounts.iter().cloned().map(|mount| Mount {
+            source: mount.source,
+            destination: mount.destination,
+            access: mount.access,
+        }));
+    }
     for spec in &policy.reads {
         mounts.push(parse_mount(spec, MountAccess::ReadOnly, &workdir)?);
     }
@@ -143,21 +179,36 @@ fn real_main() -> Result<()> {
         mounts.push(parse_mount(spec, MountAccess::ReadWrite, &workdir)?);
     }
     let mut environment: BTreeMap<OsString, OsString> = config.environment;
+    if let Some(template) = &template {
+        environment.extend(
+            template
+                .environment
+                .iter()
+                .map(|(key, value)| (OsString::from(key), OsString::from(value))),
+        );
+    }
     environment.extend(policy.environment);
     let request = ExecutionRequest {
         command,
         working_directory: workdir,
         mounts,
         environment,
-        network: policy.network || config.network.enabled,
-        interactive: policy.interactive || shell,
+        network: policy.network
+            || template.as_ref().is_some_and(|value| value.network)
+            || config.network.enabled,
+        interactive: policy.interactive
+            || template.as_ref().is_some_and(|value| value.interactive)
+            || shell,
     };
     let request = validate_request(&request)?;
-    match config.isolation.backend.as_str() {
+    match backend_name {
         "podman" => {
             let backend = PodmanIsolation {
                 executable: config.isolation.podman.executable,
-                image: policy.image.unwrap_or(config.isolation.podman.image),
+                image: policy
+                    .image
+                    .or_else(|| template.as_ref().and_then(|value| value.image.clone()))
+                    .unwrap_or(config.isolation.podman.image),
             };
             let invocation = backend.command(&request);
             if durable {
@@ -169,7 +220,10 @@ fn real_main() -> Result<()> {
         "docker" => {
             let backend = DockerIsolation {
                 executable: config.isolation.docker.executable,
-                image: policy.image.unwrap_or(config.isolation.docker.image),
+                image: policy
+                    .image
+                    .or_else(|| template.as_ref().and_then(|value| value.image.clone()))
+                    .unwrap_or(config.isolation.docker.image),
             };
             let invocation = backend.command(&request);
             if durable {
@@ -182,7 +236,11 @@ fn real_main() -> Result<()> {
             if durable {
                 bail!("Bubblewrap does not support durable sessions; use `driva run` or `driva shell`");
             }
-            if policy.image.is_some() {
+            if policy.image.is_some()
+                || template
+                    .as_ref()
+                    .is_some_and(|value| value.image.is_some())
+            {
                 bail!("--image is not supported by the Bubblewrap backend; configure isolation.bwrap.rootfs");
             }
             let backend = BwrapIsolation {
@@ -218,6 +276,12 @@ fn runner_backend(config: &Config) -> Result<Box<dyn driva::DurableIsolation>> {
 }
 
 fn lifecycle(config: &Config, operation: Operation) -> Result<()> {
+    if matches!(operation, Operation::Templates) {
+        for (name, template) in config.effective_templates() {
+            println!("{name}\t{}", template.description);
+        }
+        return Ok(());
+    }
     let backend = runner_backend(config)?;
     let runner = driva::SessionRunner::new(
         backend.as_ref(),
