@@ -7,10 +7,10 @@ environment. It provides a convenient, reusable interface for both manual use
 and programmatic callers such as Orka.
 
 Driva does not implement isolation itself. Its core validates a portable
-execution request and delegates it to an isolation backend. Podman is the
-default backend, Docker is also supported, and Bubblewrap provides lightweight
-synchronous Linux execution. Backend-specific concepts are not part of the
-core interface.
+execution request and delegates it to an isolation backend. Bubblewrap is the
+default backend for lightweight synchronous Linux execution; Podman and Docker
+are also supported. Backend-specific concepts are not part of the core
+interface.
 
 The distinguishing policy is deny by default:
 
@@ -55,10 +55,10 @@ like:
 
 ```toml
 [isolation]
-backend = "podman"
+backend = "bwrap"
 
-[isolation.podman]
-image = "rust:1.88"
+[isolation.bwrap]
+rootfs = "/var/lib/driva/rootfs/rust"
 workdir = "/workspace"
 
 [[mount]]
@@ -156,11 +156,11 @@ Configuration must name every capability that crosses the isolation boundary.
 
 ## Isolation backends
 
-The production adapters translate an `ExecutionRequest` into a synchronous
-`podman run --rm` or `docker run --rm` invocation. Podman is selected by
+The production adapters translate an `ExecutionRequest` into Bubblewrap,
+`podman run --rm`, or `docker run --rm` invocations. Bubblewrap is selected by
 default. Each adapter is responsible for:
 
-- selecting the configured image and isolated working directory;
+- selecting the configured rootfs or image and isolated working directory;
 - translating read-only and read-write mounts;
 - disabling networking by default;
 - attaching the caller's standard streams and allocating a TTY when requested;

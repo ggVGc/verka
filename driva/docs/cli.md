@@ -39,8 +39,9 @@ Options:
 Every subcommand accepts the global option:
 
 - `--config <CONFIG>` — configuration file to load. When omitted, Driva uses
-  `./driva.toml` if it exists, otherwise built-in defaults (Podman backend,
-  `docker.io/library/busybox:latest` image, `/tmp` working directory).
+  `./driva.toml` if it exists, otherwise built-in defaults (Bubblewrap backend
+  and `/tmp` working directory). Bubblewrap still requires an explicitly
+  configured rootfs; the host root is never selected implicitly.
 
 On any internal error Driva prints `driva: <error>` to stderr and exits with
 status 1. Commands that proxy an isolated process exit with that process's
@@ -330,12 +331,12 @@ them in the same format as `list`.
 
 ## Configuration file (`driva.toml`)
 
-Loaded from `--config <FILE>`, or `./driva.toml` when present. All keys are
-optional; defaults are shown below.
+Loaded from `--config <FILE>`, or `./driva.toml` when present. Defaults are
+shown below; Bubblewrap's `rootfs` is required for execution.
 
 ```toml
 [isolation]
-backend = "podman"                # or "docker" or "bwrap"
+backend = "bwrap"                 # or "podman" or "docker"
 
 [isolation.podman]
 image = "docker.io/library/busybox:latest"

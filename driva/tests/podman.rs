@@ -46,17 +46,3 @@ fn translates_request_without_implicit_capabilities() {
         ]
     );
 }
-
-#[test]
-fn podman_is_the_configuration_default() {
-    let config = driva::Config::default();
-    assert_eq!(config.isolation.backend, "podman");
-    assert_eq!(
-        config.isolation.podman.image,
-        "docker.io/library/busybox:latest"
-    );
-    assert_eq!(
-        config.isolation.podman.workdir,
-        std::path::Path::new("/tmp")
-    );
-}

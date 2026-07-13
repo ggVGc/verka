@@ -2,9 +2,8 @@
 
 Driva runs a command in a disposable isolated environment with no host access
 and no network access unless they are explicitly granted.
-The default image is the minimal `docker.io/library/busybox:latest`; configure
-a tool-specific image when the command needs more than BusyBox provides. The
-zero-configuration working directory is `/tmp`, which exists in BusyBox.
+Bubblewrap is the default backend. Configure a prepared root filesystem before
+the first run; Driva deliberately does not default it to the host root.
 
 ```sh
 cargo run -- run --write . -- cargo test
@@ -27,10 +26,10 @@ Projects can provide `driva.toml`:
 
 ```toml
 [isolation]
-backend = "podman"
+backend = "bwrap"
 
-[isolation.podman]
-image = "rust:1.88"
+[isolation.bwrap]
+rootfs = "/var/lib/driva/rootfs/rust"
 workdir = "/workspace"
 
 [[mount]]
@@ -46,9 +45,7 @@ The library exposes the backend-independent `ExecutionRequest` and `Isolation`
 interface. `validate_request` resolves host sources and rejects invalid or
 conflicting grants; `execute` validates before dispatching to a backend.
 
-Podman is the default backend. Docker remains available by setting
-`isolation.backend = "docker"` and configuring `[isolation.docker]`.
-Bubblewrap is available for lightweight synchronous Linux execution using a
+Bubblewrap is the default for lightweight synchronous Linux execution using a
 prepared root filesystem:
 
 ```toml
@@ -65,6 +62,10 @@ every configured mount destination. Driva exposes the rootfs read-only and
 places a private writable tmpfs at `/tmp`. Bubblewrap does not currently
 support Driva's durable session commands or `--image`; use Podman or Docker
 when those capabilities are required.
+
+Podman and Docker remain available by setting `isolation.backend` to
+`"podman"` or `"docker"`. Their default image is the minimal
+`docker.io/library/busybox:latest`.
 
 ## Durable sessions
 

@@ -19,7 +19,7 @@ pub struct Config {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct IsolationConfig {
-    #[serde(default = "podman_backend")]
+    #[serde(default = "bwrap_backend")]
     pub backend: String,
     #[serde(default)]
     pub docker: DockerConfig,
@@ -32,7 +32,7 @@ pub struct IsolationConfig {
 impl Default for IsolationConfig {
     fn default() -> Self {
         Self {
-            backend: podman_backend(),
+            backend: bwrap_backend(),
             docker: DockerConfig::default(),
             podman: PodmanConfig::default(),
             bwrap: BwrapConfig::default(),
@@ -40,8 +40,8 @@ impl Default for IsolationConfig {
     }
 }
 
-fn podman_backend() -> String {
-    "podman".into()
+fn bwrap_backend() -> String {
+    "bwrap".into()
 }
 
 #[derive(Clone, Debug, Deserialize)]
