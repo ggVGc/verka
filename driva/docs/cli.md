@@ -117,6 +117,8 @@ List effective built-in and project-defined templates with:
 
 ```console
 $ driva templates
+claude	Run Claude Code interactively against the current project
+claude-exec	Run Claude Code non-interactively against the current project
 codex	Run OpenAI Codex interactively against the current project
 codex-exec	Run OpenAI Codex non-interactively against the current project
 ```
@@ -136,10 +138,23 @@ The built-in requires a file-backed host login at `~/.codex/auth.json`. If the
 host uses an OS keyring, create a file-backed login first or define a project
 replacement using another authentication scheme.
 
+The built-in `claude` template runs `npx --yes
+@anthropic-ai/claude-code@latest` interactively; `claude-exec` adds `--print`
+for non-interactive use. Both use the same Podman, Node, workspace, and network
+policy as the Codex templates. On Linux they mount only
+`~/.claude/.credentials.json` writable at
+`/root/.claude/.credentials.json`, leaving other Claude configuration and
+session state disposable. [Anthropic's authentication
+documentation](https://docs.anthropic.com/en/docs/claude-code/iam) identifies
+that file as the Linux credential store. A host Claude Code login must have
+created it before using these templates.
+
 ```sh
 driva run --template codex
 driva run --template codex-exec -- "update the dependencies and run tests"
 driva run --template codex -- --model MODEL
+driva run --template claude
+driva run --template claude-exec -- "update the dependencies and run tests"
 ```
 
 A `[template.<name>]` entry with a built-in name completely replaces that

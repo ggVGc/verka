@@ -38,8 +38,36 @@ fn provides_codex_templates() {
 }
 
 #[test]
+fn provides_claude_code_templates() {
+    let config = Config::default();
+    let claude = config.template("claude").unwrap();
+    assert_eq!(
+        claude.command,
+        ["npx", "--yes", "@anthropic-ai/claude-code@latest"]
+    );
+    assert_eq!(claude.backend.as_deref(), Some("podman"));
+    assert_eq!(claude.workdir.unwrap(), PathBuf::from("/workspace"));
+    assert!(claude.network);
+    assert!(claude.interactive);
+    assert_eq!(claude.mounts.len(), 2);
+    assert_eq!(
+        claude.mounts[1].source,
+        PathBuf::from("~/.claude/.credentials.json")
+    );
+    assert_eq!(
+        claude.mounts[1].destination,
+        PathBuf::from("/root/.claude/.credentials.json")
+    );
+    assert_eq!(claude.mounts[1].access, MountAccess::ReadWrite);
+
+    let claude_exec = config.template("claude-exec").unwrap();
+    assert_eq!(claude_exec.command.last().unwrap(), "--print");
+    assert!(!claude_exec.interactive);
+}
+
+#[test]
 fn builtin_template_assets_use_the_public_toml_schema() {
-    for name in ["codex", "codex-exec"] {
+    for name in ["claude", "claude-exec", "codex", "codex-exec"] {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("templates")
             .join(format!("{name}.toml"));
@@ -48,6 +76,32 @@ fn builtin_template_assets_use_the_public_toml_schema() {
         assert_eq!(template.command.first().unwrap(), "npx");
         assert_eq!(template.mounts.len(), 2);
     }
+}
+
+#[test]
+fn builtin_claude_selects_podman_and_mounts_only_credentials() {
+    let directory = temporary_directory("builtin-claude");
+    fs::create_dir(directory.join(".claude")).unwrap();
+    fs::write(directory.join(".claude/.credentials.json"), "{}").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_driva"))
+        .current_dir(&directory)
+        .env("HOME", &directory)
+        .args(["run", "--template", "claude", "--dry-run"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("backend: podman"));
+    assert!(stdout.contains("@anthropic-ai/claude-code@latest"));
+    assert!(stdout
+        .contains("/.claude/.credentials.json -> /root/.claude/.credentials.json (read-write)"));
+    assert!(!stdout.contains(" -> /root/.claude (read-write)"));
+
+    fs::remove_dir_all(directory).unwrap();
 }
 
 #[test]

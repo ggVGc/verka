@@ -12,13 +12,15 @@ cargo run -- shell --write .
 ```
 
 Named templates bundle a command, backend, image, mounts, and policy. Driva
-ships interactive and non-interactive Codex templates:
+ships interactive and non-interactive templates for Codex and Claude Code:
 
 ```sh
 cargo run -- templates
 cargo run -- run --template codex
 cargo run -- run --template codex-exec -- "fix the failing tests"
 cargo run -- run --template codex --no-network
+cargo run -- run --template claude
+cargo run -- run --template claude-exec -- "fix the failing tests"
 ```
 
 These templates use Podman with Node 22, mount the current project writable at
@@ -29,6 +31,11 @@ contains access tokens, so select the template only for code you trust. Hosts
 using an OS keyring must create a file-backed Codex login before using the
 built-in template, or replace it with a project template using another
 authentication scheme.
+
+The Claude Code templates use the same container policy and mount only the
+Linux credential file `~/.claude/.credentials.json` at
+`/root/.claude/.credentials.json`; all other Claude state is disposable. They
+require a host login created by Claude Code on Linux.
 
 The full command-line reference — every subcommand, option, the mount
 grammar, and the `driva.toml` schema — lives in [`docs/cli.md`](docs/cli.md).

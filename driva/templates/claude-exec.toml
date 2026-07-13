@@ -1,0 +1,20 @@
+description = "Run Claude Code non-interactively against the current project"
+command = ["npx", "--yes", "@anthropic-ai/claude-code@latest", "--print"]
+backend = "podman"
+image = "docker.io/library/node:22-bookworm"
+workdir = "/workspace"
+network = true
+interactive = false
+
+[environment]
+DISABLE_AUTOUPDATER = "1"
+
+[[mount]]
+source = "."
+destination = "/workspace"
+access = "write"
+
+[[mount]]
+source = "~/.claude/.credentials.json"
+destination = "/root/.claude/.credentials.json"
+access = "write"

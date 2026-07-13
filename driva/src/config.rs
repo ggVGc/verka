@@ -213,6 +213,8 @@ impl Config {
 
 fn builtin_templates() -> BTreeMap<String, TemplateConfig> {
     [
+        ("claude", include_str!("../templates/claude.toml")),
+        ("claude-exec", include_str!("../templates/claude-exec.toml")),
         ("codex", include_str!("../templates/codex.toml")),
         ("codex-exec", include_str!("../templates/codex-exec.toml")),
     ]
