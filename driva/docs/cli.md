@@ -122,6 +122,7 @@ claude	Run Claude Code interactively against the current project
 claude-exec	Run Claude Code non-interactively against the current project
 codex	Run OpenAI Codex interactively against the current project
 codex-exec	Run OpenAI Codex non-interactively against the current project
+codex-local	Run the host's Codex binary interactively in Bubblewrap
 ```
 
 The built-in `codex` template runs a pinned, prepared Codex installation
@@ -150,6 +151,16 @@ The built-in requires a file-backed host login at `~/.codex/auth.json`. If the
 host uses an OS keyring, create a file-backed login first or define a project
 replacement using another authentication scheme.
 
+The built-in `codex-local` template runs the host's `codex` executable using
+Bubblewrap directly, without a prepared Driva runtime. It exposes the host root
+read-only so the executable and its shared libraries remain available, then
+replaces the invoking user's home directory with a private tmpfs. Only the
+current project and `~/.codex/auth.json` are mounted back into the sandbox, at
+`/tmp/workspace` and the disposable `/root` respectively. The local
+executable must therefore be available on the standard system `PATH` outside
+the user's home directory. Like the prepared templates, it trusts the isolated
+workspace and disables Codex's inner sandbox.
+
 The built-in `claude` template runs `npx --yes
 @anthropic-ai/claude-code@latest` interactively; `claude-exec` adds `--print`
 for non-interactive use. Both use Podman with Node 22, mount the project at
@@ -165,6 +176,7 @@ created it before using these templates.
 driva run --template codex
 driva run --template codex-exec -- "update the dependencies and run tests"
 driva run --template codex -- --model MODEL
+driva run --template codex-local
 driva run --template claude
 driva run --template claude-exec -- "update the dependencies and run tests"
 ```
@@ -550,17 +562,20 @@ non-empty. `command` is an array of the executable and its initial arguments.
 Bubblewrap; `~` is expanded using `$HOME` and the tree is mounted read-only.
 `tmpfs` replaces listed rootfs directories with private writable temporary
 filesystems before template mounts are applied, allowing a writable file mount
-inside otherwise-disposable state.
+inside otherwise-disposable state. A leading `~` is expanded using the host
+`$HOME`; mount destinations and the working directory may be created beneath a
+private tmpfs even when they are absent from the read-only rootfs.
 Template mounts use the same shape and validation as global `[[mount]]`
 entries. Project templates appear in `driva templates`; project definitions
 replace built-ins with the same name.
 
 Bubblewrap uses `rootfs` as a prepared filesystem tree rather than pulling an
-OCI image. The tree must contain `/proc`, `/dev`, `/tmp`, the configured
-working directory, and every mount destination. Driva exposes it read-only,
-creates private `/proc` and `/dev` mounts and a writable tmpfs at `/tmp`, and
-clears the inherited host environment. `--image` and durable session commands
-are not supported with this backend.
+OCI image. The tree must contain `/proc`, `/dev`, `/tmp`, each configured tmpfs
+mount point, and any working directory or mount destination that is not created
+beneath a private tmpfs. Driva exposes it read-only, creates private `/proc` and
+`/dev` mounts and a writable tmpfs at `/tmp`, and clears the inherited host
+environment. `--image` and durable session commands are not supported with
+this backend.
 
 ## Further reading
 

@@ -35,12 +35,29 @@ impl BwrapIsolation {
         self.require_rootfs_directory(&rootfs, Path::new("/proc"), "proc mount point")?;
         self.require_rootfs_directory(&rootfs, Path::new("/dev"), "device mount point")?;
         self.require_rootfs_directory(&rootfs, Path::new("/tmp"), "temporary directory")?;
-        self.require_rootfs_directory(&rootfs, &request.working_directory, "working directory")?;
+        let mut tmpfs = Vec::new();
         for destination in &self.tmpfs {
+            let destination = expand_home(destination)?;
+            if !tmpfs.contains(&destination) {
+                tmpfs.push(destination);
+            }
+        }
+        for destination in &tmpfs {
             self.require_rootfs_directory(&rootfs, destination, "tmpfs mount point")?;
         }
+        self.require_rootfs_path_or_tmpfs(
+            &rootfs,
+            &tmpfs,
+            &request.working_directory,
+            "working directory",
+        )?;
         for mount in &request.mounts {
-            self.require_rootfs_path(&rootfs, &mount.destination, "mount destination")?;
+            self.require_rootfs_path_or_tmpfs(
+                &rootfs,
+                &tmpfs,
+                &mount.destination,
+                "mount destination",
+            )?;
         }
 
         let mut command = Command::new(&self.executable);
@@ -69,7 +86,7 @@ impl BwrapIsolation {
             .arg("/dev")
             .arg("--tmpfs")
             .arg("/tmp");
-        for destination in &self.tmpfs {
+        for destination in &tmpfs {
             command.arg("--tmpfs").arg(destination);
         }
         for mount in &request.mounts {
@@ -98,6 +115,21 @@ impl BwrapIsolation {
         Ok(())
     }
 
+    fn require_rootfs_path_or_tmpfs(
+        &self,
+        rootfs: &Path,
+        tmpfs: &[PathBuf],
+        path: &Path,
+        label: &str,
+    ) -> Result<()> {
+        if is_nested_beneath(path, Path::new("/tmp"))
+            || tmpfs.iter().any(|base| is_nested_beneath(path, base))
+        {
+            return Ok(());
+        }
+        self.require_rootfs_path(rootfs, path, label).map(|_| ())
+    }
+
     fn require_rootfs_path(&self, rootfs: &Path, path: &Path, label: &str) -> Result<PathBuf> {
         let relative = path
             .strip_prefix("/")
@@ -117,6 +149,16 @@ impl BwrapIsolation {
         }
         Ok(resolved)
     }
+}
+
+fn is_nested_beneath(path: &Path, base: &Path) -> bool {
+    let Ok(relative) = path.strip_prefix(base) else {
+        return false;
+    };
+    relative.components().next().is_some()
+        && relative
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_)))
 }
 
 fn expand_home(path: &Path) -> Result<PathBuf> {

@@ -145,6 +145,46 @@ fn creates_private_tmpfs_before_nested_file_mounts() {
 }
 
 #[test]
+fn permits_paths_created_beneath_private_tmpfs() {
+    let rootfs = TestRootfs::new();
+    std::fs::create_dir(rootfs.0.join("home")).unwrap();
+    let backend = BwrapIsolation {
+        executable: "bwrap".into(),
+        rootfs: rootfs.0.clone(),
+        tmpfs: vec!["/home".into()],
+    };
+    let request = ExecutionRequest {
+        command: vec!["true".into()],
+        working_directory: "/tmp/workspace".into(),
+        mounts: vec![
+            Mount {
+                source: "/host/project".into(),
+                destination: "/tmp/workspace".into(),
+                access: MountAccess::ReadWrite,
+            },
+            Mount {
+                source: "/host/auth.json".into(),
+                destination: "/home/codex/.codex/auth.json".into(),
+                access: MountAccess::ReadWrite,
+            },
+        ],
+        environment: BTreeMap::new(),
+        network: false,
+        interactive: false,
+    };
+
+    let command = backend.command(&request).unwrap();
+    let args: Vec<_> = command
+        .get_args()
+        .map(|value| value.to_string_lossy().into_owned())
+        .collect();
+    assert!(args.windows(2).any(|args| args == ["--tmpfs", "/home"]));
+    assert!(args
+        .windows(3)
+        .any(|args| args == ["--bind", "/host/project", "/tmp/workspace"]));
+}
+
+#[test]
 fn rejects_destinations_missing_from_read_only_rootfs() {
     let rootfs = TestRootfs::new();
     let backend = BwrapIsolation {

@@ -91,6 +91,25 @@ fn provides_codex_templates() {
         ]
     );
     assert!(!codex_exec.interactive);
+
+    let codex_local = config.template("codex-local").unwrap();
+    assert_eq!(
+        codex_local.command.first().map(String::as_str),
+        Some("codex")
+    );
+    assert_eq!(codex_local.backend.as_deref(), Some("bwrap"));
+    assert_eq!(codex_local.rootfs.as_deref(), Some(Path::new("/")));
+    assert_eq!(
+        codex_local.tmpfs,
+        [PathBuf::from("~"), PathBuf::from("/root")]
+    );
+    assert_eq!(codex_local.workdir, Some(PathBuf::from("/tmp/workspace")));
+    assert!(codex_local.interactive);
+    assert_eq!(codex_local.mounts.len(), 2);
+    assert_eq!(
+        codex_local.mounts[1].destination,
+        PathBuf::from("/root/.codex/auth.json")
+    );
 }
 
 #[test]
@@ -123,7 +142,13 @@ fn provides_claude_code_templates() {
 
 #[test]
 fn builtin_template_assets_use_the_public_toml_schema() {
-    for name in ["claude", "claude-exec", "codex", "codex-exec"] {
+    for name in [
+        "claude",
+        "claude-exec",
+        "codex",
+        "codex-exec",
+        "codex-local",
+    ] {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("templates")
             .join(format!("{name}.toml"));
@@ -131,11 +156,42 @@ fn builtin_template_assets_use_the_public_toml_schema() {
         let template: TemplateConfig = toml::from_str(&source).unwrap();
         assert!(matches!(
             template.command.first().map(String::as_str),
-            Some("npx" | "/usr/local/bin/driva-codex")
+            Some("npx" | "codex" | "/usr/local/bin/driva-codex")
         ));
-        let expected_mounts = if name.starts_with("codex") { 3 } else { 2 };
+        let expected_mounts = if matches!(name, "codex" | "codex-exec") {
+            3
+        } else {
+            2
+        };
         assert_eq!(template.mounts.len(), expected_mounts);
     }
+}
+
+#[test]
+fn builtin_codex_local_uses_the_host_root_without_exposing_home() {
+    let directory = temporary_directory("builtin-codex-local");
+    fs::create_dir(directory.join(".codex")).unwrap();
+    fs::write(directory.join(".codex/auth.json"), "{}").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_driva"))
+        .current_dir(&directory)
+        .env("HOME", &directory)
+        .args(["run", "--template", "codex-local", "--dry-run"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("backend: bwrap"));
+    assert!(stdout.contains("\"--ro-bind\" \"/\" \"/\""));
+    assert!(stdout.contains(&format!("\"--tmpfs\" \"{}", directory.display())));
+    assert!(stdout.contains("\"codex\""));
+    assert!(stdout.contains("/tmp/workspace"));
+    assert!(stdout.contains("/root/.codex/auth.json"));
+
+    fs::remove_dir_all(directory).unwrap();
 }
 
 #[test]
