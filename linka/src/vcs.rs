@@ -15,6 +15,9 @@ pub trait StoreHistory {
     fn require_clean_store(&self, path: &str) -> Result<()>;
 
     fn commit_store(&self, path: &str, message: &str) -> Result<()>;
+
+    /// Whether store history ever recorded `commit` as `node`'s output.
+    fn output_was_recorded(&self, path: &str, node: &str, commit: &str) -> Result<bool>;
 }
 
 pub trait ArtifactStore {
@@ -45,6 +48,8 @@ pub trait ArtifactStore {
 
 pub trait ContextIdentity {
     fn head_commit(&self) -> Result<Option<String>>;
+    /// The node named by a `Linka-Node` trailer on `commit`, if present.
+    fn linka_node(&self, commit: &str) -> Result<Option<String>>;
     fn tree_id(&self, commit: &str) -> Result<String>;
     fn file_blob(&self, path: &str) -> Result<Option<String>>;
     fn file_blob_at(&self, revision: &str, path: &str) -> Result<Option<String>>;
@@ -71,6 +76,8 @@ pub struct FakeVcs {
     pub captured: std::cell::RefCell<Vec<Vec<String>>>,
     pub store_commits: std::cell::RefCell<usize>,
     pub dirty_store: std::cell::RefCell<Vec<String>>,
+    pub linka_nodes: std::collections::HashMap<String, String>,
+    pub recorded_outputs: std::collections::HashSet<(String, String)>,
     pub files_for: std::cell::RefCell<std::collections::HashMap<String, Vec<String>>>,
     /// The project repo's root commit; `None` models an empty repository.
     pub root: Option<String>,
@@ -131,12 +138,21 @@ impl StoreHistory for FakeVcs {
         self.dirty_store.borrow_mut().clear();
         Ok(())
     }
+
+    fn output_was_recorded(&self, _path: &str, node: &str, commit: &str) -> Result<bool> {
+        Ok(self
+            .recorded_outputs
+            .contains(&(node.to_string(), commit.to_string())))
+    }
 }
 
 #[cfg(test)]
 impl ContextIdentity for FakeVcs {
     fn head_commit(&self) -> Result<Option<String>> {
         Ok(self.root.clone())
+    }
+    fn linka_node(&self, commit: &str) -> Result<Option<String>> {
+        Ok(self.linka_nodes.get(commit).cloned())
     }
     fn tree_id(&self, commit: &str) -> Result<String> {
         Ok(format!("tree-{commit}"))

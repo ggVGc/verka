@@ -221,7 +221,7 @@ pub fn complete(
         Some(commit)
     };
 
-    submit_result(
+    let submitted = submit_result(
         store,
         vcs,
         ResultSubmission {
@@ -235,9 +235,57 @@ pub fn complete(
             author,
             producer: None,
         },
-    )
-    .map_err(|error| anyhow::anyhow!(error))?;
+    );
+    if let Err(error) = submitted {
+        if let Some(commit) = &output_commit {
+            bail!(
+                "inconsistent completion: project output commit {commit} was created but its \
+                 Linka result was not recorded: {error}"
+            );
+        }
+        return Err(anyhow::anyhow!(error));
+    }
     Ok(output_commit)
+}
+
+/// Refuse a project checkout whose `HEAD` identifies itself as a Linka output
+/// but is not recorded as that node's output in the store. This detects the
+/// durable partial state left if short-lived completion is interrupted after
+/// committing project outputs and before committing the Linka result.
+pub fn require_consistent_project_head(store: &Store, vcs: &dyn Vcs) -> Result<()> {
+    let Some(head) = vcs.head_commit()? else {
+        return Ok(());
+    };
+    let Some(declared_node) = vcs.linka_node(&head)? else {
+        return Ok(());
+    };
+    match origin(store, &head)? {
+        Some(recorded_node) if recorded_node == declared_node => return Ok(()),
+        Some(recorded_node) => bail!(
+            "inconsistent Linka state: project HEAD {} declares node `{declared_node}`, but the \
+             store records it as output of `{recorded_node}`",
+            short(&head)
+        ),
+        None => {}
+    }
+    declared_node
+        .parse::<crate::model::NodeId>()
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "project HEAD {} has an invalid Linka-Node trailer: {error}",
+                short(&head)
+            )
+        })?;
+    if vcs.output_was_recorded(&store.store_name(), &declared_node, &head)? {
+        return Ok(());
+    }
+    bail!(
+        "inconsistent Linka state: project HEAD {} declares itself as output of node \
+         `{declared_node}`, but the store has never recorded that output; restore the project \
+         changes and run `linka complete` again, or move the project checkout to a \
+         consistent commit",
+        short(&head)
+    )
 }
 
 /// Answer a node: record it done with the response as its result notes,
@@ -3149,6 +3197,71 @@ mod tests {
             other => panic!("expected a conflict, got {other:?}"),
         }
         // No result recorded and no output ref retained on a conflict.
+        assert!(store.read_result(&id).unwrap().is_none());
+    }
+
+    #[test]
+    fn unrecorded_linka_output_at_project_head_is_inconsistent() {
+        let (_t, store) = temp_store();
+        let setup = FakeVcs::default();
+        let id = add(&store, &setup, new_node("a", vec![])).unwrap();
+        let fake = FakeVcs {
+            root: Some("dangling-output".into()),
+            linka_nodes: [("dangling-output".into(), id.clone())].into(),
+            ..Default::default()
+        };
+
+        let error = require_consistent_project_head(&store, &fake).unwrap_err();
+
+        assert!(
+            error.to_string().contains("has never recorded"),
+            "{error:#}"
+        );
+        assert!(error.to_string().contains(&id), "{error:#}");
+    }
+
+    #[test]
+    fn historical_linka_output_at_project_head_is_consistent() {
+        let (_t, store) = temp_store();
+        let setup = FakeVcs::default();
+        let id = add(&store, &setup, new_node("a", vec![])).unwrap();
+        let fake = FakeVcs {
+            root: Some("historical-output".into()),
+            linka_nodes: [("historical-output".into(), id.clone())].into(),
+            recorded_outputs: [(id, "historical-output".into())].into(),
+            ..Default::default()
+        };
+
+        require_consistent_project_head(&store, &fake).unwrap();
+    }
+
+    #[test]
+    fn completion_reports_an_output_commit_left_without_a_store_result() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs {
+            next_id: "dangling-output".into(),
+            ..Default::default()
+        };
+        let id = add(&store, &fake, new_node("a", vec![])).unwrap();
+        fake.dirty_store.borrow_mut().push("interference".into());
+
+        let error = complete(
+            &store,
+            &fake,
+            &id,
+            &["out.txt".into()],
+            &[],
+            None,
+            "",
+            Author::Human,
+        )
+        .unwrap_err();
+
+        assert!(
+            error.to_string().contains("inconsistent completion"),
+            "{error:#}"
+        );
+        assert!(error.to_string().contains("dangling-output"), "{error:#}");
         assert!(store.read_result(&id).unwrap().is_none());
     }
 }

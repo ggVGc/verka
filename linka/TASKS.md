@@ -280,28 +280,24 @@ Acceptance criteria:
   transcript.
 - Interaction logs do not participate in Linka graph versions or derived state.
 
-## 13. Add recoverable cross-repository completion
+## 13. Detect incomplete cross-repository completion
 
-- [x] Put a submission journal in the coordinating application layer (Orka or
-  the human CLI workflow), not in Linka's graph semantics.
-- [x] Record a submission ID, node, frozen snapshot, intended result, output
-  artifact, and phase.
-- [x] Define phases such as prepared, artifact retained, result written, store
-  committed, and finalized.
-- [x] Make every phase idempotent.
-- [x] Add recovery that distinguishes finalized, already finalized, conflict,
-  artifact-only, store-write-pending, and corrupt states.
-- [x] Ensure recovery rechecks the expected result and graph snapshot before
-  finalization.
+- [x] Keep submission journals and procedural recovery state out of Linka.
+- [x] Mark output commits with their `Linka-Node` trailer.
+- [x] Report the output commit explicitly if project capture succeeds but
+  recording the Linka result fails.
+- [x] Refuse CLI operations when project `HEAD` is a Linka output that has
+  never been recorded in store history.
+- [x] Accept historical outputs whose current result has since been replaced.
 - [x] Do not silently discard an output artifact when graph submission fails.
 
 Tests:
 
-- [x] Inject a failure before and after every phase and recover successfully.
-- [x] Run recovery repeatedly and get the same final state.
+- [x] Detect an unrecorded Linka output at project `HEAD`.
+- [x] Accept an output found in committed store history.
+- [x] Include the dangling output commit in an immediate completion error.
 - [x] Handle two submissions from the same snapshot without overwriting the
   winner.
-- [x] Preserve recoverable evidence when graph state changes before submission.
 
 ## 14. Update CLI state presentation
 

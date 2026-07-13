@@ -92,6 +92,21 @@ impl ContextIdentity for GitVcs {
         }
         Ok(Some(checked(&self.project, &["rev-parse", "HEAD"])?))
     }
+    fn linka_node(&self, commit: &str) -> Result<Option<String>> {
+        let format = "%(trailers:key=Linka-Node,valueonly)";
+        let value = checked(
+            &self.project,
+            &["show", "-s", &format!("--format={format}"), commit],
+        )?;
+        let mut values = value.lines().filter(|line| !line.trim().is_empty());
+        let Some(node) = values.next() else {
+            return Ok(None);
+        };
+        if values.next().is_some() {
+            bail!("commit {commit} has more than one Linka-Node trailer");
+        }
+        Ok(Some(node.trim().to_string()))
+    }
     fn tree_id(&self, commit: &str) -> Result<String> {
         checked(&self.project, &["rev-parse", &format!("{commit}^{{tree}}")])
     }
@@ -145,6 +160,15 @@ impl StoreHistory for GitVcs {
 
     fn commit_store(&self, path: &str, message: &str) -> Result<()> {
         commit_path(&self.workbench, path, message)
+    }
+
+    fn output_was_recorded(&self, path: &str, node: &str, commit: &str) -> Result<bool> {
+        let result = format!("{path}/nodes/{node}/result.toml");
+        let out = checked(
+            &self.workbench,
+            &["log", "--format=%H", "-S", commit, "--", &result],
+        )?;
+        Ok(!out.is_empty())
     }
 }
 

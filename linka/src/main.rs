@@ -13,8 +13,6 @@ use linka::model::{Blocker, BlockerReason, NodeState, StalenessReason};
 use linka::ops::{self, NewNode};
 use linka::{Author, DepKind, GitVcs, NodeId, ProjectPath, Store};
 
-mod journal;
-
 #[derive(Parser)]
 #[command(
     name = "linka",
@@ -108,9 +106,6 @@ enum Cmd {
         author: Author,
     },
 
-    /// Resume an interrupted recoverable completion journal.
-    Recover { submission: String },
-
     /// Record a node's work as failed, with notes on what went wrong.
     Fail {
         id: NodeId,
@@ -203,6 +198,11 @@ enum Cmd {
 
 fn main() -> Result<()> {
     let Cli { store, cmd } = Cli::parse();
+    if !matches!(&cmd, Cmd::Init { .. }) {
+        let opened = Store::open(store.clone())?;
+        let vcs = GitVcs::for_store(&opened);
+        ops::require_consistent_project_head(&opened, &vcs)?;
+    }
     match cmd {
         Cmd::Init { name } => {
             let initialized = ops::init_workbench(store, name)?;
@@ -291,31 +291,20 @@ fn main() -> Result<()> {
             let store = Store::open(store)?;
             let vcs = GitVcs::for_store(&store);
             let notes = resolve_notes(notes, notes_file, &store, &id, "what happened?")?;
-            let (_, description) = store.read_node(&id)?;
-            let output_message =
-                message.unwrap_or_else(|| linka::title_of(&description).to_string());
-            let commit = journal::complete(
+            let commit = ops::complete(
                 &store,
                 &vcs,
                 &id,
                 &to_strings(&outputs),
                 &to_strings(&context),
-                output_message,
-                notes,
+                message,
+                &notes,
                 author,
             )?;
             match commit {
                 Some(c) => println!("{id}  done  (output {})", ops::short(&c)),
                 None => println!("{id}  done  (no output files)"),
             }
-        }
-
-        Cmd::Recover { submission } => {
-            let store = Store::open(store)?;
-            let vcs = GitVcs::for_store(&store);
-            let mut record = journal::load(&store, &submission)?;
-            journal::recover(&store, &vcs, &mut record)?;
-            println!("{}  {:?}", record.id, record.phase);
         }
 
         Cmd::Fail {
