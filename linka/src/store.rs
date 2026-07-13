@@ -61,25 +61,63 @@ pub struct Store {
 }
 
 pub struct MutationLock {
-    path: PathBuf,
     _file: fs::File,
+    path: String,
 }
 
 impl Drop for MutationLock {
     fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
+        // Closing the file also releases the lock, but unlock explicitly so a
+        // following mutation in the same process can proceed immediately.
+        let _ = self._file.unlock();
+    }
+}
+
+impl MutationLock {
+    /// Commit the one action performed while this lock was held, verify that
+    /// the store is clean again, and then release the lock on return.
+    pub fn commit(self, vcs: &dyn crate::vcs::Vcs, message: &str) -> Result<()> {
+        vcs.commit_store(&self.path, message)?;
+        vcs.require_clean_store(&self.path)
+            .context("Linka store is still dirty after committing the mutation")?;
+        Ok(())
     }
 }
 
 impl Store {
-    pub fn mutation_lock(&self) -> Result<MutationLock> {
-        let path = self.root.join("mutation.lock");
+    /// Acquire the workbench-wide mutation lock and require the tracked store
+    /// to be clean before returning it. The stable lock file lives inside
+    /// `.git`, so it is never part of a store commit; the OS lock is released
+    /// automatically on drop, including after a crash.
+    pub fn mutation_lock(&self, vcs: &dyn crate::vcs::Vcs) -> Result<MutationLock> {
+        let git_dir = self.workbench_root().join(".git");
+        fs::create_dir_all(&git_dir).with_context(|| format!("creating {}", git_dir.display()))?;
+        let lock_path = git_dir.join("linka-mutation.lock");
         let file = fs::OpenOptions::new()
+            .read(true)
             .write(true)
-            .create_new(true)
-            .open(&path)
-            .with_context(|| format!("acquiring store mutation lock {}", path.display()))?;
-        Ok(MutationLock { path, _file: file })
+            .create(true)
+            .truncate(false)
+            .open(&lock_path)
+            .with_context(|| format!("opening store mutation lock {}", lock_path.display()))?;
+        match file.try_lock() {
+            Ok(()) => {}
+            Err(fs::TryLockError::WouldBlock) => {
+                bail!(
+                    "another Linka store mutation is in progress ({})",
+                    lock_path.display()
+                )
+            }
+            Err(fs::TryLockError::Error(error)) => {
+                return Err(error).with_context(|| {
+                    format!("acquiring store mutation lock {}", lock_path.display())
+                })
+            }
+        }
+        let path = self.store_name();
+        vcs.require_clean_store(&path)
+            .context("Linka store must be clean before mutating")?;
+        Ok(MutationLock { _file: file, path })
     }
     /// Open an existing store, erroring if it has not been initialised.
     pub fn open(root: PathBuf) -> Result<Self> {

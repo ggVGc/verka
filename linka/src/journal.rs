@@ -141,6 +141,10 @@ mod tests {
     #[derive(Default)]
     struct TestVcs;
     impl StoreHistory for TestVcs {
+        fn require_clean_store(&self, _: &str) -> Result<()> {
+            Ok(())
+        }
+
         fn commit_store(&self, _: &str, _: &str) -> Result<()> {
             Ok(())
         }

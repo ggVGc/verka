@@ -9,6 +9,11 @@
 
 use anyhow::Result;
 pub trait StoreHistory {
+    /// Require the Linka store path to have no uncommitted changes. The error
+    /// identifies the dirty store content so callers can report what must be
+    /// resolved.
+    fn require_clean_store(&self, path: &str) -> Result<()>;
+
     fn commit_store(&self, path: &str, message: &str) -> Result<()>;
 }
 
@@ -65,6 +70,7 @@ pub struct FakeVcs {
     pub revision_blobs: std::collections::HashMap<(String, String), String>,
     pub captured: std::cell::RefCell<Vec<Vec<String>>>,
     pub store_commits: std::cell::RefCell<usize>,
+    pub dirty_store: std::cell::RefCell<Vec<String>>,
     pub files_for: std::cell::RefCell<std::collections::HashMap<String, Vec<String>>>,
     /// The project repo's root commit; `None` models an empty repository.
     pub root: Option<String>,
@@ -112,8 +118,17 @@ impl ArtifactStore for FakeVcs {
 
 #[cfg(test)]
 impl StoreHistory for FakeVcs {
+    fn require_clean_store(&self, _path: &str) -> Result<()> {
+        let dirty = self.dirty_store.borrow();
+        if !dirty.is_empty() {
+            anyhow::bail!("uncommitted store changes:\n  {}", dirty.join("\n  "));
+        }
+        Ok(())
+    }
+
     fn commit_store(&self, _path: &str, _message: &str) -> Result<()> {
         *self.store_commits.borrow_mut() += 1;
+        self.dirty_store.borrow_mut().clear();
         Ok(())
     }
 }

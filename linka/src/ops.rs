@@ -1,8 +1,9 @@
 //! Graph operations and derived queries.
 //!
 //! Every mutating operation ([`add`], [`link`], [`edit`], [`complete`], [`fail`])
-//! commits its own store change to the workbench repository, so each is its own
-//! git commit there. The project repository is checked only where output
+//! takes the workbench-wide mutation lock, requires a clean store, commits its
+//! complete store change as one git commit, and verifies the store is clean
+//! before releasing the lock. The project repository is checked only where output
 //! provenance is asserted: [`complete`] refuses undeclared dirty writes
 //! ([`require_clean_except`]); pure graph edits never gate on project state.
 //! The derived queries ([`current_status`], [`staleness`], [`blockers`],
@@ -94,6 +95,7 @@ pub fn add(store: &Store, vcs: &dyn Vcs, new: NewNode) -> Result<String> {
     if new.description.trim().is_empty() {
         bail!("a node needs a description");
     }
+    let mutation = store.mutation_lock(vcs)?;
     for dep in new.depends_on.iter().chain(&new.derived_from) {
         if !store.exists(dep) {
             bail!("unknown related node `{dep}`");
@@ -119,7 +121,7 @@ pub fn add(store: &Store, vcs: &dyn Vcs, new: NewNode) -> Result<String> {
         extensions: Default::default(),
     };
     store.write_node(&id, &meta, &new.description)?;
-    vcs.commit_store(&store.store_name(), &format!("linka: add {id}"))?;
+    mutation.commit(vcs, &format!("linka: add {id}"))?;
     Ok(id)
 }
 
@@ -129,6 +131,7 @@ pub fn link(store: &Store, vcs: &dyn Vcs, from: &str, to: &str, kind: DepKind) -
     if from == to {
         bail!("cannot link a node to itself");
     }
+    let mutation = store.mutation_lock(vcs)?;
     if !store.exists(to) {
         bail!("unknown related node `{to}`");
     }
@@ -142,7 +145,7 @@ pub fn link(store: &Store, vcs: &dyn Vcs, from: &str, to: &str, kind: DepKind) -
     }
     edges.push(to.parse().map_err(anyhow::Error::msg)?);
     store.write_node(from, &meta, &description)?;
-    vcs.commit_store(&store.store_name(), &format!("linka: link {from} -> {to}"))?;
+    mutation.commit(vcs, &format!("linka: link {from} -> {to}"))?;
     Ok(())
 }
 
@@ -152,9 +155,10 @@ pub fn edit(store: &Store, vcs: &dyn Vcs, id: &str, description: String) -> Resu
     if description.trim().is_empty() {
         bail!("a node needs a description");
     }
+    let mutation = store.mutation_lock(vcs)?;
     let (meta, _) = store.read_node(id)?;
     store.write_node(id, &meta, &description)?;
-    vcs.commit_store(&store.store_name(), &format!("linka: edit {id}"))?;
+    mutation.commit(vcs, &format!("linka: edit {id}"))?;
     Ok(())
 }
 
@@ -253,6 +257,7 @@ pub fn respond(store: &Store, vcs: &dyn Vcs, id: &str, notes: &str, author: Auth
 /// It does not gate on project-tree cleanliness: a failed attempt may well have
 /// left a mess, and recording the failure must not be blocked by it.
 pub fn fail(store: &Store, vcs: &dyn Vcs, id: &str, notes: &str, author: Author) -> Result<()> {
+    let mutation = store.mutation_lock(vcs)?;
     let (meta, _) = store.read_node(id)?;
     let consumed = pin_deps(store, &meta)?;
     let result = ResultMeta {
@@ -268,7 +273,7 @@ pub fn fail(store: &Store, vcs: &dyn Vcs, id: &str, notes: &str, author: Author)
         producer: None,
     };
     store.write_result(id, &result, notes)?;
-    vcs.commit_store(&store.store_name(), &format!("linka: fail {id}"))?;
+    mutation.commit(vcs, &format!("linka: fail {id}"))?;
     Ok(())
 }
 
@@ -280,6 +285,7 @@ pub fn record_context_observation(
     expected_result: &ResultVersion,
     paths: &[String],
 ) -> Result<usize> {
+    let mutation = store.mutation_lock(vcs)?;
     let Some((result, _)) = store.read_result(id)? else {
         bail!("node `{id}` has no result");
     };
@@ -338,10 +344,7 @@ pub fn record_context_observation(
             context,
         },
     )?;
-    vcs.commit_store(
-        &store.store_name(),
-        &format!("linka: context observation {id}"),
-    )?;
+    mutation.commit(vcs, &format!("linka: context observation {id}"))?;
     Ok(added)
 }
 
@@ -622,7 +625,7 @@ pub fn submit_result(
     vcs: &dyn Vcs,
     submission: ResultSubmission,
 ) -> std::result::Result<(), SubmissionError> {
-    let _lock = store.mutation_lock()?;
+    let mutation = store.mutation_lock(vcs)?;
     let snapshot = &submission.snapshot;
     let id = snapshot.node.as_str();
     let mut conflicts = Vec::new();
@@ -710,7 +713,7 @@ pub fn submit_result(
         producer: submission.producer,
     };
     store.write_result(id, &result, &submission.notes)?;
-    vcs.commit_store(&store.store_name(), &format!("linka: result {id}"))?;
+    mutation.commit(vcs, &format!("linka: result {id}"))?;
     Ok(())
 }
 
@@ -1114,11 +1117,11 @@ pub fn migration_plan(store: &Store) -> Result<Vec<String>> {
 }
 
 pub fn migrate(store: &Store, vcs: &dyn Vcs) -> Result<Vec<String>> {
+    let mutation = store.mutation_lock(vcs)?;
     let changes = migration_plan(store)?;
     if changes.is_empty() {
         return Ok(changes);
     }
-    let _lock = store.mutation_lock()?;
     let ids = store.list_ids()?;
     let old_versions: std::collections::HashMap<_, _> = ids
         .iter()
@@ -1168,7 +1171,7 @@ pub fn migrate(store: &Store, vcs: &dyn Vcs) -> Result<Vec<String>> {
         }
         store.replace_context_observations(id, &observations)?;
     }
-    vcs.commit_store(&store.store_name(), "linka: migrate schema")?;
+    mutation.commit(vcs, "linka: migrate schema")?;
     Ok(changes)
 }
 
@@ -1231,6 +1234,7 @@ fn find_cycles(graph: &std::collections::BTreeMap<String, Vec<String>>) -> Vec<S
 /// refreshed (a given name wins; a currently-present remote wins) without
 /// touching the identity or its timestamp.
 pub fn pair(store: &Store, vcs: &dyn Vcs, name: Option<String>, force: bool) -> Result<Pairing> {
+    let mutation = store.mutation_lock(vcs)?;
     let Some(root) = vcs.root_commit()? else {
         bail!("the project repository has no commits yet — nothing to pair to");
     };
@@ -1246,7 +1250,7 @@ pub fn pair(store: &Store, vcs: &dyn Vcs, name: Option<String>, force: bool) -> 
                 return Ok(existing);
             }
             updated.save(store.root())?;
-            vcs.commit_store(&store.store_name(), "linka: pair project (update info)")?;
+            mutation.commit(vcs, "linka: pair project (update info)")?;
             return Ok(updated);
         }
         if !force {
@@ -1267,7 +1271,7 @@ pub fn pair(store: &Store, vcs: &dyn Vcs, name: Option<String>, force: bool) -> 
         remote,
     };
     pairing.save(store.root())?;
-    vcs.commit_store(&store.store_name(), "linka: pair project")?;
+    mutation.commit(vcs, "linka: pair project")?;
     Ok(pairing)
 }
 

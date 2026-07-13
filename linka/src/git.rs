@@ -113,6 +113,24 @@ impl ContextIdentity for GitVcs {
 }
 
 impl StoreHistory for GitVcs {
+    fn require_clean_store(&self, path: &str) -> Result<()> {
+        let out = git(&self.workbench, &["status", "--porcelain", "--", path])?;
+        if !out.status.success() {
+            bail!(
+                "`git status --porcelain -- {path}` failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        let dirty: Vec<_> = String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(str::to_string)
+            .collect();
+        if !dirty.is_empty() {
+            bail!("uncommitted store changes:\n  {}", dirty.join("\n  "));
+        }
+        Ok(())
+    }
+
     fn commit_store(&self, path: &str, message: &str) -> Result<()> {
         commit_path(&self.workbench, path, message)
     }
@@ -220,11 +238,13 @@ fn commit_paths(base: &Path, paths: &[String], message: &str) -> Result<String> 
     checked(base, &["rev-parse", "HEAD"])
 }
 
-/// Commit changes under a single path (e.g. the store directory). No-op if clean.
+/// Commit changes under a single path (e.g. the store directory). The caller
+/// has already established a clean baseline, so no staged change means the
+/// purported mutation did not produce an atomic operation.
 fn commit_path(base: &Path, path: &str, message: &str) -> Result<()> {
     checked(base, &["add", "--", path])?;
     if nothing_staged(base, std::slice::from_ref(&path.to_string()))? {
-        return Ok(());
+        bail!("store mutation produced no changes to commit");
     }
     checked(base, &["commit", "-m", message, "--", path])?;
     Ok(())
@@ -262,6 +282,109 @@ fn output_drift(base: &Path, commit: &str) -> Result<Option<String>> {
     args.extend(paths.iter().map(String::as_str));
     let drift = checked(base, &args)?;
     Ok((!drift.is_empty()).then_some(drift))
+}
+
+#[cfg(test)]
+mod store_mutation_tests {
+    use super::*;
+    use crate::model::Author;
+    use crate::ops::{self, NewNode};
+
+    struct TempDir(PathBuf);
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn workbench() -> (TempDir, Store, GitVcs) {
+        let root = std::env::temp_dir().join(format!(
+            "linka-store-mutation-{}-{}",
+            std::process::id(),
+            ulid::Ulid::new()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        checked(&root, &["init"]).unwrap();
+        checked(&root, &["config", "user.name", "linka test"]).unwrap();
+        checked(&root, &["config", "user.email", "test@linka.invalid"]).unwrap();
+        let store = Store::init(root.join(".linka")).unwrap();
+        std::fs::write(store.root().join("store.toml"), "schema = 1\n").unwrap();
+        checked(&root, &["add", ".linka"]).unwrap();
+        checked(&root, &["commit", "-m", "initial store"]).unwrap();
+        let vcs = GitVcs::for_store(&store);
+        (TempDir(root), store, vcs)
+    }
+
+    fn new_node(description: &str) -> NewNode {
+        NewNode {
+            description: description.into(),
+            author: Author::Human,
+            assignee: None,
+            depends_on: vec![],
+            derived_from: vec![],
+        }
+    }
+
+    #[test]
+    fn clean_store_mutation_is_one_commit_and_finishes_clean() {
+        let (_temp, store, vcs) = workbench();
+        let before = checked(&store.workbench_root(), &["rev-parse", "HEAD"]).unwrap();
+
+        let id = ops::add(&store, &vcs, new_node("atomic addition")).unwrap();
+
+        let after = checked(&store.workbench_root(), &["rev-parse", "HEAD"]).unwrap();
+        assert_ne!(before, after);
+        vcs.require_clean_store(&store.store_name()).unwrap();
+        let changed = checked(
+            &store.workbench_root(),
+            &["diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"],
+        )
+        .unwrap();
+        assert_eq!(
+            changed.lines().collect::<Vec<_>>(),
+            vec![
+                format!(".linka/nodes/{id}/description.md"),
+                format!(".linka/nodes/{id}/node.toml")
+            ]
+        );
+        assert!(store
+            .workbench_root()
+            .join(".git/linka-mutation.lock")
+            .is_file());
+    }
+
+    #[test]
+    fn dirty_store_refuses_mutation_before_any_edit() {
+        let (_temp, store, vcs) = workbench();
+        let id = ops::add(&store, &vcs, new_node("existing")).unwrap();
+        let before = checked(&store.workbench_root(), &["rev-parse", "HEAD"]).unwrap();
+        std::fs::write(store.node_dir(&id).join("description.md"), "hand edit").unwrap();
+
+        let error = ops::add(&store, &vcs, new_node("must not be created")).unwrap_err();
+
+        assert!(
+            format!("{error:#}").contains("uncommitted store changes"),
+            "{error:#}"
+        );
+        assert_eq!(
+            checked(&store.workbench_root(), &["rev-parse", "HEAD"]).unwrap(),
+            before
+        );
+        assert_eq!(store.list_ids().unwrap(), vec![id]);
+    }
+
+    #[test]
+    fn concurrent_store_mutation_is_refused_until_lock_release() {
+        let (_temp, store, vcs) = workbench();
+        let lock = store.mutation_lock(&vcs).unwrap();
+
+        let error = ops::add(&store, &vcs, new_node("contended")).unwrap_err();
+        assert!(error.to_string().contains("mutation is in progress"));
+        drop(lock);
+
+        ops::add(&store, &vcs, new_node("after release")).unwrap();
+    }
 }
 
 /* Project lifecycle and worktree tests live in the coordinating application.

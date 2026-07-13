@@ -85,6 +85,15 @@ and logs use inspectable TOML and Markdown. Mutations are committed so Git
 provides history, integrity, blame, and distribution; Linka provides the graph
 semantics Git cannot express.
 
+Every store mutation follows one transaction boundary: Linka acquires the
+workbench-wide mutation lock, refuses to proceed unless the tracked `.linka/`
+store is clean, performs the complete action, commits it as one Git commit,
+verifies that the store is clean again, and releases the lock. The lock itself
+lives under the workbench repository's `.git/` directory and uses an OS file
+lock, so it never enters a store commit and is released if a process exits.
+Failed writes or commits may leave evidence in the working tree, but that dirty
+state blocks every later mutation until it is explicitly resolved.
+
 Definitions and results are never overwritten as hidden mutable state. Stored
 facts are minimal; readiness, blockers, dependents, provenance, and staleness
 are computed from them.
