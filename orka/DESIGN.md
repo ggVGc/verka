@@ -125,5 +125,6 @@ paths stay in `.orka/`. Linka preserves this verbatim and never interprets it.
 
 ## Configuration
 
-Orka configuration (`orka.toml`) decides the agent command, mounts, network
-policy, and executor backend/image. None of these belong in Linka.
+Orka configuration (`orka.toml`) decides the agent command or Driva template,
+mounts, network policy, and executor backend/image. None of these belong in
+Linka.

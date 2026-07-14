@@ -36,6 +36,18 @@ impl DrivaExecutor {
             image: image.into(),
         }))
     }
+
+    pub fn bwrap(
+        executable: impl Into<std::path::PathBuf>,
+        rootfs: impl Into<std::path::PathBuf>,
+        tmpfs: Vec<std::path::PathBuf>,
+    ) -> Self {
+        Self::new(Box::new(driva::BwrapIsolation {
+            executable: executable.into(),
+            rootfs: rootfs.into(),
+            tmpfs,
+        }))
+    }
 }
 
 impl IsolatedExecutor for DrivaExecutor {

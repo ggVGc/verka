@@ -27,6 +27,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Create a default orka.toml using Driva's codex-exec template.
+    Init,
     /// Run one attempt: the given node, or the first ready one.
     Run {
         /// Node id to run; omitted, the first ready machine-workable node.
@@ -107,6 +109,11 @@ fn parse_node(arg: String) -> Result<NodeId> {
 fn run(cli: Cli) -> Result<()> {
     let workbench = Workbench::locate(cli.workbench)?;
     match cli.command {
+        Command::Init => {
+            let path = workbench.root.join(CONFIG_FILE);
+            Config::init(&path)?;
+            println!("created {}", path.display());
+        }
         Command::Run { node } => {
             let config = workbench.config()?;
             let store = workbench.linka_store()?;
@@ -118,7 +125,7 @@ fn run(cli: Cli) -> Result<()> {
                 executor: &executor,
                 workspaces: &workspaces,
                 attempts: &attempts,
-                policy: config.policy(),
+                policy: config.policy()?,
             };
             let report = match node {
                 Some(arg) => Some(engine.run_node(&parse_node(arg)?)?),
@@ -189,7 +196,7 @@ fn run(cli: Cli) -> Result<()> {
                 executor: &executor,
                 workspaces: &workspaces,
                 attempts: &attempts,
-                policy: config.policy(),
+                policy: config.policy()?,
             };
             let reports = engine.recover()?;
             if reports.is_empty() {

@@ -26,8 +26,26 @@ refused and sealed as such, never silently completed.
 
 ## Use
 
-Run from a Linka workbench (the directory holding `.linka/` and `project/`)
-with an `orka.toml` beside them:
+Run from a Linka workbench (the directory holding `.linka/` and `project/`).
+Create the default configuration beside them with:
+
+```text
+orka init
+```
+
+The generated `orka.toml` selects Driva's non-interactive Codex template:
+
+```toml
+[agent]
+template = "codex-exec"
+```
+
+Install its prepared runtime once with `driva runtime install codex@latest`.
+Orka replaces the template's generic workspace mount with the isolated attempt
+worktree, adds its prompt and outcome exchange mount, and preserves the
+template's rootfs, credential mounts, environment, and network policy.
+
+Literal commands remain available for custom container images:
 
 ```toml
 [agent]
@@ -40,6 +58,7 @@ image = "docker.io/library/busybox:latest"
 
 ```text
 orka ready               list workable nodes
+orka init                create a default orka.toml (never overwrite one)
 orka run [NODE]          run one attempt (first ready node when omitted)
 orka attempts            list recorded attempts
 orka show ATTEMPT        one attempt's durable record
@@ -47,8 +66,8 @@ orka recover             classify and finish unfinished attempts
 ```
 
 The agent command executes inside the isolated environment with the attempt
-worktree mounted writable at `/workspace` and an exchange directory at
-`/orka` (`$ORKA_PROMPT` in, `$ORKA_OUTCOME` out). It declares its outcome by
+worktree mounted writable at `/workspace` and an exchange directory
+(`$ORKA_PROMPT` in, `$ORKA_OUTCOME` out). It declares its outcome by
 writing `outcome.toml`; see `src/outcome.rs` for the contract. Publication of
 an accepted candidate branch into the project checkout is review's decision,
 not Orka's.
