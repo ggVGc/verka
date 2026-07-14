@@ -1,0 +1,22 @@
+[package]
+name = "nota"
+version = "0.1.0"
+edition = "2021"
+description = "Git-native review branches with notes and suggested edits"
+
+[lib]
+name = "nota"
+path = "src/lib.rs"
+
+[[bin]]
+name = "nota"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+linka = { path = "../linka" }
+ulid = "1"
+
+[dev-dependencies]
+tempfile = "3"

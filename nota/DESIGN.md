@@ -1,5 +1,9 @@
 # Nota design
 
+The first implementation is specified by [`PROTOTYPE_V1.md`](PROTOTYPE_V1.md).
+It intentionally tests a smaller Git-native model before the more general
+domain and storage design below is implemented.
+
 ## Purpose
 
 Nota is a standalone review application. It lets a user inspect a review
