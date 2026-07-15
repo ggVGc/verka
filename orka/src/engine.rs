@@ -72,6 +72,34 @@ pub struct RunReport {
     pub cleanup: CleanupOutcome,
 }
 
+/// A visible milestone in a live attempt. The CLI reports these on stderr so
+/// long-running workspace preparation and agent execution do not look hung,
+/// while stdout remains reserved for the final, script-friendly report.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RunProgress {
+    Selected {
+        node: NodeId,
+    },
+    AttemptCreated {
+        attempt: AttemptId,
+    },
+    WorkspacePrepared {
+        attempt: AttemptId,
+    },
+    ExecutionStarted {
+        attempt: AttemptId,
+        transcript: PathBuf,
+    },
+    ExecutionFinished {
+        attempt: AttemptId,
+        exit_code: i32,
+    },
+    Sealed {
+        attempt: AttemptId,
+        state: SealedState,
+    },
+}
+
 /// What recovery did (or could not do) for one attempt.
 #[derive(Clone, Debug)]
 pub struct RecoveryReport {
@@ -84,21 +112,43 @@ pub struct RecoveryReport {
 impl Engine<'_> {
     /// Run the first ready node, if any.
     pub fn run_next(&self) -> Result<Option<RunReport>> {
+        self.run_next_with_progress(&mut |_| {})
+    }
+
+    /// Run the first ready node and report durable lifecycle milestones.
+    pub fn run_next_with_progress(
+        &self,
+        progress: &mut dyn FnMut(&RunProgress),
+    ) -> Result<Option<RunReport>> {
         match self.linka.ready_for_machine()?.into_iter().next() {
-            Some(item) => self.run_node(&item.node).map(Some),
+            Some(item) => self.run_node_with_progress(&item.node, progress).map(Some),
             None => Ok(None),
         }
     }
 
     /// Run one node through a complete attempt.
     pub fn run_node(&self, id: &NodeId) -> Result<RunReport> {
+        self.run_node_with_progress(id, &mut |_| {})
+    }
+
+    /// Run one node through a complete attempt and report lifecycle
+    /// milestones as they happen.
+    pub fn run_node_with_progress(
+        &self,
+        id: &NodeId,
+        progress: &mut dyn FnMut(&RunProgress),
+    ) -> Result<RunReport> {
         if self.policy.command.is_empty() {
             bail!("no agent command configured");
         }
+        progress(&RunProgress::Selected { node: id.clone() });
         // 1–2. Snapshot the Linka work input and durably record the attempt.
         let input = self.linka.prepare_input(id)?;
         let attempt = AttemptId::new();
         self.attempts.create(&attempt, &input)?;
+        progress(&RunProgress::AttemptCreated {
+            attempt: attempt.clone(),
+        });
 
         // 3. Record the workspace plan, then create it at the frozen revision.
         let plan = self.workspaces.plan(&attempt.0, input.input_commit());
@@ -108,6 +158,9 @@ impl Engine<'_> {
             .prepare(&attempt.0, input.input_commit())
             .with_context(|| format!("preparing workspace for {attempt}"))?;
         self.attempts.mark_prepared(&attempt)?;
+        progress(&RunProgress::WorkspacePrepared {
+            attempt: attempt.clone(),
+        });
 
         // 4. Stage the exchange directory and record the exact request.
         let io_dir = self.attempts.io_dir(&attempt)?;
@@ -117,13 +170,24 @@ impl Engine<'_> {
         self.attempts.record_request(&attempt, &spec)?;
 
         // 5. Execute and capture evidence.
-        let report = self
-            .executor
-            .run(&spec, &self.attempts.transcript_path(&attempt))?;
+        let transcript = self.attempts.transcript_path(&attempt);
+        progress(&RunProgress::ExecutionStarted {
+            attempt: attempt.clone(),
+            transcript: transcript.clone(),
+        });
+        let report = self.executor.run(&spec, &transcript)?;
         self.attempts.record_evidence(&attempt, &report)?;
+        progress(&RunProgress::ExecutionFinished {
+            attempt: attempt.clone(),
+            exit_code: report.exit_code,
+        });
 
         // 6–7. Decide from the evidence, submit version-checked, seal.
         let (sealed, backend_failed) = self.settle(&attempt, &input, &workspace, &report)?;
+        progress(&RunProgress::Sealed {
+            attempt: attempt.clone(),
+            state: sealed.clone(),
+        });
         let cleanup = self.workspaces.cleanup(&workspace)?;
         Ok(RunReport {
             attempt,

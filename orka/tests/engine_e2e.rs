@@ -9,7 +9,7 @@ mod common;
 use common::*;
 use linka::Store;
 use orka::attempt::{AttemptId, AttemptPhase, FsAttemptStore, SealedState};
-use orka::engine::{Engine, ExecutionPolicy};
+use orka::engine::{Engine, ExecutionPolicy, RunProgress};
 use orka::executor::{ExecutionReport, ExecutionSpec};
 use orka::fakes::FakeExecutor;
 use orka::linka_work::LinkaWork;
@@ -90,7 +90,22 @@ fn a_full_attempt_lands_a_version_checked_result_from_an_isolated_worktree() {
     let executor = conforming_agent();
     let engine = engine!(&root, store, executor, workspaces, attempts);
 
-    let report = engine.run_next().unwrap().expect("the node is ready");
+    let mut progress = Vec::new();
+    let report = engine
+        .run_next_with_progress(&mut |event| progress.push(event.clone()))
+        .unwrap()
+        .expect("the node is ready");
+    assert!(matches!(
+        &progress[..],
+        [
+            RunProgress::Selected { .. },
+            RunProgress::AttemptCreated { .. },
+            RunProgress::WorkspacePrepared { .. },
+            RunProgress::ExecutionStarted { .. },
+            RunProgress::ExecutionFinished { exit_code: 0, .. },
+            RunProgress::Sealed { .. },
+        ]
+    ));
     assert_eq!(report.node.as_str(), node);
     let SealedState::Submitted { output_commit } = &report.sealed else {
         panic!("expected submission, got {:?}", report.sealed);

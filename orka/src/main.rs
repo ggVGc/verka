@@ -6,7 +6,7 @@ use clap::{Parser, Subcommand};
 use linka::{NodeId, Store};
 use orka::attempt::{AttemptId, FsAttemptStore, SealedState};
 use orka::config::{Config, CONFIG_FILE};
-use orka::engine::{Engine, RunReport};
+use orka::engine::{Engine, RunProgress, RunReport};
 use orka::linka_work::LinkaWork;
 use orka::workspace::GitWorkspaces;
 use std::path::PathBuf;
@@ -127,9 +127,10 @@ fn run(cli: Cli) -> Result<()> {
                 attempts: &attempts,
                 policy: config.policy()?,
             };
+            let mut progress = print_progress;
             let report = match node {
-                Some(arg) => Some(engine.run_node(&parse_node(arg)?)?),
-                None => engine.run_next()?,
+                Some(arg) => Some(engine.run_node_with_progress(&parse_node(arg)?, &mut progress)?),
+                None => engine.run_next_with_progress(&mut progress)?,
             };
             match report {
                 None => println!("nothing ready"),
@@ -218,6 +219,31 @@ fn print_run(report: &RunReport) {
         println!("warning: the agent command exited nonzero; its outcome was still handled");
     }
     println!("cleanup {:?}", report.cleanup);
+}
+
+fn print_progress(progress: &RunProgress) {
+    match progress {
+        RunProgress::Selected { node } => eprintln!("[orka] selected node {node}"),
+        RunProgress::AttemptCreated { attempt } => {
+            eprintln!("[orka] created {attempt}")
+        }
+        RunProgress::WorkspacePrepared { attempt } => {
+            eprintln!("[orka] {attempt}: workspace prepared")
+        }
+        RunProgress::ExecutionStarted {
+            attempt,
+            transcript,
+        } => eprintln!(
+            "[orka] {attempt}: agent running (transcript: {})",
+            transcript.display()
+        ),
+        RunProgress::ExecutionFinished { attempt, exit_code } => {
+            eprintln!("[orka] {attempt}: agent exited with code {exit_code}")
+        }
+        RunProgress::Sealed { attempt, state } => {
+            eprintln!("[orka] {attempt}: {}", seal_line(state))
+        }
+    }
 }
 
 fn seal_line(state: &SealedState) -> String {
