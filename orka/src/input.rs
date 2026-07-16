@@ -19,6 +19,11 @@ use serde::{Deserialize, Serialize};
 pub struct AttemptInput {
     /// Linka's frozen, version-checked work input. Authoritative for submission.
     pub snapshot: WorkSnapshot,
+    /// Named project branch this attempt proposes to integrate into. Older
+    /// durable attempts may not carry it; recovery then uses the current
+    /// project branch.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub target_branch: String,
     /// The node's definition prose, as shown to the agent.
     pub description: String,
     /// Completed dependencies (`depends_on`), presented as prompt context.
@@ -75,6 +80,7 @@ pub(crate) fn sample_input(node: &str) -> AttemptInput {
             },
             previous_result: None,
         },
+        target_branch: "main".into(),
         description: "Do the thing".into(),
         dependency_context: vec![],
         lineage_context: vec![],

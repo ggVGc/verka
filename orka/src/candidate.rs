@@ -1,84 +1,82 @@
-//! Inspection and publication of project candidates produced by attempts.
+//! Orka presentation over Linka's first-class candidate protocol.
 //!
-//! An attempt branch becomes a candidate when its head moves beyond the
-//! frozen input commit. Durable attempt metadata ties it to its source node.
+//! Linka owns candidate identity, decisions, and recoverable publication.
+//! Orka adds attempt-oriented lookup and patch display, but stores no duplicate
+//! candidate state and performs no publication side effect itself.
 
-use crate::attempt::{AttemptId, FsAttemptStore, SealedState};
-use crate::linka_work::LinkaWork;
+use crate::attempt::AttemptId;
 use anyhow::{bail, Context, Result};
-use linka::{ops, GitVcs, NodeId, Outcome, StalenessReason, Store};
-use std::path::{Path, PathBuf};
+use linka::{
+    Author, CandidateId, CandidateStore, CandidateView, DecisionKind, GitVcs, IntegrationStatus,
+    Store,
+};
+use std::path::Path;
 use std::process::Command;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct Candidate {
-    pub attempt: AttemptId,
-    pub node: NodeId,
+    pub id: CandidateId,
+    pub attempt: Option<AttemptId>,
+    pub node: linka::NodeId,
     pub branch: String,
+    pub target: String,
     pub input_commit: String,
     pub head_commit: String,
-    pub disposition: CandidateDisposition,
+    pub integration: IntegrationStatus,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum CandidateDisposition {
-    Publishable,
-    Published,
-    NotPublishable(String),
-}
-
-impl CandidateDisposition {
-    pub fn label(&self) -> &str {
-        match self {
-            Self::Publishable => "publishable",
-            Self::Published => "published",
-            Self::NotPublishable(reason) => reason,
+impl Candidate {
+    pub fn status(&self) -> &'static str {
+        match self.integration {
+            IntegrationStatus::Pending => "pending",
+            IntegrationStatus::Accepted => "accepted",
+            IntegrationStatus::Published => "published",
+            IntegrationStatus::Rejected => "rejected",
+            IntegrationStatus::NotRequired => "direct",
         }
     }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum PublishOutcome {
-    Published { commit: String },
-    AlreadyPublished { commit: String },
 }
 
 pub struct Candidates<'a> {
     store: &'a Store,
-    attempts: &'a FsAttemptStore,
-    project: PathBuf,
 }
 
 impl<'a> Candidates<'a> {
-    pub fn new(store: &'a Store, attempts: &'a FsAttemptStore) -> Self {
-        Self {
-            project: store.project_root(),
-            store,
-            attempts,
-        }
+    pub fn new(store: &'a Store) -> Self {
+        Self { store }
     }
 
-    /// List attempt branches that contain project work beyond their input.
     pub fn list(&self) -> Result<Vec<Candidate>> {
-        let mut candidates = Vec::new();
-        for id in self.attempts.list()? {
-            if let Some(candidate) = self.load_candidate(&id)? {
-                candidates.push(candidate);
-            }
-        }
-        Ok(candidates)
+        let candidates = CandidateStore::new(self.store);
+        candidates
+            .list()?
+            .into_iter()
+            .map(|id| candidates.load(&id).and_then(Self::present))
+            .collect()
     }
 
-    pub fn get(&self, id: &AttemptId) -> Result<Candidate> {
-        self.load_candidate(id)?
-            .with_context(|| format!("attempt `{id}` produced no project candidate"))
+    /// Resolve either Linka's candidate id or Orka's producing attempt id.
+    pub fn get(&self, reference: &str) -> Result<Candidate> {
+        let candidates = CandidateStore::new(self.store);
+        let view = if reference.starts_with("candidate-") {
+            candidates.load(&CandidateId(reference.to_string()))?
+        } else {
+            let external = linka::ExternalIdentity {
+                namespace: "orka".into(),
+                id: reference.to_string(),
+            };
+            let record = candidates.by_external(&external)?.with_context(|| {
+                format!("no Linka candidate belongs to Orka attempt `{reference}`")
+            })?;
+            candidates.load(&record.id)?
+        };
+        Self::present(view)
     }
 
-    /// Render the candidate's patch relative to its frozen project input.
-    pub fn patch(&self, id: &AttemptId) -> Result<String> {
-        let candidate = self.get(id)?;
+    pub fn patch(&self, reference: &str) -> Result<String> {
+        let candidate = self.get(reference)?;
         checked(
-            &self.project,
+            &self.store.project_root(),
             &[
                 "diff",
                 "--find-renames",
@@ -88,145 +86,76 @@ impl<'a> Candidates<'a> {
         )
     }
 
-    /// Fast-forward an accepted candidate into the checked-out project branch.
-    pub fn publish(&self, id: &AttemptId) -> Result<PublishOutcome> {
-        let candidate = self.get(id)?;
-        let snapshot = self.attempts.load(id)?;
-        let expected_output = match snapshot.seal.as_ref().map(|seal| &seal.state) {
-            Some(SealedState::Submitted {
-                output_commit: Some(commit),
-            }) => commit,
-            Some(state) => bail!("candidate `{id}` is not an accepted project result ({state:?})"),
-            None => bail!("candidate `{id}` belongs to an unfinished attempt"),
-        };
-        if candidate.head_commit != *expected_output {
-            bail!(
-                "candidate branch `{}` moved to {}, expected accepted output {}",
-                candidate.branch,
-                candidate.head_commit,
-                expected_output
-            );
-        }
-
-        let recorded = LinkaWork::new(self.store)
-            .result_by_attempt(&candidate.node, &id.0)?
-            .with_context(|| {
-                format!(
-                    "candidate `{id}` is no longer the recorded result for node `{}`",
-                    candidate.node
-                )
-            })?;
-        if recorded.outcome != Outcome::Done
-            || recorded.output_commit.as_deref() != Some(expected_output.as_str())
-        {
-            bail!(
-                "candidate `{id}` does not match node `{}`'s current successful result",
-                candidate.node
-            );
-        }
-
-        let vcs = GitVcs::for_store(self.store);
-        let state = ops::node_state(self.store, &vcs, candidate.node.as_str())?;
-        if state.is_complete() {
-            return Ok(PublishOutcome::AlreadyPublished {
-                commit: expected_output.clone(),
-            });
-        }
-        if state
-            .staleness
-            .iter()
-            .any(|reason| !matches!(reason, StalenessReason::OutputDrifted { .. }))
-        {
-            bail!(
-                "node `{}` changed beyond candidate output drift; inspect `linka show {}`",
-                candidate.node,
-                candidate.node
-            );
-        }
-        if !checked(&self.project, &["status", "--porcelain"])?.is_empty() {
-            bail!("project checkout is dirty; commit or stash its changes before publishing");
-        }
-        let head = checked(&self.project, &["rev-parse", "HEAD"])?;
-        if head != candidate.input_commit {
-            bail!(
-                "project HEAD moved from candidate input {} to {}; reconcile the candidate explicitly",
-                candidate.input_commit,
-                head
-            );
-        }
-        checked(&self.project, &["symbolic-ref", "--quiet", "HEAD"])
-            .context("project HEAD is detached; check out the branch to publish into")?;
-        checked(&self.project, &["merge", "--ff-only", expected_output])?;
-
-        let state = ops::node_state(self.store, &vcs, candidate.node.as_str())?;
-        if !state.is_complete() {
-            bail!(
-                "published {} but node `{}` is still not complete; inspect `linka show {}`",
-                expected_output,
-                candidate.node,
-                candidate.node
-            );
-        }
-        Ok(PublishOutcome::Published {
-            commit: expected_output.clone(),
-        })
+    pub fn accept(&self, reference: &str, notes: String) -> Result<Candidate> {
+        let candidate = self.get(reference)?;
+        CandidateStore::new(self.store).accept(
+            &GitVcs::for_store(self.store),
+            &candidate.id,
+            Author::Human,
+            notes,
+        )?;
+        self.get(&candidate.id.0)
     }
 
-    fn load_candidate(&self, id: &AttemptId) -> Result<Option<Candidate>> {
-        let snapshot = self.attempts.load(id)?;
-        let Some(workspace) = &snapshot.workspace else {
-            return Ok(None);
-        };
-        let branch_ref = format!("refs/heads/{}", workspace.branch);
-        let head = checked(
-            &self.project,
-            &["rev-parse", "--verify", &format!("{branch_ref}^{{commit}}")],
-        )
-        .with_context(|| {
-            format!(
-                "attempt `{id}` candidate branch `{}` is missing",
-                workspace.branch
-            )
-        })?;
-        if head == workspace.input_commit {
-            return Ok(None);
+    pub fn reject(&self, reference: &str, notes: String) -> Result<Candidate> {
+        let candidate = self.get(reference)?;
+        CandidateStore::new(self.store).reject(
+            &GitVcs::for_store(self.store),
+            &candidate.id,
+            Author::Human,
+            notes,
+        )?;
+        self.get(&candidate.id.0)
+    }
+
+    pub fn publish(&self, reference: &str) -> Result<Candidate> {
+        let candidate = self.get(reference)?;
+        CandidateStore::new(self.store).publish(&GitVcs::for_store(self.store), &candidate.id)?;
+        self.get(&candidate.id.0)
+    }
+
+    pub fn recover_publications(&self) -> Result<Vec<CandidateId>> {
+        let candidates = CandidateStore::new(self.store);
+        let vcs = GitVcs::for_store(self.store);
+        let mut recovered = Vec::new();
+        for id in candidates.list()? {
+            let view = candidates.load(&id)?;
+            if view
+                .publication
+                .as_ref()
+                .is_some_and(|publication| publication.completed_at_ms.is_none())
+            {
+                candidates.recover_publication(&vcs, &id)?;
+                recovered.push(id);
+            }
         }
-        let node = snapshot.record.input.node().clone();
-        let disposition = match snapshot.seal.as_ref().map(|seal| &seal.state) {
-            Some(SealedState::Submitted {
-                output_commit: Some(output),
-            }) if output == &head => {
-                let vcs = GitVcs::for_store(self.store);
-                let state = ops::node_state(self.store, &vcs, node.as_str())?;
-                if state.is_complete() {
-                    CandidateDisposition::Published
-                } else if LinkaWork::new(self.store)
-                    .result_by_attempt(&node, &id.0)?
-                    .is_some()
-                    && state
-                        .staleness
-                        .iter()
-                        .all(|reason| matches!(reason, StalenessReason::OutputDrifted { .. }))
-                {
-                    CandidateDisposition::Publishable
-                } else {
-                    CandidateDisposition::NotPublishable("superseded-or-node-changed".into())
-                }
+        Ok(recovered)
+    }
+
+    fn present(view: CandidateView) -> Result<Candidate> {
+        let attempt = view
+            .candidate
+            .external
+            .as_ref()
+            .filter(|external| external.namespace == "orka")
+            .map(|external| AttemptId(external.id.clone()));
+        let integration = view.integration();
+        let record = view.candidate;
+        if let Some(decision) = &view.decision {
+            if decision.kind == DecisionKind::Accepted && decision.target_ref.is_none() {
+                bail!("accepted candidate `{}` has no target", record.id);
             }
-            Some(SealedState::StaleAtSubmit { .. }) => {
-                CandidateDisposition::NotPublishable("stale-at-submit".into())
-            }
-            Some(state) => CandidateDisposition::NotPublishable(format!("{:?}", state)),
-            None => CandidateDisposition::NotPublishable("unfinished".into()),
-        };
-        Ok(Some(Candidate {
-            attempt: id.clone(),
-            node,
-            branch: workspace.branch.clone(),
-            input_commit: workspace.input_commit.clone(),
-            head_commit: head,
-            disposition,
-        }))
+        }
+        Ok(Candidate {
+            id: record.id,
+            attempt,
+            node: record.node,
+            branch: record.branch,
+            target: record.target,
+            input_commit: record.input_commit,
+            head_commit: record.artifact.id,
+            integration,
+        })
     }
 }
 

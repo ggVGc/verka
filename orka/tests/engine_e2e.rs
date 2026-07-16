@@ -9,7 +9,7 @@ mod common;
 use common::*;
 use linka::Store;
 use orka::attempt::{AttemptId, AttemptPhase, FsAttemptStore, SealedState};
-use orka::candidate::{CandidateDisposition, Candidates, PublishOutcome};
+use orka::candidate::Candidates;
 use orka::engine::{Engine, ExecutionPolicy, RunProgress};
 use orka::executor::{ExecutionReport, ExecutionSpec};
 use orka::fakes::FakeExecutor;
@@ -157,35 +157,36 @@ fn a_full_attempt_lands_a_version_checked_result_from_an_isolated_worktree() {
     );
 
     // Orka exposes the candidate with its source node and its complete patch.
-    let candidates = Candidates::new(&store, &attempts);
+    let candidates = Candidates::new(&store);
     let listed = candidates.list().unwrap();
     assert_eq!(listed.len(), 1);
-    assert_eq!(listed[0].attempt, report.attempt);
+    assert_eq!(listed[0].attempt.as_ref(), Some(&report.attempt));
     assert_eq!(listed[0].node.as_str(), node);
-    assert_eq!(listed[0].disposition, CandidateDisposition::Publishable);
+    assert_eq!(listed[0].integration, linka::IntegrationStatus::Pending);
+    assert_eq!(report.candidate.as_ref(), Some(&listed[0].id));
     assert!(candidates
-        .patch(&report.attempt)
+        .patch(&report.attempt.0)
         .unwrap()
         .contains("greeting.txt"));
 
-    // Publication refuses to trample a dirty human checkout.
-    let error = candidates.publish(&report.attempt).unwrap_err();
+    // Acceptance is durable and separate from publication. Publication then
+    // refuses to trample a dirty human checkout.
+    let accepted = candidates
+        .accept(&listed[0].id.0, "looks good".into())
+        .unwrap();
+    assert_eq!(accepted.integration, linka::IntegrationStatus::Accepted);
+    let error = candidates.publish(&listed[0].id.0).unwrap_err();
     assert!(error.to_string().contains("checkout is dirty"), "{error:#}");
 
     // A human accepts through Orka. The node is then complete and no machine
     // work is ready; repeating publication is harmless.
     std::fs::remove_file(project.join("wip.txt")).unwrap();
+    let published = candidates.publish(&listed[0].id.0).unwrap();
+    assert_eq!(published.integration, linka::IntegrationStatus::Published);
+    assert_eq!(published.head_commit, output);
     assert_eq!(
-        candidates.publish(&report.attempt).unwrap(),
-        PublishOutcome::Published {
-            commit: output.clone()
-        }
-    );
-    assert_eq!(
-        candidates.publish(&report.attempt).unwrap(),
-        PublishOutcome::AlreadyPublished {
-            commit: output.clone()
-        }
+        candidates.publish(&listed[0].id.0).unwrap().integration,
+        linka::IntegrationStatus::Published
     );
     assert!(linka::ops::node_state(&store, &vcs, &node)
         .unwrap()
@@ -328,17 +329,15 @@ fn an_attempt_against_a_graph_that_moved_mid_run_seals_stale() {
     assert!(!conflicts.is_empty());
     assert!(store.read_result(&node).unwrap().is_none());
 
-    // Its committed branch remains visible and tied to the source node, but
-    // cannot be published because Linka rejected the submission.
-    let candidates = Candidates::new(&store, &attempts);
-    let candidate = candidates.get(&report.attempt).unwrap();
-    assert_eq!(candidate.node.as_str(), node);
-    assert_eq!(
-        candidate.disposition,
-        CandidateDisposition::NotPublishable("stale-at-submit".into())
+    // Linka records no candidate for a result it rejected. The attempt and
+    // retained branch remain Orka evidence for inspection/recovery.
+    let candidates = Candidates::new(&store);
+    assert!(candidates.list().unwrap().is_empty());
+    let error = candidates.get(&report.attempt.0).unwrap_err();
+    assert!(
+        error.to_string().contains("no Linka candidate"),
+        "{error:#}"
     );
-    let error = candidates.publish(&report.attempt).unwrap_err();
-    assert!(error.to_string().contains("not an accepted"), "{error:#}");
 }
 
 #[test]
@@ -403,8 +402,8 @@ fn recovery_settles_an_executed_attempt_and_a_second_pass_duplicates_nothing() {
 #[test]
 fn recovery_after_linka_accepted_but_before_seal_recognizes_its_own_result() {
     // The crash window: Linka accepted the result but Orka never sealed. The
-    // node is now complete, so a naive resubmit would look stale — recovery
-    // must instead recognize its own accepted result (by producer evidence).
+    // A naive resubmit would conflict. Recovery must recognize its own result
+    // and finish the missing Linka candidate registration before sealing.
     let (_temp, root) = workbench();
     let node = add_node(&root, "Accepted then crashed", vec![]);
     let (store, workspaces, attempts) = parts(&root);
@@ -418,10 +417,11 @@ fn recovery_after_linka_accepted_but_before_seal_recognizes_its_own_result() {
     let ws = workspaces_prepare(&root, &id, input.input_commit());
     attempts.plan_workspace(&id, &ws).unwrap();
     attempts.mark_prepared(&id).unwrap();
+    std::fs::write(ws.path.join("out.txt"), "recovered output\n").unwrap();
     let io = attempts.io_dir(&id).unwrap();
     std::fs::write(
         io.join("outcome.toml"),
-        "outcome = \"succeeded\"\nnotes = \"done\"\n",
+        "outcome = \"succeeded\"\noutputs = [\"out.txt\"]\nnotes = \"done\"\n",
     )
     .unwrap();
     let evidence = ExecutionReport {
@@ -433,13 +433,13 @@ fn recovery_after_linka_accepted_but_before_seal_recognizes_its_own_result() {
     };
     attempts.record_evidence(&id, &evidence).unwrap();
 
-    // Linka accepts the (graph-only) result, attributed to this attempt — then
-    // "the crash" happens before Orka seals.
+    // Linka accepts and captures the result, attributed to this attempt — then
+    // "the crash" happens before candidate registration and Orka sealing.
     linka
         .submit_success(
             &input,
             &ws.path,
-            &[],
+            &["out.txt".parse().unwrap()],
             None,
             "done".into(),
             orka::linka_work::producer_evidence(&id, &evidence),
@@ -453,6 +453,9 @@ fn recovery_after_linka_accepted_but_before_seal_recognizes_its_own_result() {
         "recovery recognized its own accepted result: {:?}",
         reports[0].sealed
     );
+    let candidate = Candidates::new(&store).get(&id.0).unwrap();
+    assert_eq!(candidate.node.as_str(), node);
+    assert_eq!(candidate.integration, linka::IntegrationStatus::Pending);
 }
 
 #[test]

@@ -16,8 +16,8 @@ use crate::input::{AttemptInput, DependencyContext};
 use anyhow::{Context, Result};
 use linka::ops::{self, SubmissionError};
 use linka::{
-    Author, ConsumedNode, GitVcs, NodeId, Outcome, ProducerEvidence, ProjectPath, Store,
-    SubmissionConflict,
+    Author, BranchStore, CandidateId, CandidateStore, ConsumedNode, ExternalIdentity, GitVcs,
+    NewCandidate, NodeId, Outcome, ProducerEvidence, ProjectPath, Store, SubmissionConflict,
 };
 use std::path::{Path, PathBuf};
 
@@ -94,11 +94,15 @@ impl<'a> LinkaWork<'a> {
         let vcs = self.vcs();
         let snapshot = ops::snapshot_work(self.store, &vcs, node.as_str(), &[])
             .with_context(|| format!("snapshotting `{node}`"))?;
+        let target_branch = vcs
+            .current_branch()?
+            .context("project HEAD is detached; check out a target branch before running Orka")?;
         let (_, description) = self.store.read_node(node.as_str())?;
         let dependency_context = self.context_for(&snapshot.dependencies)?;
         let lineage_context = self.context_for(&snapshot.lineage)?;
         Ok(AttemptInput {
             snapshot,
+            target_branch,
             description,
             dependency_context,
             lineage_context,
@@ -153,6 +157,49 @@ impl<'a> LinkaWork<'a> {
     /// Submit a successful attempt against its persisted snapshot: capture the
     /// declared outputs in the execution worktree and record the result. A
     /// graph conflict records nothing and is returned as [`Settled::Conflict`].
+    pub fn submit_candidate_success(
+        &self,
+        input: &AttemptInput,
+        workspace: &crate::workspace::PreparedWorkspace,
+        attempt: &AttemptId,
+        outputs: &[ProjectPath],
+        message: Option<String>,
+        notes: String,
+        producer: ProducerEvidence,
+    ) -> Result<(Settled, Option<CandidateId>)> {
+        let vcs = self.vcs_at(&workspace.path);
+        let settled = classify(ops::capture_submission(
+            self.store,
+            &vcs,
+            input.snapshot.clone(),
+            outputs,
+            message,
+            Outcome::Done,
+            notes,
+            Author::Machine,
+            Some(producer.clone()),
+        ))?;
+        match settled {
+            Settled::Accepted {
+                output_commit: Some(output_commit),
+                ..
+            } => {
+                let candidate =
+                    self.register_candidate(input, workspace, attempt, producer, &output_commit)?;
+                Ok((
+                    Settled::Accepted {
+                        output_commit: Some(output_commit),
+                    },
+                    Some(candidate),
+                ))
+            }
+            accepted => Ok((accepted, None)),
+        }
+    }
+
+    /// Submit success without registering a candidate. This remains useful for
+    /// graph-only work and non-orchestrator callers; Orka's engine uses
+    /// [`submit_candidate_success`] for project-producing attempts.
     pub fn submit_success(
         &self,
         input: &AttemptInput,
@@ -174,6 +221,49 @@ impl<'a> LinkaWork<'a> {
             Author::Machine,
             Some(producer),
         ))
+    }
+
+    /// Idempotently attach an accepted project output to Linka's candidate
+    /// protocol. The Orka attempt is an opaque external identity; Linka never
+    /// interprets it.
+    pub fn register_candidate(
+        &self,
+        input: &AttemptInput,
+        workspace: &crate::workspace::PreparedWorkspace,
+        attempt: &AttemptId,
+        producer: ProducerEvidence,
+        output_commit: &str,
+    ) -> Result<CandidateId> {
+        let target = if input.target_branch.is_empty() {
+            self.vcs()
+                .current_branch()?
+                .context("cannot recover candidate without a checked-out target branch")?
+        } else {
+            input.target_branch.clone()
+        };
+        let candidate = CandidateStore::new(self.store).register(
+            &self.vcs(),
+            NewCandidate {
+                node: input.node().clone(),
+                branch: workspace.branch.clone(),
+                input_commit: input.input_commit().to_string(),
+                target,
+                external: Some(ExternalIdentity {
+                    namespace: "orka".into(),
+                    id: attempt.0.clone(),
+                }),
+                producer: Some(producer),
+            },
+        )?;
+        if candidate.artifact.id != output_commit {
+            anyhow::bail!(
+                "Linka candidate {} records {}, expected {}",
+                candidate.id,
+                candidate.artifact.id,
+                output_commit
+            );
+        }
+        Ok(candidate.id)
     }
 
     /// Record a failed attempt against its persisted snapshot. Faithful failure

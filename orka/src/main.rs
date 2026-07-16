@@ -5,7 +5,7 @@ use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use linka::{NodeId, Store};
 use orka::attempt::{AttemptId, FsAttemptStore, SealedState};
-use orka::candidate::{Candidates, PublishOutcome};
+use orka::candidate::Candidates;
 use orka::config::{Config, CONFIG_FILE};
 use orka::engine::{Engine, RunProgress, RunReport};
 use orka::linka_work::LinkaWork;
@@ -43,10 +43,22 @@ enum Command {
     Show { attempt: String },
     /// List project candidates and the Linka nodes that produced them.
     Candidates,
-    /// Show a candidate's source node, branch, commits, and patch.
-    Candidate { attempt: String },
-    /// Fast-forward the project checkout to an accepted candidate.
-    Publish { attempt: String },
+    /// Show a Linka candidate (candidate id or producing attempt id).
+    Candidate { candidate: String },
+    /// Accept an exact Linka candidate for its recorded target branch.
+    Accept {
+        candidate: String,
+        #[arg(long, default_value = "")]
+        notes: String,
+    },
+    /// Reject a Linka candidate and make its source node retryable.
+    Reject {
+        candidate: String,
+        #[arg(long)]
+        notes: String,
+    },
+    /// Publish an accepted candidate by recoverable fast-forward.
+    Publish { candidate: String },
     /// Classify unfinished attempts and finish what can be finished.
     Recover,
 }
@@ -193,53 +205,68 @@ fn run(cli: Cli) -> Result<()> {
             if transcript.exists() {
                 println!("transcript {}", transcript.display());
             }
+            let store = workbench.linka_store()?;
+            if let Ok(candidate) = Candidates::new(&store).get(&id.0) {
+                println!("linka     {} ({})", candidate.id, candidate.status());
+            }
         }
         Command::Candidates => {
             let store = workbench.linka_store()?;
-            let attempts = workbench.attempts();
-            let candidates = Candidates::new(&store, &attempts).list()?;
+            let candidates = Candidates::new(&store).list()?;
             if candidates.is_empty() {
                 println!("no project candidates");
             }
             for candidate in candidates {
                 println!(
-                    "{}  node {}  {}  {}",
-                    candidate.attempt,
+                    "{}  node {}  {}  {} -> {}{}",
+                    candidate.id,
                     candidate.node,
-                    candidate.disposition.label(),
-                    candidate.branch
+                    candidate.status(),
+                    candidate.branch,
+                    candidate.target,
+                    candidate
+                        .attempt
+                        .as_ref()
+                        .map(|attempt| format!("  attempt {attempt}"))
+                        .unwrap_or_default()
                 );
             }
         }
-        Command::Candidate { attempt } => {
+        Command::Candidate { candidate } => {
             let store = workbench.linka_store()?;
-            let attempts = workbench.attempts();
-            let candidates = Candidates::new(&store, &attempts);
-            let id = AttemptId(attempt);
-            let candidate = candidates.get(&id)?;
-            println!("candidate {}", candidate.attempt);
+            let candidates = Candidates::new(&store);
+            let candidate = candidates.get(&candidate)?;
+            println!("candidate {}", candidate.id);
             println!("node      {}", candidate.node);
-            println!("status    {}", candidate.disposition.label());
+            println!("status    {}", candidate.status());
             println!("branch    {}", candidate.branch);
+            println!("target    {}", candidate.target);
             println!("input     {}", candidate.input_commit);
             println!("head      {}", candidate.head_commit);
-            let patch = candidates.patch(&id)?;
+            if let Some(attempt) = &candidate.attempt {
+                println!("attempt   {attempt}");
+            }
+            let patch = candidates.patch(&candidate.id.0)?;
             if patch.is_empty() {
                 println!("\n(no diff)");
             } else {
                 println!("\n{patch}");
             }
         }
-        Command::Publish { attempt } => {
+        Command::Accept { candidate, notes } => {
             let store = workbench.linka_store()?;
-            let attempts = workbench.attempts();
-            let id = AttemptId(attempt);
-            match Candidates::new(&store, &attempts).publish(&id)? {
-                PublishOutcome::Published { commit } => println!("published {id} at {commit}"),
-                PublishOutcome::AlreadyPublished { commit } => {
-                    println!("candidate {id} is already published at {commit}")
-                }
-            }
+            let accepted = Candidates::new(&store).accept(&candidate, notes)?;
+            println!("accepted {} for {}", accepted.id, accepted.target);
+        }
+        Command::Reject { candidate, notes } => {
+            let store = workbench.linka_store()?;
+            let rejected = Candidates::new(&store).reject(&candidate, notes)?;
+            println!("rejected {}", rejected.id);
+        }
+        Command::Publish { candidate } => {
+            let store = workbench.linka_store()?;
+            let published = Candidates::new(&store).publish(&candidate)?;
+            println!("published {} at {}", published.id, published.head_commit);
         }
         Command::Recover => {
             let config = workbench.config()?;
@@ -255,6 +282,9 @@ fn run(cli: Cli) -> Result<()> {
                 policy: config.policy()?,
             };
             let reports = engine.recover()?;
+            for candidate in Candidates::new(&store).recover_publications()? {
+                println!("{candidate}  recovered publication");
+            }
             if reports.is_empty() {
                 println!("no attempts recorded");
             }
@@ -270,17 +300,10 @@ fn print_run(report: &RunReport) {
     println!("attempt {}  node {}", report.attempt, report.node);
     println!("exit    {}", report.exit_code);
     println!("sealed  {}", seal_line(&report.sealed));
-    if matches!(
-        report.sealed,
-        SealedState::Submitted {
-            output_commit: Some(_)
-        }
-    ) {
+    if let Some(candidate) = &report.candidate {
         println!(
-            "candidate {}  (view: `orka candidate {}`; publish: `orka publish {}`)",
-            orka::workspace::GitWorkspaces::branch_for(&report.attempt.0),
-            report.attempt,
-            report.attempt
+            "candidate {}  (view: `orka candidate {}`; accept: `orka accept {}`; publish: `orka publish {}`)",
+            candidate, candidate, candidate, candidate
         );
     }
     if report.backend_failed {

@@ -64,6 +64,7 @@ pub struct Engine<'a> {
 pub struct RunReport {
     pub attempt: AttemptId,
     pub node: NodeId,
+    pub candidate: Option<linka::CandidateId>,
     pub sealed: SealedState,
     pub exit_code: i32,
     /// The command exited nonzero even though an outcome was declared and
@@ -183,7 +184,8 @@ impl Engine<'_> {
         });
 
         // 6–7. Decide from the evidence, submit version-checked, seal.
-        let (sealed, backend_failed) = self.settle(&attempt, &input, &workspace, &report)?;
+        let (sealed, backend_failed, candidate) =
+            self.settle(&attempt, &input, &workspace, &report)?;
         progress(&RunProgress::Sealed {
             attempt: attempt.clone(),
             state: sealed.clone(),
@@ -192,6 +194,7 @@ impl Engine<'_> {
         Ok(RunReport {
             attempt,
             node: id.clone(),
+            candidate,
             sealed,
             exit_code: report.exit_code,
             backend_failed,
@@ -259,7 +262,7 @@ impl Engine<'_> {
         input: &AttemptInput,
         workspace: &PreparedWorkspace,
         report: &ExecutionReport,
-    ) -> Result<(SealedState, bool)> {
+    ) -> Result<(SealedState, bool, Option<linka::CandidateId>)> {
         let declared = outcome::read_declared(&self.attempts.io_dir(attempt)?)?;
         match outcome::decide(declared, report.exit_code) {
             Decision::Submit {
@@ -271,6 +274,18 @@ impl Engine<'_> {
                 // it rather than resubmitting into a now-complete (and so
                 // stale-looking) node.
                 if let Some(recorded) = self.linka.result_by_attempt(input.node(), &attempt.0)? {
+                    let candidate = match (&recorded.outcome, &recorded.output_commit) {
+                        (linka::Outcome::Done, Some(output)) => {
+                            Some(self.linka.register_candidate(
+                                input,
+                                workspace,
+                                attempt,
+                                linka_work::producer_evidence(attempt, report),
+                                output,
+                            )?)
+                        }
+                        _ => None,
+                    };
                     let sealed = match recorded.outcome {
                         linka::Outcome::Done => SealedState::Submitted {
                             output_commit: recorded.output_commit,
@@ -278,10 +293,10 @@ impl Engine<'_> {
                         linka::Outcome::Failed => SealedState::FailureRecorded,
                     };
                     self.attempts.seal(attempt, sealed.clone())?;
-                    return Ok((sealed, backend_failed));
+                    return Ok((sealed, backend_failed, candidate));
                 }
                 let producer = linka_work::producer_evidence(attempt, report);
-                let (settled, succeeded) = match outcome {
+                let (settled, succeeded, candidate) = match outcome {
                     AgentOutcome::Succeeded {
                         outputs,
                         message,
@@ -304,24 +319,19 @@ impl Engine<'_> {
                                     reason: format!("{error:#}"),
                                 };
                                 self.attempts.seal(attempt, sealed.clone())?;
-                                return Ok((sealed, backend_failed));
+                                return Ok((sealed, backend_failed, None));
                             }
                         };
-                        let settled = self.linka.submit_success(
-                            input,
-                            &workspace.path,
-                            &outputs,
-                            message,
-                            notes,
-                            producer,
+                        let (settled, candidate) = self.linka.submit_candidate_success(
+                            input, workspace, attempt, &outputs, message, notes, producer,
                         )?;
-                        (settled, true)
+                        (settled, true, candidate)
                     }
                     AgentOutcome::Failed { notes } => {
                         let settled =
                             self.linka
                                 .submit_failure(input, &workspace.path, notes, producer)?;
-                        (settled, false)
+                        (settled, false, None)
                     }
                 };
                 let sealed = match settled {
@@ -332,17 +342,17 @@ impl Engine<'_> {
                     Settled::Conflict(conflicts) => SealedState::StaleAtSubmit { conflicts },
                 };
                 self.attempts.seal(attempt, sealed.clone())?;
-                Ok((sealed, backend_failed))
+                Ok((sealed, backend_failed, candidate))
             }
             Decision::ContractViolation { reason } => {
                 let sealed = SealedState::ContractViolation { reason };
                 self.attempts.seal(attempt, sealed.clone())?;
-                Ok((sealed, false))
+                Ok((sealed, false, None))
             }
             Decision::Interrupted { reason } => {
                 let sealed = SealedState::Interrupted { reason };
                 self.attempts.seal(attempt, sealed.clone())?;
-                Ok((sealed, false))
+                Ok((sealed, false, None))
             }
         }
     }
@@ -371,7 +381,7 @@ impl Engine<'_> {
                         .clone()
                         .context("executed attempt has no recorded workspace")?;
                     match self.settle(&id, &snapshot.record.input, &workspace, &evidence) {
-                        Ok((sealed, _)) => {
+                        Ok((sealed, _, _)) => {
                             let cleanup = self.recover_cleanup(Some(&workspace))?;
                             RecoveryReport {
                                 attempt: id,

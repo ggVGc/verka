@@ -14,7 +14,7 @@ select Linka-ready node ──► snapshot Linka work input ──► record att
       ──► prepare worktree (orka/attempts/<id> branch at the frozen revision)
       ──► record request ──► run agent via Driva (podman/docker, deny-by-default)
       ──► capture transcript + exit evidence ──► read declared outcome
-      ──► version-checked submit to Linka ──► seal ──► clean up (never dirty trees)
+      ──► version-checked submit + Linka candidate ──► seal ──► clean up
 ```
 
 The attempt durably stores Linka's exact `WorkSnapshot`, and success or failure
@@ -63,8 +63,10 @@ orka run [NODE]          run one attempt (first ready node when omitted)
 orka attempts            list recorded attempts
 orka show ATTEMPT        one attempt's durable record
 orka candidates          list project candidates with their source nodes
-orka candidate ATTEMPT   show a candidate and its patch
-orka publish ATTEMPT     safely fast-forward an accepted candidate
+orka candidate CANDIDATE show a candidate and its patch
+orka accept CANDIDATE    record exact acceptance in Linka
+orka reject CANDIDATE    reject it and make its source retryable
+orka publish CANDIDATE   recoverably fast-forward the recorded target
 orka recover             classify and finish unfinished attempts
 ```
 
@@ -73,23 +75,24 @@ worktree mounted writable at `/workspace` and an exchange directory
 (`$ORKA_PROMPT` in, `$ORKA_OUTCOME` out). It declares its outcome by
 writing `outcome.toml`; see `src/outcome.rs` for the contract.
 
-When a successful attempt produces project files, `orka run` prints the
-candidate branch and the commands for inspecting and publishing it. The node
-will read as succeeded-but-stale until that output is published, because the
-candidate deliberately does not alter the human project checkout:
+When a successful attempt produces project files, Orka registers a first-class
+Linka candidate and prints its id and follow-up commands. Linka reports the
+source node as awaiting integration—not stale and not ready for duplicate
+machine work—until that exact candidate is decided and published:
 
 ```text
 orka candidates
-orka candidate ATTEMPT
-orka publish ATTEMPT
+orka candidate CANDIDATE
+orka accept CANDIDATE --notes "reviewed"
+orka publish CANDIDATE
 ```
 
-The candidate list connects each branch to its durable attempt and source
-Linka node. The detail view includes the frozen input, candidate head, and full
-patch. Publication accepts only the latest successful result for the node,
-refuses unrelated Linka staleness and dirty, detached, or moved checkouts, then
-fast-forwards the project branch. Choosing to publish remains the human review
-decision; Orka supplies the safe mechanism but never approves automatically.
+The candidate list connects Linka's candidate id to its source node, branch,
+target, and opaque Orka attempt identity. Linka owns the decision and a durable
+publication journal; Orka only supplies an attempt-oriented UI and patch view.
+Acceptance pins the exact artifact and previous target commit. Publication
+refuses dirty or concurrently moved targets and can be resumed by `orka
+recover` after a crash.
 
 Worktree cleanup retains the `orka/attempts/<attempt-id>` candidate branch for
 every sealed attempt, including stale submissions and recorded failures. This

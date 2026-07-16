@@ -16,10 +16,11 @@ never depends on Orka.
 ## Ownership
 
 - Linka owns graph definitions, readiness, staleness, work snapshots, result
-  validation, graph mutations, and project/output provenance.
+  validation, candidates, accept/reject decisions, recoverable publication,
+  graph mutations, and project/output provenance.
 - Orka owns agent selection policy, execution policy, prompts, durable
-  attempts, transcripts, outcome interpretation, candidate inspection and
-  publication mechanics, recovery, and cleanup.
+  attempts, transcripts, outcome interpretation, candidate presentation,
+  attempt recovery, and workspace cleanup.
 - Orka calls Linka's public operations but never reads or mutates Linka's
   on-disk representation directly.
 - Linka stores only namespaced producer evidence about Orka (namespace `orka`);
@@ -41,6 +42,10 @@ Orka uses one documented Linka protocol:
   retains no output ref — stale work never silently completes. Conflicts come
   back as `SubmissionError::Conflict(Vec<SubmissionConflict>)`; other errors are
   reserved for evaluation, storage, git, or invariant failures.
+- `CandidateStore::register` attaches a successful project output to its exact
+  node result, immutable branch, frozen input, target branch, and opaque Orka
+  attempt identity. Linka derives pending/accepted/published/rejected
+  integration state and excludes pending work from redispatch.
 
 ## Boundaries
 
@@ -77,7 +82,9 @@ Linka, not a backend-neutral port.
 6. Interpret the agent's declared outcome (Orka's `AgentOutcome`), then submit
    through Linka against the exact persisted snapshot, attaching the executor
    report as `orka`-namespaced producer evidence.
-7. Seal accepted success, accepted failure, or a submission conflict
+7. For a successful project output, idempotently register a Linka candidate
+   using the Orka attempt as opaque external identity.
+8. Seal accepted success, accepted failure, or a submission conflict
    (stale-at-submit). Operational failures stay unsealed and recoverable.
 
 ## Agent authority
@@ -110,19 +117,17 @@ of the attempt's evidence and are not garbage-collection candidates. Any
 future deletion must be an explicit pruning operation with a visible retention
 policy; ordinary run and recovery cleanup never deletes them.
 
-## Candidate publication
+## Candidate integration
 
-An attempt branch whose head moved beyond its frozen input is exposed as a
-candidate together with its durable attempt id and source Linka node. Orka can
-render its patch and publish an accepted candidate, but never publishes as an
-implicit consequence of execution. Publication verifies that the candidate is
-the node's latest accepted successful result, that output drift is its only
-staleness, and that the named, clean project checkout is still at the frozen
-input. It then fast-forwards the checkout to the accepted output commit.
+Linka is authoritative for candidates and their integration. Orka lists and
+renders Linka records, resolves its own attempt ids through Linka's opaque
+external identity, and delegates accept, reject, publish, and publication
+recovery to Linka. It neither duplicates candidate state in `.orka/` nor moves
+the target branch itself.
 
-Stale-at-submit branches remain inspectable evidence but are not publishable.
-Approval remains outside Orka; the explicit publish command is only the safe
-project-side mechanism used after that decision.
+Only Linka-accepted successful outputs become candidates. A stale-at-submit
+branch remains durable Orka attempt evidence but cannot enter Linka's
+acceptance protocol because Linka recorded no result for it.
 
 ## Producer evidence
 
@@ -136,7 +141,7 @@ paths stay in `.orka/`. Linka preserves this verbatim and never interprets it.
 - Implementing isolation mechanics or process stdio (Driva).
 - Owning node-graph semantics or storage (Linka).
 - A generic, backend-neutral graph interface. Orka orchestrates Linka.
-- Review comments, suggested edits, approval, or publication (Nota).
+- Review comments, suggested edits, or authorization policy (Nota).
 
 ## Configuration
 
