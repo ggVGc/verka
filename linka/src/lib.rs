@@ -21,7 +21,7 @@ pub mod vcs;
 
 pub use candidate::{
     CandidateDecision, CandidateId, CandidateRecord, CandidateStore, CandidateView, DecisionKind,
-    ExternalIdentity, NewCandidate, PublicationRecord,
+    ExternalIdentity, NewCandidate,
 };
 pub use git::GitVcs;
 pub use model::{

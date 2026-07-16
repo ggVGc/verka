@@ -1,6 +1,6 @@
 //! Orka presentation over Linka's first-class candidate protocol.
 //!
-//! Linka owns candidate identity, decisions, and recoverable publication.
+//! Linka owns candidate identity, decisions, and Git-derived publication.
 //! Orka adds attempt-oriented lookup and patch display, but stores no duplicate
 //! candidate state and performs no publication side effect itself.
 
@@ -51,7 +51,7 @@ impl<'a> Candidates<'a> {
         candidates
             .list()?
             .into_iter()
-            .map(|id| candidates.load(&id).and_then(Self::present))
+            .map(|id| candidates.load(&id).and_then(|view| self.present(view)))
             .collect()
     }
 
@@ -70,7 +70,7 @@ impl<'a> Candidates<'a> {
             })?;
             candidates.load(&record.id)?
         };
-        Self::present(view)
+        self.present(view)
     }
 
     pub fn patch(&self, reference: &str) -> Result<String> {
@@ -114,32 +114,14 @@ impl<'a> Candidates<'a> {
         self.get(&candidate.id.0)
     }
 
-    pub fn recover_publications(&self) -> Result<Vec<CandidateId>> {
-        let candidates = CandidateStore::new(self.store);
-        let vcs = GitVcs::for_store(self.store);
-        let mut recovered = Vec::new();
-        for id in candidates.list()? {
-            let view = candidates.load(&id)?;
-            if view
-                .publication
-                .as_ref()
-                .is_some_and(|publication| publication.completed_at_ms.is_none())
-            {
-                candidates.recover_publication(&vcs, &id)?;
-                recovered.push(id);
-            }
-        }
-        Ok(recovered)
-    }
-
-    fn present(view: CandidateView) -> Result<Candidate> {
+    fn present(&self, view: CandidateView) -> Result<Candidate> {
         let attempt = view
             .candidate
             .external
             .as_ref()
             .filter(|external| external.namespace == "orka")
             .map(|external| AttemptId(external.id.clone()));
-        let integration = view.integration();
+        let integration = view.integration(&GitVcs::for_store(self.store))?;
         let record = view.candidate;
         if let Some(decision) = &view.decision {
             if decision.kind == DecisionKind::Accepted && decision.target_ref.is_none() {

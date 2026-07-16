@@ -223,6 +223,21 @@ impl BranchStore for GitVcs {
         ))
     }
 
+    fn is_ancestor(&self, ancestor: &str, descendant: &str) -> Result<bool> {
+        let out = git(
+            &self.project,
+            &["merge-base", "--is-ancestor", ancestor, descendant],
+        )?;
+        match out.status.code() {
+            Some(0) => Ok(true),
+            Some(1) => Ok(false),
+            _ => bail!(
+                "git merge-base --is-ancestor failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            ),
+        }
+    }
+
     fn publish_fast_forward(
         &self,
         target: &str,

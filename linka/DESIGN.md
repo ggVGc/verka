@@ -95,12 +95,12 @@ Definitions and results are never overwritten as hidden mutable state. Stored
 facts are minimal; readiness, blockers, dependents, provenance, and staleness
 are computed from them.
 
-Candidate records live under `candidates/<candidate-id>/`: immutable candidate
-identity, an immutable decision, and a recoverable publication journal.
-Acceptance pins the artifact and target branch's previous commit. Publication
-first commits an intent, then compare-and-swap fast-forwards the target, then
-commits completion. Recovery advances a target still at the old commit,
-finishes one already at the candidate, and refuses any unrelated movement.
+Candidate records live under `candidates/<candidate-id>/` and contain an
+immutable identity and decision. Acceptance pins the artifact and target
+branch's previous commit. Publication compare-and-swap fast-forwards the target;
+whether it succeeded is derived from Git ancestry. Retrying is safe after a
+crash, and a target that moved without containing the candidate is reported as
+an integrity error.
 
 Node identifiers are single portable path components. Project paths are
 normalized to `/` separators and are always relative to the paired project

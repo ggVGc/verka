@@ -64,11 +64,12 @@ pub trait RepositoryIdentity {
     fn remote_url(&self) -> Result<Option<String>>;
 }
 
-/// Named project-reference operations used by Linka candidates and their
-/// recoverable publication protocol.
+/// Named project-reference operations used by Linka candidates.
 pub trait BranchStore {
     fn current_branch(&self) -> Result<Option<String>>;
     fn ref_commit(&self, reference: &str) -> Result<Option<String>>;
+    /// Whether `ancestor` is contained in `descendant`'s history.
+    fn is_ancestor(&self, ancestor: &str, descendant: &str) -> Result<bool>;
     /// Move `target` from exactly `expected_previous` to `candidate`, only by
     /// fast-forward. Returns false for a race or non-fast-forward.
     fn publish_fast_forward(
@@ -222,6 +223,10 @@ impl BranchStore for FakeVcs {
 
     fn ref_commit(&self, reference: &str) -> Result<Option<String>> {
         Ok(self.refs.borrow().get(reference).cloned())
+    }
+
+    fn is_ancestor(&self, ancestor: &str, descendant: &str) -> Result<bool> {
+        Ok(ancestor == descendant)
     }
 
     fn publish_fast_forward(

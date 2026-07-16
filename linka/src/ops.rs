@@ -460,7 +460,8 @@ fn node_state_inner(
                     outcome,
                     candidate
                         .as_ref()
-                        .map(CandidateView::integration)
+                        .map(|candidate| candidate.integration(vcs))
+                        .transpose()?
                         .unwrap_or(IntegrationStatus::NotRequired),
                     staleness_for_result(store, vcs, id, result, revision, candidate.as_ref())?,
                 )
@@ -581,15 +582,15 @@ fn staleness_for_result(
             let branch_ref = format!("refs/heads/{}", candidate.candidate.branch);
             match vcs.ref_commit(&branch_ref)? {
                 Some(commit) if commit == output.id => {
-                    if candidate.integration() == IntegrationStatus::Published {
-                        let publication = candidate
-                            .publication
+                    if candidate.integration(vcs)? == IntegrationStatus::Published {
+                        let target_ref = candidate
+                            .decision
                             .as_ref()
-                            .expect("published candidate has publication");
-                        let target =
-                            vcs.ref_commit(&publication.target_ref)?.with_context(|| {
-                                format!("published target `{}` is missing", publication.target_ref)
-                            })?;
+                            .and_then(|decision| decision.target_ref.as_deref())
+                            .context("published candidate has no target")?;
+                        let target = vcs.ref_commit(target_ref)?.with_context(|| {
+                            format!("published target `{target_ref}` is missing")
+                        })?;
                         vcs.drift_at(&output.id, &target)?
                     } else {
                         None

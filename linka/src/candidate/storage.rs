@@ -39,7 +39,6 @@ impl CandidateStore<'_> {
         Ok(CandidateView {
             candidate,
             decision: read_optional(&self.decision_path(id))?,
-            publication: read_optional(&self.publication_path(id))?,
         })
     }
 
@@ -84,10 +83,6 @@ impl CandidateStore<'_> {
 
     pub(super) fn decision_path(&self, id: &CandidateId) -> PathBuf {
         self.dir(id).join("decision.toml")
-    }
-
-    pub(super) fn publication_path(&self, id: &CandidateId) -> PathBuf {
-        self.dir(id).join("publication.toml")
     }
 
     fn root(&self) -> PathBuf {

@@ -88,11 +88,11 @@ orka publish CANDIDATE
 ```
 
 The candidate list connects Linka's candidate id to its source node, branch,
-target, and opaque Orka attempt identity. Linka owns the decision and a durable
-publication journal; Orka only supplies an attempt-oriented UI and patch view.
-Acceptance pins the exact artifact and previous target commit. Publication
-refuses dirty or concurrently moved targets and can be resumed by `orka
-recover` after a crash.
+target, and opaque Orka attempt identity. Linka owns the decision and derives
+publication from Git history; Orka only supplies an attempt-oriented UI and
+patch view. Acceptance pins the exact artifact and previous target commit.
+Publication refuses dirty or concurrently moved targets and is safe to retry
+after a crash.
 
 Worktree cleanup retains the `orka/attempts/<attempt-id>` candidate branch for
 every sealed attempt, including stale submissions and recorded failures. This

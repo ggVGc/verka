@@ -124,7 +124,7 @@ enum Cmd {
     /// List recorded output candidates, optionally for one source node.
     Candidates { node: Option<NodeId> },
 
-    /// Show one candidate, its source node, decision, and publication.
+    /// Show one candidate and its source node and decision.
     Candidate { id: String },
 
     /// Accept an exact candidate for its recorded target branch.
@@ -145,11 +145,8 @@ enum Cmd {
         author: Author,
     },
 
-    /// Publish an accepted candidate by recoverable fast-forward.
+    /// Publish an accepted candidate by idempotent fast-forward.
     Publish { id: String },
-
-    /// Finish any prepared publication interrupted by a crash.
-    RecoverPublications,
 
     /// List every node with its derived status.
     List,
@@ -353,6 +350,7 @@ fn main() -> Result<()> {
 
         Cmd::Candidates { node } => {
             let store = Store::open(store)?;
+            let vcs = GitVcs::for_store(&store);
             let candidates = CandidateStore::new(&store);
             let views = match node {
                 Some(node) => candidates.for_node(&node)?,
@@ -370,7 +368,7 @@ fn main() -> Result<()> {
                     "{}  node {}  {:?}  {} -> {}",
                     view.candidate.id,
                     view.candidate.node,
-                    view.integration(),
+                    view.integration(&vcs)?,
                     view.candidate.branch,
                     view.candidate.target
                 );
@@ -379,10 +377,11 @@ fn main() -> Result<()> {
 
         Cmd::Candidate { id } => {
             let store = Store::open(store)?;
+            let vcs = GitVcs::for_store(&store);
             let view = CandidateStore::new(&store).load(&CandidateId(id))?;
             println!("candidate {}", view.candidate.id);
             println!("node      {}", view.candidate.node);
-            println!("status    {:?}", view.integration());
+            println!("status    {:?}", view.integration(&vcs)?);
             println!("branch    {}", view.candidate.branch);
             println!("target    {}", view.candidate.target);
             println!("input     {}", view.candidate.input_commit);
@@ -400,19 +399,6 @@ fn main() -> Result<()> {
                 if !decision.notes.is_empty() {
                     println!("notes     {}", decision.notes);
                 }
-            }
-            if let Some(publication) = &view.publication {
-                println!(
-                    "publish   {}: {} -> {}{}",
-                    publication.target_ref,
-                    publication.target_previous,
-                    publication.candidate_commit,
-                    if publication.completed_at_ms.is_some() {
-                        " (complete)"
-                    } else {
-                        " (prepared)"
-                    }
-                );
             }
         }
 
@@ -433,34 +419,8 @@ fn main() -> Result<()> {
         Cmd::Publish { id } => {
             let store = Store::open(store)?;
             let vcs = GitVcs::for_store(&store);
-            let publication =
-                CandidateStore::new(&store).publish(&vcs, &CandidateId(id.clone()))?;
-            println!(
-                "published {id} to {} at {}",
-                publication.target_ref, publication.candidate_commit
-            );
-        }
-
-        Cmd::RecoverPublications => {
-            let store = Store::open(store)?;
-            let vcs = GitVcs::for_store(&store);
-            let candidates = CandidateStore::new(&store);
-            let mut recovered = 0;
-            for id in candidates.list()? {
-                let view = candidates.load(&id)?;
-                if view
-                    .publication
-                    .as_ref()
-                    .is_some_and(|publication| publication.completed_at_ms.is_none())
-                {
-                    candidates.recover_publication(&vcs, &id)?;
-                    println!("recovered {id}");
-                    recovered += 1;
-                }
-            }
-            if recovered == 0 {
-                println!("no pending publications");
-            }
+            CandidateStore::new(&store).publish(&vcs, &CandidateId(id.clone()))?;
+            println!("published {id}");
         }
 
         Cmd::List => {
@@ -847,7 +807,7 @@ fn show_node(store: &Store, vcs: &GitVcs, id: &str) -> Result<String> {
             out,
             "candidate: {} ({:?}, {} -> {})",
             candidate.candidate.id,
-            candidate.integration(),
+            candidate.integration(vcs)?,
             candidate.candidate.branch,
             candidate.candidate.target
         )?;

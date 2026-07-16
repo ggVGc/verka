@@ -282,9 +282,6 @@ fn run(cli: Cli) -> Result<()> {
                 policy: config.policy()?,
             };
             let reports = engine.recover()?;
-            for candidate in Candidates::new(&store).recover_publications()? {
-                println!("{candidate}  recovered publication");
-            }
             if reports.is_empty() {
                 println!("no attempts recorded");
             }

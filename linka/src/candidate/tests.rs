@@ -104,18 +104,14 @@ fn candidate_acceptance_and_publication_are_first_class_node_state() {
             .integration,
         IntegrationStatus::Accepted
     );
-    let publication = candidates.publish(&vcs, &candidate.id).unwrap();
-    assert!(publication.completed_at_ms.is_some());
+    candidates.publish(&vcs, &candidate.id).unwrap();
     assert_eq!(vcs.refs.borrow().get("refs/heads/main"), Some(&output));
     let state = ops::node_state(&store, &vcs, node.as_str()).unwrap();
     assert_eq!(state.integration, IntegrationStatus::Published);
     assert!(state.is_complete());
 
     assert_eq!(register(&store, &vcs, &node).id, candidate.id);
-    assert_eq!(
-        candidates.publish(&vcs, &candidate.id).unwrap(),
-        publication
-    );
+    candidates.publish(&vcs, &candidate.id).unwrap();
 }
 
 #[test]
@@ -146,27 +142,31 @@ fn a_moved_source_cannot_accept_an_obsolete_candidate() {
 }
 
 #[test]
-fn recovery_finishes_when_the_target_moved_before_store_finalization() {
-    let (_temp, store, vcs, node, output) = successful_output();
+fn publication_is_derived_and_target_corruption_is_detected() {
+    let (_temp, store, vcs, node, _) = successful_output();
     let candidate = register(&store, &vcs, &node);
     let candidates = CandidateStore::new(&store);
-    let decision = candidates
+    candidates
         .accept(&vcs, &candidate.id, Author::Human, String::new())
         .unwrap();
-    let publication = PublicationRecord {
-        schema: PUBLICATION_SCHEMA,
-        candidate: candidate.id.clone(),
-        candidate_commit: output.clone(),
-        target_ref: decision.target_ref.unwrap(),
-        target_previous: decision.target_previous.unwrap(),
-        prepared_at_ms: 1,
-        completed_at_ms: None,
-    };
-    storage::write_toml(&candidates.publication_path(&candidate.id), &publication).unwrap();
+    assert_eq!(
+        candidates
+            .load(&candidate.id)
+            .unwrap()
+            .integration(&vcs)
+            .unwrap(),
+        IntegrationStatus::Accepted
+    );
     vcs.refs
         .borrow_mut()
-        .insert("refs/heads/main".into(), output);
-
-    let recovered = candidates.recover_publication(&vcs, &candidate.id).unwrap();
-    assert!(recovered.completed_at_ms.is_some());
+        .insert("refs/heads/main".into(), "unrelated".into());
+    let error = candidates
+        .load(&candidate.id)
+        .unwrap()
+        .integration(&vcs)
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("without containing"),
+        "{error:#}"
+    );
 }

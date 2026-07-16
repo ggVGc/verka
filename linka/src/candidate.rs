@@ -6,7 +6,8 @@
 use crate::model::{
     ArtifactRef, Author, IntegrationStatus, NodeId, ProducerEvidence, ResultVersion,
 };
-use crate::Store;
+use crate::{Store, Vcs};
+use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -18,7 +19,6 @@ mod tests;
 
 pub const CANDIDATE_SCHEMA: u32 = 1;
 pub const DECISION_SCHEMA: u32 = 1;
-pub const PUBLICATION_SCHEMA: u32 = 1;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -97,40 +97,45 @@ pub struct CandidateDecision {
     pub target_previous: Option<String>,
 }
 
-/// Journal written before moving the project ref and completed afterward.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PublicationRecord {
-    pub schema: u32,
-    pub candidate: CandidateId,
-    pub candidate_commit: String,
-    pub target_ref: String,
-    pub target_previous: String,
-    pub prepared_at_ms: i64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub completed_at_ms: Option<i64>,
-}
-
 #[derive(Clone, Debug)]
 pub struct CandidateView {
     pub candidate: CandidateRecord,
     pub decision: Option<CandidateDecision>,
-    pub publication: Option<PublicationRecord>,
 }
 
 impl CandidateView {
-    pub fn integration(&self) -> IntegrationStatus {
-        if self
-            .publication
-            .as_ref()
-            .and_then(|publication| publication.completed_at_ms)
-            .is_some()
-        {
-            return IntegrationStatus::Published;
-        }
+    /// Derive publication from the accepted intent and the target's Git history.
+    pub fn integration(&self, vcs: &dyn Vcs) -> Result<IntegrationStatus> {
         match self.decision.as_ref().map(|decision| decision.kind) {
-            None => IntegrationStatus::Pending,
-            Some(DecisionKind::Accepted) => IntegrationStatus::Accepted,
-            Some(DecisionKind::Rejected) => IntegrationStatus::Rejected,
+            None => Ok(IntegrationStatus::Pending),
+            Some(DecisionKind::Rejected) => Ok(IntegrationStatus::Rejected),
+            Some(DecisionKind::Accepted) => {
+                let decision = self.decision.as_ref().expect("accepted decision");
+                let target_ref = decision
+                    .target_ref
+                    .as_deref()
+                    .context("accepted candidate has no target")?;
+                let previous = decision
+                    .target_previous
+                    .as_deref()
+                    .context("accepted candidate has no target baseline")?;
+                let target = vcs.ref_commit(target_ref)?.with_context(|| {
+                    format!("accepted candidate target `{target_ref}` is missing")
+                })?;
+                if vcs.is_ancestor(&self.candidate.artifact.id, &target)? {
+                    Ok(IntegrationStatus::Published)
+                } else if target == previous {
+                    Ok(IntegrationStatus::Accepted)
+                } else {
+                    bail!(
+                        "candidate `{}` target moved from {} to {} without containing {}",
+                        self.candidate.id,
+                        previous,
+                        target,
+                        self.candidate.artifact.id
+                    )
+                }
+            }
         }
     }
 }

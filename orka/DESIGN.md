@@ -16,7 +16,7 @@ never depends on Orka.
 ## Ownership
 
 - Linka owns graph definitions, readiness, staleness, work snapshots, result
-  validation, candidates, accept/reject decisions, recoverable publication,
+  validation, candidates, accept/reject decisions, Git-derived publication,
   graph mutations, and project/output provenance.
 - Orka owns agent selection policy, execution policy, prompts, durable
   attempts, transcripts, outcome interpretation, candidate presentation,
@@ -121,9 +121,9 @@ policy; ordinary run and recovery cleanup never deletes them.
 
 Linka is authoritative for candidates and their integration. Orka lists and
 renders Linka records, resolves its own attempt ids through Linka's opaque
-external identity, and delegates accept, reject, publish, and publication
-recovery to Linka. It neither duplicates candidate state in `.orka/` nor moves
-the target branch itself.
+external identity, and delegates accept, reject, and publish to Linka. It
+neither duplicates candidate state in `.orka/` nor moves the target branch
+itself.
 
 Only Linka-accepted successful outputs become candidates. A stale-at-submit
 branch remains durable Orka attempt evidence but cannot enter Linka's

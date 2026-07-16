@@ -14,7 +14,6 @@
 //!   candidates/<id>/  output proposal attached to an exact node result
 //!     candidate.toml  immutable candidate, branch, target, and artifact
 //!     decision.toml   exact accept/reject decision (optional)
-//!     publication.toml recoverable target-ref movement (optional)
 //! ```
 //!
 //! There is no object store or mutable status log: git is the versioning layer.

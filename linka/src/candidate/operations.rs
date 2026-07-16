@@ -169,7 +169,7 @@ impl CandidateStore<'_> {
             .with_context(|| format!("candidate `{}` is no longer current", candidate.id))?;
         let state = crate::ops::node_state(self.store, vcs, candidate.node.as_str())?;
         if current.candidate.id != candidate.id
-            || current.integration() != expected
+            || current.integration(vcs)? != expected
             || state.currency != crate::Currency::Current
         {
             bail!(
