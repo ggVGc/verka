@@ -17,7 +17,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 
-use linka::{ops, title_of, Author, GitVcs, Store, Vcs};
+use linka::{ops, title_of, Author, Blocker, BlockerReason, GitVcs, StalenessReason, Store, Vcs};
 
 const PAGE: &str = include_str!("viz.html");
 
@@ -216,10 +216,75 @@ fn graph_json(store: &Store, vcs: &dyn Vcs) -> Result<Value> {
             "ready": state.is_ready(),
             "outcome": state.outcome,
             "currency": state.currency,
-            "stale": state.staleness,
-            "blockers": state.blockers,
+            "stale": state.staleness.iter().map(format_staleness).collect::<Vec<_>>(),
+            "blockers": state.blockers.iter().map(format_blocker).collect::<Vec<_>>(),
             "result": result,
         }));
     }
     Ok(json!({ "nodes": nodes, "problems": ops::check(store)? }))
+}
+
+fn format_blocker(blocker: &Blocker) -> String {
+    let reason = match blocker.reason {
+        BlockerReason::Missing => "missing",
+        BlockerReason::Open => "not complete (open)",
+        BlockerReason::Failed => "not complete (failed)",
+        BlockerReason::Stale => "not complete (stale)",
+    };
+    format!("{}: {reason}", blocker.id)
+}
+
+fn format_staleness(reason: &StalenessReason) -> String {
+    match reason {
+        StalenessReason::DefinitionChanged {
+            metadata,
+            description,
+        } => {
+            let mut files = Vec::new();
+            if *metadata {
+                files.push("node.toml");
+            }
+            if *description {
+                files.push("description.md");
+            }
+            format!("definition changed since the work ({})", files.join(", "))
+        }
+        StalenessReason::ConsumedDefinitionChanged { id } => {
+            format!("dependency {id}: definition moved")
+        }
+        StalenessReason::ConsumedNodeMissing { id } => format!("dependency {id}: missing"),
+        StalenessReason::ConsumedResultChanged { id } => {
+            format!("dependency {id}: result changed since it was consumed")
+        }
+        StalenessReason::ConsumedOutputChanged { id } => {
+            format!("dependency {id}: output changed")
+        }
+        StalenessReason::ContextChanged { path } => format!("context {path}: content changed"),
+        StalenessReason::ContextMissing { path } => format!("context {path}: missing"),
+        StalenessReason::OutputDrifted { artifact, detail } => {
+            format!("output changed since {artifact}:\n{detail}")
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn formats_structured_reasons_for_the_page() {
+        assert_eq!(
+            format_staleness(&StalenessReason::ContextChanged {
+                path: "src/lib.rs".into(),
+            }),
+            "context src/lib.rs: content changed"
+        );
+        assert_eq!(
+            format_blocker(&Blocker {
+                id: "node-dependency".into(),
+                reason: BlockerReason::Stale,
+            }),
+            "node-dependency: not complete (stale)"
+        );
+    }
 }
