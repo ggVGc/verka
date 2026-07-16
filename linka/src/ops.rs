@@ -37,11 +37,12 @@ use anyhow::{bail, Context, Result};
 use std::time::{SystemTime, UNIX_EPOCH};
 use ulid::Ulid;
 
+use crate::candidate::{CandidateStore, CandidateView};
 use crate::model::{
     ArtifactRef, Author, Blocker, BlockerReason, ConsumedNode, ContextPin, Currency,
-    DefinitionVersion, DepKind, NodeMeta, NodeState, Outcome, ProducerEvidence, ProjectPath,
-    ProjectSnapshot, RecordedOutcome, ResultMeta, ResultSubmission, ResultVersion, StalenessReason,
-    Status, SubmissionConflict, WorkSnapshot,
+    DefinitionVersion, DepKind, IntegrationStatus, NodeId, NodeMeta, NodeState, Outcome,
+    ProducerEvidence, ProjectPath, ProjectSnapshot, RecordedOutcome, ResultMeta, ResultSubmission,
+    ResultVersion, StalenessReason, Status, SubmissionConflict, WorkSnapshot,
 };
 use crate::model::{DEFINITION_SCHEMA, OBSERVATION_SCHEMA, RESULT_SCHEMA, SNAPSHOT_SCHEMA};
 use crate::pairing::Pairing;
@@ -443,16 +444,25 @@ fn node_state_inner(
     }
     let result = (|| {
         let result = store.read_result(id)?;
-        let (outcome, staleness) = match result.as_ref() {
-            None => (RecordedOutcome::Open, Vec::new()),
+        let (outcome, integration, staleness) = match result.as_ref() {
+            None => (
+                RecordedOutcome::Open,
+                IntegrationStatus::NotRequired,
+                Vec::new(),
+            ),
             Some((result, _)) => {
                 let outcome = match result.outcome {
                     Outcome::Done => RecordedOutcome::Succeeded,
                     Outcome::Failed => RecordedOutcome::Failed,
                 };
+                let candidate = candidate_for_result(store, id, result)?;
                 (
                     outcome,
-                    staleness_for_result(store, vcs, id, result, revision)?,
+                    candidate
+                        .as_ref()
+                        .map(CandidateView::integration)
+                        .unwrap_or(IntegrationStatus::NotRequired),
+                    staleness_for_result(store, vcs, id, result, revision, candidate.as_ref())?,
                 )
             }
         };
@@ -478,7 +488,7 @@ fn node_state_inner(
                     match dependency_state.outcome {
                         RecordedOutcome::Open => BlockerReason::Open,
                         RecordedOutcome::Failed => BlockerReason::Failed,
-                        RecordedOutcome::Succeeded => BlockerReason::Stale,
+                        RecordedOutcome::Succeeded => BlockerReason::AwaitingIntegration,
                     }
                 };
                 blockers.push(Blocker {
@@ -490,6 +500,7 @@ fn node_state_inner(
         Ok(NodeState {
             outcome,
             currency,
+            integration,
             staleness,
             blockers,
         })
@@ -504,6 +515,7 @@ fn staleness_for_result(
     id: &str,
     result: &ResultMeta,
     revision: Option<&str>,
+    candidate: Option<&CandidateView>,
 ) -> Result<Vec<StalenessReason>> {
     let mut reasons = Vec::new();
     let current = store.node_version(id)?;
@@ -565,7 +577,37 @@ fn staleness_for_result(
         }
     }
     if let Some(output) = &result.output {
-        if let Some(detail) = vcs.drift(&output.id)? {
+        let detail = if let Some(candidate) = candidate {
+            let branch_ref = format!("refs/heads/{}", candidate.candidate.branch);
+            match vcs.ref_commit(&branch_ref)? {
+                Some(commit) if commit == output.id => {
+                    if candidate.integration() == IntegrationStatus::Published {
+                        let publication = candidate
+                            .publication
+                            .as_ref()
+                            .expect("published candidate has publication");
+                        let target =
+                            vcs.ref_commit(&publication.target_ref)?.with_context(|| {
+                                format!("published target `{}` is missing", publication.target_ref)
+                            })?;
+                        vcs.drift_at(&output.id, &target)?
+                    } else {
+                        None
+                    }
+                }
+                Some(commit) => Some(format!(
+                    "candidate branch {} moved to {}",
+                    candidate.candidate.branch, commit
+                )),
+                None => Some(format!(
+                    "candidate branch {} is missing",
+                    candidate.candidate.branch
+                )),
+            }
+        } else {
+            vcs.drift(&output.id)?
+        };
+        if let Some(detail) = detail {
             reasons.push(StalenessReason::OutputDrifted {
                 artifact: output.id.clone(),
                 detail,
@@ -575,13 +617,26 @@ fn staleness_for_result(
     Ok(reasons)
 }
 
+fn candidate_for_result(
+    store: &Store,
+    id: &str,
+    result: &ResultMeta,
+) -> Result<Option<CandidateView>> {
+    let Some(artifact) = &result.output else {
+        return Ok(None);
+    };
+    let node: NodeId = id.parse().map_err(anyhow::Error::msg)?;
+    let version = store.result_version(id)?;
+    CandidateStore::new(store).for_result(&node, &version, artifact)
+}
+
 #[deprecated(note = "use node_state; Status cannot represent stale or evaluation errors")]
 pub fn current_status(store: &Store, vcs: &dyn Vcs, id: &str) -> Result<Status> {
     let state = node_state(store, vcs, id)?;
     Ok(match state.outcome {
         RecordedOutcome::Open => Status::Open,
         RecordedOutcome::Failed => Status::Failed,
-        RecordedOutcome::Succeeded if state.currency == Currency::Current => Status::Done,
+        RecordedOutcome::Succeeded if state.is_complete() => Status::Done,
         RecordedOutcome::Succeeded => Status::Open,
     })
 }
@@ -955,7 +1010,9 @@ pub fn unsettled(store: &Store, vcs: &dyn Vcs, id: &str) -> Result<Vec<String>> 
         }
         let state = node_state(store, vcs, &node)?;
         if !state.is_complete() {
-            if state.outcome == RecordedOutcome::Succeeded {
+            if state.is_awaiting_integration() {
+                reasons.push(format!("{node}: awaiting candidate integration"));
+            } else if state.outcome == RecordedOutcome::Succeeded {
                 reasons.push(format!("{node}: done but stale"));
             } else {
                 let outcome = match state.outcome {

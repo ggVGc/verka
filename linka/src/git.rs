@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::store::Store;
-use crate::vcs::{ArtifactStore, ContextIdentity, RepositoryIdentity, StoreHistory};
+use crate::vcs::{ArtifactStore, BranchStore, ContextIdentity, RepositoryIdentity, StoreHistory};
 
 /// Git-backed implementations of Linka's narrow graph capabilities.
 pub struct GitVcs {
@@ -49,6 +49,10 @@ impl ArtifactStore for GitVcs {
     }
     fn drift(&self, id: &str) -> Result<Option<String>> {
         output_drift(&self.project, id)
+    }
+
+    fn drift_at(&self, id: &str, revision: &str) -> Result<Option<String>> {
+        output_drift_at(&self.project, id, revision)
     }
 
     fn dirty_paths(&self) -> Result<Vec<String>> {
@@ -187,6 +191,74 @@ impl RepositoryIdentity for GitVcs {
     }
 }
 
+impl BranchStore for GitVcs {
+    fn current_branch(&self) -> Result<Option<String>> {
+        let out = git(
+            &self.project,
+            &["symbolic-ref", "--quiet", "--short", "HEAD"],
+        )?;
+        if !out.status.success() {
+            return Ok(None);
+        }
+        Ok(Some(
+            String::from_utf8_lossy(&out.stdout).trim().to_string(),
+        ))
+    }
+
+    fn ref_commit(&self, reference: &str) -> Result<Option<String>> {
+        let out = git(
+            &self.project,
+            &[
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                &format!("{reference}^{{commit}}"),
+            ],
+        )?;
+        if !out.status.success() {
+            return Ok(None);
+        }
+        Ok(Some(
+            String::from_utf8_lossy(&out.stdout).trim().to_string(),
+        ))
+    }
+
+    fn publish_fast_forward(
+        &self,
+        target: &str,
+        expected_previous: &str,
+        candidate: &str,
+    ) -> Result<bool> {
+        if self.ref_commit(target)?.as_deref() != Some(expected_previous) {
+            return Ok(false);
+        }
+        let ancestor = git(
+            &self.project,
+            &["merge-base", "--is-ancestor", expected_previous, candidate],
+        )?;
+        if !ancestor.status.success() {
+            return Ok(false);
+        }
+
+        let checked_out = checked(&self.project, &["symbolic-ref", "--quiet", "HEAD"]).ok();
+        if checked_out.as_deref() == Some(target) {
+            if !checked(&self.project, &["status", "--porcelain"])?.is_empty() {
+                bail!("project checkout is dirty; commit or stash changes before publishing");
+            }
+            if checked(&self.project, &["rev-parse", "HEAD"])? != expected_previous {
+                return Ok(false);
+            }
+            checked(&self.project, &["merge", "--ff-only", candidate])?;
+        } else {
+            checked(
+                &self.project,
+                &["update-ref", target, candidate, expected_previous],
+            )?;
+        }
+        Ok(true)
+    }
+}
+
 /// `git init` a directory unless it already is a repository (its own, not a
 /// parent's). Returns whether a repository was created.
 pub fn ensure_repo(dir: &Path) -> Result<bool> {
@@ -317,6 +389,17 @@ fn output_drift(base: &Path, commit: &str) -> Result<Option<String>> {
     }
 
     let mut args = vec!["diff", "--name-status", commit, "--"];
+    args.extend(paths.iter().map(String::as_str));
+    let drift = checked(base, &args)?;
+    Ok((!drift.is_empty()).then_some(drift))
+}
+
+fn output_drift_at(base: &Path, commit: &str, revision: &str) -> Result<Option<String>> {
+    let paths = commit_files(base, commit)?;
+    if paths.is_empty() {
+        return Ok(None);
+    }
+    let mut args = vec!["diff", "--name-status", commit, revision, "--"];
     args.extend(paths.iter().map(String::as_str));
     let drift = checked(base, &args)?;
     Ok((!drift.is_empty()).then_some(drift))

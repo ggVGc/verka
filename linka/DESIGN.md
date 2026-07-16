@@ -12,61 +12,47 @@ A node has an immutable identity and versioned definition. Directed edges
 express dependencies, lineage, and explicit context. A result pins the exact
 definition and inputs it covered and may declare output artifacts.
 
-Graph state is derived, never stored as one `status` value. It has three
+Graph state is derived, never stored as one `status` value. It has four
 independent dimensions:
 
-- **Recorded outcome** is `open`, `succeeded`, or `failed`. `open` means that
-  no result is recorded; the other values report the outcome of the recorded
-  result. An outcome is historical evidence, not a statement that the node is
-  currently complete.
-- **Currency** is `current` or `stale`. Recorded evidence is current only while
-  it still describes the current node definition, consumed node versions and
-  outputs, explicit context, and the node's own output. A node with no result
-  is current because it has no recorded evidence that can have gone stale.
-- **Workability** is `complete`, `ready`, or `blocked`. This dimension answers
-  whether the current work is already satisfied or can be performed now.
+- **Recorded outcome** is `open`, `succeeded`, or `failed`.
+- **Currency** is `current` or `stale` against the exact definition, inputs,
+  context, and artifact the result recorded.
+- **Integration** is `not-required`, `pending`, `accepted`, `published`, or
+  `rejected`. Direct results need no integration. Candidate results remain
+  current on their immutable branches while awaiting a decision; absence from
+  the target branch is not staleness.
+- **Workability** is `complete`, `ready`, `awaiting-integration`, or `blocked`.
 
-These dimensions are related by the following authoritative rules:
+These dimensions obey the following rules:
 
-1. A node is **complete** if and only if it has a successful result that covers
-   its current definition, all consumed inputs and context, and a still-valid
-   output. In other words, only `succeeded` plus `current` can be complete.
-2. A node is **ready** if it is not complete and every node named by a current
-   `depends_on` edge is complete.
-3. Every other valid node is **blocked**. Its blockers are the current
-   `depends_on` targets that are not complete.
-4. A `derived_from` edge records lineage. Its pinned versions participate in
-   provenance and can make existing evidence stale, but the current state of a
-   `derived_from` target never blocks work.
+1. A node is **complete** exactly when it has a successful, current result whose
+   integration is either not required or published.
+2. A node is **awaiting integration** while its current successful candidate is
+   pending acceptance or accepted but unpublished. It is not redispatched.
+3. A node is **ready** when it is neither complete nor awaiting integration and
+   all current `depends_on` targets are complete. Rejecting the current
+   candidate returns the node to ready.
+4. Other valid nodes are **blocked** by incomplete `depends_on` targets.
+5. `derived_from` records lineage and provenance but does not gate readiness.
 
-Successful results may only be accepted for nodes that are ready immediately
-before the result is recorded. Recording the result changes a ready node to a
-complete node. Failed evidence may be recorded regardless of readiness: it
-describes what happened, but never makes the node complete or removes its
-blockers.
+Candidates are first-class records attached to an exact node result version
+and immutable output artifact. They are not ordinary work nodes, so rejected
+alternatives do not become dependencies or poison graph settlement. A
+candidate pins its branch, frozen input commit, intended target branch, and
+optional opaque producer identity. Linka never interprets producer namespaces;
+an executor such as Orka remains a one-way client.
 
-When a definition, consumed node, context value, or output changes, any
-recorded result becomes stale whether it succeeded or failed. A stale failure
-remains failed historical evidence; it does not revert to `open`. Like an open
-node or a current failure, it is ready when all required dependencies are
-complete and blocked otherwise. Re-recording a result replaces the evidence
-whose currency is evaluated; retry and evidence-retention policy belong to
-applications.
-
-The truth table below summarizes valid graph states. "Dependencies complete"
-refers only to current `depends_on` edges. A successful/current result already
-implies that its consumed required dependencies and output are valid.
-
-| Recorded outcome | Currency | Dependencies complete | Workability | Meaning |
+| Outcome | Currency | Integration | Dependencies | Workability |
 | --- | --- | --- | --- | --- |
-| open | current | yes | ready | No result has been recorded and work can start. |
-| open | current | no | blocked | No result has been recorded, but required work is incomplete. |
-| failed | current or stale | yes | ready | Failure is evidence; the current work can be tried. |
-| failed | current or stale | no | blocked | Failure is evidence and required work is incomplete. |
-| succeeded | current | necessarily yes | complete | The result covers the current node and all of its inputs and output. |
-| succeeded | stale | yes | ready | Prior success is evidence, but the current work must be redone. |
-| succeeded | stale | no | blocked | Prior success is evidence, and required work must be completed first. |
-| any or unreadable | unknown | unknown | error | Corrupt or unreadable facts have no graph state. |
+| open | current | not-required | complete | ready |
+| failed | current or stale | not-required | complete | ready |
+| succeeded | current | not-required or published | complete | complete |
+| succeeded | current | pending or accepted | complete | awaiting-integration |
+| succeeded | current | rejected | complete | ready |
+| succeeded | stale | any | complete | ready |
+| any | any | any | incomplete | blocked |
+| unreadable | unknown | unknown | unknown | error |
 
 Missing facts with defined semantics are not corruption: an absent result is
 `open`, a context path proven absent is stale, and an artifact proven absent is
@@ -75,8 +61,9 @@ to inspect context, and artifact-backend failures are errors. Queries must
 return those errors rather than converting them to `open`, `ready`, `blocked`,
 or `stale`.
 
-Approval, dispatch eligibility, and publication are policies belonging to
-other applications and cannot change these graph facts.
+Review discussion and authorization policy belong to other applications.
+Linka records exact accept/reject decisions and owns safe publication after an
+authorized caller requests it.
 
 ## Storage
 
@@ -108,6 +95,13 @@ Definitions and results are never overwritten as hidden mutable state. Stored
 facts are minimal; readiness, blockers, dependents, provenance, and staleness
 are computed from them.
 
+Candidate records live under `candidates/<candidate-id>/`: immutable candidate
+identity, an immutable decision, and a recoverable publication journal.
+Acceptance pins the artifact and target branch's previous commit. Publication
+first commits an intent, then compare-and-swap fast-forwards the target, then
+commits completion. Recovery advances a target still at the old commit,
+finishes one already at the candidate, and refuses any unrelated movement.
+
 Node identifiers are single portable path components. Project paths are
 normalized to `/` separators and are always relative to the paired project
 root. Empty components, absolute and platform-prefixed paths, traversal,
@@ -123,7 +117,8 @@ operations to people and scripts. An agent-facing protocol may adapt those
 operations, but protocol-specific concepts do not enter the graph model.
 
 Orka consumes a narrow graph interface for reading ready work, freezing
-versioned input, and submitting version-checked results. Nota may use an
+versioned input, submitting version-checked results, and registering candidate
+outputs. Nota may use an
 optional adapter to persist or link review records, but Linka never interprets
 their schema.
 
@@ -139,5 +134,5 @@ caller between its steps.
 - Starting or supervising agent processes.
 - Docker, worktree, or network isolation policy.
 - Scheduling and retry policy.
-- Review comments, suggested edits, approval, or publication.
+- Review comments, suggested edits, or deciding who may accept.
 - Requiring Orka, Driva, or Nota for normal CLI/library use.

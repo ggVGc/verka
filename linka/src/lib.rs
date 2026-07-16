@@ -11,6 +11,7 @@
 //! * [`ops`] — the operations (add, link, edit, complete, fail) and the derived
 //!   queries (status, staleness, readiness, blockers, origin).
 
+pub mod candidate;
 pub mod git;
 pub mod model;
 pub mod ops;
@@ -18,14 +19,18 @@ pub mod pairing;
 pub mod store;
 pub mod vcs;
 
+pub use candidate::{
+    CandidateDecision, CandidateId, CandidateRecord, CandidateStore, CandidateView, DecisionKind,
+    ExternalIdentity, NewCandidate, PublicationRecord,
+};
 pub use git::GitVcs;
 pub use model::{
     title_of, ArtifactRef, Author, Blocker, BlockerReason, ConsumedNode, ContextObservation,
-    ContextPin, Currency, DefinitionVersion, DepKind, NodeId, NodeMeta, NodeState, Outcome,
-    ProducerEvidence, ProjectPath, ProjectSnapshot, RecordedOutcome, ResultMeta, ResultSubmission,
-    ResultVersion, StalenessReason, Status, SubmissionConflict, WorkSnapshot, DEFINITION_SCHEMA,
-    OBSERVATION_SCHEMA, RESULT_SCHEMA, SNAPSHOT_SCHEMA,
+    ContextPin, Currency, DefinitionVersion, DepKind, IntegrationStatus, NodeId, NodeMeta,
+    NodeState, Outcome, ProducerEvidence, ProjectPath, ProjectSnapshot, RecordedOutcome,
+    ResultMeta, ResultSubmission, ResultVersion, StalenessReason, Status, SubmissionConflict,
+    WorkSnapshot, DEFINITION_SCHEMA, OBSERVATION_SCHEMA, RESULT_SCHEMA, SNAPSHOT_SCHEMA,
 };
 pub use pairing::Pairing;
 pub use store::Store;
-pub use vcs::{ArtifactStore, ContextIdentity, RepositoryIdentity, StoreHistory, Vcs};
+pub use vcs::{ArtifactStore, BranchStore, ContextIdentity, RepositoryIdentity, StoreHistory, Vcs};

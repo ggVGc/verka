@@ -33,6 +33,10 @@ pub trait ArtifactStore {
     /// human-readable reason (for git, a `diff --name-status`); else `None`.
     fn drift(&self, id: &str) -> Result<Option<String>>;
 
+    /// As `drift`, but compare the artifact with a named revision rather than
+    /// the currently checked-out project tree.
+    fn drift_at(&self, id: &str, revision: &str) -> Result<Option<String>>;
+
     /// The paths captured under `id` (for git, the files the commit touches).
     fn files_in(&self, id: &str) -> Result<Vec<String>>;
 
@@ -60,8 +64,30 @@ pub trait RepositoryIdentity {
     fn remote_url(&self) -> Result<Option<String>>;
 }
 
-pub trait Vcs: StoreHistory + ArtifactStore + ContextIdentity + RepositoryIdentity {}
-impl<T: StoreHistory + ArtifactStore + ContextIdentity + RepositoryIdentity + ?Sized> Vcs for T {}
+/// Named project-reference operations used by Linka candidates and their
+/// recoverable publication protocol.
+pub trait BranchStore {
+    fn current_branch(&self) -> Result<Option<String>>;
+    fn ref_commit(&self, reference: &str) -> Result<Option<String>>;
+    /// Move `target` from exactly `expected_previous` to `candidate`, only by
+    /// fast-forward. Returns false for a race or non-fast-forward.
+    fn publish_fast_forward(
+        &self,
+        target: &str,
+        expected_previous: &str,
+        candidate: &str,
+    ) -> Result<bool>;
+}
+
+pub trait Vcs:
+    StoreHistory + ArtifactStore + ContextIdentity + RepositoryIdentity + BranchStore
+{
+}
+impl<
+        T: StoreHistory + ArtifactStore + ContextIdentity + RepositoryIdentity + BranchStore + ?Sized,
+    > Vcs for T
+{
+}
 
 /// In-memory [`Vcs`] for tests. `capture` records the paths and returns `next_id`;
 /// `drift` looks the id up in `drift_for`.
@@ -85,6 +111,8 @@ pub struct FakeVcs {
     pub remote: Option<String>,
     /// Commits that exist in the project repo; `capture` adds `next_id`.
     pub commits: std::cell::RefCell<std::collections::HashSet<String>>,
+    pub refs: std::cell::RefCell<std::collections::HashMap<String, String>>,
+    pub branch: Option<String>,
 }
 
 #[cfg(test)]
@@ -108,6 +136,14 @@ impl ArtifactStore for FakeVcs {
             anyhow::bail!("{error}");
         }
         Ok(self.drift_for.get(id).cloned())
+    }
+
+    fn drift_at(&self, id: &str, revision: &str) -> Result<Option<String>> {
+        if id == revision {
+            Ok(None)
+        } else {
+            self.drift(id)
+        }
     }
 
     fn dirty_paths(&self) -> Result<Vec<String>> {
@@ -175,5 +211,30 @@ impl RepositoryIdentity for FakeVcs {
     }
     fn remote_url(&self) -> Result<Option<String>> {
         Ok(self.remote.clone())
+    }
+}
+
+#[cfg(test)]
+impl BranchStore for FakeVcs {
+    fn current_branch(&self) -> Result<Option<String>> {
+        Ok(self.branch.clone())
+    }
+
+    fn ref_commit(&self, reference: &str) -> Result<Option<String>> {
+        Ok(self.refs.borrow().get(reference).cloned())
+    }
+
+    fn publish_fast_forward(
+        &self,
+        target: &str,
+        expected_previous: &str,
+        candidate: &str,
+    ) -> Result<bool> {
+        let mut refs = self.refs.borrow_mut();
+        if refs.get(target).map(String::as_str) != Some(expected_previous) {
+            return Ok(false);
+        }
+        refs.insert(target.to_string(), candidate.to_string());
+        Ok(true)
     }
 }

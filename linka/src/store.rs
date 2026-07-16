@@ -11,14 +11,15 @@
 //!     result.toml     structured completion record (optional)
 //!     result.md       completion narrative (optional)
 //!     work.jsonl      legacy execution log (read-only compatibility only)
+//!   candidates/<id>/  output proposal attached to an exact node result
+//!     candidate.toml  immutable candidate, branch, target, and artifact
+//!     decision.toml   exact accept/reject decision (optional)
+//!     publication.toml recoverable target-ref movement (optional)
 //! ```
 //!
-//! Applications layered on top (execution harnesses, review tools) may keep
-//! their own namespaces beside `nodes/`; this library neither reads nor
-//! interprets them.
-//!
-//! There is no object store, no refs, and no status log: git is the only
-//! versioning layer. A node's version is the pair of Git blob ids for
+//! There is no object store or mutable status log: git is the versioning layer.
+//! Candidate records pin project refs but never store their contents. A node's
+//! version is the pair of Git blob ids for
 //! `node.toml` and `description.md`, computed on demand.
 //!
 //! The store lives in a *workbench*: an outer directory (its own git repo)

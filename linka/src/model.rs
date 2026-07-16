@@ -334,6 +334,7 @@ pub enum BlockerReason {
     Open,
     Failed,
     Stale,
+    AwaitingIntegration,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -347,8 +348,22 @@ pub struct Blocker {
 pub struct NodeState {
     pub outcome: RecordedOutcome,
     pub currency: Currency,
+    pub integration: IntegrationStatus,
     pub staleness: Vec<StalenessReason>,
     pub blockers: Vec<Blocker>,
+}
+
+/// Whether the current successful result must be, or has been, integrated
+/// into its candidate's target branch. Direct results do not require a
+/// separate integration step.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IntegrationStatus {
+    NotRequired,
+    Pending,
+    Accepted,
+    Published,
+    Rejected,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -396,11 +411,28 @@ pub enum SubmissionConflict {
 
 impl NodeState {
     pub fn is_complete(&self) -> bool {
-        self.outcome == RecordedOutcome::Succeeded && self.currency == Currency::Current
+        self.outcome == RecordedOutcome::Succeeded
+            && self.currency == Currency::Current
+            && matches!(
+                self.integration,
+                IntegrationStatus::NotRequired | IntegrationStatus::Published
+            )
     }
 
     pub fn is_ready(&self) -> bool {
-        !self.is_complete() && self.blockers.is_empty()
+        !self.is_complete()
+            && self.blockers.is_empty()
+            && matches!(
+                self.integration,
+                IntegrationStatus::NotRequired | IntegrationStatus::Rejected
+            )
+    }
+
+    pub fn is_awaiting_integration(&self) -> bool {
+        matches!(
+            self.integration,
+            IntegrationStatus::Pending | IntegrationStatus::Accepted
+        )
     }
 
     pub fn is_blocked(&self) -> bool {

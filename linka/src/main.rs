@@ -11,7 +11,7 @@ use std::path::PathBuf;
 
 use linka::model::{Blocker, BlockerReason, NodeState, StalenessReason};
 use linka::ops::{self, NewNode};
-use linka::{Author, DepKind, GitVcs, NodeId, ProjectPath, Store};
+use linka::{Author, CandidateId, CandidateStore, DepKind, GitVcs, NodeId, ProjectPath, Store};
 
 #[derive(Parser)]
 #[command(
@@ -120,6 +120,36 @@ enum Cmd {
 
     /// Show a node: definition, derived status, result, and staleness reasons.
     Show { id: NodeId },
+
+    /// List recorded output candidates, optionally for one source node.
+    Candidates { node: Option<NodeId> },
+
+    /// Show one candidate, its source node, decision, and publication.
+    Candidate { id: String },
+
+    /// Accept an exact candidate for its recorded target branch.
+    Accept {
+        id: String,
+        #[arg(long, default_value = "")]
+        notes: String,
+        #[arg(long, value_enum, default_value = "human")]
+        author: Author,
+    },
+
+    /// Reject a candidate; rejection notes are required.
+    Reject {
+        id: String,
+        #[arg(long)]
+        notes: String,
+        #[arg(long, value_enum, default_value = "human")]
+        author: Author,
+    },
+
+    /// Publish an accepted candidate by recoverable fast-forward.
+    Publish { id: String },
+
+    /// Finish any prepared publication interrupted by a crash.
+    RecoverPublications,
 
     /// List every node with its derived status.
     List,
@@ -319,6 +349,118 @@ fn main() -> Result<()> {
             let store = Store::open(store)?;
             let vcs = GitVcs::for_store(&store);
             print!("{}", show_node(&store, &vcs, &id)?);
+        }
+
+        Cmd::Candidates { node } => {
+            let store = Store::open(store)?;
+            let candidates = CandidateStore::new(&store);
+            let views = match node {
+                Some(node) => candidates.for_node(&node)?,
+                None => candidates
+                    .list()?
+                    .into_iter()
+                    .map(|id| candidates.load(&id))
+                    .collect::<Result<Vec<_>>>()?,
+            };
+            if views.is_empty() {
+                println!("no candidates");
+            }
+            for view in views {
+                println!(
+                    "{}  node {}  {:?}  {} -> {}",
+                    view.candidate.id,
+                    view.candidate.node,
+                    view.integration(),
+                    view.candidate.branch,
+                    view.candidate.target
+                );
+            }
+        }
+
+        Cmd::Candidate { id } => {
+            let store = Store::open(store)?;
+            let view = CandidateStore::new(&store).load(&CandidateId(id))?;
+            println!("candidate {}", view.candidate.id);
+            println!("node      {}", view.candidate.node);
+            println!("status    {:?}", view.integration());
+            println!("branch    {}", view.candidate.branch);
+            println!("target    {}", view.candidate.target);
+            println!("input     {}", view.candidate.input_commit);
+            println!("artifact  {}", view.candidate.artifact.id);
+            println!("result    {:?}", view.candidate.result);
+            if let Some(external) = &view.candidate.external {
+                println!("external  {}/{}", external.namespace, external.id);
+            }
+            if let Some(decision) = &view.decision {
+                println!(
+                    "decision  {:?} by {}",
+                    decision.kind,
+                    decision.author.as_str()
+                );
+                if !decision.notes.is_empty() {
+                    println!("notes     {}", decision.notes);
+                }
+            }
+            if let Some(publication) = &view.publication {
+                println!(
+                    "publish   {}: {} -> {}{}",
+                    publication.target_ref,
+                    publication.target_previous,
+                    publication.candidate_commit,
+                    if publication.completed_at_ms.is_some() {
+                        " (complete)"
+                    } else {
+                        " (prepared)"
+                    }
+                );
+            }
+        }
+
+        Cmd::Accept { id, notes, author } => {
+            let store = Store::open(store)?;
+            let vcs = GitVcs::for_store(&store);
+            CandidateStore::new(&store).accept(&vcs, &CandidateId(id.clone()), author, notes)?;
+            println!("accepted {id}");
+        }
+
+        Cmd::Reject { id, notes, author } => {
+            let store = Store::open(store)?;
+            let vcs = GitVcs::for_store(&store);
+            CandidateStore::new(&store).reject(&vcs, &CandidateId(id.clone()), author, notes)?;
+            println!("rejected {id}");
+        }
+
+        Cmd::Publish { id } => {
+            let store = Store::open(store)?;
+            let vcs = GitVcs::for_store(&store);
+            let publication =
+                CandidateStore::new(&store).publish(&vcs, &CandidateId(id.clone()))?;
+            println!(
+                "published {id} to {} at {}",
+                publication.target_ref, publication.candidate_commit
+            );
+        }
+
+        Cmd::RecoverPublications => {
+            let store = Store::open(store)?;
+            let vcs = GitVcs::for_store(&store);
+            let candidates = CandidateStore::new(&store);
+            let mut recovered = 0;
+            for id in candidates.list()? {
+                let view = candidates.load(&id)?;
+                if view
+                    .publication
+                    .as_ref()
+                    .is_some_and(|publication| publication.completed_at_ms.is_none())
+                {
+                    candidates.recover_publication(&vcs, &id)?;
+                    println!("recovered {id}");
+                    recovered += 1;
+                }
+            }
+            if recovered == 0 {
+                println!("no pending publications");
+            }
         }
 
         Cmd::List => {
@@ -604,6 +746,13 @@ fn state_summary(state: &NodeState) -> String {
     if state.is_complete() {
         return "complete".into();
     }
+    if state.is_awaiting_integration() {
+        return match state.integration {
+            linka::IntegrationStatus::Pending => "awaiting candidate acceptance".into(),
+            linka::IntegrationStatus::Accepted => "accepted; awaiting publication".into(),
+            _ => unreachable!(),
+        };
+    }
     if state.is_ready() {
         if state.currency == linka::Currency::Stale {
             let reason = state
@@ -630,6 +779,7 @@ fn format_blocker(blocker: &Blocker) -> String {
         BlockerReason::Open => "not complete (open)",
         BlockerReason::Failed => "not complete (failed)",
         BlockerReason::Stale => "not complete (stale)",
+        BlockerReason::AwaitingIntegration => "awaiting candidate integration",
     };
     format!("{}: {reason}", blocker.id)
 }
@@ -689,6 +839,18 @@ fn show_node(store: &Store, vcs: &GitVcs, id: &str) -> Result<String> {
     }
     for src in &meta.derived_from {
         writeln!(out, "derived_from: {src}")?;
+    }
+    for candidate in
+        CandidateStore::new(store).for_node(&id.parse().map_err(anyhow::Error::msg)?)?
+    {
+        writeln!(
+            out,
+            "candidate: {} ({:?}, {} -> {})",
+            candidate.candidate.id,
+            candidate.integration(),
+            candidate.candidate.branch,
+            candidate.candidate.target
+        )?;
     }
 
     if let Some((result, notes)) = store.read_result(id)? {
@@ -836,7 +998,10 @@ fn to_strings(paths: &[ProjectPath]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::{state_summary, strip_comment_lines};
-    use linka::{Blocker, BlockerReason, Currency, NodeState, RecordedOutcome, StalenessReason};
+    use linka::{
+        Blocker, BlockerReason, Currency, IntegrationStatus, NodeState, RecordedOutcome,
+        StalenessReason,
+    };
 
     #[test]
     fn strip_comment_lines_follows_the_git_template_convention() {
@@ -851,6 +1016,7 @@ mod tests {
         let stale = NodeState {
             outcome: RecordedOutcome::Succeeded,
             currency: Currency::Stale,
+            integration: IntegrationStatus::NotRequired,
             staleness: vec![StalenessReason::ContextMissing {
                 path: "input".into(),
             }],
@@ -860,6 +1026,7 @@ mod tests {
         let failed = NodeState {
             outcome: RecordedOutcome::Failed,
             currency: Currency::Current,
+            integration: IntegrationStatus::NotRequired,
             staleness: vec![],
             blockers: vec![],
         };
