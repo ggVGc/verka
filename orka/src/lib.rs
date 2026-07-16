@@ -18,6 +18,7 @@
 //! tests; the Linka store is always real.
 
 pub mod attempt;
+pub mod candidate;
 pub mod config;
 pub mod driva_exec;
 pub mod engine;

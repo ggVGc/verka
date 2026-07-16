@@ -62,15 +62,34 @@ orka init                create a default orka.toml (never overwrite one)
 orka run [NODE]          run one attempt (first ready node when omitted)
 orka attempts            list recorded attempts
 orka show ATTEMPT        one attempt's durable record
+orka candidates          list project candidates with their source nodes
+orka candidate ATTEMPT   show a candidate and its patch
+orka publish ATTEMPT     safely fast-forward an accepted candidate
 orka recover             classify and finish unfinished attempts
 ```
 
 The agent command executes inside the isolated environment with the attempt
 worktree mounted writable at `/workspace` and an exchange directory
 (`$ORKA_PROMPT` in, `$ORKA_OUTCOME` out). It declares its outcome by
-writing `outcome.toml`; see `src/outcome.rs` for the contract. Publication of
-an accepted candidate branch into the project checkout is review's decision,
-not Orka's.
+writing `outcome.toml`; see `src/outcome.rs` for the contract.
+
+When a successful attempt produces project files, `orka run` prints the
+candidate branch and the commands for inspecting and publishing it. The node
+will read as succeeded-but-stale until that output is published, because the
+candidate deliberately does not alter the human project checkout:
+
+```text
+orka candidates
+orka candidate ATTEMPT
+orka publish ATTEMPT
+```
+
+The candidate list connects each branch to its durable attempt and source
+Linka node. The detail view includes the frozen input, candidate head, and full
+patch. Publication accepts only the latest successful result for the node,
+refuses unrelated Linka staleness and dirty, detached, or moved checkouts, then
+fast-forwards the project branch. Choosing to publish remains the human review
+decision; Orka supplies the safe mechanism but never approves automatically.
 
 Worktree cleanup retains the `orka/attempts/<attempt-id>` candidate branch for
 every sealed attempt, including stale submissions and recorded failures. This

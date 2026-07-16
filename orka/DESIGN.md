@@ -18,7 +18,8 @@ never depends on Orka.
 - Linka owns graph definitions, readiness, staleness, work snapshots, result
   validation, graph mutations, and project/output provenance.
 - Orka owns agent selection policy, execution policy, prompts, durable
-  attempts, transcripts, outcome interpretation, recovery, and cleanup.
+  attempts, transcripts, outcome interpretation, candidate inspection and
+  publication mechanics, recovery, and cleanup.
 - Orka calls Linka's public operations but never reads or mutates Linka's
   on-disk representation directly.
 - Linka stores only namespaced producer evidence about Orka (namespace `orka`);
@@ -108,6 +109,20 @@ available for inspection, recovery, or later review. These branches are part
 of the attempt's evidence and are not garbage-collection candidates. Any
 future deletion must be an explicit pruning operation with a visible retention
 policy; ordinary run and recovery cleanup never deletes them.
+
+## Candidate publication
+
+An attempt branch whose head moved beyond its frozen input is exposed as a
+candidate together with its durable attempt id and source Linka node. Orka can
+render its patch and publish an accepted candidate, but never publishes as an
+implicit consequence of execution. Publication verifies that the candidate is
+the node's latest accepted successful result, that output drift is its only
+staleness, and that the named, clean project checkout is still at the frozen
+input. It then fast-forwards the checkout to the accepted output commit.
+
+Stale-at-submit branches remain inspectable evidence but are not publishable.
+Approval remains outside Orka; the explicit publish command is only the safe
+project-side mechanism used after that decision.
 
 ## Producer evidence
 

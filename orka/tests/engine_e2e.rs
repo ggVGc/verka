@@ -9,6 +9,7 @@ mod common;
 use common::*;
 use linka::Store;
 use orka::attempt::{AttemptId, AttemptPhase, FsAttemptStore, SealedState};
+use orka::candidate::{CandidateDisposition, Candidates, PublishOutcome};
 use orka::engine::{Engine, ExecutionPolicy, RunProgress};
 use orka::executor::{ExecutionReport, ExecutionSpec};
 use orka::fakes::FakeExecutor;
@@ -155,10 +156,37 @@ fn a_full_attempt_lands_a_version_checked_result_from_an_isolated_worktree() {
         "agent transcript\n"
     );
 
-    // A human accepts the candidate: fast-forward the checked-out branch onto
-    // the output. The node is then complete and no machine work is ready.
+    // Orka exposes the candidate with its source node and its complete patch.
+    let candidates = Candidates::new(&store, &attempts);
+    let listed = candidates.list().unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].attempt, report.attempt);
+    assert_eq!(listed[0].node.as_str(), node);
+    assert_eq!(listed[0].disposition, CandidateDisposition::Publishable);
+    assert!(candidates
+        .patch(&report.attempt)
+        .unwrap()
+        .contains("greeting.txt"));
+
+    // Publication refuses to trample a dirty human checkout.
+    let error = candidates.publish(&report.attempt).unwrap_err();
+    assert!(error.to_string().contains("checkout is dirty"), "{error:#}");
+
+    // A human accepts through Orka. The node is then complete and no machine
+    // work is ready; repeating publication is harmless.
     std::fs::remove_file(project.join("wip.txt")).unwrap();
-    git(&project, &["merge", "--ff-only", &output]);
+    assert_eq!(
+        candidates.publish(&report.attempt).unwrap(),
+        PublishOutcome::Published {
+            commit: output.clone()
+        }
+    );
+    assert_eq!(
+        candidates.publish(&report.attempt).unwrap(),
+        PublishOutcome::AlreadyPublished {
+            commit: output.clone()
+        }
+    );
     assert!(linka::ops::node_state(&store, &vcs, &node)
         .unwrap()
         .is_complete());
@@ -299,6 +327,18 @@ fn an_attempt_against_a_graph_that_moved_mid_run_seals_stale() {
     };
     assert!(!conflicts.is_empty());
     assert!(store.read_result(&node).unwrap().is_none());
+
+    // Its committed branch remains visible and tied to the source node, but
+    // cannot be published because Linka rejected the submission.
+    let candidates = Candidates::new(&store, &attempts);
+    let candidate = candidates.get(&report.attempt).unwrap();
+    assert_eq!(candidate.node.as_str(), node);
+    assert_eq!(
+        candidate.disposition,
+        CandidateDisposition::NotPublishable("stale-at-submit".into())
+    );
+    let error = candidates.publish(&report.attempt).unwrap_err();
+    assert!(error.to_string().contains("not an accepted"), "{error:#}");
 }
 
 #[test]

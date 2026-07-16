@@ -5,6 +5,7 @@ use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use linka::{NodeId, Store};
 use orka::attempt::{AttemptId, FsAttemptStore, SealedState};
+use orka::candidate::{Candidates, PublishOutcome};
 use orka::config::{Config, CONFIG_FILE};
 use orka::engine::{Engine, RunProgress, RunReport};
 use orka::linka_work::LinkaWork;
@@ -40,6 +41,12 @@ enum Command {
     Attempts,
     /// Show one attempt's durable record.
     Show { attempt: String },
+    /// List project candidates and the Linka nodes that produced them.
+    Candidates,
+    /// Show a candidate's source node, branch, commits, and patch.
+    Candidate { attempt: String },
+    /// Fast-forward the project checkout to an accepted candidate.
+    Publish { attempt: String },
     /// Classify unfinished attempts and finish what can be finished.
     Recover,
 }
@@ -171,6 +178,7 @@ fn run(cli: Cli) -> Result<()> {
             println!("input     {}", input.input_commit());
             if let Some(ws) = &snapshot.workspace {
                 println!("workspace {} (branch {})", ws.path.display(), ws.branch);
+                println!("candidate {}", ws.branch);
             }
             if let Some(evidence) = &snapshot.evidence {
                 println!(
@@ -184,6 +192,53 @@ fn run(cli: Cli) -> Result<()> {
             let transcript = attempts.transcript_path(&id);
             if transcript.exists() {
                 println!("transcript {}", transcript.display());
+            }
+        }
+        Command::Candidates => {
+            let store = workbench.linka_store()?;
+            let attempts = workbench.attempts();
+            let candidates = Candidates::new(&store, &attempts).list()?;
+            if candidates.is_empty() {
+                println!("no project candidates");
+            }
+            for candidate in candidates {
+                println!(
+                    "{}  node {}  {}  {}",
+                    candidate.attempt,
+                    candidate.node,
+                    candidate.disposition.label(),
+                    candidate.branch
+                );
+            }
+        }
+        Command::Candidate { attempt } => {
+            let store = workbench.linka_store()?;
+            let attempts = workbench.attempts();
+            let candidates = Candidates::new(&store, &attempts);
+            let id = AttemptId(attempt);
+            let candidate = candidates.get(&id)?;
+            println!("candidate {}", candidate.attempt);
+            println!("node      {}", candidate.node);
+            println!("status    {}", candidate.disposition.label());
+            println!("branch    {}", candidate.branch);
+            println!("input     {}", candidate.input_commit);
+            println!("head      {}", candidate.head_commit);
+            let patch = candidates.patch(&id)?;
+            if patch.is_empty() {
+                println!("\n(no diff)");
+            } else {
+                println!("\n{patch}");
+            }
+        }
+        Command::Publish { attempt } => {
+            let store = workbench.linka_store()?;
+            let attempts = workbench.attempts();
+            let id = AttemptId(attempt);
+            match Candidates::new(&store, &attempts).publish(&id)? {
+                PublishOutcome::Published { commit } => println!("published {id} at {commit}"),
+                PublishOutcome::AlreadyPublished { commit } => {
+                    println!("candidate {id} is already published at {commit}")
+                }
             }
         }
         Command::Recover => {
@@ -215,6 +270,19 @@ fn print_run(report: &RunReport) {
     println!("attempt {}  node {}", report.attempt, report.node);
     println!("exit    {}", report.exit_code);
     println!("sealed  {}", seal_line(&report.sealed));
+    if matches!(
+        report.sealed,
+        SealedState::Submitted {
+            output_commit: Some(_)
+        }
+    ) {
+        println!(
+            "candidate {}  (view: `orka candidate {}`; publish: `orka publish {}`)",
+            orka::workspace::GitWorkspaces::branch_for(&report.attempt.0),
+            report.attempt,
+            report.attempt
+        );
+    }
     if report.backend_failed {
         println!("warning: the agent command exited nonzero; its outcome was still handled");
     }
