@@ -36,10 +36,25 @@ impl CandidateStore<'_> {
             .output
             .clone()
             .with_context(|| format!("node `{}` result has no project output", new.node))?;
+        let result_version = self.store.result_version(new.node.as_str())?;
+        if let Some(existing) = self.for_result(&new.node, &result_version, &artifact)? {
+            if existing.branch == new.branch
+                && existing.input_commit == new.input_commit
+                && existing.target == new.target
+                && existing.external == new.external
+            {
+                return Ok(existing);
+            }
+            bail!(
+                "node `{}` result already has candidate `{}` with different facts",
+                new.node,
+                existing.id
+            );
+        }
         let candidate = CandidateRecord {
             schema: CANDIDATE_SCHEMA,
             id: CandidateId::new(),
-            result: self.store.result_version(new.node.as_str())?,
+            result: result_version,
             node: new.node,
             artifact,
             branch: new.branch,

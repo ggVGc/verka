@@ -152,6 +152,25 @@ fn candidate_branch_is_informational_after_registration() {
 }
 
 #[test]
+fn an_exact_result_has_only_one_candidate() {
+    let (_temp, store, vcs, node, _) = successful_output();
+    let candidate = register(&store, &vcs, &node);
+    let error = CandidateStore::new(&store)
+        .register(
+            &vcs,
+            NewCandidate {
+                node,
+                branch: "candidates/other".into(),
+                input_commit: "base".into(),
+                target: "main".into(),
+                external: None,
+            },
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains(&candidate.id.0), "{error:#}");
+}
+
+#[test]
 fn publication_is_derived_and_target_corruption_is_detected() {
     let (_temp, store, vcs, node, _) = successful_output();
     let candidate = register(&store, &vcs, &node);

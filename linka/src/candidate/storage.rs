@@ -61,7 +61,11 @@ impl CandidateStore<'_> {
             .into_iter()
             .filter(|candidate| candidate.result == *result && candidate.artifact == *artifact)
             .collect::<Vec<_>>();
-        Ok(matches.pop())
+        match matches.len() {
+            0 => Ok(None),
+            1 => Ok(matches.pop()),
+            count => bail!("node `{node}` result has {count} candidate records"),
+        }
     }
 
     pub fn by_external(&self, external: &ExternalIdentity) -> Result<Option<CandidateRecord>> {
