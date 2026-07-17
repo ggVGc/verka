@@ -15,7 +15,7 @@ impl CandidateStore<'_> {
         if candidate.integration(vcs)? == IntegrationStatus::Published {
             return Ok(());
         }
-        self.require_current_candidate(vcs, &candidate, IntegrationStatus::Accepted)?;
+        self.require_current(vcs, &candidate, IntegrationStatus::Accepted)?;
         if !vcs.publish_fast_forward(
             &branch_ref(&candidate.target),
             target_previous,

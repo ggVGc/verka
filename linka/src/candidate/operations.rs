@@ -82,7 +82,7 @@ impl CandidateStore<'_> {
             CandidateState::Rejected { .. } => bail!("candidate `{id}` was already rejected"),
             CandidateState::Pending => {}
         }
-        self.require_current_candidate(vcs, &candidate, IntegrationStatus::Pending)?;
+        self.require_current(vcs, &candidate, IntegrationStatus::Pending)?;
         let target_ref = branch_ref(&candidate.target);
         let target_previous = vcs
             .ref_commit(&target_ref)?
@@ -117,7 +117,7 @@ impl CandidateStore<'_> {
             CandidateState::Pending => {}
             _ => bail!("candidate `{id}` already has a different decision"),
         }
-        self.require_current_candidate(vcs, &candidate, IntegrationStatus::Pending)?;
+        self.require_current(vcs, &candidate, IntegrationStatus::Pending)?;
         candidate.state = CandidateState::Rejected {
             decided_at_ms: now_millis(),
             author,
@@ -128,7 +128,7 @@ impl CandidateStore<'_> {
         Ok(candidate)
     }
 
-    pub(super) fn require_current_candidate(
+    pub(super) fn require_current(
         &self,
         vcs: &dyn Vcs,
         candidate: &CandidateRecord,
@@ -146,14 +146,8 @@ impl CandidateStore<'_> {
                 candidate.node
             );
         }
-        let current = self
-            .for_result(&candidate.node, &candidate.result, &candidate.artifact)?
-            .with_context(|| format!("candidate `{}` is no longer current", candidate.id))?;
         let state = crate::ops::node_state(self.store, vcs, candidate.node.as_str())?;
-        if current.id != candidate.id
-            || current.integration(vcs)? != expected
-            || state.currency != crate::Currency::Current
-        {
+        if state.integration != expected || state.currency != crate::Currency::Current {
             bail!(
                 "candidate `{}` is not the current {:?} candidate for node `{}`",
                 candidate.id,
