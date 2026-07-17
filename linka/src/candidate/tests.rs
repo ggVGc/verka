@@ -141,6 +141,17 @@ fn a_moved_source_cannot_accept_an_obsolete_candidate() {
 }
 
 #[test]
+fn candidate_branch_is_informational_after_registration() {
+    let (_temp, store, vcs, node, _) = successful_output();
+    let candidate = register(&store, &vcs, &node);
+    vcs.refs.borrow_mut().remove("refs/heads/candidates/a");
+
+    CandidateStore::new(&store)
+        .accept(&vcs, &candidate.id, Author::Human, String::new())
+        .unwrap();
+}
+
+#[test]
 fn publication_is_derived_and_target_corruption_is_detected() {
     let (_temp, store, vcs, node, _) = successful_output();
     let candidate = register(&store, &vcs, &node);

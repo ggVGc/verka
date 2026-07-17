@@ -36,13 +36,6 @@ impl CandidateStore<'_> {
             .output
             .clone()
             .with_context(|| format!("node `{}` result has no project output", new.node))?;
-        if vcs.ref_commit(&branch_ref(&new.branch))?.as_deref() != Some(artifact.id.as_str()) {
-            bail!(
-                "candidate branch `{}` does not point to recorded output {}",
-                new.branch,
-                artifact.id
-            );
-        }
         let candidate = CandidateRecord {
             schema: CANDIDATE_SCHEMA,
             id: CandidateId::new(),
@@ -74,7 +67,6 @@ impl CandidateStore<'_> {
             CandidateState::Rejected { .. } => bail!("candidate `{id}` was already rejected"),
             CandidateState::Pending => {}
         }
-        self.require_candidate_ref(vcs, &candidate)?;
         self.require_current_candidate(vcs, &candidate, IntegrationStatus::Pending)?;
         let target_ref = branch_ref(&candidate.target);
         let target_previous = vcs
@@ -119,23 +111,6 @@ impl CandidateStore<'_> {
         storage::write_toml(&self.record_path(id), &candidate)?;
         mutation.commit(vcs, &format!("linka: reject candidate {id}"))?;
         Ok(candidate)
-    }
-
-    pub(super) fn require_candidate_ref(
-        &self,
-        vcs: &dyn Vcs,
-        candidate: &CandidateRecord,
-    ) -> Result<()> {
-        if vcs.ref_commit(&branch_ref(&candidate.branch))?.as_deref()
-            != Some(candidate.artifact.id.as_str())
-        {
-            bail!(
-                "candidate branch `{}` moved from accepted artifact {}",
-                candidate.branch,
-                candidate.artifact.id
-            );
-        }
-        Ok(())
     }
 
     pub(super) fn require_current_candidate(

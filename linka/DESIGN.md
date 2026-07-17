@@ -96,8 +96,10 @@ facts are minimal; readiness, blockers, dependents, provenance, and staleness
 are computed from them.
 
 Each candidate lives in one `candidates/<candidate-id>/candidate.toml` record.
-The record contains its identity, source result, artifact, branch, target, and
-pending/accepted/rejected state; Git history provides the decision audit trail.
+The record contains its identity, source result, artifact, display branch,
+target, and pending/accepted/rejected state; Git history provides the decision
+audit trail. The artifact commit is authoritative—the producer's branch is
+informational and may be moved or removed without changing candidate validity.
 Acceptance pins the target branch's previous commit. Publication
 compare-and-swap fast-forwards the target; whether it succeeded is derived from
 Git ancestry. Retrying is safe after a crash, and a target that moved without

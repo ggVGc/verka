@@ -579,24 +579,14 @@ fn staleness_for_result(
     }
     if let Some(output) = &result.output {
         let detail = if let Some(candidate) = candidate {
-            let branch_ref = format!("refs/heads/{}", candidate.branch);
-            match vcs.ref_commit(&branch_ref)? {
-                Some(commit) if commit == output.id => {
-                    if candidate.integration(vcs)? == IntegrationStatus::Published {
-                        let target_ref = format!("refs/heads/{}", candidate.target);
-                        let target = vcs.ref_commit(&target_ref)?.with_context(|| {
-                            format!("published target `{target_ref}` is missing")
-                        })?;
-                        vcs.drift_at(&output.id, &target)?
-                    } else {
-                        None
-                    }
-                }
-                Some(commit) => Some(format!(
-                    "candidate branch {} moved to {}",
-                    candidate.branch, commit
-                )),
-                None => Some(format!("candidate branch {} is missing", candidate.branch)),
+            if candidate.integration(vcs)? == IntegrationStatus::Published {
+                let target_ref = format!("refs/heads/{}", candidate.target);
+                let target = vcs
+                    .ref_commit(&target_ref)?
+                    .with_context(|| format!("published target `{target_ref}` is missing"))?;
+                vcs.drift_at(&output.id, &target)?
+            } else {
+                None
             }
         } else {
             vcs.drift(&output.id)?
