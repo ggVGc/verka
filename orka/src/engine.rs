@@ -275,15 +275,10 @@ impl Engine<'_> {
                 // stale-looking) node.
                 if let Some(recorded) = self.linka.result_by_attempt(input.node(), &attempt.0)? {
                     let candidate = match (&recorded.outcome, &recorded.output_commit) {
-                        (linka::Outcome::Done, Some(output)) => {
-                            Some(self.linka.register_candidate(
-                                input,
-                                workspace,
-                                attempt,
-                                linka_work::producer_evidence(attempt, report),
-                                output,
-                            )?)
-                        }
+                        (linka::Outcome::Done, Some(output)) => Some(
+                            self.linka
+                                .register_candidate(input, workspace, attempt, output)?,
+                        ),
                         _ => None,
                     };
                     let sealed = match recorded.outcome {

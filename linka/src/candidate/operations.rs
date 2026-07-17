@@ -46,7 +46,6 @@ impl CandidateStore<'_> {
         let candidate = CandidateRecord {
             schema: CANDIDATE_SCHEMA,
             id: CandidateId::new(),
-            created_at_ms: now_millis(),
             result: self.store.result_version(new.node.as_str())?,
             node: new.node,
             artifact,
@@ -54,7 +53,6 @@ impl CandidateStore<'_> {
             input_commit: new.input_commit,
             target: new.target,
             external: new.external,
-            producer: new.producer,
             state: CandidateState::Pending,
         };
         storage::write_toml(&self.record_path(&candidate.id), &candidate)?;

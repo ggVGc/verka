@@ -185,7 +185,7 @@ impl<'a> LinkaWork<'a> {
                 ..
             } => {
                 let candidate =
-                    self.register_candidate(input, workspace, attempt, producer, &output_commit)?;
+                    self.register_candidate(input, workspace, attempt, &output_commit)?;
                 Ok((
                     Settled::Accepted {
                         output_commit: Some(output_commit),
@@ -231,7 +231,6 @@ impl<'a> LinkaWork<'a> {
         input: &AttemptInput,
         workspace: &crate::workspace::PreparedWorkspace,
         attempt: &AttemptId,
-        producer: ProducerEvidence,
         output_commit: &str,
     ) -> Result<CandidateId> {
         let target = if input.target_branch.is_empty() {
@@ -252,7 +251,6 @@ impl<'a> LinkaWork<'a> {
                     namespace: "orka".into(),
                     id: attempt.0.clone(),
                 }),
-                producer: Some(producer),
             },
         )?;
         if candidate.artifact.id != output_commit {

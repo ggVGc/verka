@@ -70,7 +70,6 @@ fn register(store: &Store, vcs: &FakeVcs, node: &NodeId) -> CandidateRecord {
                     namespace: "test-runner".into(),
                     id: "run-1".into(),
                 }),
-                producer: None,
             },
         )
         .unwrap()

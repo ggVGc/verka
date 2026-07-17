@@ -3,9 +3,7 @@
 //! Candidates are attached to an exact node result and immutable artifact.
 //! Producer metadata is opaque, keeping execution drivers outside Linka's domain.
 
-use crate::model::{
-    ArtifactRef, Author, IntegrationStatus, NodeId, ProducerEvidence, ResultVersion,
-};
+use crate::model::{ArtifactRef, Author, IntegrationStatus, NodeId, ResultVersion};
 use crate::{Store, Vcs};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -52,7 +50,6 @@ pub struct ExternalIdentity {
 pub struct CandidateRecord {
     pub schema: u32,
     pub id: CandidateId,
-    pub created_at_ms: i64,
     pub node: NodeId,
     pub result: ResultVersion,
     pub artifact: ArtifactRef,
@@ -63,8 +60,6 @@ pub struct CandidateRecord {
     pub target: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub external: Option<ExternalIdentity>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub producer: Option<ProducerEvidence>,
     pub state: CandidateState,
 }
 
@@ -74,7 +69,6 @@ pub struct NewCandidate {
     pub input_commit: String,
     pub target: String,
     pub external: Option<ExternalIdentity>,
-    pub producer: Option<ProducerEvidence>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
