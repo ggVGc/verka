@@ -1,4 +1,4 @@
-//! First-class candidate outputs and recoverable target-branch publication.
+//! First-class candidate outputs and target-branch publication.
 //!
 //! Candidates are attached to an exact node result and immutable artifact.
 //! Producer metadata is opaque, keeping execution drivers outside Linka's domain.
@@ -17,8 +17,7 @@ mod storage;
 #[cfg(test)]
 mod tests;
 
-pub const CANDIDATE_SCHEMA: u32 = 1;
-pub const DECISION_SCHEMA: u32 = 1;
+pub const CANDIDATE_SCHEMA: u32 = 2;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -48,7 +47,7 @@ pub struct ExternalIdentity {
     pub id: String,
 }
 
-/// Immutable identity of one proposed project output.
+/// One proposed project output and its review state.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CandidateRecord {
     pub schema: u32,
@@ -66,6 +65,7 @@ pub struct CandidateRecord {
     pub external: Option<ExternalIdentity>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub producer: Option<ProducerEvidence>,
+    pub state: CandidateState,
 }
 
 pub struct NewCandidate {
@@ -77,65 +77,52 @@ pub struct NewCandidate {
     pub producer: Option<ProducerEvidence>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DecisionKind {
-    Accepted,
-    Rejected,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CandidateDecision {
-    pub schema: u32,
-    pub decided_at_ms: i64,
-    pub kind: DecisionKind,
-    pub author: Author,
-    pub notes: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub target_ref: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub target_previous: Option<String>,
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum CandidateState {
+    Pending,
+    Accepted {
+        decided_at_ms: i64,
+        author: Author,
+        notes: String,
+        target_previous: String,
+    },
+    Rejected {
+        decided_at_ms: i64,
+        author: Author,
+        notes: String,
+    },
 }
 
-#[derive(Clone, Debug)]
-pub struct CandidateView {
-    pub candidate: CandidateRecord,
-    pub decision: Option<CandidateDecision>,
-}
-
-impl CandidateView {
+impl CandidateRecord {
     /// Derive publication from the accepted intent and the target's Git history.
     pub fn integration(&self, vcs: &dyn Vcs) -> Result<IntegrationStatus> {
-        match self.decision.as_ref().map(|decision| decision.kind) {
-            None => Ok(IntegrationStatus::Pending),
-            Some(DecisionKind::Rejected) => Ok(IntegrationStatus::Rejected),
-            Some(DecisionKind::Accepted) => {
-                let decision = self.decision.as_ref().expect("accepted decision");
-                let target_ref = decision
-                    .target_ref
-                    .as_deref()
-                    .context("accepted candidate has no target")?;
-                let previous = decision
-                    .target_previous
-                    .as_deref()
-                    .context("accepted candidate has no target baseline")?;
-                let target = vcs.ref_commit(target_ref)?.with_context(|| {
-                    format!("accepted candidate target `{target_ref}` is missing")
-                })?;
-                if vcs.is_ancestor(&self.candidate.artifact.id, &target)? {
-                    Ok(IntegrationStatus::Published)
-                } else if target == previous {
-                    Ok(IntegrationStatus::Accepted)
-                } else {
-                    bail!(
-                        "candidate `{}` target moved from {} to {} without containing {}",
-                        self.candidate.id,
-                        previous,
-                        target,
-                        self.candidate.artifact.id
-                    )
-                }
-            }
+        let CandidateState::Accepted {
+            target_previous, ..
+        } = &self.state
+        else {
+            return Ok(match self.state {
+                CandidateState::Pending => IntegrationStatus::Pending,
+                CandidateState::Rejected { .. } => IntegrationStatus::Rejected,
+                CandidateState::Accepted { .. } => unreachable!(),
+            });
+        };
+        let target_ref = branch_ref(&self.target);
+        let target = vcs
+            .ref_commit(&target_ref)?
+            .with_context(|| format!("accepted candidate target `{target_ref}` is missing"))?;
+        if vcs.is_ancestor(&self.artifact.id, &target)? {
+            Ok(IntegrationStatus::Published)
+        } else if target == *target_previous {
+            Ok(IntegrationStatus::Accepted)
+        } else {
+            bail!(
+                "candidate `{}` target moved from {} to {} without containing {}",
+                self.id,
+                target_previous,
+                target,
+                self.artifact.id
+            )
         }
     }
 }

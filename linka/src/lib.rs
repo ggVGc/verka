@@ -20,8 +20,7 @@ pub mod store;
 pub mod vcs;
 
 pub use candidate::{
-    CandidateDecision, CandidateId, CandidateRecord, CandidateStore, CandidateView, DecisionKind,
-    ExternalIdentity, NewCandidate,
+    CandidateId, CandidateRecord, CandidateState, CandidateStore, ExternalIdentity, NewCandidate,
 };
 pub use git::GitVcs;
 pub use model::{

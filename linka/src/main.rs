@@ -11,7 +11,10 @@ use std::path::PathBuf;
 
 use linka::model::{Blocker, BlockerReason, NodeState, StalenessReason};
 use linka::ops::{self, NewNode};
-use linka::{Author, CandidateId, CandidateStore, DepKind, GitVcs, NodeId, ProjectPath, Store};
+use linka::{
+    Author, CandidateId, CandidateState, CandidateStore, DepKind, GitVcs, NodeId, ProjectPath,
+    Store,
+};
 
 #[derive(Parser)]
 #[command(
@@ -363,14 +366,14 @@ fn main() -> Result<()> {
             if views.is_empty() {
                 println!("no candidates");
             }
-            for view in views {
+            for candidate in views {
                 println!(
                     "{}  node {}  {:?}  {} -> {}",
-                    view.candidate.id,
-                    view.candidate.node,
-                    view.integration(&vcs)?,
-                    view.candidate.branch,
-                    view.candidate.target
+                    candidate.id,
+                    candidate.node,
+                    candidate.integration(&vcs)?,
+                    candidate.branch,
+                    candidate.target
                 );
             }
         }
@@ -378,26 +381,29 @@ fn main() -> Result<()> {
         Cmd::Candidate { id } => {
             let store = Store::open(store)?;
             let vcs = GitVcs::for_store(&store);
-            let view = CandidateStore::new(&store).load(&CandidateId(id))?;
-            println!("candidate {}", view.candidate.id);
-            println!("node      {}", view.candidate.node);
-            println!("status    {:?}", view.integration(&vcs)?);
-            println!("branch    {}", view.candidate.branch);
-            println!("target    {}", view.candidate.target);
-            println!("input     {}", view.candidate.input_commit);
-            println!("artifact  {}", view.candidate.artifact.id);
-            println!("result    {:?}", view.candidate.result);
-            if let Some(external) = &view.candidate.external {
+            let candidate = CandidateStore::new(&store).load(&CandidateId(id))?;
+            println!("candidate {}", candidate.id);
+            println!("node      {}", candidate.node);
+            println!("status    {:?}", candidate.integration(&vcs)?);
+            println!("branch    {}", candidate.branch);
+            println!("target    {}", candidate.target);
+            println!("input     {}", candidate.input_commit);
+            println!("artifact  {}", candidate.artifact.id);
+            println!("result    {:?}", candidate.result);
+            if let Some(external) = &candidate.external {
                 println!("external  {}/{}", external.namespace, external.id);
             }
-            if let Some(decision) = &view.decision {
-                println!(
-                    "decision  {:?} by {}",
-                    decision.kind,
-                    decision.author.as_str()
-                );
-                if !decision.notes.is_empty() {
-                    println!("notes     {}", decision.notes);
+            match &candidate.state {
+                CandidateState::Pending => {}
+                CandidateState::Accepted { author, notes, .. } => {
+                    println!("decision  accepted by {}", author.as_str());
+                    if !notes.is_empty() {
+                        println!("notes     {notes}");
+                    }
+                }
+                CandidateState::Rejected { author, notes, .. } => {
+                    println!("decision  rejected by {}", author.as_str());
+                    println!("notes     {notes}");
                 }
             }
         }
@@ -806,10 +812,10 @@ fn show_node(store: &Store, vcs: &GitVcs, id: &str) -> Result<String> {
         writeln!(
             out,
             "candidate: {} ({:?}, {} -> {})",
-            candidate.candidate.id,
+            candidate.id,
             candidate.integration(vcs)?,
-            candidate.candidate.branch,
-            candidate.candidate.target
+            candidate.branch,
+            candidate.target
         )?;
     }
 

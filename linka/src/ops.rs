@@ -37,7 +37,7 @@ use anyhow::{bail, Context, Result};
 use std::time::{SystemTime, UNIX_EPOCH};
 use ulid::Ulid;
 
-use crate::candidate::{CandidateStore, CandidateView};
+use crate::candidate::{CandidateRecord, CandidateStore};
 use crate::model::{
     ArtifactRef, Author, Blocker, BlockerReason, ConsumedNode, ContextPin, Currency,
     DefinitionVersion, DepKind, IntegrationStatus, NodeId, NodeMeta, NodeState, Outcome,
@@ -516,7 +516,7 @@ fn staleness_for_result(
     id: &str,
     result: &ResultMeta,
     revision: Option<&str>,
-    candidate: Option<&CandidateView>,
+    candidate: Option<&CandidateRecord>,
 ) -> Result<Vec<StalenessReason>> {
     let mut reasons = Vec::new();
     let current = store.node_version(id)?;
@@ -579,16 +579,12 @@ fn staleness_for_result(
     }
     if let Some(output) = &result.output {
         let detail = if let Some(candidate) = candidate {
-            let branch_ref = format!("refs/heads/{}", candidate.candidate.branch);
+            let branch_ref = format!("refs/heads/{}", candidate.branch);
             match vcs.ref_commit(&branch_ref)? {
                 Some(commit) if commit == output.id => {
                     if candidate.integration(vcs)? == IntegrationStatus::Published {
-                        let target_ref = candidate
-                            .decision
-                            .as_ref()
-                            .and_then(|decision| decision.target_ref.as_deref())
-                            .context("published candidate has no target")?;
-                        let target = vcs.ref_commit(target_ref)?.with_context(|| {
+                        let target_ref = format!("refs/heads/{}", candidate.target);
+                        let target = vcs.ref_commit(&target_ref)?.with_context(|| {
                             format!("published target `{target_ref}` is missing")
                         })?;
                         vcs.drift_at(&output.id, &target)?
@@ -598,12 +594,9 @@ fn staleness_for_result(
                 }
                 Some(commit) => Some(format!(
                     "candidate branch {} moved to {}",
-                    candidate.candidate.branch, commit
+                    candidate.branch, commit
                 )),
-                None => Some(format!(
-                    "candidate branch {} is missing",
-                    candidate.candidate.branch
-                )),
+                None => Some(format!("candidate branch {} is missing", candidate.branch)),
             }
         } else {
             vcs.drift(&output.id)?
@@ -622,7 +615,7 @@ fn candidate_for_result(
     store: &Store,
     id: &str,
     result: &ResultMeta,
-) -> Result<Option<CandidateView>> {
+) -> Result<Option<CandidateRecord>> {
     let Some(artifact) = &result.output else {
         return Ok(None);
     };

@@ -26,7 +26,7 @@ impl CandidateStore<'_> {
         Ok(ids)
     }
 
-    pub fn load(&self, id: &CandidateId) -> Result<CandidateView> {
+    pub fn load(&self, id: &CandidateId) -> Result<CandidateRecord> {
         validate_candidate_id(id)?;
         let candidate: CandidateRecord = read_toml(&self.record_path(id))
             .with_context(|| format!("unknown or unreadable candidate `{id}`"))?;
@@ -36,18 +36,15 @@ impl CandidateStore<'_> {
                 candidate.schema
             );
         }
-        Ok(CandidateView {
-            candidate,
-            decision: read_optional(&self.decision_path(id))?,
-        })
+        Ok(candidate)
     }
 
-    pub fn for_node(&self, node: &NodeId) -> Result<Vec<CandidateView>> {
+    pub fn for_node(&self, node: &NodeId) -> Result<Vec<CandidateRecord>> {
         self.list()?
             .into_iter()
             .map(|id| self.load(&id))
             .filter(|view| match view {
-                Ok(view) => view.candidate.node == *node,
+                Ok(candidate) => candidate.node == *node,
                 Err(_) => true,
             })
             .collect()
@@ -58,18 +55,18 @@ impl CandidateStore<'_> {
         node: &NodeId,
         result: &ResultVersion,
         artifact: &ArtifactRef,
-    ) -> Result<Option<CandidateView>> {
+    ) -> Result<Option<CandidateRecord>> {
         let mut matches = self
             .for_node(node)?
             .into_iter()
-            .filter(|view| view.candidate.result == *result && view.candidate.artifact == *artifact)
+            .filter(|candidate| candidate.result == *result && candidate.artifact == *artifact)
             .collect::<Vec<_>>();
         Ok(matches.pop())
     }
 
     pub fn by_external(&self, external: &ExternalIdentity) -> Result<Option<CandidateRecord>> {
         for id in self.list()? {
-            let candidate = self.load(&id)?.candidate;
+            let candidate = self.load(&id)?;
             if candidate.external.as_ref() == Some(external) {
                 return Ok(Some(candidate));
             }
@@ -79,10 +76,6 @@ impl CandidateStore<'_> {
 
     pub(super) fn record_path(&self, id: &CandidateId) -> PathBuf {
         self.dir(id).join("candidate.toml")
-    }
-
-    pub(super) fn decision_path(&self, id: &CandidateId) -> PathBuf {
-        self.dir(id).join("decision.toml")
     }
 
     fn root(&self) -> PathBuf {
@@ -110,16 +103,6 @@ pub(super) fn write_toml<T: Serialize>(path: &Path, value: &T) -> Result<()> {
 fn read_toml<T: DeserializeOwned>(path: &Path) -> Result<T> {
     let text = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))
-}
-
-fn read_optional<T: DeserializeOwned>(path: &Path) -> Result<Option<T>> {
-    match fs::read_to_string(path) {
-        Ok(text) => toml::from_str(&text)
-            .map(Some)
-            .with_context(|| format!("parsing {}", path.display())),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error).with_context(|| format!("reading {}", path.display())),
-    }
 }
 
 fn validate_candidate_id(id: &CandidateId) -> Result<()> {

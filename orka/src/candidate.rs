@@ -7,8 +7,7 @@
 use crate::attempt::AttemptId;
 use anyhow::{bail, Context, Result};
 use linka::{
-    Author, CandidateId, CandidateStore, CandidateView, DecisionKind, GitVcs, IntegrationStatus,
-    Store,
+    Author, CandidateId, CandidateRecord, CandidateStore, GitVcs, IntegrationStatus, Store,
 };
 use std::path::Path;
 use std::process::Command;
@@ -51,14 +50,14 @@ impl<'a> Candidates<'a> {
         candidates
             .list()?
             .into_iter()
-            .map(|id| candidates.load(&id).and_then(|view| self.present(view)))
+            .map(|id| candidates.load(&id).and_then(|record| self.present(record)))
             .collect()
     }
 
     /// Resolve either Linka's candidate id or Orka's producing attempt id.
     pub fn get(&self, reference: &str) -> Result<Candidate> {
         let candidates = CandidateStore::new(self.store);
-        let view = if reference.starts_with("candidate-") {
+        let record = if reference.starts_with("candidate-") {
             candidates.load(&CandidateId(reference.to_string()))?
         } else {
             let external = linka::ExternalIdentity {
@@ -70,7 +69,7 @@ impl<'a> Candidates<'a> {
             })?;
             candidates.load(&record.id)?
         };
-        self.present(view)
+        self.present(record)
     }
 
     pub fn patch(&self, reference: &str) -> Result<String> {
@@ -114,20 +113,13 @@ impl<'a> Candidates<'a> {
         self.get(&candidate.id.0)
     }
 
-    fn present(&self, view: CandidateView) -> Result<Candidate> {
-        let attempt = view
-            .candidate
+    fn present(&self, record: CandidateRecord) -> Result<Candidate> {
+        let attempt = record
             .external
             .as_ref()
             .filter(|external| external.namespace == "orka")
             .map(|external| AttemptId(external.id.clone()));
-        let integration = view.integration(&GitVcs::for_store(self.store))?;
-        let record = view.candidate;
-        if let Some(decision) = &view.decision {
-            if decision.kind == DecisionKind::Accepted && decision.target_ref.is_none() {
-                bail!("accepted candidate `{}` has no target", record.id);
-            }
-        }
+        let integration = record.integration(&GitVcs::for_store(self.store))?;
         Ok(Candidate {
             id: record.id,
             attempt,

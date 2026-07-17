@@ -95,12 +95,13 @@ Definitions and results are never overwritten as hidden mutable state. Stored
 facts are minimal; readiness, blockers, dependents, provenance, and staleness
 are computed from them.
 
-Candidate records live under `candidates/<candidate-id>/` and contain an
-immutable identity and decision. Acceptance pins the artifact and target
-branch's previous commit. Publication compare-and-swap fast-forwards the target;
-whether it succeeded is derived from Git ancestry. Retrying is safe after a
-crash, and a target that moved without containing the candidate is reported as
-an integrity error.
+Each candidate lives in one `candidates/<candidate-id>/candidate.toml` record.
+The record contains its identity, source result, artifact, branch, target, and
+pending/accepted/rejected state; Git history provides the decision audit trail.
+Acceptance pins the target branch's previous commit. Publication
+compare-and-swap fast-forwards the target; whether it succeeded is derived from
+Git ancestry. Retrying is safe after a crash, and a target that moved without
+containing the candidate is reported as an integrity error.
 
 Node identifiers are single portable path components. Project paths are
 normalized to `/` separators and are always relative to the paired project

@@ -12,8 +12,7 @@
 //!     result.md       completion narrative (optional)
 //!     work.jsonl      legacy execution log (read-only compatibility only)
 //!   candidates/<id>/  output proposal attached to an exact node result
-//!     candidate.toml  immutable candidate, branch, target, and artifact
-//!     decision.toml   exact accept/reject decision (optional)
+//!     candidate.toml  candidate facts and accept/reject state
 //! ```
 //!
 //! There is no object store or mutable status log: git is the versioning layer.

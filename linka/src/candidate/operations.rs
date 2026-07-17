@@ -55,6 +55,7 @@ impl CandidateStore<'_> {
             target: new.target,
             external: new.external,
             producer: new.producer,
+            state: CandidateState::Pending,
         };
         storage::write_toml(&self.record_path(&candidate.id), &candidate)?;
         mutation.commit(vcs, &format!("linka: register candidate {}", candidate.id))?;
@@ -67,33 +68,29 @@ impl CandidateStore<'_> {
         id: &CandidateId,
         author: Author,
         notes: String,
-    ) -> Result<CandidateDecision> {
+    ) -> Result<CandidateRecord> {
         let mutation = self.store.mutation_lock(vcs)?;
-        let view = self.load(id)?;
-        if let Some(decision) = view.decision {
-            if decision.kind == DecisionKind::Accepted {
-                return Ok(decision);
-            }
-            bail!("candidate `{id}` was already rejected");
+        let mut candidate = self.load(id)?;
+        match candidate.state {
+            CandidateState::Accepted { .. } => return Ok(candidate),
+            CandidateState::Rejected { .. } => bail!("candidate `{id}` was already rejected"),
+            CandidateState::Pending => {}
         }
-        self.require_candidate_ref(vcs, &view.candidate)?;
-        self.require_current_candidate(vcs, &view.candidate, IntegrationStatus::Pending)?;
-        let target_ref = branch_ref(&view.candidate.target);
+        self.require_candidate_ref(vcs, &candidate)?;
+        self.require_current_candidate(vcs, &candidate, IntegrationStatus::Pending)?;
+        let target_ref = branch_ref(&candidate.target);
         let target_previous = vcs
             .ref_commit(&target_ref)?
-            .with_context(|| format!("target branch `{}` does not exist", view.candidate.target))?;
-        let decision = CandidateDecision {
-            schema: DECISION_SCHEMA,
+            .with_context(|| format!("target branch `{}` does not exist", candidate.target))?;
+        candidate.state = CandidateState::Accepted {
             decided_at_ms: now_millis(),
-            kind: DecisionKind::Accepted,
             author,
             notes,
-            target_ref: Some(target_ref),
-            target_previous: Some(target_previous),
+            target_previous,
         };
-        storage::write_toml(&self.decision_path(id), &decision)?;
+        storage::write_toml(&self.record_path(id), &candidate)?;
         mutation.commit(vcs, &format!("linka: accept candidate {id}"))?;
-        Ok(decision)
+        Ok(candidate)
     }
 
     pub fn reject(
@@ -102,31 +99,28 @@ impl CandidateStore<'_> {
         id: &CandidateId,
         author: Author,
         notes: String,
-    ) -> Result<CandidateDecision> {
+    ) -> Result<CandidateRecord> {
         if notes.trim().is_empty() {
             bail!("rejection requires notes");
         }
         let mutation = self.store.mutation_lock(vcs)?;
-        let view = self.load(id)?;
-        if let Some(decision) = view.decision {
-            if decision.kind == DecisionKind::Rejected && decision.notes == notes {
-                return Ok(decision);
-            }
-            bail!("candidate `{id}` already has a different decision");
+        let mut candidate = self.load(id)?;
+        match &candidate.state {
+            CandidateState::Rejected {
+                notes: existing, ..
+            } if existing == &notes => return Ok(candidate),
+            CandidateState::Pending => {}
+            _ => bail!("candidate `{id}` already has a different decision"),
         }
-        self.require_current_candidate(vcs, &view.candidate, IntegrationStatus::Pending)?;
-        let decision = CandidateDecision {
-            schema: DECISION_SCHEMA,
+        self.require_current_candidate(vcs, &candidate, IntegrationStatus::Pending)?;
+        candidate.state = CandidateState::Rejected {
             decided_at_ms: now_millis(),
-            kind: DecisionKind::Rejected,
             author,
             notes,
-            target_ref: None,
-            target_previous: None,
         };
-        storage::write_toml(&self.decision_path(id), &decision)?;
+        storage::write_toml(&self.record_path(id), &candidate)?;
         mutation.commit(vcs, &format!("linka: reject candidate {id}"))?;
-        Ok(decision)
+        Ok(candidate)
     }
 
     pub(super) fn require_candidate_ref(
@@ -168,7 +162,7 @@ impl CandidateStore<'_> {
             .for_result(&candidate.node, &candidate.result, &candidate.artifact)?
             .with_context(|| format!("candidate `{}` is no longer current", candidate.id))?;
         let state = crate::ops::node_state(self.store, vcs, candidate.node.as_str())?;
-        if current.candidate.id != candidate.id
+        if current.id != candidate.id
             || current.integration(vcs)? != expected
             || state.currency != crate::Currency::Current
         {
