@@ -387,7 +387,6 @@ fn main() -> Result<()> {
             println!("status    {:?}", candidate.integration(&vcs)?);
             println!("branch    {}", candidate.branch);
             println!("target    {}", candidate.target);
-            println!("input     {}", candidate.input_commit);
             println!("artifact  {}", candidate.artifact.id);
             println!("result    {:?}", candidate.result);
             if let Some(external) = &candidate.external {

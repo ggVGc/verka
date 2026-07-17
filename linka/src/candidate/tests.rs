@@ -64,7 +64,6 @@ fn register(store: &Store, vcs: &FakeVcs, node: &NodeId) -> CandidateRecord {
             NewCandidate {
                 node: node.clone(),
                 branch: "candidates/a".into(),
-                input_commit: "base".into(),
                 target: "main".into(),
                 external: Some(ExternalIdentity {
                     namespace: "test-runner".into(),
@@ -161,7 +160,6 @@ fn an_exact_result_has_only_one_candidate() {
             NewCandidate {
                 node,
                 branch: "candidates/other".into(),
-                input_commit: "base".into(),
                 target: "main".into(),
                 external: None,
             },

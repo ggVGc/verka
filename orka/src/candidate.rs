@@ -4,7 +4,7 @@
 //! Orka adds attempt-oriented lookup and patch display, but stores no duplicate
 //! candidate state and performs no publication side effect itself.
 
-use crate::attempt::AttemptId;
+use crate::attempt::{AttemptId, FsAttemptStore};
 use anyhow::{bail, Context, Result};
 use linka::{
     Author, CandidateId, CandidateRecord, CandidateStore, GitVcs, IntegrationStatus, Store,
@@ -19,7 +19,7 @@ pub struct Candidate {
     pub node: linka::NodeId,
     pub branch: String,
     pub target: String,
-    pub input_commit: String,
+    pub input_commit: Option<String>,
     pub head_commit: String,
     pub integration: IntegrationStatus,
 }
@@ -38,11 +38,12 @@ impl Candidate {
 
 pub struct Candidates<'a> {
     store: &'a Store,
+    attempts: &'a FsAttemptStore,
 }
 
 impl<'a> Candidates<'a> {
-    pub fn new(store: &'a Store) -> Self {
-        Self { store }
+    pub fn new(store: &'a Store, attempts: &'a FsAttemptStore) -> Self {
+        Self { store, attempts }
     }
 
     pub fn list(&self) -> Result<Vec<Candidate>> {
@@ -74,12 +75,16 @@ impl<'a> Candidates<'a> {
 
     pub fn patch(&self, reference: &str) -> Result<String> {
         let candidate = self.get(reference)?;
+        let input_commit = candidate
+            .input_commit
+            .as_deref()
+            .context("candidate has no Orka attempt input for patching")?;
         checked(
             &self.store.project_root(),
             &[
                 "diff",
                 "--find-renames",
-                &candidate.input_commit,
+                input_commit,
                 &candidate.head_commit,
             ],
         )
@@ -119,6 +124,14 @@ impl<'a> Candidates<'a> {
             .as_ref()
             .filter(|external| external.namespace == "orka")
             .map(|external| AttemptId(external.id.clone()));
+        let input_commit = attempt
+            .as_ref()
+            .map(|attempt| {
+                self.attempts
+                    .load(attempt)
+                    .map(|snapshot| snapshot.record.input.input_commit().to_string())
+            })
+            .transpose()?;
         let integration = record.integration(&GitVcs::for_store(self.store))?;
         Ok(Candidate {
             id: record.id,
@@ -126,7 +139,7 @@ impl<'a> Candidates<'a> {
             node: record.node,
             branch: record.branch,
             target: record.target,
-            input_commit: record.input_commit,
+            input_commit,
             head_commit: record.artifact.id,
             integration,
         })

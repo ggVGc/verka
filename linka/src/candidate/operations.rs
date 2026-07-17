@@ -12,7 +12,6 @@ impl CandidateStore<'_> {
             if let Some(existing) = self.by_external(external)? {
                 if existing.node != new.node
                     || existing.branch != new.branch
-                    || existing.input_commit != new.input_commit
                     || existing.target != new.target
                 {
                     bail!(
@@ -39,7 +38,6 @@ impl CandidateStore<'_> {
         let result_version = self.store.result_version(new.node.as_str())?;
         if let Some(existing) = self.for_result(&new.node, &result_version, &artifact)? {
             if existing.branch == new.branch
-                && existing.input_commit == new.input_commit
                 && existing.target == new.target
                 && existing.external == new.external
             {
@@ -58,7 +56,6 @@ impl CandidateStore<'_> {
             node: new.node,
             artifact,
             branch: new.branch,
-            input_commit: new.input_commit,
             target: new.target,
             external: new.external,
             state: CandidateState::Pending,

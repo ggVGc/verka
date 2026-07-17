@@ -157,7 +157,7 @@ fn a_full_attempt_lands_a_version_checked_result_from_an_isolated_worktree() {
     );
 
     // Orka exposes the candidate with its source node and its complete patch.
-    let candidates = Candidates::new(&store);
+    let candidates = Candidates::new(&store, &attempts);
     let listed = candidates.list().unwrap();
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].attempt.as_ref(), Some(&report.attempt));
@@ -331,7 +331,7 @@ fn an_attempt_against_a_graph_that_moved_mid_run_seals_stale() {
 
     // Linka records no candidate for a result it rejected. The attempt and
     // retained branch remain Orka evidence for inspection/recovery.
-    let candidates = Candidates::new(&store);
+    let candidates = Candidates::new(&store, &attempts);
     assert!(candidates.list().unwrap().is_empty());
     let error = candidates.get(&report.attempt.0).unwrap_err();
     assert!(
@@ -453,7 +453,7 @@ fn recovery_after_linka_accepted_but_before_seal_recognizes_its_own_result() {
         "recovery recognized its own accepted result: {:?}",
         reports[0].sealed
     );
-    let candidate = Candidates::new(&store).get(&id.0).unwrap();
+    let candidate = Candidates::new(&store, &attempts).get(&id.0).unwrap();
     assert_eq!(candidate.node.as_str(), node);
     assert_eq!(candidate.integration, linka::IntegrationStatus::Pending);
 }

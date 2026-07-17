@@ -39,9 +39,9 @@ These dimensions obey the following rules:
 Candidates are first-class records attached to an exact node result version
 and immutable output artifact. They are not ordinary work nodes, so rejected
 alternatives do not become dependencies or poison graph settlement. A
-candidate pins its branch, frozen input commit, intended target branch, and
-optional opaque producer identity. Linka never interprets producer namespaces;
-an executor such as Orka remains a one-way client.
+candidate pins its artifact and intended target branch and may carry a display
+branch and opaque producer identity. Linka never interprets producer
+namespaces; an executor such as Orka remains a one-way client.
 
 | Outcome | Currency | Integration | Dependencies | Workability |
 | --- | --- | --- | --- | --- |

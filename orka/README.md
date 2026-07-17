@@ -90,7 +90,8 @@ orka publish CANDIDATE
 The candidate list connects Linka's candidate id to its source node, branch,
 target, and opaque Orka attempt identity. Linka owns the decision and derives
 publication from Git history; Orka only supplies an attempt-oriented UI and
-patch view. Acceptance pins the exact artifact and previous target commit.
+patch view. The patch base comes from Orka's durable attempt input rather than
+being duplicated in Linka. Acceptance pins the exact artifact and previous target commit.
 Publication refuses dirty or concurrently moved targets and is safe to retry
 after a crash.
 

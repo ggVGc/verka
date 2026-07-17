@@ -245,7 +245,6 @@ impl<'a> LinkaWork<'a> {
             NewCandidate {
                 node: input.node().clone(),
                 branch: workspace.branch.clone(),
-                input_commit: input.input_commit().to_string(),
                 target,
                 external: Some(ExternalIdentity {
                     namespace: "orka".into(),

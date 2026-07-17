@@ -14,7 +14,7 @@ mod storage;
 #[cfg(test)]
 mod tests;
 
-pub const CANDIDATE_SCHEMA: u32 = 2;
+pub const CANDIDATE_SCHEMA: u32 = 3;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -54,7 +54,6 @@ pub struct CandidateRecord {
     pub artifact: ArtifactRef,
     /// Candidate branch name, without `refs/heads/`.
     pub branch: String,
-    pub input_commit: String,
     /// Intended target branch name, without `refs/heads/`.
     pub target: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -65,7 +64,6 @@ pub struct CandidateRecord {
 pub struct NewCandidate {
     pub node: NodeId,
     pub branch: String,
-    pub input_commit: String,
     pub target: String,
     pub external: Option<ExternalIdentity>,
 }
