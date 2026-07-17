@@ -10,7 +10,6 @@ use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 mod operations;
-mod publication;
 mod storage;
 #[cfg(test)]
 mod tests;
