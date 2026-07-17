@@ -39,3 +39,7 @@
   - A node description could be to analyze the codebase for some specific concern.
   - Node could be re-opened and re-run each time the user wants to re-check
   - We should not lose previous history because of that, but that matches other repeated outputs as well. We always want to be able to see prior outputs from nodes.
+- Orka: Auto-review:
+  Feed the original context and node description, as well as the output result to an agent,
+  with the instruction to analyze if the implementation fulfills the request.
+  Also, additional expectations on code quality, keeping things modular, reduce duplication etc.
