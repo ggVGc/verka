@@ -366,6 +366,18 @@ pub enum IntegrationStatus {
     Rejected,
 }
 
+impl IntegrationStatus {
+    pub fn is_done(self) -> bool {
+        match self {
+            Self::NotRequired => true,
+            Self::Pending => false,
+            Self::Accepted => false,
+            Self::Published => true,
+            Self::Rejected => true,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProjectSnapshot {
     pub scheme: String,
@@ -420,19 +432,11 @@ impl NodeState {
     }
 
     pub fn is_ready(&self) -> bool {
-        !self.is_complete()
-            && self.blockers.is_empty()
-            && matches!(
-                self.integration,
-                IntegrationStatus::NotRequired | IntegrationStatus::Rejected
-            )
+        !self.is_complete() && self.blockers.is_empty() && self.integration.is_done()
     }
 
     pub fn is_awaiting_integration(&self) -> bool {
-        matches!(
-            self.integration,
-            IntegrationStatus::Pending | IntegrationStatus::Accepted
-        )
+        !self.integration.is_done()
     }
 
     pub fn is_blocked(&self) -> bool {
@@ -515,6 +519,15 @@ mod tests {
             ..result
         };
         assert_eq!(status(&version, Some(&failed)), Status::Failed);
+    }
+
+    #[test]
+    fn integration_is_done_after_publication_or_rejection() {
+        assert!(IntegrationStatus::NotRequired.is_done());
+        assert!(!IntegrationStatus::Pending.is_done());
+        assert!(!IntegrationStatus::Accepted.is_done());
+        assert!(IntegrationStatus::Published.is_done());
+        assert!(IntegrationStatus::Rejected.is_done());
     }
 
     #[test]
