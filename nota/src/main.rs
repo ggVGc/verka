@@ -1,9 +1,6 @@
-use anyhow::{bail, Result};
+use anyhow::Result;
 use clap::{Parser, Subcommand};
-use nota::{
-    add_note, commit_suggestion, load_review, start_review, GitProvider, LinkaProvider,
-    ReviewEntryKind,
-};
+use nota::{add_note, commit_suggestion, load_review, start_review, GitProvider, ReviewEntryKind};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -52,16 +49,6 @@ enum StartProvider {
         #[arg(long)]
         branch: Option<String>,
     },
-    /// Resolve the current successful Git output of a Linka node.
-    Linka {
-        node: String,
-        /// Workbench root containing .linka/ and project/. Defaults to the
-        /// nearest ancestor containing .linka/.
-        #[arg(long)]
-        workbench: Option<PathBuf>,
-        #[arg(long)]
-        branch: Option<String>,
-    },
 }
 
 fn main() {
@@ -80,15 +67,6 @@ fn run(cli: Cli) -> Result<()> {
                     repository,
                     branch,
                 } => start_review(&GitProvider::new(repository), &revision, branch.as_deref())?,
-                StartProvider::Linka {
-                    node,
-                    workbench,
-                    branch,
-                } => {
-                    let workbench = locate_workbench(workbench)?;
-                    let store = linka::Store::open(workbench.join(".linka"))?;
-                    start_review(&LinkaProvider::new(&store), &node, branch.as_deref())?
-                }
             };
             println!("review   {}", started.branch);
             println!("subject  {}", started.subject);
@@ -135,24 +113,6 @@ fn run(cli: Cli) -> Result<()> {
         }
     }
     Ok(())
-}
-
-fn locate_workbench(given: Option<PathBuf>) -> Result<PathBuf> {
-    if let Some(root) = given {
-        if !root.join(".linka").is_dir() {
-            bail!("no .linka store under {}", root.display());
-        }
-        return Ok(root);
-    }
-    let mut directory = std::env::current_dir()?;
-    loop {
-        if directory.join(".linka").is_dir() {
-            return Ok(directory);
-        }
-        if !directory.pop() {
-            bail!("no workbench found: no ancestor contains .linka/");
-        }
-    }
 }
 
 fn short(commit: &str) -> &str {

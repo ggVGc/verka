@@ -1,5 +1,5 @@
 use nota::{
-    add_note, commit_suggestion, load_review, start_review, GitProvider, LinkaProvider,
+    add_note, commit_suggestion, load_review, load_review_ref, start_review, GitProvider,
     ReviewEntryKind, ReviewProvider,
 };
 use std::path::{Path, PathBuf};
@@ -71,6 +71,9 @@ fn review_branch_records_notes_and_staged_suggestions_as_commits() {
         git(&repository, &["rev-parse", &format!("{}^", started.marker)]),
         subject
     );
+    let review = load_review_ref(&repository, "nota/review-one").unwrap();
+    assert_eq!(review.subject, subject);
+    assert!(review.entries.is_empty());
 
     git(&repository, &["switch", "--quiet", "nota/review-one"]);
     std::fs::write(repository.join("suggested.txt"), "suggested\n").unwrap();
@@ -106,61 +109,4 @@ fn suggestion_requires_a_review_branch_and_staged_changes() {
     git(&repository, &["switch", "--quiet", "nota/empty"]);
     let error = commit_suggestion(&repository, "comment").unwrap_err();
     assert!(format!("{error:#}").contains("no staged changes"));
-}
-
-#[test]
-fn linka_provider_resolves_the_current_output_commit() {
-    let temp = tempfile::tempdir().unwrap();
-    let workbench = temp.path();
-    git(workbench, &["init", "--quiet"]);
-    configure(workbench);
-
-    let store = linka::Store::init(workbench.join(".linka")).unwrap();
-    let project = store.project_root();
-    git(&project, &["init", "--quiet"]);
-    configure(&project);
-    std::fs::write(project.join("README.md"), "base\n").unwrap();
-    git(&project, &["add", "README.md"]);
-    git(&project, &["commit", "--quiet", "-m", "base"]);
-
-    let vcs = linka::GitVcs::for_store(&store);
-    let node = linka::ops::add(
-        &store,
-        &vcs,
-        linka::ops::NewNode {
-            description: "Implement the reviewed change".into(),
-            author: linka::Author::Human,
-            assignee: None,
-            depends_on: vec![],
-            derived_from: vec![],
-        },
-    )
-    .unwrap();
-    std::fs::write(project.join("answer.txt"), "answer\n").unwrap();
-    linka::ops::complete(
-        &store,
-        &vcs,
-        &node,
-        &["answer.txt".into()],
-        &[],
-        None,
-        "implemented",
-        linka::Author::Human,
-    )
-    .unwrap();
-
-    let (_, result_notes) = store.read_result(&node).unwrap().unwrap();
-    assert_eq!(result_notes, "implemented");
-    let expected = store
-        .read_result(&node)
-        .unwrap()
-        .unwrap()
-        .0
-        .output
-        .unwrap()
-        .id;
-    let subject = LinkaProvider::new(&store).resolve_subject(&node).unwrap();
-    assert_eq!(subject.repository, project);
-    assert_eq!(subject.revision, expected);
-    assert_eq!(subject.title, "Implement the reviewed change");
 }

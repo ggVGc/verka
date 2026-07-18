@@ -50,9 +50,10 @@ The repository-file backend stores inspectable, versionable review records in
 ordinary files within a configurable directory. It requires no Linka service
 or library and is the baseline standalone mode.
 
-The Linka adapter maps Nota review identities and follow-up requests to Linka
-records or nodes while preserving Nota's versioning contract. The adapter owns
-that mapping. Linka itself does not gain review-specific semantics.
+Nota has no Linka adapter. Cross-application coordination belongs to an
+orchestrator: Orka may resolve a Linka candidate to an exact Git commit, ask
+Nota to review that commit, and later submit the review as a Linka verification
+result. Nota sees only Git repositories, revisions, branches, and commits.
 
 All backends run the same contract test suite, including optimistic
 concurrency, stable ordering, stale suggested edits, and idempotent retries.
@@ -68,5 +69,5 @@ the worker cannot accidentally address different content.
 
 - Agent/container execution (Driva).
 - Scheduling follow-up workers (Orka).
-- Requiring Linka for file-backed review.
+- Depending on Linka or interpreting graph and candidate identities.
 - Owning graph readiness or result semantics (Linka).

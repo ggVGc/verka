@@ -2,13 +2,14 @@
 //! store.
 
 use anyhow::{bail, Context, Result};
-use clap::{Parser, Subcommand};
-use linka::{NodeId, Store};
+use clap::{Parser, Subcommand, ValueEnum};
+use linka::{Author, CandidateId, NodeId, Store};
 use orka::attempt::{AttemptId, FsAttemptStore, SealedState};
 use orka::candidate::Candidates;
 use orka::config::{Config, CONFIG_FILE};
 use orka::engine::{Engine, RunProgress, RunReport};
 use orka::linka_work::LinkaWork;
+use orka::review::{FinishOutcome, ReviewVerdict, Reviews};
 use orka::workspace::GitWorkspaces;
 use std::path::PathBuf;
 
@@ -59,8 +60,54 @@ enum Command {
     },
     /// Publish an accepted candidate by recoverable fast-forward.
     Publish { candidate: String },
+    /// Coordinate Git-native Nota reviews with Linka verification nodes.
+    Review {
+        #[command(subcommand)]
+        command: ReviewCommand,
+    },
     /// Classify unfinished attempts and finish what can be finished.
     Recover,
+}
+
+#[derive(Subcommand)]
+enum ReviewCommand {
+    /// Create a verification node and start a Nota branch at the candidate artifact.
+    Start {
+        candidate: String,
+        #[arg(long, value_enum, default_value = "human")]
+        assignee: Author,
+    },
+    /// Finish branch creation after an interrupted review start.
+    Resume { verification: String },
+    /// Show the binding and Git-native review entries.
+    Show { verification: String },
+    /// Submit the Nota review as the verification node's graph-only result.
+    Finish {
+        verification: String,
+        #[arg(long, value_enum)]
+        verdict: VerdictArg,
+        #[arg(long)]
+        summary: Option<String>,
+        #[arg(long, value_enum, default_value = "human")]
+        author: Author,
+    },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum VerdictArg {
+    Approved,
+    ChangesRequested,
+    Commented,
+}
+
+impl From<VerdictArg> for ReviewVerdict {
+    fn from(value: VerdictArg) -> Self {
+        match value {
+            VerdictArg::Approved => Self::Approved,
+            VerdictArg::ChangesRequested => Self::ChangesRequested,
+            VerdictArg::Commented => Self::Commented,
+        }
+    }
 }
 
 fn main() {
@@ -101,6 +148,10 @@ impl Workbench {
 
     fn attempts(&self) -> FsAttemptStore {
         FsAttemptStore::new(self.root.join(".orka"))
+    }
+
+    fn reviews<'a>(&self, store: &'a Store) -> Reviews<'a> {
+        Reviews::new(store, self.root.join(".orka"))
     }
 
     fn workspaces(&self, store: &Store) -> GitWorkspaces {
@@ -275,6 +326,71 @@ fn run(cli: Cli) -> Result<()> {
             let published = Candidates::new(&store, &attempts).publish(&candidate)?;
             println!("published {} at {}", published.id, published.head_commit);
         }
+        Command::Review { command } => {
+            let store = workbench.linka_store()?;
+            let reviews = workbench.reviews(&store);
+            match command {
+                ReviewCommand::Start {
+                    candidate,
+                    assignee,
+                } => {
+                    let started = reviews.start(&CandidateId(candidate), assignee)?;
+                    print_started_review(&started);
+                }
+                ReviewCommand::Resume { verification } => {
+                    let verification = parse_node(verification)?;
+                    let started = reviews.resume(&verification)?;
+                    print_started_review(&started);
+                }
+                ReviewCommand::Show { verification } => {
+                    let verification = parse_node(verification)?;
+                    let (record, review) = reviews.review(&verification)?;
+                    let vcs = linka::GitVcs::for_store(&store);
+                    let state = linka::ops::node_state(&store, &vcs, verification.as_str())?;
+                    println!("verification {}", record.verification);
+                    println!("candidate    {}", record.candidate);
+                    println!("branch       {}", review.branch);
+                    println!("subject      {}", review.subject);
+                    println!(
+                        "state        {:?} {:?} {:?}",
+                        state.outcome, state.currency, state.integration
+                    );
+                    if review.entries.is_empty() {
+                        println!("entries      none");
+                    }
+                    for entry in review.entries {
+                        println!(
+                            "{}  {:?}  {}",
+                            linka::ops::short(&entry.commit),
+                            entry.kind,
+                            entry.message.lines().next().unwrap_or_default()
+                        );
+                    }
+                }
+                ReviewCommand::Finish {
+                    verification,
+                    verdict,
+                    summary,
+                    author,
+                } => {
+                    let verification = parse_node(verification)?;
+                    match reviews.finish(
+                        &verification,
+                        verdict.into(),
+                        summary.as_deref(),
+                        author,
+                    )? {
+                        FinishOutcome::Submitted => println!("completed {verification}"),
+                        FinishOutcome::AlreadySubmitted => {
+                            println!("completed {verification} (already submitted)")
+                        }
+                        FinishOutcome::Conflict(conflicts) => {
+                            println!("stale {verification}: {conflicts:?}")
+                        }
+                    }
+                }
+            }
+        }
         Command::Recover => {
             let config = workbench.config()?;
             let store = workbench.linka_store()?;
@@ -298,6 +414,18 @@ fn run(cli: Cli) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn print_started_review(started: &orka::review::Started) {
+    println!("verification {}", started.record.verification);
+    println!("candidate    {}", started.record.candidate);
+    println!("review       {}", started.review.branch);
+    println!("subject      {}", started.review.subject);
+    println!(
+        "worktree     git -C {} worktree add <path> {}",
+        started.review.repository.display(),
+        started.review.branch
+    );
 }
 
 fn print_run(report: &RunReport) {

@@ -7,10 +7,10 @@ mod review;
 use anyhow::Result;
 use std::path::PathBuf;
 
-pub use providers::{GitProvider, LinkaProvider};
+pub use providers::GitProvider;
 pub use review::{
-    add_note, commit_suggestion, load_review, start_review, Review, ReviewEntry, ReviewEntryKind,
-    StartedReview,
+    add_note, commit_suggestion, load_review, load_review_ref, start_review, Review, ReviewEntry,
+    ReviewEntryKind, StartedReview,
 };
 
 /// Resolves an application-specific reference to exact Git content.

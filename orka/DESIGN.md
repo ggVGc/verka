@@ -20,12 +20,15 @@ never depends on Orka.
   graph mutations, and project/output provenance.
 - Orka owns agent selection policy, execution policy, prompts, durable
   attempts, transcripts, outcome interpretation, candidate presentation,
-  attempt recovery, and workspace cleanup.
+  attempt recovery, workspace cleanup, and coordination of Git-native Nota
+  reviews with Linka verification nodes.
 - Orka calls Linka's public operations but never reads or mutates Linka's
   on-disk representation directly.
 - Linka stores only namespaced producer evidence about Orka (namespace `orka`);
   it never interprets attempts, agents, executors, or recovery state.
 - `.linka/` and `.orka/` are separately owned stores in the workbench.
+- Nota depends only on Git. Orka resolves Linka candidates to Git artifacts and
+  owns the binding between a Nota branch and a Linka verification node.
 
 ## Linka protocol
 
@@ -129,19 +132,38 @@ Only Linka-accepted successful outputs become candidates. A stale-at-submit
 branch remains durable Orka attempt evidence but cannot enter Linka's
 acceptance protocol because Linka recorded no result for it.
 
+## Candidate verification
+
+`orka review start <candidate>` creates an ordinary Linka verification node,
+freezes its `WorkSnapshot`, and starts a Nota branch at the candidate's exact
+Git artifact. Orka records the immutable binding under
+`.orka/reviews/<verification>/review.toml` before creating the branch. Nota
+receives only a repository, revision, and branch; it has no Linka dependency.
+
+Reviewers use Nota directly for notes and suggestion commits. `orka review
+finish` loads that Git evidence by branch and submits a graph-only verification
+result against the frozen Linka snapshot with `orka.nota` producer evidence.
+The verdict is evidence, not acceptance policy: accepting, rejecting, and
+publishing the candidate remain explicit operations. If graph inputs moved
+during review, Linka rejects submission and the Nota branch remains intact.
+
 ## Producer evidence
 
-Every submitted result carries `linka::ProducerEvidence` in the stable `orka`
-namespace: the attempt id and the executor-observed backend, backend reference,
-start/finish timestamps, and exit code. The transcript and mutable filesystem
-paths stay in `.orka/`. Linka preserves this verbatim and never interprets it.
+Every agent-attempt result carries `linka::ProducerEvidence` in the stable
+`orka` namespace: the attempt id and the executor-observed backend, backend
+reference, start/finish timestamps, and exit code. Coordinated review results
+use `orka.nota` with the candidate, verification, branch, marker, review head,
+and verdict. Transcripts and mutable filesystem paths stay in `.orka/`. Linka
+preserves either namespace verbatim and never interprets it.
 
 ## Non-goals
 
 - Implementing isolation mechanics or process stdio (Driva).
 - Owning node-graph semantics or storage (Linka).
 - A generic, backend-neutral graph interface. Orka orchestrates Linka.
-- Review comments, suggested edits, or authorization policy (Nota).
+- Implementing review comments or suggested edits (Nota owns their Git
+  representation).
+- Treating a review verdict as authorization to accept or publish.
 
 ## Configuration
 

@@ -84,7 +84,7 @@ pub fn start_review(
 pub fn add_note(repository: &Path, message: &str) -> Result<ReviewEntry> {
     let message = require_message(message)?;
     let repository = repository_root(repository)?;
-    let _ = find_marker(&repository)?;
+    let _ = find_marker(&repository, "HEAD")?;
     let relative = format!(".nota/notes/note-{}.md", ulid::Ulid::new());
     let path = repository.join(&relative);
     std::fs::create_dir_all(path.parent().expect("note has parent"))?;
@@ -104,7 +104,7 @@ pub fn add_note(repository: &Path, message: &str) -> Result<ReviewEntry> {
 pub fn commit_suggestion(repository: &Path, comment: &str) -> Result<ReviewEntry> {
     let comment = require_message(comment)?;
     let repository = repository_root(repository)?;
-    let _ = find_marker(&repository)?;
+    let _ = find_marker(&repository, "HEAD")?;
     let staged = nul_list(&checked(
         &repository,
         &["diff", "--cached", "--name-only", "-z"],
@@ -126,9 +126,16 @@ pub fn load_review(repository: &Path) -> Result<Review> {
     let repository = repository_root(repository)?;
     let branch = checked(&repository, &["symbolic-ref", "--quiet", "--short", "HEAD"])
         .context("Nota commands require a checked-out review branch")?;
-    let (marker, recorded_branch, subject) = find_marker(&repository)?;
+    load_review_ref(&repository, &branch)
+}
+
+/// Load a review branch without requiring it to be checked out. Coordinators
+/// can inspect Nota's Git evidence by ref without changing a user's checkout.
+pub fn load_review_ref(repository: &Path, branch: &str) -> Result<Review> {
+    let repository = repository_root(repository)?;
+    let (marker, recorded_branch, subject) = find_marker(&repository, branch)?;
     if branch != recorded_branch {
-        bail!("current branch `{branch}` does not match review marker `{recorded_branch}`");
+        bail!("review branch `{branch}` does not match review marker `{recorded_branch}`");
     }
     let commits = checked(
         &repository,
@@ -136,7 +143,7 @@ pub fn load_review(repository: &Path) -> Result<Review> {
             "rev-list",
             "--reverse",
             "--first-parent",
-            &format!("{marker}..HEAD"),
+            &format!("{marker}..{branch}"),
         ],
     )?;
     let entries = commits
@@ -145,16 +152,16 @@ pub fn load_review(repository: &Path) -> Result<Review> {
         .map(|commit| entry_at(&repository, commit))
         .collect::<Result<Vec<_>>>()?;
     Ok(Review {
-        branch,
+        branch: branch.to_string(),
         marker,
         subject,
         entries,
     })
 }
 
-fn find_marker(repository: &Path) -> Result<(String, String, String)> {
-    let commits = checked(repository, &["rev-list", "--first-parent", "HEAD"])
-        .context("reading current branch history")?;
+fn find_marker(repository: &Path, revision: &str) -> Result<(String, String, String)> {
+    let commits = checked(repository, &["rev-list", "--first-parent", revision])
+        .with_context(|| format!("reading review history from `{revision}`"))?;
     for commit in commits.lines() {
         let message = checked(repository, &["show", "-s", "--format=%B", commit])?;
         let branch = trailer(&message, REVIEW_TRAILER);
