@@ -43,3 +43,6 @@
   Feed the original context and node description, as well as the output result to an agent,
   with the instruction to analyze if the implementation fulfills the request.
   Also, additional expectations on code quality, keeping things modular, reduce duplication etc.
+- Command: View all context used for a completed node's work:
+  - Maybe create a temp directory which contains the contents
+  - Or an API which allows listing and getting the content of all context files
