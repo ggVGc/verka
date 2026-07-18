@@ -39,7 +39,7 @@ use ulid::Ulid;
 
 use crate::candidate::{CandidateRecord, CandidateStore};
 use crate::model::{
-    ArtifactRef, Author, Blocker, BlockerReason, ConsumedNode, ContextPin, Currency,
+    ArtifactRef, Author, Blocker, BlockerReason, CandidateId, ConsumedNode, ContextPin, Currency,
     DefinitionVersion, DepKind, IntegrationStatus, NodeId, NodeMeta, NodeState, Outcome,
     ProducerEvidence, ProjectPath, ProjectSnapshot, RecordedOutcome, ResultMeta, ResultSubmission,
     ResultVersion, StalenessReason, Status, SubmissionConflict, WorkSnapshot,
@@ -93,10 +93,41 @@ pub struct NewNode {
 
 /// Create a new node. Returns its id.
 pub fn add(store: &Store, vcs: &dyn Vcs, new: NewNode) -> Result<String> {
+    add_node(store, vcs, new, None)
+}
+
+/// Create an ordinary node that verifies an exact candidate. The candidate's
+/// source node is added as lineage so completing the verification pins the
+/// candidate artifact through the normal result protocol.
+pub fn add_verification(
+    store: &Store,
+    vcs: &dyn Vcs,
+    candidate: &CandidateId,
+    new: NewNode,
+) -> Result<String> {
+    add_node(store, vcs, new, Some(candidate.clone()))
+}
+
+fn add_node(
+    store: &Store,
+    vcs: &dyn Vcs,
+    mut new: NewNode,
+    verifies: Option<CandidateId>,
+) -> Result<String> {
     if new.description.trim().is_empty() {
         bail!("a node needs a description");
     }
     let mutation = store.mutation_lock(vcs)?;
+    if let Some(candidate_id) = &verifies {
+        let candidate = CandidateStore::new(store).load(candidate_id)?;
+        if !new
+            .derived_from
+            .iter()
+            .any(|id| id == candidate.node.as_str())
+        {
+            new.derived_from.push(candidate.node.to_string());
+        }
+    }
     for dep in new.depends_on.iter().chain(&new.derived_from) {
         if !store.exists(dep) {
             bail!("unknown related node `{dep}`");
@@ -119,6 +150,7 @@ pub fn add(store: &Store, vcs: &dyn Vcs, new: NewNode) -> Result<String> {
             .map(|id| id.parse())
             .collect::<std::result::Result<_, String>>()
             .map_err(anyhow::Error::msg)?,
+        verifies,
         extensions: Default::default(),
     };
     store.write_node(&id, &meta, &new.description)?;
@@ -964,6 +996,19 @@ pub fn dependents(store: &Store, id: &str) -> Result<Vec<String>> {
     Ok(out)
 }
 
+/// Ids of ordinary nodes that verify `candidate`.
+pub fn verifications_for(store: &Store, candidate: &CandidateId) -> Result<Vec<String>> {
+    CandidateStore::new(store).load(candidate)?;
+    let mut out = Vec::new();
+    for id in store.list_ids()? {
+        let (meta, _) = store.read_node(&id)?;
+        if meta.verifies.as_ref() == Some(candidate) {
+            out.push(id);
+        }
+    }
+    Ok(out)
+}
+
 /// Reasons a node is not *settled* — done, not stale, and with every piece of
 /// work derived from it (transitively, over reverse `depends_on` and
 /// `derived_from` edges) also done and not stale. Empty means the whole branch
@@ -1079,6 +1124,21 @@ pub fn check(store: &Store) -> Result<Vec<String>> {
                 }
                 if store.read_node(dep).is_err() {
                     problems.push(format!("{id}: {kind} target `{dep}` missing or unreadable"));
+                }
+            }
+        }
+        if let Some(candidate_id) = &meta.verifies {
+            match CandidateStore::new(store).load(candidate_id) {
+                Err(error) => problems.push(format!(
+                    "{id}: verifies candidate `{candidate_id}` missing or unreadable ({error:#})"
+                )),
+                Ok(candidate) => {
+                    if !meta.derived_from.contains(&candidate.node) {
+                        problems.push(format!(
+                            "{id}: verifies candidate `{candidate_id}` but does not derive from its source node `{}`",
+                            candidate.node
+                        ));
+                    }
                 }
             }
         }

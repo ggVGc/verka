@@ -20,15 +20,16 @@ pub mod store;
 pub mod vcs;
 
 pub use candidate::{
-    CandidateId, CandidateRecord, CandidateState, CandidateStore, ExternalIdentity, NewCandidate,
+    CandidateRecord, CandidateState, CandidateStore, ExternalIdentity, NewCandidate,
 };
 pub use git::GitVcs;
 pub use model::{
-    title_of, ArtifactRef, Author, Blocker, BlockerReason, ConsumedNode, ContextObservation,
-    ContextPin, Currency, DefinitionVersion, DepKind, IntegrationStatus, NodeId, NodeMeta,
-    NodeState, Outcome, ProducerEvidence, ProjectPath, ProjectSnapshot, RecordedOutcome,
-    ResultMeta, ResultSubmission, ResultVersion, StalenessReason, Status, SubmissionConflict,
-    WorkSnapshot, DEFINITION_SCHEMA, OBSERVATION_SCHEMA, RESULT_SCHEMA, SNAPSHOT_SCHEMA,
+    title_of, ArtifactRef, Author, Blocker, BlockerReason, CandidateId, ConsumedNode,
+    ContextObservation, ContextPin, Currency, DefinitionVersion, DepKind, IntegrationStatus,
+    NodeId, NodeMeta, NodeState, Outcome, ProducerEvidence, ProjectPath, ProjectSnapshot,
+    RecordedOutcome, ResultMeta, ResultSubmission, ResultVersion, StalenessReason, Status,
+    SubmissionConflict, WorkSnapshot, DEFINITION_SCHEMA, OBSERVATION_SCHEMA, RESULT_SCHEMA,
+    SNAPSHOT_SCHEMA,
 };
 pub use pairing::Pairing;
 pub use store::Store;

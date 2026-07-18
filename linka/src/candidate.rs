@@ -3,7 +3,7 @@
 //! Candidates are attached to an exact node result and immutable artifact.
 //! Producer metadata is opaque, keeping execution drivers outside Linka's domain.
 
-use crate::model::{ArtifactRef, Author, IntegrationStatus, NodeId, ResultVersion};
+use crate::model::{ArtifactRef, Author, CandidateId, IntegrationStatus, NodeId, ResultVersion};
 use crate::{Store, Vcs};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -15,28 +15,6 @@ mod storage;
 mod tests;
 
 pub const CANDIDATE_SCHEMA: u32 = 3;
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct CandidateId(pub String);
-
-impl CandidateId {
-    pub fn new() -> Self {
-        Self(format!("candidate-{}", ulid::Ulid::new()))
-    }
-}
-
-impl Default for CandidateId {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl std::fmt::Display for CandidateId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExternalIdentity {

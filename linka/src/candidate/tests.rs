@@ -197,3 +197,152 @@ fn publication_is_derived_and_target_corruption_is_detected() {
         "{error:#}"
     );
 }
+
+#[test]
+fn verification_is_an_ordinary_node_with_candidate_lineage() {
+    let (_temp, store, vcs, source, output) = successful_output();
+    let candidate = register(&store, &vcs, &source);
+
+    let verification = ops::add_verification(
+        &store,
+        &vcs,
+        &candidate.id,
+        NewNode {
+            description: "Verify the candidate".into(),
+            author: Author::Human,
+            assignee: Some(Author::Machine),
+            depends_on: vec![],
+            derived_from: vec![],
+        },
+    )
+    .unwrap();
+
+    let (meta, _) = store.read_node(&verification).unwrap();
+    assert_eq!(meta.verifies.as_ref(), Some(&candidate.id));
+    assert_eq!(meta.derived_from, vec![source.clone()]);
+    assert_eq!(
+        ops::verifications_for(&store, &candidate.id).unwrap(),
+        vec![verification.clone()]
+    );
+    assert!(ops::node_state(&store, &vcs, &verification)
+        .unwrap()
+        .is_ready());
+
+    ops::complete(
+        &store,
+        &vcs,
+        &verification,
+        &[],
+        &[],
+        None,
+        "candidate is valid",
+        Author::Machine,
+    )
+    .unwrap();
+    let (result, _) = store.read_result(&verification).unwrap().unwrap();
+    assert_eq!(result.consumed.len(), 1);
+    assert_eq!(result.consumed[0].id, source);
+    assert_eq!(
+        result.consumed[0].output.as_ref().map(|item| &item.id),
+        Some(&output)
+    );
+    assert!(ops::check(&store).unwrap().is_empty());
+}
+
+#[test]
+fn completed_verification_becomes_stale_when_its_source_is_reworked() {
+    let (_temp, store, mut vcs, source, _) = successful_output();
+    let candidate = register(&store, &vcs, &source);
+    let verification = ops::add_verification(
+        &store,
+        &vcs,
+        &candidate.id,
+        NewNode {
+            description: "Verify the candidate".into(),
+            author: Author::Human,
+            assignee: Some(Author::Machine),
+            depends_on: vec![],
+            derived_from: vec![],
+        },
+    )
+    .unwrap();
+    ops::complete(
+        &store,
+        &vcs,
+        &verification,
+        &[],
+        &[],
+        None,
+        "candidate is valid",
+        Author::Machine,
+    )
+    .unwrap();
+    assert!(ops::staleness(&store, &vcs, &verification)
+        .unwrap()
+        .is_empty());
+
+    CandidateStore::new(&store)
+        .reject(&vcs, &candidate.id, Author::Human, "requires rework".into())
+        .unwrap();
+    ops::edit(
+        &store,
+        &vcs,
+        source.as_str(),
+        "candidate work revised".into(),
+    )
+    .unwrap();
+    vcs.next_id = "replacement-output".into();
+    ops::complete(
+        &store,
+        &vcs,
+        source.as_str(),
+        &["out.txt".into()],
+        &[],
+        None,
+        "reworked",
+        Author::Machine,
+    )
+    .unwrap();
+
+    let reasons = ops::staleness(&store, &vcs, &verification).unwrap();
+    assert!(
+        reasons.contains(&crate::StalenessReason::ConsumedOutputChanged {
+            id: source.to_string()
+        })
+    );
+    let state = ops::node_state(&store, &vcs, &verification).unwrap();
+    assert_eq!(state.currency, crate::Currency::Stale);
+    assert!(!state.is_complete());
+}
+
+#[test]
+fn check_detects_verification_without_candidate_source_lineage() {
+    let (_temp, store, vcs, source, _) = successful_output();
+    let candidate = register(&store, &vcs, &source);
+    let verification = ops::add_verification(
+        &store,
+        &vcs,
+        &candidate.id,
+        NewNode {
+            description: "Verify the candidate".into(),
+            author: Author::Human,
+            assignee: None,
+            depends_on: vec![],
+            derived_from: vec![],
+        },
+    )
+    .unwrap();
+    let (mut meta, description) = store.read_node(&verification).unwrap();
+    meta.derived_from.clear();
+    store
+        .write_node(&verification, &meta, &description)
+        .unwrap();
+
+    let problems = ops::check(&store).unwrap();
+    assert!(
+        problems
+            .iter()
+            .any(|problem| problem.contains("does not derive from its source node")),
+        "{problems:?}"
+    );
+}

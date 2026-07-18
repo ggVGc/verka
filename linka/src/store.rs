@@ -442,6 +442,7 @@ mod tests {
             assignee: None,
             depends_on: vec!["node-a".parse().unwrap()],
             derived_from: vec![],
+            verifies: None,
             extensions: Default::default(),
         };
         store
@@ -503,6 +504,7 @@ mod tests {
             assignee: None,
             depends_on: vec![],
             derived_from: vec![],
+            verifies: None,
             extensions: Default::default(),
         };
         store.write_node("node-1", &meta, "").unwrap();

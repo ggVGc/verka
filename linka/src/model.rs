@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
 
-pub const DEFINITION_SCHEMA: u32 = 2;
+pub const DEFINITION_SCHEMA: u32 = 3;
 pub const RESULT_SCHEMA: u32 = 2;
 pub const SNAPSHOT_SCHEMA: u32 = 2;
 pub const OBSERVATION_SCHEMA: u32 = 2;
@@ -68,6 +68,28 @@ impl FromStr for NodeId {
             return Err("node id uses a forbidden platform name or prefix".into());
         }
         Ok(Self(value.into()))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct CandidateId(pub String);
+
+impl CandidateId {
+    pub fn new() -> Self {
+        Self(format!("candidate-{}", ulid::Ulid::new()))
+    }
+}
+
+impl Default for CandidateId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl fmt::Display for CandidateId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
     }
 }
 
@@ -184,6 +206,9 @@ pub struct NodeMeta {
     pub depends_on: Vec<NodeId>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub derived_from: Vec<NodeId>,
+    /// Exact candidate whose output this ordinary node verifies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verifies: Option<CandidateId>,
     /// Namespaced application metadata (e.g. from an execution harness) is
     /// preserved but never interpreted here.
     #[serde(default, flatten)]

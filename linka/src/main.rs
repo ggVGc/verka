@@ -62,6 +62,23 @@ enum Cmd {
         derived_from: Vec<NodeId>,
     },
 
+    /// Add an ordinary node that verifies an exact candidate. Prints its id.
+    AddVerification {
+        /// Candidate to verify.
+        candidate: String,
+        /// The verification task's description. Defaults to a short generated title.
+        #[arg(long, conflicts_with = "file")]
+        description: Option<String>,
+        /// Description read from a file.
+        #[arg(long)]
+        file: Option<PathBuf>,
+        #[arg(long, value_enum, default_value = "human")]
+        author: Author,
+        /// Who should perform the verification. Unset means anyone may work it.
+        #[arg(long, value_enum)]
+        assignee: Option<Author>,
+    },
+
     /// Add <to> to one of <from>'s dependency lists (a definition change).
     Link {
         /// Source node (the one that gains the dependency).
@@ -129,6 +146,9 @@ enum Cmd {
 
     /// Show one candidate and its source node and decision.
     Candidate { id: String },
+
+    /// List the nodes that verify an exact candidate.
+    Verifications { candidate: String },
 
     /// Accept an exact candidate for its recorded target branch.
     Accept {
@@ -282,6 +302,35 @@ fn main() -> Result<()> {
             println!("{id}");
         }
 
+        Cmd::AddVerification {
+            candidate,
+            description,
+            file,
+            author,
+            assignee,
+        } => {
+            let store = Store::open(store)?;
+            let vcs = GitVcs::for_store(&store);
+            let candidate = CandidateId(candidate);
+            let mut description = read_description(description, file)?;
+            if description.trim().is_empty() {
+                description = format!("Verify candidate {candidate}");
+            }
+            let id = ops::add_verification(
+                &store,
+                &vcs,
+                &candidate,
+                NewNode {
+                    description,
+                    author,
+                    assignee,
+                    depends_on: vec![],
+                    derived_from: vec![],
+                },
+            )?;
+            println!("{id}");
+        }
+
         Cmd::Link { from, to, rel } => {
             let store = Store::open(store)?;
             let vcs = GitVcs::for_store(&store);
@@ -404,6 +453,21 @@ fn main() -> Result<()> {
                     println!("decision  rejected by {}", author.as_str());
                     println!("notes     {notes}");
                 }
+            }
+            for verification in ops::verifications_for(&store, &candidate.id)? {
+                println!("verification {verification}");
+            }
+        }
+
+        Cmd::Verifications { candidate } => {
+            let store = Store::open(store)?;
+            let candidate = CandidateId(candidate);
+            let verifications = ops::verifications_for(&store, &candidate)?;
+            if verifications.is_empty() {
+                println!("no verifications");
+            }
+            for verification in verifications {
+                println!("{verification}");
             }
         }
 
@@ -804,6 +868,9 @@ fn show_node(store: &Store, vcs: &GitVcs, id: &str) -> Result<String> {
     }
     for src in &meta.derived_from {
         writeln!(out, "derived_from: {src}")?;
+    }
+    if let Some(candidate) = &meta.verifies {
+        writeln!(out, "verifies:     {candidate}")?;
     }
     for candidate in
         CandidateStore::new(store).for_node(&id.parse().map_err(anyhow::Error::msg)?)?

@@ -43,6 +43,15 @@ candidate pins its artifact and intended target branch and may carry a display
 branch and opaque producer identity. Linka never interprets producer
 namespaces; an executor such as Orka remains a one-way client.
 
+A verification is an ordinary node with one additional typed fact: `verifies`
+names the exact candidate under review. Its `derived_from` lineage must include
+that candidate's source node. This makes a completed verification pin the exact
+source artifact through the existing result protocol. Verification content,
+results, readiness, staleness, and history otherwise use normal node semantics;
+Linka does not interpret a verifier's report or make it an acceptance gate.
+Several verification nodes may refer to the same candidate. A tool such as Nota
+can create or fill these nodes without Linka depending on Nota.
+
 | Outcome | Currency | Integration | Dependencies | Workability |
 | --- | --- | --- | --- | --- |
 | open | current | not-required | complete | ready |
@@ -122,8 +131,8 @@ operations, but protocol-specific concepts do not enter the graph model.
 Orka consumes a narrow graph interface for reading ready work, freezing
 versioned input, submitting version-checked results, and registering candidate
 outputs. Nota may use an
-optional adapter to persist or link review records, but Linka never interprets
-their schema.
+optional adapter to fill verification node descriptions and results, but Linka
+never interprets their schema.
 
 Long-running workers must call `snapshot_work` before starting and
 `submit_result` when finished. Submission compares the frozen definition,
