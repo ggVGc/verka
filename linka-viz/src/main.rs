@@ -229,6 +229,7 @@ fn format_blocker(blocker: &Blocker) -> String {
         BlockerReason::Missing => "missing",
         BlockerReason::Open => "not complete (open)",
         BlockerReason::Failed => "not complete (failed)",
+        BlockerReason::AwaitingIntegration => "awaiting candidate integration",
         BlockerReason::Stale => "not complete (stale)",
     };
     format!("{}: {reason}", blocker.id)
@@ -285,6 +286,13 @@ mod tests {
                 reason: BlockerReason::Stale,
             }),
             "node-dependency: not complete (stale)"
+        );
+        assert_eq!(
+            format_blocker(&Blocker {
+                id: "node-candidate".into(),
+                reason: BlockerReason::AwaitingIntegration,
+            }),
+            "node-candidate: awaiting candidate integration"
         );
     }
 }
