@@ -222,7 +222,7 @@ fn builtin_templates() -> BTreeMap<String, TemplateConfig> {
         ("claude-exec", include_str!("../templates/claude-exec.toml")),
         ("codex", include_str!("../templates/codex.toml")),
         ("codex-exec", include_str!("../templates/codex-exec.toml")),
-        ("codex-local", include_str!("../templates/codex-local.toml")),
+        ("codex-runtime", include_str!("../templates/codex-runtime.toml")),
     ]
     .into_iter()
     .map(|(name, source)| {

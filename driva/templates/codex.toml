@@ -1,9 +1,9 @@
-description = "Run OpenAI Codex interactively against the current project"
-command = ["/usr/local/bin/driva-codex", "-c", 'projects."/workspace".trust_level="trusted"', "--sandbox", "danger-full-access"]
+description = "Run the host's Codex binary interactively in Bubblewrap"
+command = ["codex", "-c", 'projects."/tmp/workspace".trust_level="trusted"', "--sandbox", "danger-full-access"]
 backend = "bwrap"
-rootfs = "~/.local/share/driva/runtimes/codex/current/rootfs"
-tmpfs = ["/root/.codex", "/driva"]
-workdir = "/workspace"
+rootfs = "/"
+tmpfs = ["~", "/root"]
+workdir = "/tmp/workspace"
 network = true
 interactive = true
 
@@ -13,15 +13,15 @@ TERM = "xterm-256color"
 
 [[mount]]
 source = "."
-destination = "/workspace"
+destination = "/tmp/workspace"
 access = "write"
 
 [[mount]]
-source = "/etc/resolv.conf"
-destination = "/etc/resolv.conf"
-access = "read"
-
-[[mount]]
-source = "~/.codex/auth.json"
-destination = "/root/.codex/auth.json"
+source = "~/.codex"
+destination = "/root/.codex"
 access = "write"
+
+# [[mount]]
+# source = "~/.codex/auth.json"
+# destination = "/root/.codex/auth.json"
+# access = "write"
