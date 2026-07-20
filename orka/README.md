@@ -103,6 +103,6 @@ currently prune attempt records or their candidate branches implicitly.
 ## Source
 
 Source from the former combined execution/review application
-(`llaundry-work`) is parked in
-[`../llaundry-work-reference/`](../llaundry-work-reference/) as reference
+(`verka-work`) is parked in
+[`../verka-work-reference/`](../verka-work-reference/) as reference
 material only.

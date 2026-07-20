@@ -20,7 +20,7 @@ and [`../designs/ISOLATED_WORKTREE_EXECUTION.md`](../designs/ISOLATED_WORKTREE_E
 - driva provides Stage 1 synchronous execution (`Isolation`, `execute()`,
   podman/docker backends); Stage 2 durable sessions are in progress.
 - orka starts fresh; the former combined implementation is reference material
-  in `../llaundry-work-reference/`.
+  in `../verka-work-reference/`.
 
 ## Phase 0 — Crate skeleton and boundary ports
 

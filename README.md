@@ -50,5 +50,5 @@ adapter at the edge.
 The source split is in progress. Linka is the existing working core. Orka is
 implemented fresh against its design; Driva and Nota begin as explicit designs
 so their code can be extracted behind the contracts described above.
-`llaundry-work-reference/` holds parked, non-building source from the former
-combined execution/review project (`llaundry-work`), kept as reference only.
+`verka-work-reference/` holds parked, non-building source from the former
+combined execution/review project (`verka-work`), kept as reference only.
