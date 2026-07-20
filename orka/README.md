@@ -12,7 +12,7 @@ plan this code follows; [`TASKS.md`](TASKS.md) is superseded history.
 ```text
 select Linka-ready node ──► snapshot Linka work input ──► record attempt (.orka/attempts/<id>/)
       ──► prepare worktree (orka/attempts/<id> branch at the frozen revision)
-      ──► record request ──► run agent via Driva (podman/docker, deny-by-default)
+      ──► record request ──► run agent via Driva (bwrap/podman/docker, deny-by-default)
       ──► capture transcript + exit evidence ──► read declared outcome
       ──► version-checked submit + Linka candidate ──► seal ──► clean up
 ```
@@ -67,6 +67,12 @@ orka candidate CANDIDATE show a candidate and its patch
 orka accept CANDIDATE    record exact acceptance in Linka
 orka reject CANDIDATE    reject it and make its source retryable
 orka publish CANDIDATE   recoverably fast-forward the recorded target
+orka review start CANDIDATE
+                         create a Linka verification and Nota review branch
+orka review resume NODE  finish an interrupted review-branch creation
+orka review show NODE    show the binding and Git-native review entries
+orka review finish NODE --verdict VERDICT
+                         submit review evidence to the verification node
 orka recover             classify and finish unfinished attempts
 ```
 
@@ -100,9 +106,12 @@ every sealed attempt, including stale submissions and recorded failures. This
 keeps attempted work available for later inspection or recovery. Orka does not
 currently prune attempt records or their candidate branches implicitly.
 
-## Source
+## Candidate reviews
 
-Source from the former combined execution/review application
-(`verka-work`) is parked in
-[`../verka-work-reference/`](../verka-work-reference/) as reference
-material only.
+Orka can bind an exact Linka candidate to a Git-native Nota review. `orka
+review start` creates and snapshots a Linka verification node, records the
+binding under `.orka/reviews/`, and starts a Nota branch at the candidate's
+artifact commit. Reviewers use `nota note` and `nota suggest` in a worktree for
+that branch. `orka review finish` records the chosen verdict and Git evidence
+as the verification result; it does not implicitly accept, reject, or publish
+the candidate.
