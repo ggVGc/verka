@@ -22,7 +22,7 @@ fn prepare_codex_runtime(home: &Path) {
         "proc",
         "dev",
         "tmp",
-        "workspace",
+        "driva",
         "etc",
         "root/.codex",
         "usr/local/bin",
@@ -45,6 +45,8 @@ fn provides_codex_templates() {
         codex.command,
         [
             "/usr/local/bin/driva-codex",
+            "-c",
+            "projects.\"/workspace\".trust_level=\"trusted\"",
             "--sandbox",
             "danger-full-access",
         ]
@@ -56,7 +58,10 @@ fn provides_codex_templates() {
             "~/.local/share/driva/runtimes/codex/current/rootfs"
         ))
     );
-    assert_eq!(codex.tmpfs, [PathBuf::from("/root/.codex")]);
+    assert_eq!(
+        codex.tmpfs,
+        [PathBuf::from("/root/.codex"), PathBuf::from("/driva")]
+    );
     assert_eq!(
         codex.environment.get("HOME").map(String::as_str),
         Some("/root")
@@ -84,6 +89,8 @@ fn provides_codex_templates() {
         codex_exec.command,
         [
             "/usr/local/bin/driva-codex",
+            "-c",
+            "projects.\"/workspace\".trust_level=\"trusted\"",
             "--sandbox",
             "danger-full-access",
             "exec",
@@ -213,6 +220,9 @@ fn builtin_claude_selects_podman_and_mounts_only_credentials() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("backend: podman"));
     assert!(stdout.contains("@anthropic-ai/claude-code@latest"));
+    let project = format!("/driva{}", directory.display());
+    assert!(stdout.contains(&project));
+    assert!(!stdout.contains("/workspace"));
     assert!(stdout
         .contains("/.claude/.credentials.json -> /root/.claude/.credentials.json (read-write)"));
     assert!(!stdout.contains(" -> /root/.claude (read-write)"));
@@ -259,6 +269,10 @@ fn builtin_codex_selects_bwrap_and_works_without_arguments() {
     assert!(stdout.contains("\"/usr/local/bin/driva-codex\""));
     assert!(stdout.contains("--ro-bind"));
     assert!(stdout.contains("\"--tmpfs\" \"/root/.codex\""));
+    assert!(stdout.contains("\"--tmpfs\" \"/driva\""));
+    let project = format!("/driva{}", directory.display());
+    assert!(stdout.contains(&project));
+    assert!(!stdout.contains("/workspace"));
     assert!(stdout.contains("/.local/share/driva/runtimes/codex/0.144.3/rootfs"));
     assert!(stdout.contains("\"--sandbox\" \"danger-full-access\""));
     assert!(stdout.contains("/etc/resolv.conf -> /etc/resolv.conf (read-only)"));

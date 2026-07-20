@@ -152,7 +152,11 @@ fn real_main() -> Result<()> {
         Operation::Start { policy, command } => (policy, command, false, true),
         _ => unreachable!(),
     };
-    let template = policy
+    let template_is_builtin = policy
+        .template
+        .as_ref()
+        .is_some_and(|name| !config.templates.contains_key(name));
+    let mut template = policy
         .template
         .as_deref()
         .map(|name| {
@@ -163,6 +167,11 @@ fn real_main() -> Result<()> {
             })
         })
         .transpose()?;
+    if template_is_builtin {
+        if let Some(template) = &mut template {
+            resolve_builtin_project_path(template)?;
+        }
+    }
     if !shell {
         if let Some(template) = &template {
             let mut template_command: Vec<OsString> =
@@ -297,6 +306,35 @@ fn real_main() -> Result<()> {
         }
         _ => unreachable!("backend was validated above"),
     }
+}
+
+/// Built-in agent templates preserve the canonical host path below `/driva`.
+/// Besides making the isolation boundary visible, this lets tools report paths
+/// that still identify the project unambiguously.
+fn resolve_builtin_project_path(template: &mut driva::TemplateConfig) -> Result<()> {
+    let host_path = std::fs::canonicalize(".").context("failed to resolve the current project")?;
+    let relative = host_path
+        .strip_prefix("/")
+        .context("the current project path is not absolute")?;
+    let destination = Path::new("/driva").join(relative);
+    let destination_text = destination
+        .to_str()
+        .context("the current project path is not valid UTF-8")?;
+
+    if template.workdir.as_deref() == Some(Path::new("/workspace")) {
+        template.workdir = Some(destination.clone());
+    }
+    for mount in &mut template.mounts {
+        if mount.destination == Path::new("/workspace") {
+            mount.destination = destination.clone();
+        }
+    }
+    for argument in &mut template.command {
+        if argument.contains("/workspace") {
+            *argument = argument.replace("/workspace", destination_text);
+        }
+    }
+    Ok(())
 }
 
 fn runner_backend(config: &Config) -> Result<Box<dyn driva::DurableIsolation>> {

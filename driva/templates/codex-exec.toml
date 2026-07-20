@@ -1,8 +1,8 @@
 description = "Run OpenAI Codex non-interactively against the current project"
-command = ["/usr/local/bin/driva-codex", "--sandbox", "danger-full-access", "exec", "--skip-git-repo-check"]
+command = ["/usr/local/bin/driva-codex", "-c", 'projects."/workspace".trust_level="trusted"', "--sandbox", "danger-full-access", "exec", "--skip-git-repo-check"]
 backend = "bwrap"
 rootfs = "~/.local/share/driva/runtimes/codex/current/rootfs"
-tmpfs = ["/root/.codex"]
+tmpfs = ["/root/.codex", "/driva"]
 workdir = "/workspace"
 network = true
 interactive = false

@@ -29,7 +29,8 @@ The Codex templates use a pinned runtime prepared by `driva runtime install`
 and expose it read-only through Bubblewrap. Installation uses Podman once to
 install Node and Codex into a complete versioned filesystem under
 `~/.local/share/driva/runtimes`; normal Codex runs do not use Podman. The
-templates mount the current project writable at `/workspace`, enable
+templates mount the current project writable below `/driva` at its canonical
+host path (for example, `/driva/home/me/project`), enable
 networking, give Codex a private writable tmpfs for disposable state, mount
 the host resolver configuration read-only, and mount `~/.codex/auth.json`
 writable at `/root/.codex/auth.json`. The auth file
@@ -37,7 +38,8 @@ contains access tokens, so select the template only for code you trust. Hosts
 using an OS keyring must create a file-backed Codex login first or replace the
 template's authentication scheme.
 
-The Claude Code templates continue to use Podman with Node 22 and mount only
+The Claude Code templates continue to use Podman with Node 22, mount the
+current project below `/driva` at its canonical host path, and mount only
 the Linux credential file `~/.claude/.credentials.json` at
 `/root/.claude/.credentials.json`; all other Claude state is disposable. They
 require a host login created by Claude Code on Linux.

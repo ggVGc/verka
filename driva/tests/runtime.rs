@@ -64,7 +64,7 @@ fn installs_an_exported_rootfs_and_publishes_it_atomically() {
         "proc",
         "dev",
         "tmp",
-        "workspace",
+        "driva",
         "root/.codex",
         "usr/local/bin",
     ] {
@@ -95,17 +95,12 @@ fn installs_an_exported_rootfs_and_publishes_it_atomically() {
         "prepared"
     );
     assert!(
-        fs::read_to_string(store.rootfs(&spec).join("etc/driva/codex-config.toml"))
-            .unwrap()
-            .contains("trust_level = \"trusted\"")
-    );
-    assert!(
         fs::read_to_string(store.rootfs(&spec).join("usr/local/bin/driva-codex"))
             .unwrap()
-            .contains("/root/.codex/config.toml")
+            .contains("exec /usr/local/bin/codex")
     );
+    assert!(store.rootfs(&spec).join("driva").is_dir());
     fs::remove_file(store.rootfs(&spec).join("usr/local/bin/driva-codex")).unwrap();
-    fs::remove_file(store.rootfs(&spec).join("etc/driva/codex-config.toml")).unwrap();
     store
         .install_codex(&spec, "example/node:22", &fake_podman)
         .unwrap();

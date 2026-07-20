@@ -162,7 +162,7 @@ impl RuntimeStore {
             "resolved=$(npm view {selector} version) && \
              npm install --global --prefix /usr/local \"{CODEX_PACKAGE}@$resolved\" && \
              printf '%s' \"$resolved\" > /driva-runtime-version && \
-             mkdir -p /workspace /root/.codex /proc /dev /tmp && \
+             mkdir -p /driva /root/.codex /proc /dev /tmp && \
              touch /root/.codex/auth.json && rm -rf /root/.npm"
         );
         let cidfile = staging.join("container.cid");
@@ -347,7 +347,7 @@ fn prepare_mount_targets(rootfs: &Path) -> Result<()> {
         "proc",
         "dev",
         "tmp",
-        "workspace",
+        "driva",
         "root/.codex",
         "etc",
         "etc/driva",
@@ -370,14 +370,10 @@ fn prepare_mount_targets(rootfs: &Path) -> Result<()> {
     if !codex.is_file() {
         bail!("prepared runtime does not contain {}", codex.display());
     }
-    fs::write(
-        rootfs.join("etc/driva/codex-config.toml"),
-        "[projects.\"/workspace\"]\ntrust_level = \"trusted\"\n",
-    )?;
     let wrapper = rootfs.join("usr/local/bin/driva-codex");
     fs::write(
         &wrapper,
-        "#!/bin/sh\nset -eu\ncp /etc/driva/codex-config.toml /root/.codex/config.toml\nexec /usr/local/bin/codex \"$@\"\n",
+        "#!/bin/sh\nset -eu\nexec /usr/local/bin/codex \"$@\"\n",
     )?;
     set_executable(&wrapper)?;
     Ok(())

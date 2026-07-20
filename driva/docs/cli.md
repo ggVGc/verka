@@ -133,12 +133,13 @@ a complete filesystem under
 `~/.local/share/driva/runtimes/codex/VERSION`; normal executions expose the
 active version read-only through Bubblewrap and do not use Podman.
 
-Both templates seed an ephemeral user-level Codex configuration that marks
-`/workspace` as trusted, avoiding the directory trust prompt before
+Both templates pass an ephemeral Codex setting that marks the isolated project
+path as trusted, avoiding the directory trust prompt before
 project-scoped configuration is loaded. They disable Codex's inner sandbox and
 rely on Driva's outer Bubblewrap isolation. They mount the current directory
-writable at `/workspace`, enable networking, and put `/root/.codex` on a private
-writable tmpfs for disposable Codex state. They then mount
+writable below `/driva` at its canonical host path (for example,
+`/driva/home/me/project`), enable networking, and put `/root/.codex` on a
+private writable tmpfs for disposable Codex state. They then mount
 `/etc/resolv.conf` read-only for DNS and `~/.codex/auth.json` writable at
 `/root/.codex/auth.json`, allowing credential refreshes to persist. The auth
 file is exposed to the selected project. The templates also establish stable
@@ -163,8 +164,9 @@ workspace and disables Codex's inner sandbox.
 
 The built-in `claude` template runs `npx --yes
 @anthropic-ai/claude-code@latest` interactively; `claude-exec` adds `--print`
-for non-interactive use. Both use Podman with Node 22, mount the project at
-`/workspace`, and enable networking. On Linux they mount only
+for non-interactive use. Both use Podman with Node 22, mount the project below
+`/driva` at its canonical host path, and enable networking. On Linux they mount
+only
 `~/.claude/.credentials.json` writable at
 `/root/.claude/.credentials.json`, leaving other Claude configuration and
 session state disposable. [Anthropic's authentication
