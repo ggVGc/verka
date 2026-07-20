@@ -120,16 +120,16 @@ List effective built-in and project-defined templates with:
 $ driva templates
 claude	Run Claude Code interactively against the current project
 claude-exec	Run Claude Code non-interactively against the current project
-codex	Run OpenAI Codex interactively against the current project
+codex	Run the host's Codex binary interactively in Bubblewrap
 codex-exec	Run OpenAI Codex non-interactively against the current project
-codex-local	Run the host's Codex binary interactively in Bubblewrap
+codex-runtime	Run OpenAI Codex interactively against the current project
 ```
 
-The built-in `codex` template runs a pinned, prepared Codex installation
-interactively; `codex-exec` inserts the `exec` subcommand for automation. Run
-`driva runtime install codex@latest` or select an exact version before using
-either template. Installation uses Podman and `node:22-bookworm` once to build
-a complete filesystem under
+The built-in `codex-runtime` template runs a pinned, prepared Codex
+installation interactively; `codex-exec` inserts the `exec` subcommand for
+automation. Run `driva runtime install codex@latest` or select an exact version
+before using either template. Installation uses Podman and
+`node:22-bookworm` once to build a complete filesystem under
 `~/.local/share/driva/runtimes/codex/VERSION`; normal executions expose the
 active version read-only through Bubblewrap and do not use Podman.
 
@@ -152,15 +152,16 @@ The built-in requires a file-backed host login at `~/.codex/auth.json`. If the
 host uses an OS keyring, create a file-backed login first or define a project
 replacement using another authentication scheme.
 
-The built-in `codex-local` template runs the host's `codex` executable using
+The built-in `codex` template runs the host's `codex` executable using
 Bubblewrap directly, without a prepared Driva runtime. It exposes the host root
 read-only so the executable and its shared libraries remain available, then
 replaces the invoking user's home directory with a private tmpfs. Only the
-current project and `~/.codex/auth.json` are mounted back into the sandbox, at
-`/tmp/workspace` and the disposable `/root` respectively. The local
-executable must therefore be available on the standard system `PATH` outside
-the user's home directory. Like the prepared templates, it trusts the isolated
-workspace and disables Codex's inner sandbox.
+current project and `~/.codex` are mounted back into the sandbox. The project
+is placed below `/tmp/driva` at its canonical host path (for example,
+`/tmp/driva/home/me/project`), while Codex state is mounted at `/root/.codex`.
+The local executable must therefore be available on the standard system `PATH`
+outside the user's home directory. Like the prepared templates, it trusts the
+isolated workspace and disables Codex's inner sandbox.
 
 The built-in `claude` template runs `npx --yes
 @anthropic-ai/claude-code@latest` interactively; `claude-exec` adds `--print`
@@ -177,8 +178,7 @@ created it before using these templates.
 ```sh
 driva run --template codex
 driva run --template codex-exec -- "update the dependencies and run tests"
-driva run --template codex -- --model MODEL
-driva run --template codex-local
+driva run --template codex-runtime -- --model MODEL
 driva run --template claude
 driva run --template claude-exec -- "update the dependencies and run tests"
 ```
@@ -545,6 +545,8 @@ backend = "podman"               # optional: "bwrap", "podman", or "docker"
 image = "rust:1.88"              # optional; Podman/Docker only
 rootfs = "/srv/driva/rootfs/rust" # optional; Bubblewrap only
 tmpfs = ["/root/.cache"]          # optional; Bubblewrap only
+workspace_root = "/workspace"    # optional; derives a canonical project path
+codex_trust_workspace = false     # optional; injects Codex's trust override
 workdir = "/workspace"           # optional
 network = false
 interactive = false
@@ -567,6 +569,11 @@ filesystems before template mounts are applied, allowing a writable file mount
 inside otherwise-disposable state. A leading `~` is expanded using the host
 `$HOME`; mount destinations and the working directory may be created beneath a
 private tmpfs even when they are absent from the read-only rootfs.
+`workspace_root` appends the canonical host project path to the configured
+absolute root, mounts the project writable there, and uses the result as the
+working directory. It supersedes `workdir` when both are set.
+`codex_trust_workspace` inserts a Codex configuration argument for that
+derived path and requires `workspace_root` and a non-empty command.
 Template mounts use the same shape and validation as global `[[mount]]`
 entries. Project templates appear in `driva templates`; project definitions
 replace built-ins with the same name.

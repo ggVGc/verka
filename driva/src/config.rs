@@ -153,6 +153,12 @@ pub struct TemplateConfig {
     /// Rootfs directories replaced with private writable tmpfs mounts.
     #[serde(default)]
     pub tmpfs: Vec<PathBuf>,
+    /// Sandbox directory below which the canonical host project path is
+    /// mounted writable and used as the working directory.
+    pub workspace_root: Option<PathBuf>,
+    /// Pass the derived workspace path to Codex as a trusted project.
+    #[serde(default)]
+    pub codex_trust_workspace: bool,
     pub workdir: Option<PathBuf>,
     #[serde(default, rename = "mount")]
     pub mounts: Vec<MountConfig>,

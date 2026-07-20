@@ -152,10 +152,6 @@ fn real_main() -> Result<()> {
         Operation::Start { policy, command } => (policy, command, false, true),
         _ => unreachable!(),
     };
-    let template_is_builtin = policy
-        .template
-        .as_ref()
-        .is_some_and(|name| !config.templates.contains_key(name));
     let mut template = policy
         .template
         .as_deref()
@@ -167,10 +163,8 @@ fn real_main() -> Result<()> {
             })
         })
         .transpose()?;
-    if template_is_builtin {
-        if let Some(template) = &mut template {
-            resolve_builtin_project_path(template)?;
-        }
+    if let Some(template) = &mut template {
+        resolve_workspace(template)?;
     }
     if !shell {
         if let Some(template) = &template {
@@ -308,31 +302,47 @@ fn real_main() -> Result<()> {
     }
 }
 
-/// Built-in agent templates preserve the canonical host path below `/driva`.
-/// Besides making the isolation boundary visible, this lets tools report paths
-/// that still identify the project unambiguously.
-fn resolve_builtin_project_path(template: &mut driva::TemplateConfig) -> Result<()> {
+/// Mount a template workspace below its configured sandbox root while
+/// preserving the canonical host path.
+fn resolve_workspace(template: &mut driva::TemplateConfig) -> Result<()> {
+    let Some(root) = &template.workspace_root else {
+        if template.codex_trust_workspace {
+            bail!("codex_trust_workspace requires workspace_root");
+        }
+        return Ok(());
+    };
+    if !root.is_absolute() {
+        bail!(
+            "template workspace_root must be absolute: {}",
+            root.display()
+        );
+    }
     let host_path = std::fs::canonicalize(".").context("failed to resolve the current project")?;
     let relative = host_path
         .strip_prefix("/")
         .context("the current project path is not absolute")?;
-    let destination = Path::new("/driva").join(relative);
-    let destination_text = destination
-        .to_str()
-        .context("the current project path is not valid UTF-8")?;
+    let destination = root.join(relative);
+    template.workdir = Some(destination.clone());
+    template.mounts.push(driva::MountConfig {
+        source: PathBuf::from("."),
+        destination: destination.clone(),
+        access: MountAccess::ReadWrite,
+    });
 
-    if template.workdir.as_deref() == Some(Path::new("/workspace")) {
-        template.workdir = Some(destination.clone());
-    }
-    for mount in &mut template.mounts {
-        if mount.destination == Path::new("/workspace") {
-            mount.destination = destination.clone();
+    if template.codex_trust_workspace {
+        let destination = destination
+            .to_str()
+            .context("the current project path is not valid UTF-8")?;
+        if template.command.is_empty() {
+            bail!("codex_trust_workspace requires a template command");
         }
-    }
-    for argument in &mut template.command {
-        if argument.contains("/workspace") {
-            *argument = argument.replace("/workspace", destination_text);
-        }
+        template.command.splice(
+            1..1,
+            [
+                "-c".to_owned(),
+                format!("projects.{destination:?}.trust_level=\"trusted\""),
+            ],
+        );
     }
     Ok(())
 }

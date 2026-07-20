@@ -17,26 +17,27 @@ Claude Code:
 
 ```sh
 cargo run -- templates
-cargo run -- runtime install codex@latest
 cargo run -- run --template codex
+cargo run -- runtime install codex@latest
+cargo run -- run --template codex-runtime
 cargo run -- run --template codex-exec -- "fix the failing tests"
 cargo run -- run --template codex --no-network
 cargo run -- run --template claude
 cargo run -- run --template claude-exec -- "fix the failing tests"
 ```
 
-The Codex templates use a pinned runtime prepared by `driva runtime install`
-and expose it read-only through Bubblewrap. Installation uses Podman once to
-install Node and Codex into a complete versioned filesystem under
-`~/.local/share/driva/runtimes`; normal Codex runs do not use Podman. The
-templates mount the current project writable below `/driva` at its canonical
-host path (for example, `/driva/home/me/project`), enable
-networking, give Codex a private writable tmpfs for disposable state, mount
-the host resolver configuration read-only, and mount `~/.codex/auth.json`
-writable at `/root/.codex/auth.json`. The auth file
-contains access tokens, so select the template only for code you trust. Hosts
-using an OS keyring must create a file-backed Codex login first or replace the
-template's authentication scheme.
+The `codex` template runs the host's Codex binary with Bubblewrap and mounts
+the current project writable below `/tmp/driva` at its canonical host path
+(for example, `/tmp/driva/home/me/project`). It makes the host's `~/.codex`
+directory available at `/root/.codex`.
+
+The `codex-runtime` and `codex-exec` templates instead use a pinned runtime
+prepared by `driva runtime install` and expose it read-only through Bubblewrap.
+Installation uses Podman once to install Node and Codex into a complete
+versioned filesystem under `~/.local/share/driva/runtimes`; normal Codex runs
+do not use Podman. These templates mount the project below `/driva` at its
+canonical host path, use disposable Codex state, and mount the host
+`~/.codex/auth.json` at `/root/.codex/auth.json`.
 
 The Claude Code templates continue to use Podman with Node 22, mount the
 current project below `/driva` at its canonical host path, and mount only
@@ -78,12 +79,10 @@ description = "Run this project's tests"
 command = ["cargo", "test"]
 backend = "podman"
 image = "rust:1.88"
-workdir = "/workspace"
+workspace_root = "/workspace"
 
-[[template.test.mount]]
-source = "."
-destination = "/workspace"
-access = "write"
+# Driva mounts the project at
+# /workspace/<canonical host path> and uses it as the working directory.
 ```
 
 The library exposes the backend-independent `ExecutionRequest` and `Isolation`
