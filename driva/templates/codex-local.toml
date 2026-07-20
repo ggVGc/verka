@@ -17,6 +17,11 @@ destination = "/tmp/workspace"
 access = "write"
 
 [[mount]]
-source = "~/.codex/auth.json"
-destination = "/root/.codex/auth.json"
+source = "~/.codex"
+destination = "/root/.codex"
 access = "write"
+
+# [[mount]]
+# source = "~/.codex/auth.json"
+# destination = "/root/.codex/auth.json"
+# access = "write"
