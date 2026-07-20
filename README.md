@@ -38,17 +38,3 @@ Nota ----> ReviewStore <---- repository files
 Linka and Driva know nothing about Orka or Nota. Orka composes Linka and Driva.
 Nota's domain code knows only its own storage interface; Linka support is an
 adapter at the edge.
-
-## Design documents
-
-- [`linka/DESIGN.md`](linka/DESIGN.md)
-- [`driva/DESIGN.md`](driva/DESIGN.md)
-- [`orka/DESIGN.md`](orka/DESIGN.md)
-- [`nota/DESIGN.md`](nota/DESIGN.md)
-- [`designs/SEPARATE_APPLICATIONS.md`](designs/SEPARATE_APPLICATIONS.md)
-
-The source split is in progress. Linka is the existing working core. Orka is
-implemented fresh against its design; Driva and Nota begin as explicit designs
-so their code can be extracted behind the contracts described above.
-`verka-work-reference/` holds parked, non-building source from the former
-combined execution/review project (`verka-work`), kept as reference only.
