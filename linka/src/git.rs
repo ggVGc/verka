@@ -58,7 +58,13 @@ impl ArtifactStore for GitVcs {
     fn dirty_paths(&self) -> Result<Vec<String>> {
         // Do not use `checked`: its outer trim would remove the leading index
         // status column from the first line (for example ` M file`).
-        let out = git(&self.project, &["status", "--porcelain"])?;
+        // Git's default untracked-files mode reports a wholly untracked
+        // directory as one `dir/` entry. Completion validates exact declared
+        // output paths, so enumerate the files beneath it instead.
+        let out = git(
+            &self.project,
+            &["status", "--porcelain", "--untracked-files=all"],
+        )?;
         if !out.status.success() {
             bail!(
                 "`git status --porcelain` failed: {}",
@@ -566,6 +572,18 @@ mod store_mutation_tests {
             before
         );
         assert!(store.list_ids().unwrap().is_empty());
+    }
+
+    #[test]
+    fn dirty_paths_enumerates_files_in_untracked_directories() {
+        let (temp, store, _) = workbench();
+        let project = store.project_root();
+        ensure_repo(&project).unwrap();
+        std::fs::create_dir_all(project.join("test/nested")).unwrap();
+        std::fs::write(project.join("test/nested/output.txt"), "produced\n").unwrap();
+        let vcs = GitVcs::new(project, temp.0.clone());
+
+        assert_eq!(vcs.dirty_paths().unwrap(), vec!["test/nested/output.txt"]);
     }
 
     #[test]
