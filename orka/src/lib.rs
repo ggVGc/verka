@@ -27,6 +27,7 @@ pub mod engine;
 pub mod events;
 pub mod executor;
 pub mod fakes;
+pub mod file_changes;
 pub mod input;
 pub mod linka_work;
 pub mod outcome;

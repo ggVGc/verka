@@ -853,8 +853,12 @@ function workLogRow(block) {
       return evRow(ok ? "done" : "failed", ok ? "done" : "failed",
                    `${b.command || ""}${state ? ` [${state}]` : ""}`, details);
     }
-    case "files_changed":
-      return evRow("tool", "changed", (b.paths || []).join(", ") || "files");
+    case "files_changed": {
+      const checkpoint = b.checkpoint ? ` · checkpoint ${b.checkpoint.slice(0, 12)}` : "";
+      const details = b.files?.length ? fileChangeDetails(b.files) :
+        b.checkpoint_error ? detailsContent([{type: "text", text: b.checkpoint_error}], "checkpoint error") : null;
+      return evRow("tool", "changed", `${(b.paths || []).join(", ") || "files"}${checkpoint}`, details);
+    }
     case "tool_started":
       return evRow("tool", "tool", [b.name, b.detail].filter(Boolean).join(" "));
     case "tool_completed":
@@ -906,10 +910,10 @@ function renderContent(content) {
   for (const block of Array.isArray(content) ? content : []) {
     if (block.type === "code") {
       const language = normalizeLanguage(block.language);
-      if (language) {
+      if (language || block.filename) {
         const head = document.createElement("div");
         head.className = "code-head";
-        head.textContent = language;
+        head.textContent = [block.filename, language].filter(Boolean).join(" · ");
         wrap.appendChild(head);
       }
       const pre = document.createElement("pre");
@@ -923,6 +927,26 @@ function renderContent(content) {
     }
   }
   return wrap;
+}
+
+function fileChangeDetails(files) {
+  const det = document.createElement("details");
+  const sum = document.createElement("summary");
+  sum.textContent = "files at checkpoint";
+  const content = [];
+  for (const file of files) {
+    if (typeof file.text === "string") {
+      content.push({
+        type: "code", filename: file.path,
+        language: languageFromPath(file.path), text: file.text,
+      });
+    } else {
+      const state = file.deleted ? "deleted" : file.binary ? "binary file" : file.error || "unavailable";
+      content.push({type: "text", text: `${file.path}: ${state}`});
+    }
+  }
+  det.append(sum, renderContent(content));
+  return det;
 }
 
 function detailsContent(content, label) {
@@ -949,6 +973,19 @@ const KEYWORDS = {
 function normalizeLanguage(language) {
   const name = String(language || "").toLowerCase().replace(/^language-/, "");
   return LANGUAGE_ALIASES[name] || name;
+}
+
+function languageFromPath(path) {
+  const name = String(path || "").split("/").pop();
+  const extension = name.includes(".") ? name.split(".").pop().toLowerCase() : "";
+  const aliases = {
+    rs: "rust", js: "javascript", jsx: "javascript", mjs: "javascript",
+    ts: "typescript", tsx: "typescript", py: "python", sh: "shell",
+    bash: "shell", zsh: "shell", json: "json", toml: "toml", yaml: "yaml",
+    yml: "yaml", html: "html", htm: "html", css: "css", md: "markdown",
+    c: "c", h: "c", cc: "cpp", cpp: "cpp", hpp: "cpp", java: "java",
+  };
+  return aliases[extension] || extension;
 }
 
 // A small, dependency-free lexer. It deliberately emits DOM text nodes rather

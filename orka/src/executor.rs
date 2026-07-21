@@ -46,6 +46,10 @@ pub struct ExecutionArtifacts {
     pub diagnostics: PathBuf,
     pub raw_events: Option<PathBuf>,
     pub events: Option<PathBuf>,
+    /// Event-to-commit mappings for per-file-change Git checkpoints.
+    pub file_changes: Option<PathBuf>,
+    /// Attempt-owned ref retaining the checkpoint commit chain.
+    pub file_change_ref: Option<String>,
     /// Durable, harness-observed project file accesses for this execution.
     pub accesses: PathBuf,
 }

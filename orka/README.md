@@ -117,6 +117,12 @@ messages, failures, and token usage as they arrive. Terminal control sequences
 in agent-produced text are removed before rendering. Literal `[agent].command` profiles retain plain
 stdout in `transcript.log` and stderr in `diagnostics.log`.
 
+Every completed `file_change` event also creates a checkpoint commit through a
+private Git index and records it in `file-changes.v1.jsonl`. The commits form a
+chain retained at `refs/orka/file-changes/<attempt-id>` without moving the
+agent worktree's HEAD or index. This preserves each reported intermediate file
+state without changing Linka's final declared-output capture.
+
 Human-facing views are projected through Orka's provider-independent
 `WorkLogBlock` format. Markdown prose and fenced code are separate content
 blocks, including the fence's language, so the terminal and `orka-web` share

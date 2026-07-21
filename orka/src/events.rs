@@ -47,6 +47,10 @@ pub enum AgentEvent {
     FileChanged {
         id: String,
         paths: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        checkpoint: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        checkpoint_error: Option<String>,
     },
     ToolStarted {
         id: String,
@@ -104,6 +108,10 @@ pub enum WorkLogBlock {
     },
     FilesChanged {
         paths: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        checkpoint: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        checkpoint_error: Option<String>,
     },
     ToolStarted {
         name: String,
@@ -176,8 +184,15 @@ pub fn event_blocks(event: &AgentEvent) -> Vec<WorkLogBlock> {
                 }]
             },
         },
-        AgentEvent::FileChanged { paths, .. } => WorkLogBlock::FilesChanged {
+        AgentEvent::FileChanged {
+            paths,
+            checkpoint,
+            checkpoint_error,
+            ..
+        } => WorkLogBlock::FilesChanged {
             paths: paths.iter().map(|path| clean(path)).collect(),
+            checkpoint: checkpoint.clone(),
+            checkpoint_error: checkpoint_error.clone(),
         },
         AgentEvent::ToolStarted { name, detail, .. } => WorkLogBlock::ToolStarted {
             name: clean(name),
@@ -382,6 +397,8 @@ fn decode_item(event_type: &str, item: &Value) -> AgentEvent {
         ("file_change", true) => AgentEvent::FileChanged {
             id,
             paths: changed_paths(item),
+            checkpoint: None,
+            checkpoint_error: None,
         },
         ("agent_message", true) => AgentEvent::AgentMessage {
             id,
@@ -460,6 +477,17 @@ fn changed_paths(item: &Value) -> Vec<String> {
 /// Convert the exact Codex journal into a versioned normalized journal and a
 /// compact human-readable transcript after execution completes.
 pub fn materialize_codex_events(raw: &Path, normalized: &Path, transcript: &Path) -> Result<()> {
+    materialize_codex_events_with_checkpoints(raw, normalized, transcript, None)
+}
+
+/// Materialize events and attach per-file-change checkpoint commits from the
+/// harness journal when one is available.
+pub fn materialize_codex_events_with_checkpoints(
+    raw: &Path,
+    normalized: &Path,
+    transcript: &Path,
+    file_changes: Option<&Path>,
+) -> Result<()> {
     let input = File::open(raw).with_context(|| format!("opening {}", raw.display()))?;
     let mut events = BufWriter::new(
         File::create(normalized).with_context(|| format!("creating {}", normalized.display()))?,
@@ -468,9 +496,32 @@ pub fn materialize_codex_events(raw: &Path, normalized: &Path, transcript: &Path
         File::create(transcript).with_context(|| format!("creating {}", transcript.display()))?,
     );
 
+    let mut checkpoints = match file_changes {
+        Some(path) => crate::file_changes::read_checkpoints(path)?.into_iter(),
+        None => Vec::new().into_iter(),
+    };
     for line in BufReader::new(input).lines() {
         let line = line.with_context(|| format!("reading {}", raw.display()))?;
-        let event = decode_codex_line(&line);
+        let mut event = decode_codex_line(&line);
+        if let AgentEvent::FileChanged {
+            id,
+            checkpoint,
+            checkpoint_error,
+            ..
+        } = &mut event
+        {
+            if let Some(record) = checkpoints.next() {
+                if record.event_id == *id {
+                    *checkpoint = record.commit;
+                    *checkpoint_error = record.error;
+                } else {
+                    *checkpoint_error = Some(format!(
+                        "checkpoint journal expected event `{}`, found `{id}`",
+                        record.event_id
+                    ));
+                }
+            }
+        }
         serde_json::to_writer(&mut events, &event)?;
         events.write_all(b"\n")?;
         write_transcript_event(&mut readable, &event)?;
@@ -619,7 +670,7 @@ impl<W: Write> RichRenderer<W> {
                     self.render_content(output, dim, reset, Some(20))?;
                 }
             }
-            WorkLogBlock::FilesChanged { paths } => {
+            WorkLogBlock::FilesChanged { paths, .. } => {
                 let detail = if paths.is_empty() {
                     "files".into()
                 } else {
@@ -858,6 +909,43 @@ mod tests {
         let readable = std::fs::read_to_string(transcript).unwrap();
         assert!(readable.contains("$ cargo test"));
         assert!(readable.contains("All tests pass"));
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn materialization_attaches_file_change_checkpoint_commits() {
+        let directory = std::env::temp_dir().join(format!("orka-event-test-{}", ulid::Ulid::new()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let raw = directory.join("events.raw.jsonl");
+        let normalized = directory.join("events.v1.jsonl");
+        let transcript = directory.join("transcript.log");
+        let checkpoints = directory.join("file-changes.v1.jsonl");
+        std::fs::write(
+            &raw,
+            "{\"type\":\"item.completed\",\"item\":{\"id\":\"f1\",\"type\":\"file_change\",\"changes\":[{\"path\":\"src/lib.rs\"}]}}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            &checkpoints,
+            "{\"schema\":1,\"sequence\":1,\"event_id\":\"f1\",\"paths\":[\"src/lib.rs\"],\"commit\":\"abc123\"}\n",
+        )
+        .unwrap();
+
+        materialize_codex_events_with_checkpoints(
+            &raw,
+            &normalized,
+            &transcript,
+            Some(&checkpoints),
+        )
+        .unwrap();
+
+        assert!(std::fs::read_to_string(&normalized)
+            .unwrap()
+            .contains(r#""checkpoint":"abc123""#));
+        assert!(matches!(
+            read_work_log(&normalized).unwrap().as_slice(),
+            [WorkLogBlock::FilesChanged { checkpoint: Some(commit), .. }] if commit == "abc123"
+        ));
         std::fs::remove_dir_all(directory).unwrap();
     }
 }

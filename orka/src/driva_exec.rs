@@ -8,8 +8,9 @@
 
 use crate::access::{read_access_summary, write_access_summary, AccessRecorder};
 use crate::agent::AgentProtocol;
-use crate::events::materialize_codex_events;
+use crate::events::materialize_codex_events_with_checkpoints;
 use crate::executor::{ExecutionArtifacts, ExecutionReport, ExecutionSpec, IsolatedExecutor};
+use crate::file_changes::FileChangeRecorder;
 use anyhow::{anyhow, Context, Result};
 use driva::{ExecutionIo, Isolation, Mount, MountAccess};
 use std::ffi::OsString;
@@ -103,6 +104,32 @@ impl IsolatedExecutor for DrivaExecutor {
             stderr: append_handle(&artifacts.diagnostics)?,
         };
 
+        let file_change_recorder = if spec.protocol == AgentProtocol::CodexJsonl {
+            let workspace = spec
+                .mounts
+                .iter()
+                .find(|mount| mount.destination == spec.working_directory)
+                .context("Codex JSONL execution has no workspace mount")?;
+            Some(FileChangeRecorder::start(
+                &workspace.source,
+                &spec.working_directory,
+                artifacts
+                    .raw_events
+                    .as_deref()
+                    .context("Codex JSONL execution has no raw event path")?,
+                artifacts
+                    .file_changes
+                    .as_deref()
+                    .context("Codex JSONL execution has no file-change journal")?,
+                artifacts
+                    .file_change_ref
+                    .as_deref()
+                    .context("Codex JSONL execution has no file-change ref")?,
+            )?)
+        } else {
+            None
+        };
+
         let access_recorder = spec
             .mounts
             .iter()
@@ -121,6 +148,16 @@ impl IsolatedExecutor for DrivaExecutor {
             )?;
         }
         let outcome = driva::execute(self.backend.as_ref(), &request, io);
+        if let Some(recorder) = file_change_recorder {
+            if let Err(error) = recorder.finish() {
+                if let Ok(mut diagnostics) = append_handle(&artifacts.diagnostics) {
+                    let _ = writeln!(
+                        diagnostics,
+                        "orka: could not finish file-change checkpointing: {error:#}"
+                    );
+                }
+            }
+        }
         if let Some(recorder) = access_recorder {
             if let Err(error) = recorder.finish() {
                 if let Ok(mut diagnostics) = append_handle(&artifacts.diagnostics) {
@@ -156,10 +193,11 @@ impl IsolatedExecutor for DrivaExecutor {
         }
         if spec.protocol == AgentProtocol::CodexJsonl {
             let projection = match artifacts.events.as_ref() {
-                Some(events) => materialize_codex_events(
+                Some(events) => materialize_codex_events_with_checkpoints(
                     artifacts.raw_events.as_ref().expect("validated above"),
                     events,
                     &artifacts.transcript,
+                    artifacts.file_changes.as_deref(),
                 ),
                 None => Err(anyhow!(
                     "Codex JSONL execution has no normalized event path"
@@ -207,6 +245,7 @@ mod tests {
     use driva::{ExecutionOutcome, ExecutionRequest, ProcessExit};
     use std::collections::BTreeMap;
     use std::io::Write;
+    use std::process::Command;
     use std::sync::{Arc, Mutex};
 
     /// A backend that records the validated request it received and writes to
@@ -268,7 +307,28 @@ mod tests {
             raw_events: (protocol == AgentProtocol::CodexJsonl)
                 .then(|| dir.join("events.raw.jsonl")),
             events: (protocol == AgentProtocol::CodexJsonl).then(|| dir.join("events.v1.jsonl")),
+            file_changes: (protocol == AgentProtocol::CodexJsonl)
+                .then(|| dir.join("file-changes.v1.jsonl")),
+            file_change_ref: (protocol == AgentProtocol::CodexJsonl)
+                .then(|| "refs/orka/file-changes/test".into()),
             accesses: dir.join("accesses.v1.jsonl"),
+        }
+    }
+
+    fn init_workspace_repository(path: &Path) {
+        for args in [
+            &["init", "-q"][..],
+            &["config", "user.name", "test"][..],
+            &["config", "user.email", "test@example.com"][..],
+            &["commit", "--allow-empty", "-qm", "base"][..],
+        ] {
+            assert!(Command::new("git")
+                .arg("-C")
+                .arg(path)
+                .args(args)
+                .status()
+                .unwrap()
+                .success());
         }
     }
 
@@ -325,6 +385,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("orka-codex-events-{}", ulid::Ulid::new()));
         std::fs::create_dir_all(dir.join("ws")).unwrap();
         std::fs::create_dir_all(dir.join("ctx")).unwrap();
+        init_workspace_repository(&dir.join("ws"));
         let executor = DrivaExecutor::new(Box::new(StubBackend {
             seen: Arc::new(Mutex::new(Vec::new())),
             exit: 0,
@@ -355,6 +416,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("orka-codex-events-{}", ulid::Ulid::new()));
         std::fs::create_dir_all(dir.join("ws")).unwrap();
         std::fs::create_dir_all(dir.join("ctx")).unwrap();
+        init_workspace_repository(&dir.join("ws"));
         let executor = DrivaExecutor::new(Box::new(StubBackend {
             seen: Arc::new(Mutex::new(Vec::new())),
             exit: 7,

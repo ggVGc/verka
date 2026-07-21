@@ -15,6 +15,7 @@ use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Arc;
 
 use linka::{
@@ -167,7 +168,7 @@ fn handle(mut stream: TcpStream, app: &App) -> Result<()> {
         }
         ("GET", p) if p.starts_with("/api/transcript/") => {
             let id = &p["/api/transcript/".len()..];
-            match transcript_json(&app.attempts, id) {
+            match transcript_json(app, id) {
                 Ok(v) => ("200 OK", "application/json", v.to_string()),
                 Err(e) => (
                     "404 Not Found",
@@ -399,7 +400,8 @@ fn reviews_json(store: &Store, orka_root: &Path) -> Result<Vec<Value>> {
         .collect()
 }
 
-fn transcript_json(store: &FsAttemptStore, raw_id: &str) -> Result<Value> {
+fn transcript_json(app: &App, raw_id: &str) -> Result<Value> {
+    let store = &app.attempts;
     let id = AttemptId(raw_id.to_string());
     // Loading first both validates the id against durable Orka state and keeps
     // arbitrary paths out of this read-only endpoint.
@@ -413,6 +415,8 @@ fn transcript_json(store: &FsAttemptStore, raw_id: &str) -> Result<Value> {
     } else {
         transcript_blocks(&transcript)
     };
+    let mut blocks = serde_json::to_value(blocks)?;
+    hydrate_file_changes(&app.root.join("project"), &mut blocks);
     Ok(json!({
         "attempt": id.0,
         "node": snapshot.record.input.node(),
@@ -421,6 +425,76 @@ fn transcript_json(store: &FsAttemptStore, raw_id: &str) -> Result<Value> {
         // logs were introduced. The page consumes `blocks`.
         "transcript": transcript,
     }))
+}
+
+const MAX_WORK_LOG_FILE: u64 = 256 * 1024;
+
+/// Attach bounded text from the immutable checkpoint commits. A missing,
+/// binary, or large file remains visible with a reason instead of making the
+/// entire work log fail.
+fn hydrate_file_changes(project: &Path, blocks: &mut Value) {
+    let Some(blocks) = blocks.as_array_mut() else {
+        return;
+    };
+    for block in blocks {
+        if block["type"] != "files_changed" {
+            continue;
+        }
+        let Some(commit) = block["checkpoint"].as_str() else {
+            continue;
+        };
+        let files = block["paths"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(|path| checkpoint_file(project, commit, path))
+            .collect::<Vec<_>>();
+        block["files"] = Value::Array(files);
+    }
+}
+
+fn checkpoint_file(project: &Path, commit: &str, path: &str) -> Value {
+    if !commit.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return json!({ "path": path, "error": "invalid checkpoint commit" });
+    }
+    let object = format!("{commit}:{path}");
+    let size = Command::new("git")
+        .arg("-C")
+        .arg(project)
+        .args(["cat-file", "-s", &object])
+        .output();
+    let Ok(size) = size else {
+        return json!({ "path": path, "error": "could not inspect checkpoint" });
+    };
+    if !size.status.success() {
+        return json!({ "path": path, "deleted": true });
+    }
+    let size = String::from_utf8_lossy(&size.stdout)
+        .trim()
+        .parse::<u64>()
+        .unwrap_or(u64::MAX);
+    if size > MAX_WORK_LOG_FILE {
+        return json!({ "path": path, "size": size, "error": "file is too large to display" });
+    }
+    let content = Command::new("git")
+        .arg("-C")
+        .arg(project)
+        .args(["show", &object])
+        .output();
+    let Ok(content) = content else {
+        return json!({ "path": path, "error": "could not read checkpoint" });
+    };
+    if !content.status.success() {
+        return json!({ "path": path, "error": "checkpoint content is unavailable" });
+    }
+    if content.stdout.contains(&0) {
+        return json!({ "path": path, "size": size, "binary": true });
+    }
+    match String::from_utf8(content.stdout) {
+        Ok(text) => json!({ "path": path, "size": size, "text": text }),
+        Err(_) => json!({ "path": path, "size": size, "binary": true }),
+    }
 }
 
 fn attempt_phase_label(phase: AttemptPhase) -> &'static str {

@@ -25,3 +25,7 @@ The work-log view consumes Orka's normalized `WorkLogBlock` representation,
 not model-specific JSONL. Fenced Markdown code is shown as a code block and is
 syntax-highlighted using its declared language; legacy plain-output attempts
 remain available through the same format.
+
+File-change rows identify their immutable checkpoint commit and show bounded
+text contents from that checkpoint. Binary, deleted, and files larger than
+256 KiB are identified without embedding their contents in the response.

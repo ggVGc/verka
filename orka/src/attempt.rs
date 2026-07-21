@@ -13,6 +13,7 @@
 //!     request.toml     the exact execution spec, before the command starts
 //!     events.raw.jsonl exact machine-readable agent stdout, when available
 //!     events.v1.jsonl  normalized Orka agent events
+//!     file-changes.v1.jsonl event-to-Git-checkpoint mappings
 //!     accesses.v1.jsonl harness-observed project file reads
 //!     diagnostics.log agent stderr, kept outside the event stream
 //!     transcript.log   readable transcript derived from agent stdout
@@ -200,6 +201,10 @@ impl FsAttemptStore {
         self.attempt_dir(id).join("events.v1.jsonl")
     }
 
+    pub fn file_changes_path(&self, id: &AttemptId) -> PathBuf {
+        self.attempt_dir(id).join("file-changes.v1.jsonl")
+    }
+
     pub fn accesses_path(&self, id: &AttemptId) -> PathBuf {
         self.attempt_dir(id).join("accesses.v1.jsonl")
     }
@@ -214,6 +219,10 @@ impl FsAttemptStore {
             diagnostics: self.diagnostics_path(id),
             raw_events: (protocol == AgentProtocol::CodexJsonl).then(|| self.raw_events_path(id)),
             events: (protocol == AgentProtocol::CodexJsonl).then(|| self.events_path(id)),
+            file_changes: (protocol == AgentProtocol::CodexJsonl)
+                .then(|| self.file_changes_path(id)),
+            file_change_ref: (protocol == AgentProtocol::CodexJsonl)
+                .then(|| format!("refs/orka/file-changes/{}", id.0)),
             accesses: self.accesses_path(id),
         }
     }
