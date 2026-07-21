@@ -66,14 +66,14 @@ fn provides_codex_templates() {
     assert_eq!(
         codex_exec.command,
         [
-            "/usr/local/bin/driva-codex",
+            "codex",
             "--sandbox",
             "danger-full-access",
             "exec",
             "--skip-git-repo-check",
         ]
     );
-    assert_eq!(codex_exec.workspace_root, Some(PathBuf::from("/driva")));
+    assert_eq!(codex_exec.workspace_root, Some(PathBuf::from("/tmp/driva")));
     assert!(codex_exec.codex_trust_workspace);
     assert_eq!(codex_exec.interactive, Some(false));
 
@@ -147,8 +147,8 @@ fn builtin_template_assets_use_the_public_toml_schema() {
             Some("npx" | "codex" | "/usr/local/bin/driva-codex")
         ));
         let expected_mounts = match name {
-            "codex" | "claude" | "claude-exec" => 1,
-            "codex-exec" | "codex-runtime" => 2,
+            "codex" | "codex-exec" | "claude" | "claude-exec" => 1,
+            "codex-runtime" => 2,
             _ => unreachable!(),
         };
         assert_eq!(template.mounts.len(), expected_mounts);
@@ -303,14 +303,14 @@ fn builtin_codex_runtime_selects_bwrap_and_works_without_arguments() {
 }
 
 #[test]
-fn builtin_codex_explains_how_to_install_a_missing_runtime() {
+fn builtin_codex_runtime_explains_how_to_install_a_missing_runtime() {
     let directory = temporary_directory("missing-codex-runtime");
     fs::create_dir(directory.join(".codex")).unwrap();
     fs::write(directory.join(".codex/auth.json"), "{}").unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_driva"))
         .current_dir(&directory)
         .env("HOME", &directory)
-        .args(["run", "--template", "codex-exec", "--dry-run"])
+        .args(["run", "--template", "codex-runtime", "--dry-run"])
         .output()
         .unwrap();
     assert!(!output.status.success());

@@ -2,87 +2,15 @@ use crate::{
     effective_policy, ExecutionEvidence, ExecutionIo, ExecutionOutcome, ExecutionRequest,
     Isolation, MountAccess, ProcessExit,
 };
-use crate::{
-    BackendReference, DiscoveredResource, DurableIsolation, ObservedProcessState,
-    ProcessConnection, SessionId,
-};
 use anyhow::{Context, Result};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::time::Duration;
 use std::time::SystemTime;
 
 #[derive(Clone, Debug)]
 pub struct DockerIsolation {
     pub executable: PathBuf,
     pub image: String,
-}
-
-impl DurableIsolation for DockerIsolation {
-    fn backend_name(&self) -> &'static str {
-        "docker"
-    }
-    fn start(&self, id: &SessionId, r: &ExecutionRequest) -> Result<BackendReference> {
-        let old = self.command(r);
-        let args: Vec<_> = old.get_args().map(|x| x.to_os_string()).collect();
-        let mut c = Command::new(&self.executable);
-        c.arg("run")
-            .arg("--detach")
-            .arg("--name")
-            .arg(format!("driva-{}", id.0))
-            .arg("--label")
-            .arg("io.driva.managed=true")
-            .arg("--label")
-            .arg(format!("io.driva.session={}", id.0));
-        for a in args.into_iter().skip(2) {
-            c.arg(a);
-        }
-        let o = c.output()?;
-        if !o.status.success() {
-            anyhow::bail!(
-                "docker start failed: {}",
-                String::from_utf8_lossy(&o.stderr).trim()
-            )
-        }
-        Ok(BackendReference(
-            String::from_utf8_lossy(&o.stdout).trim().into(),
-        ))
-    }
-    fn find(&self, id: &SessionId) -> Result<Option<BackendReference>> {
-        crate::podman::find_engine(&self.executable, id)
-    }
-    fn enumerate_managed(&self) -> Result<Vec<DiscoveredResource>> {
-        crate::podman::enumerate_engine(&self.executable)
-    }
-    fn inspect(&self, r: &BackendReference) -> Result<ObservedProcessState> {
-        crate::podman::inspect_engine(&self.executable, r)
-    }
-    fn attach(&self, r: &BackendReference) -> Result<Box<dyn ProcessConnection>> {
-        Ok(crate::podman::attach_engine(&self.executable, r))
-    }
-    fn resume(&self, r: &BackendReference) -> Result<Box<dyn ProcessConnection>> {
-        Ok(crate::podman::resume_engine(&self.executable, r))
-    }
-    fn wait(&self, r: &BackendReference) -> Result<ProcessExit> {
-        crate::podman::wait_engine(&self.executable, r)
-    }
-    fn terminate(&self, r: &BackendReference, g: Duration) -> Result<()> {
-        crate::podman::engine_ok(
-            Command::new(&self.executable)
-                .arg("stop")
-                .arg("--time")
-                .arg(g.as_secs().to_string())
-                .arg(&r.0),
-        )
-    }
-    fn remove(&self, r: &BackendReference) -> Result<()> {
-        crate::podman::engine_ok(
-            Command::new(&self.executable)
-                .arg("rm")
-                .arg("--force")
-                .arg(&r.0),
-        )
-    }
 }
 
 impl DockerIsolation {
@@ -130,7 +58,6 @@ impl Isolation for DockerIsolation {
             exit: ProcessExit::from(status),
             evidence: ExecutionEvidence {
                 isolation_backend: "docker".into(),
-                backend_reference: None,
                 effective_policy: effective_policy(request),
                 started_at,
                 finished_at: SystemTime::now(),

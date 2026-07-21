@@ -133,7 +133,6 @@ pub struct ExecutionOutcome {
 
 pub struct ExecutionEvidence {
     pub isolation_backend: String,
-    pub backend_reference: Option<String>,
     pub effective_policy: EffectivePolicy,
     pub started_at: SystemTime,
     pub finished_at: SystemTime,
@@ -181,15 +180,13 @@ Engine-specific image names, flags, identifiers, and error details remain in
 their adapters. Other backends can implement the same portable contract where
 their semantics match.
 
-The Bubblewrap adapter translates synchronous requests into unprivileged Linux
+The Bubblewrap adapter translates requests into unprivileged Linux
 namespaces. With an explicit rootfs it mounts that prepared tree read-only.
 Without one it creates a private root and mounts only conventional host system
 runtime paths read-only, making `/bin/sh` and normal OS tools available without
 exposing the host root, home, or current directory. It adds fresh `/proc`,
 `/dev`, and `/tmp` mounts, clears the inherited host environment, and shares
-the host network namespace only when networking is granted. Bubblewrap is not
-a durable backend; session lifecycle operations continue to require Podman or
-Docker.
+the host network namespace only when networking is granted.
 
 Tests for Driva's policy use a fake `Isolation` implementation. Each production
 backend also has focused integration tests for its request translation, I/O,
@@ -209,175 +206,19 @@ Orka decides what work to run and constructs the command, mounts, and network
 grant. Driva validates and executes that concrete grant. It neither interprets
 the command as an agent nor parses its output.
 
-## Stage 2: durable sessions
+## Process lifetime
 
-After synchronous execution is established, Driva may add durable sessions for
-commands that must survive a detached client and be inspected or reattached
-later. This remains a generic process facility; agent conversation semantics
-continue to belong to Orka or another caller.
+Driva runs one foreground command to completion. The caller owns that command's
+lifetime: if it needs detachment, reattachment, scheduling, or restart policy,
+it composes Driva with a terminal multiplexer, service manager, or job runner.
+Driva does not persist process state or provide a session lifecycle API.
 
-Stage 2 adds these operations while retaining `run` as the simple interface:
+For example, a human can keep an interactive isolated command alive with:
 
-```text
-driva start [OPTIONS] -- COMMAND [ARG...]
-driva attach SESSION
-driva inspect SESSION
-driva wait SESSION
-driva terminate SESSION
-driva remove SESSION
-driva list
-driva recover
+```sh
+tmux new-session -s work -- driva run --interactive -- COMMAND
 ```
 
-`run` may then be implemented as start, attach, wait, and remove. Existing
-callers do not need to adopt the lower-level lifecycle.
-
-### Authority and consistency
-
-Driva must not persist a second lifecycle state machine alongside the
-isolation backend. The backend is authoritative for whether its process is
-created, running, exited, or absent. A Driva session record is authoritative
-only for:
-
-- the Driva session identity;
-- the redacted request and effective policy;
-- the selected backend and its opaque native reference; and
-- immutable evidence observed from that backend.
-
-Current status is always read from the backend:
-
-```rust
-pub struct SessionRecord {
-    pub id: SessionId,
-    pub backend: String,
-    pub backend_reference: BackendReference,
-    pub request: RedactedExecutionRequest,
-    pub effective_policy: EffectivePolicy,
-    pub created_at: SystemTime,
-}
-
-pub struct SessionSnapshot {
-    pub record: SessionRecord,
-    pub observed: ObservedProcessState,
-    pub observed_at: SystemTime,
-}
-
-pub enum ObservedProcessState {
-    Created,
-    Running,
-    Exited(ProcessExit),
-    Missing,
-    Unknown { error: String },
-}
-```
-
-Driva may record that removal was requested or that absence was observed. It
-must not claim that a resource was removed without confirming that through the
-backend. Likewise, a sealed exit outcome is historical evidence, not a cached
-claim about the resource's current existence.
-
-### Durable backend capability
-
-Not every Stage 1 backend can support durable sessions. Durability is a
-separate capability rather than a requirement of `Isolation`:
-
-```rust
-pub trait DurableIsolation: Isolation {
-    fn start(
-        &self,
-        id: &SessionId,
-        request: &ExecutionRequest,
-    ) -> Result<BackendReference>;
-
-    fn find(&self, id: &SessionId) -> Result<Option<BackendReference>>;
-    fn inspect(&self, reference: &BackendReference)
-        -> Result<ObservedProcessState>;
-    fn attach(&self, reference: &BackendReference)
-        -> Result<Box<dyn ProcessConnection>>;
-    fn terminate(&self, reference: &BackendReference, grace: Duration)
-        -> Result<()>;
-    fn remove(&self, reference: &BackendReference) -> Result<()>;
-}
-```
-
-`BackendReference` is opaque outside its adapter. It may contain a Docker
-container ID, a process-supervisor identity, a VM identity, or a remote
-sandbox identity.
-
-Driva chooses the session ID before starting the backend and supplies it as
-backend metadata. A durable backend must be able to rediscover a managed
-resource by that ID. This closes the failure window in which backend creation
-succeeds but writing Driva's reference fails: recovery can find the resource
-without guessing from stale lifecycle state.
-
-A backend that cannot rediscover, inspect, attach to, and terminate a process
-implements only `Isolation`. Driva must not simulate durable sessions on top
-of it.
-
-### Session interface
-
-Programmatic callers use a lifecycle interface corresponding to the Stage 2
-CLI:
-
-```rust
-pub trait SessionRunner {
-    fn start(&self, request: ExecutionRequest) -> Result<StartedSession>;
-    fn inspect(&self, id: &SessionId) -> Result<SessionSnapshot>;
-    fn attach(&self, id: &SessionId) -> Result<Box<dyn SessionConnection>>;
-    fn wait(&self, id: &SessionId) -> Result<ExecutionOutcome>;
-    fn terminate(&self, id: &SessionId) -> Result<ExecutionOutcome>;
-    fn remove(&self, id: &SessionId) -> Result<CleanupObservation>;
-}
-```
-
-Attached and detached are client connection conditions, not persisted process
-states. In particular, Driva does not infer that an arbitrary command is
-waiting for input merely because no client is attached.
-
-### Evidence and recovery
-
-Stage 1 returns execution evidence to its caller. Stage 2 retains the session
-record and append-only observations needed for later inspection. An
-observation states what a backend reported at a particular time:
-
-```rust
-pub struct Observation {
-    pub observed_at: SystemTime,
-    pub backend_reference: BackendReference,
-    pub state: ObservedProcessState,
-}
-```
-
-On recovery, Driva does not replay local transitions. It finds or inspects the
-backend resource, records the resulting observation, collects a final outcome
-if the process exited, and retries explicitly requested cleanup. A missing
-resource is reported as `Missing`; Driva does not invent an exit status.
-
-The authority split is therefore:
-
-```text
-isolation backend  current process and resource state
-Driva              request, effective grant, identity, and observations
-Orka               attempt, agent transcript, and task outcome
-```
-
-### Retained output
-
-Reattachment may require a bounded operational output log. If introduced, it
-contains uninterpreted stdout and stderr events with observation sequence
-numbers. It exists only to let clients catch up after detaching and is not an
-agent transcript. Retention must be bounded so an absent or slow client cannot
-cause unlimited storage growth. Orka remains responsible for its authoritative
-transcript.
-
-## Other deferred features
-
-Neither stage initially includes:
-
-- conversation or agent-context continuation;
-- orchestration, retries, or task selection; or
-- backend capabilities without a concrete initial use.
-
-Remote backends and a resident service may be introduced if a Stage 2 backend
-requires them, but they are implementation choices rather than part of the
-portable execution semantics.
+The multiplexer owns terminal state and reattachment while Driva continues to
+own the concrete isolation grant, standard-stream transport, exit status, and
+cleanup.

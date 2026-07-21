@@ -483,46 +483,19 @@ impl Engine<'_> {
             let snapshot = self.attempts.load(&id)?;
             let node = snapshot.record.input.node().clone();
             let transcript = self.attempts.transcript_path(&id);
-            let produced_output = snapshot.seal.as_ref().is_some_and(|seal| {
-                matches!(
-                    seal.state,
-                    SealedState::Submitted {
-                        output_commit: Some(_)
-                    }
-                )
-            });
-            if produced_output {
-                // Backfill the complete evidence set for output-producing
-                // attempts sealed by older Orka versions.
-                self.attach_output_evidence(&node, &id)?;
-            } else if transcript.is_file() {
-                // This also migrates transcripts from attempts sealed by older
-                // Orka versions. New attempts are harmless idempotent retries.
+            if transcript.is_file() {
+                // Attachment is idempotent, including after a crash between
+                // writing the transcript and finishing the attempt.
                 self.linka.attach_transcript(&node, &id, &transcript)?;
             }
             let report = match snapshot.phase() {
                 AttemptPhase::Sealed => {
-                    let empty_interruption = snapshot.evidence.is_none()
-                        && snapshot.seal.as_ref().is_some_and(|seal| {
-                            matches!(seal.state, SealedState::Interrupted { .. })
-                        });
-                    if empty_interruption
-                        && self.discard_unchanged_attempt(&id, snapshot.workspace.as_ref())?
-                    {
-                        RecoveryReport {
-                            attempt: id,
-                            node,
-                            action: "discarded empty interrupted attempt".into(),
-                            sealed: None,
-                        }
-                    } else {
-                        let action = self.recover_cleanup(snapshot.workspace.as_ref())?;
-                        RecoveryReport {
-                            attempt: id,
-                            node,
-                            action,
-                            sealed: snapshot.seal.map(|s| s.state),
-                        }
+                    let action = self.recover_cleanup(snapshot.workspace.as_ref())?;
+                    RecoveryReport {
+                        attempt: id,
+                        node,
+                        action,
+                        sealed: snapshot.seal.map(|s| s.state),
                     }
                 }
                 AttemptPhase::Executed => {

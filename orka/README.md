@@ -4,8 +4,7 @@ Orka orchestrates isolated agent attempts for work in a Linka store: it uses
 Linka's public API to discover, freeze, and record work, and Driva to run agent
 commands in isolation. Orka orchestrates Linka specifically — it has no generic
 graph backend. See [`DESIGN.md`](DESIGN.md) for the ownership boundary and
-attempt lifecycle. [`SIMPLIFICATION_TASKS.md`](SIMPLIFICATION_TASKS.md) is the
-plan this code follows; [`TASKS.md`](TASKS.md) is superseded history.
+attempt lifecycle.
 
 ## What an attempt does
 
@@ -133,8 +132,7 @@ keeps attempted work available for later inspection or recovery. One narrow
 case is rolled back completely: when the executor returns no exit evidence and
 the workspace and branch still exactly match their frozen input, Orka removes
 the empty worktree, candidate branch, and attempt record. Changed work is never
-discarded implicitly. `orka recover` applies the same rule to empty interrupted
-attempts left by older versions.
+discarded implicitly.
 
 ## Candidate reviews
 

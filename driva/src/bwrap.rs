@@ -261,7 +261,6 @@ impl Isolation for BwrapIsolation {
             exit: ProcessExit::from(status),
             evidence: ExecutionEvidence {
                 isolation_backend: "bwrap".into(),
-                backend_reference: None,
                 effective_policy: effective_policy(request),
                 started_at,
                 finished_at: SystemTime::now(),

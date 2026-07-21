@@ -42,7 +42,6 @@ impl IsolatedExecutor for FakeExecutor {
         self.runs.borrow_mut().push(spec.clone());
         Ok(ExecutionReport {
             backend: "fake".into(),
-            backend_reference: None,
             exit_code: self.exit_code,
             started_at_ms: 0,
             finished_at_ms: 0,

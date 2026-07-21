@@ -36,13 +36,15 @@ the current project writable below `/tmp/driva` at its canonical host path
 (for example, `/tmp/driva/home/me/project`). It makes the host's `~/.codex`
 directory available at `/root/.codex`.
 
-The `codex-runtime` and `codex-exec` templates instead use a pinned runtime
-prepared by `driva runtime install` and expose it read-only through Bubblewrap.
-Installation uses Podman once to install Node and Codex into a complete
-versioned filesystem under `~/.local/share/driva/runtimes`; normal Codex runs
-do not use Podman. These templates mount the project below `/driva` at its
-canonical host path, use disposable Codex state, and mount the host
-`~/.codex/auth.json` at `/root/.codex/auth.json`.
+The `codex-exec` template is the non-interactive form of `codex`; it uses the
+same host executable and isolated `/tmp/driva` workspace. `codex-runtime`
+instead uses a pinned runtime prepared by `driva runtime install` and exposed
+read-only through Bubblewrap. Installation uses Podman once to install Node and
+Codex into a complete versioned filesystem under
+`~/.local/share/driva/runtimes`; normal executions do not use Podman. The
+runtime template mounts the project below `/driva` at its canonical host path,
+uses disposable Codex state, and mounts the host `~/.codex/auth.json` at
+`/root/.codex/auth.json`.
 
 The Claude Code templates continue to use Podman with Node 22, mount the
 current project below `/driva` at its canonical host path, and mount only
@@ -110,7 +112,7 @@ The library exposes the backend-independent `ExecutionRequest` and `Isolation`
 interface. `validate_request` resolves host sources and rejects invalid or
 conflicting grants; `execute` validates before dispatching to a backend.
 
-Bubblewrap is the default for lightweight synchronous Linux execution. Its
+Bubblewrap is the default for lightweight Linux execution. Its
 configuration-free mode exposes conventional system runtime paths read-only
 inside an otherwise private root. A prepared root filesystem can be selected
 when commands need a different userspace:
@@ -126,38 +128,19 @@ workdir = "/tmp"
 
 When configured, the rootfs must contain `/proc`, `/dev`, `/tmp`, the working
 directory, and every configured mount destination. Driva exposes it read-only
-and places a private writable tmpfs at `/tmp`. Bubblewrap does not currently
-support Driva's durable session commands or `--image`; use Podman or Docker
-when those capabilities are required.
+and places a private writable tmpfs at `/tmp`. Bubblewrap uses `--rootfs`
+instead of an OCI `--image`.
 
 Podman and Docker remain available by setting `isolation.backend` to
 `"podman"` or `"docker"`. Their default image is the minimal
 `docker.io/library/busybox:latest`.
 
-## Durable sessions
-
-Long-running commands can be detached and managed later. Both Podman and
-Docker sessions are labelled with their Driva session id so recovery can
-rediscover the backend resource:
+Driva keeps every command attached to its caller and returns its exit status.
+For a detachable interactive command, run Driva under a terminal multiplexer:
 
 ```sh
-id=$(cargo run -- start --write . -- make watch)
-cargo run -- inspect "$id"
-cargo run -- attach "$id"
-cargo run -- wait "$id"
-cargo run -- terminate "$id" --grace 10
-cargo run -- remove "$id"
-cargo run -- list
-cargo run -- recover
+tmux new-session -s codex -- driva run --template codex
 ```
 
-Session records and append-only observations are stored below
-`$DRIVA_STATE_DIR`, `$XDG_STATE_HOME/driva`, or `~/.local/state/driva` (in
-that order). Records retain the effective grant and environment variable
-names, but deliberately omit environment values. Current process state is
-always queried from the container backend; a missing resource is never
-reported as a successful exit.
-
-The production-hardening roadmap, lifecycle invariants, storage protocol, and
-phase acceptance criteria are specified in
-[`STAGE2_IMPLEMENTATION.md`](STAGE2_IMPLEMENTATION.md).
+tmux or screen then owns terminal persistence and reattachment; Driva continues
+to own isolation policy and cleanup.

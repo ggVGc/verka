@@ -27,10 +27,8 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// The current attempt-record schema. Schema 1 predated Orka's move onto
-/// Linka's `WorkSnapshot`; schema 2 embeds it. The break is intentional and
-/// there are no schema-1 records outside development.
-pub const ATTEMPT_SCHEMA: u32 = 2;
+/// The current attempt-record schema.
+pub const ATTEMPT_SCHEMA: u32 = 1;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -302,19 +300,11 @@ impl FsAttemptStore {
         Ok(ids)
     }
 
-    /// Remove an attempt that never acquired exit evidence. This is used only
-    /// after its unchanged workspace and branch have been rolled back. A
-    /// legacy interrupted seal is allowed so recovery can prune records made
-    /// by older Orka versions; every evidence-bearing or substantive sealed
-    /// attempt remains durable history.
+    /// Remove an unsealed attempt that never acquired exit evidence. This is
+    /// used only after its unchanged workspace and branch have been rolled back.
     pub fn discard_without_evidence(&self, id: &AttemptId) -> Result<()> {
         let snapshot = self.load(id)?;
-        if snapshot.evidence.is_some()
-            || snapshot
-                .seal
-                .as_ref()
-                .is_some_and(|seal| !matches!(seal.state, SealedState::Interrupted { .. }))
-        {
+        if snapshot.evidence.is_some() || snapshot.seal.is_some() {
             bail!("refusing to discard durable attempt `{id}`");
         }
         let dir = self.attempt_dir(id);
@@ -422,7 +412,6 @@ mod tests {
     fn report() -> ExecutionReport {
         ExecutionReport {
             backend: "fake".into(),
-            backend_reference: None,
             exit_code: 0,
             started_at_ms: 1,
             finished_at_ms: 2,
@@ -502,7 +491,7 @@ mod tests {
     }
 
     #[test]
-    fn only_empty_or_interrupted_attempts_can_be_discarded() {
+    fn only_unsealed_attempts_without_evidence_can_be_discarded() {
         let (_temp, store) = store();
         let unexecuted = AttemptId::new();
         store.create(&unexecuted, &input()).unwrap();
@@ -516,12 +505,12 @@ mod tests {
             .seal(
                 &interrupted,
                 SealedState::Interrupted {
-                    reason: "old backend failure".into(),
+                    reason: "backend failure".into(),
                 },
             )
             .unwrap();
-        store.discard_without_evidence(&interrupted).unwrap();
-        assert!(store.list().unwrap().is_empty());
+        assert!(store.discard_without_evidence(&interrupted).is_err());
+        assert!(store.load(&interrupted).is_ok());
 
         let executed = AttemptId::new();
         store.create(&executed, &input()).unwrap();

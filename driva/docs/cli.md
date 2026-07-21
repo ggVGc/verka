@@ -22,14 +22,6 @@ Usage: driva [OPTIONS] <COMMAND>
 Commands:
   run        Run a command in a disposable isolated environment
   shell      Open /bin/sh in a disposable isolated environment
-  start      Start a durable isolated session and print its id
-  attach     Attach the terminal to a durable session
-  inspect    Inspect backend-authoritative session state
-  wait       Wait for a session and return its exit status
-  terminate  Gracefully terminate a session and return its exit status
-  remove     Remove a session resource and its local record after confirming absence
-  list       List recorded sessions and their current backend states
-  recover    Rediscover and inspect recorded sessions
   templates  List built-in and project-defined execution templates
   runtime    Manage prepared read-only runtimes for Bubblewrap templates
   help       Print this message or the help of the given subcommand(s)
@@ -160,25 +152,24 @@ codex-runtime	Run OpenAI Codex interactively against the current project
 ```
 
 The built-in `codex-runtime` template runs a pinned, prepared Codex
-installation interactively; `codex-exec` inserts the `exec` subcommand for
-automation. Run `driva runtime install codex@latest` or select an exact version
-before using either template. Installation uses Podman and
+installation interactively. Run `driva runtime install codex@latest` or select
+an exact version before using it. Installation uses Podman and
 `node:22-bookworm` once to build a complete filesystem under
 `~/.local/share/driva/runtimes/codex/VERSION`; normal executions expose the
 active version read-only through Bubblewrap and do not use Podman.
 
-Both templates pass an ephemeral Codex setting that marks the isolated project
+The template passes an ephemeral Codex setting that marks the isolated project
 path as trusted, avoiding the directory trust prompt before
-project-scoped configuration is loaded. They disable Codex's inner sandbox and
-rely on Driva's outer Bubblewrap isolation. They mount the current directory
+project-scoped configuration is loaded. It disables Codex's inner sandbox and
+relies on Driva's outer Bubblewrap isolation. It mounts the current directory
 writable below `/driva` at its canonical host path (for example,
 `/driva/home/me/project`), enable networking, and put `/root/.codex` on a
-private writable tmpfs for disposable Codex state. They then mount
+private writable tmpfs for disposable Codex state. It then mounts
 `/etc/resolv.conf` read-only for DNS and `~/.codex/auth.json` writable at
 `/root/.codex/auth.json`, allowing credential refreshes to persist. The auth
-file is exposed to the selected project. The templates also establish stable
+file is exposed to the selected project. The template also establishes stable
 `HOME` and `TERM` values because Bubblewrap clears the inherited environment.
-Use them only with trusted code. [OpenAI's authentication
+Use it only with trusted code. [OpenAI's authentication
 documentation](https://developers.openai.com/codex/auth/) warns that
 `auth.json` contains access tokens.
 
@@ -186,16 +177,17 @@ The built-in requires a file-backed host login at `~/.codex/auth.json`. If the
 host uses an OS keyring, create a file-backed login first or define a project
 replacement using another authentication scheme.
 
-The built-in `codex` template runs the host's `codex` executable using
-Bubblewrap directly, without a prepared Driva runtime. It exposes the host root
+The built-in `codex` and `codex-exec` templates run the host's `codex`
+executable using Bubblewrap directly, without a prepared Driva runtime.
+`codex-exec` adds the `exec` subcommand for automation. They expose the host root
 read-only so the executable and its shared libraries remain available, then
-replaces the invoking user's home directory with a private tmpfs. Only the
+replace the invoking user's home directory with a private tmpfs. Only the
 current project and `~/.codex` are mounted back into the sandbox. The project
 is placed below `/tmp/driva` at its canonical host path (for example,
 `/tmp/driva/home/me/project`), while Codex state is mounted at `/root/.codex`.
 The local executable must therefore be available on the standard system `PATH`
-outside the user's home directory. Like the prepared templates, it trusts the
-isolated workspace and disables Codex's inner sandbox.
+outside the user's home directory. Like the prepared template, they trust the
+isolated workspace and disable Codex's inner sandbox.
 
 The built-in `claude` template runs `npx --yes
 @anthropic-ai/claude-code@latest` interactively; `claude-exec` adds `--print`
@@ -356,198 +348,6 @@ Options:
 driva shell --write .
 ```
 
-## Durable sessions
-
-A durable session is a detached container that keeps running after Driva
-exits. `start` prints the session id; the remaining subcommands take that id.
-Session records (grants and environment variable *names*, never values) are
-stored under `$DRIVA_STATE_DIR`, `$XDG_STATE_HOME/driva`, or
-`~/.local/state/driva`, in that order of preference. Process state is always
-queried from the container backend — a missing container is never reported
-as a successful exit.
-
-Durable sessions require Podman or Docker. The Bubblewrap backend supports
-only disposable `run` and `shell` execution.
-
-```sh
-id=$(driva start --write . -- make watch)
-driva inspect "$id"
-driva attach "$id"
-driva wait "$id"
-driva terminate "$id" --grace 10
-driva remove "$id"
-driva list
-driva recover
-```
-
-### `driva start`
-
-```console
-$ driva start --help
-Start a durable isolated session and print its id
-
-Usage: driva start [OPTIONS] [COMMAND]...
-
-Arguments:
-  [COMMAND]...  
-
-Options:
-      --config <CONFIG>     Configuration file (defaults to ./driva.toml when present)
-      --template <NAME>     Apply a named execution template
-      --read <MOUNT>        Add a read-only mount as SOURCE or SOURCE:DESTINATION
-      --write <MOUNT>       Add a writable mount as SOURCE or SOURCE:DESTINATION
-      --no-write            Make every host mount read-only, overriding configuration and templates
-      --path <DIRECTORY>    Add a host directory read-only and prepend it to the isolated PATH
-      --backend <BACKEND>   Select the isolation backend
-      --network             Permit networking (disabled otherwise)
-      --no-network          Disable networking, overriding configuration and templates
-  -i, --interactive         Allocate an interactive terminal
-      --no-interactive      Disable interactivity, overriding a template
-      --dry-run             Print the validated request and backend invocation without executing it
-      --image <IMAGE>       Override the configured container image
-      --rootfs <DIRECTORY>  Override the Bubblewrap root filesystem
-      --tmpfs <DIRECTORY>   Add a private writable Bubblewrap tmpfs mount
-      --workdir <WORKDIR>   Override the isolated working directory
-      --env <ENVIRONMENT>   Set an environment variable as NAME=VALUE
-  -h, --help                Print help
-```
-
-Accepts the same policy options as `run` and prints the new session id on
-stdout. With `--dry-run` it prints the backend invocation instead of
-starting anything.
-
-### `driva attach`
-
-```console
-$ driva attach --help
-Attach the terminal to a durable session
-
-Usage: driva attach [OPTIONS] <SESSION>
-
-Arguments:
-  <SESSION>  
-
-Options:
-      --config <CONFIG>  Configuration file (defaults to ./driva.toml when present)
-  -h, --help             Print help
-```
-
-Connects the current terminal to the session's process and exits with the
-session's exit code when it finishes.
-
-### `driva inspect`
-
-```console
-$ driva inspect --help
-Inspect backend-authoritative session state
-
-Usage: driva inspect [OPTIONS] <SESSION>
-
-Arguments:
-  <SESSION>  
-
-Options:
-      --config <CONFIG>  Configuration file (defaults to ./driva.toml when present)
-  -h, --help             Print help
-```
-
-Prints `<id> <backend> <observed-state>`, where the state comes from the
-container backend, not the local record.
-
-### `driva wait`
-
-```console
-$ driva wait --help
-Wait for a session and return its exit status
-
-Usage: driva wait [OPTIONS] <SESSION>
-
-Arguments:
-  <SESSION>  
-
-Options:
-      --config <CONFIG>  Configuration file (defaults to ./driva.toml when present)
-  -h, --help             Print help
-```
-
-Blocks until the session finishes and exits with the session's exit code.
-
-### `driva terminate`
-
-```console
-$ driva terminate --help
-Gracefully terminate a session and return its exit status
-
-Usage: driva terminate [OPTIONS] <SESSION>
-
-Arguments:
-  <SESSION>  
-
-Options:
-      --config <CONFIG>  Configuration file (defaults to ./driva.toml when present)
-      --grace <GRACE>    [default: 10]
-  -h, --help             Print help
-```
-
-Stops the session gracefully, waiting up to `--grace` seconds (default 10)
-before forcing termination. Prints the exit status and exits with the
-session's exit code. The session record and backend resource remain until
-`driva remove` is run.
-
-### `driva remove`
-
-```console
-$ driva remove --help
-Remove a session resource and its local record after confirming absence
-
-Usage: driva remove [OPTIONS] <SESSION>
-
-Arguments:
-  <SESSION>  
-
-Options:
-      --config <CONFIG>  Configuration file (defaults to ./driva.toml when present)
-  -h, --help             Print help
-```
-
-Deletes the backend resource and the local record, but only after confirming
-the resource is actually gone; it fails if the backend still reports the
-resource as present.
-
-### `driva list`
-
-```console
-$ driva list --help
-List recorded sessions and their current backend states
-
-Usage: driva list [OPTIONS]
-
-Options:
-      --config <CONFIG>  Configuration file (defaults to ./driva.toml when present)
-  -h, --help             Print help
-```
-
-Prints one tab-separated line per recorded session:
-`<id> <backend> <observed-state>`, with a trailing note for sessions that
-were recovered with incomplete metadata.
-
-### `driva recover`
-
-```console
-$ driva recover --help
-Rediscover and inspect recorded sessions
-
-Usage: driva recover [OPTIONS]
-
-Options:
-      --config <CONFIG>  Configuration file (defaults to ./driva.toml when present)
-  -h, --help             Print help
-```
-
-Rediscovers sessions from the container backend (containers are labelled
-with their Driva session id), reconciles them with local records, and prints
-them in the same format as `list`.
-
 ## Configuration file (`driva.toml`)
 
 Loaded from `--config <FILE>`, or `./driva.toml` when present. Defaults are
@@ -638,13 +438,10 @@ an OCI image. The tree must contain `/proc`, `/dev`, `/tmp`, each configured
 tmpfs mount point, and any working directory or mount destination that is not
 created beneath a private tmpfs. Driva exposes it read-only. With or without a
 prepared tree, Driva creates private `/proc` and `/dev` mounts and a writable
-tmpfs at `/tmp`, and clears the inherited host environment. `--image` and
-durable session commands are not supported with this backend; use `--rootfs`
-for a one-off prepared filesystem.
+tmpfs at `/tmp`, and clears the inherited host environment. `--image` is not
+supported with this backend; use `--rootfs` for a one-off prepared filesystem.
 
 ## Further reading
 
 - [`README.md`](../README.md) — overview and quick start.
 - [`DESIGN.md`](../DESIGN.md) — architecture and isolation model.
-- [`STAGE2_IMPLEMENTATION.md`](../STAGE2_IMPLEMENTATION.md) — durable-session
-  lifecycle invariants and storage protocol.

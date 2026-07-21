@@ -41,8 +41,6 @@ pub struct ExecutionSpec {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExecutionReport {
     pub backend: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub backend_reference: Option<String>,
     pub exit_code: i32,
     pub started_at_ms: i64,
     pub finished_at_ms: i64,

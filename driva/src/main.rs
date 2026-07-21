@@ -33,31 +33,6 @@ enum Operation {
         #[command(flatten)]
         policy: PolicyArgs,
     },
-    /// Start a durable isolated session and print its id.
-    Start {
-        #[command(flatten)]
-        policy: PolicyArgs,
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        command: Vec<OsString>,
-    },
-    /// Attach the terminal to a durable session.
-    Attach { session: driva::SessionId },
-    /// Inspect backend-authoritative session state.
-    Inspect { session: driva::SessionId },
-    /// Wait for a session and return its exit status.
-    Wait { session: driva::SessionId },
-    /// Gracefully terminate a session and return its exit status.
-    Terminate {
-        session: driva::SessionId,
-        #[arg(long, default_value_t = 10)]
-        grace: u64,
-    },
-    /// Remove a session resource and its local record after confirming absence.
-    Remove { session: driva::SessionId },
-    /// List recorded sessions and their current backend states.
-    List,
-    /// Rediscover and inspect recorded sessions.
-    Recover,
     /// List built-in and project-defined execution templates.
     Templates,
     /// Manage prepared read-only runtimes for Bubblewrap templates.
@@ -178,21 +153,19 @@ fn real_main() -> Result<()> {
         Some(ref path) => Config::load(path)?,
         None => Config::discover()?,
     };
-    let operation = cli.command;
-    if !matches!(
-        operation,
-        Operation::Run { .. } | Operation::Shell { .. } | Operation::Start { .. }
-    ) {
-        return lifecycle(&config, operation);
-    }
-    let (policy, mut command, shell, durable) = match operation {
-        Operation::Run { policy, command } => (policy, command, false, false),
+    let (policy, mut command, shell) = match cli.command {
+        Operation::Run { policy, command } => (policy, command, false),
         Operation::Shell { mut policy } => {
             policy.interactive = true;
-            (policy, vec![OsString::from("/bin/sh")], true, false)
+            (policy, vec![OsString::from("/bin/sh")], true)
         }
-        Operation::Start { policy, command } => (policy, command, false, true),
-        _ => unreachable!(),
+        Operation::Templates => {
+            for (name, template) in config.effective_templates() {
+                println!("{name}\t{}", template.description);
+            }
+            return Ok(());
+        }
+        Operation::Runtime { command } => return runtime_command(&config, command),
     };
     let mut template = policy
         .template
@@ -320,11 +293,7 @@ fn real_main() -> Result<()> {
                 image,
             };
             let invocation = backend.command(&request);
-            if durable {
-                start_session(&backend, request, policy.dry_run, invocation)
-            } else {
-                finish("podman", &backend, invocation, &request, policy.dry_run)
-            }
+            finish("podman", &backend, invocation, &request, policy.dry_run)
         }
         ResolvedBackend::Docker { image } => {
             let backend = DockerIsolation {
@@ -332,23 +301,16 @@ fn real_main() -> Result<()> {
                 image,
             };
             let invocation = backend.command(&request);
-            if durable {
-                start_session(&backend, request, policy.dry_run, invocation)
-            } else {
-                finish("docker", &backend, invocation, &request, policy.dry_run)
-            }
+            finish("docker", &backend, invocation, &request, policy.dry_run)
         }
         ResolvedBackend::Bwrap { rootfs, tmpfs } => {
-            if durable {
-                bail!("Bubblewrap does not support durable sessions; use `driva run` or `driva shell`");
-            }
             let backend = BwrapIsolation {
                 executable: config.isolation.bwrap.executable,
                 rootfs,
                 tmpfs,
             };
             let invocation = backend.command(&request).with_context(|| {
-                if matches!(policy.template.as_deref(), Some("codex" | "codex-exec")) {
+                if matches!(policy.template.as_deref(), Some("codex-runtime")) {
                     "Codex runtime is unavailable; run `driva runtime install codex@VERSION`"
                 } else {
                     "failed to construct Bubblewrap invocation"
@@ -463,88 +425,6 @@ fn resolve_workspace(template: &mut driva::TemplateConfig) -> Result<()> {
     Ok(())
 }
 
-fn runner_backend(config: &Config) -> Result<Box<dyn driva::DurableIsolation>> {
-    Ok(match config.isolation.backend.as_str() {
-        "podman" => Box::new(PodmanIsolation {
-            executable: config.isolation.podman.executable.clone(),
-            image: config.isolation.podman.image.clone(),
-        }),
-        "docker" => Box::new(DockerIsolation {
-            executable: config.isolation.docker.executable.clone(),
-            image: config.isolation.docker.image.clone(),
-        }),
-        "bwrap" => bail!(
-            "Bubblewrap does not support durable session commands; use `driva run` or `driva shell`"
-        ),
-        b => bail!("unsupported isolation backend {b:?}"),
-    })
-}
-
-fn lifecycle(config: &Config, operation: Operation) -> Result<()> {
-    if matches!(operation, Operation::Templates) {
-        for (name, template) in config.effective_templates() {
-            println!("{name}\t{}", template.description);
-        }
-        return Ok(());
-    }
-    if let Operation::Runtime { command } = operation {
-        return runtime_command(config, command);
-    }
-    let backend = runner_backend(config)?;
-    let runner = driva::SessionRunner::new(
-        backend.as_ref(),
-        driva::SessionStore::new(driva::SessionStore::default_path()),
-    );
-    match operation {
-        Operation::Attach { session } => {
-            let exit = runner.attach(&session, ExecutionIo::inherited()?)?;
-            std::process::exit(exit.code())
-        }
-        Operation::Inspect { session } => {
-            let s = runner.inspect(&session)?;
-            println!("{} {} {}", s.record.id, s.record.backend, s.observed);
-        }
-        Operation::Wait { session } => {
-            let o = runner.wait(&session)?;
-            std::process::exit(o.exit.code())
-        }
-        Operation::Terminate { session, grace } => {
-            let o = runner.terminate(&session, std::time::Duration::from_secs(grace))?;
-            println!(
-                "session {session} stopped (exit {}); use `driva remove {session}` to delete it",
-                o.exit.code()
-            );
-            std::process::exit(o.exit.code())
-        }
-        Operation::Remove { session } => {
-            let o = runner.remove(&session)?;
-            if o.state != driva::ObservedProcessState::Missing {
-                bail!("backend resource still present: {}", o.state)
-            }
-            println!("session {session} removed");
-        }
-        Operation::List => {
-            for r in runner.store.list()? {
-                let state = runner.inspect(&r.id)?.observed;
-                println!("{}\t{}\t{}{}", r.id, r.backend, state, incomplete_note(&r))
-            }
-        }
-        Operation::Recover => {
-            for s in runner.recover()? {
-                println!(
-                    "{}\t{}\t{}{}",
-                    s.record.id,
-                    s.record.backend,
-                    s.observed,
-                    incomplete_note(&s.record)
-                )
-            }
-        }
-        _ => unreachable!(),
-    }
-    Ok(())
-}
-
 fn runtime_command(config: &Config, command: RuntimeOperation) -> Result<()> {
     let store = driva::RuntimeStore::new(driva::RuntimeStore::default_path()?);
     match command {
@@ -573,32 +453,6 @@ fn runtime_command(config: &Config, command: RuntimeOperation) -> Result<()> {
             println!("Removed {}", spec.display());
         }
     }
-    Ok(())
-}
-
-fn incomplete_note(record: &driva::SessionRecord) -> &'static str {
-    if record.metadata_incomplete {
-        "\t(recovered; metadata incomplete)"
-    } else {
-        ""
-    }
-}
-
-fn start_session(
-    backend: &dyn driva::DurableIsolation,
-    request: ExecutionRequest,
-    dry_run: bool,
-    invocation: Command,
-) -> Result<()> {
-    if dry_run {
-        print_dry_run(backend.backend_name(), invocation, &request);
-        return Ok(());
-    }
-    let runner = driva::SessionRunner::new(
-        backend,
-        driva::SessionStore::new(driva::SessionStore::default_path()),
-    );
-    println!("{}", runner.start(request)?.record.id);
     Ok(())
 }
 

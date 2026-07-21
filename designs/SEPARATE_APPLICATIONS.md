@@ -25,7 +25,7 @@ readiness, blockers, provenance, and staleness.
 process I/O, exit status, and cleanup through a replaceable isolation backend.
 It has no knowledge of agents, tasks, graphs, attempts, or reviews.
 
-**Orka** owns multi-session orchestration: selecting Linka work, freezing its
+**Orka** owns multi-attempt orchestration: selecting Linka work, freezing its
 inputs, creating durable attempts, constructing a Driva execution request,
 handling its outcome, and version-safely reporting results to Linka. It does
 not own isolation mechanics or Nota's review-entry representation. It also
@@ -64,7 +64,7 @@ does not interpret Linka identities or depend on another application here.
 
 Orka reads a ready node and its permitted context from Linka and freezes that
 input as a `linka::WorkSnapshot` in an attempt, then asks Driva to run an agent
-with precisely selected mounts and network policy. Driva returns session
+with precisely selected mounts and network policy. Driva returns execution
 evidence and an exit outcome. Orka submits success or failure against that exact
 snapshot through Linka's version-checked `capture_submission`, which revalidates
 every frozen input before recording anything.
@@ -95,7 +95,7 @@ references are stable opaque identifiers or version pins.
 
 ```text
 linka/       graph library and CLI
-driva/       standalone container session runner
+driva/       standalone isolated command runner
 orka/        Linka + Driva orchestration
 orka-web/    local web interface for an Orka workbench
 nota/        standalone review application

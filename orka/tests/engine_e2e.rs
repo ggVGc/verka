@@ -501,7 +501,6 @@ fn recovery_settles_an_executed_attempt_and_a_second_pass_duplicates_nothing() {
             &id,
             &ExecutionReport {
                 backend: "fake".into(),
-                backend_reference: None,
                 exit_code: 0,
                 started_at_ms: 1,
                 finished_at_ms: 2,
@@ -557,7 +556,6 @@ fn recovery_after_linka_accepted_but_before_seal_recognizes_its_own_result() {
     .unwrap();
     let evidence = ExecutionReport {
         backend: "fake".into(),
-        backend_reference: None,
         exit_code: 0,
         started_at_ms: 1,
         finished_at_ms: 2,
@@ -613,102 +611,6 @@ fn recovery_discards_an_unchanged_pre_evidence_attempt() {
     assert!(store.read_result(&node).unwrap().is_none());
     assert!(!ws.path.exists(), "the untouched workspace was cleaned");
     assert!(attempts.list().unwrap().is_empty());
-}
-
-#[test]
-fn recovery_prunes_a_legacy_empty_interrupted_attempt() {
-    use orka::workspace::WorkspaceManager;
-
-    let (_temp, root) = workbench();
-    let node = add_node(&root, "Old backend failure", vec![]);
-    let (store, workspaces, attempts) = parts(&root);
-    let executor = FakeExecutor::default();
-    let engine = engine!(&root, store, executor, workspaces, attempts);
-
-    let id = AttemptId::new();
-    let input = LinkaWork::new(&store)
-        .prepare_input(&node.parse().unwrap())
-        .unwrap();
-    attempts.create(&id, &input).unwrap();
-    let ws = workspaces_prepare(&root, &id, input.input_commit());
-    attempts.plan_workspace(&id, &ws).unwrap();
-    attempts.mark_prepared(&id).unwrap();
-    attempts
-        .seal(
-            &id,
-            SealedState::Interrupted {
-                reason: "execution failed before exit evidence".into(),
-            },
-        )
-        .unwrap();
-    assert_eq!(workspaces.cleanup(&ws).unwrap(), CleanupOutcome::Removed);
-
-    let reports = engine.recover().unwrap();
-    assert!(reports[0].action.contains("discarded empty"));
-    assert!(attempts.list().unwrap().is_empty());
-    assert!(git(&root.join("project"), &["branch", "--list", &ws.branch]).is_empty());
-}
-
-#[test]
-fn recovery_attaches_a_transcript_from_an_older_sealed_attempt() {
-    let (_temp, root) = workbench();
-    let node = add_node(&root, "Historical transcript", vec![]);
-    let (store, workspaces, attempts) = parts(&root);
-    let executor = FakeExecutor::default();
-    let engine = engine!(&root, store, executor, workspaces, attempts);
-
-    let id = AttemptId::new();
-    let input = LinkaWork::new(&store)
-        .prepare_input(&node.parse().unwrap())
-        .unwrap();
-    attempts.create(&id, &input).unwrap();
-    std::fs::write(attempts.transcript_path(&id), "historical agent output\n").unwrap();
-    attempts
-        .seal(
-            &id,
-            SealedState::ContractViolation {
-                reason: "old sealed attempt".into(),
-            },
-        )
-        .unwrap();
-
-    engine.recover().unwrap();
-
-    assert_eq!(
-        store
-            .read_node_attachment(&node, "orka", &format!("{id}/transcript"))
-            .unwrap()
-            .unwrap()
-            .1,
-        b"historical agent output\n"
-    );
-}
-
-#[test]
-fn recovery_backfills_complete_evidence_for_an_older_output() {
-    let (_temp, root) = workbench();
-    let node = add_node(&root, "Backfill output evidence", vec![]);
-    let (store, workspaces, attempts) = parts(&root);
-    let executor = conforming_agent();
-    let engine = engine!(&root, store, executor, workspaces, attempts);
-    engine.run_node(&node.parse().unwrap()).unwrap();
-
-    // Simulate a candidate created before complete evidence attachments were
-    // introduced while retaining the original .orka attempt files.
-    std::fs::remove_dir_all(store.node_dir(&node).join("attachments")).unwrap();
-    git(&root, &["add", "-A", ".linka"]);
-    git(&root, &["commit", "-m", "simulate historical output"]);
-    assert!(!LinkaWork::new(&store)
-        .audit_output_evidence()
-        .unwrap()
-        .is_empty());
-
-    engine.recover().unwrap();
-
-    assert!(LinkaWork::new(&store)
-        .audit_output_evidence()
-        .unwrap()
-        .is_empty());
 }
 
 // A standalone worktree preparation matching what the engine would do, so the

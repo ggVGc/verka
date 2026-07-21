@@ -90,7 +90,6 @@ impl IsolatedExecutor for DrivaExecutor {
         let outcome = driva::execute(self.backend.as_ref(), &request, io)?;
         Ok(ExecutionReport {
             backend: outcome.evidence.isolation_backend,
-            backend_reference: outcome.evidence.backend_reference,
             exit_code: outcome.exit.code(),
             started_at_ms: unix_millis(outcome.evidence.started_at),
             finished_at_ms: unix_millis(outcome.evidence.finished_at),
@@ -138,7 +137,6 @@ mod tests {
                 exit: ProcessExit::Code(self.exit),
                 evidence: driva::ExecutionEvidence {
                     isolation_backend: "stub".into(),
-                    backend_reference: Some("stub-1".into()),
                     effective_policy: driva::effective_policy(request),
                     started_at: now,
                     finished_at: now,
@@ -187,7 +185,6 @@ mod tests {
         let report = executor.run(&spec(&dir), &transcript).unwrap();
         assert_eq!(report.exit_code, 3);
         assert_eq!(report.backend, "stub");
-        assert_eq!(report.backend_reference.as_deref(), Some("stub-1"));
 
         let text = std::fs::read_to_string(&transcript).unwrap();
         assert!(text.contains("to stdout") && text.contains("to stderr"));

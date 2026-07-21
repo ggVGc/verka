@@ -433,14 +433,9 @@ pub fn project_paths(outputs: &[String]) -> Result<Vec<ProjectPath>> {
 /// transcript and mutable filesystem paths stay in `.orka/`. Linka preserves
 /// this verbatim and never interprets it.
 pub fn producer_evidence(attempt: &AttemptId, report: &ExecutionReport) -> ProducerEvidence {
-    // Built as a table with only present fields: Linka persists this to TOML,
-    // which has no null, so an absent backend reference is omitted, not null.
     let mut data = serde_json::Map::new();
     data.insert("attempt".into(), attempt.0.clone().into());
     data.insert("backend".into(), report.backend.clone().into());
-    if let Some(reference) = &report.backend_reference {
-        data.insert("backend_reference".into(), reference.clone().into());
-    }
     data.insert("started_at_ms".into(), report.started_at_ms.into());
     data.insert("finished_at_ms".into(), report.finished_at_ms.into());
     data.insert("exit_code".into(), report.exit_code.into());

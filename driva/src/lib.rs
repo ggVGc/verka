@@ -5,7 +5,6 @@ mod config;
 mod docker;
 mod podman;
 mod runtime;
-mod session;
 
 pub use bwrap::BwrapIsolation;
 pub use config::{
@@ -15,11 +14,6 @@ pub use config::{
 pub use docker::DockerIsolation;
 pub use podman::PodmanIsolation;
 pub use runtime::{RuntimeSpec, RuntimeStore};
-pub use session::{
-    BackendReference, CleanupObservation, DiscoveredResource, DurableIsolation, Observation,
-    ObservedProcessState, ProcessConnection, RedactedExecutionRequest, SessionId, SessionRecord,
-    SessionRunner, SessionSnapshot, SessionStore, StartedSession,
-};
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -78,7 +72,6 @@ pub struct ExecutionOutcome {
 #[derive(Clone, Debug)]
 pub struct ExecutionEvidence {
     pub isolation_backend: String,
-    pub backend_reference: Option<String>,
     pub effective_policy: EffectivePolicy,
     pub started_at: SystemTime,
     pub finished_at: SystemTime,
