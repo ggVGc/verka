@@ -331,7 +331,6 @@ fn attempts_json(store: &FsAttemptStore) -> Result<Vec<Value>> {
             let evidence = snapshot.evidence.as_ref().map(|e| {
                 json!({
                     "backend": e.backend,
-                    "backend_reference": e.backend_reference,
                     "exit_code": e.exit_code,
                     "started_at_ms": e.started_at_ms,
                     "finished_at_ms": e.finished_at_ms,

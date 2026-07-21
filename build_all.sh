@@ -2,8 +2,8 @@
 
 set -e
 
-pushd ./linka && cargo build --release && popd
-pushd ./orka-web && cargo build --release && popd
-pushd ./driva && cargo build --release && popd
-pushd ./orka && cargo build --release && popd
-pushd ./nota && cargo build --release && popd
+(cd ./linka && cargo build --release)
+(cd ./orka-web && cargo build --release)
+(cd ./driva && cargo build --release)
+(cd ./orka && cargo build --release)
+(cd ./nota && cargo build --release)
