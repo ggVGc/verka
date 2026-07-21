@@ -146,9 +146,10 @@ receives only a repository, revision, and branch; it has no Linka dependency.
 Once that verification is finished or abandoned, another review can create a
 new verification for the same candidate.
 
-Reviewers use Nota directly for notes and suggestion commits. `orka review
-finish` loads that Git evidence by branch and submits a graph-only verification
-result against the frozen Linka snapshot with `orka.nota` producer evidence.
+Reviewers use Nota directly for notes and ordinary Git commits for suggested
+edits. `orka review finish` loads and validates that Git evidence by branch and
+submits a graph-only verification result against the frozen Linka snapshot with
+`orka.nota` producer evidence.
 `orka review list` derives active reviews from bindings whose verification has
 no result. `orka review abandon` submits a graph-only failed result with
 explicit abandonment evidence and leaves both the binding and Nota branch

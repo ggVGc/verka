@@ -45,8 +45,9 @@ Every later first-parent commit is one review entry:
 
 - A prose-only note adds one uniquely named Markdown file below
   `.nota/notes/`. Its commit message is the note's first non-empty line.
-- A code edit or suggestion is one commit containing already-staged project
-  changes. Its commit message is the review comment.
+- A code edit or suggestion is an ordinary Git commit containing project
+  changes. Its commit message is the review comment. Suggestion commits must
+  not contain `.nota/` files.
 
 Commit hashes are stable entry identities and first-parent history is entry
 order. Published review branches are append-only: they must not be rebased,
@@ -67,13 +68,13 @@ apply cleanly.
 ```text
 nota start git <revision> [--repository <path>] [--branch <name>]
 nota note <message> [--repository <path>]
-nota suggest <comment> [--repository <path>]
 nota show [--repository <path>]
 ```
 
 `start` prints the created branch, subject revision, and suggested worktree
-command. `note`, `suggest`, and `show` operate on the currently checked-out
-review branch.
+command. `note` and `show` operate on the currently checked-out review branch.
+Reviewers record suggested edits with the ordinary `git add` and `git commit`
+workflow. Nota validates those commits when it loads the review.
 
 ## Non-goals
 

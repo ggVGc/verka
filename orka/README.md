@@ -138,7 +138,8 @@ binding instead of creating another verification. Add `--enter` to create the
 canonical worktree at `.orka/review-worktrees/<verification>/` and print its
 path. `orka review enter NODE` reuses it later and prints only the directory,
 so a caller may run `cd "$(orka review enter NODE)"`. Reviewers use `nota note`
-and `nota suggest` inside that tree. `orka review worktree NODE --print-path`
+for prose comments and ordinary `git add` and `git commit` commands for
+suggested edits inside that tree. `orka review worktree NODE --print-path`
 offers the same path-only output for editor integrations.
 
 `orka review worktrees` reports clean and dirty managed trees. `orka review

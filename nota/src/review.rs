@@ -99,29 +99,6 @@ pub fn add_note(repository: &Path, message: &str) -> Result<ReviewEntry> {
     entry_at(&repository, "HEAD")
 }
 
-/// Commit the staged project edit as one suggestion. Nota never chooses which
-/// project files belong to a suggestion; the review author stages them first.
-pub fn commit_suggestion(repository: &Path, comment: &str) -> Result<ReviewEntry> {
-    let comment = require_message(comment)?;
-    let repository = repository_root(repository)?;
-    let _ = find_marker(&repository, "HEAD")?;
-    let staged = nul_list(&checked(
-        &repository,
-        &["diff", "--cached", "--name-only", "-z"],
-    )?);
-    if staged.is_empty() {
-        bail!("no staged changes to commit as a suggestion");
-    }
-    if staged
-        .iter()
-        .any(|path| path == ".nota" || path.starts_with(".nota/"))
-    {
-        bail!("suggestion commits may not contain Nota note files");
-    }
-    checked_with_input(&repository, &["commit", "-F", "-"], comment)?;
-    entry_at(&repository, "HEAD")
-}
-
 pub fn load_review(repository: &Path) -> Result<Review> {
     let repository = repository_root(repository)?;
     let branch = checked(&repository, &["symbolic-ref", "--quiet", "--short", "HEAD"])
@@ -202,6 +179,20 @@ fn entry_at(repository: &Path, revision: &str) -> Result<ReviewEntry> {
     } else {
         ReviewEntryKind::Suggestion
     };
+    if kind == ReviewEntryKind::Suggestion {
+        if message.trim().is_empty() {
+            bail!("suggestion commit `{commit}` has an empty review comment");
+        }
+        if paths.is_empty() {
+            bail!("suggestion commit `{commit}` has no changed project files");
+        }
+        if paths
+            .iter()
+            .any(|path| path == ".nota" || path.starts_with(".nota/"))
+        {
+            bail!("suggestion commit `{commit}` may not contain Nota files");
+        }
+    }
     Ok(ReviewEntry {
         commit,
         message,
@@ -215,12 +206,4 @@ fn require_message(message: &str) -> Result<&str> {
         bail!("review message must not be empty");
     }
     Ok(message)
-}
-
-fn nul_list(value: &str) -> Vec<String> {
-    value
-        .split('\0')
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .collect()
 }

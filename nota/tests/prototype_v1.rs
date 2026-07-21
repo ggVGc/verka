@@ -1,6 +1,6 @@
 use nota::{
-    add_note, commit_suggestion, load_review, load_review_ref, start_review, GitProvider,
-    ReviewEntryKind, ReviewProvider,
+    add_note, load_review, load_review_ref, start_review, GitProvider, ReviewEntryKind,
+    ReviewProvider,
 };
 use std::path::{Path, PathBuf};
 
@@ -52,7 +52,7 @@ fn git_provider_resolves_an_exact_commit() {
 }
 
 #[test]
-fn review_branch_records_notes_and_staged_suggestions_as_commits() {
+fn review_branch_records_notes_and_ordinary_project_commits_as_suggestions() {
     let (_temp, repository, subject) = project();
     let original_branch = git(&repository, &["branch", "--show-current"]);
     let started = start_review(
@@ -87,7 +87,11 @@ fn review_branch_records_notes_and_staged_suggestions_as_commits() {
         "adding a note must preserve unrelated staged edits"
     );
 
-    let suggestion = commit_suggestion(&repository, "Make the behavior explicit.").unwrap();
+    git(
+        &repository,
+        &["commit", "--quiet", "-m", "Make the behavior explicit."],
+    );
+    let suggestion = load_review(&repository).unwrap().entries[1].clone();
     assert_eq!(suggestion.kind, ReviewEntryKind::Suggestion);
     assert_eq!(suggestion.paths, vec!["suggested.txt"]);
 
@@ -100,13 +104,59 @@ fn review_branch_records_notes_and_staged_suggestions_as_commits() {
 }
 
 #[test]
-fn suggestion_requires_a_review_branch_and_staged_changes() {
+fn loading_a_review_rejects_suggestions_containing_nota_files() {
     let (_temp, repository, _) = project();
-    let error = commit_suggestion(&repository, "comment").unwrap_err();
-    assert!(format!("{error:#}").contains("no review marker"));
+    start_review(&GitProvider::new(&repository), "HEAD", Some("nota/invalid")).unwrap();
+    git(&repository, &["switch", "--quiet", "nota/invalid"]);
+    std::fs::create_dir_all(repository.join(".nota")).unwrap();
+    std::fs::write(repository.join(".nota/metadata"), "invalid\n").unwrap();
+    git(&repository, &["add", "--force", ".nota/metadata"]);
+    git(
+        &repository,
+        &["commit", "--quiet", "-m", "invalid suggestion"],
+    );
 
+    let error = load_review(&repository).unwrap_err();
+    assert!(format!("{error:#}").contains("may not contain Nota files"));
+}
+
+#[test]
+fn loading_a_review_rejects_empty_suggestion_commits() {
+    let (_temp, repository, _) = project();
     start_review(&GitProvider::new(&repository), "HEAD", Some("nota/empty")).unwrap();
     git(&repository, &["switch", "--quiet", "nota/empty"]);
-    let error = commit_suggestion(&repository, "comment").unwrap_err();
-    assert!(format!("{error:#}").contains("no staged changes"));
+    git(
+        &repository,
+        &[
+            "commit",
+            "--quiet",
+            "--allow-empty",
+            "-m",
+            "empty suggestion",
+        ],
+    );
+
+    let error = load_review(&repository).unwrap_err();
+    assert!(format!("{error:#}").contains("has no changed project files"));
+}
+
+#[test]
+fn loading_a_review_rejects_suggestions_without_a_comment() {
+    let (_temp, repository, _) = project();
+    start_review(
+        &GitProvider::new(&repository),
+        "HEAD",
+        Some("nota/no-comment"),
+    )
+    .unwrap();
+    git(&repository, &["switch", "--quiet", "nota/no-comment"]);
+    std::fs::write(repository.join("suggested.txt"), "suggested\n").unwrap();
+    git(&repository, &["add", "suggested.txt"]);
+    git(
+        &repository,
+        &["commit", "--quiet", "--allow-empty-message", "-m", ""],
+    );
+
+    let error = load_review(&repository).unwrap_err();
+    assert!(format!("{error:#}").contains("has an empty review comment"));
 }

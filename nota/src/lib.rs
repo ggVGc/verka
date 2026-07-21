@@ -9,8 +9,8 @@ use std::path::PathBuf;
 
 pub use providers::GitProvider;
 pub use review::{
-    add_note, commit_suggestion, load_review, load_review_ref, start_review, Review, ReviewEntry,
-    ReviewEntryKind, StartedReview,
+    add_note, load_review, load_review_ref, start_review, Review, ReviewEntry, ReviewEntryKind,
+    StartedReview,
 };
 
 /// Resolves an application-specific reference to exact Git content.

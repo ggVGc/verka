@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use nota::{add_note, commit_suggestion, load_review, start_review, GitProvider, ReviewEntryKind};
+use nota::{add_note, load_review, start_review, GitProvider, ReviewEntryKind};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -23,12 +23,6 @@ enum Command {
     /// Add and commit one Markdown review note.
     Note {
         message: String,
-        #[arg(long, default_value = ".")]
-        repository: PathBuf,
-    },
-    /// Commit the currently staged code changes as one suggestion.
-    Suggest {
-        comment: String,
         #[arg(long, default_value = ".")]
         repository: PathBuf,
     },
@@ -83,13 +77,6 @@ fn run(cli: Cli) -> Result<()> {
         } => {
             let entry = add_note(&repository, &message)?;
             println!("{}  note", short(&entry.commit));
-        }
-        Command::Suggest {
-            comment,
-            repository,
-        } => {
-            let entry = commit_suggestion(&repository, &comment)?;
-            println!("{}  suggestion", short(&entry.commit));
         }
         Command::Show { repository } => {
             let review = load_review(&repository)?;

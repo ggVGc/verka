@@ -20,7 +20,7 @@ framework.
   attempts, candidate-oriented commands, and the coordination between Linka
   verification nodes and Nota reviews.
 - `nota/` — a standalone Git-native review application. A review is an
-  append-only branch: Markdown note commits and staged suggestion commits form
+  append-only branch: Markdown note commits and ordinary project commits form
   its record. Nota knows Git revisions, but not Linka candidates or nodes.
 
 `linka-viz/` is a small Linka-specific graph viewer, not another domain

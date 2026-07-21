@@ -112,6 +112,46 @@ fn nota_review_completes_a_linka_verification_without_nota_knowing_linka() {
 }
 
 #[test]
+fn finishing_a_review_rejects_an_invalid_git_suggestion() {
+    let (_temp, root) = workbench();
+    let candidate = candidate(&root);
+    let store = store_at(&root);
+    let reviews = Reviews::new(&store, root.join(".orka"));
+    let started = reviews.start(&candidate.id, Author::Human).unwrap();
+    let review_tree = root.join("review-worktree");
+    git(
+        &root.join("project"),
+        &[
+            "worktree",
+            "add",
+            review_tree.to_str().unwrap(),
+            &started.review.branch,
+        ],
+    );
+    std::fs::create_dir_all(review_tree.join(".nota")).unwrap();
+    std::fs::write(review_tree.join(".nota/metadata"), "invalid\n").unwrap();
+    git(&review_tree, &["add", "--force", ".nota/metadata"]);
+    git(
+        &review_tree,
+        &["commit", "--quiet", "-m", "invalid suggestion"],
+    );
+
+    let error = reviews
+        .finish(
+            &started.record.verification,
+            ReviewVerdict::ChangesRequested,
+            None,
+            Author::Human,
+        )
+        .unwrap_err();
+    assert!(format!("{error:#}").contains("may not contain Nota files"));
+    assert!(store
+        .read_result(started.record.verification.as_str())
+        .unwrap()
+        .is_none());
+}
+
+#[test]
 fn starting_a_review_twice_resumes_the_only_review_for_the_candidate() {
     let (_temp, root) = workbench();
     let candidate = candidate(&root);
