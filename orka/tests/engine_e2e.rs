@@ -161,6 +161,15 @@ fn a_full_attempt_lands_a_version_checked_result_from_an_isolated_worktree() {
         std::fs::read_to_string(attempts.transcript_path(&report.attempt)).unwrap(),
         "agent transcript\n"
     );
+    let (attachment, attached_transcript) = store
+        .read_node_attachment(&node, "orka", &format!("{}/transcript", report.attempt))
+        .unwrap()
+        .expect("Orka transcript attached to its Linka node");
+    assert_eq!(
+        attachment.media_type.as_deref(),
+        Some("text/plain; charset=utf-8")
+    );
+    assert_eq!(attached_transcript, b"agent transcript\n");
 
     // Orka exposes the candidate with its source node and its complete patch.
     let candidates = Candidates::new(&store, &attempts);
@@ -395,6 +404,7 @@ fn an_attempt_against_a_graph_that_moved_mid_run_seals_stale() {
     let node_for_agent = node.clone();
     let root_for_agent = root.clone();
     let executor = FakeExecutor {
+        transcript: "stale transcript\n".into(),
         on_run: Some(Box::new(move |spec: &ExecutionSpec| {
             edit_node(&root_for_agent, &node_for_agent, "Moved mid-run");
             std::fs::write(mount(spec, "/tmp/orka/workspace").join("out.txt"), "x\n")?;
@@ -417,6 +427,14 @@ fn an_attempt_against_a_graph_that_moved_mid_run_seals_stale() {
     };
     assert!(!conflicts.is_empty());
     assert!(store.read_result(&node).unwrap().is_none());
+    assert_eq!(
+        store
+            .read_node_attachment(&node, "orka", &format!("{}/transcript", report.attempt))
+            .unwrap()
+            .unwrap()
+            .1,
+        b"stale transcript\n"
+    );
 
     // Linka records no candidate for a result it rejected. The attempt and
     // retained branch remain Orka evidence for inspection/recovery.
@@ -455,6 +473,7 @@ fn recovery_settles_an_executed_attempt_and_a_second_pass_duplicates_nothing() {
         "outcome = \"succeeded\"\noutputs = [\"out.txt\"]\nnotes = \"done before the crash\"\n",
     )
     .unwrap();
+    std::fs::write(attempts.transcript_path(&id), "recovered transcript\n").unwrap();
     attempts
         .record_evidence(
             &id,
@@ -520,6 +539,7 @@ fn recovery_after_linka_accepted_but_before_seal_recognizes_its_own_result() {
         started_at_ms: 1,
         finished_at_ms: 2,
     };
+    std::fs::write(attempts.transcript_path(&id), "accepted transcript\n").unwrap();
     attempts.record_evidence(&id, &evidence).unwrap();
 
     // Linka accepts and captures the result, attributed to this attempt — then
@@ -604,6 +624,41 @@ fn recovery_prunes_a_legacy_empty_interrupted_attempt() {
     assert!(reports[0].action.contains("discarded empty"));
     assert!(attempts.list().unwrap().is_empty());
     assert!(git(&root.join("project"), &["branch", "--list", &ws.branch]).is_empty());
+}
+
+#[test]
+fn recovery_attaches_a_transcript_from_an_older_sealed_attempt() {
+    let (_temp, root) = workbench();
+    let node = add_node(&root, "Historical transcript", vec![]);
+    let (store, workspaces, attempts) = parts(&root);
+    let executor = FakeExecutor::default();
+    let engine = engine!(&root, store, executor, workspaces, attempts);
+
+    let id = AttemptId::new();
+    let input = LinkaWork::new(&store)
+        .prepare_input(&node.parse().unwrap())
+        .unwrap();
+    attempts.create(&id, &input).unwrap();
+    std::fs::write(attempts.transcript_path(&id), "historical agent output\n").unwrap();
+    attempts
+        .seal(
+            &id,
+            SealedState::ContractViolation {
+                reason: "old sealed attempt".into(),
+            },
+        )
+        .unwrap();
+
+    engine.recover().unwrap();
+
+    assert_eq!(
+        store
+            .read_node_attachment(&node, "orka", &format!("{id}/transcript"))
+            .unwrap()
+            .unwrap()
+            .1,
+        b"historical agent output\n"
+    );
 }
 
 // A standalone worktree preparation matching what the engine would do, so the

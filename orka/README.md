@@ -17,11 +17,15 @@ select Linka-ready node ──► snapshot Linka work input ──► record att
       ──► version-checked submit + Linka candidate ──► seal ──► clean up
 ```
 
-The attempt durably stores Linka's exact `WorkSnapshot`, and success or failure
-is submitted against that snapshot through Linka's version-checked
+The attempt durably stores Linka's exact `WorkSnapshot`. After execution, Orka
+also attaches the transcript to the source node through Linka's generic opaque
+attachment API, so the interaction history is carried by the Linka Git
+repository even if local `.orka/` state is later unavailable. Success or failure
+is submitted against the snapshot through Linka's version-checked
 `capture_submission`. Every step is recorded before its side effect, so `orka
 recover` can classify any crash from the files present and finish the idempotent
-remainder. Stale work — a graph that moved between snapshot and submit — is
+remainder. Recovery also attaches transcripts from attempts sealed by older
+Orka versions. Stale work — a graph that moved between snapshot and submit — is
 refused and sealed as such, never silently completed.
 
 ## Use

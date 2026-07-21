@@ -6,14 +6,14 @@
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use std::io;
+use std::io::{self, Write};
 use std::path::PathBuf;
 
 use linka::model::{Blocker, BlockerReason, NodeState, StalenessReason};
 use linka::ops::{self, NewNode};
 use linka::{
-    Author, CandidateId, CandidateState, CandidateStore, DepKind, GitVcs, NodeId, ProjectPath,
-    Store,
+    Author, CandidateId, CandidateState, CandidateStore, DepKind, GitVcs, NewNodeAttachment,
+    NodeId, ProjectPath, Store,
 };
 
 #[derive(Parser)]
@@ -176,6 +176,29 @@ enum Cmd {
 
     /// Show a node's git history (every definition and result change).
     Log { id: NodeId },
+
+    /// Commit opaque data associated with a node.
+    Attach {
+        id: NodeId,
+        #[arg(long)]
+        namespace: String,
+        #[arg(long)]
+        key: String,
+        #[arg(long)]
+        file: PathBuf,
+        #[arg(long)]
+        media_type: Option<String>,
+    },
+
+    /// List opaque data attached to a node.
+    Attachments { id: NodeId },
+
+    /// Write one attachment's payload to standard output.
+    Attachment {
+        id: NodeId,
+        namespace: String,
+        key: String,
+    },
 
     /// Report nodes whose recorded work has been invalidated, with reasons.
     Stale,
@@ -540,6 +563,59 @@ fn main() -> Result<()> {
             if !status.success() {
                 anyhow::bail!("git log failed");
             }
+        }
+
+        Cmd::Attach {
+            id,
+            namespace,
+            key,
+            file,
+            media_type,
+        } => {
+            let store = Store::open(store)?;
+            let vcs = GitVcs::for_store(&store);
+            let attachment = ops::record_node_attachment(
+                &store,
+                &vcs,
+                &id,
+                NewNodeAttachment {
+                    namespace,
+                    key,
+                    media_type,
+                    data: std::fs::read(&file)
+                        .with_context(|| format!("reading {}", file.display()))?,
+                },
+            )?;
+            println!(
+                "{}/{}  {} bytes  {}",
+                attachment.namespace, attachment.key, attachment.size, attachment.content
+            );
+        }
+
+        Cmd::Attachments { id } => {
+            let store = Store::open(store)?;
+            for attachment in store.list_node_attachments(&id)? {
+                println!(
+                    "{}/{}  {} bytes  {}{}",
+                    attachment.namespace,
+                    attachment.key,
+                    attachment.size,
+                    attachment.content,
+                    attachment
+                        .media_type
+                        .as_ref()
+                        .map(|value| format!("  {value}"))
+                        .unwrap_or_default()
+                );
+            }
+        }
+
+        Cmd::Attachment { id, namespace, key } => {
+            let store = Store::open(store)?;
+            let (_, data) = store
+                .read_node_attachment(&id, &namespace, &key)?
+                .with_context(|| format!("no attachment `{namespace}/{key}` on node `{id}`"))?;
+            io::stdout().write_all(&data)?;
         }
 
         Cmd::Stale => {

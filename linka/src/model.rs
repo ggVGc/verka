@@ -15,6 +15,7 @@ pub const DEFINITION_SCHEMA: u32 = 3;
 pub const RESULT_SCHEMA: u32 = 2;
 pub const SNAPSHOT_SCHEMA: u32 = 2;
 pub const OBSERVATION_SCHEMA: u32 = 2;
+pub const ATTACHMENT_SCHEMA: u32 = 1;
 fn legacy_schema() -> u32 {
     1
 }
@@ -264,6 +265,35 @@ pub struct ContextObservation {
     pub schema: u32,
     pub result: ResultVersion,
     pub context: Vec<ContextPin>,
+}
+
+/// Metadata for opaque data associated with a node.
+///
+/// Attachments are deliberately outside the node definition and result: Linka
+/// stores and versions their bytes, but never uses them to derive graph state.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeAttachment {
+    pub schema: u32,
+    /// Application-owned namespace (for example `orka`).
+    pub namespace: String,
+    /// Stable identity within the namespace.
+    pub key: String,
+    /// Unix milliseconds when the attachment was first recorded.
+    pub created_at_ms: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_type: Option<String>,
+    /// Git blob identity of the payload bytes.
+    pub content: String,
+    pub size: u64,
+}
+
+/// Caller-supplied data for one immutable node attachment.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NewNodeAttachment {
+    pub namespace: String,
+    pub key: String,
+    pub media_type: Option<String>,
+    pub data: Vec<u8>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

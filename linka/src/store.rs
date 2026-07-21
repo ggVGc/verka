@@ -1,6 +1,7 @@
 //! The on-disk store for the core graph namespace, plus workbench paths.
 //!
-//! Layout (all text, all diff-friendly, all meant to live in git):
+//! Layout (inspectable metadata plus opaque attachment payloads, all meant to
+//! live in git):
 //!
 //! ```text
 //! <root>/
@@ -10,6 +11,7 @@
 //!     description.md  definition prose
 //!     result.toml     structured completion record (optional)
 //!     result.md       completion narrative (optional)
+//!     attachments/    opaque, node-associated data (never graph state)
 //!     work.jsonl      legacy execution log (read-only compatibility only)
 //!   candidates/<id>/  output proposal attached to an exact node result
 //!     candidate.toml  candidate facts and accept/reject state
@@ -40,7 +42,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::model::{
-    ContextObservation, DefinitionVersion, NodeId, NodeMeta, ResultMeta, ResultVersion,
+    ContextObservation, DefinitionVersion, NodeAttachment, NodeId, NodeMeta, ResultMeta,
+    ResultVersion, ATTACHMENT_SCHEMA,
 };
 
 /// Git's blob id for `bytes`, computed locally so version identity needs no
@@ -166,6 +169,16 @@ impl Store {
         self.node_dir(id).join("result.md")
     }
 
+    fn attachments_path(&self, id: &str) -> PathBuf {
+        self.node_dir(id).join("attachments")
+    }
+
+    fn attachment_path(&self, id: &str, namespace: &str, key: &str) -> Result<PathBuf> {
+        validate_attachment_identity(namespace, key)?;
+        let identity = attachment_identity(namespace, key);
+        Ok(self.attachments_path(id).join(identity))
+    }
+
     pub fn exists(&self, id: &str) -> bool {
         self.node_path(id).is_file()
     }
@@ -268,6 +281,98 @@ impl Store {
             metadata: blob_id(&metadata),
             notes,
         })
+    }
+
+    // --- opaque attachments -------------------------------------------------------
+
+    /// Read one immutable node attachment and its exact payload bytes.
+    pub fn read_node_attachment(
+        &self,
+        id: &str,
+        namespace: &str,
+        key: &str,
+    ) -> Result<Option<(NodeAttachment, Vec<u8>)>> {
+        validate_node_id(id)?;
+        if !self.exists(id) {
+            bail!("unknown node `{id}`");
+        }
+        let dir = self.attachment_path(id, namespace, key)?;
+        if !dir.exists() {
+            return Ok(None);
+        }
+        let metadata_path = dir.join("attachment.toml");
+        let data_path = dir.join("data");
+        let metadata_text = fs::read_to_string(&metadata_path)
+            .with_context(|| format!("reading {}", metadata_path.display()))?;
+        let attachment: NodeAttachment = toml::from_str(&metadata_text)
+            .with_context(|| format!("parsing {}", metadata_path.display()))?;
+        validate_attachment_record(&attachment, namespace, key)?;
+        let data =
+            fs::read(&data_path).with_context(|| format!("reading {}", data_path.display()))?;
+        validate_attachment_data(&attachment, &data)?;
+        Ok(Some((attachment, data)))
+    }
+
+    /// List attachment metadata in stable namespace/key order.
+    pub fn list_node_attachments(&self, id: &str) -> Result<Vec<NodeAttachment>> {
+        validate_node_id(id)?;
+        if !self.exists(id) {
+            bail!("unknown node `{id}`");
+        }
+        let entries = match fs::read_dir(self.attachments_path(id)) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error.into()),
+        };
+        let mut attachments = Vec::new();
+        for entry in entries {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() {
+                bail!(
+                    "unexpected file in node `{id}` attachments: {}",
+                    entry.path().display()
+                );
+            }
+            let metadata_path = entry.path().join("attachment.toml");
+            let metadata_text = fs::read_to_string(&metadata_path)
+                .with_context(|| format!("reading {}", metadata_path.display()))?;
+            let attachment: NodeAttachment = toml::from_str(&metadata_text)
+                .with_context(|| format!("parsing {}", metadata_path.display()))?;
+            validate_attachment_record(&attachment, &attachment.namespace, &attachment.key)?;
+            if entry.file_name().to_string_lossy()
+                != attachment_identity(&attachment.namespace, &attachment.key)
+            {
+                bail!("attachment identity and directory disagree for node `{id}`");
+            }
+            let data = fs::read(entry.path().join("data"))?;
+            validate_attachment_data(&attachment, &data)?;
+            attachments.push(attachment);
+        }
+        attachments.sort_by(|a, b| (&a.namespace, &a.key).cmp(&(&b.namespace, &b.key)));
+        Ok(attachments)
+    }
+
+    pub(crate) fn write_node_attachment(
+        &self,
+        id: &str,
+        attachment: &NodeAttachment,
+        data: &[u8],
+    ) -> Result<()> {
+        validate_node_id(id)?;
+        if !self.exists(id) {
+            bail!("unknown node `{id}`");
+        }
+        validate_attachment_record(attachment, &attachment.namespace, &attachment.key)?;
+        validate_attachment_data(attachment, data)?;
+        let dir = self.attachment_path(id, &attachment.namespace, &attachment.key)?;
+        fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+        let metadata =
+            toml::to_string_pretty(attachment).context("serialising node attachment metadata")?;
+        fs::write(dir.join("data"), data)
+            .with_context(|| format!("writing attachment data for node `{id}`"))?;
+        fs::write(dir.join("attachment.toml"), metadata)
+            .with_context(|| format!("writing attachment metadata for node `{id}`"))?;
+        Ok(())
     }
 
     // --- legacy compatibility and immutable observations -------------------------
@@ -401,6 +506,58 @@ impl Store {
     }
 }
 
+fn validate_attachment_identity(namespace: &str, key: &str) -> Result<()> {
+    for (label, value) in [("namespace", namespace), ("key", key)] {
+        if value.is_empty() {
+            bail!("attachment {label} must not be empty");
+        }
+        if value.chars().any(char::is_control) {
+            bail!("attachment {label} must not contain control characters");
+        }
+    }
+    Ok(())
+}
+
+fn attachment_identity(namespace: &str, key: &str) -> String {
+    blob_id(format!("{namespace}\0{key}").as_bytes())
+}
+
+fn validate_attachment_record(
+    attachment: &NodeAttachment,
+    namespace: &str,
+    key: &str,
+) -> Result<()> {
+    validate_attachment_identity(namespace, key)?;
+    if attachment.schema != ATTACHMENT_SCHEMA {
+        bail!(
+            "attachment `{namespace}/{key}` uses unsupported schema {}",
+            attachment.schema
+        );
+    }
+    if attachment.namespace != namespace || attachment.key != key {
+        bail!("attachment identity does not match its recorded namespace and key");
+    }
+    Ok(())
+}
+
+fn validate_attachment_data(attachment: &NodeAttachment, data: &[u8]) -> Result<()> {
+    if attachment.size != data.len() as u64 {
+        bail!(
+            "attachment `{}/{}` size does not match its payload",
+            attachment.namespace,
+            attachment.key
+        );
+    }
+    if attachment.content != blob_id(data) {
+        bail!(
+            "attachment `{}/{}` content identity does not match its payload",
+            attachment.namespace,
+            attachment.key
+        );
+    }
+    Ok(())
+}
+
 fn validate_node_id(id: &str) -> Result<NodeId> {
     id.parse().map_err(anyhow::Error::msg)
 }
@@ -523,6 +680,52 @@ mod tests {
         );
         assert_eq!(store.node_version("node-1").unwrap(), v);
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn opaque_node_attachments_round_trip_without_changing_node_versions() {
+        let dir =
+            std::env::temp_dir().join(format!("linka-attachment-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = Store::init(dir.join(".linka")).unwrap();
+        let meta = NodeMeta {
+            schema: 1,
+            author: Author::Human,
+            assignee: None,
+            depends_on: vec![],
+            derived_from: vec![],
+            verifies: None,
+            extensions: Default::default(),
+        };
+        store.write_node("node-1", &meta, "attached").unwrap();
+        let version = store.node_version("node-1").unwrap();
+        let data = [0, 1, 2, 255];
+        let attachment = NodeAttachment {
+            schema: ATTACHMENT_SCHEMA,
+            namespace: "test.tool".into(),
+            key: "arbitrary report".into(),
+            created_at_ms: 42,
+            media_type: Some("application/octet-stream".into()),
+            content: blob_id(&data),
+            size: data.len() as u64,
+        };
+
+        store
+            .write_node_attachment("node-1", &attachment, &data)
+            .unwrap();
+
+        assert_eq!(
+            store
+                .read_node_attachment("node-1", "test.tool", "arbitrary report")
+                .unwrap(),
+            Some((attachment.clone(), data.to_vec()))
+        );
+        assert_eq!(
+            store.list_node_attachments("node-1").unwrap(),
+            vec![attachment]
+        );
+        assert_eq!(store.node_version("node-1").unwrap(), version);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

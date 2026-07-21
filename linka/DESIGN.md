@@ -52,6 +52,14 @@ Linka does not interpret a verifier's report or make it an acceptance gate.
 Several verification nodes may refer to the same candidate. A tool such as Nota
 can create or fill these nodes without Linka depending on Nota.
 
+Applications may also associate opaque attachments with a node under a
+namespaced key. Linka commits the exact bytes and basic content metadata but
+never interprets them or includes them in definition, result, readiness, or
+staleness semantics. Attachments are immutable: recording identical data again
+is idempotent, while changing an existing namespace/key is refused. This lets a
+producer retain durable evidence without adding producer-specific concepts to
+the graph model.
+
 | Outcome | Currency | Integration | Dependencies | Workability |
 | --- | --- | --- | --- | --- |
 | open | current | not-required | complete | ready |
@@ -77,9 +85,9 @@ authorized caller requests it.
 ## Storage
 
 The default store is `.linka/` in a Git workbench. Node definitions, results,
-and logs use inspectable TOML and Markdown. Mutations are committed so Git
-provides history, integrity, blame, and distribution; Linka provides the graph
-semantics Git cannot express.
+attachments, and logs use inspectable metadata and payload files. Mutations are
+committed so Git provides history, integrity, blame, and distribution; Linka
+provides the graph semantics Git cannot express.
 
 Every store mutation follows one transaction boundary: Linka acquires the
 workbench-wide mutation lock, refuses to proceed unless the tracked `.linka/`

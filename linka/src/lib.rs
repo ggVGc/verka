@@ -26,10 +26,10 @@ pub use git::GitVcs;
 pub use model::{
     title_of, ArtifactRef, Author, Blocker, BlockerReason, CandidateId, ConsumedNode,
     ContextObservation, ContextPin, Currency, DefinitionVersion, DepKind, IntegrationStatus,
-    NodeId, NodeMeta, NodeState, Outcome, ProducerEvidence, ProjectPath, ProjectSnapshot,
-    RecordedOutcome, ResultMeta, ResultSubmission, ResultVersion, StalenessReason, Status,
-    SubmissionConflict, WorkSnapshot, DEFINITION_SCHEMA, OBSERVATION_SCHEMA, RESULT_SCHEMA,
-    SNAPSHOT_SCHEMA,
+    NewNodeAttachment, NodeAttachment, NodeId, NodeMeta, NodeState, Outcome, ProducerEvidence,
+    ProjectPath, ProjectSnapshot, RecordedOutcome, ResultMeta, ResultSubmission, ResultVersion,
+    StalenessReason, Status, SubmissionConflict, WorkSnapshot, ATTACHMENT_SCHEMA,
+    DEFINITION_SCHEMA, OBSERVATION_SCHEMA, RESULT_SCHEMA, SNAPSHOT_SCHEMA,
 };
 pub use pairing::Pairing;
 pub use store::Store;

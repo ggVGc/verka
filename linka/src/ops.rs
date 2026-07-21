@@ -40,13 +40,16 @@ use ulid::Ulid;
 use crate::candidate::{CandidateRecord, CandidateStore};
 use crate::model::{
     ArtifactRef, Author, Blocker, BlockerReason, CandidateId, ConsumedNode, ContextPin, Currency,
-    DefinitionVersion, DepKind, IntegrationStatus, NodeId, NodeMeta, NodeState, Outcome,
-    ProducerEvidence, ProjectPath, ProjectSnapshot, RecordedOutcome, ResultMeta, ResultSubmission,
-    ResultVersion, StalenessReason, Status, SubmissionConflict, WorkSnapshot,
+    DefinitionVersion, DepKind, IntegrationStatus, NewNodeAttachment, NodeAttachment, NodeId,
+    NodeMeta, NodeState, Outcome, ProducerEvidence, ProjectPath, ProjectSnapshot, RecordedOutcome,
+    ResultMeta, ResultSubmission, ResultVersion, StalenessReason, Status, SubmissionConflict,
+    WorkSnapshot,
 };
-use crate::model::{DEFINITION_SCHEMA, OBSERVATION_SCHEMA, RESULT_SCHEMA, SNAPSHOT_SCHEMA};
+use crate::model::{
+    ATTACHMENT_SCHEMA, DEFINITION_SCHEMA, OBSERVATION_SCHEMA, RESULT_SCHEMA, SNAPSHOT_SCHEMA,
+};
 use crate::pairing::Pairing;
-use crate::store::{file_blob, MutationLock, Store};
+use crate::store::{blob_id, file_blob, MutationLock, Store};
 use crate::vcs::Vcs;
 
 pub struct InitializedWorkbench {
@@ -448,6 +451,50 @@ pub fn record_context_observation(
     )?;
     mutation.commit(vcs, &format!("linka: context observation {id}"))?;
     Ok(added)
+}
+
+/// Attach arbitrary immutable data to a node and commit it to Linka's Git
+/// history. Attachments are opaque to graph evaluation. Repeating the same
+/// namespace/key with identical content is a no-op; changing an existing
+/// attachment is refused.
+pub fn record_node_attachment(
+    store: &Store,
+    vcs: &dyn Vcs,
+    id: &str,
+    new: NewNodeAttachment,
+) -> Result<NodeAttachment> {
+    let mutation = store.mutation_lock(vcs)?;
+    if !store.exists(id) {
+        bail!("unknown node `{id}`");
+    }
+    if let Some((existing, data)) = store.read_node_attachment(id, &new.namespace, &new.key)? {
+        if existing.media_type == new.media_type && data == new.data {
+            return Ok(existing);
+        }
+        bail!(
+            "attachment `{}/{}` already exists with different content",
+            new.namespace,
+            new.key
+        );
+    }
+    let attachment = NodeAttachment {
+        schema: ATTACHMENT_SCHEMA,
+        namespace: new.namespace,
+        key: new.key,
+        created_at_ms: now_millis(),
+        media_type: new.media_type,
+        content: blob_id(&new.data),
+        size: new.data.len() as u64,
+    };
+    store.write_node_attachment(id, &attachment, &new.data)?;
+    mutation.commit(
+        vcs,
+        &format!(
+            "linka: attach {}/{} to {id}",
+            attachment.namespace, attachment.key
+        ),
+    )?;
+    Ok(attachment)
 }
 
 /// Derive all graph state through one fallible evaluation.
@@ -1108,6 +1155,9 @@ pub fn check(store: &Store) -> Result<Vec<String>> {
                     }
                 }
             }
+        }
+        if let Err(error) = store.list_node_attachments(&id) {
+            problems.push(format!("{id}: unreadable attachment ({error:#})"));
         }
         for (kind, list) in [
             ("depends_on", &meta.depends_on),
@@ -1823,6 +1873,50 @@ mod tests {
             record_context_observation(&store, &fake, &id, &nonexistent, &["x.txt".into()])
                 .is_err()
         );
+    }
+
+    #[test]
+    fn node_attachments_are_opaque_committed_and_idempotent() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs::default();
+        let id = add(&store, &fake, new_node("a", vec![])).unwrap();
+        let definition = store.node_version(&id).unwrap();
+        let commits = *fake.store_commits.borrow();
+        let new = NewNodeAttachment {
+            namespace: "example".into(),
+            key: "report-1".into(),
+            media_type: Some("application/octet-stream".into()),
+            data: vec![0, 1, 2, 255],
+        };
+
+        let attachment = record_node_attachment(&store, &fake, &id, new.clone()).unwrap();
+        assert_eq!(*fake.store_commits.borrow(), commits + 1);
+        assert_eq!(store.node_version(&id).unwrap(), definition);
+        assert_eq!(
+            store
+                .read_node_attachment(&id, "example", "report-1")
+                .unwrap()
+                .unwrap()
+                .1,
+            new.data
+        );
+
+        assert_eq!(
+            record_node_attachment(&store, &fake, &id, new.clone()).unwrap(),
+            attachment
+        );
+        assert_eq!(
+            *fake.store_commits.borrow(),
+            commits + 1,
+            "an identical retry must not create another Git mutation"
+        );
+
+        let mut changed = new;
+        changed.data.push(3);
+        assert!(record_node_attachment(&store, &fake, &id, changed)
+            .unwrap_err()
+            .to_string()
+            .contains("different content"));
     }
 
     #[test]

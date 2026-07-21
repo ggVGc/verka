@@ -17,7 +17,8 @@ use anyhow::{Context, Result};
 use linka::ops::{self, SubmissionError};
 use linka::{
     Author, BranchStore, CandidateId, CandidateStore, ConsumedNode, ExternalIdentity, GitVcs,
-    NewCandidate, NodeId, Outcome, ProducerEvidence, ProjectPath, Store, SubmissionConflict,
+    NewCandidate, NewNodeAttachment, NodeAttachment, NodeId, Outcome, ProducerEvidence,
+    ProjectPath, Store, SubmissionConflict,
 };
 use std::path::{Path, PathBuf};
 
@@ -70,6 +71,30 @@ impl<'a> LinkaWork<'a> {
     /// state still commits to the workbench repository.
     fn vcs_at(&self, workspace: &Path) -> GitVcs {
         GitVcs::for_execution(self.store, workspace.to_path_buf())
+    }
+
+    /// Commit an attempt's transcript as opaque, node-associated Linka data.
+    /// The stable key makes normal execution and recovery retries idempotent.
+    pub fn attach_transcript(
+        &self,
+        node: &NodeId,
+        attempt: &AttemptId,
+        transcript: &Path,
+    ) -> Result<NodeAttachment> {
+        let data = std::fs::read(transcript)
+            .with_context(|| format!("reading transcript for {attempt}"))?;
+        ops::record_node_attachment(
+            self.store,
+            &self.vcs(),
+            node.as_str(),
+            NewNodeAttachment {
+                namespace: "orka".into(),
+                key: format!("{attempt}/transcript"),
+                media_type: Some("text/plain; charset=utf-8".into()),
+                data,
+            },
+        )
+        .with_context(|| format!("attaching transcript for {attempt} to node `{node}`"))
     }
 
     /// Linka-ready, machine-assignable work, in Linka's selection order. Orka

@@ -325,6 +325,14 @@ impl Engine<'_> {
         workspace: &PreparedWorkspace,
         report: &ExecutionReport,
     ) -> Result<(SealedState, bool, Option<linka::CandidateId>)> {
+        // Agent output is durable node-associated evidence independently of
+        // whether result submission succeeds, fails, or becomes stale. This
+        // operation is idempotent, so recovery safely retries it.
+        self.linka.attach_transcript(
+            input.node(),
+            attempt,
+            &self.attempts.transcript_path(attempt),
+        )?;
         let declared = outcome::read_declared(&self.attempts.io_dir(attempt)?)?;
         match outcome::decide(declared, report.exit_code) {
             Decision::Submit {
@@ -420,6 +428,12 @@ impl Engine<'_> {
         for id in self.attempts.list()? {
             let snapshot = self.attempts.load(&id)?;
             let node = snapshot.record.input.node().clone();
+            let transcript = self.attempts.transcript_path(&id);
+            if transcript.is_file() {
+                // This also migrates transcripts from attempts sealed by older
+                // Orka versions. New attempts are harmless idempotent retries.
+                self.linka.attach_transcript(&node, &id, &transcript)?;
+            }
             let report = match snapshot.phase() {
                 AttemptPhase::Sealed => {
                     let empty_interruption = snapshot.evidence.is_none()
