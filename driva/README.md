@@ -11,6 +11,7 @@ directory.
 cargo run -- run --write . -- cargo test
 cargo run -- run --read ~/.cargo/registry --write . --network -- cargo update
 cargo run -- run --path ./tools -- project-tool
+cargo run -- run --backend bwrap --rootfs /srv/rootfs --tmpfs /home -- command
 cargo run -- shell --write .
 ```
 
@@ -64,6 +65,12 @@ available without granting write access. Driva mounts each directory read-only
 at its canonical host path inside the isolation and prepends those paths to
 `PATH` in the order given. This works with Bubblewrap, Podman, and Docker while
 preserving paths used by tool managers such as Rustup.
+
+Launch settings use the same vocabulary in templates and on the command line.
+For example, `--backend`, `--image`, `--rootfs`, repeatable `--tmpfs`,
+`--workdir`, `--path`, networking, interactivity, environment, and mounts all
+override or extend the corresponding project/template settings. Scalar
+precedence is CLI, then template, then project configuration.
 
 Projects can provide `driva.toml`:
 

@@ -67,19 +67,23 @@ Arguments:
   [COMMAND]...  
 
 Options:
-      --config <CONFIG>    Configuration file (defaults to ./driva.toml when present)
-      --template <NAME>    Apply a named execution template
-      --read <MOUNT>       Add a read-only mount as SOURCE or SOURCE:DESTINATION
-      --write <MOUNT>      Add a writable mount as SOURCE or SOURCE:DESTINATION
-      --path <DIRECTORY>   Add a host directory read-only and prepend it to the isolated PATH
-      --network            Permit networking (disabled otherwise)
-      --no-network         Disable networking, overriding configuration and templates
-  -i, --interactive        Allocate an interactive terminal
-      --dry-run            Print the validated request and backend invocation without executing it
-      --image <IMAGE>      Override the configured container image
-      --workdir <WORKDIR>  Override the isolated working directory
-      --env <ENVIRONMENT>  Set an environment variable as NAME=VALUE
-  -h, --help               Print help
+      --config <CONFIG>     Configuration file (defaults to ./driva.toml when present)
+      --template <NAME>     Apply a named execution template
+      --read <MOUNT>        Add a read-only mount as SOURCE or SOURCE:DESTINATION
+      --write <MOUNT>       Add a writable mount as SOURCE or SOURCE:DESTINATION
+      --path <DIRECTORY>    Add a host directory read-only and prepend it to the isolated PATH
+      --backend <BACKEND>   Select the isolation backend
+      --network             Permit networking (disabled otherwise)
+      --no-network          Disable networking, overriding configuration and templates
+  -i, --interactive         Allocate an interactive terminal
+      --no-interactive      Disable interactivity, overriding a template
+      --dry-run             Print the validated request and backend invocation without executing it
+      --image <IMAGE>       Override the configured container image
+      --rootfs <DIRECTORY>  Override the Bubblewrap root filesystem
+      --tmpfs <DIRECTORY>   Add a private writable Bubblewrap tmpfs mount
+      --workdir <WORKDIR>   Override the isolated working directory
+      --env <ENVIRONMENT>   Set an environment variable as NAME=VALUE
+  -h, --help                Print help
 ```
 
 The trailing `<COMMAND>...` is the program and its arguments. Use `--` to
@@ -89,6 +93,7 @@ separate them from Driva's own flags when the command has flags of its own:
 driva run --write . -- cargo test
 driva run --read ~/.cargo/registry --write . --network -- cargo update
 driva run --image rust:1.88 --workdir /workspace --write .:/workspace -- cargo build
+driva run --backend bwrap --rootfs /srv/rootfs --tmpfs /home -- command
 driva run --path ./tools -- project-tool
 driva run --env RUST_LOG=debug -- env
 ```
@@ -101,11 +106,15 @@ Policy options (shared by `run`, `shell`, and `start`):
 | `--read <MOUNT>` | Bind-mount a host path read-only. Repeatable. |
 | `--write <MOUNT>` | Bind-mount a host path read-write. Repeatable. |
 | `--path <DIRECTORY>` | Bind-mount a host directory read-only and prepend it to the isolated `PATH`. Repeatable. |
+| `--backend <BACKEND>` | Select `bwrap`, `podman`, or `docker` for this invocation. |
 | `--network` | Enable networking (otherwise the container has none). |
 | `--no-network` | Disable networking, overriding global configuration and templates. |
 | `-i`, `--interactive` | Allocate an interactive terminal (stdin + TTY). |
+| `--no-interactive` | Disable interactivity requested by a template. |
 | `--dry-run` | Print the validated request and the exact backend invocation without executing anything. |
 | `--image <IMAGE>` | Override the configured container image for this run (Podman/Docker only). |
+| `--rootfs <DIRECTORY>` | Override the prepared root filesystem for Bubblewrap. |
+| `--tmpfs <DIRECTORY>` | Add a private writable Bubblewrap tmpfs mount. Repeatable. |
 | `--workdir <WORKDIR>` | Override the isolated working directory (must be absolute). |
 | `--env NAME=VALUE` | Set an environment variable inside the container. Repeatable. |
 
@@ -120,12 +129,17 @@ conventional system path. The behavior is the same with Bubblewrap, Podman,
 and Docker.
 
 Template settings overlay the global configuration, and one-off CLI values
-overlay the template. Mounts are appended in global, template, then CLI order;
-environment values use the same precedence. Networking is enabled if any layer
-enables it unless the CLI specifies `--no-network`; `--network` and
-`--no-network` are mutually exclusive. Interactivity is enabled if any layer
-enables it. Arguments after `--` are appended to a template's command. Without
-a template, at least one command argument remains required at runtime.
+overlay the template. Scalar values such as backend, image, rootfs, and
+working directory use CLI, then template, then configuration precedence.
+Mounts, PATH additions, and tmpfs mounts accumulate in layer order;
+environment values are replaced by name. Explicit `network = false` in a
+template overrides enabled project networking, while `--network` and
+`--no-network` provide the final CLI choice. `--no-interactive` similarly
+overrides an interactive template. Arguments after `--` are appended to a
+template's command. Without a template, at least one command argument remains
+required at runtime. Backend-specific combinations are validated after
+resolution; for example, Docker rejects `rootfs` and Bubblewrap rejects
+`image`.
 
 ### Execution templates
 
@@ -313,19 +327,23 @@ Open /bin/sh in a disposable isolated environment
 Usage: driva shell [OPTIONS]
 
 Options:
-      --config <CONFIG>    Configuration file (defaults to ./driva.toml when present)
-      --template <NAME>    Apply a named execution template
-      --read <MOUNT>       Add a read-only mount as SOURCE or SOURCE:DESTINATION
-      --write <MOUNT>      Add a writable mount as SOURCE or SOURCE:DESTINATION
-      --path <DIRECTORY>   Add a host directory read-only and prepend it to the isolated PATH
-      --network            Permit networking (disabled otherwise)
-      --no-network         Disable networking, overriding configuration and templates
-  -i, --interactive        Allocate an interactive terminal
-      --dry-run            Print the validated request and backend invocation without executing it
-      --image <IMAGE>      Override the configured container image
-      --workdir <WORKDIR>  Override the isolated working directory
-      --env <ENVIRONMENT>  Set an environment variable as NAME=VALUE
-  -h, --help               Print help
+      --config <CONFIG>     Configuration file (defaults to ./driva.toml when present)
+      --template <NAME>     Apply a named execution template
+      --read <MOUNT>        Add a read-only mount as SOURCE or SOURCE:DESTINATION
+      --write <MOUNT>       Add a writable mount as SOURCE or SOURCE:DESTINATION
+      --path <DIRECTORY>    Add a host directory read-only and prepend it to the isolated PATH
+      --backend <BACKEND>   Select the isolation backend
+      --network             Permit networking (disabled otherwise)
+      --no-network          Disable networking, overriding configuration and templates
+  -i, --interactive         Allocate an interactive terminal
+      --no-interactive      Disable interactivity, overriding a template
+      --dry-run             Print the validated request and backend invocation without executing it
+      --image <IMAGE>       Override the configured container image
+      --rootfs <DIRECTORY>  Override the Bubblewrap root filesystem
+      --tmpfs <DIRECTORY>   Add a private writable Bubblewrap tmpfs mount
+      --workdir <WORKDIR>   Override the isolated working directory
+      --env <ENVIRONMENT>   Set an environment variable as NAME=VALUE
+  -h, --help                Print help
 ```
 
 ```sh
@@ -368,19 +386,23 @@ Arguments:
   [COMMAND]...  
 
 Options:
-      --config <CONFIG>    Configuration file (defaults to ./driva.toml when present)
-      --template <NAME>    Apply a named execution template
-      --read <MOUNT>       Add a read-only mount as SOURCE or SOURCE:DESTINATION
-      --write <MOUNT>      Add a writable mount as SOURCE or SOURCE:DESTINATION
-      --path <DIRECTORY>   Add a host directory read-only and prepend it to the isolated PATH
-      --network            Permit networking (disabled otherwise)
-      --no-network         Disable networking, overriding configuration and templates
-  -i, --interactive        Allocate an interactive terminal
-      --dry-run            Print the validated request and backend invocation without executing it
-      --image <IMAGE>      Override the configured container image
-      --workdir <WORKDIR>  Override the isolated working directory
-      --env <ENVIRONMENT>  Set an environment variable as NAME=VALUE
-  -h, --help               Print help
+      --config <CONFIG>     Configuration file (defaults to ./driva.toml when present)
+      --template <NAME>     Apply a named execution template
+      --read <MOUNT>        Add a read-only mount as SOURCE or SOURCE:DESTINATION
+      --write <MOUNT>       Add a writable mount as SOURCE or SOURCE:DESTINATION
+      --path <DIRECTORY>    Add a host directory read-only and prepend it to the isolated PATH
+      --backend <BACKEND>   Select the isolation backend
+      --network             Permit networking (disabled otherwise)
+      --no-network          Disable networking, overriding configuration and templates
+  -i, --interactive         Allocate an interactive terminal
+      --no-interactive      Disable interactivity, overriding a template
+      --dry-run             Print the validated request and backend invocation without executing it
+      --image <IMAGE>       Override the configured container image
+      --rootfs <DIRECTORY>  Override the Bubblewrap root filesystem
+      --tmpfs <DIRECTORY>   Add a private writable Bubblewrap tmpfs mount
+      --workdir <WORKDIR>   Override the isolated working directory
+      --env <ENVIRONMENT>   Set an environment variable as NAME=VALUE
+  -h, --help                Print help
 ```
 
 Accepts the same policy options as `run` and prints the new session id on
@@ -565,6 +587,7 @@ tmpfs = ["/root/.cache"]          # optional; Bubblewrap only
 workspace_root = "/workspace"    # optional; derives a canonical project path
 codex_trust_workspace = false     # optional; injects Codex's trust override
 workdir = "/workspace"           # optional
+path = ["~/.cargo/bin"]          # optional; read-only PATH additions
 network = false
 interactive = false
 
@@ -578,17 +601,22 @@ access = "write"
 ```
 
 Template fields are optional except that the effective command must be
-non-empty. `command` is an array of the executable and its initial arguments.
-`rootfs` overrides `[isolation.bwrap].rootfs` when the template selects
-Bubblewrap; `~` is expanded using `$HOME` and the tree is mounted read-only.
+non-empty. Unknown fields are rejected. `command` is an array of the executable
+and its initial arguments. `backend`, `image`, `rootfs`, `tmpfs`, `workdir`,
+`path`, networking, interactivity, environment, and mounts correspond to the
+same per-run CLI concepts. `rootfs` overrides `[isolation.bwrap].rootfs` when
+the template selects Bubblewrap, while `--rootfs` overrides both; `~` is
+expanded using `$HOME` and the tree is mounted read-only.
 When neither is set, Driva constructs a private root with conventional host
 system runtime paths mounted read-only. It does not expose the host root, home,
 current directory, or other data paths.
-`tmpfs` replaces listed rootfs directories with private writable temporary
-filesystems before template mounts are applied, allowing a writable file mount
-inside otherwise-disposable state. A leading `~` is expanded using the host
-`$HOME`; mount destinations and the working directory may be created beneath a
-private tmpfs even when they are absent from the read-only rootfs.
+`tmpfs` and repeatable `--tmpfs` values replace listed rootfs directories with
+private writable temporary filesystems before mounts are applied, allowing a
+writable file mount inside otherwise-disposable state. A leading `~` is
+expanded using the host `$HOME`; mount destinations and the working directory
+may be created beneath a private tmpfs even when they are absent from the
+read-only rootfs. `path` uses the same canonical, read-only mounting and PATH
+ordering as repeatable `--path`.
 `workspace_root` appends the canonical host project path to the configured
 absolute root, mounts the project writable there, and uses the result as the
 working directory. It supersedes `workdir` when both are set.
@@ -604,7 +632,8 @@ tmpfs mount point, and any working directory or mount destination that is not
 created beneath a private tmpfs. Driva exposes it read-only. With or without a
 prepared tree, Driva creates private `/proc` and `/dev` mounts and a writable
 tmpfs at `/tmp`, and clears the inherited host environment. `--image` and
-durable session commands are not supported with this backend.
+durable session commands are not supported with this backend; use `--rootfs`
+for a one-off prepared filesystem.
 
 ## Further reading
 

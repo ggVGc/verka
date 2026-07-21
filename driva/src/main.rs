@@ -103,6 +103,9 @@ struct PolicyArgs {
     /// Add a host directory read-only and prepend it to the isolated PATH.
     #[arg(long = "path", value_name = "DIRECTORY")]
     paths: Vec<PathBuf>,
+    /// Select the isolation backend.
+    #[arg(long, value_name = "BACKEND")]
+    backend: Option<String>,
     /// Permit networking (disabled otherwise).
     #[arg(long, conflicts_with = "no_network")]
     network: bool,
@@ -110,20 +113,53 @@ struct PolicyArgs {
     #[arg(long, conflicts_with = "network")]
     no_network: bool,
     /// Allocate an interactive terminal.
-    #[arg(short, long)]
+    #[arg(short, long, conflicts_with = "no_interactive")]
     interactive: bool,
+    /// Disable interactivity, overriding a template.
+    #[arg(long, conflicts_with = "interactive")]
+    no_interactive: bool,
     /// Print the validated request and backend invocation without executing it.
     #[arg(long)]
     dry_run: bool,
     /// Override the configured container image.
     #[arg(long)]
     image: Option<String>,
+    /// Override the Bubblewrap root filesystem.
+    #[arg(long, value_name = "DIRECTORY")]
+    rootfs: Option<PathBuf>,
+    /// Add a private writable Bubblewrap tmpfs mount.
+    #[arg(long, value_name = "DIRECTORY")]
+    tmpfs: Vec<PathBuf>,
     /// Override the isolated working directory.
     #[arg(long)]
     workdir: Option<PathBuf>,
     /// Set an environment variable as NAME=VALUE.
     #[arg(long = "env", value_parser = parse_environment)]
     environment: Vec<(OsString, OsString)>,
+}
+
+#[derive(Debug)]
+enum ResolvedBackend {
+    Podman {
+        image: String,
+    },
+    Docker {
+        image: String,
+    },
+    Bwrap {
+        rootfs: Option<PathBuf>,
+        tmpfs: Vec<PathBuf>,
+    },
+}
+
+impl ResolvedBackend {
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Podman { .. } => "podman",
+            Self::Docker { .. } => "docker",
+            Self::Bwrap { .. } => "bwrap",
+        }
+    }
 }
 
 fn main() {
@@ -177,10 +213,13 @@ fn real_main() -> Result<()> {
             command = template_command;
         }
     }
-    let backend_name = template
-        .as_ref()
-        .and_then(|value| value.backend.as_deref())
+    let requested_backend = policy
+        .backend
+        .as_deref()
+        .or_else(|| template.as_ref().and_then(|value| value.backend.as_deref()))
         .unwrap_or(&config.isolation.backend);
+    let backend = resolve_backend(requested_backend, &policy, template.as_ref(), &config)?;
+    let backend_name = backend.name();
     let configured_workdir = match backend_name {
         "podman" => &config.isolation.podman.workdir,
         "docker" => &config.isolation.docker.workdir,
@@ -223,8 +262,13 @@ fn real_main() -> Result<()> {
                 .map(|(key, value)| (OsString::from(key), OsString::from(value))),
         );
     }
-    environment.extend(policy.environment);
-    add_path_directories(&policy.paths, &mut mounts, &mut environment)?;
+    environment.extend(policy.environment.iter().cloned());
+    let mut paths = template
+        .as_ref()
+        .map(|value| value.paths.clone())
+        .unwrap_or_default();
+    paths.extend(policy.paths.iter().cloned());
+    add_path_directories(&paths, &mut mounts, &mut environment)?;
     if shell {
         environment
             .entry(OsString::from("HOME"))
@@ -238,23 +282,34 @@ fn real_main() -> Result<()> {
         working_directory: workdir,
         mounts,
         environment,
-        network: !policy.no_network
-            && (policy.network
-                || template.as_ref().is_some_and(|value| value.network)
-                || config.network.enabled),
-        interactive: policy.interactive
-            || template.as_ref().is_some_and(|value| value.interactive)
-            || shell,
+        network: if policy.no_network {
+            false
+        } else if policy.network {
+            true
+        } else {
+            template
+                .as_ref()
+                .and_then(|value| value.network)
+                .unwrap_or(config.network.enabled)
+        },
+        interactive: shell
+            || if policy.no_interactive {
+                false
+            } else if policy.interactive {
+                true
+            } else {
+                template
+                    .as_ref()
+                    .and_then(|value| value.interactive)
+                    .unwrap_or(false)
+            },
     };
     let request = validate_request(&request)?;
-    match backend_name {
-        "podman" => {
+    match backend {
+        ResolvedBackend::Podman { image } => {
             let backend = PodmanIsolation {
                 executable: config.isolation.podman.executable,
-                image: policy
-                    .image
-                    .or_else(|| template.as_ref().and_then(|value| value.image.clone()))
-                    .unwrap_or(config.isolation.podman.image),
+                image,
             };
             let invocation = backend.command(&request);
             if durable {
@@ -263,13 +318,10 @@ fn real_main() -> Result<()> {
                 finish("podman", &backend, invocation, &request, policy.dry_run)
             }
         }
-        "docker" => {
+        ResolvedBackend::Docker { image } => {
             let backend = DockerIsolation {
                 executable: config.isolation.docker.executable,
-                image: policy
-                    .image
-                    .or_else(|| template.as_ref().and_then(|value| value.image.clone()))
-                    .unwrap_or(config.isolation.docker.image),
+                image,
             };
             let invocation = backend.command(&request);
             if durable {
@@ -278,27 +330,14 @@ fn real_main() -> Result<()> {
                 finish("docker", &backend, invocation, &request, policy.dry_run)
             }
         }
-        "bwrap" => {
+        ResolvedBackend::Bwrap { rootfs, tmpfs } => {
             if durable {
                 bail!("Bubblewrap does not support durable sessions; use `driva run` or `driva shell`");
             }
-            if policy.image.is_some()
-                || template
-                    .as_ref()
-                    .is_some_and(|value| value.image.is_some())
-            {
-                bail!("--image is not supported by the Bubblewrap backend; configure isolation.bwrap.rootfs");
-            }
             let backend = BwrapIsolation {
                 executable: config.isolation.bwrap.executable,
-                rootfs: template
-                    .as_ref()
-                    .and_then(|value| value.rootfs.clone())
-                    .or(config.isolation.bwrap.rootfs),
-                tmpfs: template
-                    .as_ref()
-                    .map(|value| value.tmpfs.clone())
-                    .unwrap_or_default(),
+                rootfs,
+                tmpfs,
             };
             let invocation = backend.command(&request).with_context(|| {
                 if matches!(policy.template.as_deref(), Some("codex" | "codex-exec")) {
@@ -309,7 +348,65 @@ fn real_main() -> Result<()> {
             })?;
             finish("bwrap", &backend, invocation, &request, policy.dry_run)
         }
-        _ => unreachable!("backend was validated above"),
+    }
+}
+
+fn resolve_backend(
+    name: &str,
+    policy: &PolicyArgs,
+    template: Option<&driva::TemplateConfig>,
+    config: &Config,
+) -> Result<ResolvedBackend> {
+    let template_image = template.and_then(|value| value.image.clone());
+    let template_rootfs = template.and_then(|value| value.rootfs.clone());
+    let template_tmpfs = template
+        .map(|value| value.tmpfs.clone())
+        .unwrap_or_default();
+
+    match name {
+        "podman" | "docker" => {
+            if policy.rootfs.is_some() || template_rootfs.is_some() {
+                bail!("--rootfs is only supported by the Bubblewrap backend");
+            }
+            if !policy.tmpfs.is_empty() || !template_tmpfs.is_empty() {
+                bail!("--tmpfs is only supported by the Bubblewrap backend");
+            }
+            let configured_image = if name == "podman" {
+                &config.isolation.podman.image
+            } else {
+                &config.isolation.docker.image
+            };
+            let image = policy
+                .image
+                .clone()
+                .or(template_image)
+                .unwrap_or_else(|| configured_image.clone());
+            Ok(if name == "podman" {
+                ResolvedBackend::Podman { image }
+            } else {
+                ResolvedBackend::Docker { image }
+            })
+        }
+        "bwrap" => {
+            if policy.image.is_some() || template_image.is_some() {
+                bail!("--image is not supported by the Bubblewrap backend; use --rootfs");
+            }
+            let mut tmpfs = template_tmpfs;
+            for path in &policy.tmpfs {
+                if !tmpfs.contains(path) {
+                    tmpfs.push(path.clone());
+                }
+            }
+            Ok(ResolvedBackend::Bwrap {
+                rootfs: policy
+                    .rootfs
+                    .clone()
+                    .or(template_rootfs)
+                    .or_else(|| config.isolation.bwrap.rootfs.clone()),
+                tmpfs,
+            })
+        }
+        backend => bail!("unsupported isolation backend {backend:?}"),
     }
 }
 

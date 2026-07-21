@@ -6,6 +6,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     #[serde(default)]
     pub isolation: IsolationConfig,
@@ -22,6 +23,7 @@ pub struct Config {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct IsolationConfig {
     #[serde(default = "bwrap_backend")]
     pub backend: String,
@@ -49,6 +51,7 @@ fn bwrap_backend() -> String {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DockerConfig {
     #[serde(default = "default_image")]
     pub image: String,
@@ -78,6 +81,7 @@ fn default_docker() -> PathBuf {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PodmanConfig {
     #[serde(default = "default_image")]
     pub image: String,
@@ -102,6 +106,7 @@ fn default_podman() -> PathBuf {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BwrapConfig {
     /// A prepared filesystem tree to expose as the sandbox root. When absent,
     /// Bubblewrap uses a private root with read-only host system runtime paths.
@@ -127,6 +132,7 @@ fn default_bwrap() -> PathBuf {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MountConfig {
     pub source: PathBuf,
     pub destination: PathBuf,
@@ -139,6 +145,7 @@ pub struct MountConfig {
 /// Templates deliberately use the same policy vocabulary as the command
 /// line. They may grant capabilities, so selecting one is explicit.
 #[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TemplateConfig {
     #[serde(default)]
     pub description: String,
@@ -160,15 +167,17 @@ pub struct TemplateConfig {
     pub workdir: Option<PathBuf>,
     #[serde(default, rename = "mount")]
     pub mounts: Vec<MountConfig>,
-    #[serde(default)]
-    pub network: bool,
-    #[serde(default)]
-    pub interactive: bool,
+    /// Host directories mounted read-only and prepended to PATH.
+    #[serde(default, rename = "path")]
+    pub paths: Vec<PathBuf>,
+    pub network: Option<bool>,
+    pub interactive: Option<bool>,
     #[serde(default)]
     pub environment: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct NetworkConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -226,7 +235,10 @@ fn builtin_templates() -> BTreeMap<String, TemplateConfig> {
         ("claude-exec", include_str!("../templates/claude-exec.toml")),
         ("codex", include_str!("../templates/codex.toml")),
         ("codex-exec", include_str!("../templates/codex-exec.toml")),
-        ("codex-runtime", include_str!("../templates/codex-runtime.toml")),
+        (
+            "codex-runtime",
+            include_str!("../templates/codex-runtime.toml"),
+        ),
     ]
     .into_iter()
     .map(|(name, source)| {

@@ -83,8 +83,10 @@ access = "read"
 enabled = false
 ```
 
-Backend-specific settings, such as a Docker image, live in the selected
-backend's configuration rather than the portable execution request.
+Backend-specific settings remain outside the portable execution request, but
+configuration, templates, and command-line overrides resolve through one
+launch layer before the selected adapter is constructed. Scalar precedence is
+CLI, then template, then project configuration.
 
 ## Core interface
 

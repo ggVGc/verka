@@ -56,8 +56,8 @@ fn provides_codex_templates() {
         Some("xterm-256color")
     );
     assert!(codex.workdir.is_none());
-    assert!(codex.network);
-    assert!(codex.interactive);
+    assert_eq!(codex.network, Some(true));
+    assert_eq!(codex.interactive, Some(true));
     assert_eq!(codex.mounts.len(), 1);
     assert_eq!(codex.mounts[0].destination, PathBuf::from("/root/.codex"));
     assert_eq!(codex.mounts[0].access, MountAccess::ReadWrite);
@@ -75,7 +75,7 @@ fn provides_codex_templates() {
     );
     assert_eq!(codex_exec.workspace_root, Some(PathBuf::from("/driva")));
     assert!(codex_exec.codex_trust_workspace);
-    assert!(!codex_exec.interactive);
+    assert_eq!(codex_exec.interactive, Some(false));
 
     let codex_runtime = config.template("codex-runtime").unwrap();
     assert_eq!(
@@ -91,7 +91,7 @@ fn provides_codex_templates() {
     );
     assert_eq!(codex_runtime.workspace_root, Some(PathBuf::from("/driva")));
     assert!(codex_runtime.codex_trust_workspace);
-    assert!(codex_runtime.interactive);
+    assert_eq!(codex_runtime.interactive, Some(true));
     assert_eq!(codex_runtime.mounts.len(), 2);
     assert_eq!(
         codex_runtime.mounts[1].destination,
@@ -110,8 +110,8 @@ fn provides_claude_code_templates() {
     assert_eq!(claude.backend.as_deref(), Some("podman"));
     assert_eq!(claude.workspace_root, Some(PathBuf::from("/driva")));
     assert!(claude.workdir.is_none());
-    assert!(claude.network);
-    assert!(claude.interactive);
+    assert_eq!(claude.network, Some(true));
+    assert_eq!(claude.interactive, Some(true));
     assert_eq!(claude.mounts.len(), 1);
     assert_eq!(
         claude.mounts[0].source,
@@ -125,7 +125,7 @@ fn provides_claude_code_templates() {
 
     let claude_exec = config.template("claude-exec").unwrap();
     assert_eq!(claude_exec.command.last().unwrap(), "--print");
-    assert!(!claude_exec.interactive);
+    assert_eq!(claude_exec.interactive, Some(false));
 }
 
 #[test]
@@ -227,7 +227,7 @@ image = "example/codex:pinned"
     let codex = config.template("codex").unwrap();
     assert_eq!(codex.description, "Local Codex build");
     assert_eq!(codex.command, ["codex-from-image"]);
-    assert!(!codex.network);
+    assert_eq!(codex.network, None);
 }
 
 #[test]
