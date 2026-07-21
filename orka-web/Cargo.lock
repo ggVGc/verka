@@ -155,6 +155,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "driva"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "serde",
+ "toml",
+]
+
+[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -271,20 +281,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "linka-viz"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "linka",
- "serde_json",
-]
-
-[[package]]
 name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
+
+[[package]]
+name = "nota"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "ulid",
+]
 
 [[package]]
 name = "once_cell"
@@ -297,6 +306,32 @@ name = "once_cell_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
+
+[[package]]
+name = "orka"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "driva",
+ "linka",
+ "nota",
+ "serde",
+ "serde_json",
+ "toml",
+ "ulid",
+]
+
+[[package]]
+name = "orka-web"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "linka",
+ "orka",
+ "serde_json",
+]
 
 [[package]]
 name = "pin-project-lite"

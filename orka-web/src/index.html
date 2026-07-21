@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>linka — node graph</title>
+<title>orka — workbench</title>
 <style>
   :root {
     --page:        #f9f9f7;
@@ -45,8 +45,10 @@
     background: var(--surface);
     border-bottom: 1px solid var(--hairline);
   }
-  header h1 { font-size: 15px; font-weight: 600; }
+  header h1 { font-size: 15px; font-weight: 650; }
   header h1 span { color: var(--muted); font-weight: 400; }
+  #workbench { color: var(--muted); font: 11.5px/1.3 ui-monospace, monospace;
+               max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #stats { display: flex; gap: 8px; flex-wrap: wrap; }
   .chip {
     display: inline-flex; align-items: center; gap: 6px;
@@ -127,6 +129,7 @@
   .pill.error                { background: var(--blocked-bg);  color: var(--blocked-ink); }
   .pill.stale  { background: var(--stale-bg);  color: var(--stale-ink); }
   .pill.human  { background: var(--page); color: var(--ink-2); border: 1px solid var(--hairline); }
+  .pill.machine { background: var(--open-bg); color: var(--open-ink); border: 1px solid #c8dcf6; }
   button.pill.logbtn {
     margin-left: auto; cursor: pointer;
     font: inherit; font-size: 10.5px; font-weight: 600;
@@ -195,6 +198,16 @@
   }
   .nodelink:hover { border-color: var(--open); }
   .nodelink small { color: var(--muted); font-family: system-ui, sans-serif; display: block; }
+  .attempt-list { display: flex; flex-direction: column; gap: 5px; }
+  .attempt {
+    border: 1px solid var(--hairline); border-radius: 6px; padding: 7px 8px;
+    background: var(--page); color: var(--ink-2); font-size: 12px;
+  }
+  .attempt-head { display: flex; align-items: center; gap: 6px; }
+  .attempt-head code { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .attempt-meta { color: var(--muted); margin-top: 2px; }
+  .attempt button { border: 0; background: none; color: var(--open-ink); cursor: pointer;
+                    padding: 0; font: inherit; font-weight: 600; }
   /* work log view (left side) */
   #logview {
     width: 400px; flex: none;
@@ -252,10 +265,11 @@
 <body>
 
 <header>
-  <h1>linka <span>node graph</span></h1>
+  <h1>orka <span>workbench</span></h1>
+  <div id="workbench" title="Orka workbench"></div>
   <div id="stats"></div>
   <div id="legend">
-    <span class="item"><span class="dot" style="background:var(--ready)"></span>ready</span>
+    <span class="item"><span class="dot" style="background:var(--ready)"></span>machine-ready</span>
     <span class="item"><span class="dot" style="background:var(--awaiting)"></span>awaiting integration</span>
     <span class="item"><span class="dot" style="background:var(--blocked)"></span>blocked</span>
     <span class="item"><span class="dot" style="background:var(--complete)"></span>complete</span>
@@ -289,7 +303,7 @@
         <g id="nodes"></g>
       </g>
     </svg>
-    <div id="empty">no nodes yet — <span style="font-family:ui-monospace,monospace">&nbsp;linka add&nbsp;</span> to create one</div>
+    <div id="empty">no work has been defined in this workbench</div>
   </div>
   <aside id="panel"></aside>
 </main>
@@ -305,7 +319,7 @@ const svgEl = (tag, attrs = {}) => {
   return el;
 };
 
-let data = { nodes: [], problems: [] };
+let data = { nodes: [], ready: [], attempts: [], candidates: [], reviews: [], problems: [] };
 let byId = new Map();
 let selected = null;
 let fitted = false;
@@ -389,7 +403,7 @@ function render() {
   const nodes = data.nodes;
   byId = new Map(nodes.map(n => [n.id, n]));
   $("empty").style.display = nodes.length ? "none" : "flex";
-  if (logFor && !byId.has(logFor)) closeLog();
+  if (logFor && !(data.attempts || []).some(a => a.id === logFor)) closeLog();
 
   const edges = edgesOf(nodes);
   const xy = layout(nodes, edges);
@@ -429,15 +443,19 @@ function render() {
     tags.className = "tags";
     tags.appendChild(statusPill(n));
     if ((n.stale || []).length) tags.appendChild(pill("stale", "⚠ stale"));
-    if (n.assignee === "human") tags.appendChild(pill("human", "👤 human"));
-    if (n.has_log) {
+    if (n.orka_ready) tags.appendChild(pill("machine", "dispatchable"));
+    else if (n.assignee === "human") tags.appendChild(pill("human", "👤 human"));
+    const loggedAttempt = [...(n.attempts || [])].reverse().find(a => a.has_transcript);
+    if (loggedAttempt) {
       const b = document.createElement("button");
       b.className = "pill logbtn";
       b.textContent = "log";
       b.title = "show work log";
       // Also select the node, so its result sits in the right panel while the
       // interaction log opens on the left.
-      b.addEventListener("click", ev => { ev.stopPropagation(); select(n.id); openLog(n.id); });
+      b.addEventListener("click", ev => {
+        ev.stopPropagation(); select(n.id); openLog(loggedAttempt.id, n.title);
+      });
       tags.appendChild(b);
     }
     card.appendChild(tags);
@@ -480,14 +498,14 @@ function pill(kind, label) {
 function renderStats() {
   const nodes = data.nodes;
   const count = s => nodes.filter(n => n.status === s).length;
-  const stale = nodes.filter(n => (n.stale || []).length).length;
+  const pending = (data.candidates || []).filter(c => c.status === "pending").length;
+  const running = (data.attempts || []).filter(a => a.phase !== "sealed").length;
   const chips = [
-    [`<b>${nodes.length}</b> nodes`],
-    [`<span class="dot" style="background:var(--ready)"></span><b>${count("ready")}</b> ready`],
-    [`<span class="dot" style="background:var(--awaiting)"></span><b>${count("awaiting_integration")}</b> awaiting`],
-    [`<span class="dot" style="background:var(--blocked)"></span><b>${count("blocked")}</b> blocked`],
-    [`<span class="dot" style="background:var(--complete)"></span><b>${count("complete")}</b> complete`],
-    [`<b>${stale}</b> stale`],
+    [`<span class="dot" style="background:var(--ready)"></span><b>${(data.ready || []).length}</b> ready`],
+    [`<b>${data.attempts.length}</b> attempts${running ? ` · ${running} active` : ""}`],
+    [`<span class="dot" style="background:var(--awaiting)"></span><b>${pending}</b> candidates`],
+    [`<b>${data.reviews.length}</b> reviews`],
+    [`<b>${nodes.length}</b> graph nodes`],
   ];
   if (count("error")) {
     chips.push([`<span class="dot" style="background:var(--blocked)"></span><b>${count("error")}</b> errors`]);
@@ -499,7 +517,7 @@ function renderProblems() {
   const el = $("problems");
   const p = data.problems || [];
   el.style.display = p.length ? "block" : "none";
-  el.textContent = p.length ? `store check: ${p.length} problem(s)\n` + p.join("\n") : "";
+  el.textContent = p.length ? `workbench check: ${p.length} problem(s)\n` + p.join("\n") : "";
 }
 
 // Dim everything not connected to `id`; null clears the emphasis.
@@ -559,6 +577,7 @@ function renderPanel() {
   const tags = document.createElement("div");
   tags.className = "tags";
   tags.appendChild(statusPill(n));
+  if (n.orka_ready) tags.appendChild(pill("machine", "ready for Orka"));
   if ((n.stale || []).length) tags.appendChild(pill("stale", "⚠ stale"));
   panel.appendChild(tags);
 
@@ -651,6 +670,43 @@ function renderPanel() {
       rejected: "The candidate was rejected, so this node is ready for another attempt.",
     }[c.integration] || "The candidate's integration state could not be determined.";
     panel.appendChild(section("what this means", explanation));
+
+    const activeReviews = (data.reviews || []).filter(r => r.candidate === c.id);
+    if (activeReviews.length) {
+      const reviewList = document.createElement("dl");
+      reviewList.className = "kv";
+      for (const review of activeReviews) {
+        const dt = document.createElement("dt"); dt.textContent = "verification";
+        const dd = document.createElement("dd");
+        dd.textContent = `${review.verification} · ${review.branch}`;
+        reviewList.append(dt, dd);
+      }
+      panel.appendChild(section("active review", reviewList));
+    }
+  }
+
+  if ((n.attempts || []).length) {
+    const list = document.createElement("div");
+    list.className = "attempt-list";
+    for (const attempt of [...n.attempts].reverse()) {
+      const item = document.createElement("div");
+      item.className = "attempt";
+      const head = document.createElement("div"); head.className = "attempt-head";
+      const code = document.createElement("code"); code.textContent = attempt.id;
+      head.appendChild(code);
+      if (attempt.has_transcript) {
+        const log = document.createElement("button"); log.textContent = "transcript";
+        log.addEventListener("click", () => openLog(attempt.id, n.title));
+        head.appendChild(log);
+      }
+      const meta = document.createElement("div"); meta.className = "attempt-meta";
+      const state = attempt.seal?.state || attempt.phase.replaceAll("_", " ");
+      const backend = attempt.evidence?.backend ? ` · ${attempt.evidence.backend}` : "";
+      const exit = attempt.evidence ? ` · exit ${attempt.evidence.exit_code}` : "";
+      meta.textContent = `${state}${backend}${exit} · ${new Date(attempt.created_at_ms).toLocaleString()}`;
+      item.append(head, meta); list.appendChild(item);
+    }
+    panel.appendChild(section("Orka attempts", list));
   }
 
   // Only actionable human work gets a response box. Awaiting and blocked
@@ -724,24 +780,24 @@ async function submitResponse(id, ta, btn, err) {
 
 // --- work log view (left side) ------------------------------------------------
 
-// Which node's log is open, so the view survives the refresh cycle. The log is
-// fetched on open — it can be big, and the graph poll shouldn't carry it.
+// Which Orka attempt transcript is open, so the view survives refreshes. The
+// transcript is fetched on demand because it can be much larger than state.
 let logFor = null;
 
-async function openLog(id) {
-  logFor = id;
+async function openLog(attempt, title) {
+  logFor = attempt;
   const body = document.querySelector("#logview .logbody");
-  $("logtitle").textContent = byId.get(id)?.title || id;
+  $("logtitle").textContent = `${title || attempt} · ${attempt}`;
   $("logview").classList.add("show");
   body.textContent = "loading…";
   try {
-    const res = await fetch(`/api/log/${encodeURIComponent(id)}`);
+    const res = await fetch(`/api/transcript/${encodeURIComponent(attempt)}`);
     const payload = await res.json();
     if (!res.ok) throw new Error(payload.error || res.statusText);
-    if (logFor !== id) return; // another log was opened while this one loaded
-    body.replaceChildren(renderLog(payload.log));
+    if (logFor !== attempt) return; // another log was opened while this one loaded
+    body.replaceChildren(renderLog(payload.transcript));
   } catch (e) {
-    if (logFor === id) body.textContent = `failed to load: ${e.message}`;
+    if (logFor === attempt) body.textContent = `failed to load: ${e.message}`;
   }
 }
 
@@ -950,10 +1006,12 @@ function fit(xy) {
 
 async function load() {
   try {
-    const res = await fetch("/api/graph");
+    const res = await fetch("/api/state");
     const body = await res.json();
     if (!res.ok) throw new Error(body.error || res.statusText);
     data = body;
+    $("workbench").textContent = body.workbench || "";
+    $("workbench").title = body.workbench || "Orka workbench";
     if (selected && !body.nodes.some(n => n.id === selected)) selected = null;
     render();
     $("refresh").className = "live";
