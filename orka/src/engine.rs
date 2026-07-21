@@ -12,6 +12,7 @@
 //! submission go through [`LinkaWork`]; graph semantics stay Linka's, and Orka
 //! never models a graph of its own.
 
+use crate::agent::SandboxLayout;
 use crate::attempt::{AttemptId, AttemptPhase, FsAttemptStore, SealedState};
 use crate::executor::{ExecutionReport, ExecutionSpec, IsolatedExecutor, MountSpec};
 use crate::input::AttemptInput;
@@ -41,10 +42,11 @@ pub struct ExecutionPolicy {
 
 impl ExecutionPolicy {
     pub fn new(command: Vec<String>) -> Self {
+        let layout = SandboxLayout::default();
         Self {
             command,
-            workspace_destination: "/workspace".into(),
-            io_destination: "/orka".into(),
+            workspace_destination: layout.workspace,
+            io_destination: layout.exchange,
             extra_mounts: Vec::new(),
             environment: BTreeMap::new(),
             network: false,

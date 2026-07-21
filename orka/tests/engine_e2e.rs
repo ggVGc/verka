@@ -33,9 +33,12 @@ fn conforming_agent() -> FakeExecutor {
     FakeExecutor {
         transcript: "agent transcript\n".into(),
         on_run: Some(Box::new(|spec: &ExecutionSpec| {
-            std::fs::write(mount(spec, "/workspace").join("greeting.txt"), "hello\n")?;
             std::fs::write(
-                mount(spec, "/orka").join("outcome.toml"),
+                mount(spec, "/tmp/orka/workspace").join("greeting.txt"),
+                "hello\n",
+            )?;
+            std::fs::write(
+                mount(spec, "/tmp/orka/exchange").join("outcome.toml"),
                 "outcome = \"succeeded\"\noutputs = [\"greeting.txt\"]\n\
                  message = \"add the greeting\"\nnotes = \"wrote greeting.txt\"\n",
             )?;
@@ -50,7 +53,10 @@ fn declaring_agent(outcome_toml: &'static str, exit_code: i32) -> FakeExecutor {
     FakeExecutor {
         exit_code,
         on_run: Some(Box::new(move |spec: &ExecutionSpec| {
-            std::fs::write(mount(spec, "/orka").join("outcome.toml"), outcome_toml)?;
+            std::fs::write(
+                mount(spec, "/tmp/orka/exchange").join("outcome.toml"),
+                outcome_toml,
+            )?;
             Ok(())
         })),
         ..Default::default()
@@ -233,9 +239,12 @@ fn graph_only_success_refuses_undeclared_workspace_changes() {
     let (store, workspaces, attempts) = parts(&root);
     let executor = FakeExecutor {
         on_run: Some(Box::new(|spec: &ExecutionSpec| {
-            std::fs::write(mount(spec, "/workspace").join("undeclared.txt"), "hidden\n")?;
             std::fs::write(
-                mount(spec, "/orka").join("outcome.toml"),
+                mount(spec, "/tmp/orka/workspace").join("undeclared.txt"),
+                "hidden\n",
+            )?;
+            std::fs::write(
+                mount(spec, "/tmp/orka/exchange").join("outcome.toml"),
                 "outcome = \"succeeded\"\nnotes = \"graph only\"\n",
             )?;
             Ok(())
@@ -280,9 +289,9 @@ fn a_nonzero_exit_with_a_declared_success_still_submits_and_reports() {
     let executor = FakeExecutor {
         exit_code: 3,
         on_run: Some(Box::new(|spec: &ExecutionSpec| {
-            std::fs::write(mount(spec, "/workspace").join("out.txt"), "x\n")?;
+            std::fs::write(mount(spec, "/tmp/orka/workspace").join("out.txt"), "x\n")?;
             std::fs::write(
-                mount(spec, "/orka").join("outcome.toml"),
+                mount(spec, "/tmp/orka/exchange").join("outcome.toml"),
                 "outcome = \"succeeded\"\noutputs = [\"out.txt\"]\nnotes = \"done\"\n",
             )?;
             Ok(())
@@ -347,7 +356,10 @@ fn an_executor_error_retains_a_worktree_it_may_have_changed() {
     let (store, workspaces, attempts) = parts(&root);
     let executor = FakeExecutor {
         on_run: Some(Box::new(|spec: &ExecutionSpec| {
-            std::fs::write(mount(spec, "/workspace").join("partial.txt"), "partial\n")?;
+            std::fs::write(
+                mount(spec, "/tmp/orka/workspace").join("partial.txt"),
+                "partial\n",
+            )?;
             anyhow::bail!("backend connection was lost")
         })),
         ..Default::default()
@@ -385,9 +397,9 @@ fn an_attempt_against_a_graph_that_moved_mid_run_seals_stale() {
     let executor = FakeExecutor {
         on_run: Some(Box::new(move |spec: &ExecutionSpec| {
             edit_node(&root_for_agent, &node_for_agent, "Moved mid-run");
-            std::fs::write(mount(spec, "/workspace").join("out.txt"), "x\n")?;
+            std::fs::write(mount(spec, "/tmp/orka/workspace").join("out.txt"), "x\n")?;
             std::fs::write(
-                mount(spec, "/orka").join("outcome.toml"),
+                mount(spec, "/tmp/orka/exchange").join("outcome.toml"),
                 "outcome = \"succeeded\"\noutputs = [\"out.txt\"]\nnotes = \"n\"\n",
             )?;
             Ok(())

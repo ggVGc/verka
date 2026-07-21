@@ -29,7 +29,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Create a default orka.toml using Driva's codex-exec template.
+    /// Create a default orka.toml using Orka's Codex profile.
     Init,
     /// Run one attempt: the given node, or the first ready one.
     Run {

@@ -1,21 +1,14 @@
-//! `orka.toml`: per-workbench orchestration policy.
+//! `orka.toml`: Orka-owned coding-agent and isolation policy.
 //!
-//! The default delegates the agent runtime and isolation details to Driva's
-//! non-interactive Codex template:
-//!
-//! ```toml
-//! [agent]
-//! template = "codex-exec"
-//! ```
-//!
-//! A literal command and the older Orka-native isolation settings remain
-//! supported for small custom images.
+//! Coding-agent profiles live in Orka because they are part of Orka's prompt,
+//! workspace, and outcome protocol. Driva receives a fully resolved execution
+//! request and contributes no templates or agent-specific behavior.
 
+use crate::agent::{self, AgentInvocation, SandboxLayout};
 use crate::driva_exec::DrivaExecutor;
 use crate::engine::ExecutionPolicy;
 use crate::executor::MountSpec;
 use anyhow::{bail, Context, Result};
-use driva::{MountAccess, TemplateConfig};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::fs::OpenOptions;
@@ -23,16 +16,18 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 pub const CONFIG_FILE: &str = "orka.toml";
-pub const DEFAULT_CONFIG: &str = r#"# Orka delegates the agent runtime and its isolation policy to Driva.
-# Install the Codex runtime first with: driva runtime install codex@latest
+pub const DEFAULT_CONFIG: &str = r#"# Orka owns the Codex invocation and delegates only isolation to Driva.
 [agent]
-template = "codex-exec"
+kind = "codex"
+
+[isolation]
+backend = "bwrap"
+rootfs = "/"
+tmpfs = ["/root"]
 "#;
 
-const TEMPLATE_PROMPT: &str =
-    "Read and follow the instructions in the file named by the ORKA_PROMPT environment variable.";
-
 #[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     pub agent: AgentConfig,
     #[serde(default)]
@@ -43,32 +38,43 @@ pub struct Config {
     pub environment: BTreeMap<String, String>,
     #[serde(default, rename = "mount")]
     pub mounts: Vec<MountConfig>,
-    #[serde(skip)]
-    driva: driva::Config,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum AgentKind {
+    Codex,
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AgentConfig {
-    /// A Driva template name, such as `codex-exec` or `claude-exec`.
-    pub template: Option<String>,
-    /// A literal command for the legacy Orka-native configuration form.
+    /// An Orka-owned coding-agent profile.
+    pub kind: Option<AgentKind>,
+    /// Override the executable selected by the profile.
+    #[serde(default)]
+    pub executable: Option<PathBuf>,
+    /// A fully literal command, for agents without an Orka profile.
     #[serde(default)]
     pub command: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct IsolationConfig {
     #[serde(default = "default_backend")]
     pub backend: String,
     #[serde(default = "default_image")]
     pub image: String,
-    /// Engine executable override (defaults to the backend's name in PATH).
+    /// Isolation engine executable override (defaults to the backend name).
     #[serde(default)]
     pub executable: Option<PathBuf>,
-    #[serde(default = "default_workdir")]
-    pub workdir: PathBuf,
-    #[serde(default = "default_io")]
-    pub io: PathBuf,
+    /// Prepared filesystem tree for Bubblewrap. Required for that backend.
+    #[serde(default)]
+    pub rootfs: Option<PathBuf>,
+    /// Rootfs directories replaced by private writable tmpfs mounts.
+    #[serde(default)]
+    pub tmpfs: Vec<PathBuf>,
 }
 
 impl Default for IsolationConfig {
@@ -77,39 +83,29 @@ impl Default for IsolationConfig {
             backend: default_backend(),
             image: default_image(),
             executable: None,
-            workdir: default_workdir(),
-            io: default_io(),
+            rootfs: None,
+            tmpfs: Vec::new(),
         }
     }
 }
 
 fn default_backend() -> String {
-    "podman".into()
+    "bwrap".into()
 }
+
 fn default_image() -> String {
     "docker.io/library/busybox:latest".into()
 }
-fn default_workdir() -> PathBuf {
-    PathBuf::from("/workspace")
-}
-fn default_io() -> PathBuf {
-    PathBuf::from("/orka")
-}
-
-fn template_io() -> PathBuf {
-    // Driva's prepared Bubblewrap rootfs deliberately exposes `/tmp` as a
-    // writable tmpfs. Keeping the exchange mount below it avoids requiring
-    // every agent rootfs to contain an Orka-specific top-level directory.
-    PathBuf::from("/tmp/orka")
-}
 
 #[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct NetworkConfig {
     #[serde(default)]
     pub enabled: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MountConfig {
     pub source: PathBuf,
     pub destination: PathBuf,
@@ -119,8 +115,7 @@ pub struct MountConfig {
 
 struct ResolvedAgent {
     command: Vec<String>,
-    workspace: PathBuf,
-    io: PathBuf,
+    layout: SandboxLayout,
     mounts: Vec<MountSpec>,
     environment: BTreeMap<String, String>,
     network: bool,
@@ -147,12 +142,8 @@ impl Config {
     pub fn load(path: &Path) -> Result<Self> {
         let text =
             std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-        let mut config: Config =
+        let config: Config =
             toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
-        let driva_path = path.with_file_name("driva.toml");
-        if driva_path.exists() {
-            config.driva = driva::Config::load(&driva_path)?;
-        }
         config.resolve()?;
         Ok(config)
     }
@@ -172,8 +163,8 @@ impl Config {
         let resolved = self.resolve()?;
         Ok(ExecutionPolicy {
             command: resolved.command,
-            workspace_destination: resolved.workspace,
-            io_destination: resolved.io,
+            workspace_destination: resolved.layout.workspace,
+            io_destination: resolved.layout.exchange,
             extra_mounts: resolved.mounts,
             environment: resolved.environment,
             network: resolved.network,
@@ -197,22 +188,64 @@ impl Config {
     }
 
     fn resolve(&self) -> Result<ResolvedAgent> {
-        match (&self.agent.template, self.agent.command.is_empty()) {
-            (Some(_), false) => bail!("agent.template and agent.command are mutually exclusive"),
-            (None, true) => bail!("either agent.template or agent.command is required"),
-            (Some(name), true) => self.resolve_template(name),
-            (None, false) => self.resolve_literal(),
+        let layout = SandboxLayout::default();
+        let invocation = self.resolve_invocation(&layout)?;
+        let backend = self.resolve_backend()?;
+
+        let mut mounts = invocation.mounts;
+        mounts.extend(self.mounts.iter().map(|mount| MountSpec {
+            source: mount.source.clone(),
+            destination: mount.destination.clone(),
+            writable: mount.writable,
+        }));
+
+        let mut environment = invocation.environment;
+        environment.extend(self.environment.clone());
+
+        Ok(ResolvedAgent {
+            command: invocation.command,
+            layout,
+            mounts,
+            environment,
+            network: invocation.network || self.network.enabled,
+            backend,
+        })
+    }
+
+    fn resolve_invocation(&self, layout: &SandboxLayout) -> Result<AgentInvocation> {
+        match (self.agent.kind, self.agent.command.is_empty()) {
+            (Some(_), false) => bail!("agent.kind and agent.command are mutually exclusive"),
+            (None, true) => bail!("either agent.kind or agent.command is required"),
+            (Some(AgentKind::Codex), true) => {
+                let executable = self
+                    .agent
+                    .executable
+                    .as_deref()
+                    .unwrap_or_else(|| Path::new("codex"));
+                agent::codex(executable, layout)
+            }
+            (None, false) => {
+                if self.agent.executable.is_some() {
+                    bail!("agent.executable requires agent.kind");
+                }
+                Ok(AgentInvocation {
+                    command: self.agent.command.clone(),
+                    mounts: Vec::new(),
+                    environment: BTreeMap::new(),
+                    network: false,
+                })
+            }
         }
     }
 
-    fn resolve_literal(&self) -> Result<ResolvedAgent> {
+    fn resolve_backend(&self) -> Result<ResolvedBackend> {
         let executable = |name: &str| {
             self.isolation
                 .executable
                 .clone()
                 .unwrap_or_else(|| PathBuf::from(name))
         };
-        let backend = match self.isolation.backend.as_str() {
+        Ok(match self.isolation.backend.as_str() {
             "podman" => ResolvedBackend::Podman {
                 executable: executable("podman"),
                 image: self.isolation.image.clone(),
@@ -221,104 +254,18 @@ impl Config {
                 executable: executable("docker"),
                 image: self.isolation.image.clone(),
             },
-            other => bail!("unknown isolation backend `{other}` (podman or docker)"),
-        };
-        Ok(ResolvedAgent {
-            command: self.agent.command.clone(),
-            workspace: self.isolation.workdir.clone(),
-            io: self.isolation.io.clone(),
-            mounts: self
-                .mounts
-                .iter()
-                .map(|mount| MountSpec {
-                    source: mount.source.clone(),
-                    destination: mount.destination.clone(),
-                    writable: mount.writable,
-                })
-                .collect(),
-            environment: self.environment.clone(),
-            network: self.network.enabled,
-            backend,
+            "bwrap" => ResolvedBackend::Bwrap {
+                executable: executable("bwrap"),
+                rootfs: self
+                    .isolation
+                    .rootfs
+                    .clone()
+                    .context("isolation.rootfs is required for the bwrap backend")?,
+                tmpfs: self.isolation.tmpfs.clone(),
+            },
+            other => bail!("unknown isolation backend `{other}` (bwrap, podman, or docker)"),
         })
     }
-
-    fn resolve_template(&self, name: &str) -> Result<ResolvedAgent> {
-        let template = self
-            .driva
-            .template(name)
-            .with_context(|| format!("unknown Driva template `{name}`"))?;
-        if template.interactive {
-            bail!(
-                "Driva template `{name}` is interactive; Orka requires a non-interactive template"
-            );
-        }
-        if template.command.is_empty() {
-            bail!("Driva template `{name}` has no command");
-        }
-        let workspace = template.workdir.clone().unwrap_or_else(default_workdir);
-        let backend = resolve_template_backend(name, &template, &self.driva)?;
-        let mut command = template.command;
-        command.push(TEMPLATE_PROMPT.into());
-        let mounts = template
-            .mounts
-            .into_iter()
-            // Orka supplies the concrete attempt worktree at this destination.
-            .filter(|mount| mount.destination != workspace)
-            .map(|mount| MountSpec {
-                source: mount.source,
-                destination: mount.destination,
-                writable: mount.access == MountAccess::ReadWrite,
-            })
-            .collect();
-        Ok(ResolvedAgent {
-            command,
-            workspace,
-            io: template_io(),
-            mounts,
-            environment: template.environment,
-            network: template.network,
-            backend,
-        })
-    }
-}
-
-fn resolve_template_backend(
-    name: &str,
-    template: &TemplateConfig,
-    config: &driva::Config,
-) -> Result<ResolvedBackend> {
-    let backend = template
-        .backend
-        .as_deref()
-        .unwrap_or(&config.isolation.backend);
-    Ok(match backend {
-        "podman" => ResolvedBackend::Podman {
-            executable: config.isolation.podman.executable.clone(),
-            image: template
-                .image
-                .clone()
-                .unwrap_or_else(|| config.isolation.podman.image.clone()),
-        },
-        "docker" => ResolvedBackend::Docker {
-            executable: config.isolation.docker.executable.clone(),
-            image: template
-                .image
-                .clone()
-                .unwrap_or_else(|| config.isolation.docker.image.clone()),
-        },
-        "bwrap" => ResolvedBackend::Bwrap {
-            executable: config.isolation.bwrap.executable.clone(),
-            rootfs: template
-                .rootfs
-                .clone()
-                .or_else(|| config.isolation.bwrap.rootfs.clone())
-                .with_context(|| {
-                    format!("Driva template `{name}` selects bwrap without a rootfs")
-                })?,
-            tmpfs: template.tmpfs.clone(),
-        },
-        other => bail!("Driva template `{name}` selects unknown backend `{other}`"),
-    })
 }
 
 #[cfg(test)]
@@ -326,11 +273,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn literal_command_parses_with_defaults_and_maps_to_policy() {
+    fn literal_command_maps_to_the_orka_layout() {
         let config: Config = toml::from_str(
             r#"
             [agent]
             command = ["agent", "--go"]
+
+            [isolation]
+            backend = "podman"
 
             [[mount]]
             source = "/somewhere/context"
@@ -340,24 +290,38 @@ mod tests {
         .unwrap();
         let policy = config.policy().unwrap();
         assert_eq!(policy.command, vec!["agent", "--go"]);
-        assert_eq!(policy.workspace_destination, PathBuf::from("/workspace"));
+        assert_eq!(
+            policy.workspace_destination,
+            PathBuf::from("/tmp/orka/workspace")
+        );
+        assert_eq!(policy.io_destination, PathBuf::from("/tmp/orka/exchange"));
         assert!(!policy.network, "network denied unless enabled");
         assert_eq!(policy.extra_mounts.len(), 1);
         assert!(!policy.extra_mounts[0].writable, "read-only by default");
     }
 
     #[test]
-    fn codex_template_maps_runtime_and_replaces_its_workspace_mount() {
-        let config: Config = toml::from_str("[agent]\ntemplate = \"codex-exec\"\n").unwrap();
+    fn codex_profile_is_owned_and_resolved_by_orka() {
+        let config: Config = toml::from_str(
+            r#"
+            [agent]
+            kind = "codex"
+
+            [isolation]
+            backend = "bwrap"
+            rootfs = "/"
+            tmpfs = ["/root"]
+            "#,
+        )
+        .unwrap();
         let policy = config.policy().unwrap();
-        assert_eq!(policy.command.last().unwrap(), TEMPLATE_PROMPT);
-        assert_eq!(policy.workspace_destination, PathBuf::from("/workspace"));
-        assert_eq!(policy.io_destination, PathBuf::from("/tmp/orka"));
+        assert_eq!(policy.command.last().unwrap(), agent::AGENT_PROMPT);
+        assert_eq!(
+            policy.workspace_destination,
+            PathBuf::from("/tmp/orka/workspace")
+        );
+        assert_eq!(policy.io_destination, PathBuf::from("/tmp/orka/exchange"));
         assert!(policy.network);
-        assert!(policy
-            .extra_mounts
-            .iter()
-            .all(|mount| mount.destination != Path::new("/workspace")));
         assert!(policy
             .extra_mounts
             .iter()
@@ -369,21 +333,32 @@ mod tests {
     }
 
     #[test]
-    fn rejects_ambiguous_or_interactive_agent_configuration() {
-        let both: Config =
-            toml::from_str("[agent]\ntemplate = \"codex-exec\"\ncommand = [\"agent\"]\n").unwrap();
+    fn rejects_driva_templates_and_ambiguous_agent_configuration() {
+        let old = toml::from_str::<Config>("[agent]\ntemplate = \"codex-exec\"\n");
+        assert!(old
+            .unwrap_err()
+            .to_string()
+            .contains("unknown field `template`"));
+
+        let both: Config = toml::from_str(
+            "[agent]\nkind = \"codex\"\ncommand = [\"agent\"]\n[isolation]\nbackend = \"podman\"\n",
+        )
+        .unwrap();
         assert!(both
             .policy()
             .unwrap_err()
             .to_string()
             .contains("mutually exclusive"));
+    }
 
-        let interactive: Config = toml::from_str("[agent]\ntemplate = \"codex\"\n").unwrap();
-        assert!(interactive
+    #[test]
+    fn bwrap_requires_an_explicit_rootfs() {
+        let config: Config = toml::from_str("[agent]\nkind = \"codex\"\n").unwrap();
+        assert!(config
             .policy()
             .unwrap_err()
             .to_string()
-            .contains("interactive"));
+            .contains("isolation.rootfs is required"));
     }
 
     #[test]

@@ -150,11 +150,11 @@ mod tests {
     fn spec(dir: &Path) -> ExecutionSpec {
         ExecutionSpec {
             command: vec!["agent".into(), "--work".into()],
-            working_directory: "/workspace".into(),
+            working_directory: "/tmp/orka/workspace".into(),
             mounts: vec![
                 MountSpec {
                     source: dir.join("ws"),
-                    destination: "/workspace".into(),
+                    destination: "/tmp/orka/workspace".into(),
                     writable: true,
                 },
                 MountSpec {
@@ -163,7 +163,10 @@ mod tests {
                     writable: false,
                 },
             ],
-            environment: BTreeMap::from([("ORKA_OUTCOME".into(), "/orka/outcome.toml".into())]),
+            environment: BTreeMap::from([(
+                "ORKA_OUTCOME".into(),
+                "/tmp/orka/exchange/outcome.toml".into(),
+            )]),
             network: false,
         }
     }
@@ -204,7 +207,7 @@ mod tests {
         );
         assert_eq!(
             request.environment.get(&OsString::from("ORKA_OUTCOME")),
-            Some(&OsString::from("/orka/outcome.toml"))
+            Some(&OsString::from("/tmp/orka/exchange/outcome.toml"))
         );
 
         std::fs::remove_dir_all(&dir).unwrap();
@@ -238,12 +241,12 @@ mod tests {
             command: vec![
                 "sh".into(),
                 "-c".into(),
-                "echo ran > /workspace/out.txt".into(),
+                "echo ran > /tmp/orka/workspace/out.txt".into(),
             ],
-            working_directory: "/workspace".into(),
+            working_directory: "/tmp/orka/workspace".into(),
             mounts: vec![MountSpec {
                 source: dir.join("ws"),
-                destination: "/workspace".into(),
+                destination: "/tmp/orka/workspace".into(),
                 writable: true,
             }],
             environment: BTreeMap::new(),

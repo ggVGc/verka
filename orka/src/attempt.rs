@@ -392,10 +392,10 @@ mod tests {
     fn spec() -> ExecutionSpec {
         ExecutionSpec {
             command: vec!["agent".into()],
-            working_directory: "/workspace".into(),
+            working_directory: "/tmp/orka/workspace".into(),
             mounts: vec![MountSpec {
                 source: "/tmp/ws".into(),
-                destination: "/workspace".into(),
+                destination: "/tmp/orka/workspace".into(),
                 writable: true,
             }],
             environment: BTreeMap::new(),

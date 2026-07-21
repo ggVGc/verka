@@ -170,6 +170,8 @@ preserves either namespace verbatim and never interprets it.
 
 ## Configuration
 
-Orka configuration (`orka.toml`) decides the agent command or Driva template,
-mounts, network policy, and executor backend/image. None of these belong in
-Linka.
+Orka configuration (`orka.toml`) selects an Orka-owned coding-agent profile or
+literal command, additional mounts, network policy, and the Driva isolation
+backend. Orka resolves the complete agent invocation and workspace protocol;
+Driva contributes execution and isolation mechanics, not templates. None of
+these concerns belong in Linka.

@@ -33,17 +33,25 @@ Create the default configuration beside them with:
 orka init
 ```
 
-The generated `orka.toml` selects Driva's non-interactive Codex template:
+The generated `orka.toml` selects Orka's non-interactive Codex profile and an
+explicit Driva isolation backend:
 
 ```toml
 [agent]
-template = "codex-exec"
+kind = "codex"
+
+[isolation]
+backend = "bwrap"
+rootfs = "/"
+tmpfs = ["/root"]
 ```
 
-Install its prepared runtime once with `driva runtime install codex@latest`.
-Orka replaces the template's generic workspace mount with the isolated attempt
-worktree, adds its prompt and outcome exchange mount, and preserves the
-template's rootfs, credential mounts, environment, and network policy.
+Orka owns the Codex command line, workspace trust, credential grant,
+environment, and prompt/outcome protocol. It sends the resulting concrete
+execution request to Driva, which supplies only request validation and the
+Bubblewrap, Podman, or Docker isolation mechanism. The default uses the host's
+`codex` executable through a read-only host rootfs with private `/root` and
+`/tmp` state.
 
 Literal commands remain available for custom container images:
 
@@ -52,7 +60,7 @@ Literal commands remain available for custom container images:
 command = ["sh", "-c", "…runs inside the container…"]
 
 [isolation]
-backend = "podman"                       # default; or "docker"
+backend = "podman"                       # or "docker"
 image = "docker.io/library/busybox:latest"
 ```
 
@@ -77,9 +85,11 @@ orka recover             classify and finish unfinished attempts
 ```
 
 The agent command executes inside the isolated environment with the attempt
-worktree mounted writable at `/workspace` and an exchange directory
-(`$ORKA_PROMPT` in, `$ORKA_OUTCOME` out). It declares its outcome by
-writing `outcome.toml`; see `src/outcome.rs` for the contract.
+worktree mounted writable at `/tmp/orka/workspace` and an exchange directory
+at `/tmp/orka/exchange` (`$ORKA_PROMPT` in, `$ORKA_OUTCOME` out). These are
+Orka's stable internal execution paths; the host worktree remains unique to
+the attempt. The agent declares its outcome by writing `outcome.toml`; see
+`src/outcome.rs` for the contract.
 
 When a successful attempt produces project files, Orka registers a first-class
 Linka candidate and prints its id and follow-up commands. Linka reports the
