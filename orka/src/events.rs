@@ -80,6 +80,251 @@ pub enum AgentEvent {
     },
 }
 
+/// Provider-independent blocks used by every human-facing work-log view.
+///
+/// These are deliberately presentation-oriented without containing terminal
+/// escape sequences or HTML. A terminal can add colours and a browser can add
+/// richer styling without either view having to understand provider JSONL.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum WorkLogBlock {
+    Session {
+        id: String,
+    },
+    TurnStarted,
+    CommandStarted {
+        command: String,
+    },
+    CommandCompleted {
+        command: String,
+        status: String,
+        exit_code: Option<i64>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        output: Vec<ContentBlock>,
+    },
+    FilesChanged {
+        paths: Vec<String>,
+    },
+    ToolStarted {
+        name: String,
+        detail: String,
+    },
+    ToolCompleted {
+        name: String,
+        status: String,
+    },
+    Plan {
+        content: Vec<ContentBlock>,
+    },
+    AgentMessage {
+        content: Vec<ContentBlock>,
+    },
+    Usage {
+        usage: TokenUsage,
+    },
+    Error {
+        message: String,
+    },
+    Transcript {
+        content: Vec<ContentBlock>,
+    },
+}
+
+/// A safe, structured piece of content within a work-log block.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ContentBlock {
+    Text {
+        text: String,
+    },
+    Code {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        language: Option<String>,
+        text: String,
+    },
+}
+
+/// Project a normalized event into presentation blocks. Unknown provider
+/// events intentionally have no presentation, while malformed input remains
+/// visible as an error.
+pub fn event_blocks(event: &AgentEvent) -> Vec<WorkLogBlock> {
+    let clean = clean_terminal_text;
+    let block = match event {
+        AgentEvent::ThreadStarted { thread_id } => WorkLogBlock::Session {
+            id: clean(thread_id),
+        },
+        AgentEvent::TurnStarted => WorkLogBlock::TurnStarted,
+        AgentEvent::CommandStarted { command, .. } => WorkLogBlock::CommandStarted {
+            command: clean(command),
+        },
+        AgentEvent::CommandCompleted {
+            command,
+            status,
+            exit_code,
+            output,
+            ..
+        } => WorkLogBlock::CommandCompleted {
+            command: clean(command),
+            status: clean(status),
+            exit_code: *exit_code,
+            output: if output.is_empty() {
+                Vec::new()
+            } else {
+                vec![ContentBlock::Code {
+                    language: None,
+                    text: clean(output),
+                }]
+            },
+        },
+        AgentEvent::FileChanged { paths, .. } => WorkLogBlock::FilesChanged {
+            paths: paths.iter().map(|path| clean(path)).collect(),
+        },
+        AgentEvent::ToolStarted { name, detail, .. } => WorkLogBlock::ToolStarted {
+            name: clean(name),
+            detail: clean(detail),
+        },
+        AgentEvent::ToolCompleted { name, status, .. } => WorkLogBlock::ToolCompleted {
+            name: clean(name),
+            status: clean(status),
+        },
+        AgentEvent::PlanUpdated { text, .. } => WorkLogBlock::Plan {
+            content: markdown_blocks(text),
+        },
+        AgentEvent::AgentMessage { text, .. } => WorkLogBlock::AgentMessage {
+            content: markdown_blocks(text),
+        },
+        AgentEvent::TurnCompleted { usage } => WorkLogBlock::Usage {
+            usage: usage.clone(),
+        },
+        AgentEvent::Error { message } => WorkLogBlock::Error {
+            message: clean(message),
+        },
+        AgentEvent::Malformed { error } => WorkLogBlock::Error {
+            message: format!("malformed agent event: {}", clean(error)),
+        },
+        AgentEvent::Unknown { .. } => return Vec::new(),
+    };
+    vec![block]
+}
+
+/// Parse fenced Markdown code into explicit blocks while leaving prose as
+/// Markdown text. The language info string is retained so browser views can
+/// select a syntax highlighter.
+pub fn markdown_blocks(markdown: &str) -> Vec<ContentBlock> {
+    let markdown = clean_terminal_text(markdown);
+    let mut blocks = Vec::new();
+    let mut prose = String::new();
+    let mut code = String::new();
+    let mut fence: Option<(char, usize, Option<String>)> = None;
+
+    for line in markdown.split_inclusive('\n') {
+        let candidate = line.trim_end_matches(['\r', '\n']);
+        if let Some((marker, width, language)) = &fence {
+            if closing_fence(candidate, *marker, *width) {
+                blocks.push(ContentBlock::Code {
+                    language: language.clone(),
+                    text: std::mem::take(&mut code),
+                });
+                fence = None;
+            } else {
+                code.push_str(line);
+            }
+            continue;
+        }
+
+        if let Some(opening) = opening_fence(candidate) {
+            if !prose.is_empty() {
+                blocks.push(ContentBlock::Text {
+                    text: std::mem::take(&mut prose),
+                });
+            }
+            fence = Some(opening);
+        } else {
+            prose.push_str(line);
+        }
+    }
+
+    if let Some((_, _, language)) = fence {
+        blocks.push(ContentBlock::Code {
+            language,
+            text: code,
+        });
+    }
+    if !prose.is_empty() {
+        blocks.push(ContentBlock::Text { text: prose });
+    }
+    if blocks.is_empty() && !markdown.is_empty() {
+        blocks.push(ContentBlock::Text { text: markdown });
+    }
+    blocks
+}
+
+fn opening_fence(line: &str) -> Option<(char, usize, Option<String>)> {
+    let line = line
+        .strip_prefix("   ")
+        .or_else(|| line.strip_prefix("  "))
+        .or_else(|| line.strip_prefix(' '))
+        .unwrap_or(line);
+    let marker = line.chars().next()?;
+    if marker != '`' && marker != '~' {
+        return None;
+    }
+    let width = line.chars().take_while(|ch| *ch == marker).count();
+    if width < 3 {
+        return None;
+    }
+    let info = line[width..].trim();
+    if marker == '`' && info.contains('`') {
+        return None;
+    }
+    let language = info
+        .split_whitespace()
+        .next()
+        .filter(|language| !language.is_empty())
+        .map(str::to_owned);
+    Some((marker, width, language))
+}
+
+fn closing_fence(line: &str, marker: char, width: usize) -> bool {
+    let line = line.trim_start_matches(' ');
+    if line.len() < width || !line.chars().take(width).all(|ch| ch == marker) {
+        return false;
+    }
+    line.chars().skip(width).all(char::is_whitespace)
+}
+
+/// Read the stable normalized journal and produce the same blocks consumed by
+/// the terminal renderer.
+pub fn read_work_log(path: &Path) -> Result<Vec<WorkLogBlock>> {
+    let input = File::open(path).with_context(|| format!("opening {}", path.display()))?;
+    let mut blocks = Vec::new();
+    for (index, line) in BufReader::new(input).lines().enumerate() {
+        let line = line.with_context(|| format!("reading {}", path.display()))?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let event: AgentEvent = serde_json::from_str(&line)
+            .with_context(|| format!("decoding {} line {}", path.display(), index + 1))?;
+        blocks.extend(event_blocks(&event));
+    }
+    Ok(blocks)
+}
+
+/// Wrap output from a legacy plain-text agent in the shared presentation
+/// format.
+pub fn transcript_blocks(transcript: &str) -> Vec<WorkLogBlock> {
+    if transcript.is_empty() {
+        Vec::new()
+    } else {
+        vec![WorkLogBlock::Transcript {
+            content: vec![ContentBlock::Code {
+                language: None,
+                text: clean_terminal_text(transcript),
+            }],
+        }]
+    }
+}
+
 /// Decode one `codex exec --json` line without assuming every future event is
 /// known. Unknown events remain visible and the exact input remains in the raw
 /// journal.
@@ -330,6 +575,13 @@ impl<W: Write> RichRenderer<W> {
     }
 
     pub fn render(&mut self, event: &AgentEvent) -> Result<()> {
+        for block in event_blocks(event) {
+            self.render_block(&block)?;
+        }
+        Ok(())
+    }
+
+    pub fn render_block(&mut self, block: &WorkLogBlock) -> Result<()> {
         let (bold, cyan, green, yellow, red, dim, reset) = if self.color {
             (
                 "\x1b[1m", "\x1b[36m", "\x1b[32m", "\x1b[33m", "\x1b[31m", "\x1b[2m", "\x1b[0m",
@@ -337,20 +589,17 @@ impl<W: Write> RichRenderer<W> {
         } else {
             ("", "", "", "", "", "", "")
         };
-        match event {
-            AgentEvent::ThreadStarted { thread_id } => {
-                writeln!(self.out, "{dim}session {thread_id}{reset}")?
+        match block {
+            WorkLogBlock::Session { id } => writeln!(self.out, "{dim}session {id}{reset}")?,
+            WorkLogBlock::TurnStarted => writeln!(self.out, "\n{bold}{cyan}━━ Agent turn{reset}")?,
+            WorkLogBlock::CommandStarted { command } => {
+                writeln!(self.out, "{cyan}▶{reset} {command}")?
             }
-            AgentEvent::TurnStarted => writeln!(self.out, "\n{bold}{cyan}━━ Agent turn{reset}")?,
-            AgentEvent::CommandStarted { command, .. } => {
-                writeln!(self.out, "{cyan}▶{reset} {}", clean_terminal_text(command))?
-            }
-            AgentEvent::CommandCompleted {
+            WorkLogBlock::CommandCompleted {
                 command,
                 status,
                 exit_code,
                 output,
-                ..
             } => {
                 let succeeded =
                     exit_code == &Some(0) || (exit_code.is_none() && status == "completed");
@@ -362,74 +611,74 @@ impl<W: Write> RichRenderer<W> {
                 writeln!(
                     self.out,
                     "{tone}{mark}{reset} {} {dim}[{}{}]{reset}",
-                    clean_terminal_text(command),
+                    command,
                     status,
                     exit_code.map_or(String::new(), |code| format!(", exit {code}"))
                 )?;
-                if !succeeded && !output.is_empty() {
-                    for line in clean_terminal_text(output).lines().take(20) {
-                        writeln!(self.out, "  {dim}│{reset} {line}")?;
-                    }
+                if !succeeded {
+                    self.render_content(output, dim, reset, Some(20))?;
                 }
             }
-            AgentEvent::FileChanged { paths, .. } => {
+            WorkLogBlock::FilesChanged { paths } => {
                 let detail = if paths.is_empty() {
                     "files".into()
                 } else {
                     paths.join(", ")
                 };
-                writeln!(
-                    self.out,
-                    "{yellow}✎{reset} changed {}",
-                    clean_terminal_text(&detail)
-                )?;
+                writeln!(self.out, "{yellow}✎{reset} changed {detail}")?;
             }
-            AgentEvent::ToolStarted { name, detail, .. } => writeln!(
-                self.out,
-                "{cyan}◆{reset} {} {}",
-                clean_terminal_text(name),
-                clean_terminal_text(detail)
-            )?,
-            AgentEvent::ToolCompleted { name, status, .. } => writeln!(
-                self.out,
-                "{green}◇{reset} {} {dim}[{}]{reset}",
-                clean_terminal_text(name),
-                clean_terminal_text(status)
-            )?,
-            AgentEvent::PlanUpdated { text, .. } => {
+            WorkLogBlock::ToolStarted { name, detail } => {
+                writeln!(self.out, "{cyan}◆{reset} {name} {detail}")?
+            }
+            WorkLogBlock::ToolCompleted { name, status } => {
+                writeln!(self.out, "{green}◇{reset} {name} {dim}[{status}]{reset}")?
+            }
+            WorkLogBlock::Plan { content } => {
                 writeln!(self.out, "{bold}{yellow}Plan{reset}")?;
-                self.render_markdown(text)?;
+                self.render_content(content, "", "", None)?;
             }
-            AgentEvent::AgentMessage { text, .. } => {
+            WorkLogBlock::AgentMessage { content } => {
                 writeln!(self.out, "{bold}{cyan}╭─ Agent{reset}")?;
-                self.render_markdown(text)?;
+                self.render_content(content, "", "", None)?;
                 writeln!(self.out, "{cyan}╰─{reset}")?;
             }
-            AgentEvent::TurnCompleted { usage } => writeln!(
+            WorkLogBlock::Usage { usage } => writeln!(
                 self.out,
                 "{dim}tokens: {} input ({} cached), {} output{reset}",
                 usage.input_tokens, usage.cached_input_tokens, usage.output_tokens
             )?,
-            AgentEvent::Error { message } => writeln!(
-                self.out,
-                "{red}✗ agent error:{reset} {}",
-                clean_terminal_text(message)
-            )?,
-            AgentEvent::Malformed { error } => writeln!(
-                self.out,
-                "{red}✗ malformed agent event:{reset} {}",
-                clean_terminal_text(error)
-            )?,
-            AgentEvent::Unknown { .. } => {}
+            WorkLogBlock::Error { message } => {
+                writeln!(self.out, "{red}✗ agent error:{reset} {message}")?
+            }
+            WorkLogBlock::Transcript { content } => self.render_content(content, "", "", None)?,
         }
         self.out.flush()?;
         Ok(())
     }
 
-    fn render_markdown(&mut self, markdown: &str) -> Result<()> {
-        for line in clean_terminal_text(markdown).lines() {
-            let shown = line.strip_prefix("# ").unwrap_or(line);
-            writeln!(self.out, "  │ {shown}")?;
+    fn render_content(
+        &mut self,
+        content: &[ContentBlock],
+        tone: &str,
+        reset: &str,
+        limit: Option<usize>,
+    ) -> Result<()> {
+        let mut shown = 0;
+        for block in content {
+            let text = match block {
+                ContentBlock::Text { text } | ContentBlock::Code { text, .. } => text,
+            };
+            for line in text.lines() {
+                if limit.is_some_and(|limit| shown >= limit) {
+                    return Ok(());
+                }
+                let line = match block {
+                    ContentBlock::Text { .. } => line.strip_prefix("# ").unwrap_or(line),
+                    ContentBlock::Code { .. } => line,
+                };
+                writeln!(self.out, "  {tone}│{reset} {line}")?;
+                shown += 1;
+            }
         }
         Ok(())
     }
@@ -536,6 +785,53 @@ mod tests {
         assert!(output.contains("safered"));
         assert!(!output.contains('\x1b'));
         assert!(!output.contains("title"));
+    }
+
+    #[test]
+    fn work_log_blocks_split_fenced_code_and_retain_its_language() {
+        let blocks = event_blocks(&AgentEvent::AgentMessage {
+            id: "message".into(),
+            text: "Before\n\n```rust\nlet answer = 42;\n```\n\nAfter".into(),
+        });
+        assert_eq!(
+            blocks,
+            vec![WorkLogBlock::AgentMessage {
+                content: vec![
+                    ContentBlock::Text {
+                        text: "Before\n\n".into(),
+                    },
+                    ContentBlock::Code {
+                        language: Some("rust".into()),
+                        text: "let answer = 42;\n".into(),
+                    },
+                    ContentBlock::Text {
+                        text: "\nAfter".into(),
+                    },
+                ],
+            }]
+        );
+
+        let json = serde_json::to_value(&blocks).unwrap();
+        assert_eq!(json[0]["type"], "agent_message");
+        assert_eq!(json[0]["content"][1]["type"], "code");
+        assert_eq!(json[0]["content"][1]["language"], "rust");
+    }
+
+    #[test]
+    fn terminal_renderer_consumes_the_shared_work_log_format() {
+        let mut output = Vec::new();
+        RichRenderer::new(&mut output, false)
+            .render_block(&WorkLogBlock::AgentMessage {
+                content: vec![ContentBlock::Code {
+                    language: Some("rust".into()),
+                    text: "fn main() {}".into(),
+                }],
+            })
+            .unwrap();
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "╭─ Agent\n  │ fn main() {}\n╰─\n"
+        );
     }
 
     #[test]

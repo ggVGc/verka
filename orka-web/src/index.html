@@ -210,7 +210,7 @@
                     padding: 0; font: inherit; font-weight: 600; }
   /* work log view (left side) */
   #logview {
-    width: 400px; flex: none;
+    width: min(520px, 45vw); flex: none;
     background: var(--surface);
     border-right: 1px solid var(--hairline);
     display: none; flex-direction: column; min-width: 0;
@@ -234,8 +234,8 @@
     border: 1px solid var(--hairline); border-radius: 6px;
     background: var(--page); padding: 6px 8px; overflow-wrap: anywhere;
   }
-  .ev .evtext { white-space: pre-wrap; }
-  .ev.claude { background: var(--surface); color: var(--ink); }
+  .ev .evtext, .ev .content-text { white-space: pre-wrap; }
+  .ev.agent, .ev.plan { background: var(--surface); color: var(--ink); }
   .ev.tool .evtext { font-family: ui-monospace, monospace; font-size: 12px; }
   .ev .tag {
     display: inline-block; font-size: 10px; font-weight: 600;
@@ -244,15 +244,32 @@
     background: var(--hairline); color: var(--ink-2);
   }
   .ev .tag.attempt { background: var(--stale-bg);  color: var(--stale-ink); }
-  .ev .tag.claude  { background: var(--open-bg);   color: var(--open-ink); }
+  .ev .tag.agent   { background: var(--open-bg);   color: var(--open-ink); }
+  .ev .tag.plan    { background: var(--stale-bg);  color: var(--stale-ink); }
   .ev .tag.tool    { background: #ece9fb;          color: #4a3aa7; }
   .ev .tag.done    { background: var(--done-bg);   color: var(--done-ink); }
   .ev .tag.failed  { background: var(--failed-bg); color: var(--failed-ink); }
-  .ev .tag.thinking { color: var(--muted); }
+  .ev .tag.error   { background: var(--failed-bg); color: var(--failed-ink); }
   .ev details { margin-top: 4px; }
   .ev summary { cursor: pointer; color: var(--muted); font-size: 11px; }
   .ev summary:hover { color: var(--ink); }
-  .ev pre { margin-top: 4px; max-height: 260px; overflow: auto; }
+  .ev .content { display: flex; flex-direction: column; gap: 7px; margin-top: 6px; }
+  .ev pre {
+    margin-top: 4px; max-height: 360px; overflow: auto;
+    padding: 8px 10px; border-radius: 5px; background: #f1f1ed;
+    border: 1px solid var(--hairline); white-space: pre;
+    font: 11.5px/1.5 ui-monospace, "SFMono-Regular", Consolas, monospace;
+  }
+  .code-head {
+    color: var(--muted); font: 10px/1.2 ui-monospace, monospace;
+    text-transform: lowercase; margin-bottom: -4px;
+  }
+  .tok-comment { color: #77756e; font-style: italic; }
+  .tok-string  { color: #7b3f00; }
+  .tok-number  { color: #075985; }
+  .tok-keyword { color: #6d28d9; font-weight: 600; }
+  .tok-literal { color: #b42318; }
+  .tok-property { color: #0969a8; }
 
   #close, #logclose {
     border: none; background: none; cursor: pointer;
@@ -795,7 +812,7 @@ async function openLog(attempt, title) {
     const payload = await res.json();
     if (!res.ok) throw new Error(payload.error || res.statusText);
     if (logFor !== attempt) return; // another log was opened while this one loaded
-    body.replaceChildren(renderLog(payload.transcript));
+    body.replaceChildren(renderLog(payload.blocks));
   } catch (e) {
     if (logFor === attempt) body.textContent = `failed to load: ${e.message}`;
   }
@@ -809,92 +826,61 @@ function closeLog() {
 
 $("logclose").addEventListener("click", closeLog);
 
-// One JSONL line per event: our own `attempt` header plus the backend's
-// stream-json events (system, assistant, user/tool_result, result).
-function renderLog(text) {
+// Orka owns this provider-independent presentation format. The browser only
+// decides how to lay out and colour the already-normalized work-log blocks.
+function renderLog(blocks) {
   const wrap = document.createElement("div");
   wrap.className = "log";
-  // Consecutive thinking blocks — within one message or across adjacent events —
-  // are one train of thought: buffer them and emit a single combined row.
-  let thinking = [];
-  const flushThinking = () => {
-    if (!thinking.length) return;
-    const t = thinking.join("\n\n");
-    wrap.appendChild(evRow("thinking", "thinking", trunc(t, 300),
-                           t.length > 300 ? detailsText(t, "full thinking") : null));
-    thinking = [];
-  };
-  for (const line of text.split("\n")) {
-    if (!line.trim()) continue;
-    let ev = null;
-    try { ev = JSON.parse(line); } catch { /* rendered raw below */ }
-    for (const item of eventRows(ev, line)) {
-      if (item.thinking !== undefined) {
-        thinking.push(item.thinking);
-      } else {
-        flushThinking();
-        wrap.appendChild(item);
-      }
-    }
-  }
-  flushThinking();
+  for (const block of Array.isArray(blocks) ? blocks : [])
+    wrap.appendChild(workLogRow(block));
   if (!wrap.children.length) wrap.appendChild(evRow("raw", "log", "(empty)"));
   return wrap;
 }
 
-function eventRows(ev, raw) {
-  if (!ev || typeof ev !== "object") return [evRow("raw", "raw", raw)];
-
-  if (ev.event === "attempt") {
-    const bits = [
-      ev.backend,
-      ev.at && new Date(ev.at).toLocaleString(),
-      ev.definition_version && `definition @ ${String(ev.definition_version.metadata).slice(0, 12)}/${String(ev.definition_version.description).slice(0, 12)}`,
-    ].filter(Boolean).join(" · ");
-    return [evRow("attempt", "attempt", bits || "work session started")];
-  }
-
-  if (ev.type === "system")
-    return [evRow("session", "session", [ev.subtype, ev.model].filter(Boolean).join(" · "),
-                  detailsJson(ev, "details"))];
-
-  if (ev.type === "assistant" || ev.type === "user") {
-    const blocks = ev.message?.content;
-    if (!Array.isArray(blocks))
-      return [evRow(ev.type, ev.type, textOf(blocks) || "", detailsJson(ev, "raw event"))];
-    const rows = [];
-    for (const b of blocks) {
-      if (b.type === "text" && (b.text || "").trim()) {
-        rows.push(evRow("claude", "claude", b.text.trim()));
-      } else if (b.type === "thinking" && (b.thinking || "").trim()) {
-        // A marker, not an element: renderLog merges runs of these into one row.
-        rows.push({ thinking: b.thinking.trim() });
-      } else if (b.type === "tool_use") {
-        const inp = JSON.stringify(b.input ?? {});
-        rows.push(evRow("tool", "tool", `${toolName(b.name)} ${inp.length <= 100 ? inp : ""}`.trim(),
-                        inp.length > 100 ? detailsJson(b.input, "input") : null));
-      } else if (b.type === "tool_result") {
-        const t = textOf(b.content) || "(empty result)";
-        rows.push(evRow("toolres", "result", trunc(t, 400),
-                        t.length > 400 ? detailsText(t, "full result") : null));
-      }
+function workLogRow(block) {
+  const b = block || {};
+  switch (b.type) {
+    case "session":
+      return evRow("session", "session", b.id || "");
+    case "turn_started":
+      return evRow("attempt", "turn", "agent turn");
+    case "command_started":
+      return evRow("tool", "command", `▶ ${b.command || ""}`);
+    case "command_completed": {
+      const ok = b.exit_code === 0 || (b.exit_code == null && b.status === "completed");
+      const state = [b.status, b.exit_code != null && `exit ${b.exit_code}`].filter(Boolean).join(", ");
+      const details = b.output?.length ? detailsContent(b.output, "output") : null;
+      return evRow(ok ? "done" : "failed", ok ? "done" : "failed",
+                   `${b.command || ""}${state ? ` [${state}]` : ""}`, details);
     }
-    return rows;
+    case "files_changed":
+      return evRow("tool", "changed", (b.paths || []).join(", ") || "files");
+    case "tool_started":
+      return evRow("tool", "tool", [b.name, b.detail].filter(Boolean).join(" "));
+    case "tool_completed":
+      return evRow("done", "tool", `${b.name || "tool"} [${b.status || "completed"}]`);
+    case "plan":
+      return contentRow("plan", "plan", b.content);
+    case "agent_message":
+      return contentRow("agent", "agent", b.content);
+    case "usage": {
+      const u = b.usage || {};
+      return evRow("session", "tokens",
+        `${u.input_tokens || 0} input (${u.cached_input_tokens || 0} cached), ${u.output_tokens || 0} output`);
+    }
+    case "error":
+      return evRow("error", "error", b.message || "agent error");
+    case "transcript":
+      return contentRow("raw", "output", b.content);
+    default:
+      return evRow("raw", "event", `unknown work-log block: ${b.type || "?"}`);
   }
+}
 
-  if (ev.type === "result") {
-    const ok = ev.subtype === "success";
-    const bits = [
-      ev.subtype,
-      ev.num_turns != null && `${ev.num_turns} turns`,
-      ev.duration_ms != null && `${(ev.duration_ms / 1000).toFixed(1)}s`,
-      ev.total_cost_usd != null && `$${ev.total_cost_usd.toFixed(2)}`,
-    ].filter(Boolean).join(" · ");
-    return [evRow(ok ? "done" : "failed", ok ? "done" : "failed", bits,
-                  ev.result ? detailsText(String(ev.result), "final message") : null)];
-  }
-
-  return [evRow("raw", ev.type || ev.event || "event", "", detailsJson(ev, "raw event"))];
+function contentRow(cls, tag, content) {
+  const row = evRow(cls, tag, "");
+  row.appendChild(renderContent(content));
+  return row;
 }
 
 function evRow(cls, tag, text, extra) {
@@ -914,28 +900,114 @@ function evRow(cls, tag, text, extra) {
   return d;
 }
 
-// Tool-result / message content can be a plain string or a list of text blocks.
-function textOf(content) {
-  if (typeof content === "string") return content;
-  if (Array.isArray(content))
-    return content.map(c => (typeof c === "string" ? c : c?.text || "")).join("\n");
-  return null;
+function renderContent(content) {
+  const wrap = document.createElement("div");
+  wrap.className = "content";
+  for (const block of Array.isArray(content) ? content : []) {
+    if (block.type === "code") {
+      const language = normalizeLanguage(block.language);
+      if (language) {
+        const head = document.createElement("div");
+        head.className = "code-head";
+        head.textContent = language;
+        wrap.appendChild(head);
+      }
+      const pre = document.createElement("pre");
+      pre.appendChild(highlightCode(block.text || "", language));
+      wrap.appendChild(pre);
+    } else if (block.type === "text") {
+      const text = document.createElement("div");
+      text.className = "content-text";
+      text.textContent = block.text || "";
+      wrap.appendChild(text);
+    }
+  }
+  return wrap;
 }
 
-const toolName = name => (name || "?").replace(/^mcp__[^_]+__/, "");
-const trunc = (s, n) => (s.length > n ? s.slice(0, n) + " …" : s);
-
-function detailsJson(obj, label) {
-  return detailsText(JSON.stringify(obj, null, 2), label);
-}
-function detailsText(text, label) {
+function detailsContent(content, label) {
   const det = document.createElement("details");
   const sum = document.createElement("summary");
   sum.textContent = label;
-  const pre = document.createElement("pre");
-  pre.textContent = text;
-  det.append(sum, pre);
+  det.append(sum, renderContent(content));
   return det;
+}
+
+const LANGUAGE_ALIASES = {
+  rs: "rust", js: "javascript", jsx: "javascript", ts: "typescript",
+  tsx: "typescript", py: "python", sh: "shell", bash: "shell",
+  zsh: "shell", yml: "yaml", html: "html", xml: "html",
+};
+const KEYWORDS = {
+  rust: "as async await break const continue crate dyn else enum extern false fn for if impl in let loop match mod move mut pub ref return self Self static struct super trait true type unsafe use where while".split(" "),
+  javascript: "async await break case catch class const continue debugger default delete do else export extends finally for from function get if import in instanceof let new of return set static super switch throw try typeof var void while with yield".split(" "),
+  typescript: "abstract any as asserts async await boolean break case catch class const constructor continue declare default delete do else enum export extends finally for from function get if implements import in infer instanceof interface is keyof let module namespace never new number object of private protected public readonly require return set static string super switch symbol this throw try type typeof undefined unique unknown var void while with yield".split(" "),
+  python: "and as assert async await break class continue def del elif else except False finally for from global if import in is lambda None nonlocal not or pass raise return True try while with yield".split(" "),
+  shell: "case do done elif else esac export fi for function if in local readonly select then time until while".split(" "),
+};
+
+function normalizeLanguage(language) {
+  const name = String(language || "").toLowerCase().replace(/^language-/, "");
+  return LANGUAGE_ALIASES[name] || name;
+}
+
+// A small, dependency-free lexer. It deliberately emits DOM text nodes rather
+// than HTML, so agent output cannot become executable markup.
+function highlightCode(source, language) {
+  const code = document.createElement("code");
+  if (language) code.className = `language-${language}`;
+  const keywords = new Set(KEYWORDS[language] || []);
+  const hashComments = ["python", "shell", "yaml", "toml"].includes(language);
+  const slashComments = ["rust", "javascript", "typescript", "java", "c", "cpp", "css"].includes(language);
+  let i = 0;
+  const add = (text, cls) => {
+    if (!text) return;
+    if (!cls) return code.appendChild(document.createTextNode(text));
+    const span = document.createElement("span");
+    span.className = `tok-${cls}`;
+    span.textContent = text;
+    code.appendChild(span);
+  };
+  while (i < source.length) {
+    const start = i;
+    if (slashComments && source.startsWith("//", i)) {
+      i = source.indexOf("\n", i);
+      if (i < 0) i = source.length;
+      add(source.slice(start, i), "comment");
+    } else if (slashComments && source.startsWith("/*", i)) {
+      const end = source.indexOf("*/", i + 2);
+      i = end < 0 ? source.length : end + 2;
+      add(source.slice(start, i), "comment");
+    } else if (hashComments && source[i] === "#") {
+      i = source.indexOf("\n", i);
+      if (i < 0) i = source.length;
+      add(source.slice(start, i), "comment");
+    } else if (source[i] === '"' || source[i] === "'" || source[i] === "`") {
+      const quote = source[i++];
+      while (i < source.length) {
+        if (source[i] === "\\") { i += Math.min(2, source.length - i); continue; }
+        const ch = source[i++];
+        if (ch === quote) break;
+      }
+      let kind = "string";
+      if (language === "json" && /^\s*:/.test(source.slice(i))) kind = "property";
+      add(source.slice(start, i), kind);
+    } else if (/\d/.test(source[i])) {
+      i++;
+      while (i < source.length && /[\w.+-]/.test(source[i])) i++;
+      add(source.slice(start, i), "number");
+    } else if (/[A-Za-z_$]/.test(source[i])) {
+      i++;
+      while (i < source.length && /[\w$]/.test(source[i])) i++;
+      const word = source.slice(start, i);
+      const literal = ["true", "false", "null", "None", "True", "False"].includes(word);
+      add(word, literal ? "literal" : keywords.has(word) ? "keyword" : "");
+    } else {
+      i++;
+      add(source.slice(start, i), "");
+    }
+  }
+  return code;
 }
 
 function section(title, content) {

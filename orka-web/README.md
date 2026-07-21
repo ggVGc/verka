@@ -20,3 +20,8 @@ orka-web --workbench /path/to/workbench --addr 127.0.0.1:7710
 by default and serves a self-contained page with no external assets. It reads
 Orka and Linka through their public Rust APIs. The only write currently exposed
 by the page is responding to a ready human-assigned node.
+
+The work-log view consumes Orka's normalized `WorkLogBlock` representation,
+not model-specific JSONL. Fenced Markdown code is shown as a code block and is
+syntax-highlighted using its declared language; legacy plain-output attempts
+remain available through the same format.

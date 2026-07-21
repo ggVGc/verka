@@ -23,6 +23,7 @@ use linka::{
 };
 use orka::attempt::{AttemptId, AttemptPhase, FsAttemptStore, SealedState};
 use orka::candidate::Candidates;
+use orka::events::{read_work_log, transcript_blocks};
 use orka::linka_work::LinkaWork;
 use orka::review::Reviews;
 
@@ -406,9 +407,18 @@ fn transcript_json(store: &FsAttemptStore, raw_id: &str) -> Result<Value> {
     let path = store.transcript_path(&id);
     let transcript = std::fs::read_to_string(&path)
         .with_context(|| format!("attempt `{id}` has no readable transcript"))?;
+    let events = store.events_path(&id);
+    let blocks = if events.is_file() {
+        read_work_log(&events)?
+    } else {
+        transcript_blocks(&transcript)
+    };
     Ok(json!({
         "attempt": id.0,
         "node": snapshot.record.input.node(),
+        "blocks": blocks,
+        // Retained for read-only API clients written before structured work
+        // logs were introduced. The page consumes `blocks`.
         "transcript": transcript,
     }))
 }

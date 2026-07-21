@@ -117,6 +117,11 @@ messages, failures, and token usage as they arrive. Terminal control sequences
 in agent-produced text are removed before rendering. Literal `[agent].command` profiles retain plain
 stdout in `transcript.log` and stderr in `diagnostics.log`.
 
+Human-facing views are projected through Orka's provider-independent
+`WorkLogBlock` format. Markdown prose and fenced code are separate content
+blocks, including the fence's language, so the terminal and `orka-web` share
+the same interpretation while choosing presentation appropriate to each UI.
+
 Driva remains unaware of this protocol: it only validates the capability grant
 and transports separate stdin, stdout, and stderr streams. Provider decoding,
 durable agent transcripts, and presentation remain Orka responsibilities.
