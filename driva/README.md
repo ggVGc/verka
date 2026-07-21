@@ -26,6 +26,7 @@ cargo run -- runtime install codex@latest
 cargo run -- run --template codex-runtime
 cargo run -- run --template codex-exec -- "fix the failing tests"
 cargo run -- run --template codex --no-network
+cargo run -- run --template codex --no-write
 cargo run -- run --template claude
 cargo run -- run --template claude-exec -- "fix the failing tests"
 ```
@@ -71,6 +72,10 @@ For example, `--backend`, `--image`, `--rootfs`, repeatable `--tmpfs`,
 `--workdir`, `--path`, networking, interactivity, environment, and mounts all
 override or extend the corresponding project/template settings. Scalar
 precedence is CLI, then template, then project configuration.
+`--no-write` is a final safety override: it turns every host bind mount,
+including mounts from project configuration, templates, and `--write`, into a
+read-only mount. Private writable filesystems such as Bubblewrap tmpfs remain
+available because they cannot modify the mounted host data.
 
 Projects can provide `driva.toml`:
 

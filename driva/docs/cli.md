@@ -71,6 +71,7 @@ Options:
       --template <NAME>     Apply a named execution template
       --read <MOUNT>        Add a read-only mount as SOURCE or SOURCE:DESTINATION
       --write <MOUNT>       Add a writable mount as SOURCE or SOURCE:DESTINATION
+      --no-write            Make every host mount read-only, overriding configuration and templates
       --path <DIRECTORY>    Add a host directory read-only and prepend it to the isolated PATH
       --backend <BACKEND>   Select the isolation backend
       --network             Permit networking (disabled otherwise)
@@ -105,6 +106,7 @@ Policy options (shared by `run`, `shell`, and `start`):
 | `--template <NAME>` | Apply a built-in or project-defined execution template. |
 | `--read <MOUNT>` | Bind-mount a host path read-only. Repeatable. |
 | `--write <MOUNT>` | Bind-mount a host path read-write. Repeatable. |
+| `--no-write` | Make every host bind mount read-only, overriding project configuration, templates, and `--write`. |
 | `--path <DIRECTORY>` | Bind-mount a host directory read-only and prepend it to the isolated `PATH`. Repeatable. |
 | `--backend <BACKEND>` | Select `bwrap`, `podman`, or `docker` for this invocation. |
 | `--network` | Enable networking (otherwise the container has none). |
@@ -135,7 +137,10 @@ Mounts, PATH additions, and tmpfs mounts accumulate in layer order;
 environment values are replaced by name. Explicit `network = false` in a
 template overrides enabled project networking, while `--network` and
 `--no-network` provide the final CLI choice. `--no-interactive` similarly
-overrides an interactive template. Arguments after `--` are appended to a
+overrides an interactive template. `--no-write` is applied after all mounts
+are combined, making every host bind mount read-only regardless of its source;
+private writable filesystems such as Bubblewrap tmpfs are unaffected because
+they cannot modify mounted host data. Arguments after `--` are appended to a
 template's command. Without a template, at least one command argument remains
 required at runtime. Backend-specific combinations are validated after
 resolution; for example, Docker rejects `rootfs` and Bubblewrap rejects
@@ -331,6 +336,7 @@ Options:
       --template <NAME>     Apply a named execution template
       --read <MOUNT>        Add a read-only mount as SOURCE or SOURCE:DESTINATION
       --write <MOUNT>       Add a writable mount as SOURCE or SOURCE:DESTINATION
+      --no-write            Make every host mount read-only, overriding configuration and templates
       --path <DIRECTORY>    Add a host directory read-only and prepend it to the isolated PATH
       --backend <BACKEND>   Select the isolation backend
       --network             Permit networking (disabled otherwise)
@@ -390,6 +396,7 @@ Options:
       --template <NAME>     Apply a named execution template
       --read <MOUNT>        Add a read-only mount as SOURCE or SOURCE:DESTINATION
       --write <MOUNT>       Add a writable mount as SOURCE or SOURCE:DESTINATION
+      --no-write            Make every host mount read-only, overriding configuration and templates
       --path <DIRECTORY>    Add a host directory read-only and prepend it to the isolated PATH
       --backend <BACKEND>   Select the isolation backend
       --network             Permit networking (disabled otherwise)

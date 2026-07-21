@@ -159,6 +159,46 @@ fn cli_can_disable_template_interactivity() {
 }
 
 #[test]
+fn no_write_makes_every_host_mount_read_only() {
+    let directory = TestDirectory::new("no-write");
+    for path in ["configured", "template", "cli"] {
+        std::fs::create_dir(directory.0.join(path)).unwrap();
+    }
+    directory.write_config(
+        r#"
+        [[mount]]
+        source = "configured"
+        destination = "/configured"
+        access = "write"
+
+        [template.readonly]
+        backend = "docker"
+        workspace_root = "/workspace"
+
+        [[template.readonly.mount]]
+        source = "template"
+        destination = "/template"
+        access = "write"
+        "#,
+    );
+    let output = stdout(directory.run(&[
+        "run",
+        "--dry-run",
+        "--template",
+        "readonly",
+        "--no-write",
+        "--write",
+        "cli:/cli",
+        "--",
+        "true",
+    ]));
+
+    assert_eq!(output.matches("(read-only)").count(), 4);
+    assert!(!output.contains("(read-write)"));
+    assert_eq!(output.matches(":ro").count(), 4);
+}
+
+#[test]
 fn rejects_options_for_the_wrong_backend() {
     let directory = TestDirectory::new("wrong-backend");
     let output = directory.run(&[

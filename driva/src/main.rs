@@ -100,6 +100,9 @@ struct PolicyArgs {
     /// Add a writable mount as SOURCE or SOURCE:DESTINATION.
     #[arg(long = "write", value_name = "MOUNT")]
     writes: Vec<String>,
+    /// Make every host mount read-only, overriding configuration and templates.
+    #[arg(long)]
+    no_write: bool,
     /// Add a host directory read-only and prepend it to the isolated PATH.
     #[arg(long = "path", value_name = "DIRECTORY")]
     paths: Vec<PathBuf>,
@@ -269,6 +272,11 @@ fn real_main() -> Result<()> {
         .unwrap_or_default();
     paths.extend(policy.paths.iter().cloned());
     add_path_directories(&paths, &mut mounts, &mut environment)?;
+    if policy.no_write {
+        for mount in &mut mounts {
+            mount.access = MountAccess::ReadOnly;
+        }
+    }
     if shell {
         environment
             .entry(OsString::from("HOME"))
