@@ -83,7 +83,9 @@ Linka, not a backend-neutral port.
 3. Prepare an isolated worktree at `snapshot.project.revision`.
 4. Choose the exact mounts, network policy, agent command, and context, then
    record the Driva execution request before starting the command.
-5. Capture transcript and harness-observed exit evidence.
+5. Capture raw agent events, separate diagnostics, a readable transcript, and
+   harness-observed exit evidence. Provider event decoding remains in Orka;
+   Driva transports uninterpreted streams.
 6. Interpret the agent's declared outcome (Orka's `AgentOutcome`), then submit
    through Linka against the exact persisted snapshot, attaching the executor
    report as `orka`-namespaced producer evidence.

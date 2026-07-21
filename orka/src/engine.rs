@@ -12,9 +12,11 @@
 //! submission go through [`LinkaWork`]; graph semantics stay Linka's, and Orka
 //! never models a graph of its own.
 
-use crate::agent::SandboxLayout;
+use crate::agent::{AgentProtocol, SandboxLayout};
 use crate::attempt::{AttemptId, AttemptPhase, FsAttemptStore, SealedState};
-use crate::executor::{ExecutionReport, ExecutionSpec, IsolatedExecutor, MountSpec};
+use crate::executor::{
+    ExecutionArtifacts, ExecutionReport, ExecutionSpec, IsolatedExecutor, MountSpec,
+};
 use crate::input::AttemptInput;
 use crate::linka_work::{self, AttemptEvidencePart, LinkaWork, Settled};
 use crate::outcome::{self, AgentOutcome, Decision, OUTCOME_FILE, PROMPT_FILE};
@@ -30,6 +32,7 @@ use std::path::PathBuf;
 #[derive(Clone, Debug)]
 pub struct ExecutionPolicy {
     pub command: Vec<String>,
+    pub protocol: AgentProtocol,
     /// Where the attempt worktree appears inside the environment.
     pub workspace_destination: PathBuf,
     /// Where the exchange directory (prompt in, outcome out) appears.
@@ -45,6 +48,7 @@ impl ExecutionPolicy {
         let layout = SandboxLayout::default();
         Self {
             command,
+            protocol: AgentProtocol::Plain,
             workspace_destination: layout.workspace,
             io_destination: layout.exchange,
             extra_mounts: Vec::new(),
@@ -92,7 +96,7 @@ pub enum RunProgress {
     },
     ExecutionStarted {
         attempt: AttemptId,
-        transcript: PathBuf,
+        artifacts: ExecutionArtifacts,
     },
     ExecutionFinished {
         attempt: AttemptId,
@@ -174,12 +178,14 @@ impl Engine<'_> {
         self.attempts.record_request(&attempt, &spec)?;
 
         // 5. Execute and capture evidence.
-        let transcript = self.attempts.transcript_path(&attempt);
+        let artifacts = self
+            .attempts
+            .execution_artifacts(&attempt, self.policy.protocol);
         progress(&RunProgress::ExecutionStarted {
             attempt: attempt.clone(),
-            transcript: transcript.clone(),
+            artifacts: artifacts.clone(),
         });
-        let report = match self.executor.run(&spec, &transcript) {
+        let report = match self.executor.run(&spec, &artifacts) {
             Ok(report) => report,
             Err(error) => {
                 // No exit evidence exists, so this attempt can never be
@@ -307,6 +313,7 @@ impl Engine<'_> {
 
         ExecutionSpec {
             command: self.policy.command.clone(),
+            protocol: self.policy.protocol,
             working_directory: self.policy.workspace_destination.clone(),
             mounts,
             environment,

@@ -5,11 +5,11 @@
 //! repository. The Linka store is not faked — Orka orchestrates Linka
 //! specifically, so tests that touch selection or submission use a real store.
 
-use crate::executor::{ExecutionReport, ExecutionSpec, IsolatedExecutor};
+use crate::executor::{ExecutionArtifacts, ExecutionReport, ExecutionSpec, IsolatedExecutor};
 use crate::workspace::{CleanupOutcome, DiscardOutcome, PreparedWorkspace, WorkspaceManager};
 use anyhow::{anyhow, Result};
 use std::cell::RefCell;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// An [`IsolatedExecutor`] that writes a canned transcript and returns a
 /// canned report. `on_run` can mutate the filesystem the way a real agent
@@ -34,8 +34,9 @@ impl Default for FakeExecutor {
 }
 
 impl IsolatedExecutor for FakeExecutor {
-    fn run(&self, spec: &ExecutionSpec, transcript: &Path) -> Result<ExecutionReport> {
-        std::fs::write(transcript, &self.transcript)?;
+    fn run(&self, spec: &ExecutionSpec, artifacts: &ExecutionArtifacts) -> Result<ExecutionReport> {
+        std::fs::write(&artifacts.transcript, &self.transcript)?;
+        std::fs::write(&artifacts.diagnostics, b"")?;
         if let Some(hook) = &self.on_run {
             hook(spec)?;
         }

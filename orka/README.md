@@ -12,7 +12,7 @@ attempt lifecycle.
 select Linka-ready node ──► snapshot Linka work input ──► record attempt (.orka/attempts/<id>/)
       ──► prepare worktree (orka/attempts/<id> branch at the frozen revision)
       ──► record request ──► run agent via Driva (bwrap/podman/docker, deny-by-default)
-      ──► capture transcript + exit evidence ──► read declared outcome
+      ──► capture agent events + diagnostics + exit evidence ──► read declared outcome
       ──► version-checked submit + Linka candidate ──► seal ──► clean up
 ```
 
@@ -104,6 +104,19 @@ at `/tmp/orka/exchange` (`$ORKA_PROMPT` in, `$ORKA_OUTCOME` out). These are
 Orka's stable internal execution paths; the host worktree remains unique to
 the attempt. The agent declares its outcome by writing `outcome.toml`; see
 `src/outcome.rs` for the contract.
+
+The Codex profile runs `codex exec --json`. Orka keeps the provider's exact
+stdout in `events.raw.jsonl`, projects it into stable Orka events in
+`events.v1.jsonl`, derives a readable `transcript.log`, and keeps stderr in
+`diagnostics.log`. During `orka run`, the CLI follows the raw journal and
+renders commands, tools, changed files, Markdown agent messages, failures, and
+token usage as they arrive. Terminal control sequences in agent-produced text
+are removed before rendering. Literal `[agent].command` profiles retain plain
+stdout in `transcript.log` and stderr in `diagnostics.log`.
+
+Driva remains unaware of this protocol: it only validates the capability grant
+and transports separate stdin, stdout, and stderr streams. Provider decoding,
+durable agent transcripts, and presentation remain Orka responsibilities.
 
 When a successful attempt produces project files, Orka registers a first-class
 Linka candidate and prints its id and follow-up commands. Linka reports the

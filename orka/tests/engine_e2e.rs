@@ -633,6 +633,7 @@ fn stage_recorded_execution(attempts: &FsAttemptStore, id: &AttemptId, io: &Path
             id,
             &ExecutionSpec {
                 command: vec!["agent".into()],
+                protocol: Default::default(),
                 working_directory: "/tmp/orka/workspace".into(),
                 mounts: vec![],
                 environment: Default::default(),

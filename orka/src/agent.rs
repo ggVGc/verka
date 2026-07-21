@@ -6,11 +6,24 @@
 
 use crate::executor::MountSpec;
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 pub const AGENT_PROMPT: &str =
     "Read and follow the instructions in the file named by the ORKA_PROMPT environment variable.";
+
+/// Machine-readable output protocol produced by an agent command.
+///
+/// This belongs to Orka because Driva transports process streams without
+/// interpreting which program produced them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AgentProtocol {
+    #[default]
+    Plain,
+    CodexJsonl,
+}
 
 /// Stable paths inside one isolated Orka execution.
 ///
@@ -38,6 +51,7 @@ impl Default for SandboxLayout {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgentInvocation {
     pub command: Vec<String>,
+    pub protocol: AgentProtocol,
     pub mounts: Vec<MountSpec>,
     pub environment: BTreeMap<String, String>,
     pub network: bool,
@@ -59,8 +73,10 @@ pub fn codex(executable: &Path, layout: &SandboxLayout) -> Result<AgentInvocatio
             "danger-full-access".into(),
             "exec".into(),
             "--skip-git-repo-check".into(),
+            "--json".into(),
             AGENT_PROMPT.into(),
         ],
+        protocol: AgentProtocol::CodexJsonl,
         mounts: vec![MountSpec {
             source: "~/.codex/auth.json".into(),
             destination: "/root/.codex/auth.json".into(),
@@ -88,6 +104,11 @@ mod tests {
         assert_eq!(layout.workspace, Path::new("/tmp/orka/workspace"));
         assert_eq!(layout.exchange, Path::new("/tmp/orka/exchange"));
         assert_eq!(invocation.command[0], "codex");
+        assert_eq!(invocation.protocol, AgentProtocol::CodexJsonl);
+        assert!(invocation
+            .command
+            .iter()
+            .any(|argument| argument == "--json"));
         assert!(invocation.command.iter().any(|argument| {
             argument == "projects.\"/tmp/orka/workspace\".trust_level=\"trusted\""
         }));

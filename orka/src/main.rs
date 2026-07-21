@@ -8,11 +8,17 @@ use orka::attempt::{AttemptId, FsAttemptStore, SealedState};
 use orka::candidate::Candidates;
 use orka::config::{Config, CONFIG_FILE};
 use orka::engine::{Engine, RunProgress, RunReport};
+use orka::events::follow_codex_events;
 use orka::linka_work::LinkaWork;
 use orka::review::{AbandonOutcome, FinishOutcome, ReviewVerdict, Reviews};
 use orka::review_worktree::{GitReviewWorktrees, ReviewCleanupOutcome};
 use orka::workspace::GitWorkspaces;
+use std::io::IsTerminal;
 use std::path::PathBuf;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 #[derive(Parser)]
 #[command(
@@ -239,7 +245,8 @@ fn run(cli: Cli) -> Result<()> {
                 attempts: &attempts,
                 policy: config.policy()?,
             };
-            let mut progress = print_progress;
+            let mut printer = ProgressPrinter::new();
+            let mut progress = |event: &RunProgress| printer.print(event);
             let report = match node {
                 Some(arg) => Some(engine.run_node_with_progress(&parse_node(arg)?, &mut progress)?),
                 None => engine.run_next_with_progress(&mut progress)?,
@@ -297,6 +304,14 @@ fn run(cli: Cli) -> Result<()> {
             let transcript = attempts.transcript_path(&id);
             if transcript.exists() {
                 println!("transcript {}", transcript.display());
+            }
+            let events = attempts.events_path(&id);
+            if events.exists() {
+                println!("events     {}", events.display());
+            }
+            let diagnostics = attempts.diagnostics_path(&id);
+            if diagnostics.exists() {
+                println!("diagnostics {}", diagnostics.display());
             }
             let store = workbench.linka_store()?;
             if let Ok(candidate) = Candidates::new(&store, &attempts).get(&id.0) {
@@ -598,27 +613,89 @@ fn print_run(report: &RunReport) {
     println!("cleanup {:?}", report.cleanup);
 }
 
-fn print_progress(progress: &RunProgress) {
-    match progress {
-        RunProgress::Selected { node } => eprintln!("[orka] selected node {node}"),
-        RunProgress::AttemptCreated { attempt } => {
-            eprintln!("[orka] created {attempt}")
+struct LiveEventView {
+    done: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl LiveEventView {
+    fn start(path: PathBuf, color: bool) -> Self {
+        let done = Arc::new(AtomicBool::new(false));
+        let follower_done = done.clone();
+        let thread = std::thread::spawn(move || {
+            if let Err(error) = follow_codex_events(&path, &follower_done, color) {
+                eprintln!("[orka] event view failed: {error:#}");
+            }
+        });
+        Self {
+            done,
+            thread: Some(thread),
         }
-        RunProgress::WorkspacePrepared { attempt } => {
-            eprintln!("[orka] {attempt}: workspace prepared")
+    }
+
+    fn stop(&mut self) {
+        self.done.store(true, Ordering::Release);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
         }
-        RunProgress::ExecutionStarted {
-            attempt,
-            transcript,
-        } => eprintln!(
-            "[orka] {attempt}: agent running (transcript: {})",
-            transcript.display()
-        ),
-        RunProgress::ExecutionFinished { attempt, exit_code } => {
-            eprintln!("[orka] {attempt}: agent exited with code {exit_code}")
+    }
+}
+
+impl Drop for LiveEventView {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+struct ProgressPrinter {
+    live: Option<LiveEventView>,
+    color: bool,
+}
+
+impl ProgressPrinter {
+    fn new() -> Self {
+        Self {
+            live: None,
+            color: std::io::stderr().is_terminal(),
         }
-        RunProgress::Sealed { attempt, state } => {
-            eprintln!("[orka] {attempt}: {}", seal_line(state))
+    }
+
+    fn print(&mut self, progress: &RunProgress) {
+        match progress {
+            RunProgress::Selected { node } => eprintln!("[orka] selected node {node}"),
+            RunProgress::AttemptCreated { attempt } => {
+                eprintln!("[orka] created {attempt}")
+            }
+            RunProgress::WorkspacePrepared { attempt } => {
+                eprintln!("[orka] {attempt}: workspace prepared")
+            }
+            RunProgress::ExecutionStarted { attempt, artifacts } => {
+                eprintln!(
+                    "[orka] {attempt}: agent running (transcript: {}; diagnostics: {})",
+                    artifacts.transcript.display(),
+                    artifacts.diagnostics.display()
+                );
+                if let Some(path) = &artifacts.raw_events {
+                    self.live = Some(LiveEventView::start(path.clone(), self.color));
+                }
+            }
+            RunProgress::ExecutionFinished { attempt, exit_code } => {
+                if let Some(mut live) = self.live.take() {
+                    live.stop();
+                }
+                eprintln!("[orka] {attempt}: agent exited with code {exit_code}")
+            }
+            RunProgress::Sealed { attempt, state } => {
+                eprintln!("[orka] {attempt}: {}", seal_line(state))
+            }
+        }
+    }
+}
+
+impl Drop for ProgressPrinter {
+    fn drop(&mut self) {
+        if let Some(mut live) = self.live.take() {
+            live.stop();
         }
     }
 }

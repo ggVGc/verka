@@ -2,15 +2,18 @@
 //!
 //! Orka's [`ExecutionSpec`] is translated into a Driva execution request and
 //! run through `driva::execute`, which validates the grant (deny-by-default
-//! mounts and networking) before invoking the backend. The command's combined
-//! stdout/stderr streams into the attempt's transcript file as it runs, and
-//! the returned report carries only harness-observed evidence.
+//! mounts and networking) before invoking the backend. Stdout is retained as
+//! either plain text or a raw event journal, stderr is retained separately as
+//! diagnostics, and the returned report carries harness-observed evidence.
 
-use crate::executor::{ExecutionReport, ExecutionSpec, IsolatedExecutor};
-use anyhow::{Context, Result};
+use crate::agent::AgentProtocol;
+use crate::events::materialize_codex_events;
+use crate::executor::{ExecutionArtifacts, ExecutionReport, ExecutionSpec, IsolatedExecutor};
+use anyhow::{anyhow, Context, Result};
 use driva::{ExecutionIo, Isolation, Mount, MountAccess};
 use std::ffi::OsString;
 use std::fs::{File, OpenOptions};
+use std::io::Write;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -51,7 +54,7 @@ impl DrivaExecutor {
 }
 
 impl IsolatedExecutor for DrivaExecutor {
-    fn run(&self, spec: &ExecutionSpec, transcript: &Path) -> Result<ExecutionReport> {
+    fn run(&self, spec: &ExecutionSpec, artifacts: &ExecutionArtifacts) -> Result<ExecutionReport> {
         let request = driva::ExecutionRequest {
             command: spec.command.iter().map(OsString::from).collect(),
             working_directory: spec.working_directory.clone(),
@@ -77,17 +80,53 @@ impl IsolatedExecutor for DrivaExecutor {
             interactive: false,
         };
 
-        // Two independent append handles so stdout and stderr interleave in
-        // one transcript instead of overwriting each other.
-        std::fs::write(transcript, b"")
-            .with_context(|| format!("creating transcript {}", transcript.display()))?;
+        std::fs::write(&artifacts.transcript, b"")
+            .with_context(|| format!("creating transcript {}", artifacts.transcript.display()))?;
+        std::fs::write(&artifacts.diagnostics, b"")
+            .with_context(|| format!("creating diagnostics {}", artifacts.diagnostics.display()))?;
+        let stdout = match spec.protocol {
+            AgentProtocol::Plain => append_handle(&artifacts.transcript)?,
+            AgentProtocol::CodexJsonl => {
+                let raw = artifacts
+                    .raw_events
+                    .as_ref()
+                    .context("Codex JSONL execution has no raw event path")?;
+                std::fs::write(raw, b"")
+                    .with_context(|| format!("creating event journal {}", raw.display()))?;
+                append_handle(raw)?
+            }
+        };
         let io = ExecutionIo {
             stdin: File::open("/dev/null").context("opening /dev/null for agent stdin")?,
-            stdout: append_handle(transcript)?,
-            stderr: append_handle(transcript)?,
+            stdout,
+            stderr: append_handle(&artifacts.diagnostics)?,
         };
 
-        let outcome = driva::execute(self.backend.as_ref(), &request, io)?;
+        let outcome = driva::execute(self.backend.as_ref(), &request, io);
+        if spec.protocol == AgentProtocol::CodexJsonl {
+            let projection = match artifacts.events.as_ref() {
+                Some(events) => materialize_codex_events(
+                    artifacts.raw_events.as_ref().expect("validated above"),
+                    events,
+                    &artifacts.transcript,
+                ),
+                None => Err(anyhow!(
+                    "Codex JSONL execution has no normalized event path"
+                )),
+            };
+            if let Err(error) = projection {
+                // The raw stream and process outcome remain authoritative.
+                // A presentation failure must not erase harness evidence or
+                // make Orka treat completed agent work as never executed.
+                if let Ok(mut diagnostics) = append_handle(&artifacts.diagnostics) {
+                    let _ = writeln!(
+                        diagnostics,
+                        "orka: could not project Codex event journal: {error:#}"
+                    );
+                }
+            }
+        }
+        let outcome = outcome?;
         Ok(ExecutionReport {
             backend: outcome.evidence.isolation_backend,
             exit_code: outcome.exit.code(),
@@ -101,7 +140,7 @@ fn append_handle(path: &Path) -> Result<File> {
     OpenOptions::new()
         .append(true)
         .open(path)
-        .with_context(|| format!("opening transcript {}", path.display()))
+        .with_context(|| format!("opening output stream {}", path.display()))
 }
 
 fn unix_millis(at: SystemTime) -> i64 {
@@ -125,12 +164,13 @@ mod tests {
     struct StubBackend {
         seen: Arc<Mutex<Vec<ExecutionRequest>>>,
         exit: i32,
+        stdout: &'static str,
     }
 
     impl Isolation for StubBackend {
         fn run(&self, request: &ExecutionRequest, mut io: ExecutionIo) -> Result<ExecutionOutcome> {
             self.seen.lock().unwrap().push(request.clone());
-            writeln!(io.stdout, "to stdout").unwrap();
+            writeln!(io.stdout, "{}", self.stdout).unwrap();
             writeln!(io.stderr, "to stderr").unwrap();
             let now = SystemTime::now();
             Ok(ExecutionOutcome {
@@ -148,6 +188,7 @@ mod tests {
     fn spec(dir: &Path) -> ExecutionSpec {
         ExecutionSpec {
             command: vec!["agent".into(), "--work".into()],
+            protocol: AgentProtocol::Plain,
             working_directory: "/tmp/orka/workspace".into(),
             mounts: vec![
                 MountSpec {
@@ -169,8 +210,18 @@ mod tests {
         }
     }
 
+    fn artifacts(dir: &Path, protocol: AgentProtocol) -> ExecutionArtifacts {
+        ExecutionArtifacts {
+            transcript: dir.join("transcript.log"),
+            diagnostics: dir.join("diagnostics.log"),
+            raw_events: (protocol == AgentProtocol::CodexJsonl)
+                .then(|| dir.join("events.raw.jsonl")),
+            events: (protocol == AgentProtocol::CodexJsonl).then(|| dir.join("events.v1.jsonl")),
+        }
+    }
+
     #[test]
-    fn the_grant_is_translated_verbatim_and_the_transcript_captures_both_streams() {
+    fn the_grant_is_translated_verbatim_and_streams_are_kept_separate() {
         let dir = std::env::temp_dir().join(format!("orka-driva-test-{}", ulid::Ulid::new()));
         std::fs::create_dir_all(dir.join("ws")).unwrap();
         std::fs::create_dir_all(dir.join("ctx")).unwrap();
@@ -179,15 +230,22 @@ mod tests {
         let executor = DrivaExecutor::new(Box::new(StubBackend {
             seen: seen.clone(),
             exit: 3,
+            stdout: "to stdout",
         }));
 
-        let transcript = dir.join("transcript.log");
-        let report = executor.run(&spec(&dir), &transcript).unwrap();
+        let artifacts = artifacts(&dir, AgentProtocol::Plain);
+        let report = executor.run(&spec(&dir), &artifacts).unwrap();
         assert_eq!(report.exit_code, 3);
         assert_eq!(report.backend, "stub");
 
-        let text = std::fs::read_to_string(&transcript).unwrap();
-        assert!(text.contains("to stdout") && text.contains("to stderr"));
+        assert_eq!(
+            std::fs::read_to_string(&artifacts.transcript).unwrap(),
+            "to stdout\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&artifacts.diagnostics).unwrap(),
+            "to stderr\n"
+        );
 
         let seen = seen.lock().unwrap();
         let request = &seen[0];
@@ -211,6 +269,60 @@ mod tests {
     }
 
     #[test]
+    fn codex_jsonl_is_journaled_normalized_and_rendered_as_a_transcript() {
+        let dir = std::env::temp_dir().join(format!("orka-codex-events-{}", ulid::Ulid::new()));
+        std::fs::create_dir_all(dir.join("ws")).unwrap();
+        std::fs::create_dir_all(dir.join("ctx")).unwrap();
+        let executor = DrivaExecutor::new(Box::new(StubBackend {
+            seen: Arc::new(Mutex::new(Vec::new())),
+            exit: 0,
+            stdout: r#"{"type":"item.completed","item":{"id":"m1","type":"agent_message","text":"Finished cleanly"}}"#,
+        }));
+        let mut spec = spec(&dir);
+        spec.protocol = AgentProtocol::CodexJsonl;
+        let artifacts = artifacts(&dir, AgentProtocol::CodexJsonl);
+
+        executor.run(&spec, &artifacts).unwrap();
+
+        let raw = std::fs::read_to_string(artifacts.raw_events.unwrap()).unwrap();
+        assert!(raw.contains("agent_message"));
+        let normalized = std::fs::read_to_string(artifacts.events.unwrap()).unwrap();
+        assert!(normalized.contains("agent_message"));
+        let transcript = std::fs::read_to_string(artifacts.transcript).unwrap();
+        assert!(transcript.contains("Finished cleanly"));
+        assert_eq!(
+            std::fs::read_to_string(artifacts.diagnostics).unwrap(),
+            "to stderr\n"
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn event_projection_failure_does_not_erase_process_evidence() {
+        let dir = std::env::temp_dir().join(format!("orka-codex-events-{}", ulid::Ulid::new()));
+        std::fs::create_dir_all(dir.join("ws")).unwrap();
+        std::fs::create_dir_all(dir.join("ctx")).unwrap();
+        let executor = DrivaExecutor::new(Box::new(StubBackend {
+            seen: Arc::new(Mutex::new(Vec::new())),
+            exit: 7,
+            stdout: r#"{"type":"turn.completed","usage":{}}"#,
+        }));
+        let mut spec = spec(&dir);
+        spec.protocol = AgentProtocol::CodexJsonl;
+        let mut artifacts = artifacts(&dir, AgentProtocol::CodexJsonl);
+        artifacts.events = Some(dir.join("missing/events.v1.jsonl"));
+
+        let report = executor.run(&spec, &artifacts).unwrap();
+
+        assert_eq!(report.exit_code, 7);
+        assert!(std::fs::read_to_string(&artifacts.diagnostics)
+            .unwrap()
+            .contains("could not project Codex event journal"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn a_missing_mount_source_is_refused_before_the_backend_runs() {
         let dir = std::env::temp_dir().join(format!("orka-driva-missing-{}", ulid::Ulid::new()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -218,9 +330,10 @@ mod tests {
         let executor = DrivaExecutor::new(Box::new(StubBackend {
             seen: seen.clone(),
             exit: 0,
+            stdout: "unused",
         }));
         // `ws` and `ctx` were never created: validation must refuse the grant.
-        let result = executor.run(&spec(&dir), &dir.join("transcript.log"));
+        let result = executor.run(&spec(&dir), &artifacts(&dir, AgentProtocol::Plain));
         assert!(result.is_err());
         assert!(seen.lock().unwrap().is_empty(), "backend never ran");
         std::fs::remove_dir_all(&dir).unwrap();
@@ -240,6 +353,7 @@ mod tests {
                 "-c".into(),
                 "echo ran > /tmp/orka/workspace/out.txt".into(),
             ],
+            protocol: AgentProtocol::Plain,
             working_directory: "/tmp/orka/workspace".into(),
             mounts: vec![MountSpec {
                 source: dir.join("ws"),
@@ -249,7 +363,9 @@ mod tests {
             environment: BTreeMap::new(),
             network: false,
         };
-        let report = executor.run(&spec, &dir.join("transcript.log")).unwrap();
+        let report = executor
+            .run(&spec, &artifacts(&dir, AgentProtocol::Plain))
+            .unwrap();
         assert_eq!(report.exit_code, 0);
         assert_eq!(
             std::fs::read_to_string(dir.join("ws/out.txt")).unwrap(),

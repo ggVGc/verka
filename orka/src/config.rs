@@ -4,7 +4,7 @@
 //! workspace, and outcome protocol. Driva receives a fully resolved execution
 //! request and contributes no templates or agent-specific behavior.
 
-use crate::agent::{self, AgentInvocation, SandboxLayout};
+use crate::agent::{self, AgentInvocation, AgentProtocol, SandboxLayout};
 use crate::driva_exec::DrivaExecutor;
 use crate::engine::ExecutionPolicy;
 use crate::executor::MountSpec;
@@ -115,6 +115,7 @@ pub struct MountConfig {
 
 struct ResolvedAgent {
     command: Vec<String>,
+    protocol: AgentProtocol,
     layout: SandboxLayout,
     mounts: Vec<MountSpec>,
     environment: BTreeMap<String, String>,
@@ -163,6 +164,7 @@ impl Config {
         let resolved = self.resolve()?;
         Ok(ExecutionPolicy {
             command: resolved.command,
+            protocol: resolved.protocol,
             workspace_destination: resolved.layout.workspace,
             io_destination: resolved.layout.exchange,
             extra_mounts: resolved.mounts,
@@ -204,6 +206,7 @@ impl Config {
 
         Ok(ResolvedAgent {
             command: invocation.command,
+            protocol: invocation.protocol,
             layout,
             mounts,
             environment,
@@ -230,6 +233,7 @@ impl Config {
                 }
                 Ok(AgentInvocation {
                     command: self.agent.command.clone(),
+                    protocol: AgentProtocol::Plain,
                     mounts: Vec::new(),
                     environment: BTreeMap::new(),
                     network: false,
@@ -290,6 +294,7 @@ mod tests {
         .unwrap();
         let policy = config.policy().unwrap();
         assert_eq!(policy.command, vec!["agent", "--go"]);
+        assert_eq!(policy.protocol, AgentProtocol::Plain);
         assert_eq!(
             policy.workspace_destination,
             PathBuf::from("/tmp/orka/workspace")
@@ -316,6 +321,8 @@ mod tests {
         .unwrap();
         let policy = config.policy().unwrap();
         assert_eq!(policy.command.last().unwrap(), agent::AGENT_PROMPT);
+        assert_eq!(policy.protocol, AgentProtocol::CodexJsonl);
+        assert!(policy.command.iter().any(|argument| argument == "--json"));
         assert_eq!(
             policy.workspace_destination,
             PathBuf::from("/tmp/orka/workspace")

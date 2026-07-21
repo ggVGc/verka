@@ -6,10 +6,11 @@
 //! Every type crossing it is serde-serializable because the execution request
 //! and its harness-observed report are persisted verbatim in attempt records.
 
+use crate::agent::AgentProtocol;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// One capability crossing the isolation boundary: a host path visible inside
 /// the environment. Read-only unless explicitly writable.
@@ -26,6 +27,8 @@ pub struct MountSpec {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExecutionSpec {
     pub command: Vec<String>,
+    #[serde(default)]
+    pub protocol: AgentProtocol,
     /// Working directory inside the isolated environment.
     pub working_directory: PathBuf,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -34,6 +37,15 @@ pub struct ExecutionSpec {
     pub environment: BTreeMap<String, String>,
     #[serde(default)]
     pub network: bool,
+}
+
+/// Durable destinations for all streams produced by one execution.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExecutionArtifacts {
+    pub transcript: PathBuf,
+    pub diagnostics: PathBuf,
+    pub raw_events: Option<PathBuf>,
+    pub events: Option<PathBuf>,
 }
 
 /// Harness-observed evidence of one finished execution. This is what Orka
@@ -48,7 +60,8 @@ pub struct ExecutionReport {
 
 /// Running a command with a concrete filesystem and network capability grant.
 pub trait IsolatedExecutor {
-    /// Run the command to completion, streaming its combined stdout/stderr to
-    /// `transcript` as it runs (so a crash retains the partial transcript).
-    fn run(&self, spec: &ExecutionSpec, transcript: &Path) -> Result<ExecutionReport>;
+    /// Run the command to completion, streaming output to durable attempt
+    /// artifacts. Driva only transports these streams; this adapter applies
+    /// the Orka-selected agent protocol.
+    fn run(&self, spec: &ExecutionSpec, artifacts: &ExecutionArtifacts) -> Result<ExecutionReport>;
 }

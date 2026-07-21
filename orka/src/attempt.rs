@@ -11,7 +11,10 @@
 //!     workspace.toml   the planned workspace, before it is created
 //!     prepared         marker: workspace creation completed
 //!     request.toml     the exact execution spec, before the command starts
-//!     transcript.log   streamed agent stdout/stderr (Orka's transcript)
+//!     events.raw.jsonl exact machine-readable agent stdout, when available
+//!     events.v1.jsonl  normalized Orka agent events
+//!     diagnostics.log agent stderr, kept outside the event stream
+//!     transcript.log   readable transcript derived from agent stdout
 //!     evidence.toml    harness-observed exit and backend evidence
 //!     seal.toml        final state: how the attempt concluded
 //!     io/              the exchange directory mounted into the environment
@@ -19,7 +22,8 @@
 //!
 //! The phase of an attempt is derived from which files exist, never stored.
 
-use crate::executor::{ExecutionReport, ExecutionSpec};
+use crate::agent::AgentProtocol;
+use crate::executor::{ExecutionArtifacts, ExecutionReport, ExecutionSpec};
 use crate::input::AttemptInput;
 use crate::workspace::PreparedWorkspace;
 use anyhow::{bail, Context, Result};
@@ -181,6 +185,31 @@ impl FsAttemptStore {
 
     pub fn evidence_path(&self, id: &AttemptId) -> PathBuf {
         self.attempt_dir(id).join("evidence.toml")
+    }
+
+    pub fn diagnostics_path(&self, id: &AttemptId) -> PathBuf {
+        self.attempt_dir(id).join("diagnostics.log")
+    }
+
+    pub fn raw_events_path(&self, id: &AttemptId) -> PathBuf {
+        self.attempt_dir(id).join("events.raw.jsonl")
+    }
+
+    pub fn events_path(&self, id: &AttemptId) -> PathBuf {
+        self.attempt_dir(id).join("events.v1.jsonl")
+    }
+
+    pub fn execution_artifacts(
+        &self,
+        id: &AttemptId,
+        protocol: AgentProtocol,
+    ) -> ExecutionArtifacts {
+        ExecutionArtifacts {
+            transcript: self.transcript_path(id),
+            diagnostics: self.diagnostics_path(id),
+            raw_events: (protocol == AgentProtocol::CodexJsonl).then(|| self.raw_events_path(id)),
+            events: (protocol == AgentProtocol::CodexJsonl).then(|| self.events_path(id)),
+        }
     }
 
     /// The per-attempt exchange directory mounted into the isolated
@@ -398,6 +427,7 @@ mod tests {
     fn spec() -> ExecutionSpec {
         ExecutionSpec {
             command: vec!["agent".into()],
+            protocol: AgentProtocol::Plain,
             working_directory: "/tmp/orka/workspace".into(),
             mounts: vec![MountSpec {
                 source: "/tmp/ws".into(),

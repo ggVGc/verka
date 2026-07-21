@@ -23,6 +23,7 @@ pub mod candidate;
 pub mod config;
 pub mod driva_exec;
 pub mod engine;
+pub mod events;
 pub mod executor;
 pub mod fakes;
 pub mod input;
