@@ -2,8 +2,9 @@
 
 Driva runs a command in a disposable isolated environment using Podman,
 Docker, or Bubblewrap with explicit, deny-by-default isolation: the command
-gets no host filesystem access and no network unless each grant is stated on
-the command line or in `driva.toml`.
+gets no host data access and no network unless each grant is stated on the
+command line or in `driva.toml`. Bubblewrap exposes the host's system runtime
+read-only so basic executables are available.
 
 The `console` blocks below are verified against the compiled binary by
 `tests/cli_docs.rs`. If a flag or help text changes, that test fails; run
@@ -42,8 +43,9 @@ Every subcommand accepts the global option:
 
 - `--config <CONFIG>` — configuration file to load. When omitted, Driva uses
   `./driva.toml` if it exists, otherwise built-in defaults (Bubblewrap backend
-  and `/tmp` working directory). Bubblewrap still requires an explicitly
-  configured rootfs; the host root is never selected implicitly.
+  and `/tmp` working directory). Without a configured rootfs, Bubblewrap builds
+  a private root containing only conventional read-only system runtime paths;
+  the host root, home, and current directory are not selected implicitly.
 
 On any internal error Driva prints `driva: <error>` to stderr and exits with
 status 1. Commands that proxy an isolated process exit with that process's
@@ -505,7 +507,7 @@ them in the same format as `list`.
 ## Configuration file (`driva.toml`)
 
 Loaded from `--config <FILE>`, or `./driva.toml` when present. Defaults are
-shown below; Bubblewrap's `rootfs` is required for execution.
+shown below; Bubblewrap's `rootfs` is optional.
 
 ```toml
 [isolation]
@@ -522,7 +524,7 @@ workdir = "/tmp"
 executable = "docker"
 
 [isolation.bwrap]
-rootfs = "/var/lib/driva/rootfs/busybox" # required when backend = "bwrap"
+# rootfs = "/var/lib/driva/rootfs/busybox" # optional prepared userspace
 workdir = "/tmp"
 executable = "bwrap"
 
@@ -564,6 +566,9 @@ Template fields are optional except that the effective command must be
 non-empty. `command` is an array of the executable and its initial arguments.
 `rootfs` overrides `[isolation.bwrap].rootfs` when the template selects
 Bubblewrap; `~` is expanded using `$HOME` and the tree is mounted read-only.
+When neither is set, Driva constructs a private root with conventional host
+system runtime paths mounted read-only. It does not expose the host root, home,
+current directory, or other data paths.
 `tmpfs` replaces listed rootfs directories with private writable temporary
 filesystems before template mounts are applied, allowing a writable file mount
 inside otherwise-disposable state. A leading `~` is expanded using the host
@@ -578,13 +583,13 @@ Template mounts use the same shape and validation as global `[[mount]]`
 entries. Project templates appear in `driva templates`; project definitions
 replace built-ins with the same name.
 
-Bubblewrap uses `rootfs` as a prepared filesystem tree rather than pulling an
-OCI image. The tree must contain `/proc`, `/dev`, `/tmp`, each configured tmpfs
-mount point, and any working directory or mount destination that is not created
-beneath a private tmpfs. Driva exposes it read-only, creates private `/proc` and
-`/dev` mounts and a writable tmpfs at `/tmp`, and clears the inherited host
-environment. `--image` and durable session commands are not supported with
-this backend.
+Bubblewrap can use `rootfs` as a prepared filesystem tree rather than pulling
+an OCI image. The tree must contain `/proc`, `/dev`, `/tmp`, each configured
+tmpfs mount point, and any working directory or mount destination that is not
+created beneath a private tmpfs. Driva exposes it read-only. With or without a
+prepared tree, Driva creates private `/proc` and `/dev` mounts and a writable
+tmpfs at `/tmp`, and clears the inherited host environment. `--image` and
+durable session commands are not supported with this backend.
 
 ## Further reading
 

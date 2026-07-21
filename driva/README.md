@@ -1,9 +1,11 @@
 # Driva
 
-Driva runs a command in a disposable isolated environment with no host access
-and no network access unless they are explicitly granted.
-Bubblewrap is the default backend. Configure a prepared root filesystem before
-the first run; Driva deliberately does not default it to the host root.
+Driva runs a command in a disposable isolated environment with no host data
+access and no network access unless they are explicitly granted. Bubblewrap is
+the default backend. Without configuration, Driva constructs a private root
+that contains only the host's read-only system runtime, so `/bin/sh` and normal
+OS tools are available without exposing the host root, home, or current
+directory.
 
 ```sh
 cargo run -- run --write . -- cargo test
@@ -89,8 +91,10 @@ The library exposes the backend-independent `ExecutionRequest` and `Isolation`
 interface. `validate_request` resolves host sources and rejects invalid or
 conflicting grants; `execute` validates before dispatching to a backend.
 
-Bubblewrap is the default for lightweight synchronous Linux execution using a
-prepared root filesystem:
+Bubblewrap is the default for lightweight synchronous Linux execution. Its
+configuration-free mode exposes conventional system runtime paths read-only
+inside an otherwise private root. A prepared root filesystem can be selected
+when commands need a different userspace:
 
 ```toml
 [isolation]
@@ -101,9 +105,9 @@ rootfs = "/var/lib/driva/rootfs/busybox"
 workdir = "/tmp"
 ```
 
-The rootfs must contain `/proc`, `/dev`, `/tmp`, the working directory, and
-every configured mount destination. Driva exposes the rootfs read-only and
-places a private writable tmpfs at `/tmp`. Bubblewrap does not currently
+When configured, the rootfs must contain `/proc`, `/dev`, `/tmp`, the working
+directory, and every configured mount destination. Driva exposes it read-only
+and places a private writable tmpfs at `/tmp`. Bubblewrap does not currently
 support Driva's durable session commands or `--image`; use Podman or Docker
 when those capabilities are required.
 

@@ -178,12 +178,14 @@ their adapters. Other backends can implement the same portable contract where
 their semantics match.
 
 The Bubblewrap adapter translates synchronous requests into unprivileged Linux
-namespaces. It mounts an explicitly configured, prepared rootfs read-only,
-adds fresh `/proc`, `/dev`, and `/tmp` mounts, clears the inherited host
-environment, and shares the host network namespace only when networking is
-granted. Requiring an explicit rootfs prevents a lightweight backend from
-silently exposing the host's system tree. Bubblewrap is not a durable backend;
-session lifecycle operations continue to require Podman or Docker.
+namespaces. With an explicit rootfs it mounts that prepared tree read-only.
+Without one it creates a private root and mounts only conventional host system
+runtime paths read-only, making `/bin/sh` and normal OS tools available without
+exposing the host root, home, or current directory. It adds fresh `/proc`,
+`/dev`, and `/tmp` mounts, clears the inherited host environment, and shares
+the host network namespace only when networking is granted. Bubblewrap is not
+a durable backend; session lifecycle operations continue to require Podman or
+Docker.
 
 Tests for Driva's policy use a fake `Isolation` implementation. Each production
 backend also has focused integration tests for its request translation, I/O,

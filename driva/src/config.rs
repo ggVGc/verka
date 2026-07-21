@@ -103,10 +103,8 @@ fn default_podman() -> PathBuf {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct BwrapConfig {
-    /// A prepared filesystem tree to expose as the sandbox root.
-    ///
-    /// There is deliberately no default: selecting Bubblewrap must not
-    /// silently expose the host root filesystem.
+    /// A prepared filesystem tree to expose as the sandbox root. When absent,
+    /// Bubblewrap uses a private root with read-only host system runtime paths.
     pub rootfs: Option<PathBuf>,
     #[serde(default = "default_workdir")]
     pub workdir: PathBuf,

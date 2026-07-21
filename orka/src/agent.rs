@@ -139,7 +139,7 @@ mod tests {
         };
         let backend = BwrapIsolation {
             executable: "bwrap".into(),
-            rootfs: rootfs.clone(),
+            rootfs: Some(rootfs.clone()),
             tmpfs: vec!["/root".into()],
         };
 

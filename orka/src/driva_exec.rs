@@ -44,7 +44,7 @@ impl DrivaExecutor {
     ) -> Self {
         Self::new(Box::new(driva::BwrapIsolation {
             executable: executable.into(),
-            rootfs: rootfs.into(),
+            rootfs: Some(rootfs.into()),
             tmpfs,
         }))
     }

@@ -31,7 +31,7 @@ fn translates_request_without_implicit_host_access() {
     let rootfs = TestRootfs::new();
     let backend = BwrapIsolation {
         executable: "bwrap".into(),
-        rootfs: rootfs.0.clone(),
+        rootfs: Some(rootfs.0.clone()),
         tmpfs: vec![],
     };
     let request = ExecutionRequest {
@@ -91,7 +91,7 @@ fn shares_network_only_when_granted() {
     let rootfs = TestRootfs::new();
     let backend = BwrapIsolation {
         executable: "bwrap".into(),
-        rootfs: rootfs.0.clone(),
+        rootfs: Some(rootfs.0.clone()),
         tmpfs: vec![],
     };
     let request = ExecutionRequest {
@@ -114,7 +114,7 @@ fn creates_private_tmpfs_before_nested_file_mounts() {
     std::fs::write(rootfs.0.join("state/auth.json"), "").unwrap();
     let backend = BwrapIsolation {
         executable: "bwrap".into(),
-        rootfs: rootfs.0.clone(),
+        rootfs: Some(rootfs.0.clone()),
         tmpfs: vec!["/state".into()],
     };
     let request = ExecutionRequest {
@@ -150,7 +150,7 @@ fn permits_paths_created_beneath_private_tmpfs() {
     std::fs::create_dir(rootfs.0.join("home")).unwrap();
     let backend = BwrapIsolation {
         executable: "bwrap".into(),
-        rootfs: rootfs.0.clone(),
+        rootfs: Some(rootfs.0.clone()),
         tmpfs: vec!["/home".into()],
     };
     let request = ExecutionRequest {
@@ -189,7 +189,7 @@ fn rejects_destinations_missing_from_read_only_rootfs() {
     let rootfs = TestRootfs::new();
     let backend = BwrapIsolation {
         executable: "bwrap".into(),
-        rootfs: rootfs.0.clone(),
+        rootfs: Some(rootfs.0.clone()),
         tmpfs: vec![],
     };
     let request = ExecutionRequest {
@@ -241,4 +241,53 @@ fn bwrap_is_the_configuration_default() {
     assert_eq!(config.isolation.bwrap.rootfs, None);
     assert_eq!(config.isolation.bwrap.workdir, Path::new("/tmp"));
     assert_eq!(config.isolation.bwrap.executable, Path::new("bwrap"));
+}
+
+#[test]
+fn missing_rootfs_uses_a_private_host_runtime_instead_of_the_host_root() {
+    let backend = BwrapIsolation {
+        executable: "bwrap".into(),
+        rootfs: None,
+        tmpfs: vec![],
+    };
+    let request = ExecutionRequest {
+        command: vec!["/bin/sh".into()],
+        working_directory: "/tmp".into(),
+        mounts: vec![],
+        environment: BTreeMap::new(),
+        network: false,
+        interactive: true,
+    };
+
+    let command = backend.command(&request).unwrap();
+    let args: Vec<_> = command
+        .get_args()
+        .map(|value| value.to_string_lossy().into_owned())
+        .collect();
+    assert!(args.windows(2).any(|args| args == ["--tmpfs", "/"]));
+    assert!(args
+        .windows(3)
+        .any(|args| { args[0] == "--ro-bind" && args[1] == "/usr" && args[2] == "/usr" }));
+    assert!(!args.windows(3).any(|args| args == ["--ro-bind", "/", "/"]));
+}
+
+#[test]
+fn shell_dry_run_works_without_configuration() {
+    let directory = TestRootfs::new();
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_driva"))
+        .current_dir(&directory.0)
+        .args(["shell", "--dry-run"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("backend: bwrap"));
+    assert!(stdout.contains("\"--tmpfs\" \"/\""));
+    assert!(stdout.contains("\"--setenv\" \"HOME\" \"/tmp\""));
+    assert!(!stdout.contains("\"--ro-bind\" \"/\" \"/\""));
 }

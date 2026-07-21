@@ -9,32 +9,44 @@ use std::time::SystemTime;
 
 const DEFAULT_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
-/// A synchronous Bubblewrap backend using a prepared filesystem tree.
+/// A synchronous Bubblewrap backend using either a prepared filesystem tree
+/// or a private root containing the host's system runtime.
 #[derive(Clone, Debug)]
 pub struct BwrapIsolation {
     pub executable: PathBuf,
-    pub rootfs: PathBuf,
+    /// A prepared root filesystem. When absent, Driva constructs a private
+    /// root containing only the host's read-only system runtime.
+    pub rootfs: Option<PathBuf>,
     pub tmpfs: Vec<PathBuf>,
 }
 
 impl BwrapIsolation {
     /// Translate a portable request into a Bubblewrap invocation.
     ///
-    /// Bubblewrap cannot create bind destinations below a read-only root, so
-    /// the working directory, `/proc`, `/dev`, and every mount destination
-    /// must already exist in the configured rootfs.
+    /// When a prepared rootfs is configured, Bubblewrap cannot create bind
+    /// destinations below it, so the working directory, `/proc`, `/dev`, and
+    /// every mount destination must already exist there.
     pub fn command(&self, request: &ExecutionRequest) -> Result<Command> {
-        let configured_rootfs = expand_home(&self.rootfs)?;
-        let rootfs = configured_rootfs
-            .canonicalize()
-            .with_context(|| format!("invalid Bubblewrap rootfs {}", self.rootfs.display()))?;
-        if !rootfs.is_dir() {
-            bail!("Bubblewrap rootfs is not a directory: {}", rootfs.display());
-        }
+        let rootfs = self
+            .rootfs
+            .as_deref()
+            .map(|configured| {
+                let configured = expand_home(configured)?;
+                let rootfs = configured.canonicalize().with_context(|| {
+                    format!("invalid Bubblewrap rootfs {}", configured.display())
+                })?;
+                if !rootfs.is_dir() {
+                    bail!("Bubblewrap rootfs is not a directory: {}", rootfs.display());
+                }
+                Ok(rootfs)
+            })
+            .transpose()?;
 
-        self.require_rootfs_directory(&rootfs, Path::new("/proc"), "proc mount point")?;
-        self.require_rootfs_directory(&rootfs, Path::new("/dev"), "device mount point")?;
-        self.require_rootfs_directory(&rootfs, Path::new("/tmp"), "temporary directory")?;
+        if let Some(rootfs) = &rootfs {
+            self.require_rootfs_directory(rootfs, Path::new("/proc"), "proc mount point")?;
+            self.require_rootfs_directory(rootfs, Path::new("/dev"), "device mount point")?;
+            self.require_rootfs_directory(rootfs, Path::new("/tmp"), "temporary directory")?;
+        }
         let mut tmpfs = Vec::new();
         for destination in &self.tmpfs {
             let destination = expand_home(destination)?;
@@ -43,21 +55,25 @@ impl BwrapIsolation {
             }
         }
         for destination in &tmpfs {
-            self.require_rootfs_directory(&rootfs, destination, "tmpfs mount point")?;
+            if let Some(rootfs) = &rootfs {
+                self.require_rootfs_directory(rootfs, destination, "tmpfs mount point")?;
+            }
         }
-        self.require_rootfs_path_or_tmpfs(
-            &rootfs,
-            &tmpfs,
-            &request.working_directory,
-            "working directory",
-        )?;
-        for mount in &request.mounts {
+        if let Some(rootfs) = &rootfs {
             self.require_rootfs_path_or_tmpfs(
-                &rootfs,
+                rootfs,
                 &tmpfs,
-                &mount.destination,
-                "mount destination",
+                &request.working_directory,
+                "working directory",
             )?;
+            for mount in &request.mounts {
+                self.require_rootfs_path_or_tmpfs(
+                    rootfs,
+                    &tmpfs,
+                    &mount.destination,
+                    "mount destination",
+                )?;
+            }
         }
 
         let mut command = Command::new(&self.executable);
@@ -76,10 +92,12 @@ impl BwrapIsolation {
         for (key, value) in &request.environment {
             command.arg("--setenv").arg(key).arg(value);
         }
+        if let Some(rootfs) = &rootfs {
+            command.arg("--ro-bind").arg(rootfs).arg("/");
+        } else {
+            append_host_runtime(&mut command)?;
+        }
         command
-            .arg("--ro-bind")
-            .arg(&rootfs)
-            .arg("/")
             .arg("--proc")
             .arg("/proc")
             .arg("--dev")
@@ -88,6 +106,9 @@ impl BwrapIsolation {
             .arg("/tmp");
         for destination in &tmpfs {
             command.arg("--tmpfs").arg(destination);
+        }
+        if rootfs.is_none() {
+            command.arg("--dir").arg(&request.working_directory);
         }
         for mount in &request.mounts {
             command.arg(match mount.access {
@@ -149,6 +170,64 @@ impl BwrapIsolation {
         }
         Ok(resolved)
     }
+}
+
+/// Construct a useful base filesystem without exposing the host root, home,
+/// current directory, or other data paths. The small set of conventional
+/// system paths is enough to run the host's `/bin/sh` and normal OS tools.
+fn append_host_runtime(command: &mut Command) -> Result<()> {
+    command.arg("--tmpfs").arg("/");
+
+    for path in [
+        "/usr",
+        "/bin",
+        "/sbin",
+        "/lib",
+        "/lib64",
+        "/nix/store",
+        "/gnu/store",
+    ] {
+        append_runtime_path(command, Path::new(path))?;
+    }
+    for path in [
+        "/etc/alternatives",
+        "/etc/ca-certificates",
+        "/etc/group",
+        "/etc/hosts",
+        "/etc/ld.so.cache",
+        "/etc/ld.so.conf",
+        "/etc/ld.so.conf.d",
+        "/etc/localtime",
+        "/etc/nsswitch.conf",
+        "/etc/passwd",
+        "/etc/pki",
+        "/etc/protocols",
+        "/etc/resolv.conf",
+        "/etc/services",
+        "/etc/ssl",
+    ] {
+        append_runtime_path(command, Path::new(path))?;
+    }
+    Ok(())
+}
+
+fn append_runtime_path(command: &mut Command, path: &Path) -> Result<()> {
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("failed to inspect host runtime path {}", path.display()))
+        }
+    };
+    if metadata.file_type().is_symlink() {
+        let target = std::fs::read_link(path)
+            .with_context(|| format!("failed to read host runtime link {}", path.display()))?;
+        command.arg("--symlink").arg(target).arg(path);
+    } else {
+        command.arg("--ro-bind").arg(path).arg(path);
+    }
+    Ok(())
 }
 
 fn is_nested_beneath(path: &Path, base: &Path) -> bool {

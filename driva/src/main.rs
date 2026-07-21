@@ -221,6 +221,14 @@ fn real_main() -> Result<()> {
         );
     }
     environment.extend(policy.environment);
+    if shell {
+        environment
+            .entry(OsString::from("HOME"))
+            .or_insert_with(|| OsString::from("/tmp"));
+        environment
+            .entry(OsString::from("TERM"))
+            .or_insert_with(|| OsString::from("xterm-256color"));
+    }
     let request = ExecutionRequest {
         command,
         working_directory: workdir,
@@ -282,8 +290,7 @@ fn real_main() -> Result<()> {
                 rootfs: template
                     .as_ref()
                     .and_then(|value| value.rootfs.clone())
-                    .or(config.isolation.bwrap.rootfs)
-                    .context("Bubblewrap requires isolation.bwrap.rootfs")?,
+                    .or(config.isolation.bwrap.rootfs),
                 tmpfs: template
                     .as_ref()
                     .map(|value| value.tmpfs.clone())
