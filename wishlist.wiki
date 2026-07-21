@@ -1,3 +1,4 @@
+- Should be able to run an agent session, producing an interaction log and final plan, and make that into a linka node with little friction
 - Review gating before integrating into main
 - Implementation order: data structures, tests, logic (roughly). So I can review each chunk in isolation in a way that makes sense:
   - More generally, implement work on nodes in logically associated pieces that make sense for review
