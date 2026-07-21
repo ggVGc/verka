@@ -4,7 +4,8 @@ mod common;
 
 use common::*;
 use linka::{Author, CandidateStore, NewCandidate};
-use orka::review::{FinishOutcome, ReviewVerdict, Reviews};
+use orka::review::{AbandonOutcome, FinishOutcome, ReviewVerdict, Reviews};
+use std::process::Command;
 
 fn candidate(root: &std::path::Path) -> linka::CandidateRecord {
     let project = root.join("project");
@@ -127,6 +128,112 @@ fn starting_a_review_twice_resumes_the_only_review_for_the_candidate() {
         linka::ops::verifications_for(&store, &candidate.id).unwrap(),
         vec![first.record.verification.to_string()]
     );
+}
+
+#[test]
+fn active_reviews_can_be_listed_and_abandoned_without_removing_nota_evidence() {
+    let (_temp, root) = workbench();
+    let candidate = candidate(&root);
+    let store = store_at(&root);
+    let reviews = Reviews::new(&store, root.join(".orka"));
+
+    let started = reviews.start(&candidate.id, Author::Human).unwrap();
+    assert_eq!(reviews.list().unwrap(), vec![started.record.clone()]);
+
+    assert_eq!(
+        reviews
+            .abandon(
+                &started.record.verification,
+                Some("review is no longer needed"),
+                Author::Human,
+            )
+            .unwrap(),
+        AbandonOutcome::Abandoned
+    );
+    assert!(reviews.list().unwrap().is_empty());
+    let (result, notes) = store
+        .read_result(started.record.verification.as_str())
+        .unwrap()
+        .unwrap();
+    assert_eq!(result.outcome, linka::Outcome::Failed);
+    assert_eq!(notes, "review is no longer needed");
+    let producer = result.producer.unwrap();
+    assert_eq!(producer.namespace, "orka.nota");
+    assert_eq!(producer.data["status"], "abandoned");
+    assert_eq!(producer.data["candidate"], candidate.id.0);
+    assert!(nota::load_review_ref(&root.join("project"), &started.record.branch).is_ok());
+
+    assert_eq!(
+        reviews
+            .abandon(&started.record.verification, None, Author::Human)
+            .unwrap(),
+        AbandonOutcome::AlreadyAbandoned
+    );
+
+    let restarted = reviews.start(&candidate.id, Author::Human).unwrap();
+    assert_ne!(restarted.record.verification, started.record.verification);
+    assert_eq!(reviews.list().unwrap(), vec![restarted.record]);
+}
+
+#[test]
+fn a_review_can_be_abandoned_when_nota_branch_creation_was_interrupted() {
+    let (_temp, root) = workbench();
+    let candidate = candidate(&root);
+    let store = store_at(&root);
+    let reviews = Reviews::new(&store, root.join(".orka"));
+    let started = reviews.start(&candidate.id, Author::Human).unwrap();
+    git(
+        &root.join("project"),
+        &["branch", "-D", &started.record.branch],
+    );
+
+    assert_eq!(
+        reviews
+            .abandon(&started.record.verification, None, Author::Human)
+            .unwrap(),
+        AbandonOutcome::Abandoned
+    );
+    assert!(reviews.list().unwrap().is_empty());
+}
+
+#[test]
+fn cli_lists_active_reviews_and_accepts_stop_as_an_abandon_alias() {
+    let (_temp, root) = workbench();
+    let candidate = candidate(&root);
+    let store = store_at(&root);
+    let reviews = Reviews::new(&store, root.join(".orka"));
+    let started = reviews.start(&candidate.id, Author::Human).unwrap();
+    let binary = env!("CARGO_BIN_EXE_orka");
+
+    let listed = Command::new(binary)
+        .args(["--workbench", root.to_str().unwrap(), "review", "list"])
+        .output()
+        .unwrap();
+    assert!(listed.status.success());
+    let stdout = String::from_utf8_lossy(&listed.stdout);
+    assert!(stdout.contains(started.record.verification.as_str()));
+    assert!(stdout.contains(candidate.id.0.as_str()));
+    assert!(stdout.contains(&started.record.branch));
+
+    let stopped = Command::new(binary)
+        .args([
+            "--workbench",
+            root.to_str().unwrap(),
+            "review",
+            "stop",
+            started.record.verification.as_str(),
+            "--notes",
+            "stopped from the CLI",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        stopped.status.success(),
+        "{}",
+        String::from_utf8_lossy(&stopped.stderr)
+    );
+    assert!(String::from_utf8_lossy(&stopped.stdout).contains("abandoned"));
+    assert!(reviews.list().unwrap().is_empty());
 }
 
 #[test]

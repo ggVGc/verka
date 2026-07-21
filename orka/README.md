@@ -77,10 +77,13 @@ orka reject CANDIDATE    reject it and make its source retryable
 orka publish CANDIDATE   recoverably fast-forward the recorded target
 orka review start CANDIDATE
                          create a Linka verification and Nota review branch
+orka review list         list active reviews
 orka review resume NODE  finish an interrupted review-branch creation
 orka review show NODE    show the binding and Git-native review entries
 orka review finish NODE --verdict VERDICT
                          submit review evidence to the verification node
+orka review abandon NODE [--notes NOTES]
+                         stop a review (also available as `review stop`)
 orka recover             classify and finish unfinished attempts
 ```
 
@@ -125,8 +128,11 @@ attempts left by older versions.
 Orka can bind an exact Linka candidate to a Git-native Nota review. `orka
 review start` creates and snapshots a Linka verification node, records the
 binding under `.orka/reviews/`, and starts a Nota branch at the candidate's
-artifact commit. Starting it again for the same candidate resumes that binding
-instead of creating another verification. Reviewers use `nota note` and `nota
-suggest` in a worktree for that branch. `orka review finish` records the chosen
-verdict and Git evidence as the verification result; it does not implicitly
-accept, reject, or publish the candidate.
+artifact commit. Starting it again while the review is active resumes that
+binding instead of creating another verification. Reviewers use `nota note`
+and `nota suggest` in a worktree for that branch. `orka review finish` records
+the chosen verdict and Git evidence as the verification result; it does not
+implicitly accept, reject, or publish the candidate. `orka review list` shows unfinished
+bindings, including starts interrupted before branch creation. `orka review
+abandon` (or `review stop`) records a failed verification with abandonment
+evidence and preserves the Nota branch for inspection.

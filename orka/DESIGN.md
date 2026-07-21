@@ -137,16 +137,22 @@ acceptance protocol because Linka recorded no result for it.
 
 ## Candidate verification
 
-`orka review start <candidate>` creates one ordinary Linka verification node
-per candidate, freezes its `WorkSnapshot`, and starts a Nota branch at the
-candidate's exact Git artifact. Repeating the command resumes the existing
-binding. Orka records the immutable binding under
+`orka review start <candidate>` creates one active ordinary Linka verification
+node per candidate, freezes its `WorkSnapshot`, and starts a Nota branch at the
+candidate's exact Git artifact. Repeating the command while that review is
+active resumes the existing binding. Orka records the immutable binding under
 `.orka/reviews/<verification>/review.toml` before creating the branch. Nota
 receives only a repository, revision, and branch; it has no Linka dependency.
+Once that verification is finished or abandoned, another review can create a
+new verification for the same candidate.
 
 Reviewers use Nota directly for notes and suggestion commits. `orka review
 finish` loads that Git evidence by branch and submits a graph-only verification
 result against the frozen Linka snapshot with `orka.nota` producer evidence.
+`orka review list` derives active reviews from bindings whose verification has
+no result. `orka review abandon` submits a graph-only failed result with
+explicit abandonment evidence and leaves both the binding and Nota branch
+intact; a later start for the candidate creates a new verification.
 The verdict is evidence, not acceptance policy: accepting, rejecting, and
 publishing the candidate remain explicit operations. If graph inputs moved
 during review, Linka rejects submission and the Nota branch remains intact.
@@ -156,8 +162,9 @@ during review, Linka rejects submission and the Nota branch remains intact.
 Every agent-attempt result carries `linka::ProducerEvidence` in the stable
 `orka` namespace: the attempt id and the executor-observed backend, backend
 reference, start/finish timestamps, and exit code. Coordinated review results
-use `orka.nota` with the candidate, verification, branch, marker, review head,
-and verdict. Transcripts and mutable filesystem paths stay in `.orka/`. Linka
+use `orka.nota` with the candidate, verification, and branch plus either the
+marker, review head, and verdict or an explicit abandoned status. Transcripts
+and mutable filesystem paths stay in `.orka/`. Linka
 preserves either namespace verbatim and never interprets it.
 
 ## Non-goals

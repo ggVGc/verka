@@ -58,6 +58,13 @@ pub enum FinishOutcome {
     Conflict(Vec<SubmissionConflict>),
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AbandonOutcome {
+    Abandoned,
+    AlreadyAbandoned,
+    Conflict(Vec<SubmissionConflict>),
+}
+
 pub struct Reviews<'a> {
     linka: &'a Store,
     orka_root: PathBuf,
@@ -74,7 +81,9 @@ impl<'a> Reviews<'a> {
     /// Create the Linka verification and durable binding before creating the
     /// Nota branch. If branch creation is interrupted, [`resume`] performs the
     /// remaining idempotent Git step from the recorded facts. Starting a
-    /// second review for the same candidate resumes its existing binding.
+    /// second active review for the same candidate resumes its existing
+    /// binding. Once it is finished or abandoned, a new start creates a new
+    /// verification.
     pub fn start(&self, candidate: &CandidateId, assignee: Author) -> Result<Started> {
         let candidate_record = CandidateStore::new(self.linka).load(candidate)?;
         require_git_candidate(&candidate_record)?;
@@ -156,6 +165,23 @@ impl<'a> Reviews<'a> {
         Ok(record)
     }
 
+    /// List reviews whose Linka verification does not yet have a result.
+    /// This includes bindings whose Nota branch creation was interrupted, so
+    /// callers can resume or abandon every unfinished review.
+    pub fn list(&self) -> Result<Vec<ReviewRecord>> {
+        let mut active = Vec::new();
+        for record in self.records()? {
+            if self
+                .linka
+                .read_result(record.verification.as_str())?
+                .is_none()
+            {
+                active.push(record);
+            }
+        }
+        Ok(active)
+    }
+
     pub fn review(&self, verification: &NodeId) -> Result<(ReviewRecord, Review)> {
         let record = self.load(verification)?;
         self.validate_binding(&record)?;
@@ -214,6 +240,46 @@ impl<'a> Reviews<'a> {
         }
     }
 
+    /// Stop a review without discarding its durable binding or Nota branch.
+    /// The failed graph-only result makes abandonment visible to Linka while
+    /// producer evidence distinguishes it from an attempted review verdict.
+    pub fn abandon(
+        &self,
+        verification: &NodeId,
+        notes: Option<&str>,
+        author: Author,
+    ) -> Result<AbandonOutcome> {
+        let record = self.load(verification)?;
+        self.validate_binding(&record)?;
+        if let Some((result, _)) = self.linka.read_result(verification.as_str())? {
+            if matching_abandonment(&result.producer, &record) {
+                return Ok(AbandonOutcome::AlreadyAbandoned);
+            }
+            bail!("verification `{verification}` already has a different result");
+        }
+        let notes = notes
+            .filter(|value| !value.trim().is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| "Review abandoned.".into());
+        let vcs = GitVcs::for_store(self.linka);
+        match ops::submit_result(
+            self.linka,
+            &vcs,
+            ResultSubmission {
+                snapshot: record.snapshot.clone(),
+                outcome: Outcome::Failed,
+                output: None,
+                notes,
+                author,
+                producer: Some(abandonment_evidence(&record)),
+            },
+        ) {
+            Ok(()) => Ok(AbandonOutcome::Abandoned),
+            Err(SubmissionError::Conflict(conflicts)) => Ok(AbandonOutcome::Conflict(conflicts)),
+            Err(SubmissionError::Evaluation(error)) => Err(error),
+        }
+    }
+
     fn start_nota(&self, record: ReviewRecord) -> Result<Started> {
         let provider = GitProvider::new(self.linka.project_root());
         let review = nota::start_review(&provider, &record.subject, Some(&record.branch))?;
@@ -248,14 +314,14 @@ impl<'a> Reviews<'a> {
         write_atomic(&path, text.as_bytes())
     }
 
-    fn for_candidate(&self, candidate: &CandidateId) -> Result<Option<ReviewRecord>> {
+    fn records(&self) -> Result<Vec<ReviewRecord>> {
         let root = self.orka_root.join("reviews");
         let entries = match fs::read_dir(&root) {
             Ok(entries) => entries,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(error) => return Err(error).with_context(|| format!("reading {}", root.display())),
         };
-        let mut matches = Vec::new();
+        let mut records = Vec::new();
         for entry in entries {
             let entry = entry?;
             if !entry.file_type()?.is_dir() {
@@ -267,12 +333,18 @@ impl<'a> Reviews<'a> {
             if !self.record_path(&verification).is_file() {
                 continue;
             }
-            let record = self.load(&verification)?;
-            if &record.candidate == candidate {
-                matches.push(record);
-            }
+            records.push(self.load(&verification)?);
         }
-        matches.sort_by(|a, b| a.verification.as_str().cmp(b.verification.as_str()));
+        records.sort_by(|a, b| a.verification.as_str().cmp(b.verification.as_str()));
+        Ok(records)
+    }
+
+    fn for_candidate(&self, candidate: &CandidateId) -> Result<Option<ReviewRecord>> {
+        let mut matches = self
+            .list()?
+            .into_iter()
+            .filter(|record| &record.candidate == candidate)
+            .collect::<Vec<_>>();
         match matches.len() {
             0 => Ok(None),
             1 => Ok(matches.pop()),
@@ -380,6 +452,18 @@ fn review_evidence(
     }
 }
 
+fn abandonment_evidence(record: &ReviewRecord) -> ProducerEvidence {
+    ProducerEvidence {
+        namespace: "orka.nota".into(),
+        data: serde_json::json!({
+            "candidate": record.candidate.0,
+            "verification": record.verification.as_str(),
+            "branch": record.branch,
+            "status": "abandoned",
+        }),
+    }
+}
+
 fn matching_result(
     producer: &Option<ProducerEvidence>,
     record: &ReviewRecord,
@@ -395,6 +479,17 @@ fn matching_result(
         && producer.data.get("branch").and_then(|v| v.as_str()) == Some(record.branch.as_str())
         && producer.data.get("head").and_then(|v| v.as_str()) == Some(head)
         && producer.data.get("verdict").and_then(|v| v.as_str()) == Some(verdict.as_str())
+}
+
+fn matching_abandonment(producer: &Option<ProducerEvidence>, record: &ReviewRecord) -> bool {
+    let Some(producer) = producer else {
+        return false;
+    };
+    producer.namespace == "orka.nota"
+        && producer.data.get("verification").and_then(|v| v.as_str())
+            == Some(record.verification.as_str())
+        && producer.data.get("branch").and_then(|v| v.as_str()) == Some(record.branch.as_str())
+        && producer.data.get("status").and_then(|v| v.as_str()) == Some("abandoned")
 }
 
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {

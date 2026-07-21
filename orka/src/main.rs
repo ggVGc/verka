@@ -9,7 +9,7 @@ use orka::candidate::Candidates;
 use orka::config::{Config, CONFIG_FILE};
 use orka::engine::{Engine, RunProgress, RunReport};
 use orka::linka_work::LinkaWork;
-use orka::review::{FinishOutcome, ReviewVerdict, Reviews};
+use orka::review::{AbandonOutcome, FinishOutcome, ReviewVerdict, Reviews};
 use orka::workspace::GitWorkspaces;
 use std::path::PathBuf;
 
@@ -71,6 +71,8 @@ enum Command {
 
 #[derive(Subcommand)]
 enum ReviewCommand {
+    /// List active reviews.
+    List,
     /// Create a verification node and start a Nota branch at the candidate artifact.
     Start {
         candidate: String,
@@ -88,6 +90,15 @@ enum ReviewCommand {
         verdict: VerdictArg,
         #[arg(long)]
         summary: Option<String>,
+        #[arg(long, value_enum, default_value = "human")]
+        author: Author,
+    },
+    /// Stop a review and record an abandoned verification result.
+    #[command(visible_alias = "stop")]
+    Abandon {
+        verification: String,
+        #[arg(long)]
+        notes: Option<String>,
         #[arg(long, value_enum, default_value = "human")]
         author: Author,
     },
@@ -330,6 +341,18 @@ fn run(cli: Cli) -> Result<()> {
             let store = workbench.linka_store()?;
             let reviews = workbench.reviews(&store);
             match command {
+                ReviewCommand::List => {
+                    let active = reviews.list()?;
+                    if active.is_empty() {
+                        println!("no active reviews");
+                    }
+                    for record in active {
+                        println!(
+                            "{}  candidate {}  {}  {}",
+                            record.verification, record.candidate, record.branch, record.subject
+                        );
+                    }
+                }
                 ReviewCommand::Start {
                     candidate,
                     assignee,
@@ -385,6 +408,22 @@ fn run(cli: Cli) -> Result<()> {
                             println!("completed {verification} (already submitted)")
                         }
                         FinishOutcome::Conflict(conflicts) => {
+                            println!("stale {verification}: {conflicts:?}")
+                        }
+                    }
+                }
+                ReviewCommand::Abandon {
+                    verification,
+                    notes,
+                    author,
+                } => {
+                    let verification = parse_node(verification)?;
+                    match reviews.abandon(&verification, notes.as_deref(), author)? {
+                        AbandonOutcome::Abandoned => println!("abandoned {verification}"),
+                        AbandonOutcome::AlreadyAbandoned => {
+                            println!("abandoned {verification} (already submitted)")
+                        }
+                        AbandonOutcome::Conflict(conflicts) => {
                             println!("stale {verification}: {conflicts:?}")
                         }
                     }
