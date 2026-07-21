@@ -17,6 +17,10 @@
     --open:        #2a78d6;  --open-bg:   #e3edfb;  --open-ink:   #1c5cab;
     --done:        #0ca30c;  --done-bg:   #e2f4e2;  --done-ink:   #006300;
     --failed:      #d03b3b;  --failed-bg: #fbe4e4;  --failed-ink: #a32c2c;
+    --ready:       #2a78d6;  --ready-bg:  #e3edfb;  --ready-ink:  #1c5cab;
+    --complete:    #0ca30c;  --complete-bg:#e2f4e2; --complete-ink:#006300;
+    --awaiting:    #8b5ac2;  --awaiting-bg:#f0e7fa; --awaiting-ink:#60348f;
+    --blocked:     #d03b3b;  --blocked-bg:#fbe4e4;  --blocked-ink:#a32c2c;
     --stale-bg:    #fdf1d7;  --stale-ink: #8a5a00;
     --edge:        #b9b7ae;
     --edge-derived:#c9c7be;
@@ -99,9 +103,11 @@
   .card:hover { box-shadow: 0 2px 8px rgba(11,11,11,0.10); }
   .card.sel { outline: 2px solid var(--open); outline-offset: 1px; }
   .card.dim { opacity: 0.35; }
-  .card.status-open   { border-left-color: var(--open); }
-  .card.status-done   { border-left-color: var(--done); }
-  .card.status-failed { border-left-color: var(--failed); }
+  .card.status-ready                { border-left-color: var(--ready); }
+  .card.status-complete             { border-left-color: var(--complete); }
+  .card.status-awaiting_integration { border-left-color: var(--awaiting); }
+  .card.status-blocked,
+  .card.status-error                { border-left-color: var(--blocked); }
   .card .title {
     font-weight: 600; font-size: 12.5px; line-height: 1.3;
     display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
@@ -114,11 +120,12 @@
     padding: 1px 7px; border-radius: 999px; white-space: nowrap;
   }
   .pill .dot { width: 6px; height: 6px; }
-  .pill.open   { background: var(--open-bg);   color: var(--open-ink); }
-  .pill.done   { background: var(--done-bg);   color: var(--done-ink); }
-  .pill.failed { background: var(--failed-bg); color: var(--failed-ink); }
+  .pill.ready                { background: var(--ready-bg);    color: var(--ready-ink); }
+  .pill.complete             { background: var(--complete-bg); color: var(--complete-ink); }
+  .pill.awaiting_integration { background: var(--awaiting-bg); color: var(--awaiting-ink); }
+  .pill.blocked,
+  .pill.error                { background: var(--blocked-bg);  color: var(--blocked-ink); }
   .pill.stale  { background: var(--stale-bg);  color: var(--stale-ink); }
-  .pill.ready  { background: var(--page); color: var(--ink-2); border: 1px solid var(--hairline); }
   .pill.human  { background: var(--page); color: var(--ink-2); border: 1px solid var(--hairline); }
   button.pill.logbtn {
     margin-left: auto; cursor: pointer;
@@ -248,9 +255,10 @@
   <h1>linka <span>node graph</span></h1>
   <div id="stats"></div>
   <div id="legend">
-    <span class="item"><span class="dot" style="background:var(--open)"></span>open</span>
-    <span class="item"><span class="dot" style="background:var(--done)"></span>done</span>
-    <span class="item"><span class="dot" style="background:var(--failed)"></span>failed</span>
+    <span class="item"><span class="dot" style="background:var(--ready)"></span>ready</span>
+    <span class="item"><span class="dot" style="background:var(--awaiting)"></span>awaiting integration</span>
+    <span class="item"><span class="dot" style="background:var(--blocked)"></span>blocked</span>
+    <span class="item"><span class="dot" style="background:var(--complete)"></span>complete</span>
     <span class="item"><svg width="26" height="6"><line x1="0" y1="3" x2="26" y2="3" stroke="var(--edge)" stroke-width="1.5"/></svg>depends on</span>
     <span class="item"><svg width="26" height="6"><line x1="0" y1="3" x2="26" y2="3" stroke="var(--edge-derived)" stroke-width="1.5" stroke-dasharray="5 4"/></svg>derived from</span>
     <span id="refresh" title="auto-refresh"></span>
@@ -302,6 +310,17 @@ let byId = new Map();
 let selected = null;
 let fitted = false;
 const tf = { x: 40, y: 40, k: 1 };
+
+function statusLabel(n) {
+  if (n.status === "awaiting_integration") {
+    return n.integration === "accepted" ? "awaiting publication" : "awaiting acceptance";
+  }
+  return (n.status || "error").replaceAll("_", " ");
+}
+
+function statusPill(n) {
+  return pill(n.status || "error", statusLabel(n));
+}
 
 // --- layout: layered left-to-right DAG ------------------------------------
 
@@ -397,7 +416,7 @@ function render() {
     const p = xy.get(n.id);
     const fo = svgEl("foreignObject", { x: p.x, y: p.y, width: NODE_W, height: NODE_H });
     const card = document.createElement("div");
-    card.className = `card status-${n.status || "open"}`;
+    card.className = `card status-${n.status || "error"}`;
     card.dataset.id = n.id;
 
     const title = document.createElement("div");
@@ -408,9 +427,8 @@ function render() {
 
     const tags = document.createElement("div");
     tags.className = "tags";
-    tags.appendChild(pill(n.status, n.status));
+    tags.appendChild(statusPill(n));
     if ((n.stale || []).length) tags.appendChild(pill("stale", "⚠ stale"));
-    if (n.ready && n.status !== "done") tags.appendChild(pill("ready", "ready"));
     if (n.assignee === "human") tags.appendChild(pill("human", "👤 human"));
     if (n.has_log) {
       const b = document.createElement("button");
@@ -442,10 +460,17 @@ function render() {
 function pill(kind, label) {
   const s = document.createElement("span");
   s.className = `pill ${kind}`;
-  if (kind === "open" || kind === "done" || kind === "failed") {
+  const color = {
+    ready: "ready",
+    complete: "complete",
+    awaiting_integration: "awaiting",
+    blocked: "blocked",
+    error: "blocked",
+  }[kind];
+  if (color) {
     const d = document.createElement("span");
     d.className = "dot";
-    d.style.background = `var(--${kind})`;
+    d.style.background = `var(--${color})`;
     s.appendChild(d);
   }
   s.appendChild(document.createTextNode(label));
@@ -456,15 +481,17 @@ function renderStats() {
   const nodes = data.nodes;
   const count = s => nodes.filter(n => n.status === s).length;
   const stale = nodes.filter(n => (n.stale || []).length).length;
-  const ready = nodes.filter(n => n.ready && n.status !== "done").length;
   const chips = [
     [`<b>${nodes.length}</b> nodes`],
-    [`<span class="dot" style="background:var(--open)"></span><b>${count("open")}</b> open`],
-    [`<span class="dot" style="background:var(--done)"></span><b>${count("done")}</b> done`],
-    [`<span class="dot" style="background:var(--failed)"></span><b>${count("failed")}</b> failed`],
+    [`<span class="dot" style="background:var(--ready)"></span><b>${count("ready")}</b> ready`],
+    [`<span class="dot" style="background:var(--awaiting)"></span><b>${count("awaiting_integration")}</b> awaiting`],
+    [`<span class="dot" style="background:var(--blocked)"></span><b>${count("blocked")}</b> blocked`],
+    [`<span class="dot" style="background:var(--complete)"></span><b>${count("complete")}</b> complete`],
     [`<b>${stale}</b> stale`],
-    [`<b>${ready}</b> ready`],
   ];
+  if (count("error")) {
+    chips.push([`<span class="dot" style="background:var(--blocked)"></span><b>${count("error")}</b> errors`]);
+  }
   $("stats").innerHTML = chips.map(c => `<span class="chip">${c}</span>`).join("");
 }
 
@@ -531,9 +558,8 @@ function renderPanel() {
 
   const tags = document.createElement("div");
   tags.className = "tags";
-  tags.appendChild(pill(n.status, n.status));
+  tags.appendChild(statusPill(n));
   if ((n.stale || []).length) tags.appendChild(pill("stale", "⚠ stale"));
-  if (n.ready && n.status !== "done") tags.appendChild(pill("ready", "ready"));
   panel.appendChild(tags);
 
   const kv = document.createElement("dl");
@@ -545,7 +571,16 @@ function renderPanel() {
   };
   row("author", n.author || "—");
   if (n.assignee) row("assignee", n.assignee);
+  row("work state", statusLabel(n));
+  row("recorded evidence", n.outcome || "open");
+  if (n.currency) row("evidence currency", n.currency);
   panel.appendChild(section("about", kv));
+
+  if (n.error) {
+    const error = document.createElement("pre");
+    error.textContent = n.error;
+    panel.appendChild(section("evaluation error", error));
+  }
 
   if ((n.description || "").trim()) {
     const div = document.createElement("div");
@@ -564,7 +599,7 @@ function renderPanel() {
       const t = byId.get(id);
       if (t) {
         const small = document.createElement("small");
-        small.textContent = `${t.title} — ${t.status}`;
+        small.textContent = `${t.title} — ${statusLabel(t)}`;
         b.appendChild(small);
       }
       b.addEventListener("click", () => select(id));
@@ -593,9 +628,34 @@ function renderPanel() {
   if ((n.blockers || []).length) panel.appendChild(section("blocked by", reasonList(n.blockers)));
   if ((n.stale || []).length) panel.appendChild(section("stale because", reasonList(n.stale)));
 
-  // A node assigned to a human that is not done takes a typed response;
-  // submitting completes the node with the response as its result notes.
-  if (n.assignee === "human" && n.status !== "done") {
+  if (n.candidate) {
+    const c = n.candidate;
+    const candidate = document.createElement("dl");
+    candidate.className = "kv";
+    const candidateRow = (k, v) => {
+      const dt = document.createElement("dt"); dt.textContent = k;
+      const dd = document.createElement("dd"); dd.textContent = v;
+      candidate.append(dt, dd);
+    };
+    candidateRow("id", c.id);
+    candidateRow("stage", (c.integration || "unknown").replaceAll("_", " "));
+    candidateRow("target", c.target);
+    candidateRow("branch", c.branch);
+    panel.appendChild(section("candidate integration", candidate));
+    const explanation = document.createElement("div");
+    explanation.className = "prose";
+    explanation.textContent = {
+      pending: "The attempt succeeded, but its output is still a candidate. Accept or reject it before more work is dispatched.",
+      accepted: "The output was accepted and will complete this node when it is published to the target branch.",
+      published: "The output is present on the target branch and this node is complete.",
+      rejected: "The candidate was rejected, so this node is ready for another attempt.",
+    }[c.integration] || "The candidate's integration state could not be determined.";
+    panel.appendChild(section("what this means", explanation));
+  }
+
+  // Only actionable human work gets a response box. Awaiting and blocked
+  // nodes have a different next action and must not look answerable.
+  if (n.assignee === "human" && n.status === "ready") {
     const form = document.createElement("div");
     const ta = document.createElement("textarea");
     ta.placeholder = "type your response…";
@@ -620,7 +680,7 @@ function renderPanel() {
       const dd = document.createElement("dd"); dd.textContent = v;
       kv2.append(dt, dd);
     };
-    row2("outcome", r.outcome);
+    row2("attempt outcome", r.outcome);
     row2("author", r.author);
     if (r.at) row2("when", new Date(r.at).toLocaleString());
     if (r.worked_by)

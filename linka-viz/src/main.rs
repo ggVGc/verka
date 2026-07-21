@@ -17,7 +17,10 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 
-use linka::{ops, title_of, Author, Blocker, BlockerReason, GitVcs, StalenessReason, Store, Vcs};
+use linka::{
+    ops, title_of, Author, Blocker, BlockerReason, CandidateStore, GitVcs, NodeId, ResultMeta,
+    StalenessReason, Store, Vcs,
+};
 
 const PAGE: &str = include_str!("viz.html");
 
@@ -155,9 +158,12 @@ fn graph_json(store: &Store, vcs: &dyn Vcs) -> Result<Value> {
             Ok(x) => x,
             Err(e) => {
                 // Surface a broken node instead of hiding the whole graph.
-                nodes.push(
-                    json!({ "id": id, "title": "(unreadable node)", "error": format!("{e:#}") }),
-                );
+                nodes.push(json!({
+                    "id": id,
+                    "title": "(unreadable node)",
+                    "status": "error",
+                    "error": format!("{e:#}"),
+                }));
                 continue;
             }
         };
@@ -167,23 +173,29 @@ fn graph_json(store: &Store, vcs: &dyn Vcs) -> Result<Value> {
                 nodes.push(json!({
                     "id": id,
                     "title": title_of(&description),
+                    "status": "error",
                     "error": format!("{error:#}"),
                 }));
                 continue;
             }
         };
-        let status = if state.is_complete() {
-            "complete"
-        } else if state.is_ready() {
-            "ready"
-        } else {
-            "blocked"
-        };
-        let result = store.read_result(&id).ok().flatten().map(|(r, notes)| {
+        let status = workability(&state);
+        let stored_result = store.read_result(&id)?;
+        let candidate = stored_result
+            .as_ref()
+            .map(|(result, _)| current_candidate_json(store, vcs, &id, result))
+            .transpose()?
+            .flatten();
+        let result = stored_result.map(|(r, notes)| {
             json!({
                 "at": r.at,
                 "author": r.author.as_str(),
-                "outcome": r.outcome.as_str(),
+                // A successful attempt is evidence, not necessarily a complete
+                // node: candidate output still has to be integrated.
+                "outcome": match r.outcome {
+                    linka::Outcome::Done => "succeeded",
+                    linka::Outcome::Failed => "failed",
+                },
                 "output_commit": ops::output_commit(&r),
                 // Producer evidence is namespaced application data (e.g. an
                 // execution harness records backend/model); pass it through.
@@ -216,12 +228,53 @@ fn graph_json(store: &Store, vcs: &dyn Vcs) -> Result<Value> {
             "ready": state.is_ready(),
             "outcome": state.outcome,
             "currency": state.currency,
+            "integration": state.integration,
+            "candidate": candidate,
             "stale": state.staleness.iter().map(format_staleness).collect::<Vec<_>>(),
             "blockers": state.blockers.iter().map(format_blocker).collect::<Vec<_>>(),
             "result": result,
         }));
     }
     Ok(json!({ "nodes": nodes, "problems": ops::check(store)? }))
+}
+
+/// Present Linka's mutually meaningful work states without collapsing
+/// integration waits into dependency blocking.
+fn workability(state: &linka::NodeState) -> &'static str {
+    if state.is_complete() {
+        "complete"
+    } else if state.is_blocked() {
+        "blocked"
+    } else if state.is_awaiting_integration() {
+        "awaiting_integration"
+    } else if state.is_ready() {
+        "ready"
+    } else {
+        "error"
+    }
+}
+
+fn current_candidate_json(
+    store: &Store,
+    vcs: &dyn Vcs,
+    id: &str,
+    result: &ResultMeta,
+) -> Result<Option<Value>> {
+    let Some(artifact) = &result.output else {
+        return Ok(None);
+    };
+    let node: NodeId = id.parse().map_err(anyhow::Error::msg)?;
+    let version = store.result_version(id)?;
+    let Some(candidate) = CandidateStore::new(store).for_result(&node, &version, artifact)? else {
+        return Ok(None);
+    };
+    let integration = candidate.integration(vcs)?;
+    Ok(Some(json!({
+        "id": candidate.id.to_string(),
+        "branch": candidate.branch,
+        "target": candidate.target,
+        "integration": integration,
+    })))
 }
 
 fn format_blocker(blocker: &Blocker) -> String {
@@ -271,6 +324,36 @@ fn format_staleness(reason: &StalenessReason) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use linka::{Currency, IntegrationStatus, NodeState, RecordedOutcome};
+
+    fn state(integration: IntegrationStatus, blockers: Vec<Blocker>) -> NodeState {
+        NodeState {
+            outcome: RecordedOutcome::Succeeded,
+            currency: Currency::Current,
+            integration,
+            staleness: Vec::new(),
+            blockers,
+        }
+    }
+
+    #[test]
+    fn integration_wait_is_not_presented_as_blocked() {
+        let awaiting = state(IntegrationStatus::Pending, Vec::new());
+        assert_eq!(workability(&awaiting), "awaiting_integration");
+
+        let mut blocked = state(
+            IntegrationStatus::NotRequired,
+            vec![Blocker {
+                id: "node-dependency".into(),
+                reason: BlockerReason::Open,
+            }],
+        );
+        blocked.outcome = RecordedOutcome::Open;
+        assert_eq!(workability(&blocked), "blocked");
+
+        let complete = state(IntegrationStatus::Published, Vec::new());
+        assert_eq!(workability(&complete), "complete");
+    }
 
     #[test]
     fn formats_structured_reasons_for_the_page() {
