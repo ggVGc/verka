@@ -46,3 +46,7 @@
 - Command: View all context used for a completed node's work:
   - Maybe create a temp directory which contains the contents
   - Or an API which allows listing and getting the content of all context files
+- As an agent runs inside Driva, through Orka or not, I want a better way to view the result rather than the raw view:
+  - List of tool runs
+  - View diffs in better tool, for example vim
+
