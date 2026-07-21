@@ -125,7 +125,8 @@ attempts left by older versions.
 Orka can bind an exact Linka candidate to a Git-native Nota review. `orka
 review start` creates and snapshots a Linka verification node, records the
 binding under `.orka/reviews/`, and starts a Nota branch at the candidate's
-artifact commit. Reviewers use `nota note` and `nota suggest` in a worktree for
-that branch. `orka review finish` records the chosen verdict and Git evidence
-as the verification result; it does not implicitly accept, reject, or publish
-the candidate.
+artifact commit. Starting it again for the same candidate resumes that binding
+instead of creating another verification. Reviewers use `nota note` and `nota
+suggest` in a worktree for that branch. `orka review finish` records the chosen
+verdict and Git evidence as the verification result; it does not implicitly
+accept, reject, or publish the candidate.

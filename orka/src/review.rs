@@ -13,6 +13,7 @@ use linka::{
 };
 use nota::{GitProvider, Review, StartedReview};
 use serde::{Deserialize, Serialize};
+use std::fs;
 use std::path::{Path, PathBuf};
 
 pub const REVIEW_SCHEMA: u32 = 1;
@@ -72,10 +73,15 @@ impl<'a> Reviews<'a> {
 
     /// Create the Linka verification and durable binding before creating the
     /// Nota branch. If branch creation is interrupted, [`resume`] performs the
-    /// remaining idempotent Git step from the recorded facts.
+    /// remaining idempotent Git step from the recorded facts. Starting a
+    /// second review for the same candidate resumes its existing binding.
     pub fn start(&self, candidate: &CandidateId, assignee: Author) -> Result<Started> {
         let candidate_record = CandidateStore::new(self.linka).load(candidate)?;
         require_git_candidate(&candidate_record)?;
+        let _start_lock = self.start_lock()?;
+        if let Some(record) = self.for_candidate(candidate)? {
+            return self.resume(&record.verification);
+        }
         let vcs = GitVcs::for_store(self.linka);
         let verification: NodeId = ops::add_verification(
             self.linka,
@@ -240,6 +246,68 @@ impl<'a> Reviews<'a> {
         let text = toml::to_string_pretty(record)
             .with_context(|| format!("serialising {}", path.display()))?;
         write_atomic(&path, text.as_bytes())
+    }
+
+    fn for_candidate(&self, candidate: &CandidateId) -> Result<Option<ReviewRecord>> {
+        let root = self.orka_root.join("reviews");
+        let entries = match fs::read_dir(&root) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error).with_context(|| format!("reading {}", root.display())),
+        };
+        let mut matches = Vec::new();
+        for entry in entries {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+            let Ok(verification) = entry.file_name().to_string_lossy().parse::<NodeId>() else {
+                continue;
+            };
+            if !self.record_path(&verification).is_file() {
+                continue;
+            }
+            let record = self.load(&verification)?;
+            if &record.candidate == candidate {
+                matches.push(record);
+            }
+        }
+        matches.sort_by(|a, b| a.verification.as_str().cmp(b.verification.as_str()));
+        match matches.len() {
+            0 => Ok(None),
+            1 => Ok(matches.pop()),
+            count => {
+                let ids = matches
+                    .iter()
+                    .map(|record| record.verification.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                bail!(
+                    "candidate `{candidate}` already has {count} Orka reviews ({ids}); refusing to create another"
+                )
+            }
+        }
+    }
+
+    fn start_lock(&self) -> Result<fs::File> {
+        fs::create_dir_all(&self.orka_root)
+            .with_context(|| format!("creating {}", self.orka_root.display()))?;
+        let path = self.orka_root.join(".review-start.lock");
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .with_context(|| format!("opening review start lock {}", path.display()))?;
+        match file.try_lock() {
+            Ok(()) => Ok(file),
+            Err(fs::TryLockError::WouldBlock) => {
+                bail!("another review start is in progress ({})", path.display())
+            }
+            Err(fs::TryLockError::Error(error)) => Err(error)
+                .with_context(|| format!("acquiring review start lock {}", path.display())),
+        }
     }
 
     fn review_dir(&self, verification: &NodeId) -> PathBuf {

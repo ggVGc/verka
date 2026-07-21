@@ -110,6 +110,26 @@ fn nota_review_completes_a_linka_verification_without_nota_knowing_linka() {
 }
 
 #[test]
+fn starting_a_review_twice_resumes_the_only_review_for_the_candidate() {
+    let (_temp, root) = workbench();
+    let candidate = candidate(&root);
+    let store = store_at(&root);
+    let reviews = Reviews::new(&store, root.join(".orka"));
+
+    let first = reviews.start(&candidate.id, Author::Human).unwrap();
+    let second = reviews.start(&candidate.id, Author::Machine).unwrap();
+
+    assert_eq!(second.record, first.record);
+    assert_eq!(second.review.branch, first.review.branch);
+    assert_eq!(second.review.marker, first.review.marker);
+    assert_eq!(second.review.subject, first.review.subject);
+    assert_eq!(
+        linka::ops::verifications_for(&store, &candidate.id).unwrap(),
+        vec![first.record.verification.to_string()]
+    );
+}
+
+#[test]
 fn a_source_change_during_review_is_a_submission_conflict() {
     let (_temp, root) = workbench();
     let candidate = candidate(&root);

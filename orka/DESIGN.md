@@ -137,9 +137,10 @@ acceptance protocol because Linka recorded no result for it.
 
 ## Candidate verification
 
-`orka review start <candidate>` creates an ordinary Linka verification node,
-freezes its `WorkSnapshot`, and starts a Nota branch at the candidate's exact
-Git artifact. Orka records the immutable binding under
+`orka review start <candidate>` creates one ordinary Linka verification node
+per candidate, freezes its `WorkSnapshot`, and starts a Nota branch at the
+candidate's exact Git artifact. Repeating the command resumes the existing
+binding. Orka records the immutable binding under
 `.orka/reviews/<verification>/review.toml` before creating the branch. Nota
 receives only a repository, revision, and branch; it has no Linka dependency.
 
