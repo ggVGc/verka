@@ -4,8 +4,9 @@
 //! Every step that has an external side effect is durably recorded before it
 //! happens, so [`Engine::recover`] can classify any crash by the files the
 //! attempt store holds and finish the idempotent remainder. Recovery never
-//! invents results: an attempt without exit evidence seals as interrupted,
-//! and a dirty or missing workspace is reported, not discarded or guessed at.
+//! invents results: an attempt without exit evidence is discarded only when
+//! its workspace still exactly matches the input; possible work is sealed as
+//! interrupted and retained.
 //!
 //! Orka orchestrates a Linka store specifically. Selection, snapshotting, and
 //! submission go through [`LinkaWork`]; graph semantics stay Linka's, and Orka
@@ -16,7 +17,7 @@ use crate::executor::{ExecutionReport, ExecutionSpec, IsolatedExecutor, MountSpe
 use crate::input::AttemptInput;
 use crate::linka_work::{self, LinkaWork, Settled};
 use crate::outcome::{self, AgentOutcome, Decision, PROMPT_FILE};
-use crate::workspace::{CleanupOutcome, PreparedWorkspace, WorkspaceManager};
+use crate::workspace::{CleanupOutcome, DiscardOutcome, PreparedWorkspace, WorkspaceManager};
 use anyhow::{bail, Context, Result};
 use linka::NodeId;
 use std::collections::BTreeMap;
@@ -176,7 +177,66 @@ impl Engine<'_> {
             attempt: attempt.clone(),
             transcript: transcript.clone(),
         });
-        let report = self.executor.run(&spec, &transcript)?;
+        let report = match self.executor.run(&spec, &transcript) {
+            Ok(report) => report,
+            Err(error) => {
+                // No exit evidence exists, so this attempt can never be
+                // submitted. If nothing changed, roll the allocation back
+                // completely instead of accumulating empty attempt records
+                // and candidate branches for backend configuration errors.
+                // Any possible work remains durable as an interrupted
+                // attempt for inspection.
+                match self.workspaces.discard_unchanged(&workspace) {
+                    Ok(DiscardOutcome::Discarded) => {
+                        return match self.attempts.discard_without_evidence(&attempt) {
+                            Ok(()) => Err(error),
+                            Err(discard_error) => Err(error.context(format!(
+                                "also failed to discard empty attempt {attempt}: {discard_error:#}"
+                            ))),
+                        };
+                    }
+                    Ok(DiscardOutcome::RetainedChanged) => {}
+                    Err(discard_error) => {
+                        let state = SealedState::Interrupted {
+                            reason: format!("execution failed before exit evidence: {error:#}"),
+                        };
+                        let seal = self.attempts.seal(&attempt, state.clone());
+                        if seal.is_ok() {
+                            progress(&RunProgress::Sealed {
+                                attempt: attempt.clone(),
+                                state,
+                            });
+                        }
+                        return match seal {
+                            Ok(_) => Err(error.context(format!(
+                                "also failed to discard unchanged workspace for {attempt}: {discard_error:#}"
+                            ))),
+                            Err(seal_error) => Err(error.context(format!(
+                                "also failed to discard unchanged workspace for {attempt}: \
+                                 {discard_error:#}; and failed to seal it: {seal_error:#}"
+                            ))),
+                        };
+                    }
+                }
+
+                let state = SealedState::Interrupted {
+                    reason: format!("execution failed before exit evidence: {error:#}"),
+                };
+                let seal = self.attempts.seal(&attempt, state.clone());
+                if seal.is_ok() {
+                    progress(&RunProgress::Sealed {
+                        attempt: attempt.clone(),
+                        state,
+                    });
+                }
+                return match seal {
+                    Ok(_) => Err(error),
+                    Err(seal_error) => Err(error.context(format!(
+                        "also failed to seal interrupted attempt {attempt}: {seal_error:#}"
+                    ))),
+                };
+            }
+        };
         self.attempts.record_evidence(&attempt, &report)?;
         progress(&RunProgress::ExecutionFinished {
             attempt: attempt.clone(),
@@ -360,12 +420,27 @@ impl Engine<'_> {
             let node = snapshot.record.input.node().clone();
             let report = match snapshot.phase() {
                 AttemptPhase::Sealed => {
-                    let action = self.recover_cleanup(snapshot.workspace.as_ref())?;
-                    RecoveryReport {
-                        attempt: id,
-                        node,
-                        action,
-                        sealed: snapshot.seal.map(|s| s.state),
+                    let empty_interruption = snapshot.evidence.is_none()
+                        && snapshot.seal.as_ref().is_some_and(|seal| {
+                            matches!(seal.state, SealedState::Interrupted { .. })
+                        });
+                    if empty_interruption
+                        && self.discard_unchanged_attempt(&id, snapshot.workspace.as_ref())?
+                    {
+                        RecoveryReport {
+                            attempt: id,
+                            node,
+                            action: "discarded empty interrupted attempt".into(),
+                            sealed: None,
+                        }
+                    } else {
+                        let action = self.recover_cleanup(snapshot.workspace.as_ref())?;
+                        RecoveryReport {
+                            attempt: id,
+                            node,
+                            action,
+                            sealed: snapshot.seal.map(|s| s.state),
+                        }
                     }
                 }
                 AttemptPhase::Executed => {
@@ -393,31 +468,58 @@ impl Engine<'_> {
                         },
                     }
                 }
-                // No exit evidence: whether the command ran is unknowable
-                // from here, so nothing may be submitted. Seal as
-                // interrupted; the workspace is cleaned only if untouched.
+                // No exit evidence means nothing may be submitted. Roll back
+                // an unchanged allocation completely; retain and seal any
+                // workspace that may contain work.
                 AttemptPhase::Created
                 | AttemptPhase::WorkspacePlanned
                 | AttemptPhase::Prepared
                 | AttemptPhase::Requested => {
-                    let sealed = self.attempts.seal(
-                        &id,
-                        SealedState::Interrupted {
-                            reason: "recovered: attempt ended without exit evidence".into(),
-                        },
-                    )?;
-                    let cleanup = self.recover_cleanup(snapshot.workspace.as_ref())?;
-                    RecoveryReport {
-                        attempt: id,
-                        node,
-                        action: format!("sealed as interrupted; {cleanup}"),
-                        sealed: Some(sealed.state),
+                    if self.discard_unchanged_attempt(&id, snapshot.workspace.as_ref())? {
+                        RecoveryReport {
+                            attempt: id,
+                            node,
+                            action: "discarded empty pre-evidence attempt".into(),
+                            sealed: None,
+                        }
+                    } else {
+                        let sealed = self.attempts.seal(
+                            &id,
+                            SealedState::Interrupted {
+                                reason: "recovered: attempt ended without exit evidence".into(),
+                            },
+                        )?;
+                        let cleanup = self.recover_cleanup(snapshot.workspace.as_ref())?;
+                        RecoveryReport {
+                            attempt: id,
+                            node,
+                            action: format!("sealed as interrupted; {cleanup}"),
+                            sealed: Some(sealed.state),
+                        }
                     }
                 }
             };
             reports.push(report);
         }
         Ok(reports)
+    }
+
+    fn discard_unchanged_attempt(
+        &self,
+        attempt: &AttemptId,
+        workspace: Option<&PreparedWorkspace>,
+    ) -> Result<bool> {
+        let discarded = match workspace {
+            None => true,
+            Some(workspace) => matches!(
+                self.workspaces.discard_unchanged(workspace)?,
+                DiscardOutcome::Discarded
+            ),
+        };
+        if discarded {
+            self.attempts.discard_without_evidence(attempt)?;
+        }
+        Ok(discarded)
     }
 
     fn recover_cleanup(&self, workspace: Option<&PreparedWorkspace>) -> Result<String> {

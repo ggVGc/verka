@@ -105,20 +105,23 @@ An attempt is written before external side effects, one file per step, so its
 phase is derived from which files exist. Recovery classifies each attempt by its
 files and finishes the idempotent remainder:
 
-- Never invent an outcome without exit evidence: a pre-evidence attempt seals
-  interrupted.
+- Never invent an outcome without exit evidence: a changed pre-evidence
+  attempt seals interrupted. An entirely unchanged executor failure is rolled
+  back, including its empty attempt record and candidate branch.
 - Resubmit executed-but-unsealed attempts against the persisted snapshot;
   Linka's version check makes re-submission safe and non-duplicating.
 - Never discard a dirty workspace; clean only sealed attempts or attempts that
   cannot have a result.
 
-Removing a clean execution worktree does not remove its candidate branch.
+Ordinary cleanup of a sealed attempt does not remove its candidate branch.
 Orka deliberately retains `orka/attempts/<attempt-id>` branches for accepted,
 failed, stale, and otherwise sealed attempts so their candidate state remains
 available for inspection, recovery, or later review. These branches are part
-of the attempt's evidence and are not garbage-collection candidates. Any
-future deletion must be an explicit pruning operation with a visible retention
-policy; ordinary run and recovery cleanup never deletes them.
+of the attempt's evidence and are not garbage-collection candidates. The only
+automatic rollback is a pre-evidence executor error whose worktree and branch
+still exactly match the frozen input; there is no work to preserve in that
+case. Any broader deletion requires an explicit pruning operation with a
+visible retention policy.
 
 ## Candidate integration
 

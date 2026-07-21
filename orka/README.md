@@ -103,8 +103,12 @@ after a crash.
 
 Worktree cleanup retains the `orka/attempts/<attempt-id>` candidate branch for
 every sealed attempt, including stale submissions and recorded failures. This
-keeps attempted work available for later inspection or recovery. Orka does not
-currently prune attempt records or their candidate branches implicitly.
+keeps attempted work available for later inspection or recovery. One narrow
+case is rolled back completely: when the executor returns no exit evidence and
+the workspace and branch still exactly match their frozen input, Orka removes
+the empty worktree, candidate branch, and attempt record. Changed work is never
+discarded implicitly. `orka recover` applies the same rule to empty interrupted
+attempts left by older versions.
 
 ## Candidate reviews
 

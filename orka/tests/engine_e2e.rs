@@ -297,6 +297,83 @@ fn a_nonzero_exit_with_a_declared_success_still_submits_and_reports() {
 }
 
 #[test]
+fn an_executor_error_discards_an_unchanged_attempt_completely() {
+    let (_temp, root) = workbench();
+    let node = add_node(&root, "Backend cannot start", vec![]);
+    let (store, workspaces, attempts) = parts(&root);
+    let executor = FakeExecutor {
+        on_run: Some(Box::new(|_| anyhow::bail!("backend refused the request"))),
+        ..Default::default()
+    };
+    let engine = engine!(&root, store, executor, workspaces, attempts);
+    let mut progress = Vec::new();
+
+    let error = engine
+        .run_node_with_progress(&node.parse().unwrap(), &mut |event| {
+            progress.push(event.clone())
+        })
+        .unwrap_err();
+
+    assert!(error.to_string().contains("backend refused"), "{error:#}");
+    let attempt = progress
+        .iter()
+        .find_map(|event| match event {
+            RunProgress::AttemptCreated { attempt } => Some(attempt.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert!(attempts.list().unwrap().is_empty());
+    assert!(
+        !workspaces.path_for(&attempt.0).exists(),
+        "a backend startup error must not leave a clean worktree behind"
+    );
+    assert!(
+        git(
+            &root.join("project"),
+            &["branch", "--list", &format!("orka/attempts/{attempt}")]
+        )
+        .is_empty(),
+        "an empty attempt must not leave a candidate branch behind"
+    );
+    assert!(!progress
+        .iter()
+        .any(|event| matches!(event, RunProgress::Sealed { .. })));
+}
+
+#[test]
+fn an_executor_error_retains_a_worktree_it_may_have_changed() {
+    let (_temp, root) = workbench();
+    let node = add_node(&root, "Backend fails after starting", vec![]);
+    let (store, workspaces, attempts) = parts(&root);
+    let executor = FakeExecutor {
+        on_run: Some(Box::new(|spec: &ExecutionSpec| {
+            std::fs::write(mount(spec, "/workspace").join("partial.txt"), "partial\n")?;
+            anyhow::bail!("backend connection was lost")
+        })),
+        ..Default::default()
+    };
+    let engine = engine!(&root, store, executor, workspaces, attempts);
+
+    engine.run_node(&node.parse().unwrap()).unwrap_err();
+
+    let attempt = attempts.list().unwrap().pop().unwrap();
+    let snapshot = attempts.load(&attempt).unwrap();
+    assert!(matches!(
+        snapshot.seal.unwrap().state,
+        SealedState::Interrupted { .. }
+    ));
+    assert!(
+        snapshot
+            .workspace
+            .unwrap()
+            .path
+            .join("partial.txt")
+            .is_file(),
+        "possibly useful partial work must be retained"
+    );
+}
+
+#[test]
 fn an_attempt_against_a_graph_that_moved_mid_run_seals_stale() {
     let (_temp, root) = workbench();
     let node = add_node(&root, "Moving target", vec![]);
@@ -459,7 +536,7 @@ fn recovery_after_linka_accepted_but_before_seal_recognizes_its_own_result() {
 }
 
 #[test]
-fn recovery_seals_a_pre_evidence_attempt_as_interrupted_and_submits_nothing() {
+fn recovery_discards_an_unchanged_pre_evidence_attempt() {
     let (_temp, root) = workbench();
     let node = add_node(&root, "Never ran", vec![]);
     let (store, workspaces, attempts) = parts(&root);
@@ -476,12 +553,45 @@ fn recovery_seals_a_pre_evidence_attempt_as_interrupted_and_submits_nothing() {
     attempts.mark_prepared(&id).unwrap();
 
     let reports = engine.recover().unwrap();
-    assert!(matches!(
-        reports[0].sealed,
-        Some(SealedState::Interrupted { .. })
-    ));
+    assert_eq!(reports[0].sealed, None);
+    assert!(reports[0].action.contains("discarded empty"));
     assert!(store.read_result(&node).unwrap().is_none());
     assert!(!ws.path.exists(), "the untouched workspace was cleaned");
+    assert!(attempts.list().unwrap().is_empty());
+}
+
+#[test]
+fn recovery_prunes_a_legacy_empty_interrupted_attempt() {
+    use orka::workspace::WorkspaceManager;
+
+    let (_temp, root) = workbench();
+    let node = add_node(&root, "Old backend failure", vec![]);
+    let (store, workspaces, attempts) = parts(&root);
+    let executor = FakeExecutor::default();
+    let engine = engine!(&root, store, executor, workspaces, attempts);
+
+    let id = AttemptId::new();
+    let input = LinkaWork::new(&store)
+        .prepare_input(&node.parse().unwrap())
+        .unwrap();
+    attempts.create(&id, &input).unwrap();
+    let ws = workspaces_prepare(&root, &id, input.input_commit());
+    attempts.plan_workspace(&id, &ws).unwrap();
+    attempts.mark_prepared(&id).unwrap();
+    attempts
+        .seal(
+            &id,
+            SealedState::Interrupted {
+                reason: "execution failed before exit evidence".into(),
+            },
+        )
+        .unwrap();
+    assert_eq!(workspaces.cleanup(&ws).unwrap(), CleanupOutcome::Removed);
+
+    let reports = engine.recover().unwrap();
+    assert!(reports[0].action.contains("discarded empty"));
+    assert!(attempts.list().unwrap().is_empty());
+    assert!(git(&root.join("project"), &["branch", "--list", &ws.branch]).is_empty());
 }
 
 // A standalone worktree preparation matching what the engine would do, so the

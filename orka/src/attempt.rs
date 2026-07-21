@@ -286,6 +286,26 @@ impl FsAttemptStore {
         Ok(ids)
     }
 
+    /// Remove an attempt that never acquired exit evidence. This is used only
+    /// after its unchanged workspace and branch have been rolled back. A
+    /// legacy interrupted seal is allowed so recovery can prune records made
+    /// by older Orka versions; every evidence-bearing or substantive sealed
+    /// attempt remains durable history.
+    pub fn discard_without_evidence(&self, id: &AttemptId) -> Result<()> {
+        let snapshot = self.load(id)?;
+        if snapshot.evidence.is_some()
+            || snapshot
+                .seal
+                .as_ref()
+                .is_some_and(|seal| !matches!(seal.state, SealedState::Interrupted { .. }))
+        {
+            bail!("refusing to discard durable attempt `{id}`");
+        }
+        let dir = self.attempt_dir(id);
+        std::fs::remove_dir_all(&dir)
+            .with_context(|| format!("discarding pre-evidence attempt `{id}`"))
+    }
+
     fn require(&self, id: &AttemptId) -> Result<()> {
         if !self.attempt_dir(id).join("attempt.toml").is_file() {
             bail!("unknown attempt `{id}`");
@@ -463,6 +483,35 @@ mod tests {
     fn listing_an_uninitialised_store_is_empty_not_an_error() {
         let (_temp, store) = store();
         assert_eq!(store.list().unwrap(), vec![]);
+    }
+
+    #[test]
+    fn only_empty_or_interrupted_attempts_can_be_discarded() {
+        let (_temp, store) = store();
+        let unexecuted = AttemptId::new();
+        store.create(&unexecuted, &input()).unwrap();
+        store.record_request(&unexecuted, &spec()).unwrap();
+        store.discard_without_evidence(&unexecuted).unwrap();
+        assert!(store.list().unwrap().is_empty());
+
+        let interrupted = AttemptId::new();
+        store.create(&interrupted, &input()).unwrap();
+        store
+            .seal(
+                &interrupted,
+                SealedState::Interrupted {
+                    reason: "old backend failure".into(),
+                },
+            )
+            .unwrap();
+        store.discard_without_evidence(&interrupted).unwrap();
+        assert!(store.list().unwrap().is_empty());
+
+        let executed = AttemptId::new();
+        store.create(&executed, &input()).unwrap();
+        store.record_evidence(&executed, &report()).unwrap();
+        assert!(store.discard_without_evidence(&executed).is_err());
+        assert!(store.load(&executed).is_ok());
     }
 
     #[test]

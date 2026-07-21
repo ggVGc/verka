@@ -6,7 +6,7 @@
 //! specifically, so tests that touch selection or submission use a real store.
 
 use crate::executor::{ExecutionReport, ExecutionSpec, IsolatedExecutor};
-use crate::workspace::{CleanupOutcome, PreparedWorkspace, WorkspaceManager};
+use crate::workspace::{CleanupOutcome, DiscardOutcome, PreparedWorkspace, WorkspaceManager};
 use anyhow::{anyhow, Result};
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -104,5 +104,21 @@ impl WorkspaceManager for FakeWorkspaces {
         }
         std::fs::remove_dir_all(&workspace.path)?;
         Ok(CleanupOutcome::Removed)
+    }
+
+    fn discard_unchanged(&self, workspace: &PreparedWorkspace) -> Result<DiscardOutcome> {
+        self.cleanups.borrow_mut().push(workspace.clone());
+        let attempt = workspace
+            .path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if self.dirty.contains(&attempt) {
+            return Ok(DiscardOutcome::RetainedChanged);
+        }
+        if workspace.path.exists() {
+            std::fs::remove_dir_all(&workspace.path)?;
+        }
+        Ok(DiscardOutcome::Discarded)
     }
 }

@@ -36,6 +36,15 @@ pub enum CleanupOutcome {
     AlreadyAbsent,
 }
 
+/// Whether an unexecuted workspace could be rolled back without losing work.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DiscardOutcome {
+    /// The worktree and its candidate branch were both removed.
+    Discarded,
+    /// The worktree is dirty or its branch has commits beyond the input.
+    RetainedChanged,
+}
+
 /// Preparing and cleaning isolated per-attempt working trees.
 pub trait WorkspaceManager {
     /// Where `prepare` would put the attempt's workspace — pure, so the plan
@@ -49,6 +58,11 @@ pub trait WorkspaceManager {
     /// Remove a workspace whose attempt is sealed. Refuses to discard
     /// uncommitted changes, reporting `RetainedDirty` instead.
     fn cleanup(&self, workspace: &PreparedWorkspace) -> Result<CleanupOutcome>;
+
+    /// Roll back an attempt that produced no exit evidence. Removes both the
+    /// worktree and candidate branch only when they still exactly match the
+    /// frozen input; otherwise retains them for inspection.
+    fn discard_unchanged(&self, workspace: &PreparedWorkspace) -> Result<DiscardOutcome>;
 }
 
 pub struct GitWorkspaces {
@@ -116,6 +130,38 @@ impl WorkspaceManager for GitWorkspaces {
         remove_worktree(&self.project, &workspace.path)?;
         Ok(CleanupOutcome::Removed)
     }
+
+    fn discard_unchanged(&self, workspace: &PreparedWorkspace) -> Result<DiscardOutcome> {
+        if workspace.path.exists() {
+            if !worktree_clean(&workspace.path)?
+                || checked(&workspace.path, &["rev-parse", "HEAD"])? != workspace.input_commit
+            {
+                return Ok(DiscardOutcome::RetainedChanged);
+            }
+            remove_worktree(&self.project, &workspace.path)?;
+        } else {
+            let _ = Command::new("git")
+                .arg("-C")
+                .arg(&self.project)
+                .args(["worktree", "prune"])
+                .status();
+        }
+
+        let branch_ref = format!("refs/heads/{}", workspace.branch);
+        match resolve_ref_optional(&self.project, &branch_ref)? {
+            Some(commit) if commit != workspace.input_commit => Ok(DiscardOutcome::RetainedChanged),
+            Some(_) => {
+                // Supply the expected old value so a concurrent ref move
+                // cannot make rollback delete work produced elsewhere.
+                checked(
+                    &self.project,
+                    &["update-ref", "-d", &branch_ref, &workspace.input_commit],
+                )?;
+                Ok(DiscardOutcome::Discarded)
+            }
+            None => Ok(DiscardOutcome::Discarded),
+        }
+    }
 }
 
 // --- git worktree mechanics --------------------------------------------------
@@ -171,6 +217,27 @@ fn remove_worktree(project: &Path, path: &Path) -> Result<()> {
     let path_arg = path.to_string_lossy().into_owned();
     checked(project, &["worktree", "remove", &path_arg])?;
     Ok(())
+}
+
+fn resolve_ref_optional(project: &Path, reference: &str) -> Result<Option<String>> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(project)
+        .args(["rev-parse", "--verify", "--quiet", reference])
+        .output()
+        .with_context(|| format!("failed to resolve Git ref `{reference}`"))?;
+    if out.status.success() {
+        return Ok(Some(
+            String::from_utf8_lossy(&out.stdout).trim().to_string(),
+        ));
+    }
+    if out.status.code() == Some(1) {
+        return Ok(None);
+    }
+    bail!(
+        "resolving Git ref `{reference}` failed: {}",
+        String::from_utf8_lossy(&out.stderr).trim()
+    )
 }
 
 /// Run a git command, returning trimmed stdout or an error carrying stderr.
@@ -291,6 +358,42 @@ mod tests {
             std::fs::read_to_string(ws.path.join("scratch.txt")).unwrap(),
             "unsaved\n"
         );
+    }
+
+    #[test]
+    fn discard_removes_an_unchanged_tree_and_its_branch() {
+        let (_temp, project, head) = project();
+        let manager = workspaces(&project);
+        let ws = manager.prepare("attempt-1", &head).unwrap();
+
+        assert_eq!(
+            manager.discard_unchanged(&ws).unwrap(),
+            DiscardOutcome::Discarded
+        );
+        assert!(!ws.path.exists());
+        assert!(git(&project, &["branch", "--list", &ws.branch]).is_empty());
+    }
+
+    #[test]
+    fn discard_retains_dirty_or_committed_work() {
+        let (_temp, project, head) = project();
+        let manager = workspaces(&project);
+        let dirty = manager.prepare("attempt-dirty", &head).unwrap();
+        std::fs::write(dirty.path.join("scratch.txt"), "unsaved\n").unwrap();
+        assert_eq!(
+            manager.discard_unchanged(&dirty).unwrap(),
+            DiscardOutcome::RetainedChanged
+        );
+        assert!(dirty.path.exists());
+
+        let committed = manager.prepare("attempt-committed", &head).unwrap();
+        std::fs::write(committed.path.join("file.txt"), "changed\n").unwrap();
+        git(&committed.path, &["commit", "-q", "-am", "partial work"]);
+        assert_eq!(
+            manager.discard_unchanged(&committed).unwrap(),
+            DiscardOutcome::RetainedChanged
+        );
+        assert!(committed.path.exists());
     }
 
     #[test]
