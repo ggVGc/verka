@@ -424,10 +424,20 @@ pub fn record_context_observation(
             continue;
         }
         let project_path: crate::model::ProjectPath = path.parse().map_err(anyhow::Error::msg)?;
-        let Some(blob) = vcs
-            .file_blob(project_path.as_str())?
-            .or(project_file_blob(&root, &project_path)?)
-        else {
+        // Observations are discovered after execution, but their identity is
+        // the content the accepted result actually ran against. Never hash a
+        // possibly modified execution worktree or a checkout that has moved
+        // since the attempt's frozen project snapshot.
+        let frozen_revision = result
+            .project
+            .as_ref()
+            .map(|project| project.revision.as_str())
+            .filter(|revision| !revision.is_empty());
+        let blob = match frozen_revision {
+            Some(revision) => vcs.file_blob_at(revision, project_path.as_str())?,
+            None => project_file_blob(&root, &project_path)?,
+        };
+        let Some(blob) = blob else {
             continue;
         };
         pinned.insert(path.clone());
@@ -1892,6 +1902,35 @@ mod tests {
             0
         );
         assert_eq!(store.result_version(&id).unwrap(), version);
+    }
+
+    #[test]
+    fn observed_context_is_hashed_from_the_results_frozen_revision() {
+        let (_t, store) = temp_store();
+        let frozen = crate::store::blob_id(b"frozen");
+        let fake = FakeVcs {
+            root: Some("input-commit".into()),
+            revision_blobs: [(("input-commit".into(), "read.txt".into()), frozen.clone())]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+        std::fs::write(
+            store.project_root().join("read.txt"),
+            "new checkout content",
+        )
+        .unwrap();
+        let id = add(&store, &fake, new_node("a", vec![])).unwrap();
+        done(&store, &fake, &id);
+        let version = store.result_version(&id).unwrap();
+
+        assert_eq!(
+            record_context_observation(&store, &fake, &id, &version, &["read.txt".into()],)
+                .unwrap(),
+            1
+        );
+        let observations = store.read_context_observations(&id).unwrap();
+        assert_eq!(observations[0].context[0].identity, frozen);
     }
 
     #[test]

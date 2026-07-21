@@ -12,8 +12,9 @@ attempt lifecycle.
 select Linka-ready node ──► snapshot Linka work input ──► record attempt (.orka/attempts/<id>/)
       ──► prepare worktree (orka/attempts/<id> branch at the frozen revision)
       ──► record request ──► run agent via Driva (bwrap/podman/docker, deny-by-default)
-      ──► capture agent events + diagnostics + exit evidence ──► read declared outcome
-      ──► version-checked submit + Linka candidate ──► seal ──► clean up
+      ──► capture agent events + file reads + diagnostics + exit evidence
+      ──► read declared outcome ──► version-checked submit + observed context pins
+      ──► Linka candidate ──► seal ──► clean up
 ```
 
 The attempt durably stores Linka's exact `WorkSnapshot`. Before submitting a
@@ -108,10 +109,12 @@ the attempt. The agent declares its outcome by writing `outcome.toml`; see
 The Codex profile runs `codex exec --json`. Orka keeps the provider's exact
 stdout in `events.raw.jsonl`, projects it into stable Orka events in
 `events.v1.jsonl`, derives a readable `transcript.log`, and keeps stderr in
-`diagnostics.log`. During `orka run`, the CLI follows the raw journal and
-renders commands, tools, changed files, Markdown agent messages, failures, and
-token usage as they arrive. Terminal control sequences in agent-produced text
-are removed before rendering. Literal `[agent].command` profiles retain plain
+`diagnostics.log`. On Linux, it also watches the attempt worktree and records
+project file reads in `accesses.v1.jsonl`; accepted results pin those files by
+their content at the frozen input revision. During `orka run`, the CLI follows
+the raw journal and renders commands, tools, changed files, Markdown agent
+messages, failures, and token usage as they arrive. Terminal control sequences
+in agent-produced text are removed before rendering. Literal `[agent].command` profiles retain plain
 stdout in `transcript.log` and stderr in `diagnostics.log`.
 
 Driva remains unaware of this protocol: it only validates the capability grant

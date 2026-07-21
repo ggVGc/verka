@@ -13,6 +13,7 @@
 //!     request.toml     the exact execution spec, before the command starts
 //!     events.raw.jsonl exact machine-readable agent stdout, when available
 //!     events.v1.jsonl  normalized Orka agent events
+//!     accesses.v1.jsonl harness-observed project file reads
 //!     diagnostics.log agent stderr, kept outside the event stream
 //!     transcript.log   readable transcript derived from agent stdout
 //!     evidence.toml    harness-observed exit and backend evidence
@@ -199,6 +200,10 @@ impl FsAttemptStore {
         self.attempt_dir(id).join("events.v1.jsonl")
     }
 
+    pub fn accesses_path(&self, id: &AttemptId) -> PathBuf {
+        self.attempt_dir(id).join("accesses.v1.jsonl")
+    }
+
     pub fn execution_artifacts(
         &self,
         id: &AttemptId,
@@ -209,6 +214,7 @@ impl FsAttemptStore {
             diagnostics: self.diagnostics_path(id),
             raw_events: (protocol == AgentProtocol::CodexJsonl).then(|| self.raw_events_path(id)),
             events: (protocol == AgentProtocol::CodexJsonl).then(|| self.events_path(id)),
+            accesses: self.accesses_path(id),
         }
     }
 

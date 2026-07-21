@@ -8,6 +8,7 @@ mod common;
 
 use common::*;
 use linka::Store;
+use orka::access::write_access_summary;
 use orka::attempt::{AttemptId, AttemptPhase, FsAttemptStore, SealedState};
 use orka::candidate::Candidates;
 use orka::engine::{Engine, ExecutionPolicy, RunProgress};
@@ -231,6 +232,72 @@ fn a_full_attempt_lands_a_version_checked_result_from_an_isolated_worktree() {
         .ready_for_machine()
         .unwrap()
         .is_empty());
+}
+
+#[test]
+fn observed_workspace_reads_are_pinned_to_the_exact_accepted_result() {
+    let (_temp, root) = workbench();
+    let project = root.join("project");
+    std::fs::write(project.join("input.txt"), "frozen input\n").unwrap();
+    git(&project, &["add", "input.txt"]);
+    git(&project, &["commit", "-qm", "add input"]);
+    let input_commit = git(&project, &["rev-parse", "HEAD"]);
+    let input_blob = git(&project, &["rev-parse", "HEAD:input.txt"]);
+    let node = add_node(&root, "Use input.txt", vec![]);
+
+    let (store, workspaces, attempts) = parts(&root);
+    let executor = FakeExecutor {
+        observed_reads: vec!["input.txt".into(), "out.txt".into(), "input.txt".into()],
+        on_run: Some(Box::new(|spec: &ExecutionSpec| {
+            let workspace = mount(spec, "/tmp/orka/workspace");
+            assert_eq!(
+                std::fs::read_to_string(workspace.join("input.txt"))?,
+                "frozen input\n"
+            );
+            std::fs::write(workspace.join("out.txt"), "result\n")?;
+            std::fs::write(
+                mount(spec, "/tmp/orka/exchange").join("outcome.toml"),
+                "outcome = \"succeeded\"\noutputs = [\"out.txt\"]\nnotes = \"used input\"\n",
+            )?;
+            Ok(())
+        })),
+        ..Default::default()
+    };
+    let engine = engine!(&root, store, executor, workspaces, attempts);
+    let report = engine.run_node(&node.parse().unwrap()).unwrap();
+
+    let result_version = store.result_version(&node).unwrap();
+    let observations = store.read_context_observations(&node).unwrap();
+    let pins: Vec<_> = observations
+        .iter()
+        .filter(|observation| observation.result == result_version)
+        .flat_map(|observation| observation.context.iter())
+        .collect();
+    assert_eq!(
+        pins.len(),
+        1,
+        "own outputs and duplicate reads are excluded"
+    );
+    assert_eq!(pins[0].path.as_str(), "input.txt");
+    assert_eq!(pins[0].identity, input_blob);
+    assert!(pins[0].observed);
+
+    let (result, _) = store.read_result(&node).unwrap().unwrap();
+    assert_eq!(result.project.unwrap().revision, input_commit);
+    let tracking = result
+        .producer
+        .unwrap()
+        .data
+        .get("context_tracking")
+        .cloned()
+        .unwrap();
+    assert_eq!(tracking["complete"], true);
+    assert_eq!(tracking["observed_files"], 2);
+
+    assert!(store
+        .read_node_attachment(&node, "orka", &format!("{}/accesses", report.attempt),)
+        .unwrap()
+        .is_some());
 }
 
 #[test]
@@ -534,6 +601,10 @@ fn recovery_after_linka_accepted_but_before_seal_recognizes_its_own_result() {
     // A naive resubmit would conflict. Recovery must recognize its own result
     // and finish the missing Linka candidate registration before sealing.
     let (_temp, root) = workbench();
+    let project = root.join("project");
+    std::fs::write(project.join("input.txt"), "input\n").unwrap();
+    git(&project, &["add", "input.txt"]);
+    git(&project, &["commit", "-qm", "add recovery input"]);
     let node = add_node(&root, "Accepted then crashed", vec![]);
     let (store, workspaces, attempts) = parts(&root);
     let executor = FakeExecutor::default();
@@ -562,6 +633,14 @@ fn recovery_after_linka_accepted_but_before_seal_recognizes_its_own_result() {
     };
     std::fs::write(attempts.transcript_path(&id), "accepted transcript\n").unwrap();
     attempts.record_evidence(&id, &evidence).unwrap();
+    write_access_summary(
+        &attempts.accesses_path(&id),
+        "test",
+        &["input.txt".into()],
+        true,
+        None,
+    )
+    .unwrap();
 
     // Linka accepts and captures the result, attributed to this attempt — then
     // "the crash" happens before candidate registration and Orka sealing.
@@ -586,6 +665,15 @@ fn recovery_after_linka_accepted_but_before_seal_recognizes_its_own_result() {
     let candidate = Candidates::new(&store, &attempts).get(&id.0).unwrap();
     assert_eq!(candidate.node.as_str(), node);
     assert_eq!(candidate.integration, linka::IntegrationStatus::Pending);
+    let version = store.result_version(&node).unwrap();
+    let observations = store.read_context_observations(&node).unwrap();
+    assert!(observations.iter().any(|observation| {
+        observation.result == version
+            && observation
+                .context
+                .iter()
+                .any(|pin| pin.path.as_str() == "input.txt" && pin.observed)
+    }));
 }
 
 #[test]

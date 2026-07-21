@@ -83,15 +83,19 @@ Linka, not a backend-neutral port.
 3. Prepare an isolated worktree at `snapshot.project.revision`.
 4. Choose the exact mounts, network policy, agent command, and context, then
    record the Driva execution request before starting the command.
-5. Capture raw agent events, separate diagnostics, a readable transcript, and
-   harness-observed exit evidence. Provider event decoding remains in Orka;
-   Driva transports uninterpreted streams.
+5. Capture raw agent events, separate diagnostics, a readable transcript,
+   harness-observed project file reads, and exit evidence. Provider event
+   decoding and filesystem observation remain in Orka; Driva transports
+   uninterpreted streams.
 6. Interpret the agent's declared outcome (Orka's `AgentOutcome`), then submit
    through Linka against the exact persisted snapshot, attaching the executor
    report as `orka`-namespaced producer evidence.
-7. For a successful project output, idempotently register a Linka candidate
+7. After an accepted result, record content pins for observed reads against
+   that exact result version. Recovery repeats this idempotently if a crash
+   occurs between result acceptance and attempt sealing.
+8. For a successful project output, idempotently register a Linka candidate
    using the Orka attempt as opaque external identity.
-8. Seal accepted success, accepted failure, or a submission conflict
+9. Seal accepted success, accepted failure, or a submission conflict
    (stale-at-submit). Operational failures stay unsealed and recoverable.
 
 ## Agent authority
@@ -172,15 +176,21 @@ policy.
 ## Producer evidence
 
 Every agent-attempt result carries `linka::ProducerEvidence` in the stable
-`orka` namespace: the attempt id and the executor-observed backend, backend
-reference, start/finish timestamps, and exit code. Coordinated review results
-use `orka.nota` with the candidate, verification, and branch plus either the
-marker, review head, and verdict or an explicit abandoned status. For a
-successful agent outcome, Orka additionally stores the exact attempt input,
-prompt, execution request, transcript, harness evidence, and declared outcome
-as opaque Linka node attachments before submitting the result. Mutable
+`orka` namespace: the attempt id, executor-observed backend, start/finish
+timestamps, exit code, and access-tracking completeness. Coordinated review
+results use `orka.nota` with the candidate, verification, and branch plus
+either the marker, review head, and verdict or an explicit abandoned status.
+For a successful agent outcome, Orka additionally stores the exact attempt
+input, prompt, execution request, transcript, harness evidence, and declared
+outcome as opaque Linka node attachments before submitting the result. Mutable
 filesystem paths and recovery state stay in `.orka/`. Linka preserves this
 evidence verbatim and never interprets it.
+
+On Linux, Orka watches the attempt's unique host-side worktree with inotify
+during execution and writes `accesses.v1.jsonl`. Reads are project-relative,
+deduplicated, and exclude `.git`; paths covered by node outputs are excluded by
+Linka when observations are recorded. Tracking failures and queue overflow are
+recorded as incomplete rather than presented as an empty complete read set.
 
 ## Non-goals
 

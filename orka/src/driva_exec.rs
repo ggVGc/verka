@@ -6,6 +6,7 @@
 //! either plain text or a raw event journal, stderr is retained separately as
 //! diagnostics, and the returned report carries harness-observed evidence.
 
+use crate::access::{read_access_summary, write_access_summary, AccessRecorder};
 use crate::agent::AgentProtocol;
 use crate::events::materialize_codex_events;
 use crate::executor::{ExecutionArtifacts, ExecutionReport, ExecutionSpec, IsolatedExecutor};
@@ -102,7 +103,57 @@ impl IsolatedExecutor for DrivaExecutor {
             stderr: append_handle(&artifacts.diagnostics)?,
         };
 
+        let access_recorder = spec
+            .mounts
+            .iter()
+            .find(|mount| mount.destination == spec.working_directory)
+            .map(|mount| AccessRecorder::start(&mount.source, &artifacts.accesses));
+        if access_recorder.is_none() {
+            write_access_summary(
+                &artifacts.accesses,
+                "filesystem-watcher",
+                &[],
+                false,
+                Some(format!(
+                    "no workspace mount found at {}",
+                    spec.working_directory.display()
+                )),
+            )?;
+        }
         let outcome = driva::execute(self.backend.as_ref(), &request, io);
+        if let Some(recorder) = access_recorder {
+            if let Err(error) = recorder.finish() {
+                if let Ok(mut diagnostics) = append_handle(&artifacts.diagnostics) {
+                    let _ = writeln!(
+                        diagnostics,
+                        "orka: could not finish filesystem access tracking: {error:#}"
+                    );
+                }
+            }
+        }
+        match read_access_summary(&artifacts.accesses) {
+            Ok(Some(summary)) if !summary.complete => {
+                if let Ok(mut diagnostics) = append_handle(&artifacts.diagnostics) {
+                    let _ = writeln!(
+                        diagnostics,
+                        "orka: filesystem access tracking is incomplete: {}",
+                        summary
+                            .reason
+                            .as_deref()
+                            .unwrap_or("no reason was recorded")
+                    );
+                }
+            }
+            Err(error) => {
+                if let Ok(mut diagnostics) = append_handle(&artifacts.diagnostics) {
+                    let _ = writeln!(
+                        diagnostics,
+                        "orka: could not read filesystem access evidence: {error:#}"
+                    );
+                }
+            }
+            _ => {}
+        }
         if spec.protocol == AgentProtocol::CodexJsonl {
             let projection = match artifacts.events.as_ref() {
                 Some(events) => materialize_codex_events(
@@ -217,6 +268,7 @@ mod tests {
             raw_events: (protocol == AgentProtocol::CodexJsonl)
                 .then(|| dir.join("events.raw.jsonl")),
             events: (protocol == AgentProtocol::CodexJsonl).then(|| dir.join("events.v1.jsonl")),
+            accesses: dir.join("accesses.v1.jsonl"),
         }
     }
 

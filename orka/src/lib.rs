@@ -17,6 +17,7 @@
 //! port. [`fakes`] substitute for the executor and workspace boundaries in
 //! tests; the Linka store is always real.
 
+pub mod access;
 pub mod agent;
 pub mod attempt;
 pub mod candidate;

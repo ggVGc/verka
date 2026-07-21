@@ -10,6 +10,7 @@
 //! All access goes through Linka's public API; Orka never reads or writes
 //! Linka's on-disk representation.
 
+use crate::access::AccessSummary;
 use crate::attempt::{AttemptId, AttemptRecord};
 use crate::executor::ExecutionReport;
 use crate::input::{AttemptInput, DependencyContext};
@@ -18,7 +19,7 @@ use linka::ops::{self, SubmissionError};
 use linka::{
     ArtifactStore, Author, BranchStore, CandidateId, CandidateStore, ConsumedNode,
     ExternalIdentity, GitVcs, NewCandidate, NewNodeAttachment, NodeAttachment, NodeId, Outcome,
-    ProducerEvidence, ProjectPath, Store, SubmissionConflict,
+    ProducerEvidence, ProjectPath, ResultVersion, Store, SubmissionConflict,
 };
 use std::path::{Path, PathBuf};
 
@@ -47,6 +48,7 @@ pub enum Settled {
 pub struct RecordedResult {
     pub outcome: Outcome,
     pub output_commit: Option<String>,
+    pub version: ResultVersion,
 }
 
 pub const OUTPUT_EVIDENCE_PARTS: [&str; 6] = [
@@ -110,6 +112,31 @@ impl<'a> LinkaWork<'a> {
             },
         )
         .with_context(|| format!("attaching transcript for {attempt} to node `{node}`"))
+    }
+
+    /// Preserve the raw access journal as opaque attempt evidence. The
+    /// context pins derived from it are Linka-native; this attachment keeps
+    /// the completeness status and original observations inspectable.
+    pub fn attach_accesses(
+        &self,
+        node: &NodeId,
+        attempt: &AttemptId,
+        accesses: &Path,
+    ) -> Result<NodeAttachment> {
+        let data = std::fs::read(accesses)
+            .with_context(|| format!("reading access journal for {attempt}"))?;
+        ops::record_node_attachment(
+            self.store,
+            &self.vcs(),
+            node.as_str(),
+            NewNodeAttachment {
+                namespace: "orka".into(),
+                key: format!("{attempt}/accesses"),
+                media_type: Some("application/x-ndjson".into()),
+                data,
+            },
+        )
+        .with_context(|| format!("attaching access journal for {attempt} to node `{node}`"))
     }
 
     /// Commit the complete, inspectable evidence needed to understand an
@@ -250,6 +277,7 @@ impl<'a> LinkaWork<'a> {
         Ok(Some(RecordedResult {
             outcome: result.outcome,
             output_commit: result.output.map(|artifact| artifact.id),
+            version: self.store.result_version(node.as_str())?,
         }))
     }
 
@@ -404,6 +432,25 @@ impl<'a> LinkaWork<'a> {
             Some(producer),
         ))
     }
+
+    /// Attach observed project reads to one exact accepted result. The Linka
+    /// operation is immutable and idempotent, so recovery may repeat it.
+    pub fn record_observed_context(
+        &self,
+        input: &AttemptInput,
+        workspace: &Path,
+        expected_result: &ResultVersion,
+        paths: &[String],
+    ) -> Result<usize> {
+        ops::record_context_observation(
+            self.store,
+            &self.vcs_at(workspace),
+            input.node().as_str(),
+            expected_result,
+            paths,
+        )
+        .with_context(|| format!("recording observed context for `{}`", input.node()))
+    }
 }
 
 /// Map a Linka submission result onto Orka's terminal states: a conflict is a
@@ -433,12 +480,33 @@ pub fn project_paths(outputs: &[String]) -> Result<Vec<ProjectPath>> {
 /// transcript and mutable filesystem paths stay in `.orka/`. Linka preserves
 /// this verbatim and never interprets it.
 pub fn producer_evidence(attempt: &AttemptId, report: &ExecutionReport) -> ProducerEvidence {
+    producer_evidence_with_accesses(attempt, report, None)
+}
+
+pub fn producer_evidence_with_accesses(
+    attempt: &AttemptId,
+    report: &ExecutionReport,
+    accesses: Option<&AccessSummary>,
+) -> ProducerEvidence {
     let mut data = serde_json::Map::new();
     data.insert("attempt".into(), attempt.0.clone().into());
     data.insert("backend".into(), report.backend.clone().into());
     data.insert("started_at_ms".into(), report.started_at_ms.into());
     data.insert("finished_at_ms".into(), report.finished_at_ms.into());
     data.insert("exit_code".into(), report.exit_code.into());
+    if let Some(accesses) = accesses {
+        let mut tracking = serde_json::Map::new();
+        tracking.insert("method".into(), accesses.method.clone().into());
+        tracking.insert("complete".into(), accesses.complete.into());
+        tracking.insert("observed_files".into(), accesses.reads.len().into());
+        if let Some(reason) = &accesses.reason {
+            tracking.insert("reason".into(), reason.clone().into());
+        }
+        data.insert(
+            "context_tracking".into(),
+            serde_json::Value::Object(tracking),
+        );
+    }
     ProducerEvidence {
         namespace: "orka".into(),
         data: serde_json::Value::Object(data),

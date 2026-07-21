@@ -12,6 +12,7 @@
 //! submission go through [`LinkaWork`]; graph semantics stay Linka's, and Orka
 //! never models a graph of its own.
 
+use crate::access::{read_access_summary, AccessSummary};
 use crate::agent::{AgentProtocol, SandboxLayout};
 use crate::attempt::{AttemptId, AttemptPhase, FsAttemptStore, SealedState};
 use crate::executor::{
@@ -332,6 +333,7 @@ impl Engine<'_> {
         workspace: &PreparedWorkspace,
         report: &ExecutionReport,
     ) -> Result<(SealedState, bool, Option<linka::CandidateId>)> {
+        let access_summary = read_access_summary(&self.attempts.accesses_path(attempt))?;
         let declared = outcome::read_declared(&self.attempts.io_dir(attempt)?)?;
         let decision = outcome::decide(declared, report.exit_code);
         if matches!(
@@ -351,6 +353,13 @@ impl Engine<'_> {
                 attempt,
                 &self.attempts.transcript_path(attempt),
             )?;
+            if self.attempts.accesses_path(attempt).is_file() {
+                self.linka.attach_accesses(
+                    input.node(),
+                    attempt,
+                    &self.attempts.accesses_path(attempt),
+                )?;
+            }
         }
         match decision {
             Decision::Submit {
@@ -375,10 +384,20 @@ impl Engine<'_> {
                         },
                         linka::Outcome::Failed => SealedState::FailureRecorded,
                     };
+                    self.record_observed_context(
+                        input,
+                        workspace,
+                        &recorded.version,
+                        access_summary.as_ref(),
+                    )?;
                     self.attempts.seal(attempt, sealed.clone())?;
                     return Ok((sealed, backend_failed, candidate));
                 }
-                let producer = linka_work::producer_evidence(attempt, report);
+                let producer = linka_work::producer_evidence_with_accesses(
+                    attempt,
+                    report,
+                    access_summary.as_ref(),
+                );
                 let (settled, succeeded, candidate) = match outcome {
                     AgentOutcome::Succeeded {
                         outputs,
@@ -417,6 +436,7 @@ impl Engine<'_> {
                         (settled, false, None)
                     }
                 };
+                let accepted = matches!(&settled, Settled::Accepted { .. });
                 let sealed = match settled {
                     Settled::Accepted { output_commit } if succeeded => {
                         SealedState::Submitted { output_commit }
@@ -424,6 +444,18 @@ impl Engine<'_> {
                     Settled::Accepted { .. } => SealedState::FailureRecorded,
                     Settled::Conflict(conflicts) => SealedState::StaleAtSubmit { conflicts },
                 };
+                if accepted {
+                    let recorded = self
+                        .linka
+                        .result_by_attempt(input.node(), &attempt.0)?
+                        .context("accepted result is not attributed to its Orka attempt")?;
+                    self.record_observed_context(
+                        input,
+                        workspace,
+                        &recorded.version,
+                        access_summary.as_ref(),
+                    )?;
+                }
                 self.attempts.seal(attempt, sealed.clone())?;
                 Ok((sealed, backend_failed, candidate))
             }
@@ -440,9 +472,25 @@ impl Engine<'_> {
         }
     }
 
+    fn record_observed_context(
+        &self,
+        input: &AttemptInput,
+        workspace: &PreparedWorkspace,
+        result: &linka::ResultVersion,
+        accesses: Option<&AccessSummary>,
+    ) -> Result<()> {
+        let Some(accesses) = accesses else {
+            // Compatibility with attempts created before access journals.
+            return Ok(());
+        };
+        self.linka
+            .record_observed_context(input, &workspace.path, result, &accesses.reads)?;
+        Ok(())
+    }
+
     fn attach_output_evidence(&self, node: &NodeId, attempt: &AttemptId) -> Result<()> {
         let io = self.attempts.io_dir(attempt)?;
-        let files = [
+        let mut files = vec![
             (
                 "attempt",
                 "application/toml",
@@ -470,6 +518,10 @@ impl Engine<'_> {
             ),
             ("outcome", "application/toml", io.join(OUTCOME_FILE)),
         ];
+        let accesses = self.attempts.accesses_path(attempt);
+        if accesses.is_file() {
+            files.push(("accesses", "application/x-ndjson", accesses));
+        }
         let mut parts = Vec::with_capacity(files.len());
         for (name, media_type, path) in files {
             parts.push(AttemptEvidencePart {

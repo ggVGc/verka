@@ -46,6 +46,8 @@ pub struct ExecutionArtifacts {
     pub diagnostics: PathBuf,
     pub raw_events: Option<PathBuf>,
     pub events: Option<PathBuf>,
+    /// Durable, harness-observed project file accesses for this execution.
+    pub accesses: PathBuf,
 }
 
 /// Harness-observed evidence of one finished execution. This is what Orka

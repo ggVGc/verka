@@ -5,6 +5,7 @@
 //! repository. The Linka store is not faked — Orka orchestrates Linka
 //! specifically, so tests that touch selection or submission use a real store.
 
+use crate::access::write_access_summary;
 use crate::executor::{ExecutionArtifacts, ExecutionReport, ExecutionSpec, IsolatedExecutor};
 use crate::workspace::{CleanupOutcome, DiscardOutcome, PreparedWorkspace, WorkspaceManager};
 use anyhow::{anyhow, Result};
@@ -18,6 +19,8 @@ use std::path::PathBuf;
 pub struct FakeExecutor {
     pub exit_code: i32,
     pub transcript: String,
+    /// Project-relative reads to place in the durable access journal.
+    pub observed_reads: Vec<String>,
     pub runs: RefCell<Vec<ExecutionSpec>>,
     pub on_run: Option<Box<dyn Fn(&ExecutionSpec) -> Result<()>>>,
 }
@@ -27,6 +30,7 @@ impl Default for FakeExecutor {
         Self {
             exit_code: 0,
             transcript: String::new(),
+            observed_reads: Vec::new(),
             runs: RefCell::new(Vec::new()),
             on_run: None,
         }
@@ -37,6 +41,13 @@ impl IsolatedExecutor for FakeExecutor {
     fn run(&self, spec: &ExecutionSpec, artifacts: &ExecutionArtifacts) -> Result<ExecutionReport> {
         std::fs::write(&artifacts.transcript, &self.transcript)?;
         std::fs::write(&artifacts.diagnostics, b"")?;
+        write_access_summary(
+            &artifacts.accesses,
+            "fake",
+            &self.observed_reads,
+            true,
+            None,
+        )?;
         if let Some(hook) = &self.on_run {
             hook(spec)?;
         }

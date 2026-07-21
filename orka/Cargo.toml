@@ -22,3 +22,6 @@ ulid = "1"
 linka = { path = "../linka" }
 driva = { path = "../driva" }
 nota = { path = "../nota" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+inotify = { version = "0.9", default-features = false }
