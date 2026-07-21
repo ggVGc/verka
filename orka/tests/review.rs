@@ -5,6 +5,7 @@ mod common;
 use common::*;
 use linka::{Author, CandidateStore, NewCandidate};
 use orka::review::{AbandonOutcome, FinishOutcome, ReviewVerdict, Reviews};
+use orka::review_worktree::{GitReviewWorktrees, ReviewCleanupOutcome};
 use std::process::Command;
 
 fn candidate(root: &std::path::Path) -> linka::CandidateRecord {
@@ -127,6 +128,151 @@ fn starting_a_review_twice_resumes_the_only_review_for_the_candidate() {
     assert_eq!(
         linka::ops::verifications_for(&store, &candidate.id).unwrap(),
         vec![first.record.verification.to_string()]
+    );
+}
+
+#[test]
+fn managed_review_worktrees_are_reused_inspected_and_safely_cleaned() {
+    let (_temp, root) = workbench();
+    let candidate = candidate(&root);
+    let store = store_at(&root);
+    let reviews = Reviews::new(&store, root.join(".orka"));
+    let started = reviews.start(&candidate.id, Author::Human).unwrap();
+    let worktrees =
+        GitReviewWorktrees::new(root.join("project"), root.join(".orka/review-worktrees"));
+
+    let prepared = worktrees.prepare(&started.record).unwrap();
+    assert_eq!(
+        prepared.path,
+        root.join(".orka/review-worktrees")
+            .join(started.record.verification.as_str())
+    );
+    assert_eq!(
+        git(&prepared.path, &["branch", "--show-current"]),
+        started.record.branch
+    );
+    assert_eq!(worktrees.prepare(&started.record).unwrap(), prepared);
+
+    let listed = worktrees.list().unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].verification, started.record.verification);
+    assert_eq!(listed[0].path, prepared.path);
+    assert!(!listed[0].dirty);
+
+    std::fs::write(prepared.path.join("scratch.txt"), "not committed\n").unwrap();
+    assert!(worktrees.list().unwrap()[0].dirty);
+    assert_eq!(
+        worktrees.cleanup(&started.record).unwrap(),
+        ReviewCleanupOutcome::RetainedDirty
+    );
+    assert!(prepared.path.exists());
+
+    std::fs::remove_file(prepared.path.join("scratch.txt")).unwrap();
+    assert_eq!(
+        worktrees.cleanup(&started.record).unwrap(),
+        ReviewCleanupOutcome::Removed
+    );
+    assert!(!prepared.path.exists());
+    assert!(!git(
+        &root.join("project"),
+        &["branch", "--list", &started.record.branch]
+    )
+    .is_empty());
+    assert_eq!(
+        worktrees.cleanup(&started.record).unwrap(),
+        ReviewCleanupOutcome::AlreadyAbsent
+    );
+
+    git(
+        &root.join("project"),
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "unrelated/review",
+            prepared.path.to_str().unwrap(),
+            "HEAD",
+        ],
+    );
+    let error = worktrees.prepare(&started.record).unwrap_err();
+    assert!(format!("{error:#}").contains("expected `nota/"));
+    assert!(
+        prepared.path.exists(),
+        "a mismatched tree must not be removed"
+    );
+}
+
+#[test]
+fn cli_enter_prepares_the_managed_tree_and_prints_its_path() {
+    let (_temp, root) = workbench();
+    let candidate = candidate(&root);
+    let output = Command::new(env!("CARGO_BIN_EXE_orka"))
+        .args([
+            "--workbench",
+            root.to_str().unwrap(),
+            "review",
+            "start",
+            &candidate.id.0,
+            "--enter",
+        ])
+        // A deliberately invalid shell proves that `--enter` does not launch
+        // a process; it only prepares the tree and reports its path.
+        .env("SHELL", root.join("does-not-exist"))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let store = store_at(&root);
+    let reviews = Reviews::new(&store, root.join(".orka"));
+    let record = reviews.list().unwrap().pop().unwrap();
+    let expected_path = root
+        .join(".orka/review-worktrees")
+        .join(record.verification.as_str());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .last()
+            .unwrap(),
+        expected_path.to_str().unwrap()
+    );
+    assert!(expected_path.is_dir());
+
+    let enter_output = Command::new(env!("CARGO_BIN_EXE_orka"))
+        .args([
+            "--workbench",
+            root.to_str().unwrap(),
+            "review",
+            "enter",
+            record.verification.as_str(),
+        ])
+        .env("SHELL", root.join("does-not-exist"))
+        .output()
+        .unwrap();
+    assert!(enter_output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&enter_output.stdout).trim(),
+        expected_path.to_str().unwrap()
+    );
+
+    let path_output = Command::new(env!("CARGO_BIN_EXE_orka"))
+        .args([
+            "--workbench",
+            root.to_str().unwrap(),
+            "review",
+            "worktree",
+            record.verification.as_str(),
+            "--print-path",
+        ])
+        .output()
+        .unwrap();
+    assert!(path_output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&path_output.stdout).trim(),
+        expected_path.to_str().unwrap()
     );
 }
 

@@ -29,4 +29,5 @@ pub mod input;
 pub mod linka_work;
 pub mod outcome;
 pub mod review;
+pub mod review_worktree;
 pub mod workspace;

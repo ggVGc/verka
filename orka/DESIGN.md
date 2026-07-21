@@ -157,6 +157,13 @@ The verdict is evidence, not acceptance policy: accepting, rejecting, and
 publishing the candidate remain explicit operations. If graph inputs moved
 during review, Linka rejects submission and the Nota branch remains intact.
 
+Orka manages an optional canonical checkout for each review below
+`.orka/review-worktrees/<verification>/`. Entering a review creates or reuses
+that checkout only after verifying its registered branch. Cleanup refuses
+uncommitted changes and never deletes the Nota branch, which remains the
+durable review record. Nota itself stays independent of worktree lifecycle
+policy.
+
 ## Producer evidence
 
 Every agent-attempt result carries `linka::ProducerEvidence` in the stable

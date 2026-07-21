@@ -75,10 +75,15 @@ orka candidate CANDIDATE show a candidate and its patch
 orka accept CANDIDATE    record exact acceptance in Linka
 orka reject CANDIDATE    reject it and make its source retryable
 orka publish CANDIDATE   recoverably fast-forward the recorded target
-orka review start CANDIDATE
-                         create a Linka verification and Nota review branch
 orka review list         list active reviews
+orka review start CANDIDATE [--enter]
+                         create a review and optionally prepare its managed tree
 orka review resume NODE  finish an interrupted review-branch creation
+orka review enter NODE   create or reuse its managed worktree and print its path
+orka review worktree NODE [--print-path]
+                         create or reuse its managed worktree
+orka review worktrees    inspect managed review worktrees
+orka review cleanup NODE remove its managed worktree when clean
 orka review show NODE    show the binding and Git-native review entries
 orka review finish NODE --verdict VERDICT
                          submit review evidence to the verification node
@@ -129,10 +134,18 @@ Orka can bind an exact Linka candidate to a Git-native Nota review. `orka
 review start` creates and snapshots a Linka verification node, records the
 binding under `.orka/reviews/`, and starts a Nota branch at the candidate's
 artifact commit. Starting it again while the review is active resumes that
-binding instead of creating another verification. Reviewers use `nota note`
-and `nota suggest` in a worktree for that branch. `orka review finish` records
-the chosen verdict and Git evidence as the verification result; it does not
-implicitly accept, reject, or publish the candidate. `orka review list` shows unfinished
-bindings, including starts interrupted before branch creation. `orka review
-abandon` (or `review stop`) records a failed verification with abandonment
-evidence and preserves the Nota branch for inspection.
+binding instead of creating another verification. Add `--enter` to create the
+canonical worktree at `.orka/review-worktrees/<verification>/` and print its
+path. `orka review enter NODE` reuses it later and prints only the directory,
+so a caller may run `cd "$(orka review enter NODE)"`. Reviewers use `nota note`
+and `nota suggest` inside that tree. `orka review worktree NODE --print-path`
+offers the same path-only output for editor integrations.
+
+`orka review worktrees` reports clean and dirty managed trees. `orka review
+cleanup` removes only a clean, correctly registered tree and preserves the
+Nota branch. `orka review finish` records the chosen verdict and Git evidence
+as the verification result; it does not implicitly accept, reject, or publish
+the candidate. `orka review list` shows unfinished bindings, including starts
+interrupted before branch creation. `orka review abandon` (or `review stop`)
+records a failed verification with abandonment evidence and preserves the Nota
+branch for inspection.

@@ -10,6 +10,7 @@ use orka::config::{Config, CONFIG_FILE};
 use orka::engine::{Engine, RunProgress, RunReport};
 use orka::linka_work::LinkaWork;
 use orka::review::{AbandonOutcome, FinishOutcome, ReviewVerdict, Reviews};
+use orka::review_worktree::{GitReviewWorktrees, ReviewCleanupOutcome};
 use orka::workspace::GitWorkspaces;
 use std::path::PathBuf;
 
@@ -78,9 +79,30 @@ enum ReviewCommand {
         candidate: String,
         #[arg(long, value_enum, default_value = "human")]
         assignee: Author,
+        /// Prepare the managed review worktree and print its path.
+        #[arg(long)]
+        enter: bool,
     },
     /// Finish branch creation after an interrupted review start.
-    Resume { verification: String },
+    Resume {
+        verification: String,
+        /// Prepare the managed review worktree and print its path.
+        #[arg(long)]
+        enter: bool,
+    },
+    /// Create or reuse the managed review worktree and print its path.
+    Enter { verification: String },
+    /// Create or reuse the managed review worktree.
+    Worktree {
+        verification: String,
+        /// Print only the path, suitable for command substitution.
+        #[arg(long)]
+        print_path: bool,
+    },
+    /// List managed review worktrees.
+    Worktrees,
+    /// Safely remove a clean managed review worktree.
+    Cleanup { verification: String },
     /// Show the binding and Git-native review entries.
     Show { verification: String },
     /// Submit the Nota review as the verification node's graph-only result.
@@ -167,6 +189,13 @@ impl Workbench {
 
     fn workspaces(&self, store: &Store) -> GitWorkspaces {
         GitWorkspaces::new(store.project_root(), self.root.join(".orka/worktrees"))
+    }
+
+    fn review_worktrees(&self, store: &Store) -> GitReviewWorktrees {
+        GitReviewWorktrees::new(
+            store.project_root(),
+            self.root.join(".orka/review-worktrees"),
+        )
     }
 
     fn config(&self) -> Result<Config> {
@@ -356,14 +385,83 @@ fn run(cli: Cli) -> Result<()> {
                 ReviewCommand::Start {
                     candidate,
                     assignee,
+                    enter,
                 } => {
                     let started = reviews.start(&CandidateId(candidate), assignee)?;
                     print_started_review(&started);
+                    if enter {
+                        let worktree = workbench
+                            .review_worktrees(&store)
+                            .prepare(&started.record)?;
+                        println!("{}", worktree.path.display());
+                    }
                 }
-                ReviewCommand::Resume { verification } => {
+                ReviewCommand::Resume {
+                    verification,
+                    enter,
+                } => {
                     let verification = parse_node(verification)?;
                     let started = reviews.resume(&verification)?;
                     print_started_review(&started);
+                    if enter {
+                        let worktree = workbench
+                            .review_worktrees(&store)
+                            .prepare(&started.record)?;
+                        println!("{}", worktree.path.display());
+                    }
+                }
+                ReviewCommand::Enter { verification } => {
+                    let verification = parse_node(verification)?;
+                    let started = reviews.resume(&verification)?;
+                    let worktree = workbench
+                        .review_worktrees(&store)
+                        .prepare(&started.record)?;
+                    println!("{}", worktree.path.display());
+                }
+                ReviewCommand::Worktree {
+                    verification,
+                    print_path,
+                } => {
+                    let verification = parse_node(verification)?;
+                    let started = reviews.resume(&verification)?;
+                    let worktree = workbench
+                        .review_worktrees(&store)
+                        .prepare(&started.record)?;
+                    if print_path {
+                        println!("{}", worktree.path.display());
+                    } else {
+                        println!("verification {}", worktree.verification);
+                        println!("branch       {}", worktree.branch);
+                        println!("worktree     {}", worktree.path.display());
+                    }
+                }
+                ReviewCommand::Worktrees => {
+                    let worktrees = workbench.review_worktrees(&store).list()?;
+                    if worktrees.is_empty() {
+                        println!("no managed review worktrees");
+                    }
+                    for worktree in worktrees {
+                        println!(
+                            "{}  {}  {}  {}",
+                            worktree.verification,
+                            if worktree.dirty { "dirty" } else { "clean" },
+                            worktree.branch,
+                            worktree.path.display()
+                        );
+                    }
+                }
+                ReviewCommand::Cleanup { verification } => {
+                    let verification = parse_node(verification)?;
+                    let record = reviews.load(&verification)?;
+                    match workbench.review_worktrees(&store).cleanup(&record)? {
+                        ReviewCleanupOutcome::Removed => println!("removed {verification}"),
+                        ReviewCleanupOutcome::RetainedDirty => {
+                            println!("retained {verification}: worktree has uncommitted changes")
+                        }
+                        ReviewCleanupOutcome::AlreadyAbsent => {
+                            println!("absent {verification}")
+                        }
+                    }
                 }
                 ReviewCommand::Show { verification } => {
                     let verification = parse_node(verification)?;
@@ -461,9 +559,12 @@ fn print_started_review(started: &orka::review::Started) {
     println!("review       {}", started.review.branch);
     println!("subject      {}", started.review.subject);
     println!(
-        "worktree     git -C {} worktree add <path> {}",
-        started.review.repository.display(),
-        started.review.branch
+        "enter        orka review enter {}",
+        started.record.verification
+    );
+    println!(
+        "worktree     orka review worktree {}",
+        started.record.verification
     );
 }
 
