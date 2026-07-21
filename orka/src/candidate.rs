@@ -4,7 +4,7 @@
 //! Orka adds attempt-oriented lookup and patch display, but stores no duplicate
 //! candidate state and performs no publication side effect itself.
 
-use crate::attempt::{AttemptId, FsAttemptStore};
+use crate::attempt::{AttemptId, AttemptRecord, FsAttemptStore};
 use anyhow::{bail, Context, Result};
 use linka::{
     Author, CandidateId, CandidateRecord, CandidateStore, GitVcs, IntegrationStatus, Store,
@@ -127,11 +127,34 @@ impl<'a> Candidates<'a> {
         let input_commit = attempt
             .as_ref()
             .map(|attempt| {
-                self.attempts
-                    .load(attempt)
-                    .map(|snapshot| snapshot.record.input.input_commit().to_string())
+                let key = format!("{attempt}/attempt");
+                if let Some((_, data)) =
+                    self.store
+                        .read_node_attachment(record.node.as_str(), "orka", &key)?
+                {
+                    let text = std::str::from_utf8(&data)
+                        .context("Orka attempt attachment is not UTF-8")?;
+                    let attached: AttemptRecord =
+                        toml::from_str(text).context("parsing Orka attempt attachment")?;
+                    if &attached.id != attempt || attached.input.node() != &record.node {
+                        bail!("Orka attempt attachment does not match its Linka candidate");
+                    }
+                    return Ok(Some(attached.input.input_commit().to_string()));
+                }
+                if self.attempts.contains(attempt) {
+                    return Ok(Some(
+                        self.attempts
+                            .load(attempt)?
+                            .record
+                            .input
+                            .input_commit()
+                            .to_string(),
+                    ));
+                }
+                Ok(None)
             })
-            .transpose()?;
+            .transpose()?
+            .flatten();
         let integration = record.integration(&GitVcs::for_store(self.store))?;
         Ok(Candidate {
             id: record.id,

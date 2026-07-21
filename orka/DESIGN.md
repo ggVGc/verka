@@ -25,7 +25,9 @@ never depends on Orka.
 - Orka calls Linka's public operations but never reads or mutates Linka's
   on-disk representation directly.
 - Linka stores only namespaced producer evidence about Orka (namespace `orka`);
-  it never interprets attempts, agents, executors, or recovery state.
+  it never interprets attempts, agents, executors, or recovery state. Linka's
+  generic node attachments also retain opaque Orka evidence for produced
+  outputs without adding Orka semantics to Linka.
 - `.linka/` and `.orka/` are separately owned stores in the workbench.
 - Nota depends only on Git. Orka resolves Linka candidates to Git artifacts and
   owns the binding between a Nota branch and a Linka verification node.
@@ -171,9 +173,12 @@ Every agent-attempt result carries `linka::ProducerEvidence` in the stable
 `orka` namespace: the attempt id and the executor-observed backend, backend
 reference, start/finish timestamps, and exit code. Coordinated review results
 use `orka.nota` with the candidate, verification, and branch plus either the
-marker, review head, and verdict or an explicit abandoned status. Transcripts
-and mutable filesystem paths stay in `.orka/`. Linka
-preserves either namespace verbatim and never interprets it.
+marker, review head, and verdict or an explicit abandoned status. For a
+successful agent outcome, Orka additionally stores the exact attempt input,
+prompt, execution request, transcript, harness evidence, and declared outcome
+as opaque Linka node attachments before submitting the result. Mutable
+filesystem paths and recovery state stay in `.orka/`. Linka preserves this
+evidence verbatim and never interprets it.
 
 ## Non-goals
 

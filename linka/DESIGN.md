@@ -58,7 +58,8 @@ never interprets them or includes them in definition, result, readiness, or
 staleness semantics. Attachments are immutable: recording identical data again
 is idempotent, while changing an existing namespace/key is refused. This lets a
 producer retain durable evidence without adding producer-specific concepts to
-the graph model.
+the graph model. Applications may record several attachments atomically in one
+Linka mutation.
 
 | Outcome | Currency | Integration | Dependencies | Workability |
 | --- | --- | --- | --- | --- |

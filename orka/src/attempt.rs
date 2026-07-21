@@ -161,12 +161,28 @@ impl FsAttemptStore {
         &self.root
     }
 
+    pub fn contains(&self, id: &AttemptId) -> bool {
+        self.attempt_dir(id).join("attempt.toml").is_file()
+    }
+
     fn attempt_dir(&self, id: &AttemptId) -> PathBuf {
         self.root.join("attempts").join(&id.0)
     }
 
     pub fn transcript_path(&self, id: &AttemptId) -> PathBuf {
         self.attempt_dir(id).join("transcript.log")
+    }
+
+    pub fn attempt_record_path(&self, id: &AttemptId) -> PathBuf {
+        self.attempt_dir(id).join("attempt.toml")
+    }
+
+    pub fn request_path(&self, id: &AttemptId) -> PathBuf {
+        self.attempt_dir(id).join("request.toml")
+    }
+
+    pub fn evidence_path(&self, id: &AttemptId) -> PathBuf {
+        self.attempt_dir(id).join("evidence.toml")
     }
 
     /// The per-attempt exchange directory mounted into the isolated

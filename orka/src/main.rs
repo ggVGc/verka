@@ -68,6 +68,8 @@ enum Command {
     },
     /// Classify unfinished attempts and finish what can be finished.
     Recover,
+    /// Verify durable evidence for every Orka-produced project candidate.
+    Audit,
 }
 
 #[derive(Subcommand)]
@@ -547,6 +549,18 @@ fn run(cli: Cli) -> Result<()> {
             }
             for report in reports {
                 println!("{}  {}  {}", report.attempt, report.node, report.action);
+            }
+        }
+        Command::Audit => {
+            let store = workbench.linka_store()?;
+            let problems = LinkaWork::new(&store).audit_output_evidence()?;
+            if problems.is_empty() {
+                println!("all Orka-produced outputs retain complete evidence");
+            } else {
+                for problem in &problems {
+                    eprintln!("{problem}");
+                }
+                bail!("{} output evidence problem(s)", problems.len());
             }
         }
     }

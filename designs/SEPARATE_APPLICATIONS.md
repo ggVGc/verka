@@ -83,7 +83,8 @@ Each application writes only through storage it owns or an explicit adapter:
 - Linka owns its graph store (default `.linka/`).
 - Driva owns ephemeral isolation runtime data until command cleanup completes.
 - Orka owns durable orchestration attempts, review bindings, and audit evidence
-  under `.orka/`.
+  under `.orka/`; evidence needed to inspect a produced output is also copied
+  durably through Linka's generic, opaque node-attachment interface.
 - Nota stores its review marker and entries as commits on a Git branch; note
   bodies also appear as files under `.nota/notes/` on that branch.
 

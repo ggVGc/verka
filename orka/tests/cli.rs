@@ -35,3 +35,19 @@ fn init_creates_the_default_config_and_refuses_to_replace_it() {
         "keep me\n"
     );
 }
+
+#[test]
+fn audit_succeeds_when_every_output_has_evidence() {
+    let (_temp, root) = workbench();
+    let output = Command::new(env!("CARGO_BIN_EXE_orka"))
+        .args(["--workbench", root.to_str().unwrap(), "audit"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("complete evidence"));
+}

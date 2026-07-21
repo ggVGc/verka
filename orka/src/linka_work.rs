@@ -10,15 +10,15 @@
 //! All access goes through Linka's public API; Orka never reads or writes
 //! Linka's on-disk representation.
 
-use crate::attempt::AttemptId;
+use crate::attempt::{AttemptId, AttemptRecord};
 use crate::executor::ExecutionReport;
 use crate::input::{AttemptInput, DependencyContext};
 use anyhow::{Context, Result};
 use linka::ops::{self, SubmissionError};
 use linka::{
-    Author, BranchStore, CandidateId, CandidateStore, ConsumedNode, ExternalIdentity, GitVcs,
-    NewCandidate, NewNodeAttachment, NodeAttachment, NodeId, Outcome, ProducerEvidence,
-    ProjectPath, Store, SubmissionConflict,
+    ArtifactStore, Author, BranchStore, CandidateId, CandidateStore, ConsumedNode,
+    ExternalIdentity, GitVcs, NewCandidate, NewNodeAttachment, NodeAttachment, NodeId, Outcome,
+    ProducerEvidence, ProjectPath, Store, SubmissionConflict,
 };
 use std::path::{Path, PathBuf};
 
@@ -47,6 +47,21 @@ pub enum Settled {
 pub struct RecordedResult {
     pub outcome: Outcome,
     pub output_commit: Option<String>,
+}
+
+pub const OUTPUT_EVIDENCE_PARTS: [&str; 6] = [
+    "attempt",
+    "prompt",
+    "request",
+    "transcript",
+    "evidence",
+    "outcome",
+];
+
+pub struct AttemptEvidencePart {
+    pub name: &'static str,
+    pub media_type: &'static str,
+    pub data: Vec<u8>,
 }
 
 pub struct LinkaWork<'a> {
@@ -95,6 +110,84 @@ impl<'a> LinkaWork<'a> {
             },
         )
         .with_context(|| format!("attaching transcript for {attempt} to node `{node}`"))
+    }
+
+    /// Commit the complete, inspectable evidence needed to understand an
+    /// attempt that can produce a project output. Linka treats every part as
+    /// opaque node data; the Orka namespace supplies their meaning.
+    pub fn attach_output_evidence(
+        &self,
+        node: &NodeId,
+        attempt: &AttemptId,
+        parts: Vec<AttemptEvidencePart>,
+    ) -> Result<Vec<NodeAttachment>> {
+        let attachments = parts
+            .into_iter()
+            .map(|part| NewNodeAttachment {
+                namespace: "orka".into(),
+                key: format!("{attempt}/{}", part.name),
+                media_type: Some(part.media_type.into()),
+                data: part.data,
+            })
+            .collect();
+        ops::record_node_attachments(self.store, &self.vcs(), node.as_str(), attachments)
+            .with_context(|| format!("attaching output evidence for {attempt} to node `{node}`"))
+    }
+
+    /// Verify that every Orka-produced project candidate retains both its Git
+    /// artifact and the complete durable evidence set.
+    pub fn audit_output_evidence(&self) -> Result<Vec<String>> {
+        let candidates = CandidateStore::new(self.store);
+        let vcs = self.vcs();
+        let mut problems = Vec::new();
+        for id in candidates.list()? {
+            let candidate = candidates.load(&id)?;
+            let Some(external) = candidate
+                .external
+                .as_ref()
+                .filter(|external| external.namespace == "orka")
+            else {
+                continue;
+            };
+            if candidate.artifact.scheme != "git-commit"
+                || !vcs.commit_exists(&candidate.artifact.id)?
+            {
+                problems.push(format!(
+                    "{}: project artifact {} is not retained",
+                    candidate.id, candidate.artifact.id
+                ));
+            }
+            for part in OUTPUT_EVIDENCE_PARTS {
+                let key = format!("{}/{}", external.id, part);
+                let attachment =
+                    self.store
+                        .read_node_attachment(candidate.node.as_str(), "orka", &key)?;
+                if attachment.is_none() {
+                    problems.push(format!(
+                        "{}: missing node attachment orka/{key}",
+                        candidate.id
+                    ));
+                }
+            }
+            let key = format!("{}/attempt", external.id);
+            if let Some((_, data)) =
+                self.store
+                    .read_node_attachment(candidate.node.as_str(), "orka", &key)?
+            {
+                let text = std::str::from_utf8(&data).with_context(|| {
+                    format!("{}: attempt attachment is not UTF-8", candidate.id)
+                })?;
+                let record: AttemptRecord = toml::from_str(text)
+                    .with_context(|| format!("{}: invalid attempt attachment", candidate.id))?;
+                if record.id.0 != external.id || record.input.node() != &candidate.node {
+                    problems.push(format!(
+                        "{}: attempt attachment identity does not match the candidate",
+                        candidate.id
+                    ));
+                }
+            }
+        }
+        Ok(problems)
     }
 
     /// Linka-ready, machine-assignable work, in Linka's selection order. Orka

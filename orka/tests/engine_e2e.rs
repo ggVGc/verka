@@ -170,6 +170,27 @@ fn a_full_attempt_lands_a_version_checked_result_from_an_isolated_worktree() {
         Some("text/plain; charset=utf-8")
     );
     assert_eq!(attached_transcript, b"agent transcript\n");
+    let attachments = store.list_node_attachments(&node).unwrap();
+    for part in orka::linka_work::OUTPUT_EVIDENCE_PARTS {
+        assert!(
+            attachments
+                .iter()
+                .any(|attachment| attachment.key == format!("{}/{part}", report.attempt)),
+            "missing durable {part} evidence"
+        );
+    }
+    assert!(LinkaWork::new(&store)
+        .audit_output_evidence()
+        .unwrap()
+        .is_empty());
+
+    // Output inspection and candidate operations no longer depend on local
+    // Orka state once the successful evidence set has been committed.
+    std::fs::remove_dir_all(attempts.root()).unwrap();
+    assert!(LinkaWork::new(&store)
+        .audit_output_evidence()
+        .unwrap()
+        .is_empty());
 
     // Orka exposes the candidate with its source node and its complete patch.
     let candidates = Candidates::new(&store, &attempts);
@@ -468,6 +489,7 @@ fn recovery_settles_an_executed_attempt_and_a_second_pass_duplicates_nothing() {
     attempts.mark_prepared(&id).unwrap();
     std::fs::write(ws.path.join("out.txt"), "produced\n").unwrap();
     let io = attempts.io_dir(&id).unwrap();
+    stage_recorded_execution(&attempts, &id, &io);
     std::fs::write(
         io.join("outcome.toml"),
         "outcome = \"succeeded\"\noutputs = [\"out.txt\"]\nnotes = \"done before the crash\"\n",
@@ -527,6 +549,7 @@ fn recovery_after_linka_accepted_but_before_seal_recognizes_its_own_result() {
     attempts.mark_prepared(&id).unwrap();
     std::fs::write(ws.path.join("out.txt"), "recovered output\n").unwrap();
     let io = attempts.io_dir(&id).unwrap();
+    stage_recorded_execution(&attempts, &id, &io);
     std::fs::write(
         io.join("outcome.toml"),
         "outcome = \"succeeded\"\noutputs = [\"out.txt\"]\nnotes = \"done\"\n",
@@ -661,6 +684,33 @@ fn recovery_attaches_a_transcript_from_an_older_sealed_attempt() {
     );
 }
 
+#[test]
+fn recovery_backfills_complete_evidence_for_an_older_output() {
+    let (_temp, root) = workbench();
+    let node = add_node(&root, "Backfill output evidence", vec![]);
+    let (store, workspaces, attempts) = parts(&root);
+    let executor = conforming_agent();
+    let engine = engine!(&root, store, executor, workspaces, attempts);
+    engine.run_node(&node.parse().unwrap()).unwrap();
+
+    // Simulate a candidate created before complete evidence attachments were
+    // introduced while retaining the original .orka attempt files.
+    std::fs::remove_dir_all(store.node_dir(&node).join("attachments")).unwrap();
+    git(&root, &["add", "-A", ".linka"]);
+    git(&root, &["commit", "-m", "simulate historical output"]);
+    assert!(!LinkaWork::new(&store)
+        .audit_output_evidence()
+        .unwrap()
+        .is_empty());
+
+    engine.recover().unwrap();
+
+    assert!(LinkaWork::new(&store)
+        .audit_output_evidence()
+        .unwrap()
+        .is_empty());
+}
+
 // A standalone worktree preparation matching what the engine would do, so the
 // recovery tests can stage a mid-lifecycle attempt.
 fn workspaces_prepare(
@@ -672,4 +722,20 @@ fn workspaces_prepare(
     GitWorkspaces::new(root.join("project"), root.join(".orka/worktrees"))
         .prepare(&id.0, input_commit)
         .unwrap()
+}
+
+fn stage_recorded_execution(attempts: &FsAttemptStore, id: &AttemptId, io: &Path) {
+    std::fs::write(io.join("prompt.md"), "# Historical prompt\n").unwrap();
+    attempts
+        .record_request(
+            id,
+            &ExecutionSpec {
+                command: vec!["agent".into()],
+                working_directory: "/tmp/orka/workspace".into(),
+                mounts: vec![],
+                environment: Default::default(),
+                network: false,
+            },
+        )
+        .unwrap();
 }

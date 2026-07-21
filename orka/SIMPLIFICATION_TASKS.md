@@ -278,8 +278,9 @@ engine and contains no mirrored Linka fingerprints or pins.
 - [x] Add tests proving Linka preserves but does not interpret the namespaced
       evidence.
 
-Exit criterion: a Linka result identifies the Orka attempt that produced it,
-while detailed execution records remain exclusively in `.orka/`.
+Exit criterion: a Linka result identifies the Orka attempt that produced it.
+Detailed execution records remain Orka-owned; evidence for a produced output is
+also retained through Linka's generic opaque node attachments.
 
 ## Phase 5 — Refactor the engine to use Linka directly
 

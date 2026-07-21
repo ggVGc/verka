@@ -17,16 +17,18 @@ select Linka-ready node ──► snapshot Linka work input ──► record att
       ──► version-checked submit + Linka candidate ──► seal ──► clean up
 ```
 
-The attempt durably stores Linka's exact `WorkSnapshot`. After execution, Orka
-also attaches the transcript to the source node through Linka's generic opaque
-attachment API, so the interaction history is carried by the Linka Git
-repository even if local `.orka/` state is later unavailable. Success or failure
-is submitted against the snapshot through Linka's version-checked
+The attempt durably stores Linka's exact `WorkSnapshot`. Before submitting a
+successful outcome, Orka atomically attaches the attempt input, exact prompt,
+execution request, transcript, harness evidence, and raw declared outcome to
+the source node through Linka's generic opaque attachment API. The evidence
+needed to understand a produced output therefore travels with the Linka Git
+repository even if local `.orka/` state is later unavailable. Success or
+failure is submitted against the snapshot through Linka's version-checked
 `capture_submission`. Every step is recorded before its side effect, so `orka
-recover` can classify any crash from the files present and finish the idempotent
-remainder. Recovery also attaches transcripts from attempts sealed by older
-Orka versions. Stale work — a graph that moved between snapshot and submit — is
-refused and sealed as such, never silently completed.
+recover` can classify any crash from the files present and finish the
+idempotent remainder. Recovery also backfills complete evidence for outputs
+sealed by older Orka versions. Stale work — a graph that moved between snapshot
+and submit — is refused and sealed as such, never silently completed.
 
 ## Use
 
@@ -79,6 +81,7 @@ orka candidate CANDIDATE show a candidate and its patch
 orka accept CANDIDATE    record exact acceptance in Linka
 orka reject CANDIDATE    reject it and make its source retryable
 orka publish CANDIDATE   recoverably fast-forward the recorded target
+orka audit               verify evidence for every Orka-produced output
 orka review list         list active reviews
 orka review start CANDIDATE [--enter]
                          create a review and optionally prepare its managed tree
@@ -118,8 +121,9 @@ orka publish CANDIDATE
 The candidate list connects Linka's candidate id to its source node, branch,
 target, and opaque Orka attempt identity. Linka owns the decision and derives
 publication from Git history; Orka only supplies an attempt-oriented UI and
-patch view. The patch base comes from Orka's durable attempt input rather than
-being duplicated in Linka. Acceptance pins the exact artifact and previous target commit.
+patch view. The patch base comes from the attempt input attached durably to the
+Linka node, with local `.orka/` state used only as a compatibility fallback.
+Acceptance pins the exact artifact and previous target commit.
 Publication refuses dirty or concurrently moved targets and is safe to retry
 after a crash.
 

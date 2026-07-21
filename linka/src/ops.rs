@@ -463,38 +463,72 @@ pub fn record_node_attachment(
     id: &str,
     new: NewNodeAttachment,
 ) -> Result<NodeAttachment> {
+    Ok(record_node_attachments(store, vcs, id, vec![new])?
+        .into_iter()
+        .next()
+        .expect("one attachment requested"))
+}
+
+/// Atomically commit several opaque attachments in one Linka mutation.
+/// Existing identical items are accepted, so a caller can recover from a
+/// partially completed older workflow without duplicating data or commits.
+pub fn record_node_attachments(
+    store: &Store,
+    vcs: &dyn Vcs,
+    id: &str,
+    new: Vec<NewNodeAttachment>,
+) -> Result<Vec<NodeAttachment>> {
+    if new.is_empty() {
+        return Ok(Vec::new());
+    }
     let mutation = store.mutation_lock(vcs)?;
     if !store.exists(id) {
         bail!("unknown node `{id}`");
     }
-    if let Some((existing, data)) = store.read_node_attachment(id, &new.namespace, &new.key)? {
-        if existing.media_type == new.media_type && data == new.data {
-            return Ok(existing);
+
+    let mut identities = std::collections::HashSet::new();
+    let mut attachments = Vec::with_capacity(new.len());
+    let mut pending = Vec::new();
+    let created_at_ms = now_millis();
+    for new in new {
+        if !identities.insert((new.namespace.clone(), new.key.clone())) {
+            bail!("attachment batch repeats `{}/{}`", new.namespace, new.key);
         }
-        bail!(
-            "attachment `{}/{}` already exists with different content",
-            new.namespace,
-            new.key
-        );
+        if let Some((existing, data)) = store.read_node_attachment(id, &new.namespace, &new.key)? {
+            if existing.media_type != new.media_type || data != new.data {
+                bail!(
+                    "attachment `{}/{}` already exists with different content",
+                    new.namespace,
+                    new.key
+                );
+            }
+            attachments.push(existing);
+            continue;
+        }
+        let attachment = NodeAttachment {
+            schema: ATTACHMENT_SCHEMA,
+            namespace: new.namespace,
+            key: new.key,
+            created_at_ms,
+            media_type: new.media_type,
+            content: blob_id(&new.data),
+            size: new.data.len() as u64,
+        };
+        pending.push((attachment.clone(), new.data));
+        attachments.push(attachment);
     }
-    let attachment = NodeAttachment {
-        schema: ATTACHMENT_SCHEMA,
-        namespace: new.namespace,
-        key: new.key,
-        created_at_ms: now_millis(),
-        media_type: new.media_type,
-        content: blob_id(&new.data),
-        size: new.data.len() as u64,
-    };
-    store.write_node_attachment(id, &attachment, &new.data)?;
+
+    if pending.is_empty() {
+        return Ok(attachments);
+    }
+    for (attachment, data) in &pending {
+        store.write_node_attachment(id, attachment, data)?;
+    }
     mutation.commit(
         vcs,
-        &format!(
-            "linka: attach {}/{} to {id}",
-            attachment.namespace, attachment.key
-        ),
+        &format!("linka: attach {} item(s) to {id}", pending.len()),
     )?;
-    Ok(attachment)
+    Ok(attachments)
 }
 
 /// Derive all graph state through one fallible evaluation.
@@ -1910,6 +1944,34 @@ mod tests {
             commits + 1,
             "an identical retry must not create another Git mutation"
         );
+
+        let batch = vec![
+            NewNodeAttachment {
+                namespace: "example".into(),
+                key: "report-2".into(),
+                media_type: Some("text/plain".into()),
+                data: b"two".to_vec(),
+            },
+            NewNodeAttachment {
+                namespace: "other".into(),
+                key: "report-3".into(),
+                media_type: None,
+                data: b"three".to_vec(),
+            },
+        ];
+        assert_eq!(
+            record_node_attachments(&store, &fake, &id, batch.clone())
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(
+            *fake.store_commits.borrow(),
+            commits + 2,
+            "the batch is one Git mutation"
+        );
+        record_node_attachments(&store, &fake, &id, batch).unwrap();
+        assert_eq!(*fake.store_commits.borrow(), commits + 2);
 
         let mut changed = new;
         changed.data.push(3);

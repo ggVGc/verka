@@ -16,8 +16,8 @@ use crate::agent::SandboxLayout;
 use crate::attempt::{AttemptId, AttemptPhase, FsAttemptStore, SealedState};
 use crate::executor::{ExecutionReport, ExecutionSpec, IsolatedExecutor, MountSpec};
 use crate::input::AttemptInput;
-use crate::linka_work::{self, LinkaWork, Settled};
-use crate::outcome::{self, AgentOutcome, Decision, PROMPT_FILE};
+use crate::linka_work::{self, AttemptEvidencePart, LinkaWork, Settled};
+use crate::outcome::{self, AgentOutcome, Decision, OUTCOME_FILE, PROMPT_FILE};
 use crate::workspace::{CleanupOutcome, DiscardOutcome, PreparedWorkspace, WorkspaceManager};
 use anyhow::{bail, Context, Result};
 use linka::NodeId;
@@ -325,16 +325,27 @@ impl Engine<'_> {
         workspace: &PreparedWorkspace,
         report: &ExecutionReport,
     ) -> Result<(SealedState, bool, Option<linka::CandidateId>)> {
-        // Agent output is durable node-associated evidence independently of
-        // whether result submission succeeds, fails, or becomes stale. This
-        // operation is idempotent, so recovery safely retries it.
-        self.linka.attach_transcript(
-            input.node(),
-            attempt,
-            &self.attempts.transcript_path(attempt),
-        )?;
         let declared = outcome::read_declared(&self.attempts.io_dir(attempt)?)?;
-        match outcome::decide(declared, report.exit_code) {
+        let decision = outcome::decide(declared, report.exit_code);
+        if matches!(
+            &decision,
+            Decision::Submit {
+                outcome: AgentOutcome::Succeeded { .. },
+                ..
+            }
+        ) {
+            // A successful output is never submitted until its full audit
+            // evidence is already committed to Linka. Recovery retries the
+            // same immutable batch after any crash.
+            self.attach_output_evidence(input.node(), attempt)?;
+        } else {
+            self.linka.attach_transcript(
+                input.node(),
+                attempt,
+                &self.attempts.transcript_path(attempt),
+            )?;
+        }
+        match decision {
             Decision::Submit {
                 outcome,
                 backend_failed,
@@ -422,6 +433,49 @@ impl Engine<'_> {
         }
     }
 
+    fn attach_output_evidence(&self, node: &NodeId, attempt: &AttemptId) -> Result<()> {
+        let io = self.attempts.io_dir(attempt)?;
+        let files = [
+            (
+                "attempt",
+                "application/toml",
+                self.attempts.attempt_record_path(attempt),
+            ),
+            (
+                "prompt",
+                "text/markdown; charset=utf-8",
+                io.join(PROMPT_FILE),
+            ),
+            (
+                "request",
+                "application/toml",
+                self.attempts.request_path(attempt),
+            ),
+            (
+                "transcript",
+                "text/plain; charset=utf-8",
+                self.attempts.transcript_path(attempt),
+            ),
+            (
+                "evidence",
+                "application/toml",
+                self.attempts.evidence_path(attempt),
+            ),
+            ("outcome", "application/toml", io.join(OUTCOME_FILE)),
+        ];
+        let mut parts = Vec::with_capacity(files.len());
+        for (name, media_type, path) in files {
+            parts.push(AttemptEvidencePart {
+                name,
+                media_type,
+                data: std::fs::read(&path)
+                    .with_context(|| format!("reading output evidence {}", path.display()))?,
+            });
+        }
+        self.linka.attach_output_evidence(node, attempt, parts)?;
+        Ok(())
+    }
+
     /// Classify every recorded attempt and finish what can be finished.
     pub fn recover(&self) -> Result<Vec<RecoveryReport>> {
         let mut reports = Vec::new();
@@ -429,7 +483,19 @@ impl Engine<'_> {
             let snapshot = self.attempts.load(&id)?;
             let node = snapshot.record.input.node().clone();
             let transcript = self.attempts.transcript_path(&id);
-            if transcript.is_file() {
+            let produced_output = snapshot.seal.as_ref().is_some_and(|seal| {
+                matches!(
+                    seal.state,
+                    SealedState::Submitted {
+                        output_commit: Some(_)
+                    }
+                )
+            });
+            if produced_output {
+                // Backfill the complete evidence set for output-producing
+                // attempts sealed by older Orka versions.
+                self.attach_output_evidence(&node, &id)?;
+            } else if transcript.is_file() {
                 // This also migrates transcripts from attempts sealed by older
                 // Orka versions. New attempts are harmless idempotent retries.
                 self.linka.attach_transcript(&node, &id, &transcript)?;
