@@ -4,20 +4,17 @@ Status: accepted and implemented.
 
 ## Decision
 
-The repository is a suite of four independently usable applications:
+The repository is a suite of five independently usable applications:
 
 ```text
- +------------+       +-------+       +------+       +-------+
- | linka-viz  +------>| Linka |<------+ Orka +------>| Driva |
- +------------+       +-------+       +--+---+       +---+---+
-                                        |               |
-                                        v               v
-                                     +------+       Bubblewrap /
-                                     | Nota |       Podman / Docker
-                                     +--+---+
-                                        |
-                                        v
-                                       Git
+ +----------+       +------+       +-------+       Bubblewrap /
+ | Orka Web +------>| Orka +------>| Driva |------>Podman / Docker
+ +----+-----+       +--+---+       +-------+
+      |                |  |
+      v                |  v
+   +-------+<----------+ +------+
+   | Linka |             | Nota |-----> Git
+   +-------+             +------+
 ```
 
 **Linka** owns the node graph: definitions, dependency and lineage edges,
@@ -34,6 +31,11 @@ handling its outcome, and version-safely reporting results to Linka. It does
 not own isolation mechanics or Nota's review-entry representation. It also
 owns the durable binding and workflow that coordinate Linka candidates and
 verification nodes with Nota review branches.
+
+**Orka Web** is Orka's local presentation layer. It combines Orka's ready
+queue, attempt history and transcripts, candidate integration, and active
+reviews with the Linka graph Orka is coordinating. It uses public application
+APIs and never reads `.linka/` records directly.
 
 **Nota** owns Git-native human review: it pins an exact Git subject and records
 notes and suggested edits as commits on an append-only review branch. A narrow
@@ -55,6 +57,8 @@ does not interpret Linka identities or depend on another application here.
    only the concrete command and capability grant chosen by its caller.
 6. Nota verdicts are evidence, not candidate acceptance or publication policy;
    those remain explicit Linka operations exposed by Orka.
+7. Orka Web depends on Orka's public records and services and Linka's public
+   graph API. It owns no orchestration state of its own.
 
 ## Information flow
 
@@ -90,9 +94,9 @@ references are stable opaque identifiers or version pins.
 
 ```text
 linka/       graph library and CLI
-linka-viz/   Linka graph viewer
 driva/       standalone container session runner
 orka/        Linka + Driva orchestration
+orka-web/    local web interface for an Orka workbench
 nota/        standalone review application
 ```
 

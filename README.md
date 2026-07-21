@@ -1,6 +1,6 @@
-# Linka, Driva, Orka, and Nota
+# Linka, Driva, Orka, Nota, and Orka Web
 
-This repository contains four small applications for graph-based work,
+This repository contains five small applications for graph-based work,
 isolated command execution, orchestration, and Git-native review. They are
 separate applications with narrow, one-way dependencies rather than a single
 framework.
@@ -19,23 +19,25 @@ framework.
   execute agent commands in isolation. It owns orchestration policy, durable
   attempts, candidate-oriented commands, and the coordination between Linka
   verification nodes and Nota reviews.
+- `orka-web/` — Orka's local web interface. It combines Orka's ready queue,
+  attempts and transcripts, candidates, and active reviews with the Linka graph
+  being orchestrated.
 - `nota/` — a standalone Git-native review application. A review is an
   append-only branch: Markdown note commits and ordinary project commits form
   its record. Nota knows Git revisions, but not Linka candidates or nodes.
 
-`linka-viz/` is a small Linka-specific graph viewer, not another domain
-application.
-
 ## Dependency direction
 
 ```text
-linka-viz ----> Linka <---- Orka ----> Driva ----> Bubblewrap / Podman / Docker
-                            |
-                            +-------> Nota ----> Git
+Orka Web ----> Orka ----> Driva ----> Bubblewrap / Podman / Docker
+    |           |  |
+    +--> Linka <+  +-----> Nota ----> Git
 ```
 
 Linka, Driva, and Nota have no dependencies on one another. Orka is the only
 application that composes them: it resolves a Linka candidate to an exact Git
 commit, starts or reads the Nota branch, and submits the resulting evidence to
 a Linka verification node. Nota never interprets Linka identities, while Linka
-never interprets Nota's review data.
+never interprets Nota's review data. Orka Web is a presentation layer over that
+composition; it reads Orka's public records and services and Linka's public
+graph API rather than either application's on-disk representation directly.

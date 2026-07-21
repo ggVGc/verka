@@ -1,11 +1,10 @@
-//! `linka-viz` — a small web server that visualises the node graph.
+//! `orka-web` — a local web interface for an Orka workbench.
 //!
-//! It serves a single self-contained page (no external assets) showing every
-//! node and its `depends_on` / `derived_from` connections, laid out as a
-//! left-to-right dependency graph, plus a JSON endpoint the page polls so the
-//! view tracks the store live. Read-only, with one exception: a human can
-//! answer a node assigned to them (`POST /api/respond/<id>`), which completes
-//! it with their response as the result notes.
+//! It serves a single self-contained page (no external assets) combining the
+//! Linka graph Orka orchestrates with Orka's ready queue, durable attempts,
+//! transcripts, candidates, and active reviews. The page polls one JSON
+//! endpoint so it follows the workbench live. A human can also answer ready
+//! human work through Linka's public operation.
 //!
 //! The server is a deliberately tiny `std::net` loop — a handful of routes
 //! doesn't justify an HTTP framework dependency.
@@ -15,47 +14,94 @@ use clap::Parser;
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use linka::{
     ops, title_of, Author, Blocker, BlockerReason, CandidateStore, GitVcs, NodeId, ResultMeta,
     StalenessReason, Store, Vcs,
 };
+use orka::attempt::{AttemptId, AttemptPhase, FsAttemptStore, SealedState};
+use orka::candidate::Candidates;
+use orka::linka_work::LinkaWork;
+use orka::review::Reviews;
 
-const PAGE: &str = include_str!("viz.html");
+const PAGE: &str = include_str!("index.html");
 
 #[derive(Parser)]
 #[command(
-    name = "linka-viz",
+    name = "orka-web",
     version,
-    about = "Serve an interactive view of the node graph"
+    about = "Serve a local web interface for an Orka workbench"
 )]
 struct Cli {
-    /// Path to the store directory.
-    #[arg(long, env = "LINKA_DIR", default_value = ".linka")]
-    store: std::path::PathBuf,
+    /// Workbench root (holds .linka/, .orka/, project/, and orka.toml).
+    /// Defaults to the nearest ancestor containing .linka/.
+    #[arg(long, env = "ORKA_WORKBENCH")]
+    workbench: Option<PathBuf>,
     /// Address to listen on.
     #[arg(long, default_value = "127.0.0.1:7710")]
     addr: String,
 }
 
+struct App {
+    root: PathBuf,
+    store: Store,
+    vcs: GitVcs,
+    attempts: FsAttemptStore,
+}
+
+impl App {
+    fn open(given: Option<PathBuf>) -> Result<Self> {
+        let root = locate_workbench(given)?;
+        let store = Store::open(root.join(".linka"))?;
+        let vcs = GitVcs::for_store(&store);
+        let attempts = FsAttemptStore::new(root.join(".orka"));
+        Ok(Self {
+            root,
+            store,
+            vcs,
+            attempts,
+        })
+    }
+}
+
+fn locate_workbench(given: Option<PathBuf>) -> Result<PathBuf> {
+    if let Some(root) = given {
+        if !root.join(".linka").is_dir() {
+            bail!("no .linka store under {}", root.display());
+        }
+        return Ok(root);
+    }
+    let mut dir = std::env::current_dir()?;
+    loop {
+        if dir.join(".linka").is_dir() {
+            return Ok(dir);
+        }
+        if !dir.pop() {
+            bail!("no Orka workbench found: no ancestor contains .linka/");
+        }
+    }
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let store = Store::open(cli.store)?;
-    let vcs = GitVcs::for_store(&store);
-    let shared = Arc::new((store, vcs));
+    let app = Arc::new(App::open(cli.workbench)?);
 
     let listener =
         TcpListener::bind(&cli.addr).with_context(|| format!("cannot listen on {}", cli.addr))?;
-    println!("linka-viz: serving http://{}", listener.local_addr()?);
+    println!(
+        "orka-web: serving {} at http://{}",
+        app.root.display(),
+        listener.local_addr()?
+    );
 
     for stream in listener.incoming() {
         let Ok(stream) = stream else { continue };
-        let shared = Arc::clone(&shared);
+        let app = Arc::clone(&app);
         std::thread::spawn(move || {
-            let (store, vcs) = &*shared;
-            if let Err(e) = handle(stream, store, vcs) {
-                eprintln!("linka-viz: request failed: {e:#}");
+            if let Err(e) = handle(stream, &app) {
+                eprintln!("orka-web: request failed: {e:#}");
             }
         });
     }
@@ -64,7 +110,7 @@ fn main() -> Result<()> {
 
 /// Serve one request: parse the request line and headers, read the body if
 /// one is declared, route, respond, close.
-fn handle(mut stream: TcpStream, store: &Store, vcs: &dyn Vcs) -> Result<()> {
+fn handle(mut stream: TcpStream, app: &App) -> Result<()> {
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut line = String::new();
     reader.read_line(&mut line)?;
@@ -95,7 +141,7 @@ fn handle(mut stream: TcpStream, store: &Store, vcs: &dyn Vcs) -> Result<()> {
 
     let (status, content_type, body) = match (method.as_str(), path.as_str()) {
         ("GET", "/" | "/index.html") => ("200 OK", "text/html; charset=utf-8", PAGE.to_string()),
-        ("GET", "/api/graph") => match graph_json(store, vcs) {
+        ("GET", "/api/state") => match state_json(app) {
             Ok(v) => ("200 OK", "application/json", v.to_string()),
             Err(e) => (
                 "500 Internal Server Error",
@@ -105,7 +151,7 @@ fn handle(mut stream: TcpStream, store: &Store, vcs: &dyn Vcs) -> Result<()> {
         },
         ("POST", p) if p.starts_with("/api/respond/") => {
             let id = &p["/api/respond/".len()..];
-            match respond(store, vcs, id, &request_body) {
+            match respond(&app.store, &app.vcs, id, &request_body) {
                 Ok(()) => (
                     "200 OK",
                     "application/json",
@@ -113,6 +159,17 @@ fn handle(mut stream: TcpStream, store: &Store, vcs: &dyn Vcs) -> Result<()> {
                 ),
                 Err(e) => (
                     "400 Bad Request",
+                    "application/json",
+                    json!({ "error": format!("{e:#}") }).to_string(),
+                ),
+            }
+        }
+        ("GET", p) if p.starts_with("/api/transcript/") => {
+            let id = &p["/api/transcript/".len()..];
+            match transcript_json(&app.attempts, id) {
+                Ok(v) => ("200 OK", "application/json", v.to_string()),
+                Err(e) => (
+                    "404 Not Found",
                     "application/json",
                     json!({ "error": format!("{e:#}") }).to_string(),
                 ),
@@ -148,10 +205,20 @@ fn respond(store: &Store, vcs: &dyn Vcs, id: &str, body: &[u8]) -> Result<()> {
     Ok(())
 }
 
-/// The whole graph with everything derived, in one payload: per node its
-/// definition, derived status/readiness, blockers, staleness reasons, and the
-/// completion record if any — so the page needs no other endpoint.
-fn graph_json(store: &Store, vcs: &dyn Vcs) -> Result<Value> {
+/// The orchestration state in one payload: Orka's dispatchable work, durable
+/// attempts, candidates and reviews, plus the derived Linka graph those Orka
+/// records refer to.
+fn state_json(app: &App) -> Result<Value> {
+    let store = &app.store;
+    let vcs = &app.vcs;
+    let attempts = attempts_json(&app.attempts)?;
+    let candidates = candidates_json(store, &app.attempts)?;
+    let reviews = reviews_json(store, app.attempts.root())?;
+    let ready = LinkaWork::new(store).ready_for_machine()?;
+    let ready_ids = ready
+        .iter()
+        .map(|item| item.node.as_str())
+        .collect::<std::collections::HashSet<_>>();
     let mut nodes = Vec::new();
     for id in store.list_ids()? {
         let (meta, description) = match store.read_node(&id) {
@@ -226,6 +293,7 @@ fn graph_json(store: &Store, vcs: &dyn Vcs) -> Result<Value> {
             "derived_from": meta.derived_from,
             "status": status,
             "ready": state.is_ready(),
+            "orka_ready": ready_ids.contains(id.as_str()),
             "outcome": state.outcome,
             "currency": state.currency,
             "integration": state.integration,
@@ -233,9 +301,149 @@ fn graph_json(store: &Store, vcs: &dyn Vcs) -> Result<Value> {
             "stale": state.staleness.iter().map(format_staleness).collect::<Vec<_>>(),
             "blockers": state.blockers.iter().map(format_blocker).collect::<Vec<_>>(),
             "result": result,
+            "attempts": attempts.iter()
+                .filter(|attempt| attempt["node"].as_str() == Some(id.as_str()))
+                .cloned()
+                .collect::<Vec<_>>(),
         }));
     }
-    Ok(json!({ "nodes": nodes, "problems": ops::check(store)? }))
+    Ok(json!({
+        "workbench": app.root,
+        "nodes": nodes,
+        "ready": ready.iter().map(|item| json!({
+            "node": item.node,
+            "title": item.title,
+        })).collect::<Vec<_>>(),
+        "attempts": attempts,
+        "candidates": candidates,
+        "reviews": reviews,
+        "problems": ops::check(store)?,
+    }))
+}
+
+fn attempts_json(store: &FsAttemptStore) -> Result<Vec<Value>> {
+    store
+        .list()?
+        .into_iter()
+        .map(|id| {
+            let snapshot = store.load(&id)?;
+            let transcript = store.transcript_path(&id).is_file();
+            let evidence = snapshot.evidence.as_ref().map(|e| {
+                json!({
+                    "backend": e.backend,
+                    "backend_reference": e.backend_reference,
+                    "exit_code": e.exit_code,
+                    "started_at_ms": e.started_at_ms,
+                    "finished_at_ms": e.finished_at_ms,
+                })
+            });
+            let seal = snapshot.seal.as_ref().map(|seal| {
+                json!({
+                    "state": sealed_state_label(&seal.state),
+                    "detail": sealed_state_detail(&seal.state),
+                    "sealed_at_ms": seal.sealed_at_ms,
+                })
+            });
+            Ok(json!({
+                "id": id.0,
+                "node": snapshot.record.input.node(),
+                "title": title_of(&snapshot.record.input.description),
+                "created_at_ms": snapshot.record.created_at_ms,
+                "phase": attempt_phase_label(snapshot.phase()),
+                "input_commit": snapshot.record.input.input_commit(),
+                "target": snapshot.record.input.target_branch,
+                "workspace": snapshot.workspace.as_ref().map(|workspace| json!({
+                    "path": workspace.path,
+                    "branch": workspace.branch,
+                })),
+                "evidence": evidence,
+                "seal": seal,
+                "has_transcript": transcript,
+            }))
+        })
+        .collect()
+}
+
+fn candidates_json(store: &Store, attempts: &FsAttemptStore) -> Result<Vec<Value>> {
+    Candidates::new(store, attempts)
+        .list()?
+        .into_iter()
+        .map(|candidate| {
+            let status = candidate.status();
+            Ok(json!({
+                "id": candidate.id,
+                "attempt": candidate.attempt.as_ref().map(|attempt| &attempt.0),
+                "node": candidate.node,
+                "branch": candidate.branch,
+                "target": candidate.target,
+                "input_commit": candidate.input_commit,
+                "head_commit": candidate.head_commit,
+                "status": status,
+            }))
+        })
+        .collect()
+}
+
+fn reviews_json(store: &Store, orka_root: &Path) -> Result<Vec<Value>> {
+    Reviews::new(store, orka_root)
+        .list()?
+        .into_iter()
+        .map(|review| {
+            Ok(json!({
+                "candidate": review.candidate,
+                "verification": review.verification,
+                "branch": review.branch,
+                "subject": review.subject,
+            }))
+        })
+        .collect()
+}
+
+fn transcript_json(store: &FsAttemptStore, raw_id: &str) -> Result<Value> {
+    let id = AttemptId(raw_id.to_string());
+    // Loading first both validates the id against durable Orka state and keeps
+    // arbitrary paths out of this read-only endpoint.
+    let snapshot = store.load(&id)?;
+    let path = store.transcript_path(&id);
+    let transcript = std::fs::read_to_string(&path)
+        .with_context(|| format!("attempt `{id}` has no readable transcript"))?;
+    Ok(json!({
+        "attempt": id.0,
+        "node": snapshot.record.input.node(),
+        "transcript": transcript,
+    }))
+}
+
+fn attempt_phase_label(phase: AttemptPhase) -> &'static str {
+    match phase {
+        AttemptPhase::Created => "created",
+        AttemptPhase::WorkspacePlanned => "workspace_planned",
+        AttemptPhase::Prepared => "prepared",
+        AttemptPhase::Requested => "requested",
+        AttemptPhase::Executed => "executed",
+        AttemptPhase::Sealed => "sealed",
+    }
+}
+
+fn sealed_state_label(state: &SealedState) -> &'static str {
+    match state {
+        SealedState::Submitted { .. } => "submitted",
+        SealedState::StaleAtSubmit { .. } => "stale_at_submit",
+        SealedState::FailureRecorded => "failure_recorded",
+        SealedState::Interrupted { .. } => "interrupted",
+        SealedState::ContractViolation { .. } => "contract_violation",
+    }
+}
+
+fn sealed_state_detail(state: &SealedState) -> Option<Value> {
+    match state {
+        SealedState::Submitted { output_commit } => output_commit.clone().map(Value::String),
+        SealedState::StaleAtSubmit { conflicts } => Some(json!(conflicts)),
+        SealedState::Interrupted { reason } | SealedState::ContractViolation { reason } => {
+            Some(Value::String(reason.clone()))
+        }
+        SealedState::FailureRecorded => None,
+    }
 }
 
 /// Present Linka's mutually meaningful work states without collapsing

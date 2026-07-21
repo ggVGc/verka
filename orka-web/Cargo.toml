@@ -1,11 +1,11 @@
 [package]
-name = "linka-viz"
+name = "orka-web"
 version = "0.1.0"
 edition = "2021"
-description = "A small web server that visualises a linka node graph"
+description = "A local web interface for an Orka workbench"
 
 [[bin]]
-name = "linka-viz"
+name = "orka-web"
 path = "src/main.rs"
 
 [dependencies]
@@ -13,3 +13,4 @@ anyhow = "1"
 clap = { version = "4", features = ["derive", "env"] }
 serde_json = "1"
 linka = { path = "../linka" }
+orka = { path = "../orka" }
