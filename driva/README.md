@@ -10,6 +10,7 @@ directory.
 ```sh
 cargo run -- run --write . -- cargo test
 cargo run -- run --read ~/.cargo/registry --write . --network -- cargo update
+cargo run -- run --path ./tools -- project-tool
 cargo run -- shell --write .
 ```
 
@@ -57,6 +58,12 @@ Mount arguments accept `SOURCE` or `SOURCE:DESTINATION`. A relative source with
 no destination is placed below the configured container working directory;
 `.` is mounted at the working directory. Mount sources must exist. Use
 `--dry-run` to inspect the effective grants and backend invocation.
+
+Use repeatable `--path DIRECTORY` options to make host tool directories
+available without granting write access. Driva mounts each directory read-only
+at its canonical host path inside the isolation and prepends those paths to
+`PATH` in the order given. This works with Bubblewrap, Podman, and Docker while
+preserving paths used by tool managers such as Rustup.
 
 Projects can provide `driva.toml`:
 

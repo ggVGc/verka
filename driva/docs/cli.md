@@ -71,6 +71,7 @@ Options:
       --template <NAME>    Apply a named execution template
       --read <MOUNT>       Add a read-only mount as SOURCE or SOURCE:DESTINATION
       --write <MOUNT>      Add a writable mount as SOURCE or SOURCE:DESTINATION
+      --path <DIRECTORY>   Add a host directory read-only and prepend it to the isolated PATH
       --network            Permit networking (disabled otherwise)
       --no-network         Disable networking, overriding configuration and templates
   -i, --interactive        Allocate an interactive terminal
@@ -88,6 +89,7 @@ separate them from Driva's own flags when the command has flags of its own:
 driva run --write . -- cargo test
 driva run --read ~/.cargo/registry --write . --network -- cargo update
 driva run --image rust:1.88 --workdir /workspace --write .:/workspace -- cargo build
+driva run --path ./tools -- project-tool
 driva run --env RUST_LOG=debug -- env
 ```
 
@@ -98,6 +100,7 @@ Policy options (shared by `run`, `shell`, and `start`):
 | `--template <NAME>` | Apply a built-in or project-defined execution template. |
 | `--read <MOUNT>` | Bind-mount a host path read-only. Repeatable. |
 | `--write <MOUNT>` | Bind-mount a host path read-write. Repeatable. |
+| `--path <DIRECTORY>` | Bind-mount a host directory read-only and prepend it to the isolated `PATH`. Repeatable. |
 | `--network` | Enable networking (otherwise the container has none). |
 | `--no-network` | Disable networking, overriding global configuration and templates. |
 | `-i`, `--interactive` | Allocate an interactive terminal (stdin + TTY). |
@@ -105,6 +108,16 @@ Policy options (shared by `run`, `shell`, and `start`):
 | `--image <IMAGE>` | Override the configured container image for this run (Podman/Docker only). |
 | `--workdir <WORKDIR>` | Override the isolated working directory (must be absolute). |
 | `--env NAME=VALUE` | Set an environment variable inside the container. Repeatable. |
+
+Each `--path` directory must exist on the host. Relative paths are resolved
+from the current host directory, and `~` is expanded from the host home
+directory. Driva mounts each one read-only at its canonical host path inside
+the isolation and prepends that path to `PATH` in option order. Preserving the
+path allows tool managers such as Rustup to find state installed next to their
+executable proxies. If configuration, a template, or `--env` supplies `PATH`,
+the additions are prepended to that value; otherwise Driva retains its
+conventional system path. The behavior is the same with Bubblewrap, Podman,
+and Docker.
 
 Template settings overlay the global configuration, and one-off CLI values
 overlay the template. Mounts are appended in global, template, then CLI order;
@@ -304,6 +317,7 @@ Options:
       --template <NAME>    Apply a named execution template
       --read <MOUNT>       Add a read-only mount as SOURCE or SOURCE:DESTINATION
       --write <MOUNT>      Add a writable mount as SOURCE or SOURCE:DESTINATION
+      --path <DIRECTORY>   Add a host directory read-only and prepend it to the isolated PATH
       --network            Permit networking (disabled otherwise)
       --no-network         Disable networking, overriding configuration and templates
   -i, --interactive        Allocate an interactive terminal
@@ -358,6 +372,7 @@ Options:
       --template <NAME>    Apply a named execution template
       --read <MOUNT>       Add a read-only mount as SOURCE or SOURCE:DESTINATION
       --write <MOUNT>      Add a writable mount as SOURCE or SOURCE:DESTINATION
+      --path <DIRECTORY>   Add a host directory read-only and prepend it to the isolated PATH
       --network            Permit networking (disabled otherwise)
       --no-network         Disable networking, overriding configuration and templates
   -i, --interactive        Allocate an interactive terminal

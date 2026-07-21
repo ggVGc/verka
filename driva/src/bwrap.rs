@@ -1,13 +1,11 @@
 use crate::{
     effective_policy, ExecutionEvidence, ExecutionIo, ExecutionOutcome, ExecutionRequest,
-    Isolation, MountAccess, ProcessExit,
+    Isolation, MountAccess, ProcessExit, DEFAULT_PATH,
 };
 use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::SystemTime;
-
-const DEFAULT_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
 /// A synchronous Bubblewrap backend using either a prepared filesystem tree
 /// or a private root containing the host's system runtime.

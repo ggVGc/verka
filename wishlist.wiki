@@ -49,4 +49,9 @@
 - As an agent runs inside Driva, through Orka or not, I want a better way to view the result rather than the raw view:
   - List of tool runs
   - View diffs in better tool, for example vim
-
+- Some (T)UI around driva when interactive:
+  - Should allow me to go in and out of the main view, like vim insert/normal mode
+  - Allow adding/removing mounts etc. within an active session
+- Driva should have some concept of hidden, or read-only, files within writeable mounts:
+  - Main use-case is isolating files which are human-authored and should never be written, or even read, by coding agents
+  - Also, for restricting work when, for example, implementation should be modified without touching tests, or vice-versa

@@ -30,6 +30,10 @@ use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 use std::time::SystemTime;
 
+/// Conventional executable search path used when an isolated request does not
+/// provide its own PATH.
+pub const DEFAULT_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExecutionRequest {
     pub command: Vec<OsString>,

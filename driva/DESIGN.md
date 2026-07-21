@@ -16,6 +16,8 @@ The distinguishing policy is deny by default:
 
 - host files are unavailable unless explicitly mounted;
 - mounts are read-only unless explicitly writable;
+- command-line PATH additions are mounted read-only and prepended to the
+  isolated executable search path;
 - networking is disabled unless explicitly enabled; and
 - the isolated environment is removed when the command finishes.
 
