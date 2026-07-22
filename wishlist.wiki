@@ -1,3 +1,15 @@
+- New tool: Session runner?
+  Run a session with an agent in JSON format.
+  Similar to what happens when work is done on a node with orka, but interactive. Possibly start of attempt viewer.
+  I see each output from the agent as a single-line entry which I can expand if wanted.
+  Can stop the session, without losing the context (which is the JSON).
+  Can start a new session using the old context, being able to switch models mid-way (from opus to codex, for example).
+  Can fork the session etc.
+  Some TUI where I can view and switch between sessions. Maybe FZF with a preview program which views context of active sessions.
+
+- Some quick help to begin a new thing:
+  - Easily begin a driva session in new temporary branch and enter a worktree
+
 - Should be able to run an agent session, producing an interaction log and final plan, and make that into a linka node with little friction
 - Some way of starting sessions with driva, closing the window, and having some kind of overview of when a session is waiting for action:
   - TUI app
