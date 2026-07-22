@@ -333,26 +333,27 @@ impl<'a> LinkaWork<'a> {
     }
 
     /// Submit a successful attempt against its persisted snapshot: capture the
-    /// declared outputs in the execution worktree and record the result. A
-    /// graph conflict records nothing and is returned as [`Settled::Conflict`].
+    /// agent's complete work from the execution worktree and record the result.
+    /// The produced file set is the diff between the frozen input commit and
+    /// the final worktree — discovered here, never declared by the agent — so
+    /// work the agent committed itself is captured just as reliably as work it
+    /// left uncommitted. A graph conflict records nothing and is returned as
+    /// [`Settled::Conflict`].
     pub fn submit_candidate_success(
         &self,
         input: &AttemptInput,
         workspace: &crate::workspace::PreparedWorkspace,
         attempt: &AttemptId,
-        outputs: &[ProjectPath],
         message: Option<String>,
         notes: String,
         producer: ProducerEvidence,
     ) -> Result<(Settled, Option<CandidateId>)> {
         let vcs = self.vcs_at(&workspace.path);
-        let settled = classify(ops::capture_submission(
+        let settled = classify(ops::capture_execution_submission(
             self.store,
             &vcs,
             input.snapshot.clone(),
-            outputs,
             message,
-            Outcome::Done,
             notes,
             Author::Machine,
             Some(producer.clone()),
@@ -495,17 +496,6 @@ fn classify(result: std::result::Result<Option<String>, SubmissionError>) -> Res
     }
 }
 
-/// Convert declared output strings into validated project paths. Invalid paths
-/// are a contract/policy failure surfaced here, never passed raw into git.
-pub fn project_paths(outputs: &[String]) -> Result<Vec<ProjectPath>> {
-    outputs
-        .iter()
-        .map(|path| {
-            path.parse::<ProjectPath>()
-                .map_err(|e| anyhow::anyhow!("invalid declared output `{path}`: {e}"))
-        })
-        .collect()
-}
 
 /// Namespaced producer evidence identifying the Orka attempt that produced a
 /// result. Only the harness-observed execution facts are recorded; the

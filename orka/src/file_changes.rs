@@ -1,8 +1,8 @@
 //! Durable Git checkpoints for model `file_change` events.
 //!
 //! Checkpoints use a private index and ref. They never move the execution
-//! worktree's HEAD or touch its index, so Linka can still capture only the
-//! outputs declared by the agent when the attempt settles.
+//! worktree's HEAD or touch its index, so Linka can still capture the
+//! worktree's uncommitted changes cleanly when the attempt settles.
 
 use crate::events::{decode_codex_line, AgentEvent};
 use anyhow::{bail, Context, Result};

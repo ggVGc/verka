@@ -1039,6 +1039,68 @@ pub fn capture_submission(
     Ok(output_commit)
 }
 
+/// Capture a coding agent's complete work from an isolated execution worktree
+/// and submit it as a successful result against its frozen snapshot.
+///
+/// Unlike [`capture_submission`], the agent declares no output paths. The
+/// worktree is its own sandbox, so the produced change is defined as whatever
+/// differs between the frozen input commit (`snapshot.project.revision`, the
+/// commit the work started from) and the final worktree — committed by the
+/// agent or left uncommitted. That diff is the single source of truth, so no
+/// path list is asserted, stored, or trusted: the output commit itself carries
+/// the exact set (recoverable later via the artifact's files).
+///
+/// The same ordering guarantee as [`capture_submission`] holds: the output
+/// commit is synthesized before the version check, but its ref is retained only
+/// after the submission is accepted, so a conflict mutates no graph state.
+#[allow(clippy::too_many_arguments)]
+pub fn capture_execution_submission(
+    store: &Store,
+    vcs: &dyn Vcs,
+    snapshot: WorkSnapshot,
+    message: Option<String>,
+    notes: String,
+    author: Author,
+    producer: Option<ProducerEvidence>,
+) -> std::result::Result<Option<String>, SubmissionError> {
+    let id = snapshot.node.as_str().to_string();
+    let origin = snapshot.project.revision.clone();
+    let message = match message {
+        Some(message) => message,
+        None => {
+            let (_, description) = store.read_node(&id)?;
+            crate::model::title_of(&description).to_string()
+        }
+    };
+    let mut commit_message = format!("{message}\n\nLinka-Node: {id}");
+    if !origin.is_empty() {
+        commit_message.push_str(&format!("\nLinka-Input: {origin}"));
+    }
+    let output_commit = vcs.capture_worktree(&origin, &commit_message)?;
+
+    let output = output_commit
+        .as_deref()
+        .map(|commit| git_artifact(store, commit))
+        .transpose()?;
+    submit_result(
+        store,
+        vcs,
+        ResultSubmission {
+            snapshot,
+            outcome: Outcome::Done,
+            output,
+            notes,
+            author,
+            producer,
+        },
+    )?;
+    // Accepted: keep the output reachable independently of the worktree.
+    if let Some(commit) = &output_commit {
+        vcs.retain_output(&id, commit)?;
+    }
+    Ok(output_commit)
+}
+
 /// The node whose work produced `commit`, if any — the inverse of the output
 /// artifact on each result, derived by scanning rather than persisted as a
 /// second index. Unique because each completion mints one commit for one node.
@@ -3419,6 +3481,67 @@ mod tests {
             fake.captured.borrow().is_empty(),
             "no project commit for graph-only work"
         );
+        assert_eq!(current_status(&store, &fake, &id).unwrap(), Status::Done);
+    }
+
+    #[test]
+    fn execution_submission_captures_the_worktree_without_a_declaration() {
+        let (_t, store) = temp_store();
+        // The worktree's produced files are modeled by `dirty`; no output
+        // paths are passed — the agent declares nothing.
+        let fake = FakeVcs {
+            next_id: "out-commit".into(),
+            dirty: vec!["src/x.rs".into(), "src/y.rs".into()],
+            ..Default::default()
+        };
+        let id = add(&store, &fake, new_node("a", vec![])).unwrap();
+        let snapshot = snapshot_work(&store, &fake, &id, &[]).unwrap();
+
+        let commit = capture_execution_submission(
+            &store,
+            &fake,
+            snapshot,
+            Some("do it".into()),
+            "did it".into(),
+            Author::Machine,
+            None,
+        )
+        .unwrap();
+        assert_eq!(commit.as_deref(), Some("out-commit"));
+
+        let (result, _) = store.read_result(&id).unwrap().unwrap();
+        assert_eq!(
+            result.output.as_ref().map(|a| a.id.as_str()),
+            Some("out-commit")
+        );
+        // The whole worktree change set was captured, and its ref retained.
+        assert_eq!(
+            fake.captured.borrow().as_slice(),
+            &[vec!["src/x.rs".to_string(), "src/y.rs".to_string()]]
+        );
+        assert!(fake.commits.borrow().contains("out-commit"));
+    }
+
+    #[test]
+    fn execution_submission_with_an_unchanged_worktree_is_graph_only() {
+        let (_t, store) = temp_store();
+        // No dirty paths models a worktree identical to the input commit.
+        let fake = FakeVcs::default();
+        let id = add(&store, &fake, new_node("a", vec![])).unwrap();
+        let snapshot = snapshot_work(&store, &fake, &id, &[]).unwrap();
+
+        let commit = capture_execution_submission(
+            &store,
+            &fake,
+            snapshot,
+            None,
+            "nothing produced".into(),
+            Author::Machine,
+            None,
+        )
+        .unwrap();
+        assert_eq!(commit, None);
+        assert!(fake.captured.borrow().is_empty());
         assert_eq!(current_status(&store, &fake, &id).unwrap(), Status::Done);
     }
 

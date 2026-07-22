@@ -26,6 +26,17 @@ pub trait ArtifactStore {
     /// hash of the change.
     fn capture(&self, paths: &[String], message: &str) -> Result<String>;
 
+    /// Capture the entire final state of an isolated execution worktree as a
+    /// single output relative to `parent` (the frozen input commit the work
+    /// started from), returning the output id. The complete change is whatever
+    /// differs between `parent` and the worktree now — regardless of any
+    /// commits the agent made along the way — so no output paths need be
+    /// declared. The worktree's checked-out branch is left pointing at the
+    /// captured commit and its tree clean, exactly as [`Self::capture`] leaves
+    /// it. Returns `None` when the worktree is identical to `parent` (nothing
+    /// was produced).
+    fn capture_worktree(&self, parent: &str, message: &str) -> Result<Option<String>>;
+
     /// Keep a completed node output reachable independently of a worktree.
     fn retain_output(&self, node: &str, commit: &str) -> Result<()>;
 
@@ -125,6 +136,20 @@ impl ArtifactStore for FakeVcs {
             .insert(self.next_id.clone(), paths.to_vec());
         self.commits.borrow_mut().insert(self.next_id.clone());
         Ok(self.next_id.clone())
+    }
+
+    fn capture_worktree(&self, _parent: &str, _message: &str) -> Result<Option<String>> {
+        // The worktree's produced files are modeled by `dirty`; an empty set
+        // means nothing was produced, mirroring a tree equal to the parent.
+        if self.dirty.is_empty() {
+            return Ok(None);
+        }
+        self.captured.borrow_mut().push(self.dirty.clone());
+        self.files_for
+            .borrow_mut()
+            .insert(self.next_id.clone(), self.dirty.clone());
+        self.commits.borrow_mut().insert(self.next_id.clone());
+        Ok(Some(self.next_id.clone()))
     }
 
     fn retain_output(&self, _node: &str, commit: &str) -> Result<()> {

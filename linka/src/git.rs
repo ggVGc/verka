@@ -42,6 +42,9 @@ impl ArtifactStore for GitVcs {
     fn capture(&self, paths: &[String], message: &str) -> Result<String> {
         commit_paths(&self.project, paths, message)
     }
+    fn capture_worktree(&self, parent: &str, message: &str) -> Result<Option<String>> {
+        commit_worktree(&self.project, parent, message)
+    }
     fn retain_output(&self, node: &str, commit: &str) -> Result<()> {
         let refname = format!("refs/linka/outputs/{node}");
         checked(&self.project, &["update-ref", &refname, commit])?;
@@ -365,6 +368,45 @@ fn commit_paths(base: &Path, paths: &[String], message: &str) -> Result<String> 
     commit.extend(paths.iter().map(String::as_str));
     checked(base, &commit)?;
     checked(base, &["rev-parse", "HEAD"])
+}
+
+/// Snapshot the entire final worktree state as one commit parented on
+/// `parent`, the frozen input commit the work started from, and leave that
+/// commit as the tip of the worktree's checked-out branch.
+///
+/// Staging with `add -A` folds in every modification, addition, and deletion
+/// the agent left — whether or not it made its own commits — so the resulting
+/// tree is the absolute final state, and the commit's diff against `parent` is
+/// the complete, declaration-free change set. The commit is built with
+/// `commit-tree` (parented directly on `parent`, discarding any ad-hoc commits
+/// the agent made along the way), then `reset --soft` advances the current
+/// branch onto it. Because the index and worktree already equal the captured
+/// tree, that leaves the worktree clean — ready to be removed — and the branch
+/// pointing at the output, mirroring what a plain `capture` commit produces.
+/// Returns `None` when nothing changed relative to `parent`.
+fn commit_worktree(base: &Path, parent: &str, message: &str) -> Result<Option<String>> {
+    checked(base, &["add", "-A"])?;
+    let tree = checked(base, &["write-tree"])?;
+    let mut args = vec!["commit-tree", tree.as_str(), "-m", message];
+    let parent_arg;
+    if parent.is_empty() {
+        // No input commit (an empty project repository): the output is a root
+        // commit, and any tracked file at all is a change worth capturing.
+        if checked(base, &["ls-files"])?.is_empty() {
+            return Ok(None);
+        }
+    } else {
+        let parent_tree = checked(base, &["rev-parse", &format!("{parent}^{{tree}}")])?;
+        if tree == parent_tree {
+            return Ok(None);
+        }
+        parent_arg = parent.to_string();
+        args.push("-p");
+        args.push(&parent_arg);
+    }
+    let commit = checked(base, &args)?;
+    checked(base, &["reset", "--soft", &commit])?;
+    Ok(Some(commit))
 }
 
 /// Commit changes under a single path (e.g. the store directory). The caller

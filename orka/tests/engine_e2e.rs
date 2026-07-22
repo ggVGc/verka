@@ -330,19 +330,22 @@ fn graph_only_success_records_a_result_with_no_project_commit() {
 }
 
 #[test]
-fn graph_only_success_refuses_undeclared_workspace_changes() {
+fn a_success_declaration_captures_workspace_writes_it_never_listed() {
+    // The agent no longer declares its outputs: every file it leaves
+    // uncommitted in the workspace is captured as intended output.
     let (_temp, root) = workbench();
-    let node = add_node(&root, "Claimed graph-only work", vec![]);
+    let project = root.join("project");
+    let node = add_node(&root, "Work that writes without listing", vec![]);
     let (store, workspaces, attempts) = parts(&root);
     let executor = FakeExecutor {
         on_run: Some(Box::new(|spec: &ExecutionSpec| {
             std::fs::write(
-                mount(spec, "/tmp/orka/workspace").join("undeclared.txt"),
-                "hidden\n",
+                mount(spec, "/tmp/orka/workspace").join("produced.txt"),
+                "made\n",
             )?;
             std::fs::write(
                 mount(spec, "/tmp/orka/exchange").join("outcome.toml"),
-                "outcome = \"succeeded\"\nnotes = \"graph only\"\n",
+                "outcome = \"succeeded\"\nnotes = \"did work\"\n",
             )?;
             Ok(())
         })),
@@ -350,15 +353,68 @@ fn graph_only_success_refuses_undeclared_workspace_changes() {
     };
     let engine = engine!(&root, store, executor, workspaces, attempts);
 
-    let error = engine.run_node(&node.parse().unwrap()).unwrap_err();
-    assert!(error.to_string().contains("undeclared"), "{error:#}");
-    assert!(store.read_result(&node).unwrap().is_none());
+    let report = engine.run_node(&node.parse().unwrap()).unwrap();
+    let SealedState::Submitted {
+        output_commit: Some(output),
+    } = &report.sealed
+    else {
+        panic!("expected a captured output commit, got {:?}", report.sealed);
+    };
+    // The write the agent never listed is captured as project output.
+    assert_eq!(
+        git(&project, &["show", &format!("{output}:produced.txt")]),
+        "made"
+    );
+    let vcs = linka::GitVcs::for_store(&store);
+    assert_eq!(
+        linka::ops::node_state(&store, &vcs, &node).unwrap().outcome,
+        linka::RecordedOutcome::Succeeded
+    );
+}
 
-    let attempt = attempts.list().unwrap().into_iter().next().unwrap();
-    let snapshot = attempts.load(&attempt).unwrap();
-    assert_eq!(snapshot.phase(), AttemptPhase::Executed);
-    let workspace = snapshot.workspace.unwrap();
-    assert!(workspace.path.join("undeclared.txt").is_file());
+#[test]
+fn work_the_agent_commits_itself_is_captured_against_the_input_commit() {
+    // Capture is the diff between the frozen input commit and the final
+    // worktree, so it sees work the agent committed on its own — not just
+    // uncommitted changes — and folds ad-hoc agent commits into one output.
+    let (_temp, root) = workbench();
+    let project = root.join("project");
+    let input = git(&project, &["rev-parse", "HEAD"]);
+    let node = add_node(&root, "Work that self-commits", vec![]);
+    let (store, workspaces, attempts) = parts(&root);
+    let executor = FakeExecutor {
+        on_run: Some(Box::new(|spec: &ExecutionSpec| {
+            let ws = mount(spec, "/tmp/orka/workspace");
+            // The agent commits part of its work itself...
+            std::fs::write(ws.join("committed.txt"), "self\n")?;
+            git(ws, &["add", "committed.txt"]);
+            git(ws, &["commit", "-q", "-m", "agent's own commit"]);
+            // ...and leaves the rest uncommitted.
+            std::fs::write(ws.join("uncommitted.txt"), "loose\n")?;
+            std::fs::write(
+                mount(spec, "/tmp/orka/exchange").join("outcome.toml"),
+                "outcome = \"succeeded\"\nnotes = \"mixed\"\n",
+            )?;
+            Ok(())
+        })),
+        ..Default::default()
+    };
+    let engine = engine!(&root, store, executor, workspaces, attempts);
+
+    let report = engine.run_node(&node.parse().unwrap()).unwrap();
+    let SealedState::Submitted {
+        output_commit: Some(output),
+    } = &report.sealed
+    else {
+        panic!("expected a captured output commit, got {:?}", report.sealed);
+    };
+    // Both the self-committed and the loose file land in one output commit,
+    // parented directly on the frozen input — the agent's ad-hoc commit is
+    // folded away, not chained.
+    assert_eq!(git(&project, &["show", &format!("{output}:committed.txt")]), "self");
+    assert_eq!(git(&project, &["show", &format!("{output}:uncommitted.txt")]), "loose");
+    assert_eq!(git(&project, &["rev-parse", &format!("{output}^")]), input);
+    assert_eq!(report.cleanup, CleanupOutcome::Removed);
 }
 
 #[test]

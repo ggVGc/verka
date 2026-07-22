@@ -6,10 +6,14 @@
 //!
 //! ```toml
 //! outcome = "succeeded"        # or "failed"
-//! outputs = ["src/thing.rs"]   # workspace-relative declared outputs
 //! message = "add the thing"    # optional output commit message
 //! notes = "what was done and why"
 //! ```
+//!
+//! The set of files an attempt produced is not part of this declaration:
+//! Orka captures whatever the agent left uncommitted in the workspace, so
+//! every write is treated as intended output. (An `outputs` key from an
+//! older agent is accepted and ignored.)
 //!
 //! Interpreting the declaration is Orka's own concern: [`decide`] combines it
 //! with the harness-observed exit code into an Orka [`AgentOutcome`], per the
@@ -30,8 +34,6 @@ pub const PROMPT_FILE: &str = "prompt.md";
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeclaredOutcome {
     pub outcome: DeclaredKind,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub outputs: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -46,14 +48,12 @@ pub enum DeclaredKind {
 }
 
 /// Orka's interpretation of what the agent said it did. This is an execution
-/// outcome, not a graph mutation: it carries the raw declared output strings,
-/// which trusted Orka code later validates into `linka::ProjectPath` and
-/// submits. It deliberately holds no Linka snapshot or version token.
+/// outcome, not a graph mutation. The produced file set is not carried here:
+/// trusted Orka code discovers it from the workspace at submission time. This
+/// deliberately holds no Linka snapshot or version token.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AgentOutcome {
     Succeeded {
-        /// Workspace-relative paths, exactly as the agent declared them.
-        outputs: Vec<String>,
         message: Option<String>,
         notes: String,
     },
@@ -95,16 +95,10 @@ pub fn decide(declared: Option<DeclaredOutcome>, exit_code: i32) -> Decision {
         Some(declared) => match declared.outcome {
             DeclaredKind::Succeeded => Decision::Submit {
                 outcome: AgentOutcome::Succeeded {
-                    outputs: declared.outputs,
                     message: declared.message,
                     notes: declared.notes,
                 },
                 backend_failed: exit_code != 0,
-            },
-            // A failure declaration asserts no output provenance; claiming
-            // outputs alongside it is a contradiction, not a submittable result.
-            DeclaredKind::Failed if !declared.outputs.is_empty() => Decision::ContractViolation {
-                reason: "declared failure also claimed outputs".into(),
             },
             DeclaredKind::Failed => Decision::Submit {
                 outcome: AgentOutcome::Failed {
@@ -136,6 +130,8 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         assert_eq!(read_declared(&dir).unwrap(), None);
 
+        // An `outputs` key from an older agent is accepted and ignored: the
+        // produced file set is discovered from the workspace, not declared.
         std::fs::write(
             dir.join(OUTCOME_FILE),
             "outcome = \"succeeded\"\noutputs = [\"out.txt\"]\nnotes = \"did it\"\n",
@@ -143,7 +139,7 @@ mod tests {
         .unwrap();
         let declared = read_declared(&dir).unwrap().unwrap();
         assert_eq!(declared.outcome, DeclaredKind::Succeeded);
-        assert_eq!(declared.outputs, vec!["out.txt"]);
+        assert_eq!(declared.notes, "did it");
 
         std::fs::write(dir.join(OUTCOME_FILE), "outcome = \"maybe\"").unwrap();
         assert!(read_declared(&dir).is_err(), "garbage is an error");
@@ -154,7 +150,6 @@ mod tests {
     fn the_failure_matrix_decides_every_combination() {
         let succeeded = DeclaredOutcome {
             outcome: DeclaredKind::Succeeded,
-            outputs: vec!["a".into()],
             message: None,
             notes: "n".into(),
         };
@@ -163,7 +158,6 @@ mod tests {
             decide(Some(succeeded.clone()), 0),
             Decision::Submit {
                 outcome: AgentOutcome::Succeeded {
-                    outputs: vec!["a".into()],
                     message: None,
                     notes: "n".into(),
                 },
@@ -183,7 +177,6 @@ mod tests {
             decide(
                 Some(DeclaredOutcome {
                     outcome: DeclaredKind::Failed,
-                    outputs: vec![],
                     message: None,
                     notes: "why".into(),
                 }),
@@ -193,19 +186,6 @@ mod tests {
                 outcome: AgentOutcome::Failed { .. },
                 ..
             }
-        ));
-        // A failure declaration that also claims outputs is a contradiction.
-        assert!(matches!(
-            decide(
-                Some(DeclaredOutcome {
-                    outcome: DeclaredKind::Failed,
-                    outputs: vec!["a".into()],
-                    message: None,
-                    notes: "why".into(),
-                }),
-                0
-            ),
-            Decision::ContractViolation { .. }
         ));
         // No declaration: exit zero violates the contract; nonzero interrupts.
         assert!(matches!(

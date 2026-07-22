@@ -402,33 +402,17 @@ impl Engine<'_> {
                     access_summary.as_ref(),
                 );
                 let (settled, succeeded, candidate) = match outcome {
-                    AgentOutcome::Succeeded {
-                        outputs,
-                        message,
-                        notes,
-                    } => {
+                    AgentOutcome::Succeeded { message, notes } => {
                         if !workspace.path.exists() {
-                            // The declared outputs lived in the workspace;
+                            // The produced files lived in the workspace;
                             // without it there is nothing to capture or submit.
                             bail!(
                                 "attempt {attempt} declared success but its workspace {} is missing",
                                 workspace.path.display()
                             );
                         }
-                        let outputs = match linka_work::project_paths(&outputs) {
-                            Ok(outputs) => outputs,
-                            Err(error) => {
-                                // Invalid declared paths never reach git: this
-                                // is a contract violation, not stale work.
-                                let sealed = SealedState::ContractViolation {
-                                    reason: format!("{error:#}"),
-                                };
-                                self.attempts.seal(attempt, sealed.clone())?;
-                                return Ok((sealed, backend_failed, None));
-                            }
-                        };
                         let (settled, candidate) = self.linka.submit_candidate_success(
-                            input, workspace, attempt, &outputs, message, notes, producer,
+                            input, workspace, attempt, message, notes, producer,
                         )?;
                         (settled, true, candidate)
                     }
@@ -724,12 +708,9 @@ fn build_prompt(input: &AttemptInput, policy: &ExecutionPolicy) -> String {
          `$ORKA_OUTCOME`) as TOML:\n\n\
          ```toml\n\
          outcome = \"succeeded\"   # or \"failed\"\n\
-         outputs = [\"path/relative/to/workspace\"]\n\
          message = \"one-line summary of the change\"\n\
          notes = \"what was done and why\"\n\
-         ```\n\n\
-         Declare every file you created or changed in `outputs`. Undeclared\n\
-         changes are not captured and will block completion.\n",
+         ```\n",
         outcome_path.display()
     );
     prompt
