@@ -230,7 +230,10 @@ fn parses_bwrap_configuration() {
         config.isolation.bwrap.rootfs.as_deref(),
         Some(Path::new("/srv/driva/rootfs"))
     );
-    assert_eq!(config.isolation.bwrap.workdir, Path::new("/work"));
+    assert_eq!(
+        config.isolation.bwrap.workdir.as_deref(),
+        Some(Path::new("/work"))
+    );
     assert_eq!(
         config.isolation.bwrap.executable,
         Path::new("/usr/bin/bwrap")
@@ -242,7 +245,7 @@ fn bwrap_is_the_configuration_default() {
     let config = Config::default();
     assert_eq!(config.isolation.backend, "bwrap");
     assert_eq!(config.isolation.bwrap.rootfs, None);
-    assert_eq!(config.isolation.bwrap.workdir, Path::new("/tmp"));
+    assert_eq!(config.isolation.bwrap.workdir, None);
     assert_eq!(config.isolation.bwrap.executable, Path::new("bwrap"));
 }
 

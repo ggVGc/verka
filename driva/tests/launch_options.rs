@@ -62,6 +62,105 @@ fn cli_selects_backend_and_backend_specific_options() {
 }
 
 #[test]
+fn omitted_workdir_mounts_the_current_directory_as_a_writable_workspace() {
+    let directory = TestDirectory::new("default-workspace");
+    let output = stdout(directory.run(&["run", "--dry-run", "--backend", "docker", "--", "true"]));
+    let workspace = directory.0.canonicalize().unwrap();
+
+    assert!(output.contains(&format!("working-directory: {}", workspace.display())));
+    assert!(output.contains(&format!(
+        "mount: {} -> {} (read-write)",
+        workspace.display(),
+        workspace.display()
+    )));
+    assert!(output.contains(&format!(
+        "--workdir\" {:?} \"--volume\" {:?}",
+        workspace,
+        format!("{}:{}", workspace.display(), workspace.display())
+    )));
+}
+
+#[test]
+fn configured_workdir_suppresses_the_default_workspace_mount() {
+    let directory = TestDirectory::new("configured-workdir");
+    directory.write_config(
+        r#"
+        [isolation.docker]
+        workdir = "/work"
+        "#,
+    );
+    let output = stdout(directory.run(&["run", "--dry-run", "--backend", "docker", "--", "true"]));
+    let workspace = directory.0.canonicalize().unwrap();
+
+    assert!(output.contains("working-directory: /work"));
+    assert!(!output.contains(&format!("mount: {} ->", workspace.display())));
+}
+
+#[test]
+fn explicit_current_directory_mount_replaces_the_default_workspace_mount() {
+    let directory = TestDirectory::new("explicit-default-workspace");
+    let output = stdout(directory.run(&[
+        "run",
+        "--dry-run",
+        "--backend",
+        "docker",
+        "--read",
+        ".",
+        "--",
+        "true",
+    ]));
+    let workspace = directory.0.canonicalize().unwrap();
+
+    assert_eq!(
+        output
+            .matches(&format!(
+                "mount: {} -> {}",
+                workspace.display(),
+                workspace.display()
+            ))
+            .count(),
+        1
+    );
+    assert!(output.contains(&format!(
+        "mount: {} -> {} (read-only)",
+        workspace.display(),
+        workspace.display()
+    )));
+}
+
+#[test]
+fn current_directory_path_mount_replaces_the_default_workspace_mount() {
+    let directory = TestDirectory::new("path-default-workspace");
+    let output = stdout(directory.run(&[
+        "run",
+        "--dry-run",
+        "--backend",
+        "docker",
+        "--path",
+        ".",
+        "--",
+        "true",
+    ]));
+    let workspace = directory.0.canonicalize().unwrap();
+
+    assert_eq!(
+        output
+            .matches(&format!(
+                "mount: {} -> {}",
+                workspace.display(),
+                workspace.display()
+            ))
+            .count(),
+        1
+    );
+    assert!(output.contains(&format!(
+        "mount: {} -> {} (read-only)",
+        workspace.display(),
+        workspace.display()
+    )));
+}
+
+#[test]
 fn cli_rootfs_and_temporary_mount_reach_bubblewrap() {
     let directory = TestDirectory::new("bwrap");
     let rootfs = directory.0.join("rootfs");

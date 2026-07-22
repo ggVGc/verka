@@ -35,9 +35,12 @@ Every subcommand accepts the global option:
 
 - `--config <CONFIG>` — configuration file to load. When omitted, Driva uses
   `./driva.toml` if it exists, otherwise built-in defaults (Bubblewrap backend
-  and `/tmp` working directory). Without a configured rootfs, Bubblewrap builds
-  a private root containing only conventional read-only system runtime paths;
-  the host root, home, and current directory are not selected implicitly.
+  and no configured working directory). When the effective working directory
+  is omitted, Driva mounts the current directory writable at its canonical
+  same-path destination and uses it as the workspace. Without a configured
+  rootfs, Bubblewrap builds a private root containing only conventional
+  read-only system runtime paths in addition to that workspace; the host root
+  and home are not selected implicitly.
 
 On any internal error Driva prints `driva: <error>` to stderr and exits with
 status 1. Commands that proxy an isolated process exit with that process's
@@ -74,7 +77,7 @@ Options:
       --image <IMAGE>          Override the configured container image
       --rootfs <DIRECTORY>     Override the Bubblewrap root filesystem
       --temporary <DIRECTORY>  Add an empty writable filesystem discarded after execution
-      --workdir <WORKDIR>      Override the isolated working directory
+      --workdir <WORKDIR>      Override the isolated working directory (defaults to a writable current-dir workspace)
       --inherit-env            Inherit environment variables from the host shell
       --env <ENVIRONMENT>      Set an environment variable as NAME=VALUE
       --command <COMMAND>      Override the template command or supply the executable
@@ -116,7 +119,7 @@ Policy options (shared by `run` and `shell`):
 | `--image <IMAGE>` | Override the configured container image for this run (Podman/Docker only). |
 | `--rootfs <DIRECTORY>` | Override the prepared root filesystem for Bubblewrap. |
 | `--temporary <DIRECTORY>` | Add an empty writable filesystem discarded after execution. Repeatable. |
-| `--workdir <WORKDIR>` | Override the isolated working directory (must be absolute). |
+| `--workdir <WORKDIR>` | Override the isolated working directory (must be absolute; omission defaults to a writable current-directory workspace). |
 | `--inherit-env` | Inherit all environment variables from the host shell. |
 | `--env NAME=VALUE` | Set an environment variable inside the container. Repeatable. |
 
@@ -363,7 +366,7 @@ Options:
       --image <IMAGE>          Override the configured container image
       --rootfs <DIRECTORY>     Override the Bubblewrap root filesystem
       --temporary <DIRECTORY>  Add an empty writable filesystem discarded after execution
-      --workdir <WORKDIR>      Override the isolated working directory
+      --workdir <WORKDIR>      Override the isolated working directory (defaults to a writable current-dir workspace)
       --inherit-env            Inherit environment variables from the host shell
       --env <ENVIRONMENT>      Set an environment variable as NAME=VALUE
   -h, --help                   Print help
@@ -384,17 +387,17 @@ backend = "bwrap"                 # or "podman" or "docker"
 
 [isolation.podman]
 image = "docker.io/library/busybox:latest"
-workdir = "/tmp"
+# workdir = "/workspace"         # optional
 executable = "podman"
 
 [isolation.docker]
 image = "docker.io/library/busybox:latest"
-workdir = "/tmp"
+# workdir = "/workspace"         # optional
 executable = "docker"
 
 [isolation.bwrap]
 # rootfs = "/var/lib/driva/rootfs/busybox" # optional prepared userspace
-workdir = "/tmp"
+# workdir = "/workspace"         # optional
 executable = "bwrap"
 
 # Zero or more pre-granted mounts. An explicit destination must be absolute;
@@ -443,7 +446,7 @@ the template selects Bubblewrap, while `--rootfs` overrides both; `~` is
 expanded using `$HOME` and the tree is mounted read-only.
 When neither is set, Driva constructs a private root with conventional host
 system runtime paths mounted read-only. It does not expose the host root, home,
-current directory, or other data paths.
+or other data paths beyond the default current-directory workspace.
 Mounts default to `kind = "bind"`; these require a host `source`, accept an
 optional `destination` and `access`, and default to read-only. A
 `kind = "temporary"` mount requires only an absolute `destination`; it creates
@@ -460,6 +463,13 @@ at most one such entry; it supersedes `workdir` when
 both are set. Application-specific behavior, such as Codex project trust,
 belongs in the template command. Project templates appear in `driva templates`;
 project definitions replace built-ins with the same name.
+
+If `--workdir`, a template workdir or workspace mount, and the selected
+backend's configured `workdir` are all omitted, Driva creates an implicit
+writable workspace mount from `.` to its canonical same-path destination and
+uses that destination as the working directory. An explicit mount at the same
+destination replaces this default mount, so `--read .` can make the default
+workspace read-only.
 
 Bubblewrap can use `rootfs` as a prepared filesystem tree rather than pulling
 an OCI image. The tree must contain `/proc`, `/dev`, `/tmp`, each configured

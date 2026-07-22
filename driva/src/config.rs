@@ -55,8 +55,7 @@ fn bwrap_backend() -> String {
 pub struct DockerConfig {
     #[serde(default = "default_image")]
     pub image: String,
-    #[serde(default = "default_workdir")]
-    pub workdir: PathBuf,
+    pub workdir: Option<PathBuf>,
     #[serde(default = "default_docker")]
     pub executable: PathBuf,
 }
@@ -65,16 +64,13 @@ impl Default for DockerConfig {
     fn default() -> Self {
         Self {
             image: default_image(),
-            workdir: default_workdir(),
+            workdir: None,
             executable: default_docker(),
         }
     }
 }
 fn default_image() -> String {
     "docker.io/library/busybox:latest".into()
-}
-fn default_workdir() -> PathBuf {
-    PathBuf::from("/tmp")
 }
 fn default_docker() -> PathBuf {
     PathBuf::from("docker")
@@ -85,8 +81,7 @@ fn default_docker() -> PathBuf {
 pub struct PodmanConfig {
     #[serde(default = "default_image")]
     pub image: String,
-    #[serde(default = "default_workdir")]
-    pub workdir: PathBuf,
+    pub workdir: Option<PathBuf>,
     #[serde(default = "default_podman")]
     pub executable: PathBuf,
 }
@@ -95,7 +90,7 @@ impl Default for PodmanConfig {
     fn default() -> Self {
         Self {
             image: default_image(),
-            workdir: default_workdir(),
+            workdir: None,
             executable: default_podman(),
         }
     }
@@ -111,8 +106,7 @@ pub struct BwrapConfig {
     /// A prepared filesystem tree to expose as the sandbox root. When absent,
     /// Bubblewrap uses a private root with read-only host system runtime paths.
     pub rootfs: Option<PathBuf>,
-    #[serde(default = "default_workdir")]
-    pub workdir: PathBuf,
+    pub workdir: Option<PathBuf>,
     #[serde(default = "default_bwrap")]
     pub executable: PathBuf,
 }
@@ -121,7 +115,7 @@ impl Default for BwrapConfig {
     fn default() -> Self {
         Self {
             rootfs: None,
-            workdir: default_workdir(),
+            workdir: None,
             executable: default_bwrap(),
         }
     }

@@ -165,9 +165,12 @@ Before invoking a backend, Driva:
 - applies disabled networking when it is not explicitly enabled; and
 - reports the resulting effective request for dry runs and diagnostics.
 
-There are no implicit mounts for the current directory, home directory,
-credentials, SSH agent, Git configuration, or isolation-engine socket.
-Configuration must name every capability that crosses the isolation boundary.
+When no working directory is selected by the CLI, template, or backend
+configuration, Driva implicitly mounts the current directory writable at its
+canonical same-path destination and uses it as the workspace. There are no
+implicit mounts for the home directory, credentials, SSH agent, Git
+configuration, or isolation-engine socket. Configuration must name every
+other capability that crosses the isolation boundary.
 
 ## Isolation backends
 
@@ -190,9 +193,10 @@ The Bubblewrap adapter translates requests into unprivileged Linux
 namespaces. With an explicit rootfs it mounts that prepared tree read-only.
 Without one it creates a private root and mounts only conventional host system
 runtime paths read-only, making `/bin/sh` and normal OS tools available without
-exposing the host root, home, or current directory. It adds fresh `/proc`,
-`/dev`, and `/tmp` mounts, clears the inherited host environment, and shares
-the host network namespace only when networking is granted.
+exposing the host root or home directory. The launch layer adds the default
+workspace mount when applicable. Bubblewrap adds fresh `/proc`, `/dev`, and
+`/tmp` mounts, clears the inherited host environment, and shares the host
+network namespace only when networking is granted.
 
 Tests for Driva's policy use a fake `Isolation` implementation. Each production
 backend also has focused integration tests for its request translation, I/O,

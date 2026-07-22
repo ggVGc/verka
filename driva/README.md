@@ -1,18 +1,19 @@
 # Driva
 
-Driva runs a command in a disposable isolated environment with no host data
-access and no network access unless they are explicitly granted. Bubblewrap is
-the default backend. Without configuration, Driva constructs a private root
-that contains only the host's read-only system runtime, so `/bin/sh` and normal
-OS tools are available without exposing the host root, home, or current
-directory.
+Driva runs a command in a disposable isolated environment. By default, the
+current directory is mounted writable at its canonical host path and used as
+the workspace; other host data and network access must be explicitly granted.
+Bubblewrap is the default backend. Without configuration, it constructs a
+private root containing only the host's read-only system runtime in addition
+to that workspace, so `/bin/sh` and normal OS tools remain available without
+exposing the host root or home directory.
 
 ```sh
-cargo run -- run --write . -- cargo test
-cargo run -- run --read ~/.cargo/registry --write . --network -- cargo update
+cargo run -- run -- cargo test
+cargo run -- run --read ~/.cargo/registry --network -- cargo update
 cargo run -- run --path ./tools -- project-tool
 cargo run -- run --backend bwrap --rootfs /srv/rootfs --temporary /home -- command
-cargo run -- shell --write .
+cargo run -- shell
 ```
 
 Named templates bundle a command, backend, image or rootfs, mounts, and
@@ -63,6 +64,10 @@ Mount arguments accept `SOURCE` or `SOURCE:DESTINATION`. A relative source with
 no destination is placed below the configured container working directory;
 `.` is mounted at the working directory. Mount sources must exist. Use
 `--dry-run` to inspect the effective grants and backend invocation.
+When no working directory is selected by the CLI, template, or backend
+configuration, Driva mounts the current directory writable at its canonical
+same-path destination and uses it as the working directory. An explicit mount
+at that destination replaces the default workspace mount.
 
 Use repeatable `--path DIRECTORY` options to make host tool directories
 available without granting write access. Driva mounts each directory read-only

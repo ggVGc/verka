@@ -111,7 +111,7 @@ struct PolicyArgs {
     /// Add an empty writable filesystem discarded after execution.
     #[arg(long, value_name = "DIRECTORY")]
     temporary: Vec<PathBuf>,
-    /// Override the isolated working directory.
+    /// Override the isolated working directory (defaults to a writable current-dir workspace).
     #[arg(long)]
     workdir: Option<PathBuf>,
     /// Inherit environment variables from the host shell.
@@ -209,11 +209,23 @@ fn real_main() -> Result<()> {
         "bwrap" => &config.isolation.bwrap.workdir,
         backend => bail!("unsupported isolation backend {backend:?}"),
     };
-    let workdir = policy
+    let configured_workdir = policy
         .workdir
         .clone()
         .or_else(|| template.as_ref().and_then(|value| value.workdir.clone()))
-        .unwrap_or_else(|| configured_workdir.clone());
+        .or_else(|| configured_workdir.clone());
+    let default_workspace = if configured_workdir.is_none() {
+        Some(resolve_default_workspace()?)
+    } else {
+        None
+    };
+    let workdir = configured_workdir.unwrap_or_else(|| {
+        default_workspace
+            .as_ref()
+            .expect("default workspace exists when workdir is omitted")
+            .destination()
+            .to_path_buf()
+    });
     let mut mounts: Vec<Mount> = config
         .mounts
         .into_iter()
@@ -274,6 +286,11 @@ fn real_main() -> Result<()> {
         .unwrap_or_default();
     paths.extend(policy.paths.iter().cloned());
     add_path_directories(&paths, &mut mounts, &mut environment)?;
+    if let Some(default_workspace) = default_workspace {
+        if !mounts.iter().any(|mount| mount.destination() == workdir) {
+            mounts.push(default_workspace);
+        }
+    }
     if policy.no_write {
         for mount in &mut mounts {
             mount.make_read_only();
@@ -409,6 +426,19 @@ fn resolve_workspace_mount(template: &mut driva::TemplateConfig) -> Result<Optio
     };
     template.workdir = Some(destination.clone());
     Ok(Some(workspace_mount))
+}
+
+/// Use the canonical current directory as a writable same-path workspace when
+/// no working directory was selected by the CLI, template, or backend config.
+fn resolve_default_workspace() -> Result<Mount> {
+    driva::MountConfig {
+        kind: driva::MountKind::Bind,
+        source: Some(PathBuf::from(".")),
+        destination: None,
+        access: Some(MountAccess::ReadWrite),
+    }
+    .resolve()
+    .context("failed to resolve the current directory as the default workspace")
 }
 
 fn runtime_command(config: &Config, command: RuntimeOperation) -> Result<()> {
