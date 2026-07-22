@@ -76,6 +76,7 @@ Options:
       --tmpfs <DIRECTORY>   Add a private writable Bubblewrap tmpfs mount
       --workdir <WORKDIR>   Override the isolated working directory
       --env <ENVIRONMENT>   Set an environment variable as NAME=VALUE
+      --command <COMMAND>   Override the template command or supply the executable
   -h, --help                Print help
 ```
 
@@ -84,6 +85,7 @@ separate them from Driva's own flags when the command has flags of its own:
 
 ```sh
 driva run --write . -- cargo test
+driva run --template test --command cargo -- check
 driva run --read ~/.cargo/registry --write . --network -- cargo update
 driva run --image rust:1.88 --workdir /workspace --write .:/workspace -- cargo build
 driva run --backend bwrap --rootfs /srv/rootfs --tmpfs /home -- command
@@ -91,7 +93,10 @@ driva run --path ./tools -- project-tool
 driva run --env RUST_LOG=debug -- env
 ```
 
-Policy options (shared by `run`, `shell`, and `start`):
+`--command <COMMAND>` replaces the template's command for this invocation. It
+can also supply the executable without a template.
+
+Policy options (shared by `run` and `shell`):
 
 | Option | Effect |
 | --- | --- |
@@ -126,17 +131,18 @@ Template settings overlay the global configuration, and one-off CLI values
 overlay the template. Scalar values such as backend, image, rootfs, and
 working directory use CLI, then template, then configuration precedence.
 Mounts, PATH additions, and tmpfs mounts accumulate in layer order;
-environment values are replaced by name. Explicit `network = false` in a
-template overrides enabled project networking, while `--network` and
+environment values are replaced by name. `--command` replaces the template's
+entire command (including its initial arguments), after which arguments
+following `--` are appended. Explicit `network = false` in a template
+overrides enabled project networking, while `--network` and
 `--no-network` provide the final CLI choice. `--no-interactive` similarly
 overrides an interactive template. `--no-write` is applied after all mounts
 are combined, making every host bind mount read-only regardless of its source;
 private writable filesystems such as Bubblewrap tmpfs are unaffected because
-they cannot modify mounted host data. Arguments after `--` are appended to a
-template's command. Without a template, at least one command argument remains
-required at runtime. Backend-specific combinations are validated after
-resolution; for example, Docker rejects `rootfs` and Bubblewrap rejects
-`image`.
+they cannot modify mounted host data. Without a template or `--command`, at
+least one positional command argument remains required at runtime.
+Backend-specific combinations are validated after resolution; for example,
+Docker rejects `rootfs` and Bubblewrap rejects `image`.
 
 ### Execution templates
 

@@ -25,6 +25,9 @@ enum Operation {
     Run {
         #[command(flatten)]
         policy: PolicyArgs,
+        /// Override the template command or supply the executable.
+        #[arg(long = "command", value_name = "COMMAND")]
+        command_override: Option<OsString>,
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         command: Vec<OsString>,
     },
@@ -153,11 +156,15 @@ fn real_main() -> Result<()> {
         Some(ref path) => Config::load(path)?,
         None => Config::discover()?,
     };
-    let (policy, mut command, shell) = match cli.command {
-        Operation::Run { policy, command } => (policy, command, false),
+    let (policy, command_override, mut command, shell) = match cli.command {
+        Operation::Run {
+            policy,
+            command_override,
+            command,
+        } => (policy, command_override, command, false),
         Operation::Shell { mut policy } => {
             policy.interactive = true;
-            (policy, vec![OsString::from("/bin/sh")], true)
+            (policy, None, vec![OsString::from("/bin/sh")], true)
         }
         Operation::Templates => {
             for (name, template) in config.effective_templates() {
@@ -184,7 +191,9 @@ fn real_main() -> Result<()> {
         .transpose()?
         .flatten();
     if !shell {
-        if let Some(template) = &template {
+        if let Some(command_override) = command_override {
+            command.insert(0, command_override);
+        } else if let Some(template) = &template {
             let mut template_command: Vec<OsString> =
                 template.command.iter().map(OsString::from).collect();
             template_command.append(&mut command);

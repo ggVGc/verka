@@ -119,6 +119,49 @@ fn template_path_uses_the_same_semantics_as_cli_path() {
 }
 
 #[test]
+fn cli_command_overrides_the_template_command() {
+    let directory = TestDirectory::new("command-override");
+    directory.write_config(
+        r#"
+        [template.check]
+        backend = "docker"
+        command = ["template-command", "template-argument"]
+        "#,
+    );
+    let output = stdout(directory.run(&[
+        "run",
+        "--dry-run",
+        "--template",
+        "check",
+        "--command",
+        "override-command",
+        "--",
+        "argument",
+    ]));
+
+    assert!(output.contains("\"override-command\" \"argument\""));
+    assert!(!output.contains("template-command"));
+    assert!(!output.contains("template-argument"));
+}
+
+#[test]
+fn cli_command_can_supply_an_executable_without_a_template() {
+    let directory = TestDirectory::new("command-without-template");
+    let output = stdout(directory.run(&[
+        "run",
+        "--dry-run",
+        "--backend",
+        "docker",
+        "--command",
+        "override-command",
+        "--",
+        "argument",
+    ]));
+
+    assert!(output.contains("\"override-command\" \"argument\""));
+}
+
+#[test]
 fn configured_mount_without_a_destination_uses_its_canonical_source_path() {
     let directory = TestDirectory::new("implicit-mount-destination");
     let mounted = directory.0.join("mounted");

@@ -2,7 +2,7 @@ description = "Run the host's Codex binary interactively in Bubblewrap"
 command = ["codex", "--sandbox", "danger-full-access"]
 backend = "bwrap"
 rootfs = "/"
-tmpfs = ["~", "/root"]
+tmpfs = ["~"]
 network = true
 interactive = true
 
@@ -11,12 +11,10 @@ source = "."
 access = "write"
 
 [environment]
-HOME = "/root"
 TERM = "xterm-256color"
 
 [[mount]]
 source = "~/.codex"
-destination = "/root/.codex"
 access = "write"
 
 # [[mount]]
