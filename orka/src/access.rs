@@ -14,6 +14,7 @@ use std::path::{Component, Path};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(target_os = "linux")]
 use inotify::{EventMask, Inotify, WatchDescriptor, WatchMask};
@@ -29,6 +30,8 @@ pub enum AccessEvent {
     },
     FileRead {
         path: String,
+        /// Unix milliseconds at which the watcher observed the read.
+        at_ms: i64,
     },
     TrackingFinished {
         complete: bool,
@@ -37,12 +40,41 @@ pub enum AccessEvent {
     },
 }
 
+/// One observed read: a project path and when the watcher saw it. The same path
+/// appears once per observation, so repeats are preserved.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ObservedRead {
+    pub path: String,
+    pub at_ms: i64,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AccessSummary {
     pub method: String,
-    pub reads: Vec<String>,
+    pub reads: Vec<ObservedRead>,
     pub complete: bool,
     pub reason: Option<String>,
+}
+
+impl AccessSummary {
+    /// Distinct project paths in first-observed order. Callers that care about
+    /// the *set* of files touched (context pins, the observed-file count) use
+    /// this rather than the raw, repeat-preserving `reads` timeline.
+    pub fn distinct_paths(&self) -> Vec<String> {
+        let mut seen = HashSet::new();
+        self.reads
+            .iter()
+            .filter(|read| seen.insert(read.path.as_str()))
+            .map(|read| read.path.clone())
+            .collect()
+    }
+}
+
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 /// A live recursive watcher. Finishing signals its reader thread, drains all
@@ -119,7 +151,6 @@ impl AccessRecorder {
         let worker_done = done.clone();
 
         let worker = std::thread::spawn(move || -> Result<()> {
-            let mut seen = HashSet::new();
             let mut failure = None;
             let mut buffer = [0u8; 16 * 1024];
             loop {
@@ -161,10 +192,14 @@ impl AccessRecorder {
                                 || event.mask.contains(EventMask::CLOSE_NOWRITE)
                             {
                                 if let Some(path) = project_path(&workspace, &path) {
-                                    if seen.insert(path.clone()) {
-                                        write_event(&mut output, &AccessEvent::FileRead { path })?;
-                                        output.flush()?;
-                                    }
+                                    write_event(
+                                        &mut output,
+                                        &AccessEvent::FileRead {
+                                            path,
+                                            at_ms: now_ms(),
+                                        },
+                                    )?;
+                                    output.flush()?;
                                 }
                             }
                         }
@@ -265,7 +300,6 @@ pub fn read_access_summary(path: &Path) -> Result<Option<AccessSummary>> {
         Err(error) => return Err(error).with_context(|| format!("opening {}", path.display())),
     };
     let mut summary = AccessSummary::default();
-    let mut seen = HashSet::new();
     let mut started = false;
     let mut finished = false;
     for line in BufReader::new(input).lines() {
@@ -283,8 +317,9 @@ pub fn read_access_summary(path: &Path) -> Result<Option<AccessSummary>> {
                 summary.method = method;
                 started = true;
             }
-            AccessEvent::FileRead { path } if seen.insert(path.clone()) => summary.reads.push(path),
-            AccessEvent::FileRead { .. } => {}
+            AccessEvent::FileRead { path, at_ms } => {
+                summary.reads.push(ObservedRead { path, at_ms })
+            }
             AccessEvent::TrackingFinished { complete, reason } => {
                 summary.complete = complete;
                 summary.reason = reason;
@@ -312,11 +347,14 @@ pub fn write_access_summary(
         schema: ACCESS_SCHEMA,
         method: method.into(),
     }];
+    // Synthetic reads (test doubles, startup-failure records) share one
+    // observation instant; only the live watcher produces a true timeline.
+    let at_ms = now_ms();
     events.extend(
         reads
             .iter()
             .cloned()
-            .map(|path| AccessEvent::FileRead { path }),
+            .map(|path| AccessEvent::FileRead { path, at_ms }),
     );
     events.push(AccessEvent::TrackingFinished { complete, reason });
     write_events(path, &events)
@@ -346,7 +384,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn summaries_round_trip_and_deduplicate_reads() {
+    fn summaries_round_trip_and_preserve_repeat_reads() {
         let dir = std::env::temp_dir().join(format!("orka-access-test-{}", ulid::Ulid::new()));
         std::fs::create_dir_all(&dir).unwrap();
         let journal = dir.join("accesses.v1.jsonl");
@@ -360,7 +398,12 @@ mod tests {
         .unwrap();
         let summary = read_access_summary(&journal).unwrap().unwrap();
         assert!(summary.complete);
-        assert_eq!(summary.reads, ["src/lib.rs", "README.md"]);
+        // The timeline keeps every read, in order, each carrying a timestamp.
+        let paths: Vec<_> = summary.reads.iter().map(|read| read.path.as_str()).collect();
+        assert_eq!(paths, ["src/lib.rs", "src/lib.rs", "README.md"]);
+        assert!(summary.reads.iter().all(|read| read.at_ms > 0));
+        // Set-oriented callers still see each path once, in first-seen order.
+        assert_eq!(summary.distinct_paths(), ["src/lib.rs", "README.md"]);
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -381,7 +424,13 @@ mod tests {
 
         let summary = read_access_summary(&journal).unwrap().unwrap();
         assert!(summary.complete, "{:?}", summary.reason);
-        assert_eq!(summary.reads, ["src/lib.rs"]);
+        // A single read may surface as several kernel events (ACCESS plus
+        // CLOSE_NOWRITE); every one is journaled, but only the project file —
+        // never `.git` or files outside the workspace.
+        assert!(!summary.reads.is_empty());
+        assert!(summary.reads.iter().all(|read| read.path == "src/lib.rs"));
+        assert!(summary.reads.iter().all(|read| read.at_ms > 0));
+        assert_eq!(summary.distinct_paths(), ["src/lib.rs"]);
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

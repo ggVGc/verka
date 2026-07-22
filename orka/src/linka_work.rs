@@ -530,7 +530,10 @@ pub fn producer_evidence_with_accesses(
         let mut tracking = serde_json::Map::new();
         tracking.insert("method".into(), accesses.method.clone().into());
         tracking.insert("complete".into(), accesses.complete.into());
-        tracking.insert("observed_files".into(), accesses.reads.len().into());
+        tracking.insert(
+            "observed_files".into(),
+            accesses.distinct_paths().len().into(),
+        );
         if let Some(reason) = &accesses.reason {
             tracking.insert("reason".into(), reason.clone().into());
         }

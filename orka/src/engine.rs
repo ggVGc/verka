@@ -487,7 +487,7 @@ impl Engine<'_> {
             return Ok(());
         };
         self.linka
-            .record_observed_context(input, &workspace.path, result, &accesses.reads)?;
+            .record_observed_context(input, &workspace.path, result, &accesses.distinct_paths())?;
         Ok(())
     }
 
