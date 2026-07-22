@@ -63,7 +63,7 @@ Arguments:
 
 Options:
       --config <CONFIG>        Configuration file (defaults to ./driva.toml when present)
-      --template <NAME>        Apply a named execution template
+      --template <NAME>        Apply a named execution template; may be repeated
       --read <MOUNT>           Add a read-only mount as SOURCE or SOURCE:DESTINATION
       --write <MOUNT>          Add a writable mount as SOURCE or SOURCE:DESTINATION
       --no-write               Make every host mount read-only, overriding configuration and templates
@@ -105,7 +105,7 @@ Policy options (shared by `run` and `shell`):
 
 | Option | Effect |
 | --- | --- |
-| `--template <NAME>` | Apply a built-in or project-defined execution template. |
+| `--template <NAME>` | Apply a built-in or project-defined execution template; repeat it to combine templates in option order. |
 | `--read <MOUNT>` | Bind-mount a host path read-only. Repeatable. |
 | `--write <MOUNT>` | Bind-mount a host path read-write. Repeatable. |
 | `--no-write` | Make every host bind mount read-only, overriding project configuration, templates, and `--write`. |
@@ -134,11 +134,15 @@ conventional system path. The behavior is the same with Bubblewrap, Podman,
 and Docker.
 
 Template settings overlay the global configuration, and one-off CLI values
-overlay the template. Scalar values such as backend, image, rootfs, and
-working directory use CLI, then template, then configuration precedence.
-Mounts and PATH additions accumulate in layer order;
-environment values are replaced by name. `--command` replaces the template's
-entire command (including its initial arguments), after which arguments
+overlay the templates. `--template` may be repeated. Templates are combined
+in option order: mounts and PATH additions accumulate, while later templates
+replace earlier scalar settings, environment values with the same name, and
+commands. A later template that does not set a scalar or command leaves the
+earlier value intact. Scalar values such as backend, image, rootfs, and
+working directory use CLI, then later templates, then earlier templates, then
+configuration precedence. Mounts and PATH additions accumulate in layer order.
+`--command` replaces the entire combined template command (including its
+initial arguments), after which arguments
 following `--` are appended. Explicit `network = false` in a template
 overrides enabled project networking, while `--network` and
 `--no-network` provide the final CLI choice. `--no-interactive` similarly
@@ -230,6 +234,7 @@ created it before using these templates.
 
 ```sh
 driva run --template codex
+driva run --template codex --template project-policy
 driva run --template codex-exec -- "update the dependencies and run tests"
 driva run --template codex-runtime -- --model MODEL
 driva run --template claude
@@ -352,7 +357,7 @@ Usage: driva shell [OPTIONS]
 
 Options:
       --config <CONFIG>        Configuration file (defaults to ./driva.toml when present)
-      --template <NAME>        Apply a named execution template
+      --template <NAME>        Apply a named execution template; may be repeated
       --read <MOUNT>           Add a read-only mount as SOURCE or SOURCE:DESTINATION
       --write <MOUNT>          Add a writable mount as SOURCE or SOURCE:DESTINATION
       --no-write               Make every host mount read-only, overriding configuration and templates

@@ -84,9 +84,10 @@ enabled = false
 ```
 
 Backend-specific settings remain outside the portable execution request, but
-configuration, templates, and command-line overrides resolve through one
-launch layer before the selected adapter is constructed. Scalar precedence is
-CLI, then template, then project configuration.
+configuration, one or more templates, and command-line overrides resolve
+through one launch layer before the selected adapter is constructed. Scalar
+precedence is CLI, then later templates, then earlier templates, then project
+configuration.
 
 ## Core interface
 

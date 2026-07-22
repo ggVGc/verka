@@ -259,6 +259,51 @@ impl Config {
     }
 }
 
+impl TemplateConfig {
+    /// Add another template on top of this one.
+    ///
+    /// Collection-valued grants accumulate, while scalar settings and the
+    /// command are replaced when the later template specifies them.
+    pub fn overlay(&mut self, later: Self) {
+        if !later.description.is_empty() {
+            self.description = later.description;
+        }
+        if !later.command.is_empty() {
+            self.command = later.command;
+        }
+        if later.backend.is_some() {
+            self.backend = later.backend;
+        }
+        if later.image.is_some() {
+            self.image = later.image;
+        }
+        if later.rootfs.is_some() {
+            self.rootfs = later.rootfs;
+        }
+        // A workspace mount also selects the workdir. When a later template
+        // selects either, retain the earlier grant as an ordinary mount while
+        // letting the later template choose the effective workdir.
+        if later.workdir.is_some() || !later.workspace_mounts.is_empty() {
+            self.mounts.append(&mut self.workspace_mounts);
+        }
+        if !later.workspace_mounts.is_empty() {
+            self.workspace_mounts = later.workspace_mounts;
+        }
+        if later.workdir.is_some() {
+            self.workdir = later.workdir;
+        }
+        self.mounts.extend(later.mounts);
+        self.paths.extend(later.paths);
+        if later.network.is_some() {
+            self.network = later.network;
+        }
+        if later.interactive.is_some() {
+            self.interactive = later.interactive;
+        }
+        self.environment.extend(later.environment);
+    }
+}
+
 fn builtin_templates() -> BTreeMap<String, TemplateConfig> {
     [
         ("claude", include_str!("../templates/claude.toml")),
@@ -269,6 +314,7 @@ fn builtin_templates() -> BTreeMap<String, TemplateConfig> {
             "codex-runtime",
             include_str!("../templates/codex-runtime.toml"),
         ),
+        ("sbt", include_str!("../templates/sbt.toml")),
     ]
     .into_iter()
     .map(|(name, source)| {

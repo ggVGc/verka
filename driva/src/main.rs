@@ -69,9 +69,9 @@ enum RuntimeOperation {
 
 #[derive(Args, Default)]
 struct PolicyArgs {
-    /// Apply a named execution template.
+    /// Apply a named execution template; may be repeated.
     #[arg(long, value_name = "NAME")]
-    template: Option<String>,
+    template: Vec<String>,
     /// Add a read-only mount as SOURCE or SOURCE:DESTINATION.
     #[arg(long = "read", value_name = "MOUNT")]
     reads: Vec<String>,
@@ -170,17 +170,17 @@ fn real_main() -> Result<()> {
         }
         Operation::Runtime { command } => return runtime_command(&config, command),
     };
-    let mut template = policy
-        .template
-        .as_deref()
-        .map(|name| {
-            config.template(name).with_context(|| {
-                format!(
-                    "unknown template {name:?}; run `driva templates` to list available templates"
-                )
-            })
-        })
-        .transpose()?;
+    let mut template: Option<driva::TemplateConfig> = None;
+    for name in &policy.template {
+        let later = config.template(name).with_context(|| {
+            format!("unknown template {name:?}; run `driva templates` to list available templates")
+        })?;
+        validate_workspace_mounts(&later)?;
+        match &mut template {
+            Some(template) => template.overlay(later),
+            None => template = Some(later),
+        }
+    }
     let workspace_mount = template
         .as_mut()
         .map(resolve_workspace_mount)
@@ -355,7 +355,7 @@ fn real_main() -> Result<()> {
                 rootfs,
             };
             let invocation = backend.command(&request).with_context(|| {
-                if matches!(policy.template.as_deref(), Some("codex-runtime")) {
+                if policy.template.iter().any(|name| name == "codex-runtime") {
                     "Codex runtime is unavailable; run `driva runtime install codex@VERSION`"
                 } else {
                     "failed to construct Bubblewrap invocation"
@@ -414,9 +414,6 @@ fn resolve_backend(
 /// Resolve a template's workspace mount and use its destination as the
 /// isolated working directory.
 fn resolve_workspace_mount(template: &mut driva::TemplateConfig) -> Result<Option<Mount>> {
-    if template.workspace_mounts.len() > 1 {
-        bail!("a template may contain at most one workspace-mount");
-    }
     let Some(workspace_mount) = template.workspace_mounts.pop() else {
         return Ok(None);
     };
@@ -426,6 +423,13 @@ fn resolve_workspace_mount(template: &mut driva::TemplateConfig) -> Result<Optio
     };
     template.workdir = Some(destination.clone());
     Ok(Some(workspace_mount))
+}
+
+fn validate_workspace_mounts(template: &driva::TemplateConfig) -> Result<()> {
+    if template.workspace_mounts.len() > 1 {
+        bail!("a template may contain at most one workspace-mount");
+    }
+    Ok(())
 }
 
 /// Use the canonical current directory as a writable same-path workspace when

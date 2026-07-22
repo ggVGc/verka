@@ -23,6 +23,7 @@ Claude Code:
 ```sh
 cargo run -- templates
 cargo run -- run --template codex
+cargo run -- run --template codex --template project-policy
 cargo run -- runtime install codex@latest
 cargo run -- run --template codex-runtime
 cargo run -- run --template codex-exec -- "fix the failing tests"
@@ -80,10 +81,13 @@ session. Project, template, and `--env NAME=VALUE` settings override inherited
 values, in that order.
 
 Launch settings use the same vocabulary in templates and on the command line.
+`--template` may be repeated; templates are combined in option order, with
+later templates overriding earlier scalar settings and commands.
 For example, `--command`, `--backend`, `--image`, `--rootfs`, repeatable
 `--temporary`, `--workdir`, `--path`, networking, interactivity, environment, and
 mounts all override or extend the corresponding project/template settings.
-Scalar precedence is CLI, then template, then project configuration. When
+Scalar precedence is CLI, then later templates, then earlier templates, then
+project configuration. When
 `--command` is given, it replaces the template's executable and initial
 arguments; trailing command arguments are appended to the replacement.
 `--no-write` is a final safety override: it turns every host bind mount,

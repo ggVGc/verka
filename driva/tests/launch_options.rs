@@ -284,6 +284,134 @@ fn cli_command_overrides_the_template_command() {
 }
 
 #[test]
+fn multiple_templates_accumulate_with_later_templates_taking_precedence() {
+    let directory = TestDirectory::new("multiple-templates");
+    for path in ["first-mount", "second-mount", "first-path", "second-path"] {
+        std::fs::create_dir(directory.0.join(path)).unwrap();
+    }
+    directory.write_config(
+        r#"
+        [template.first]
+        backend = "docker"
+        image = "example:first"
+        command = ["first-command"]
+        network = true
+        path = ["first-path"]
+
+        [[template.first.mount]]
+        source = "first-mount"
+        destination = "/first"
+
+        [template.first.environment]
+        SHARED = "first"
+        FIRST_ONLY = "first"
+
+        [template.second]
+        image = "example:second"
+        command = ["second-command"]
+        network = false
+        path = ["second-path"]
+
+        [[template.second.mount]]
+        source = "second-mount"
+        destination = "/second"
+
+        [template.second.environment]
+        SHARED = "second"
+        SECOND_ONLY = "second"
+        "#,
+    );
+    let output = stdout(directory.run(&[
+        "run",
+        "--dry-run",
+        "--template",
+        "first",
+        "--template",
+        "second",
+        "--",
+        "argument",
+    ]));
+
+    assert!(output.contains("backend: docker"));
+    assert!(output.contains("network: disabled"));
+    assert!(output.contains("\"example:second\" \"second-command\" \"argument\""));
+    assert!(!output.contains("example:first"));
+    assert!(!output.contains("first-command"));
+    assert!(output.contains(" -> /first (read-only)"));
+    assert!(output.contains(" -> /second (read-only)"));
+    assert!(output.contains("FIRST_ONLY=first"));
+    assert!(output.contains("SHARED=second"));
+    assert!(!output.contains("SHARED=first"));
+    assert!(output.contains("SECOND_ONLY=second"));
+
+    let first_path = directory.0.join("first-path").canonicalize().unwrap();
+    let second_path = directory.0.join("second-path").canonicalize().unwrap();
+    assert!(output.contains(&format!(
+        "{}:{}:{}",
+        first_path.display(),
+        second_path.display(),
+        driva::DEFAULT_PATH
+    )));
+}
+
+#[test]
+fn later_template_without_a_command_keeps_the_previous_command() {
+    let directory = TestDirectory::new("multiple-template-command-inheritance");
+    directory.write_config(
+        r#"
+        [template.command]
+        backend = "docker"
+        command = ["template-command"]
+
+        [template.policy]
+        network = true
+        "#,
+    );
+    let output = stdout(directory.run(&[
+        "run",
+        "--dry-run",
+        "--template",
+        "command",
+        "--template",
+        "policy",
+    ]));
+
+    assert!(output.contains("\"template-command\""));
+    assert!(output.contains("network: enabled"));
+}
+
+#[test]
+fn later_template_workdir_overrides_an_earlier_workspace_mount() {
+    let directory = TestDirectory::new("multiple-template-workdir");
+    std::fs::create_dir(directory.0.join("workspace")).unwrap();
+    directory.write_config(
+        r#"
+        [template.workspace]
+        backend = "docker"
+        command = ["true"]
+
+        [[template.workspace.workspace-mount]]
+        source = "workspace"
+        destination = "/workspace"
+
+        [template.workdir]
+        workdir = "/later"
+        "#,
+    );
+    let output = stdout(directory.run(&[
+        "run",
+        "--dry-run",
+        "--template",
+        "workspace",
+        "--template",
+        "workdir",
+    ]));
+
+    assert!(output.contains("working-directory: /later"));
+    assert!(output.contains(" -> /workspace (read-only)"));
+}
+
+#[test]
 fn cli_command_can_supply_an_executable_without_a_template() {
     let directory = TestDirectory::new("command-without-template");
     let output = stdout(directory.run(&[
