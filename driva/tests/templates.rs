@@ -41,7 +41,12 @@ fn prepare_codex_runtime(home: &Path) {
 fn provides_codex_templates() {
     let config = Config::default();
     let codex = config.template("codex").unwrap();
-    assert_eq!(codex.command, ["codex", "--sandbox", "danger-full-access"]);
+    assert_eq!(&codex.command[..2], ["/bin/sh", "-c"]);
+    assert!(codex.command[2].contains("workspace=$(pwd -P)"));
+    assert!(codex.command[2].contains("exec codex"));
+    assert!(codex.command[2].contains("projects.\\\"$workspace\\\".trust_level"));
+    assert!(codex.command[2].contains("\"$@\""));
+    assert_eq!(codex.command.last().unwrap(), "driva-codex");
     assert_eq!(codex.backend.as_deref(), Some("bwrap"));
     assert_eq!(codex.rootfs.as_deref(), Some(Path::new("/")));
     assert_eq!(codex.tmpfs, [PathBuf::from("~"), PathBuf::from("/root")]);
@@ -49,7 +54,6 @@ fn provides_codex_templates() {
     assert_eq!(workspace.source, PathBuf::from("."));
     assert_eq!(workspace.destination, None);
     assert_eq!(workspace.access, MountAccess::ReadWrite);
-    assert!(codex.codex_trust_workspace);
     assert_eq!(
         codex.environment.get("HOME").map(String::as_str),
         Some("/root")
@@ -69,24 +73,18 @@ fn provides_codex_templates() {
     assert_eq!(codex.mounts[0].access, MountAccess::ReadWrite);
 
     let codex_exec = config.template("codex-exec").unwrap();
-    assert_eq!(
-        codex_exec.command,
-        [
-            "codex",
-            "--sandbox",
-            "danger-full-access",
-            "exec",
-            "--skip-git-repo-check",
-        ]
-    );
+    assert_eq!(&codex_exec.command[..2], ["/bin/sh", "-c"]);
+    assert!(codex_exec.command[2].contains("exec codex"));
+    assert!(codex_exec.command[2].contains("exec --skip-git-repo-check"));
+    assert!(codex_exec.command[2].contains("\"$@\""));
+    assert_eq!(codex_exec.command.last().unwrap(), "driva-codex-exec");
     assert_eq!(codex_exec.workspace_mounts.len(), 1);
-    assert!(codex_exec.codex_trust_workspace);
     assert_eq!(codex_exec.interactive, Some(false));
 
     let codex_runtime = config.template("codex-runtime").unwrap();
     assert_eq!(
         codex_runtime.command.first().map(String::as_str),
-        Some("/usr/local/bin/driva-codex")
+        Some("/bin/sh")
     );
     assert_eq!(codex_runtime.backend.as_deref(), Some("bwrap"));
     assert_eq!(
@@ -99,13 +97,57 @@ fn provides_codex_templates() {
         codex_runtime.workspace_mounts[0].destination.as_deref(),
         Some(Path::new("/driva"))
     );
-    assert!(codex_runtime.codex_trust_workspace);
+    assert!(codex_runtime.command[2].contains("exec /usr/local/bin/driva-codex"));
+    assert!(codex_runtime.command[2].contains("\"$@\""));
+    assert_eq!(codex_runtime.command.last().unwrap(), "driva-codex-runtime");
     assert_eq!(codex_runtime.interactive, Some(true));
     assert_eq!(codex_runtime.mounts.len(), 2);
     assert_eq!(
         codex_runtime.mounts[1].destination.as_deref(),
         Some(Path::new("/root/.codex/auth.json"))
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn codex_template_resolves_the_workspace_and_forwards_appended_arguments() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = temporary_directory("codex-command-wrapper");
+    let workspace = directory.join("workspace with spaces");
+    let bin = directory.join("bin");
+    fs::create_dir(&workspace).unwrap();
+    fs::create_dir(&bin).unwrap();
+    let executable = bin.join("codex");
+    fs::write(&executable, "#!/bin/sh\nprintf '<%s>\\n' \"$@\"\n").unwrap();
+    let mut permissions = fs::metadata(&executable).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&executable, permissions).unwrap();
+
+    let template = Config::default().template("codex").unwrap();
+    let output = Command::new(&template.command[0])
+        .args(&template.command[1..])
+        .args(["prompt with spaces", "--example"])
+        .current_dir(&workspace)
+        .env("PATH", &bin)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let workspace = workspace.canonicalize().unwrap();
+    assert!(stdout.contains(&format!(
+        "<projects.\"{}\".trust_level=\"trusted\">",
+        workspace.display()
+    )));
+    assert!(stdout.contains("<--sandbox>\n<danger-full-access>"));
+    assert!(stdout.ends_with("<prompt with spaces>\n<--example>\n"));
+
+    fs::remove_dir_all(directory).unwrap();
 }
 
 #[test]
@@ -153,7 +195,7 @@ fn builtin_template_assets_use_the_public_toml_schema() {
         let template: TemplateConfig = toml::from_str(&source).unwrap();
         assert!(matches!(
             template.command.first().map(String::as_str),
-            Some("npx" | "codex" | "/usr/local/bin/driva-codex")
+            Some("npx" | "/bin/sh")
         ));
         let expected_mounts = match name {
             "codex" | "codex-exec" | "claude" | "claude-exec" => 1,
@@ -165,7 +207,7 @@ fn builtin_template_assets_use_the_public_toml_schema() {
 }
 
 #[test]
-fn builtin_codex_uses_the_host_root_and_mounts_the_project_at_its_host_path() {
+fn builtin_codex_uses_the_host_root_and_current_workspace_path() {
     let directory = temporary_directory("builtin-codex");
     fs::create_dir(directory.join(".codex")).unwrap();
     fs::write(directory.join(".codex/auth.json"), "{}").unwrap();
@@ -184,10 +226,12 @@ fn builtin_codex_uses_the_host_root_and_mounts_the_project_at_its_host_path() {
     assert!(stdout.contains("backend: bwrap"));
     assert!(stdout.contains("\"--ro-bind\" \"/\" \"/\""));
     assert!(stdout.contains(&format!("\"--tmpfs\" \"{}", directory.display())));
-    assert!(stdout.contains("\"codex\""));
+    assert!(stdout.contains("exec codex"));
     let project = directory.display().to_string();
     assert!(stdout.contains(&format!("{project} -> {project} (read-write)")));
-    assert!(!stdout.contains("/tmp/workspace"));
+    assert!(stdout.contains(&format!("working-directory: {project}")));
+    assert!(stdout.contains("workspace=$(pwd -P)"));
+    assert!(stdout.contains("$workspace"));
     assert!(stdout.contains("/.codex -> /root/.codex (read-write)"));
 
     fs::remove_dir_all(directory).unwrap();
@@ -298,15 +342,16 @@ fn builtin_codex_runtime_selects_bwrap_and_works_without_arguments() {
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("backend: bwrap"));
-    assert!(stdout.contains("\"/usr/local/bin/driva-codex\""));
+    assert!(stdout.contains("exec /usr/local/bin/driva-codex"));
     assert!(stdout.contains("--ro-bind"));
     assert!(stdout.contains("\"--tmpfs\" \"/root/.codex\""));
     assert!(stdout.contains("\"--tmpfs\" \"/driva\""));
     assert!(stdout.contains(&format!("{} -> /driva (read-write)", directory.display())));
     assert!(stdout.contains("working-directory: /driva"));
+    assert!(stdout.contains("workspace=$(pwd -P)"));
     assert!(!stdout.contains("/workspace"));
     assert!(stdout.contains("/.local/share/driva/runtimes/codex/0.144.3/rootfs"));
-    assert!(stdout.contains("\"--sandbox\" \"danger-full-access\""));
+    assert!(stdout.contains("--sandbox danger-full-access"));
     assert!(stdout.contains("/etc/resolv.conf -> /etc/resolv.conf (read-only)"));
     assert!(stdout.contains("/.codex/auth.json -> /root/.codex/auth.json (read-write)"));
     assert!(!stdout.contains(" -> /root/.codex (read-write)"));

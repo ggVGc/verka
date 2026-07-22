@@ -177,9 +177,6 @@ pub struct TemplateConfig {
     /// directory. Resolution rejects more than one workspace mount.
     #[serde(default, rename = "workspace-mount")]
     pub workspace_mounts: Vec<MountConfig>,
-    /// Pass the workspace mount destination to Codex as a trusted project.
-    #[serde(default)]
-    pub codex_trust_workspace: bool,
     pub workdir: Option<PathBuf>,
     #[serde(default, rename = "mount")]
     pub mounts: Vec<MountConfig>,

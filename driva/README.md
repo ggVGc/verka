@@ -32,8 +32,9 @@ cargo run -- run --template claude-exec -- "fix the failing tests"
 ```
 
 The `codex` template runs the host's Codex binary with Bubblewrap and mounts
-the current project writable at its canonical host path. It makes the host's
-`~/.codex` directory available at `/root/.codex`.
+the current project writable at its canonical host path. A small shell wrapper
+passes that working directory to Codex as a trusted project. The template makes
+the host's `~/.codex` directory available at `/root/.codex`.
 
 The `codex-exec` template is the non-interactive form of `codex`; it uses the
 same host executable and same-path workspace mount. `codex-runtime`

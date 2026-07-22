@@ -391,30 +391,10 @@ fn resolve_workspace_mount(template: &mut driva::TemplateConfig) -> Result<Optio
         bail!("a template may contain at most one workspace-mount");
     }
     let Some(workspace_mount) = template.workspace_mounts.pop() else {
-        if template.codex_trust_workspace {
-            bail!("codex_trust_workspace requires a workspace-mount");
-        }
         return Ok(None);
     };
     let workspace_mount = workspace_mount.resolve()?;
     template.workdir = Some(workspace_mount.destination.clone());
-
-    if template.codex_trust_workspace {
-        let destination = workspace_mount
-            .destination
-            .to_str()
-            .context("the current project path is not valid UTF-8")?;
-        if template.command.is_empty() {
-            bail!("codex_trust_workspace requires a template command");
-        }
-        template.command.splice(
-            1..1,
-            [
-                "-c".to_owned(),
-                format!("projects.{destination:?}.trust_level=\"trusted\""),
-            ],
-        );
-    }
     Ok(Some(workspace_mount))
 }
 
