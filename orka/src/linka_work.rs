@@ -335,10 +335,11 @@ impl<'a> LinkaWork<'a> {
     /// Submit a successful attempt against its persisted snapshot: capture the
     /// agent's complete work from the execution worktree and record the result.
     /// The produced file set is the diff between the frozen input commit and
-    /// the final worktree — discovered here, never declared by the agent — so
-    /// work the agent committed itself is captured just as reliably as work it
-    /// left uncommitted. A graph conflict records nothing and is returned as
-    /// [`Settled::Conflict`].
+    /// the committed worktree — discovered here, never declared by the agent.
+    /// The engine has already verified the worktree is clean (the agent is
+    /// required to commit all its work), so this folds the agent's own commits
+    /// into one output on the input. A graph conflict records nothing and is
+    /// returned as [`Settled::Conflict`].
     pub fn submit_candidate_success(
         &self,
         input: &AttemptInput,

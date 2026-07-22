@@ -10,10 +10,12 @@
 //! notes = "what was done and why"
 //! ```
 //!
-//! The set of files an attempt produced is not part of this declaration:
-//! Orka captures whatever the agent left uncommitted in the workspace, so
-//! every write is treated as intended output. (An `outputs` key from an
-//! older agent is accepted and ignored.)
+//! The set of files an attempt produced is not part of this declaration.
+//! The agent is required to commit all its work with Git before declaring
+//! success; Orka captures the diff between the frozen input commit and the
+//! committed worktree. A declared success that leaves uncommitted changes has
+//! not captured its output and is rejected as a contract violation. (An
+//! `outputs` key from an older agent is accepted and ignored.)
 //!
 //! Interpreting the declaration is Orka's own concern: [`decide`] combines it
 //! with the harness-observed exit code into an Orka [`AgentOutcome`], per the

@@ -28,25 +28,32 @@ fn mount<'a>(spec: &'a ExecutionSpec, destination: &str) -> &'a Path {
         .source
 }
 
-/// An executor whose agent writes `greeting.txt` into the workspace and
-/// declares it as its output.
+/// An executor whose agent writes `greeting.txt`, commits it as the contract
+/// requires, and declares success.
 fn conforming_agent() -> FakeExecutor {
     FakeExecutor {
         transcript: "agent transcript\n".into(),
         on_run: Some(Box::new(|spec: &ExecutionSpec| {
-            std::fs::write(
-                mount(spec, "/tmp/orka/workspace").join("greeting.txt"),
-                "hello\n",
-            )?;
+            let ws = mount(spec, "/tmp/orka/workspace");
+            std::fs::write(ws.join("greeting.txt"), "hello\n")?;
+            git(ws, &["add", "-A"]);
+            git(ws, &["commit", "-q", "-m", "add the greeting"]);
             std::fs::write(
                 mount(spec, "/tmp/orka/exchange").join("outcome.toml"),
-                "outcome = \"succeeded\"\noutputs = [\"greeting.txt\"]\n\
+                "outcome = \"succeeded\"\n\
                  message = \"add the greeting\"\nnotes = \"wrote greeting.txt\"\n",
             )?;
             Ok(())
         })),
         ..Default::default()
     }
+}
+
+/// Commit everything in a workspace, as the contract requires before a
+/// successful declaration.
+fn commit_all(ws: &Path) {
+    git(ws, &["add", "-A"]);
+    git(ws, &["commit", "-q", "-m", "agent work"]);
 }
 
 /// An executor that declares the given outcome TOML and exits with `exit_code`.
@@ -255,9 +262,10 @@ fn observed_workspace_reads_are_pinned_to_the_exact_accepted_result() {
                 "frozen input\n"
             );
             std::fs::write(workspace.join("out.txt"), "result\n")?;
+            commit_all(workspace);
             std::fs::write(
                 mount(spec, "/tmp/orka/exchange").join("outcome.toml"),
-                "outcome = \"succeeded\"\noutputs = [\"out.txt\"]\nnotes = \"used input\"\n",
+                "outcome = \"succeeded\"\nnotes = \"used input\"\n",
             )?;
             Ok(())
         })),
@@ -330,70 +338,27 @@ fn graph_only_success_records_a_result_with_no_project_commit() {
 }
 
 #[test]
-fn a_success_declaration_captures_workspace_writes_it_never_listed() {
-    // The agent no longer declares its outputs: every file it leaves
-    // uncommitted in the workspace is captured as intended output.
-    let (_temp, root) = workbench();
-    let project = root.join("project");
-    let node = add_node(&root, "Work that writes without listing", vec![]);
-    let (store, workspaces, attempts) = parts(&root);
-    let executor = FakeExecutor {
-        on_run: Some(Box::new(|spec: &ExecutionSpec| {
-            std::fs::write(
-                mount(spec, "/tmp/orka/workspace").join("produced.txt"),
-                "made\n",
-            )?;
-            std::fs::write(
-                mount(spec, "/tmp/orka/exchange").join("outcome.toml"),
-                "outcome = \"succeeded\"\nnotes = \"did work\"\n",
-            )?;
-            Ok(())
-        })),
-        ..Default::default()
-    };
-    let engine = engine!(&root, store, executor, workspaces, attempts);
-
-    let report = engine.run_node(&node.parse().unwrap()).unwrap();
-    let SealedState::Submitted {
-        output_commit: Some(output),
-    } = &report.sealed
-    else {
-        panic!("expected a captured output commit, got {:?}", report.sealed);
-    };
-    // The write the agent never listed is captured as project output.
-    assert_eq!(
-        git(&project, &["show", &format!("{output}:produced.txt")]),
-        "made"
-    );
-    let vcs = linka::GitVcs::for_store(&store);
-    assert_eq!(
-        linka::ops::node_state(&store, &vcs, &node).unwrap().outcome,
-        linka::RecordedOutcome::Succeeded
-    );
-}
-
-#[test]
-fn work_the_agent_commits_itself_is_captured_against_the_input_commit() {
-    // Capture is the diff between the frozen input commit and the final
-    // worktree, so it sees work the agent committed on its own — not just
-    // uncommitted changes — and folds ad-hoc agent commits into one output.
+fn the_agents_own_commits_are_folded_into_one_output_on_the_input() {
+    // The agent commits all its work itself, across several commits. Capture
+    // squashes them into a single output parented directly on the frozen
+    // input — the agent declares no output paths.
     let (_temp, root) = workbench();
     let project = root.join("project");
     let input = git(&project, &["rev-parse", "HEAD"]);
-    let node = add_node(&root, "Work that self-commits", vec![]);
+    let node = add_node(&root, "Work committed in steps", vec![]);
     let (store, workspaces, attempts) = parts(&root);
     let executor = FakeExecutor {
         on_run: Some(Box::new(|spec: &ExecutionSpec| {
             let ws = mount(spec, "/tmp/orka/workspace");
-            // The agent commits part of its work itself...
-            std::fs::write(ws.join("committed.txt"), "self\n")?;
-            git(ws, &["add", "committed.txt"]);
-            git(ws, &["commit", "-q", "-m", "agent's own commit"]);
-            // ...and leaves the rest uncommitted.
-            std::fs::write(ws.join("uncommitted.txt"), "loose\n")?;
+            std::fs::write(ws.join("first.txt"), "one\n")?;
+            git(ws, &["add", "-A"]);
+            git(ws, &["commit", "-q", "-m", "first step"]);
+            std::fs::write(ws.join("second.txt"), "two\n")?;
+            git(ws, &["add", "-A"]);
+            git(ws, &["commit", "-q", "-m", "second step"]);
             std::fs::write(
                 mount(spec, "/tmp/orka/exchange").join("outcome.toml"),
-                "outcome = \"succeeded\"\nnotes = \"mixed\"\n",
+                "outcome = \"succeeded\"\nnotes = \"stepwise\"\n",
             )?;
             Ok(())
         })),
@@ -408,13 +373,49 @@ fn work_the_agent_commits_itself_is_captured_against_the_input_commit() {
     else {
         panic!("expected a captured output commit, got {:?}", report.sealed);
     };
-    // Both the self-committed and the loose file land in one output commit,
-    // parented directly on the frozen input — the agent's ad-hoc commit is
-    // folded away, not chained.
-    assert_eq!(git(&project, &["show", &format!("{output}:committed.txt")]), "self");
-    assert_eq!(git(&project, &["show", &format!("{output}:uncommitted.txt")]), "loose");
+    // Both files land in one output commit, parented directly on the frozen
+    // input — the agent's two commits are folded away, not chained.
+    assert_eq!(git(&project, &["show", &format!("{output}:first.txt")]), "one");
+    assert_eq!(git(&project, &["show", &format!("{output}:second.txt")]), "two");
     assert_eq!(git(&project, &["rev-parse", &format!("{output}^")]), input);
     assert_eq!(report.cleanup, CleanupOutcome::Removed);
+}
+
+#[test]
+fn a_declared_success_with_uncommitted_changes_is_a_contract_violation() {
+    // The agent must commit all its work. A declared success that leaves the
+    // worktree dirty captures nothing, records no result, and retains the
+    // dirty worktree for inspection.
+    let (_temp, root) = workbench();
+    let node = add_node(&root, "Work left uncommitted", vec![]);
+    let (store, workspaces, attempts) = parts(&root);
+    let executor = FakeExecutor {
+        on_run: Some(Box::new(|spec: &ExecutionSpec| {
+            std::fs::write(
+                mount(spec, "/tmp/orka/workspace").join("uncommitted.txt"),
+                "loose\n",
+            )?;
+            std::fs::write(
+                mount(spec, "/tmp/orka/exchange").join("outcome.toml"),
+                "outcome = \"succeeded\"\nnotes = \"forgot to commit\"\n",
+            )?;
+            Ok(())
+        })),
+        ..Default::default()
+    };
+    let engine = engine!(&root, store, executor, workspaces, attempts);
+
+    let report = engine.run_node(&node.parse().unwrap()).unwrap();
+    let SealedState::ContractViolation { reason } = &report.sealed else {
+        panic!("expected a contract violation, got {:?}", report.sealed);
+    };
+    assert!(reason.contains("uncommitted"), "{reason}");
+    // Nothing was submitted to Linka, and the dirty worktree is retained.
+    assert!(store.read_result(&node).unwrap().is_none());
+    assert_eq!(report.cleanup, CleanupOutcome::RetainedDirty);
+    let attempt = attempts.list().unwrap().into_iter().next().unwrap();
+    let workspace = attempts.load(&attempt).unwrap().workspace.unwrap();
+    assert!(workspace.path.join("uncommitted.txt").is_file());
 }
 
 #[test]
@@ -442,10 +443,12 @@ fn a_nonzero_exit_with_a_declared_success_still_submits_and_reports() {
     let executor = FakeExecutor {
         exit_code: 3,
         on_run: Some(Box::new(|spec: &ExecutionSpec| {
-            std::fs::write(mount(spec, "/tmp/orka/workspace").join("out.txt"), "x\n")?;
+            let ws = mount(spec, "/tmp/orka/workspace");
+            std::fs::write(ws.join("out.txt"), "x\n")?;
+            commit_all(ws);
             std::fs::write(
                 mount(spec, "/tmp/orka/exchange").join("outcome.toml"),
-                "outcome = \"succeeded\"\noutputs = [\"out.txt\"]\nnotes = \"done\"\n",
+                "outcome = \"succeeded\"\nnotes = \"done\"\n",
             )?;
             Ok(())
         })),
@@ -551,10 +554,12 @@ fn an_attempt_against_a_graph_that_moved_mid_run_seals_stale() {
         transcript: "stale transcript\n".into(),
         on_run: Some(Box::new(move |spec: &ExecutionSpec| {
             edit_node(&root_for_agent, &node_for_agent, "Moved mid-run");
-            std::fs::write(mount(spec, "/tmp/orka/workspace").join("out.txt"), "x\n")?;
+            let ws = mount(spec, "/tmp/orka/workspace");
+            std::fs::write(ws.join("out.txt"), "x\n")?;
+            commit_all(ws);
             std::fs::write(
                 mount(spec, "/tmp/orka/exchange").join("outcome.toml"),
-                "outcome = \"succeeded\"\noutputs = [\"out.txt\"]\nnotes = \"n\"\n",
+                "outcome = \"succeeded\"\nnotes = \"n\"\n",
             )?;
             Ok(())
         })),
@@ -611,11 +616,13 @@ fn recovery_settles_an_executed_attempt_and_a_second_pass_duplicates_nothing() {
     attempts.plan_workspace(&id, &ws).unwrap();
     attempts.mark_prepared(&id).unwrap();
     std::fs::write(ws.path.join("out.txt"), "produced\n").unwrap();
+    // The agent committed its work before the crash, as the contract requires.
+    commit_all(&ws.path);
     let io = attempts.io_dir(&id).unwrap();
     stage_recorded_execution(&attempts, &id, &io);
     std::fs::write(
         io.join("outcome.toml"),
-        "outcome = \"succeeded\"\noutputs = [\"out.txt\"]\nnotes = \"done before the crash\"\n",
+        "outcome = \"succeeded\"\nnotes = \"done before the crash\"\n",
     )
     .unwrap();
     std::fs::write(attempts.transcript_path(&id), "recovered transcript\n").unwrap();

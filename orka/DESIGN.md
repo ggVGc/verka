@@ -89,7 +89,11 @@ Linka, not a backend-neutral port.
    uninterpreted streams.
 6. Interpret the agent's declared outcome (Orka's `AgentOutcome`), then submit
    through Linka against the exact persisted snapshot, attaching the executor
-   report as `orka`-namespaced producer evidence.
+   report as `orka`-namespaced producer evidence. The agent must commit all its
+   work: a declared success that leaves the worktree dirty captures nothing and
+   is rejected as a contract violation. The captured output is the diff between
+   the frozen input commit and the committed worktree; no output paths are
+   declared.
 7. After an accepted result, record content pins for observed reads against
    that exact result version. Recovery repeats this idempotently if a crash
    occurs between result acceptance and attempt sealing.

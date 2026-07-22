@@ -335,7 +335,24 @@ impl Engine<'_> {
     ) -> Result<(SealedState, bool, Option<linka::CandidateId>)> {
         let access_summary = read_access_summary(&self.attempts.accesses_path(attempt))?;
         let declared = outcome::read_declared(&self.attempts.io_dir(attempt)?)?;
-        let decision = outcome::decide(declared, report.exit_code);
+        let mut decision = outcome::decide(declared, report.exit_code);
+        // The agent is required to commit all its work: a declared success
+        // that leaves uncommitted changes behind has not captured its output,
+        // so it is rejected as a contract violation rather than submitted.
+        // (A missing workspace is left to the success handler's own bail.)
+        if let Decision::Submit {
+            outcome: AgentOutcome::Succeeded { .. },
+            ..
+        } = &decision
+        {
+            if workspace.path.exists() && !self.workspaces.is_clean(workspace)? {
+                decision = Decision::ContractViolation {
+                    reason: "declared success but left uncommitted changes in the workspace; \
+                             the agent must commit all its work before finishing"
+                        .into(),
+                };
+            }
+        }
         if matches!(
             &decision,
             Decision::Submit {
@@ -704,8 +721,10 @@ fn build_prompt(input: &AttemptInput, policy: &ExecutionPolicy) -> String {
         prompt,
         "\n# Contract\n\n\
          Work only inside `{workspace}` (also `$ORKA_WORKSPACE`).\n\
-         When finished, declare your outcome by writing `{}` (also\n\
-         `$ORKA_OUTCOME`) as TOML:\n\n\
+         Before declaring success, commit all your work with Git\n\
+         (`git add -A && git commit`). The workspace must have no uncommitted\n\
+         changes when you finish, or the attempt is rejected.\n\
+         Declare your outcome by writing `{}` (also `$ORKA_OUTCOME`) as TOML:\n\n\
          ```toml\n\
          outcome = \"succeeded\"   # or \"failed\"\n\
          message = \"one-line summary of the change\"\n\

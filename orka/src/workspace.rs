@@ -55,6 +55,11 @@ pub trait WorkspaceManager {
     /// named for `attempt`. Fails if the workspace already exists.
     fn prepare(&self, attempt: &str, input_commit: &str) -> Result<PreparedWorkspace>;
 
+    /// Whether the worktree has no uncommitted changes. A coding agent is
+    /// required to commit all its work, so a dirty tree at settle time means
+    /// the agent left work uncaptured and the attempt is rejected.
+    fn is_clean(&self, workspace: &PreparedWorkspace) -> Result<bool>;
+
     /// Remove a workspace whose attempt is sealed. Refuses to discard
     /// uncommitted changes, reporting `RetainedDirty` instead.
     fn cleanup(&self, workspace: &PreparedWorkspace) -> Result<CleanupOutcome>;
@@ -107,6 +112,10 @@ impl WorkspaceManager for GitWorkspaces {
         // left the branch but not the tree.
         create_worktree(&self.project, path, &branch, input_commit)
             .with_context(|| format!("preparing workspace for {attempt}"))
+    }
+
+    fn is_clean(&self, workspace: &PreparedWorkspace) -> Result<bool> {
+        worktree_clean(&workspace.path)
     }
 
     fn cleanup(&self, workspace: &PreparedWorkspace) -> Result<CleanupOutcome> {
@@ -344,6 +353,25 @@ mod tests {
         // The output stays reachable through the candidate branch.
         assert_eq!(git(&project, &["rev-parse", &ws.branch]), output);
         assert_eq!(manager.cleanup(&ws).unwrap(), CleanupOutcome::AlreadyAbsent);
+    }
+
+    #[test]
+    fn is_clean_reflects_committed_versus_uncommitted_work() {
+        let (_temp, project, head) = project();
+        let manager = workspaces(&project);
+        let ws = manager.prepare("attempt-1", &head).unwrap();
+
+        // A fresh worktree at the input commit is clean.
+        assert!(manager.is_clean(&ws).unwrap());
+
+        // An uncommitted write makes it dirty...
+        std::fs::write(ws.path.join("out.txt"), "output\n").unwrap();
+        assert!(!manager.is_clean(&ws).unwrap());
+
+        // ...and committing it makes it clean again.
+        git(&ws.path, &["add", "-A"]);
+        git(&ws.path, &["commit", "-q", "-m", "output"]);
+        assert!(manager.is_clean(&ws).unwrap());
     }
 
     #[test]

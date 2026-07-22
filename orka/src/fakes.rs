@@ -100,6 +100,15 @@ impl WorkspaceManager for FakeWorkspaces {
         Ok(planned)
     }
 
+    fn is_clean(&self, workspace: &PreparedWorkspace) -> Result<bool> {
+        let attempt = workspace
+            .path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        Ok(!self.dirty.contains(&attempt))
+    }
+
     fn cleanup(&self, workspace: &PreparedWorkspace) -> Result<CleanupOutcome> {
         self.cleanups.borrow_mut().push(workspace.clone());
         let attempt = workspace
