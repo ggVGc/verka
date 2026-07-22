@@ -337,8 +337,8 @@ fn work_log_from_reader<R: BufRead>(reader: R, source: &str) -> Result<Vec<WorkL
     Ok(blocks)
 }
 
-/// Wrap output from a legacy plain-text agent in the shared presentation
-/// format.
+/// Wrap output from a plain-text agent — one that emits no event stream — in
+/// the shared presentation format.
 pub fn transcript_blocks(transcript: &str) -> Vec<WorkLogBlock> {
     if transcript.is_empty() {
         Vec::new()

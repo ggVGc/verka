@@ -12,7 +12,6 @@
 //!     result.toml     structured completion record (optional)
 //!     result.md       completion narrative (optional)
 //!     attachments/    opaque, node-associated data (never graph state)
-//!     work.jsonl      legacy execution log (read-only compatibility only)
 //!   candidates/<id>/  output proposal attached to an exact node result
 //!     candidate.toml  candidate facts and accept/reject state
 //! ```
@@ -375,25 +374,7 @@ impl Store {
         Ok(())
     }
 
-    // --- legacy compatibility and immutable observations -------------------------
-
-    fn legacy_work_log_path(&self, id: &str) -> PathBuf {
-        self.node_dir(id).join("work.jsonl")
-    }
-
-    /// The recorded interaction log of the node's work sessions, or `None` if
-    /// none has been recorded. Opaque to every derived query: it is the *story*
-    /// of the work (what the worker said and did, one JSON event per line),
-    /// never state — status, staleness, and readiness must not read it. It does
-    /// not participate in the node's version.
-    #[deprecated(note = "compatibility reader only; execution logs belong to the coordinator")]
-    pub fn read_work_log(&self, id: &str) -> Result<Option<String>> {
-        match fs::read_to_string(self.legacy_work_log_path(id)) {
-            Ok(t) => Ok(Some(t)),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(e).with_context(|| format!("reading work log for `{id}`")),
-        }
-    }
+    // --- immutable observations --------------------------------------------------
 
     pub fn write_context_observation(
         &self,
@@ -644,41 +625,6 @@ mod tests {
         assert_eq!(r.outcome, Outcome::Done);
         assert_eq!(notes, "did the thing");
         assert_eq!(store.node_version("node-1").unwrap(), v2);
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    #[allow(deprecated)]
-    fn legacy_work_log_has_a_read_only_compatibility_reader() {
-        let dir = std::env::temp_dir().join(format!("linka-worklog-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        let store = Store::init(dir.join(".linka")).unwrap();
-
-        let meta = NodeMeta {
-            schema: 1,
-            author: Author::Human,
-            assignee: None,
-            depends_on: vec![],
-            derived_from: vec![],
-            verifies: None,
-            extensions: Default::default(),
-        };
-        store.write_node("node-1", &meta, "").unwrap();
-        assert_eq!(store.read_work_log("node-1").unwrap(), None);
-
-        // A pre-migration log remains readable but Linka exposes no writer.
-        let v = store.node_version("node-1").unwrap();
-        std::fs::write(
-            store.node_dir("node-1").join("work.jsonl"),
-            "{\"event\":\"a\"}\n",
-        )
-        .unwrap();
-        assert_eq!(
-            store.read_work_log("node-1").unwrap().unwrap(),
-            "{\"event\":\"a\"}\n"
-        );
-        assert_eq!(store.node_version("node-1").unwrap(), v);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

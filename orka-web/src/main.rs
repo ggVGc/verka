@@ -413,14 +413,11 @@ fn transcript_json(app: &App, raw_id: &str) -> Result<Value> {
     // is gone. Either way the jsonl journal is rendered here, never surfaced
     // raw.
     let events = store.events_path(&id);
-    let transcript_path = store.transcript_path(&id);
-    let (blocks, transcript) = if events.is_file() {
-        let blocks = read_work_log(&events)?;
-        let transcript = std::fs::read_to_string(&transcript_path).unwrap_or_default();
-        (blocks, transcript)
-    } else if transcript_path.is_file() {
-        let transcript = std::fs::read_to_string(&transcript_path)?;
-        (transcript_blocks(&transcript), transcript)
+    let transcript = store.transcript_path(&id);
+    let blocks = if events.is_file() {
+        read_work_log(&events)?
+    } else if transcript.is_file() {
+        transcript_blocks(&std::fs::read_to_string(&transcript)?)
     } else {
         work_log_from_linka(app, node, &id)?
     };
@@ -431,9 +428,6 @@ fn transcript_json(app: &App, raw_id: &str) -> Result<Value> {
         "attempt": id.0,
         "node": node,
         "blocks": blocks,
-        // Retained for read-only API clients written before structured work
-        // logs were introduced. The page consumes `blocks`.
-        "transcript": transcript,
     }))
 }
 
@@ -445,7 +439,7 @@ fn work_log_from_linka(
     app: &App,
     node: &NodeId,
     id: &AttemptId,
-) -> Result<(Vec<orka::events::WorkLogBlock>, String)> {
+) -> Result<Vec<orka::events::WorkLogBlock>> {
     let key = format!("{id}/worklog");
     let (attachment, data) = app
         .store
@@ -454,14 +448,9 @@ fn work_log_from_linka(
             format!("attempt `{id}` has no local work log and none stored in Linka")
         })?;
     if attachment.media_type.as_deref() == Some("application/x-ndjson") {
-        let blocks = orka::events::read_work_log_bytes(&data, &format!("linka orka/{key}"))?;
-        // The rendered transcript is derived on demand from `blocks`; the
-        // legacy plain-text field has no separate durable source here.
-        Ok((blocks, String::new()))
+        orka::events::read_work_log_bytes(&data, &format!("linka orka/{key}"))
     } else {
-        let transcript = String::from_utf8_lossy(&data).into_owned();
-        let blocks = transcript_blocks(&transcript);
-        Ok((blocks, transcript))
+        Ok(transcript_blocks(&String::from_utf8_lossy(&data)))
     }
 }
 
