@@ -250,6 +250,9 @@ fn real_main() -> Result<()> {
                 .iter()
                 .map(|(key, value)| (OsString::from(key), OsString::from(value))),
         );
+        if let Some(home) = std::env::var_os("HOME") {
+            environment.entry(OsString::from("HOME")).or_insert(home);
+        }
     }
     environment.extend(policy.environment.iter().cloned());
     let mut paths = template

@@ -229,6 +229,50 @@ fn template_false_overrides_enabled_project_networking() {
 }
 
 #[test]
+fn template_inherits_home_from_the_host_when_it_is_not_configured() {
+    let directory = TestDirectory::new("template-home");
+    directory.write_config(
+        r#"
+        [template.check]
+        backend = "docker"
+        "#,
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_driva"))
+        .current_dir(&directory.0)
+        .env("HOME", "/host/home")
+        .args(["run", "--dry-run", "--template", "check", "--", "true"])
+        .output()
+        .unwrap();
+    let output = stdout(output);
+
+    assert!(output.contains("\"--env\" \"HOME=/host/home\""));
+}
+
+#[test]
+fn configured_home_overrides_the_inherited_host_home() {
+    let directory = TestDirectory::new("configured-template-home");
+    directory.write_config(
+        r#"
+        [template.check]
+        backend = "docker"
+
+        [template.check.environment]
+        HOME = "/template/home"
+        "#,
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_driva"))
+        .current_dir(&directory.0)
+        .env("HOME", "/host/home")
+        .args(["run", "--dry-run", "--template", "check", "--", "true"])
+        .output()
+        .unwrap();
+    let output = stdout(output);
+
+    assert!(output.contains("\"--env\" \"HOME=/template/home\""));
+    assert!(!output.contains("HOME=/host/home"));
+}
+
+#[test]
 fn cli_can_disable_template_interactivity() {
     let directory = TestDirectory::new("interactive");
     directory.write_config(

@@ -144,6 +144,10 @@ least one positional command argument remains required at runtime.
 Backend-specific combinations are validated after resolution; for example,
 Docker rejects `rootfs` and Bubblewrap rejects `image`.
 
+When a template is selected and the effective configuration does not set
+`HOME`, Driva inherits `HOME` from the host. An explicit project, template, or
+`--env` value overrides that inherited default.
+
 ### Execution templates
 
 List effective built-in and project-defined templates with:
