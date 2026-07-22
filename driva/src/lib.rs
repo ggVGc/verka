@@ -36,6 +36,11 @@ pub struct ExecutionRequest {
     pub environment: BTreeMap<OsString, OsString>,
     pub network: bool,
     pub interactive: bool,
+    /// Start the sandboxed process in a new terminal session, detaching it from
+    /// the controlling terminal. Backends that support it (Bubblewrap's
+    /// `--new-session`) enable this by default to block TIOCSTI input
+    /// injection; disabling it keeps the caller's session.
+    pub new_session: bool,
 }
 
 /// A filesystem made available inside an isolated execution.

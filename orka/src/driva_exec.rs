@@ -88,6 +88,7 @@ impl IsolatedExecutor for DrivaExecutor {
                 .collect(),
             network: spec.network,
             interactive: false,
+            new_session: true,
         };
 
         std::fs::write(&artifacts.transcript, b"")

@@ -73,6 +73,7 @@ Options:
       --no-network             Disable networking, overriding configuration and templates
   -i, --interactive            Allocate an interactive terminal
       --no-interactive         Disable interactivity, overriding a template
+      --no-new-session         Keep the caller's terminal session instead of starting a new one
       --dry-run                Print the validated request and backend invocation without executing it
       --image <IMAGE>          Override the configured container image
       --rootfs <DIRECTORY>     Override the Bubblewrap root filesystem
@@ -115,6 +116,7 @@ Policy options (shared by `run` and `shell`):
 | `--no-network` | Disable networking, overriding global configuration and templates. |
 | `-i`, `--interactive` | Allocate an interactive terminal (stdin + TTY). |
 | `--no-interactive` | Disable interactivity requested by a template. |
+| `--no-new-session` | Run the command in the caller's terminal session instead of a new one. Bubblewrap otherwise passes `--new-session`, which detaches the controlling terminal to block TIOCSTI input injection; disable it only for tools that require the inherited session. |
 | `--dry-run` | Print the validated request and the exact backend invocation without executing anything. |
 | `--image <IMAGE>` | Override the configured container image for this run (Podman/Docker only). |
 | `--rootfs <DIRECTORY>` | Override the prepared root filesystem for Bubblewrap. |
@@ -367,6 +369,7 @@ Options:
       --no-network             Disable networking, overriding configuration and templates
   -i, --interactive            Allocate an interactive terminal
       --no-interactive         Disable interactivity, overriding a template
+      --no-new-session         Keep the caller's terminal session instead of starting a new one
       --dry-run                Print the validated request and backend invocation without executing it
       --image <IMAGE>          Override the configured container image
       --rootfs <DIRECTORY>     Override the Bubblewrap root filesystem

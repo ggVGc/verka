@@ -160,6 +160,7 @@ mod tests {
             environment: BTreeMap::new(),
             network: invocation.network,
             interactive: false,
+            new_session: true,
         };
         let backend = BwrapIsolation {
             executable: "bwrap".into(),

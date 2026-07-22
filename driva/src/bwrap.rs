@@ -81,10 +81,11 @@ impl BwrapIsolation {
         }
 
         let mut command = Command::new(&self.executable);
-        command
-            .arg("--unshare-all")
-            .arg("--new-session")
-            .arg("--die-with-parent");
+        command.arg("--unshare-all");
+        if request.new_session {
+            command.arg("--new-session");
+        }
+        command.arg("--die-with-parent");
         if request.network {
             command.arg("--share-net");
         }

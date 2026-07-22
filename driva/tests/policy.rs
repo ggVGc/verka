@@ -11,6 +11,7 @@ fn request() -> ExecutionRequest {
         environment: BTreeMap::new(),
         network: false,
         interactive: false,
+        new_session: true,
     }
 }
 

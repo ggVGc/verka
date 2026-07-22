@@ -44,6 +44,7 @@ fn translates_request_without_implicit_host_access() {
         environment: BTreeMap::from([(OsString::from("A"), OsString::from("B"))]),
         network: false,
         interactive: true,
+        new_session: true,
     };
 
     let command = backend.command(&request).unwrap();
@@ -86,6 +87,27 @@ fn translates_request_without_implicit_host_access() {
 }
 
 #[test]
+fn omits_new_session_when_disabled() {
+    let rootfs = TestRootfs::new();
+    let backend = BwrapIsolation {
+        executable: "bwrap".into(),
+        rootfs: Some(rootfs.0.clone()),
+    };
+    let request = ExecutionRequest {
+        command: vec!["true".into()],
+        working_directory: "/work".into(),
+        mounts: vec![],
+        environment: BTreeMap::new(),
+        network: false,
+        interactive: false,
+        new_session: false,
+    };
+
+    let command = backend.command(&request).unwrap();
+    assert!(!command.get_args().any(|argument| argument == "--new-session"));
+}
+
+#[test]
 fn shares_network_only_when_granted() {
     let rootfs = TestRootfs::new();
     let backend = BwrapIsolation {
@@ -99,6 +121,7 @@ fn shares_network_only_when_granted() {
         environment: BTreeMap::new(),
         network: true,
         interactive: false,
+        new_session: true,
     };
 
     let command = backend.command(&request).unwrap();
@@ -130,6 +153,7 @@ fn creates_private_tmpfs_before_nested_file_mounts() {
         environment: BTreeMap::new(),
         network: false,
         interactive: false,
+        new_session: true,
     };
 
     let command = backend.command(&request).unwrap();
@@ -175,6 +199,7 @@ fn permits_paths_created_beneath_private_tmpfs() {
         environment: BTreeMap::new(),
         network: false,
         interactive: false,
+        new_session: true,
     };
 
     let command = backend.command(&request).unwrap();
@@ -202,6 +227,7 @@ fn rejects_destinations_missing_from_read_only_rootfs() {
         environment: BTreeMap::new(),
         network: false,
         interactive: false,
+        new_session: true,
     };
 
     let error = backend.command(&request).unwrap_err();
@@ -262,6 +288,7 @@ fn missing_rootfs_uses_a_private_host_runtime_instead_of_the_host_root() {
         environment: BTreeMap::new(),
         network: false,
         interactive: true,
+        new_session: true,
     };
 
     let command = backend.command(&request).unwrap();

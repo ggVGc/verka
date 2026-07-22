@@ -99,6 +99,10 @@ struct PolicyArgs {
     /// Disable interactivity, overriding a template.
     #[arg(long, conflicts_with = "interactive")]
     no_interactive: bool,
+    /// Keep the caller's terminal session instead of starting a new one
+    /// (omits Bubblewrap's --new-session, which otherwise blocks TIOCSTI).
+    #[arg(long)]
+    no_new_session: bool,
     /// Print the validated request and backend invocation without executing it.
     #[arg(long)]
     dry_run: bool,
@@ -330,6 +334,7 @@ fn real_main() -> Result<()> {
                     .and_then(|value| value.interactive)
                     .unwrap_or(false)
             },
+        new_session: !policy.no_new_session,
     };
     let request = validate_request(&request)?;
     match backend {
