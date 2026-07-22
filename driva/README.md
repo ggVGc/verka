@@ -11,7 +11,7 @@ directory.
 cargo run -- run --write . -- cargo test
 cargo run -- run --read ~/.cargo/registry --write . --network -- cargo update
 cargo run -- run --path ./tools -- project-tool
-cargo run -- run --backend bwrap --rootfs /srv/rootfs --tmpfs /home -- command
+cargo run -- run --backend bwrap --rootfs /srv/rootfs --temporary /home -- command
 cargo run -- shell --write .
 ```
 
@@ -72,14 +72,14 @@ preserving paths used by tool managers such as Rustup.
 
 Launch settings use the same vocabulary in templates and on the command line.
 For example, `--command`, `--backend`, `--image`, `--rootfs`, repeatable
-`--tmpfs`, `--workdir`, `--path`, networking, interactivity, environment, and
+`--temporary`, `--workdir`, `--path`, networking, interactivity, environment, and
 mounts all override or extend the corresponding project/template settings.
 Scalar precedence is CLI, then template, then project configuration. When
 `--command` is given, it replaces the template's executable and initial
 arguments; trailing command arguments are appended to the replacement.
 `--no-write` is a final safety override: it turns every host bind mount,
 including mounts from project configuration, templates, and `--write`, into a
-read-only mount. Private writable filesystems such as Bubblewrap tmpfs remain
+read-only mount. Temporary filesystems remain
 available because they cannot modify the mounted host data.
 
 Projects can provide `driva.toml`:
@@ -96,6 +96,10 @@ workdir = "/workspace"
 source = "."
 destination = "/workspace"
 access = "write"
+
+[[mount]]
+kind = "temporary"
+destination = "/workspace/.cache"
 
 [network]
 enabled = false
@@ -133,10 +137,11 @@ rootfs = "/var/lib/driva/rootfs/busybox"
 workdir = "/tmp"
 ```
 
-When configured, the rootfs must contain `/proc`, `/dev`, `/tmp`, the working
-directory, and every configured mount destination. Driva exposes it read-only
-and places a private writable tmpfs at `/tmp`. Bubblewrap uses `--rootfs`
-instead of an OCI `--image`.
+When configured, the rootfs must contain `/proc`, `/dev`, `/tmp`, each
+temporary mount point, and every working directory or bind destination not
+created beneath a temporary mount. Driva exposes it read-only and places a
+private writable tmpfs at `/tmp`. Bubblewrap uses `--rootfs` instead of an OCI
+`--image`.
 
 Podman and Docker remain available by setting `isolation.backend` to
 `"podman"` or `"docker"`. Their default image is the minimal

@@ -62,7 +62,7 @@ fn cli_selects_backend_and_backend_specific_options() {
 }
 
 #[test]
-fn cli_rootfs_and_tmpfs_reach_bubblewrap() {
+fn cli_rootfs_and_temporary_mount_reach_bubblewrap() {
     let directory = TestDirectory::new("bwrap");
     let rootfs = directory.0.join("rootfs");
     for path in ["proc", "dev", "tmp", "work", "home"] {
@@ -75,7 +75,7 @@ fn cli_rootfs_and_tmpfs_reach_bubblewrap() {
         "bwrap",
         "--rootfs",
         rootfs.to_str().unwrap(),
-        "--tmpfs",
+        "--temporary",
         "/home",
         "--workdir",
         "/work",
@@ -86,6 +86,46 @@ fn cli_rootfs_and_tmpfs_reach_bubblewrap() {
     assert!(output.contains("backend: bwrap"));
     assert!(output.contains(&format!("\"--ro-bind\" {:?} \"/\"", rootfs)));
     assert!(output.contains("\"--tmpfs\" \"/home\""));
+}
+
+#[test]
+fn temporary_config_mount_reaches_docker() {
+    let directory = TestDirectory::new("docker-temporary");
+    directory.write_config(
+        r#"
+        [template.check]
+        backend = "docker"
+
+        [[template.check.mount]]
+        kind = "temporary"
+        destination = "/state"
+        "#,
+    );
+    let output = stdout(directory.run(&["run", "--dry-run", "--template", "check", "--", "true"]));
+
+    assert!(output.contains("mount: temporary -> /state (read-write)"));
+    assert!(output.contains("\"--tmpfs\" \"/state\""));
+}
+
+#[test]
+fn temporary_mount_rejects_bind_only_fields() {
+    let directory = TestDirectory::new("invalid-temporary");
+    directory.write_config(
+        r#"
+        [template.check]
+        backend = "docker"
+
+        [[template.check.mount]]
+        kind = "temporary"
+        source = "."
+        destination = "/state"
+        "#,
+    );
+    let output = directory.run(&["run", "--dry-run", "--template", "check", "--", "true"]);
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr)
+        .contains("temporary mount does not accept a source"));
 }
 
 #[test]
@@ -380,6 +420,10 @@ fn no_write_makes_every_host_mount_read_only() {
         source = "template"
         destination = "/template"
         access = "write"
+
+        [[template.readonly.mount]]
+        kind = "temporary"
+        destination = "/temporary"
         "#,
     );
     let output = stdout(directory.run(&[
@@ -395,7 +439,7 @@ fn no_write_makes_every_host_mount_read_only() {
     ]));
 
     assert_eq!(output.matches("(read-only)").count(), 4);
-    assert!(!output.contains("(read-write)"));
+    assert!(output.contains("mount: temporary -> /temporary (read-write)"));
     assert_eq!(output.matches(":ro").count(), 4);
 }
 

@@ -1,6 +1,6 @@
 use crate::{
     effective_policy, ExecutionEvidence, ExecutionIo, ExecutionOutcome, ExecutionRequest,
-    Isolation, MountAccess, ProcessExit, DEFAULT_PATH,
+    Isolation, Mount, MountAccess, ProcessExit, DEFAULT_PATH,
 };
 use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
@@ -15,7 +15,6 @@ pub struct BwrapIsolation {
     /// A prepared root filesystem. When absent, Driva constructs a private
     /// root containing only the host's read-only system runtime.
     pub rootfs: Option<PathBuf>,
-    pub tmpfs: Vec<PathBuf>,
 }
 
 impl BwrapIsolation {
@@ -45,30 +44,37 @@ impl BwrapIsolation {
             self.require_rootfs_directory(rootfs, Path::new("/dev"), "device mount point")?;
             self.require_rootfs_directory(rootfs, Path::new("/tmp"), "temporary directory")?;
         }
-        let mut tmpfs = Vec::new();
-        for destination in &self.tmpfs {
-            let destination = expand_home(destination)?;
-            if !tmpfs.contains(&destination) {
-                tmpfs.push(destination);
+        let mut temporary_mounts = Vec::new();
+        for mount in &request.mounts {
+            let Mount::Temporary { destination } = mount else {
+                continue;
+            };
+            let destination = crate::expand_home(destination, "temporary mount destination")?;
+            if !temporary_mounts.contains(&destination) {
+                temporary_mounts.push(destination);
             }
         }
-        for destination in &tmpfs {
+        temporary_mounts.sort_by_key(|destination| destination.components().count());
+        for destination in &temporary_mounts {
             if let Some(rootfs) = &rootfs {
-                self.require_rootfs_directory(rootfs, destination, "tmpfs mount point")?;
+                self.require_rootfs_directory(rootfs, destination, "temporary mount point")?;
             }
         }
         if let Some(rootfs) = &rootfs {
-            self.require_rootfs_path_or_tmpfs(
+            self.require_rootfs_path_or_temporary(
                 rootfs,
-                &tmpfs,
+                &temporary_mounts,
                 &request.working_directory,
                 "working directory",
             )?;
             for mount in &request.mounts {
-                self.require_rootfs_path_or_tmpfs(
+                let Mount::Bind { destination, .. } = mount else {
+                    continue;
+                };
+                self.require_rootfs_path_or_temporary(
                     rootfs,
-                    &tmpfs,
-                    &mount.destination,
+                    &temporary_mounts,
+                    destination,
                     "mount destination",
                 )?;
             }
@@ -102,18 +108,28 @@ impl BwrapIsolation {
             .arg("/dev")
             .arg("--tmpfs")
             .arg("/tmp");
-        for destination in &tmpfs {
-            command.arg("--tmpfs").arg(destination);
+        for destination in &temporary_mounts {
+            if destination != Path::new("/tmp") {
+                command.arg("--tmpfs").arg(destination);
+            }
         }
         if rootfs.is_none() {
             command.arg("--dir").arg(&request.working_directory);
         }
         for mount in &request.mounts {
-            command.arg(match mount.access {
+            let Mount::Bind {
+                source,
+                destination,
+                access,
+            } = mount
+            else {
+                continue;
+            };
+            command.arg(match access {
                 MountAccess::ReadOnly => "--ro-bind",
                 MountAccess::ReadWrite => "--bind",
             });
-            command.arg(&mount.source).arg(&mount.destination);
+            command.arg(source).arg(destination);
         }
         command
             .arg("--chdir")
@@ -134,15 +150,17 @@ impl BwrapIsolation {
         Ok(())
     }
 
-    fn require_rootfs_path_or_tmpfs(
+    fn require_rootfs_path_or_temporary(
         &self,
         rootfs: &Path,
-        tmpfs: &[PathBuf],
+        temporary_mounts: &[PathBuf],
         path: &Path,
         label: &str,
     ) -> Result<()> {
         if is_nested_beneath(path, Path::new("/tmp"))
-            || tmpfs.iter().any(|base| is_nested_beneath(path, base))
+            || temporary_mounts
+                .iter()
+                .any(|base| is_nested_beneath(path, base))
         {
             return Ok(());
         }

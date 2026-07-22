@@ -130,18 +130,21 @@ mod tests {
         let layout = SandboxLayout::default();
         let invocation = codex(Path::new("codex"), &layout).unwrap();
         let mut mounts = vec![
-            Mount {
+            Mount::Temporary {
+                destination: "/root".into(),
+            },
+            Mount::Bind {
                 source: "/host/attempt".into(),
                 destination: layout.workspace.clone(),
                 access: MountAccess::ReadWrite,
             },
-            Mount {
+            Mount::Bind {
                 source: "/host/exchange".into(),
                 destination: layout.exchange.clone(),
                 access: MountAccess::ReadWrite,
             },
         ];
-        mounts.extend(invocation.mounts.into_iter().map(|mount| Mount {
+        mounts.extend(invocation.mounts.into_iter().map(|mount| Mount::Bind {
             source: mount.source,
             destination: mount.destination,
             access: if mount.writable {
@@ -161,7 +164,6 @@ mod tests {
         let backend = BwrapIsolation {
             executable: "bwrap".into(),
             rootfs: Some(rootfs.clone()),
-            tmpfs: vec!["/root".into()],
         };
 
         backend.command(&request).unwrap();

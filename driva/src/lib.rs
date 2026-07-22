@@ -8,8 +8,8 @@ mod runtime;
 
 pub use bwrap::BwrapIsolation;
 pub use config::{
-    BwrapConfig, Config, DockerConfig, IsolationConfig, MountConfig, NetworkConfig, PodmanConfig,
-    TemplateConfig,
+    BwrapConfig, Config, DockerConfig, IsolationConfig, MountConfig, MountKind, NetworkConfig,
+    PodmanConfig, TemplateConfig,
 };
 pub use docker::DockerIsolation;
 pub use podman::PodmanIsolation;
@@ -38,11 +38,32 @@ pub struct ExecutionRequest {
     pub interactive: bool,
 }
 
+/// A filesystem made available inside an isolated execution.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
-pub struct Mount {
-    pub source: PathBuf,
-    pub destination: PathBuf,
-    pub access: MountAccess,
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum Mount {
+    /// A host path exposed at an isolated destination.
+    Bind {
+        source: PathBuf,
+        destination: PathBuf,
+        access: MountAccess,
+    },
+    /// An empty, writable filesystem discarded after execution.
+    Temporary { destination: PathBuf },
+}
+
+impl Mount {
+    pub fn destination(&self) -> &Path {
+        match self {
+            Self::Bind { destination, .. } | Self::Temporary { destination } => destination,
+        }
+    }
+
+    pub fn make_read_only(&mut self) {
+        if let Self::Bind { access, .. } = self {
+            *access = MountAccess::ReadOnly;
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -139,33 +160,40 @@ pub fn validate_request(request: &ExecutionRequest) -> Result<ExecutionRequest> 
     let mut validated = request.clone();
     let mut destinations = HashSet::new();
     for mount in &mut validated.mounts {
-        if !mount.destination.is_absolute() {
+        if let Mount::Temporary { destination } = mount {
+            *destination = expand_home(destination, "temporary mount destination")?;
+        }
+        let destination = mount.destination();
+        if !destination.is_absolute() {
             bail!(
                 "mount destination must be absolute: {}",
-                mount.destination.display()
+                destination.display()
             );
         }
-        if !destinations.insert(mount.destination.clone()) {
-            bail!(
-                "conflicting mount destination: {}",
-                mount.destination.display()
-            );
+        if !destinations.insert(destination.to_path_buf()) {
+            bail!("conflicting mount destination: {}", destination.display());
         }
-        mount.source = canonicalize_mount(&mount.source)
-            .with_context(|| format!("invalid mount source {}", mount.source.display()))?;
+        if let Mount::Bind { source, .. } = mount {
+            *source = canonicalize_mount(source)
+                .with_context(|| format!("invalid mount source {}", source.display()))?;
+        }
     }
     Ok(validated)
 }
 
 pub(crate) fn canonicalize_mount(path: &Path) -> Result<PathBuf> {
-    let expanded = if path == Path::new("~") || path.starts_with("~/") {
-        let home =
-            std::env::var_os("HOME").context("HOME is not set; cannot expand mount source")?;
-        PathBuf::from(home).join(path.strip_prefix("~").expect("prefix checked"))
-    } else {
-        path.to_path_buf()
-    };
+    let expanded = expand_home(path, "mount source")?;
     Ok(expanded.canonicalize()?)
+}
+
+pub(crate) fn expand_home(path: &Path, label: &str) -> Result<PathBuf> {
+    if path == Path::new("~") || path.starts_with("~/") {
+        let home = std::env::var_os("HOME")
+            .with_context(|| format!("HOME is not set; cannot expand {label}"))?;
+        Ok(PathBuf::from(home).join(path.strip_prefix("~").expect("prefix checked")))
+    } else {
+        Ok(path.to_path_buf())
+    }
 }
 
 pub fn effective_policy(request: &ExecutionRequest) -> EffectivePolicy {

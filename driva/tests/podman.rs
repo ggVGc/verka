@@ -11,11 +11,16 @@ fn translates_request_without_implicit_capabilities() {
     let request = ExecutionRequest {
         command: vec!["printf".into(), "hello".into()],
         working_directory: "/work".into(),
-        mounts: vec![Mount {
-            source: "/host".into(),
-            destination: "/work".into(),
-            access: MountAccess::ReadWrite,
-        }],
+        mounts: vec![
+            Mount::Temporary {
+                destination: "/state".into(),
+            },
+            Mount::Bind {
+                source: "/host".into(),
+                destination: "/work".into(),
+                access: MountAccess::ReadWrite,
+            },
+        ],
         environment: BTreeMap::from([(OsString::from("A"), OsString::from("B"))]),
         network: false,
         interactive: true,
@@ -36,6 +41,8 @@ fn translates_request_without_implicit_capabilities() {
             "none",
             "--workdir",
             "/work",
+            "--tmpfs",
+            "/state",
             "--volume",
             "/host:/work",
             "--env",

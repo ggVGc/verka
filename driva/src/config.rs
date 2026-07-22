@@ -1,5 +1,5 @@
 use crate::{Mount, MountAccess};
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -134,24 +134,50 @@ fn default_bwrap() -> PathBuf {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MountConfig {
-    pub source: PathBuf,
-    pub destination: Option<PathBuf>,
     #[serde(default)]
-    pub access: MountAccess,
+    pub kind: MountKind,
+    pub source: Option<PathBuf>,
+    pub destination: Option<PathBuf>,
+    pub access: Option<MountAccess>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum MountKind {
+    #[default]
+    Bind,
+    Temporary,
 }
 
 impl MountConfig {
     /// Resolve the host source and default an omitted destination to the same
     /// canonical path inside the isolation.
     pub fn resolve(self) -> Result<Mount> {
-        let source = crate::canonicalize_mount(&self.source)
-            .with_context(|| format!("invalid mount source {}", self.source.display()))?;
-        let destination = self.destination.unwrap_or_else(|| source.clone());
-        Ok(Mount {
-            source,
-            destination,
-            access: self.access,
-        })
+        match self.kind {
+            MountKind::Bind => {
+                let source = self.source.context("bind mount requires a source")?;
+                let source = crate::canonicalize_mount(&source)
+                    .with_context(|| format!("invalid mount source {}", source.display()))?;
+                let destination = self.destination.unwrap_or_else(|| source.clone());
+                Ok(Mount::Bind {
+                    source,
+                    destination,
+                    access: self.access.unwrap_or_default(),
+                })
+            }
+            MountKind::Temporary => {
+                if self.source.is_some() {
+                    bail!("temporary mount does not accept a source");
+                }
+                if self.access.is_some() {
+                    bail!("temporary mount does not accept an access mode");
+                }
+                let destination = self
+                    .destination
+                    .context("temporary mount requires a destination")?;
+                Ok(Mount::Temporary { destination })
+            }
+        }
     }
 }
 
@@ -170,9 +196,6 @@ pub struct TemplateConfig {
     pub image: Option<String>,
     /// Prepared filesystem tree used when this template selects Bubblewrap.
     pub rootfs: Option<PathBuf>,
-    /// Rootfs directories replaced with private writable tmpfs mounts.
-    #[serde(default)]
-    pub tmpfs: Vec<PathBuf>,
     /// A mount whose resolved destination is also used as the working
     /// directory. Resolution rejects more than one workspace mount.
     #[serde(default, rename = "workspace-mount")]

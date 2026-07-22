@@ -21,11 +21,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub struct DrivaExecutor {
     backend: Box<dyn Isolation>,
+    temporary_mounts: Vec<std::path::PathBuf>,
 }
 
 impl DrivaExecutor {
     pub fn new(backend: Box<dyn Isolation>) -> Self {
-        Self { backend }
+        Self {
+            backend,
+            temporary_mounts: Vec::new(),
+        }
     }
 
     pub fn podman(executable: impl Into<std::path::PathBuf>, image: impl Into<String>) -> Self {
@@ -45,13 +49,15 @@ impl DrivaExecutor {
     pub fn bwrap(
         executable: impl Into<std::path::PathBuf>,
         rootfs: impl Into<std::path::PathBuf>,
-        tmpfs: Vec<std::path::PathBuf>,
+        temporary_mounts: Vec<std::path::PathBuf>,
     ) -> Self {
-        Self::new(Box::new(driva::BwrapIsolation {
-            executable: executable.into(),
-            rootfs: Some(rootfs.into()),
-            tmpfs,
-        }))
+        Self {
+            backend: Box::new(driva::BwrapIsolation {
+                executable: executable.into(),
+                rootfs: Some(rootfs.into()),
+            }),
+            temporary_mounts,
+        }
     }
 }
 
@@ -60,10 +66,12 @@ impl IsolatedExecutor for DrivaExecutor {
         let request = driva::ExecutionRequest {
             command: spec.command.iter().map(OsString::from).collect(),
             working_directory: spec.working_directory.clone(),
-            mounts: spec
-                .mounts
+            mounts: self
+                .temporary_mounts
                 .iter()
-                .map(|m| Mount {
+                .cloned()
+                .map(|destination| Mount::Temporary { destination })
+                .chain(spec.mounts.iter().map(|m| Mount::Bind {
                     source: m.source.clone(),
                     destination: m.destination.clone(),
                     access: if m.writable {
@@ -71,7 +79,7 @@ impl IsolatedExecutor for DrivaExecutor {
                     } else {
                         MountAccess::ReadOnly
                     },
-                })
+                }))
                 .collect(),
             environment: spec
                 .environment
@@ -365,13 +373,19 @@ mod tests {
         assert!(!request.network, "networking stays denied");
         assert!(!request.interactive);
         assert_eq!(request.mounts.len(), 2);
-        assert_eq!(request.mounts[0].access, MountAccess::ReadWrite);
-        assert_eq!(request.mounts[1].access, MountAccess::ReadOnly);
-        // driva validated (canonicalised) the sources.
+        let Mount::Bind { source, access, .. } = &request.mounts[0] else {
+            panic!("workspace grant is not a bind mount");
+        };
+        assert_eq!(*access, MountAccess::ReadWrite);
         assert_eq!(
-            request.mounts[0].source,
-            dir.join("ws").canonicalize().unwrap()
+            source,
+            &dir.join("ws").canonicalize().unwrap(),
+            "driva canonicalised the source"
         );
+        let Mount::Bind { access, .. } = &request.mounts[1] else {
+            panic!("context grant is not a bind mount");
+        };
+        assert_eq!(*access, MountAccess::ReadOnly);
         assert_eq!(
             request.environment.get(&OsString::from("ORKA_OUTCOME")),
             Some(&OsString::from("/tmp/orka/exchange/outcome.toml"))

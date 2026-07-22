@@ -2,7 +2,6 @@ description = "Run OpenAI Codex interactively against the current project"
 command = ["/usr/local/bin/driva-codex", "--sandbox", "danger-full-access"]
 backend = "bwrap"
 rootfs = "~/.local/share/driva/runtimes/codex/current/rootfs"
-tmpfs = ["/root/.codex", "/driva"]
 network = true
 interactive = true
 
@@ -14,6 +13,10 @@ access = "write"
 [environment]
 HOME = "/root"
 TERM = "xterm-256color"
+
+[[mount]]
+kind = "temporary"
+destination = "/root/.codex"
 
 [[mount]]
 source = "/etc/resolv.conf"

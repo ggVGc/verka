@@ -1,6 +1,6 @@
 use crate::{
     effective_policy, ExecutionEvidence, ExecutionIo, ExecutionOutcome, ExecutionRequest,
-    Isolation, MountAccess, ProcessExit,
+    Isolation, Mount, MountAccess, ProcessExit,
 };
 use anyhow::{Context, Result};
 use std::path::PathBuf;
@@ -25,11 +25,31 @@ impl PodmanIsolation {
             command.arg("--network").arg("none");
         }
         command.arg("--workdir").arg(&request.working_directory);
+        let mut temporary_mounts: Vec<_> = request
+            .mounts
+            .iter()
+            .filter_map(|mount| match mount {
+                Mount::Temporary { destination } => Some(destination),
+                Mount::Bind { .. } => None,
+            })
+            .collect();
+        temporary_mounts.sort_by_key(|destination| destination.components().count());
+        for destination in temporary_mounts {
+            command.arg("--tmpfs").arg(destination);
+        }
         for mount in &request.mounts {
-            let mut value = mount.source.as_os_str().to_os_string();
+            let Mount::Bind {
+                source,
+                destination,
+                access,
+            } = mount
+            else {
+                continue;
+            };
+            let mut value = source.as_os_str().to_os_string();
             value.push(":");
-            value.push(&mount.destination);
-            if mount.access == MountAccess::ReadOnly {
+            value.push(destination);
+            if *access == MountAccess::ReadOnly {
                 value.push(":ro");
             }
             command.arg("--volume").arg(value);

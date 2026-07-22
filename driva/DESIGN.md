@@ -115,10 +115,15 @@ pub struct ExecutionRequest {
     pub interactive: bool,
 }
 
-pub struct Mount {
-    pub source: PathBuf,
-    pub destination: PathBuf,
-    pub access: MountAccess,
+pub enum Mount {
+    Bind {
+        source: PathBuf,
+        destination: PathBuf,
+        access: MountAccess,
+    },
+    Temporary {
+        destination: PathBuf,
+    },
 }
 
 pub enum MountAccess {
@@ -155,6 +160,7 @@ Before invoking a backend, Driva:
 - resolves and validates every host mount source;
 - requires isolated mount destinations to be absolute;
 - rejects conflicting destinations;
+- creates temporary mounts as empty writable filesystems for one execution;
 - applies read-only access when access is not explicitly specified;
 - applies disabled networking when it is not explicitly enabled; and
 - reports the resulting effective request for dry runs and diagnostics.
@@ -170,7 +176,7 @@ The production adapters translate an `ExecutionRequest` into Bubblewrap,
 default. Each adapter is responsible for:
 
 - selecting the configured rootfs or image and isolated working directory;
-- translating read-only and read-write mounts;
+- translating read-only, read-write, and temporary mounts;
 - disabling networking by default;
 - attaching the caller's standard streams and allocating a TTY when requested;
 - forwarding termination as well as the backend permits; and

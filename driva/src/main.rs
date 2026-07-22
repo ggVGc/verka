@@ -108,9 +108,9 @@ struct PolicyArgs {
     /// Override the Bubblewrap root filesystem.
     #[arg(long, value_name = "DIRECTORY")]
     rootfs: Option<PathBuf>,
-    /// Add a private writable Bubblewrap tmpfs mount.
+    /// Add an empty writable filesystem discarded after execution.
     #[arg(long, value_name = "DIRECTORY")]
-    tmpfs: Vec<PathBuf>,
+    temporary: Vec<PathBuf>,
     /// Override the isolated working directory.
     #[arg(long)]
     workdir: Option<PathBuf>,
@@ -121,16 +121,9 @@ struct PolicyArgs {
 
 #[derive(Debug)]
 enum ResolvedBackend {
-    Podman {
-        image: String,
-    },
-    Docker {
-        image: String,
-    },
-    Bwrap {
-        rootfs: Option<PathBuf>,
-        tmpfs: Vec<PathBuf>,
-    },
+    Podman { image: String },
+    Docker { image: String },
+    Bwrap { rootfs: Option<PathBuf> },
 }
 
 impl ResolvedBackend {
@@ -242,6 +235,13 @@ fn real_main() -> Result<()> {
     for spec in &policy.writes {
         mounts.push(parse_mount(spec, MountAccess::ReadWrite, &workdir)?);
     }
+    mounts.extend(
+        policy
+            .temporary
+            .iter()
+            .cloned()
+            .map(|destination| Mount::Temporary { destination }),
+    );
     let mut environment: BTreeMap<OsString, OsString> = config.environment;
     if let Some(template) = &template {
         environment.extend(
@@ -268,7 +268,7 @@ fn real_main() -> Result<()> {
     add_path_directories(&paths, &mut mounts, &mut environment)?;
     if policy.no_write {
         for mount in &mut mounts {
-            mount.access = MountAccess::ReadOnly;
+            mount.make_read_only();
         }
     }
     if shell {
@@ -324,11 +324,10 @@ fn real_main() -> Result<()> {
             let invocation = backend.command(&request);
             finish("docker", &backend, invocation, &request, policy.dry_run)
         }
-        ResolvedBackend::Bwrap { rootfs, tmpfs } => {
+        ResolvedBackend::Bwrap { rootfs } => {
             let backend = BwrapIsolation {
                 executable: config.isolation.bwrap.executable,
                 rootfs,
-                tmpfs,
             };
             let invocation = backend.command(&request).with_context(|| {
                 if matches!(policy.template.as_deref(), Some("codex-runtime")) {
@@ -350,17 +349,10 @@ fn resolve_backend(
 ) -> Result<ResolvedBackend> {
     let template_image = template.and_then(|value| value.image.clone());
     let template_rootfs = template.and_then(|value| value.rootfs.clone());
-    let template_tmpfs = template
-        .map(|value| value.tmpfs.clone())
-        .unwrap_or_default();
-
     match name {
         "podman" | "docker" => {
             if policy.rootfs.is_some() || template_rootfs.is_some() {
                 bail!("--rootfs is only supported by the Bubblewrap backend");
-            }
-            if !policy.tmpfs.is_empty() || !template_tmpfs.is_empty() {
-                bail!("--tmpfs is only supported by the Bubblewrap backend");
             }
             let configured_image = if name == "podman" {
                 &config.isolation.podman.image
@@ -382,19 +374,12 @@ fn resolve_backend(
             if policy.image.is_some() || template_image.is_some() {
                 bail!("--image is not supported by the Bubblewrap backend; use --rootfs");
             }
-            let mut tmpfs = template_tmpfs;
-            for path in &policy.tmpfs {
-                if !tmpfs.contains(path) {
-                    tmpfs.push(path.clone());
-                }
-            }
             Ok(ResolvedBackend::Bwrap {
                 rootfs: policy
                     .rootfs
                     .clone()
                     .or(template_rootfs)
                     .or_else(|| config.isolation.bwrap.rootfs.clone()),
-                tmpfs,
             })
         }
         backend => bail!("unsupported isolation backend {backend:?}"),
@@ -411,7 +396,10 @@ fn resolve_workspace_mount(template: &mut driva::TemplateConfig) -> Result<Optio
         return Ok(None);
     };
     let workspace_mount = workspace_mount.resolve()?;
-    template.workdir = Some(workspace_mount.destination.clone());
+    let Mount::Bind { destination, .. } = &workspace_mount else {
+        bail!("workspace-mount must be a bind mount");
+    };
+    template.workdir = Some(destination.clone());
     Ok(Some(workspace_mount))
 }
 
@@ -492,7 +480,7 @@ fn parse_mount(spec: &str, access: MountAccess, workdir: &Path) -> Result<Mount>
             workdir.join(&source)
         }
     });
-    Ok(Mount {
+    Ok(Mount::Bind {
         source,
         destination,
         access,
@@ -524,7 +512,7 @@ fn add_path_directories(
             path.push(":");
         }
         path.push(&destination);
-        mounts.push(Mount {
+        mounts.push(Mount::Bind {
             source,
             destination,
             access: MountAccess::ReadOnly,
@@ -568,16 +556,25 @@ fn print_dry_run(name: &str, command: Command, request: &ExecutionRequest) {
     println!("interactive: {}", request.interactive);
     println!("working-directory: {}", request.working_directory.display());
     for mount in &request.mounts {
-        println!(
-            "mount: {} -> {} ({})",
-            mount.source.display(),
-            mount.destination.display(),
-            if mount.access == MountAccess::ReadOnly {
-                "read-only"
-            } else {
-                "read-write"
+        match mount {
+            Mount::Bind {
+                source,
+                destination,
+                access,
+            } => println!(
+                "mount: {} -> {} ({})",
+                source.display(),
+                destination.display(),
+                if *access == MountAccess::ReadOnly {
+                    "read-only"
+                } else {
+                    "read-write"
+                }
+            ),
+            Mount::Temporary { destination } => {
+                println!("mount: temporary -> {} (read-write)", destination.display())
             }
-        );
+        }
     }
     print!("invocation:");
     for arg in std::iter::once(command.get_program()).chain(command.get_args()) {

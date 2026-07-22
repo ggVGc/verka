@@ -32,12 +32,11 @@ fn translates_request_without_implicit_host_access() {
     let backend = BwrapIsolation {
         executable: "bwrap".into(),
         rootfs: Some(rootfs.0.clone()),
-        tmpfs: vec![],
     };
     let request = ExecutionRequest {
         command: vec!["printf".into(), "hello".into()],
         working_directory: "/work".into(),
-        mounts: vec![Mount {
+        mounts: vec![Mount::Bind {
             source: "/host".into(),
             destination: "/work".into(),
             access: MountAccess::ReadWrite,
@@ -92,7 +91,6 @@ fn shares_network_only_when_granted() {
     let backend = BwrapIsolation {
         executable: "bwrap".into(),
         rootfs: Some(rootfs.0.clone()),
-        tmpfs: vec![],
     };
     let request = ExecutionRequest {
         command: vec!["true".into()],
@@ -115,16 +113,20 @@ fn creates_private_tmpfs_before_nested_file_mounts() {
     let backend = BwrapIsolation {
         executable: "bwrap".into(),
         rootfs: Some(rootfs.0.clone()),
-        tmpfs: vec!["/state".into()],
     };
     let request = ExecutionRequest {
         command: vec!["true".into()],
         working_directory: "/work".into(),
-        mounts: vec![Mount {
-            source: "/host/auth.json".into(),
-            destination: "/state/auth.json".into(),
-            access: MountAccess::ReadWrite,
-        }],
+        mounts: vec![
+            Mount::Temporary {
+                destination: "/state".into(),
+            },
+            Mount::Bind {
+                source: "/host/auth.json".into(),
+                destination: "/state/auth.json".into(),
+                access: MountAccess::ReadWrite,
+            },
+        ],
         environment: BTreeMap::new(),
         network: false,
         interactive: false,
@@ -151,18 +153,20 @@ fn permits_paths_created_beneath_private_tmpfs() {
     let backend = BwrapIsolation {
         executable: "bwrap".into(),
         rootfs: Some(rootfs.0.clone()),
-        tmpfs: vec!["/home".into()],
     };
     let request = ExecutionRequest {
         command: vec!["true".into()],
         working_directory: "/tmp/workspace".into(),
         mounts: vec![
-            Mount {
+            Mount::Temporary {
+                destination: "/home".into(),
+            },
+            Mount::Bind {
                 source: "/host/project".into(),
                 destination: "/tmp/workspace".into(),
                 access: MountAccess::ReadWrite,
             },
-            Mount {
+            Mount::Bind {
                 source: "/host/auth.json".into(),
                 destination: "/home/codex/.codex/auth.json".into(),
                 access: MountAccess::ReadWrite,
@@ -190,7 +194,6 @@ fn rejects_destinations_missing_from_read_only_rootfs() {
     let backend = BwrapIsolation {
         executable: "bwrap".into(),
         rootfs: Some(rootfs.0.clone()),
-        tmpfs: vec![],
     };
     let request = ExecutionRequest {
         command: vec!["true".into()],
@@ -248,7 +251,6 @@ fn missing_rootfs_uses_a_private_host_runtime_instead_of_the_host_root() {
     let backend = BwrapIsolation {
         executable: "bwrap".into(),
         rootfs: None,
-        tmpfs: vec![],
     };
     let request = ExecutionRequest {
         command: vec!["/bin/sh".into()],
