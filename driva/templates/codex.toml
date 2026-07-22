@@ -4,10 +4,6 @@ backend = "bwrap"
 network = true
 interactive = true
 
-[[workspace-mount]]
-source = "."
-access = "write"
-
 [[mount]]
 source = "~/.codex"
 access = "write"

@@ -5,10 +5,6 @@ image = "docker.io/library/node:22-bookworm"
 network = true
 interactive = true
 
-[[workspace-mount]]
-source = "."
-access = "write"
-
 [environment]
 DISABLE_AUTOUPDATER = "1"
 
