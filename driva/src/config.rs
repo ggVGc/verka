@@ -28,10 +28,6 @@ pub struct IsolationConfig {
     #[serde(default = "bwrap_backend")]
     pub backend: String,
     #[serde(default)]
-    pub docker: DockerConfig,
-    #[serde(default)]
-    pub podman: PodmanConfig,
-    #[serde(default)]
     pub bwrap: BwrapConfig,
 }
 
@@ -39,8 +35,6 @@ impl Default for IsolationConfig {
     fn default() -> Self {
         Self {
             backend: bwrap_backend(),
-            docker: DockerConfig::default(),
-            podman: PodmanConfig::default(),
             bwrap: BwrapConfig::default(),
         }
     }
@@ -48,56 +42,6 @@ impl Default for IsolationConfig {
 
 fn bwrap_backend() -> String {
     "bwrap".into()
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct DockerConfig {
-    #[serde(default = "default_image")]
-    pub image: String,
-    pub workdir: Option<PathBuf>,
-    #[serde(default = "default_docker")]
-    pub executable: PathBuf,
-}
-
-impl Default for DockerConfig {
-    fn default() -> Self {
-        Self {
-            image: default_image(),
-            workdir: None,
-            executable: default_docker(),
-        }
-    }
-}
-fn default_image() -> String {
-    "docker.io/library/busybox:latest".into()
-}
-fn default_docker() -> PathBuf {
-    PathBuf::from("docker")
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PodmanConfig {
-    #[serde(default = "default_image")]
-    pub image: String,
-    pub workdir: Option<PathBuf>,
-    #[serde(default = "default_podman")]
-    pub executable: PathBuf,
-}
-
-impl Default for PodmanConfig {
-    fn default() -> Self {
-        Self {
-            image: default_image(),
-            workdir: None,
-            executable: default_podman(),
-        }
-    }
-}
-
-fn default_podman() -> PathBuf {
-    PathBuf::from("podman")
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -187,7 +131,6 @@ pub struct TemplateConfig {
     #[serde(default)]
     pub command: Vec<String>,
     pub backend: Option<String>,
-    pub image: Option<String>,
     /// Prepared filesystem tree used when this template selects Bubblewrap.
     pub rootfs: Option<PathBuf>,
     /// A mount whose resolved destination is also used as the working
@@ -273,9 +216,6 @@ impl TemplateConfig {
         }
         if later.backend.is_some() {
             self.backend = later.backend;
-        }
-        if later.image.is_some() {
-            self.image = later.image;
         }
         if later.rootfs.is_some() {
             self.rootfs = later.rootfs;

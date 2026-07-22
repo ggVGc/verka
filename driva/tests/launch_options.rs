@@ -44,27 +44,18 @@ fn stdout(output: Output) -> String {
 }
 
 #[test]
-fn cli_selects_backend_and_backend_specific_options() {
+fn cli_defaults_to_the_bubblewrap_backend() {
     let directory = TestDirectory::new("backend");
-    let output = stdout(directory.run(&[
-        "run",
-        "--dry-run",
-        "--backend",
-        "docker",
-        "--image",
-        "example:cli",
-        "--",
-        "true",
-    ]));
+    let output = stdout(directory.run(&["run", "--dry-run", "--", "true"]));
 
-    assert!(output.contains("backend: docker"));
-    assert!(output.contains("\"example:cli\" \"true\""));
+    assert!(output.contains("backend: bwrap"));
+    assert!(output.contains("\"--\" \"true\""));
 }
 
 #[test]
 fn omitted_workdir_mounts_the_current_directory_as_a_writable_workspace() {
     let directory = TestDirectory::new("default-workspace");
-    let output = stdout(directory.run(&["run", "--dry-run", "--backend", "docker", "--", "true"]));
+    let output = stdout(directory.run(&["run", "--dry-run", "--", "true"]));
     let workspace = directory.0.canonicalize().unwrap();
 
     assert!(output.contains(&format!("working-directory: {}", workspace.display())));
@@ -73,11 +64,7 @@ fn omitted_workdir_mounts_the_current_directory_as_a_writable_workspace() {
         workspace.display(),
         workspace.display()
     )));
-    assert!(output.contains(&format!(
-        "--workdir\" {:?} \"--volume\" {:?}",
-        workspace,
-        format!("{}:{}", workspace.display(), workspace.display())
-    )));
+    assert!(output.contains(&format!("\"--bind\" {:?} {:?}", workspace, workspace)));
 }
 
 #[test]
@@ -85,11 +72,11 @@ fn configured_workdir_suppresses_the_default_workspace_mount() {
     let directory = TestDirectory::new("configured-workdir");
     directory.write_config(
         r#"
-        [isolation.docker]
+        [isolation.bwrap]
         workdir = "/work"
         "#,
     );
-    let output = stdout(directory.run(&["run", "--dry-run", "--backend", "docker", "--", "true"]));
+    let output = stdout(directory.run(&["run", "--dry-run", "--", "true"]));
     let workspace = directory.0.canonicalize().unwrap();
 
     assert!(output.contains("working-directory: /work"));
@@ -99,16 +86,7 @@ fn configured_workdir_suppresses_the_default_workspace_mount() {
 #[test]
 fn explicit_current_directory_mount_replaces_the_default_workspace_mount() {
     let directory = TestDirectory::new("explicit-default-workspace");
-    let output = stdout(directory.run(&[
-        "run",
-        "--dry-run",
-        "--backend",
-        "docker",
-        "--read",
-        ".",
-        "--",
-        "true",
-    ]));
+    let output = stdout(directory.run(&["run", "--dry-run", "--read", ".", "--", "true"]));
     let workspace = directory.0.canonicalize().unwrap();
 
     assert_eq!(
@@ -131,16 +109,7 @@ fn explicit_current_directory_mount_replaces_the_default_workspace_mount() {
 #[test]
 fn current_directory_path_mount_replaces_the_default_workspace_mount() {
     let directory = TestDirectory::new("path-default-workspace");
-    let output = stdout(directory.run(&[
-        "run",
-        "--dry-run",
-        "--backend",
-        "docker",
-        "--path",
-        ".",
-        "--",
-        "true",
-    ]));
+    let output = stdout(directory.run(&["run", "--dry-run", "--path", ".", "--", "true"]));
     let workspace = directory.0.canonicalize().unwrap();
 
     assert_eq!(
@@ -188,13 +157,10 @@ fn cli_rootfs_and_temporary_mount_reach_bubblewrap() {
 }
 
 #[test]
-fn temporary_config_mount_reaches_docker() {
-    let directory = TestDirectory::new("docker-temporary");
+fn temporary_config_mount_reaches_the_backend() {
+    let directory = TestDirectory::new("temporary");
     directory.write_config(
         r#"
-        [template.check]
-        backend = "docker"
-
         [[template.check.mount]]
         kind = "temporary"
         destination = "/state"
@@ -211,9 +177,6 @@ fn temporary_mount_rejects_bind_only_fields() {
     let directory = TestDirectory::new("invalid-temporary");
     directory.write_config(
         r#"
-        [template.check]
-        backend = "docker"
-
         [[template.check.mount]]
         kind = "temporary"
         source = "."
@@ -235,7 +198,6 @@ fn template_path_uses_the_same_semantics_as_cli_path() {
     directory.write_config(
         r#"
         [template.tools]
-        backend = "docker"
         path = ["tools"]
         "#,
     );
@@ -263,7 +225,6 @@ fn cli_command_overrides_the_template_command() {
     directory.write_config(
         r#"
         [template.check]
-        backend = "docker"
         command = ["template-command", "template-argument"]
         "#,
     );
@@ -292,8 +253,6 @@ fn multiple_templates_accumulate_with_later_templates_taking_precedence() {
     directory.write_config(
         r#"
         [template.first]
-        backend = "docker"
-        image = "example:first"
         command = ["first-command"]
         network = true
         path = ["first-path"]
@@ -307,7 +266,6 @@ fn multiple_templates_accumulate_with_later_templates_taking_precedence() {
         FIRST_ONLY = "first"
 
         [template.second]
-        image = "example:second"
         command = ["second-command"]
         network = false
         path = ["second-path"]
@@ -332,17 +290,16 @@ fn multiple_templates_accumulate_with_later_templates_taking_precedence() {
         "argument",
     ]));
 
-    assert!(output.contains("backend: docker"));
+    assert!(output.contains("backend: bwrap"));
     assert!(output.contains("network: disabled"));
-    assert!(output.contains("\"example:second\" \"second-command\" \"argument\""));
-    assert!(!output.contains("example:first"));
+    assert!(output.contains("\"second-command\" \"argument\""));
     assert!(!output.contains("first-command"));
     assert!(output.contains(" -> /first (read-only)"));
     assert!(output.contains(" -> /second (read-only)"));
-    assert!(output.contains("FIRST_ONLY=first"));
-    assert!(output.contains("SHARED=second"));
-    assert!(!output.contains("SHARED=first"));
-    assert!(output.contains("SECOND_ONLY=second"));
+    assert!(output.contains("\"FIRST_ONLY\" \"first\""));
+    assert!(output.contains("\"SHARED\" \"second\""));
+    assert!(!output.contains("\"SHARED\" \"first\""));
+    assert!(output.contains("\"SECOND_ONLY\" \"second\""));
 
     let first_path = directory.0.join("first-path").canonicalize().unwrap();
     let second_path = directory.0.join("second-path").canonicalize().unwrap();
@@ -360,7 +317,6 @@ fn later_template_without_a_command_keeps_the_previous_command() {
     directory.write_config(
         r#"
         [template.command]
-        backend = "docker"
         command = ["template-command"]
 
         [template.policy]
@@ -387,7 +343,6 @@ fn later_template_workdir_overrides_an_earlier_workspace_mount() {
     directory.write_config(
         r#"
         [template.workspace]
-        backend = "docker"
         command = ["true"]
 
         [[template.workspace.workspace-mount]]
@@ -417,8 +372,6 @@ fn cli_command_can_supply_an_executable_without_a_template() {
     let output = stdout(directory.run(&[
         "run",
         "--dry-run",
-        "--backend",
-        "docker",
         "--command",
         "override-command",
         "--",
@@ -439,7 +392,6 @@ fn configured_mount_without_a_destination_uses_its_canonical_source_path() {
         source = "mounted"
 
         [template.check]
-        backend = "docker"
         "#,
     );
     let output = stdout(directory.run(&["run", "--dry-run", "--template", "check", "--", "true"]));
@@ -461,7 +413,6 @@ fn rejects_multiple_workspace_mounts_in_one_template() {
     directory.write_config(
         r#"
         [template.check]
-        backend = "docker"
 
         [[template.check.workspace-mount]]
         source = "first"
@@ -501,7 +452,6 @@ fn template_inherits_home_from_the_host_when_it_is_not_configured() {
     directory.write_config(
         r#"
         [template.check]
-        backend = "docker"
         "#,
     );
     let output = Command::new(env!("CARGO_BIN_EXE_driva"))
@@ -512,7 +462,7 @@ fn template_inherits_home_from_the_host_when_it_is_not_configured() {
         .unwrap();
     let output = stdout(output);
 
-    assert!(output.contains("\"--env\" \"HOME=/host/home\""));
+    assert!(output.contains("\"--setenv\" \"HOME\" \"/host/home\""));
 }
 
 #[test]
@@ -521,7 +471,6 @@ fn configured_home_overrides_the_inherited_host_home() {
     directory.write_config(
         r#"
         [template.check]
-        backend = "docker"
 
         [template.check.environment]
         HOME = "/template/home"
@@ -535,8 +484,8 @@ fn configured_home_overrides_the_inherited_host_home() {
         .unwrap();
     let output = stdout(output);
 
-    assert!(output.contains("\"--env\" \"HOME=/template/home\""));
-    assert!(!output.contains("HOME=/host/home"));
+    assert!(output.contains("\"--setenv\" \"HOME\" \"/template/home\""));
+    assert!(!output.contains("/host/home"));
 }
 
 #[test]
@@ -546,20 +495,12 @@ fn inherit_env_passes_the_host_environment_to_the_session() {
         .current_dir(&directory.0)
         .env_clear()
         .env("DRIVA_HOST_VALUE", "from-host")
-        .args([
-            "run",
-            "--dry-run",
-            "--backend",
-            "docker",
-            "--inherit-env",
-            "--",
-            "true",
-        ])
+        .args(["run", "--dry-run", "--inherit-env", "--", "true"])
         .output()
         .unwrap();
     let output = stdout(output);
 
-    assert!(output.contains("\"--env\" \"DRIVA_HOST_VALUE=from-host\""));
+    assert!(output.contains("\"--setenv\" \"DRIVA_HOST_VALUE\" \"from-host\""));
 }
 
 #[test]
@@ -571,7 +512,6 @@ fn explicit_environment_overrides_inherited_values() {
         FROM_PROJECT = "project"
 
         [template.check]
-        backend = "docker"
 
         [template.check.environment]
         FROM_TEMPLATE = "template"
@@ -598,12 +538,10 @@ fn explicit_environment_overrides_inherited_values() {
         .unwrap();
     let output = stdout(output);
 
-    assert!(output.contains("FROM_PROJECT=project"));
-    assert!(output.contains("FROM_TEMPLATE=template"));
-    assert!(output.contains("FROM_CLI=cli"));
-    assert!(!output.contains("FROM_PROJECT=host"));
-    assert!(!output.contains("FROM_TEMPLATE=host"));
-    assert!(!output.contains("FROM_CLI=host"));
+    assert!(output.contains("\"FROM_PROJECT\" \"project\""));
+    assert!(output.contains("\"FROM_TEMPLATE\" \"template\""));
+    assert!(output.contains("\"FROM_CLI\" \"cli\""));
+    assert!(!output.contains("\"host\""));
 }
 
 #[test]
@@ -703,7 +641,6 @@ fn no_write_makes_every_host_mount_read_only() {
         access = "write"
 
         [template.readonly]
-        backend = "docker"
 
         [[template.readonly.workspace-mount]]
         source = "."
@@ -734,26 +671,15 @@ fn no_write_makes_every_host_mount_read_only() {
 
     assert_eq!(output.matches("(read-only)").count(), 4);
     assert!(output.contains("mount: temporary -> /temporary (read-write)"));
-    assert_eq!(output.matches(":ro").count(), 4);
 }
 
 #[test]
-fn rejects_options_for_the_wrong_backend() {
+fn rejects_an_unknown_backend() {
     let directory = TestDirectory::new("wrong-backend");
-    let output = directory.run(&[
-        "run",
-        "--dry-run",
-        "--backend",
-        "docker",
-        "--rootfs",
-        "/rootfs",
-        "--",
-        "true",
-    ]);
+    let output = directory.run(&["run", "--dry-run", "--backend", "docker", "--", "true"]);
 
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr)
-        .contains("--rootfs is only supported by the Bubblewrap backend"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("unsupported isolation backend"));
 }
 
 #[test]

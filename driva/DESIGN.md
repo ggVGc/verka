@@ -8,9 +8,8 @@ and programmatic callers such as Orka.
 
 Driva does not implement isolation itself. Its core validates a portable
 execution request and delegates it to an isolation backend. Bubblewrap is the
-default backend for lightweight synchronous Linux execution; Podman and Docker
-are also supported. Backend-specific concepts are not part of the core
-interface.
+backend for lightweight synchronous Linux execution. Backend-specific concepts
+are not part of the core interface.
 
 The distinguishing policy is deny by default:
 
@@ -151,8 +150,8 @@ The backend translates the request into its native invocation, forwards
 signals where possible, waits for the command, and cleans up the environment.
 
 The exact Rust types may change during implementation; the important boundary
-is that the trait describes an isolated process rather than exposing Docker
-operations such as creating or removing containers.
+is that the trait describes an isolated process rather than exposing
+backend-specific operations such as creating or removing containers.
 
 ## Validation and policy
 
@@ -175,20 +174,19 @@ other capability that crosses the isolation boundary.
 
 ## Isolation backends
 
-The production adapters translate an `ExecutionRequest` into Bubblewrap,
-`podman run --rm`, or `docker run --rm` invocations. Bubblewrap is selected by
-default. Each adapter is responsible for:
+The production adapter translates an `ExecutionRequest` into a Bubblewrap
+invocation. Each adapter is responsible for:
 
-- selecting the configured rootfs or image and isolated working directory;
+- selecting the configured rootfs and isolated working directory;
 - translating read-only, read-write, and temporary mounts;
 - disabling networking by default;
 - attaching the caller's standard streams and allocating a TTY when requested;
 - forwarding termination as well as the backend permits; and
 - returning the isolated command's exit status.
 
-Engine-specific image names, flags, identifiers, and error details remain in
-their adapters. Other backends can implement the same portable contract where
-their semantics match.
+Engine-specific flags, identifiers, and error details remain in their
+adapters. Other backends can implement the same portable contract where their
+semantics match.
 
 The Bubblewrap adapter translates requests into unprivileged Linux
 namespaces. With an explicit rootfs it mounts that prepared tree read-only.

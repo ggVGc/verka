@@ -1,0 +1,22 @@
+description = "Scala sbt"
+path = ["~/.local/share/coursier/bin"]
+
+[[mount]]
+source = "~/.sbt"
+access = "write"
+
+[[mount]]
+source = "~/.ivy2"
+access = "write"
+
+[[mount]]
+source = "~/.cache/coursier"
+access = "write"
+
+[[mount]]
+source = "/etc/java21-openjdk"
+access = "read"
+
+[[mount]]
+source = "/etc/java-openjdk"
+access = "read"

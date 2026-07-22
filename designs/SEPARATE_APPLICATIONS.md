@@ -7,8 +7,8 @@ Status: accepted and implemented.
 The repository is a suite of five independently usable applications:
 
 ```text
- +----------+       +------+       +-------+       Bubblewrap /
- | Orka Web +------>| Orka +------>| Driva |------>Podman / Docker
+ +----------+       +------+       +-------+
+ | Orka Web +------>| Orka +------>| Driva |------>Bubblewrap
  +----+-----+       +--+---+       +-------+
       |                |  |
       v                |  v

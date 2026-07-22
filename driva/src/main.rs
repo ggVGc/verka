@@ -1,8 +1,8 @@
 use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
 use driva::{
-    execute, validate_request, BwrapIsolation, Config, DockerIsolation, ExecutionIo,
-    ExecutionRequest, Mount, MountAccess, PodmanIsolation,
+    execute, validate_request, BwrapIsolation, Config, ExecutionIo, ExecutionRequest, Mount,
+    MountAccess,
 };
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -106,9 +106,6 @@ struct PolicyArgs {
     /// Print the validated request and backend invocation without executing it.
     #[arg(long)]
     dry_run: bool,
-    /// Override the configured container image.
-    #[arg(long)]
-    image: Option<String>,
     /// Override the Bubblewrap root filesystem.
     #[arg(long, value_name = "DIRECTORY")]
     rootfs: Option<PathBuf>,
@@ -128,16 +125,12 @@ struct PolicyArgs {
 
 #[derive(Debug)]
 enum ResolvedBackend {
-    Podman { image: String },
-    Docker { image: String },
     Bwrap { rootfs: Option<PathBuf> },
 }
 
 impl ResolvedBackend {
     fn name(&self) -> &'static str {
         match self {
-            Self::Podman { .. } => "podman",
-            Self::Docker { .. } => "docker",
             Self::Bwrap { .. } => "bwrap",
         }
     }
@@ -172,7 +165,7 @@ fn real_main() -> Result<()> {
             }
             return Ok(());
         }
-        Operation::Runtime { command } => return runtime_command(&config, command),
+        Operation::Runtime { command } => return runtime_command(command),
     };
     let mut template: Option<driva::TemplateConfig> = None;
     for name in &policy.template {
@@ -208,8 +201,6 @@ fn real_main() -> Result<()> {
     let backend = resolve_backend(requested_backend, &policy, template.as_ref(), &config)?;
     let backend_name = backend.name();
     let configured_workdir = match backend_name {
-        "podman" => &config.isolation.podman.workdir,
-        "docker" => &config.isolation.docker.workdir,
         "bwrap" => &config.isolation.bwrap.workdir,
         backend => bail!("unsupported isolation backend {backend:?}"),
     };
@@ -338,22 +329,6 @@ fn real_main() -> Result<()> {
     };
     let request = validate_request(&request)?;
     match backend {
-        ResolvedBackend::Podman { image } => {
-            let backend = PodmanIsolation {
-                executable: config.isolation.podman.executable,
-                image,
-            };
-            let invocation = backend.command(&request);
-            finish("podman", &backend, invocation, &request, policy.dry_run)
-        }
-        ResolvedBackend::Docker { image } => {
-            let backend = DockerIsolation {
-                executable: config.isolation.docker.executable,
-                image,
-            };
-            let invocation = backend.command(&request);
-            finish("docker", &backend, invocation, &request, policy.dry_run)
-        }
         ResolvedBackend::Bwrap { rootfs } => {
             let backend = BwrapIsolation {
                 executable: config.isolation.bwrap.executable,
@@ -377,41 +352,15 @@ fn resolve_backend(
     template: Option<&driva::TemplateConfig>,
     config: &Config,
 ) -> Result<ResolvedBackend> {
-    let template_image = template.and_then(|value| value.image.clone());
     let template_rootfs = template.and_then(|value| value.rootfs.clone());
     match name {
-        "podman" | "docker" => {
-            if policy.rootfs.is_some() || template_rootfs.is_some() {
-                bail!("--rootfs is only supported by the Bubblewrap backend");
-            }
-            let configured_image = if name == "podman" {
-                &config.isolation.podman.image
-            } else {
-                &config.isolation.docker.image
-            };
-            let image = policy
-                .image
+        "bwrap" => Ok(ResolvedBackend::Bwrap {
+            rootfs: policy
+                .rootfs
                 .clone()
-                .or(template_image)
-                .unwrap_or_else(|| configured_image.clone());
-            Ok(if name == "podman" {
-                ResolvedBackend::Podman { image }
-            } else {
-                ResolvedBackend::Docker { image }
-            })
-        }
-        "bwrap" => {
-            if policy.image.is_some() || template_image.is_some() {
-                bail!("--image is not supported by the Bubblewrap backend; use --rootfs");
-            }
-            Ok(ResolvedBackend::Bwrap {
-                rootfs: policy
-                    .rootfs
-                    .clone()
-                    .or(template_rootfs)
-                    .or_else(|| config.isolation.bwrap.rootfs.clone()),
-            })
-        }
+                .or(template_rootfs)
+                .or_else(|| config.isolation.bwrap.rootfs.clone()),
+        }),
         backend => bail!("unsupported isolation backend {backend:?}"),
     }
 }
@@ -450,14 +399,13 @@ fn resolve_default_workspace() -> Result<Mount> {
     .context("failed to resolve the current directory as the default workspace")
 }
 
-fn runtime_command(config: &Config, command: RuntimeOperation) -> Result<()> {
+fn runtime_command(command: RuntimeOperation) -> Result<()> {
     let store = driva::RuntimeStore::new(driva::RuntimeStore::default_path()?);
     match command {
         RuntimeOperation::Install { runtime, image } => {
             let spec = driva::RuntimeSpec::parse(&runtime)?;
             println!("Preparing {} from {image}...", spec.display());
-            let resolved =
-                store.install_codex(&spec, &image, &config.isolation.podman.executable)?;
+            let resolved = store.install_codex(&spec, &image, Path::new("podman"))?;
             println!("Installed and activated {}", resolved.display());
         }
         RuntimeOperation::List => {

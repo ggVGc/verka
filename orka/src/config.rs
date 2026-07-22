@@ -64,8 +64,6 @@ pub struct AgentConfig {
 pub struct IsolationConfig {
     #[serde(default = "default_backend")]
     pub backend: String,
-    #[serde(default = "default_image")]
-    pub image: String,
     /// Isolation engine executable override (defaults to the backend name).
     #[serde(default)]
     pub executable: Option<PathBuf>,
@@ -81,7 +79,6 @@ impl Default for IsolationConfig {
     fn default() -> Self {
         Self {
             backend: default_backend(),
-            image: default_image(),
             executable: None,
             rootfs: None,
             tmpfs: Vec::new(),
@@ -91,10 +88,6 @@ impl Default for IsolationConfig {
 
 fn default_backend() -> String {
     "bwrap".into()
-}
-
-fn default_image() -> String {
-    "docker.io/library/busybox:latest".into()
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -124,14 +117,6 @@ struct ResolvedAgent {
 }
 
 enum ResolvedBackend {
-    Podman {
-        executable: PathBuf,
-        image: String,
-    },
-    Docker {
-        executable: PathBuf,
-        image: String,
-    },
     Bwrap {
         executable: PathBuf,
         rootfs: PathBuf,
@@ -175,12 +160,6 @@ impl Config {
 
     pub fn executor(&self) -> Result<DrivaExecutor> {
         Ok(match self.resolve()?.backend {
-            ResolvedBackend::Podman { executable, image } => {
-                DrivaExecutor::podman(executable, image)
-            }
-            ResolvedBackend::Docker { executable, image } => {
-                DrivaExecutor::docker(executable, image)
-            }
             ResolvedBackend::Bwrap {
                 executable,
                 rootfs,
@@ -250,14 +229,6 @@ impl Config {
                 .unwrap_or_else(|| PathBuf::from(name))
         };
         Ok(match self.isolation.backend.as_str() {
-            "podman" => ResolvedBackend::Podman {
-                executable: executable("podman"),
-                image: self.isolation.image.clone(),
-            },
-            "docker" => ResolvedBackend::Docker {
-                executable: executable("docker"),
-                image: self.isolation.image.clone(),
-            },
             "bwrap" => ResolvedBackend::Bwrap {
                 executable: executable("bwrap"),
                 rootfs: self
@@ -267,7 +238,7 @@ impl Config {
                     .context("isolation.rootfs is required for the bwrap backend")?,
                 tmpfs: self.isolation.tmpfs.clone(),
             },
-            other => bail!("unknown isolation backend `{other}` (bwrap, podman, or docker)"),
+            other => bail!("unknown isolation backend `{other}` (only bwrap is supported)"),
         })
     }
 }
@@ -284,7 +255,8 @@ mod tests {
             command = ["agent", "--go"]
 
             [isolation]
-            backend = "podman"
+            backend = "bwrap"
+            rootfs = "/"
 
             [[mount]]
             source = "/somewhere/context"
@@ -348,7 +320,7 @@ mod tests {
             .contains("unknown field `template`"));
 
         let both: Config = toml::from_str(
-            "[agent]\nkind = \"codex\"\ncommand = [\"agent\"]\n[isolation]\nbackend = \"podman\"\n",
+            "[agent]\nkind = \"codex\"\ncommand = [\"agent\"]\n[isolation]\nbackend = \"bwrap\"\n",
         )
         .unwrap();
         assert!(both

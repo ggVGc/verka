@@ -11,7 +11,7 @@ attempt lifecycle.
 ```text
 select Linka-ready node ──► snapshot Linka work input ──► record attempt (.orka/attempts/<id>/)
       ──► prepare worktree (orka/attempts/<id> branch at the frozen revision)
-      ──► record request ──► run agent via Driva (bwrap/podman/docker, deny-by-default)
+      ──► record request ──► run agent via Driva (bwrap, deny-by-default)
       ──► capture agent events + file reads + diagnostics + exit evidence
       ──► read declared outcome ──► version-checked submit + observed context pins
       ──► Linka candidate ──► seal ──► clean up
@@ -55,19 +55,18 @@ tmpfs = ["/root"]
 Orka owns the Codex command line, workspace trust, credential grant,
 environment, and prompt/outcome protocol. It sends the resulting concrete
 execution request to Driva, which supplies only request validation and the
-Bubblewrap, Podman, or Docker isolation mechanism. The default uses the host's
-`codex` executable through a read-only host rootfs with private `/root` and
-`/tmp` state.
+Bubblewrap isolation mechanism. The default uses the host's `codex` executable
+through a read-only host rootfs with private `/root` and `/tmp` state.
 
-Literal commands remain available for custom container images:
+Literal commands remain available for custom sandboxes:
 
 ```toml
 [agent]
-command = ["sh", "-c", "…runs inside the container…"]
+command = ["sh", "-c", "…runs inside the sandbox…"]
 
 [isolation]
-backend = "podman"                       # or "docker"
-image = "docker.io/library/busybox:latest"
+backend = "bwrap"
+rootfs = "/"
 ```
 
 ```text

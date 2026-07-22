@@ -2,17 +2,12 @@
 
 mod bwrap;
 mod config;
-mod docker;
-mod podman;
 mod runtime;
 
 pub use bwrap::BwrapIsolation;
 pub use config::{
-    BwrapConfig, Config, DockerConfig, IsolationConfig, MountConfig, MountKind, NetworkConfig,
-    PodmanConfig, TemplateConfig,
+    BwrapConfig, Config, IsolationConfig, MountConfig, MountKind, NetworkConfig, TemplateConfig,
 };
-pub use docker::DockerIsolation;
-pub use podman::PodmanIsolation;
 pub use runtime::{RuntimeSpec, RuntimeStore};
 
 use anyhow::{bail, Context, Result};

@@ -3,7 +3,7 @@
 Driva runs a command in a disposable isolated environment. By default, the
 current directory is mounted writable at its canonical host path and used as
 the workspace; other host data and network access must be explicitly granted.
-Bubblewrap is the default backend. Without configuration, it constructs a
+Bubblewrap is the isolation backend. Without configuration, it constructs a
 private root containing only the host's read-only system runtime in addition
 to that workspace, so `/bin/sh` and normal OS tools remain available without
 exposing the host root or home directory.
@@ -16,9 +16,8 @@ cargo run -- run --backend bwrap --rootfs /srv/rootfs --temporary /home -- comma
 cargo run -- shell
 ```
 
-Named templates bundle a command, backend, image or rootfs, mounts, and
-policy. Driva ships interactive and non-interactive templates for Codex and
-Claude Code:
+Named templates bundle a command, backend, rootfs, mounts, and policy. Driva
+ships interactive and non-interactive templates for Codex and Claude Code:
 
 ```sh
 cargo run -- templates
@@ -49,11 +48,12 @@ runtime template mounts the project at `/driva`, uses disposable Codex state,
 and mounts the host `~/.codex/auth.json` at
 `/root/.codex/auth.json`.
 
-The Claude Code templates continue to use Podman with Node 22, mount the
-current project at its canonical host path, and mount only
-the Linux credential file `~/.claude/.credentials.json` at
-`/root/.claude/.credentials.json`; all other Claude state is disposable. They
-require a host login created by Claude Code on Linux.
+The Claude Code templates run the host's `claude` executable with Bubblewrap,
+putting `~/.local/bin` on the isolated `PATH` so the binary is found. They
+mount the current project as a writable workspace, enable networking, and mount
+`~/.local/share` read-only alongside writable `~/.claude` and `~/.claude.json`
+so a host Claude Code login and its session state persist. They require a host
+login created by Claude Code on Linux.
 
 The full command-line reference — every subcommand, option, the mount
 grammar, and the `driva.toml` schema — lives in [`docs/cli.md`](docs/cli.md).
@@ -73,8 +73,8 @@ at that destination replaces the default workspace mount.
 Use repeatable `--path DIRECTORY` options to make host tool directories
 available without granting write access. Driva mounts each directory read-only
 at its canonical host path inside the isolation and prepends those paths to
-`PATH` in the order given. This works with Bubblewrap, Podman, and Docker while
-preserving paths used by tool managers such as Rustup.
+`PATH` in the order given, preserving paths used by tool managers such as
+Rustup.
 
 Use `--inherit-env` to pass the host shell's environment variables into the
 session. Project, template, and `--env NAME=VALUE` settings override inherited
@@ -83,7 +83,7 @@ values, in that order.
 Launch settings use the same vocabulary in templates and on the command line.
 `--template` may be repeated; templates are combined in option order, with
 later templates overriding earlier scalar settings and commands.
-For example, `--command`, `--backend`, `--image`, `--rootfs`, repeatable
+For example, `--command`, `--backend`, `--rootfs`, repeatable
 `--temporary`, `--workdir`, `--path`, networking, interactivity, environment, and
 mounts all override or extend the corresponding project/template settings.
 Scalar precedence is CLI, then later templates, then earlier templates, then
@@ -120,8 +120,8 @@ enabled = false
 [template.test]
 description = "Run this project's tests"
 command = ["cargo", "test"]
-backend = "podman"
-image = "rust:1.88"
+backend = "bwrap"
+rootfs = "/var/lib/driva/rootfs/rust"
 
 [[template.test.workspace-mount]]
 source = "."
@@ -153,12 +153,8 @@ workdir = "/tmp"
 When configured, the rootfs must contain `/proc`, `/dev`, `/tmp`, each
 temporary mount point, and every working directory or bind destination not
 created beneath a temporary mount. Driva exposes it read-only and places a
-private writable tmpfs at `/tmp`. Bubblewrap uses `--rootfs` instead of an OCI
-`--image`.
-
-Podman and Docker remain available by setting `isolation.backend` to
-`"podman"` or `"docker"`. Their default image is the minimal
-`docker.io/library/busybox:latest`.
+private writable tmpfs at `/tmp`. Bubblewrap uses `--rootfs` to select a
+prepared filesystem tree.
 
 Driva keeps every command attached to its caller and returns its exit status.
 For a detachable interactive command, run Driva under a terminal multiplexer:

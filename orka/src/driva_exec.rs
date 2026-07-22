@@ -32,20 +32,6 @@ impl DrivaExecutor {
         }
     }
 
-    pub fn podman(executable: impl Into<std::path::PathBuf>, image: impl Into<String>) -> Self {
-        Self::new(Box::new(driva::PodmanIsolation {
-            executable: executable.into(),
-            image: image.into(),
-        }))
-    }
-
-    pub fn docker(executable: impl Into<std::path::PathBuf>, image: impl Into<String>) -> Self {
-        Self::new(Box::new(driva::DockerIsolation {
-            executable: executable.into(),
-            image: image.into(),
-        }))
-    }
-
     pub fn bwrap(
         executable: impl Into<std::path::PathBuf>,
         rootfs: impl Into<std::path::PathBuf>,
@@ -465,41 +451,6 @@ mod tests {
         let result = executor.run(&spec(&dir), &artifacts(&dir, AgentProtocol::Plain));
         assert!(result.is_err());
         assert!(seen.lock().unwrap().is_empty(), "backend never ran");
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    /// End-to-end against real podman. Ignored by default: requires a working
-    /// container engine and image. Run with `cargo test -- --ignored`.
-    #[test]
-    #[ignore]
-    fn podman_runs_a_real_isolated_command() {
-        let dir = std::env::temp_dir().join(format!("orka-podman-test-{}", ulid::Ulid::new()));
-        std::fs::create_dir_all(dir.join("ws")).unwrap();
-        let executor = DrivaExecutor::podman("podman", "docker.io/library/busybox:latest");
-        let spec = ExecutionSpec {
-            command: vec![
-                "sh".into(),
-                "-c".into(),
-                "echo ran > /tmp/orka/workspace/out.txt".into(),
-            ],
-            protocol: AgentProtocol::Plain,
-            working_directory: "/tmp/orka/workspace".into(),
-            mounts: vec![MountSpec {
-                source: dir.join("ws"),
-                destination: "/tmp/orka/workspace".into(),
-                writable: true,
-            }],
-            environment: BTreeMap::new(),
-            network: false,
-        };
-        let report = executor
-            .run(&spec, &artifacts(&dir, AgentProtocol::Plain))
-            .unwrap();
-        assert_eq!(report.exit_code, 0);
-        assert_eq!(
-            std::fs::read_to_string(dir.join("ws/out.txt")).unwrap(),
-            "ran\n"
-        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -55,41 +55,27 @@ fn dry_run(backend: &str) -> (TestDirectory, String) {
 }
 
 #[test]
-fn path_directories_are_read_only_and_prepended_for_every_backend() {
-    for backend in ["bwrap", "podman", "docker"] {
-        let (directory, stdout) = dry_run(backend);
-        let first = directory.0.join("first").canonicalize().unwrap();
-        let second = directory.0.join("second").canonicalize().unwrap();
+fn path_directories_are_read_only_and_prepended() {
+    let (directory, stdout) = dry_run("bwrap");
+    let first = directory.0.join("first").canonicalize().unwrap();
+    let second = directory.0.join("second").canonicalize().unwrap();
 
-        assert!(stdout.contains(&format!(
-            "mount: {} -> {} (read-only)",
-            first.display(),
-            first.display()
-        )));
-        assert!(stdout.contains(&format!(
-            "mount: {} -> {} (read-only)",
-            second.display(),
-            second.display()
-        )));
-        assert!(stdout.contains(&format!(
-            "{}:{}:/custom/bin",
-            first.display(),
-            second.display()
-        )));
-
-        match backend {
-            "bwrap" => {
-                assert!(stdout.contains(&format!("\"--ro-bind\" {:?} {:?}", first, first)));
-            }
-            "podman" | "docker" => {
-                assert!(stdout.contains(&format!(
-                    "\"--volume\" {:?}",
-                    format!("{}:{}:ro", first.display(), first.display())
-                )));
-            }
-            _ => unreachable!(),
-        }
-    }
+    assert!(stdout.contains(&format!(
+        "mount: {} -> {} (read-only)",
+        first.display(),
+        first.display()
+    )));
+    assert!(stdout.contains(&format!(
+        "mount: {} -> {} (read-only)",
+        second.display(),
+        second.display()
+    )));
+    assert!(stdout.contains(&format!(
+        "{}:{}:/custom/bin",
+        first.display(),
+        second.display()
+    )));
+    assert!(stdout.contains(&format!("\"--ro-bind\" {:?} {:?}", first, first)));
 }
 
 #[test]

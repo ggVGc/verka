@@ -1,10 +1,10 @@
 # Driva command-line reference
 
-Driva runs a command in a disposable isolated environment using Podman,
-Docker, or Bubblewrap with explicit, deny-by-default isolation: the command
-gets no host data access and no network unless each grant is stated on the
-command line or in `driva.toml`. Bubblewrap exposes the host's system runtime
-read-only so basic executables are available.
+Driva runs a command in a disposable isolated environment using Bubblewrap
+with explicit, deny-by-default isolation: the command gets no host data access
+and no network unless each grant is stated on the command line or in
+`driva.toml`. Bubblewrap exposes the host's system runtime read-only so basic
+executables are available.
 
 The `console` blocks below are verified against the compiled binary by
 `tests/cli_docs.rs`. If a flag or help text changes, that test fails; run
@@ -75,7 +75,6 @@ Options:
       --no-interactive         Disable interactivity, overriding a template
       --no-new-session         Keep the caller's terminal session instead of starting a new one
       --dry-run                Print the validated request and backend invocation without executing it
-      --image <IMAGE>          Override the configured container image
       --rootfs <DIRECTORY>     Override the Bubblewrap root filesystem
       --temporary <DIRECTORY>  Add an empty writable filesystem discarded after execution
       --workdir <WORKDIR>      Override the isolated working directory (defaults to a writable current-dir workspace)
@@ -92,7 +91,7 @@ separate them from Driva's own flags when the command has flags of its own:
 driva run --write . -- cargo test
 driva run --template test --command cargo -- check
 driva run --read ~/.cargo/registry --write . --network -- cargo update
-driva run --image rust:1.88 --workdir /workspace --write .:/workspace -- cargo build
+driva run --workdir /workspace --write .:/workspace -- cargo build
 driva run --backend bwrap --rootfs /srv/rootfs --temporary /home -- command
 driva run --path ./tools -- project-tool
 driva run --inherit-env -- command
@@ -111,14 +110,13 @@ Policy options (shared by `run` and `shell`):
 | `--write <MOUNT>` | Bind-mount a host path read-write. Repeatable. |
 | `--no-write` | Make every host bind mount read-only, overriding project configuration, templates, and `--write`. |
 | `--path <DIRECTORY>` | Bind-mount a host directory read-only and prepend it to the isolated `PATH`. Repeatable. |
-| `--backend <BACKEND>` | Select `bwrap`, `podman`, or `docker` for this invocation. |
-| `--network` | Enable networking (otherwise the container has none). |
+| `--backend <BACKEND>` | Select the isolation backend for this invocation (`bwrap`). |
+| `--network` | Enable networking (otherwise the sandbox has none). |
 | `--no-network` | Disable networking, overriding global configuration and templates. |
 | `-i`, `--interactive` | Allocate an interactive terminal (stdin + TTY). |
 | `--no-interactive` | Disable interactivity requested by a template. |
 | `--no-new-session` | Run the command in the caller's terminal session instead of a new one. Bubblewrap otherwise passes `--new-session`, which detaches the controlling terminal to block TIOCSTI input injection; disable it only for tools that require the inherited session. |
 | `--dry-run` | Print the validated request and the exact backend invocation without executing anything. |
-| `--image <IMAGE>` | Override the configured container image for this run (Podman/Docker only). |
 | `--rootfs <DIRECTORY>` | Override the prepared root filesystem for Bubblewrap. |
 | `--temporary <DIRECTORY>` | Add an empty writable filesystem discarded after execution. Repeatable. |
 | `--workdir <WORKDIR>` | Override the isolated working directory (must be absolute; omission defaults to a writable current-directory workspace). |
@@ -132,16 +130,15 @@ the isolation and prepends that path to `PATH` in option order. Preserving the
 path allows tool managers such as Rustup to find state installed next to their
 executable proxies. If configuration, a template, or `--env` supplies `PATH`,
 the additions are prepended to that value; otherwise Driva retains its
-conventional system path. The behavior is the same with Bubblewrap, Podman,
-and Docker.
+conventional system path.
 
 Template settings overlay the global configuration, and one-off CLI values
 overlay the templates. `--template` may be repeated. Templates are combined
 in option order: mounts and PATH additions accumulate, while later templates
 replace earlier scalar settings, environment values with the same name, and
 commands. A later template that does not set a scalar or command leaves the
-earlier value intact. Scalar values such as backend, image, rootfs, and
-working directory use CLI, then later templates, then earlier templates, then
+earlier value intact. Scalar values such as backend, rootfs, and working
+directory use CLI, then later templates, then earlier templates, then
 configuration precedence. Mounts and PATH additions accumulate in layer order.
 `--command` replaces the entire combined template command (including its
 initial arguments), after which arguments
@@ -153,8 +150,6 @@ are combined, making every host bind mount read-only regardless of its source;
 temporary filesystems are unaffected because
 they cannot modify mounted host data. Without a template or `--command`, at
 least one positional command argument remains required at runtime.
-Backend-specific combinations are validated after resolution; for example,
-Docker rejects `rootfs` and Bubblewrap rejects `image`.
 
 `--inherit-env` uses the host process environment as the base environment for
 the session. Project configuration, template environment values, and `--env`
@@ -181,6 +176,7 @@ claude-exec	Run Claude Code non-interactively against the current project
 codex	Run the host's Codex binary interactively in Bubblewrap
 codex-exec	Run OpenAI Codex non-interactively against the current project
 codex-runtime	Run OpenAI Codex interactively against the current project
+sbt	Scala sbt
 ```
 
 The built-in `codex-runtime` template runs a pinned, prepared Codex
@@ -222,17 +218,16 @@ The local executable must therefore be available on the standard system `PATH`
 outside the user's home directory. Like the prepared template, they trust the
 isolated workspace and disable Codex's inner sandbox.
 
-The built-in `claude` template runs `npx --yes
-@anthropic-ai/claude-code@latest` interactively; `claude-exec` adds `--print`
-for non-interactive use. Both use Podman with Node 22, mount the project at its
-canonical host path, and enable networking. On Linux they mount
-only
-`~/.claude/.credentials.json` writable at
-`/root/.claude/.credentials.json`, leaving other Claude configuration and
-session state disposable. [Anthropic's authentication
-documentation](https://docs.anthropic.com/en/docs/claude-code/iam) identifies
-that file as the Linux credential store. A host Claude Code login must have
-created it before using these templates.
+The built-in `claude` template runs the host's `claude` executable
+interactively; `claude-exec` adds `--print` for non-interactive use. Both use
+Bubblewrap, put `~/.local/bin` on the isolated `PATH` so the host `claude`
+binary is found, mount the current project as a writable workspace, and enable
+networking. They mount `~/.local/share` read-only and `~/.claude` and
+`~/.claude.json` writable so a host Claude Code login and its session state
+persist. [Anthropic's authentication
+documentation](https://docs.anthropic.com/en/docs/claude-code/iam) describes
+the Linux credential store. A host Claude Code login must exist before using
+these templates.
 
 ```sh
 driva run --template codex
@@ -272,7 +267,7 @@ driva runtime install codex@latest
 driva runtime list
 ```
 
-The installer uses the configured Podman executable to create a temporary
+The installer uses the `podman` executable to create a temporary
 container, resolves npm's `latest` tag, installs that exact `@openai/codex`
 version, exports and extracts its filesystem, and removes the build container.
 The artifact is stored under the resolved concrete version, never under
@@ -371,7 +366,6 @@ Options:
       --no-interactive         Disable interactivity, overriding a template
       --no-new-session         Keep the caller's terminal session instead of starting a new one
       --dry-run                Print the validated request and backend invocation without executing it
-      --image <IMAGE>          Override the configured container image
       --rootfs <DIRECTORY>     Override the Bubblewrap root filesystem
       --temporary <DIRECTORY>  Add an empty writable filesystem discarded after execution
       --workdir <WORKDIR>      Override the isolated working directory (defaults to a writable current-dir workspace)
@@ -391,17 +385,7 @@ shown below; Bubblewrap's `rootfs` is optional.
 
 ```toml
 [isolation]
-backend = "bwrap"                 # or "podman" or "docker"
-
-[isolation.podman]
-image = "docker.io/library/busybox:latest"
-# workdir = "/workspace"         # optional
-executable = "podman"
-
-[isolation.docker]
-image = "docker.io/library/busybox:latest"
-# workdir = "/workspace"         # optional
-executable = "docker"
+backend = "bwrap"
 
 [isolation.bwrap]
 # rootfs = "/var/lib/driva/rootfs/busybox" # optional prepared userspace
@@ -424,8 +408,7 @@ enabled = false                   # --network also enables it per run
 [template.lint]
 description = "Run the Rust linter"
 command = ["cargo", "clippy"]
-backend = "podman"               # optional: "bwrap", "podman", or "docker"
-image = "rust:1.88"              # optional; Podman/Docker only
+backend = "bwrap"                # optional; only "bwrap" is supported
 rootfs = "/srv/driva/rootfs/rust" # optional; Bubblewrap only
 workdir = "/workspace"           # optional
 path = ["~/.cargo/bin"]          # optional; read-only PATH additions
@@ -447,7 +430,7 @@ RUST_LOG = "info"
 
 Template fields are optional except that the effective command must be
 non-empty. Unknown fields are rejected. `command` is an array of the executable
-and its initial arguments. `backend`, `image`, `rootfs`, `workdir`,
+and its initial arguments. `backend`, `rootfs`, `workdir`,
 `path`, networking, interactivity, environment, and mounts correspond to the
 same per-run CLI concepts. `rootfs` overrides `[isolation.bwrap].rootfs` when
 the template selects Bubblewrap, while `--rootfs` overrides both; `~` is
@@ -459,8 +442,8 @@ Mounts default to `kind = "bind"`; these require a host `source`, accept an
 optional `destination` and `access`, and default to read-only. A
 `kind = "temporary"` mount requires only an absolute `destination`; it creates
 an empty writable filesystem that is discarded after execution. Temporary
-mounts are implemented with native tmpfs mounts by Bubblewrap, Podman, and
-Docker. A leading `~` in a temporary destination is expanded using the host
+mounts are implemented with native tmpfs mounts by Bubblewrap. A leading `~`
+in a temporary destination is expanded using the host
 `$HOME`. Repeatable `--temporary` values create the same mount kind.
 Bind mount destinations are optional in configuration. When omitted, the
 canonicalized host source is also used as the isolated destination. A host
@@ -484,9 +467,7 @@ an OCI image. The tree must contain `/proc`, `/dev`, `/tmp`, each configured
 temporary mount point, and any working directory or bind destination that is
 not created beneath a temporary mount. Driva exposes it read-only. With or
 without a prepared tree, Driva creates private `/proc` and `/dev` mounts and a
-writable tmpfs at `/tmp`, and clears the inherited host environment. `--image`
-is not supported with this backend; use `--rootfs` for a one-off prepared
-filesystem.
+writable tmpfs at `/tmp`, and clears the inherited host environment.
 
 ## Further reading
 

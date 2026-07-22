@@ -1,7 +1,7 @@
 description = "Run Claude Code interactively against the current project"
-command = ["npx", "--yes", "@anthropic-ai/claude-code@latest"]
-backend = "podman"
-image = "docker.io/library/node:22-bookworm"
+command = ["claude", "--dangerously-skip-permissions"]
+path = ["~/.local/bin"]
+backend = "bwrap"
 network = true
 interactive = true
 
@@ -9,6 +9,13 @@ interactive = true
 DISABLE_AUTOUPDATER = "1"
 
 [[mount]]
-source = "~/.claude/.credentials.json"
-destination = "/root/.claude/.credentials.json"
+source = "~/.local/share"
+access = "read"
+
+[[mount]]
+source = "~/.claude"
+access = "write"
+
+[[mount]]
+source = "~/.claude.json"
 access = "write"

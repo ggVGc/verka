@@ -13,8 +13,7 @@ framework.
   other applications.
 - `driva/` — a standalone isolated command runner. It exposes only explicit
   host mounts, disables networking by default, and delegates execution to a
-  replaceable isolation backend. Bubblewrap is the default; Podman and Docker
-  are also supported.
+  replaceable isolation backend. Bubblewrap is the backend.
 - `orka/` — the orchestrator. It uses Linka to find and track work and Driva to
   execute agent commands in isolation. It owns orchestration policy, durable
   attempts, candidate-oriented commands, and the coordination between Linka
@@ -29,7 +28,7 @@ framework.
 ## Dependency direction
 
 ```text
-Orka Web ----> Orka ----> Driva ----> Bubblewrap / Podman / Docker
+Orka Web ----> Orka ----> Driva ----> Bubblewrap
     |           |  |
     +--> Linka <+  +-----> Nota ----> Git
 ```
