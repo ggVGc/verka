@@ -114,6 +114,9 @@ struct PolicyArgs {
     /// Override the isolated working directory.
     #[arg(long)]
     workdir: Option<PathBuf>,
+    /// Inherit environment variables from the host shell.
+    #[arg(long)]
+    inherit_env: bool,
     /// Set an environment variable as NAME=VALUE.
     #[arg(long = "env", value_parser = parse_environment)]
     environment: Vec<(OsString, OsString)>,
@@ -242,7 +245,12 @@ fn real_main() -> Result<()> {
             .cloned()
             .map(|destination| Mount::Temporary { destination }),
     );
-    let mut environment: BTreeMap<OsString, OsString> = config.environment;
+    let mut environment: BTreeMap<OsString, OsString> = if policy.inherit_env {
+        std::env::vars_os().collect()
+    } else {
+        BTreeMap::new()
+    };
+    environment.extend(config.environment);
     if let Some(template) = &template {
         environment.extend(
             template

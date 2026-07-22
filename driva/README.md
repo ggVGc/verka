@@ -70,6 +70,10 @@ at its canonical host path inside the isolation and prepends those paths to
 `PATH` in the order given. This works with Bubblewrap, Podman, and Docker while
 preserving paths used by tool managers such as Rustup.
 
+Use `--inherit-env` to pass the host shell's environment variables into the
+session. Project, template, and `--env NAME=VALUE` settings override inherited
+values, in that order.
+
 Launch settings use the same vocabulary in templates and on the command line.
 For example, `--command`, `--backend`, `--image`, `--rootfs`, repeatable
 `--temporary`, `--workdir`, `--path`, networking, interactivity, environment, and

@@ -313,6 +313,73 @@ fn configured_home_overrides_the_inherited_host_home() {
 }
 
 #[test]
+fn inherit_env_passes_the_host_environment_to_the_session() {
+    let directory = TestDirectory::new("inherit-env");
+    let output = Command::new(env!("CARGO_BIN_EXE_driva"))
+        .current_dir(&directory.0)
+        .env_clear()
+        .env("DRIVA_HOST_VALUE", "from-host")
+        .args([
+            "run",
+            "--dry-run",
+            "--backend",
+            "docker",
+            "--inherit-env",
+            "--",
+            "true",
+        ])
+        .output()
+        .unwrap();
+    let output = stdout(output);
+
+    assert!(output.contains("\"--env\" \"DRIVA_HOST_VALUE=from-host\""));
+}
+
+#[test]
+fn explicit_environment_overrides_inherited_values() {
+    let directory = TestDirectory::new("inherit-env-override");
+    directory.write_config(
+        r#"
+        [environment]
+        FROM_PROJECT = "project"
+
+        [template.check]
+        backend = "docker"
+
+        [template.check.environment]
+        FROM_TEMPLATE = "template"
+        "#,
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_driva"))
+        .current_dir(&directory.0)
+        .env_clear()
+        .env("FROM_PROJECT", "host")
+        .env("FROM_TEMPLATE", "host")
+        .env("FROM_CLI", "host")
+        .args([
+            "run",
+            "--dry-run",
+            "--template",
+            "check",
+            "--inherit-env",
+            "--env",
+            "FROM_CLI=cli",
+            "--",
+            "true",
+        ])
+        .output()
+        .unwrap();
+    let output = stdout(output);
+
+    assert!(output.contains("FROM_PROJECT=project"));
+    assert!(output.contains("FROM_TEMPLATE=template"));
+    assert!(output.contains("FROM_CLI=cli"));
+    assert!(!output.contains("FROM_PROJECT=host"));
+    assert!(!output.contains("FROM_TEMPLATE=host"));
+    assert!(!output.contains("FROM_CLI=host"));
+}
+
+#[test]
 fn bwrap_inherits_term_from_the_host_when_it_is_not_configured() {
     let directory = TestDirectory::new("bwrap-term");
     let rootfs = directory.0.join("rootfs");

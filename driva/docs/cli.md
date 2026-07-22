@@ -75,6 +75,7 @@ Options:
       --rootfs <DIRECTORY>     Override the Bubblewrap root filesystem
       --temporary <DIRECTORY>  Add an empty writable filesystem discarded after execution
       --workdir <WORKDIR>      Override the isolated working directory
+      --inherit-env            Inherit environment variables from the host shell
       --env <ENVIRONMENT>      Set an environment variable as NAME=VALUE
       --command <COMMAND>      Override the template command or supply the executable
   -h, --help                   Print help
@@ -90,6 +91,7 @@ driva run --read ~/.cargo/registry --write . --network -- cargo update
 driva run --image rust:1.88 --workdir /workspace --write .:/workspace -- cargo build
 driva run --backend bwrap --rootfs /srv/rootfs --temporary /home -- command
 driva run --path ./tools -- project-tool
+driva run --inherit-env -- command
 driva run --env RUST_LOG=debug -- env
 ```
 
@@ -115,6 +117,7 @@ Policy options (shared by `run` and `shell`):
 | `--rootfs <DIRECTORY>` | Override the prepared root filesystem for Bubblewrap. |
 | `--temporary <DIRECTORY>` | Add an empty writable filesystem discarded after execution. Repeatable. |
 | `--workdir <WORKDIR>` | Override the isolated working directory (must be absolute). |
+| `--inherit-env` | Inherit all environment variables from the host shell. |
 | `--env NAME=VALUE` | Set an environment variable inside the container. Repeatable. |
 
 Each `--path` directory must exist on the host. Relative paths are resolved
@@ -143,6 +146,12 @@ they cannot modify mounted host data. Without a template or `--command`, at
 least one positional command argument remains required at runtime.
 Backend-specific combinations are validated after resolution; for example,
 Docker rejects `rootfs` and Bubblewrap rejects `image`.
+
+`--inherit-env` uses the host process environment as the base environment for
+the session. Project configuration, template environment values, and `--env`
+then override inherited variables in that order. Without this option, the host
+environment remains isolated except for the documented `HOME` and `TERM`
+defaults below.
 
 When a template is selected and the effective configuration does not set
 `HOME`, Driva inherits `HOME` from the host. An explicit project, template, or
@@ -355,6 +364,7 @@ Options:
       --rootfs <DIRECTORY>     Override the Bubblewrap root filesystem
       --temporary <DIRECTORY>  Add an empty writable filesystem discarded after execution
       --workdir <WORKDIR>      Override the isolated working directory
+      --inherit-env            Inherit environment variables from the host shell
       --env <ENVIRONMENT>      Set an environment variable as NAME=VALUE
   -h, --help                   Print help
 ```
