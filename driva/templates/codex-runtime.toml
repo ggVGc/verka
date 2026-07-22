@@ -1,16 +1,5 @@
 description = "Run OpenAI Codex interactively against the current project"
-command = [
-    "/bin/sh",
-    "-c",
-    '''
-workspace=$(pwd -P)
-exec /usr/local/bin/driva-codex \
-    -c "projects.\"$workspace\".trust_level=\"trusted\"" \
-    --sandbox danger-full-access \
-    "$@"
-''',
-    "driva-codex-runtime",
-]
+command = ["/usr/local/bin/driva-codex", "--sandbox", "danger-full-access"]
 backend = "bwrap"
 rootfs = "~/.local/share/driva/runtimes/codex/current/rootfs"
 tmpfs = ["/root/.codex", "/driva"]

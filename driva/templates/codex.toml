@@ -1,16 +1,5 @@
 description = "Run the host's Codex binary interactively in Bubblewrap"
-command = [
-    "/bin/sh",
-    "-c",
-    '''
-workspace=$(pwd -P)
-exec codex \
-    -c "projects.\"$workspace\".trust_level=\"trusted\"" \
-    --sandbox danger-full-access \
-    "$@"
-''',
-    "driva-codex",
-]
+command = ["codex", "--sandbox", "danger-full-access"]
 backend = "bwrap"
 rootfs = "/"
 tmpfs = ["~", "/root"]

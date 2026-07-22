@@ -1,17 +1,5 @@
 description = "Run OpenAI Codex non-interactively against the current project"
-command = [
-    "/bin/sh",
-    "-c",
-    '''
-workspace=$(pwd -P)
-exec codex \
-    -c "projects.\"$workspace\".trust_level=\"trusted\"" \
-    --sandbox danger-full-access \
-    exec --skip-git-repo-check \
-    "$@"
-''',
-    "driva-codex-exec",
-]
+command = ["codex", "--sandbox", "danger-full-access", "exec", "--skip-git-repo-check"]
 backend = "bwrap"
 rootfs = "/"
 tmpfs = ["~", "/root"]
