@@ -348,11 +348,9 @@ impl Engine<'_> {
             // same immutable batch after any crash.
             self.attach_output_evidence(input.node(), attempt)?;
         } else {
-            self.linka.attach_transcript(
-                input.node(),
-                attempt,
-                &self.attempts.transcript_path(attempt),
-            )?;
+            let (path, media_type) = self.work_log_source(attempt);
+            self.linka
+                .attach_work_log(input.node(), attempt, &path, media_type)?;
             if self.attempts.accesses_path(attempt).is_file() {
                 self.linka.attach_accesses(
                     input.node(),
@@ -488,6 +486,22 @@ impl Engine<'_> {
         Ok(())
     }
 
+    /// The durable work-log artifact for an attempt: the normalized event
+    /// journal (`events.v1.jsonl`) when the backend produced one, otherwise the
+    /// transcript, which for plain-stdout backends already is the raw log. The
+    /// readable rendering is derived downstream, never stored at rest.
+    fn work_log_source(&self, attempt: &AttemptId) -> (PathBuf, &'static str) {
+        let events = self.attempts.events_path(attempt);
+        if events.is_file() {
+            (events, "application/x-ndjson")
+        } else {
+            (
+                self.attempts.transcript_path(attempt),
+                "text/plain; charset=utf-8",
+            )
+        }
+    }
+
     fn attach_output_evidence(&self, node: &NodeId, attempt: &AttemptId) -> Result<()> {
         let io = self.attempts.io_dir(attempt)?;
         let mut files = vec![
@@ -506,11 +520,10 @@ impl Engine<'_> {
                 "application/toml",
                 self.attempts.request_path(attempt),
             ),
-            (
-                "transcript",
-                "text/plain; charset=utf-8",
-                self.attempts.transcript_path(attempt),
-            ),
+            {
+                let (path, media_type) = self.work_log_source(attempt);
+                ("worklog", media_type, path)
+            },
             (
                 "evidence",
                 "application/toml",
@@ -541,11 +554,12 @@ impl Engine<'_> {
         for id in self.attempts.list()? {
             let snapshot = self.attempts.load(&id)?;
             let node = snapshot.record.input.node().clone();
-            let transcript = self.attempts.transcript_path(&id);
-            if transcript.is_file() {
+            let (work_log, media_type) = self.work_log_source(&id);
+            if work_log.is_file() {
                 // Attachment is idempotent, including after a crash between
-                // writing the transcript and finishing the attempt.
-                self.linka.attach_transcript(&node, &id, &transcript)?;
+                // writing the work log and finishing the attempt.
+                self.linka
+                    .attach_work_log(&node, &id, &work_log, media_type)?;
             }
             let report = match snapshot.phase() {
                 AttemptPhase::Sealed => {

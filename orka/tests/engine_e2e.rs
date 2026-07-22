@@ -162,15 +162,15 @@ fn a_full_attempt_lands_a_version_checked_result_from_an_isolated_worktree() {
         std::fs::read_to_string(attempts.transcript_path(&report.attempt)).unwrap(),
         "agent transcript\n"
     );
-    let (attachment, attached_transcript) = store
-        .read_node_attachment(&node, "orka", &format!("{}/transcript", report.attempt))
+    let (attachment, attached_work_log) = store
+        .read_node_attachment(&node, "orka", &format!("{}/worklog", report.attempt))
         .unwrap()
-        .expect("Orka transcript attached to its Linka node");
+        .expect("Orka work log attached to its Linka node");
     assert_eq!(
         attachment.media_type.as_deref(),
         Some("text/plain; charset=utf-8")
     );
-    assert_eq!(attached_transcript, b"agent transcript\n");
+    assert_eq!(attached_work_log, b"agent transcript\n");
     let attachments = store.list_node_attachments(&node).unwrap();
     for part in orka::linka_work::OUTPUT_EVIDENCE_PARTS {
         assert!(
@@ -517,7 +517,7 @@ fn an_attempt_against_a_graph_that_moved_mid_run_seals_stale() {
     assert!(store.read_result(&node).unwrap().is_none());
     assert_eq!(
         store
-            .read_node_attachment(&node, "orka", &format!("{}/transcript", report.attempt))
+            .read_node_attachment(&node, "orka", &format!("{}/worklog", report.attempt))
             .unwrap()
             .unwrap()
             .1,

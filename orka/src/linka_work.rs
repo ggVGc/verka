@@ -55,7 +55,7 @@ pub const OUTPUT_EVIDENCE_PARTS: [&str; 6] = [
     "attempt",
     "prompt",
     "request",
-    "transcript",
+    "worklog",
     "evidence",
     "outcome",
 ];
@@ -90,28 +90,32 @@ impl<'a> LinkaWork<'a> {
         GitVcs::for_execution(self.store, workspace.to_path_buf())
     }
 
-    /// Commit an attempt's transcript as opaque, node-associated Linka data.
-    /// The stable key makes normal execution and recovery retries idempotent.
-    pub fn attach_transcript(
+    /// Commit an attempt's work log as opaque, node-associated Linka data. The
+    /// stored form is the faithful machine-readable journal (`events.v1.jsonl`)
+    /// when the backend produced one; readable rendering happens on demand
+    /// downstream, never at rest. The stable key makes normal execution and
+    /// recovery retries idempotent.
+    pub fn attach_work_log(
         &self,
         node: &NodeId,
         attempt: &AttemptId,
-        transcript: &Path,
+        path: &Path,
+        media_type: &str,
     ) -> Result<NodeAttachment> {
-        let data = std::fs::read(transcript)
-            .with_context(|| format!("reading transcript for {attempt}"))?;
+        let data =
+            std::fs::read(path).with_context(|| format!("reading work log for {attempt}"))?;
         ops::record_node_attachment(
             self.store,
             &self.vcs(),
             node.as_str(),
             NewNodeAttachment {
                 namespace: "orka".into(),
-                key: format!("{attempt}/transcript"),
-                media_type: Some("text/plain; charset=utf-8".into()),
+                key: format!("{attempt}/worklog"),
+                media_type: Some(media_type.into()),
                 data,
             },
         )
-        .with_context(|| format!("attaching transcript for {attempt} to node `{node}`"))
+        .with_context(|| format!("attaching work log for {attempt} to node `{node}`"))
     }
 
     /// Preserve the raw access journal as opaque attempt evidence. The
