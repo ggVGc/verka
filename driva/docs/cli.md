@@ -162,8 +162,7 @@ The template passes an ephemeral Codex setting that marks the isolated project
 path as trusted, avoiding the directory trust prompt before
 project-scoped configuration is loaded. It disables Codex's inner sandbox and
 relies on Driva's outer Bubblewrap isolation. It mounts the current directory
-writable below `/driva` at its canonical host path (for example,
-`/driva/home/me/project`), enable networking, and put `/root/.codex` on a
+writable at `/driva`, enables networking, and puts `/root/.codex` on a
 private writable tmpfs for disposable Codex state. It then mounts
 `/etc/resolv.conf` read-only for DNS and `~/.codex/auth.json` writable at
 `/root/.codex/auth.json`, allowing credential refreshes to persist. The auth
@@ -183,8 +182,8 @@ executable using Bubblewrap directly, without a prepared Driva runtime.
 read-only so the executable and its shared libraries remain available, then
 replace the invoking user's home directory with a private tmpfs. Only the
 current project and `~/.codex` are mounted back into the sandbox. The project
-is placed below `/tmp/driva` at its canonical host path (for example,
-`/tmp/driva/home/me/project`), while Codex state is mounted at `/root/.codex`.
+is mounted at its canonical host path, while Codex state is mounted at
+`/root/.codex`.
 The local executable must therefore be available on the standard system `PATH`
 outside the user's home directory. Like the prepared template, they trust the
 isolated workspace and disable Codex's inner sandbox.
@@ -192,7 +191,7 @@ isolated workspace and disable Codex's inner sandbox.
 The built-in `claude` template runs `npx --yes
 @anthropic-ai/claude-code@latest` interactively; `claude-exec` adds `--print`
 for non-interactive use. Both use Podman with Node 22, mount the project below
-`/driva` at its canonical host path, and enable networking. On Linux they mount
+its canonical host path, and enable networking. On Linux they mount
 only
 `~/.claude/.credentials.json` writable at
 `/root/.claude/.credentials.json`, leaving other Claude configuration and
@@ -372,7 +371,8 @@ executable = "docker"
 workdir = "/tmp"
 executable = "bwrap"
 
-# Zero or more pre-granted mounts. destination is required and absolute.
+# Zero or more pre-granted mounts. An explicit destination must be absolute;
+# when omitted, the canonical source path is used as the destination.
 [[mount]]
 source = "."
 destination = "/workspace"
@@ -391,20 +391,19 @@ backend = "podman"               # optional: "bwrap", "podman", or "docker"
 image = "rust:1.88"              # optional; Podman/Docker only
 rootfs = "/srv/driva/rootfs/rust" # optional; Bubblewrap only
 tmpfs = ["/root/.cache"]          # optional; Bubblewrap only
-workspace_root = "/workspace"    # optional; derives a canonical project path
-codex_trust_workspace = false     # optional; injects Codex's trust override
 workdir = "/workspace"           # optional
 path = ["~/.cargo/bin"]          # optional; read-only PATH additions
 network = false
 interactive = false
+codex_trust_workspace = false     # optional; trusts the workspace destination
+
+[[template.lint.workspace-mount]] # optional; at most one per template
+source = "."
+destination = "/workspace"      # optional; defaults to canonical source
+access = "write"
 
 [template.lint.environment]
 RUST_LOG = "info"
-
-[[template.lint.mount]]
-source = "."
-destination = "/workspace"
-access = "write"
 ```
 
 Template fields are optional except that the effective command must be
@@ -424,14 +423,15 @@ expanded using the host `$HOME`; mount destinations and the working directory
 may be created beneath a private tmpfs even when they are absent from the
 read-only rootfs. `path` uses the same canonical, read-only mounting and PATH
 ordering as repeatable `--path`.
-`workspace_root` appends the canonical host project path to the configured
-absolute root, mounts the project writable there, and uses the result as the
-working directory. It supersedes `workdir` when both are set.
-`codex_trust_workspace` inserts a Codex configuration argument for that
-derived path and requires `workspace_root` and a non-empty command.
-Template mounts use the same shape and validation as global `[[mount]]`
-entries. Project templates appear in `driva templates`; project definitions
-replace built-ins with the same name.
+Mount destinations are optional in configuration. When omitted, the
+canonicalized host source is also used as the isolated destination.
+`workspace-mount` has the same fields as a regular mount, but its resolved
+destination is additionally used as the working directory. A template can
+contain at most one such entry; it supersedes `workdir` when
+both are set. `codex_trust_workspace` inserts a Codex configuration argument
+for that destination and requires a workspace mount and a non-empty command.
+Project templates appear in `driva templates`; project definitions replace
+built-ins with the same name.
 
 Bubblewrap can use `rootfs` as a prepared filesystem tree rather than pulling
 an OCI image. The tree must contain `/proc`, `/dev`, `/tmp`, each configured

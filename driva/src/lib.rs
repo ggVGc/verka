@@ -157,7 +157,7 @@ pub fn validate_request(request: &ExecutionRequest) -> Result<ExecutionRequest> 
     Ok(validated)
 }
 
-fn canonicalize_mount(path: &Path) -> Result<PathBuf> {
+pub(crate) fn canonicalize_mount(path: &Path) -> Result<PathBuf> {
     let expanded = if path == Path::new("~") || path.starts_with("~/") {
         let home =
             std::env::var_os("HOME").context("HOME is not set; cannot expand mount source")?;

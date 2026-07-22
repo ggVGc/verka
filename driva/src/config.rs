@@ -1,4 +1,4 @@
-use crate::MountAccess;
+use crate::{Mount, MountAccess};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -135,9 +135,24 @@ fn default_bwrap() -> PathBuf {
 #[serde(deny_unknown_fields)]
 pub struct MountConfig {
     pub source: PathBuf,
-    pub destination: PathBuf,
+    pub destination: Option<PathBuf>,
     #[serde(default)]
     pub access: MountAccess,
+}
+
+impl MountConfig {
+    /// Resolve the host source and default an omitted destination to the same
+    /// canonical path inside the isolation.
+    pub fn resolve(self) -> Result<Mount> {
+        let source = crate::canonicalize_mount(&self.source)
+            .with_context(|| format!("invalid mount source {}", self.source.display()))?;
+        let destination = self.destination.unwrap_or_else(|| source.clone());
+        Ok(Mount {
+            source,
+            destination,
+            access: self.access,
+        })
+    }
 }
 
 /// A reusable overlay for an execution request.
@@ -158,10 +173,11 @@ pub struct TemplateConfig {
     /// Rootfs directories replaced with private writable tmpfs mounts.
     #[serde(default)]
     pub tmpfs: Vec<PathBuf>,
-    /// Sandbox directory below which the canonical host project path is
-    /// mounted writable and used as the working directory.
-    pub workspace_root: Option<PathBuf>,
-    /// Pass the derived workspace path to Codex as a trusted project.
+    /// A mount whose resolved destination is also used as the working
+    /// directory. Resolution rejects more than one workspace mount.
+    #[serde(default, rename = "workspace-mount")]
+    pub workspace_mounts: Vec<MountConfig>,
+    /// Pass the workspace mount destination to Codex as a trusted project.
     #[serde(default)]
     pub codex_trust_workspace: bool,
     pub workdir: Option<PathBuf>,

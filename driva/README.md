@@ -32,22 +32,21 @@ cargo run -- run --template claude-exec -- "fix the failing tests"
 ```
 
 The `codex` template runs the host's Codex binary with Bubblewrap and mounts
-the current project writable below `/tmp/driva` at its canonical host path
-(for example, `/tmp/driva/home/me/project`). It makes the host's `~/.codex`
-directory available at `/root/.codex`.
+the current project writable at its canonical host path. It makes the host's
+`~/.codex` directory available at `/root/.codex`.
 
 The `codex-exec` template is the non-interactive form of `codex`; it uses the
-same host executable and isolated `/tmp/driva` workspace. `codex-runtime`
+same host executable and same-path workspace mount. `codex-runtime`
 instead uses a pinned runtime prepared by `driva runtime install` and exposed
 read-only through Bubblewrap. Installation uses Podman once to install Node and
 Codex into a complete versioned filesystem under
 `~/.local/share/driva/runtimes`; normal executions do not use Podman. The
-runtime template mounts the project below `/driva` at its canonical host path,
-uses disposable Codex state, and mounts the host `~/.codex/auth.json` at
+runtime template mounts the project at `/driva`, uses disposable Codex state,
+and mounts the host `~/.codex/auth.json` at
 `/root/.codex/auth.json`.
 
 The Claude Code templates continue to use Podman with Node 22, mount the
-current project below `/driva` at its canonical host path, and mount only
+current project at its canonical host path, and mount only
 the Linux credential file `~/.claude/.credentials.json` at
 `/root/.claude/.credentials.json`; all other Claude state is disposable. They
 require a host login created by Claude Code on Linux.
@@ -102,10 +101,14 @@ description = "Run this project's tests"
 command = ["cargo", "test"]
 backend = "podman"
 image = "rust:1.88"
-workspace_root = "/workspace"
 
-# Driva mounts the project at
-# /workspace/<canonical host path> and uses it as the working directory.
+[[template.test.workspace-mount]]
+source = "."
+destination = "/workspace"
+access = "write"
+
+# A workspace mount also sets the isolated working directory. When
+# destination is omitted, the canonical source path is used inside too.
 ```
 
 The library exposes the backend-independent `ExecutionRequest` and `Isolation`

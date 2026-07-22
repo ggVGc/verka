@@ -119,6 +119,55 @@ fn template_path_uses_the_same_semantics_as_cli_path() {
 }
 
 #[test]
+fn configured_mount_without_a_destination_uses_its_canonical_source_path() {
+    let directory = TestDirectory::new("implicit-mount-destination");
+    let mounted = directory.0.join("mounted");
+    std::fs::create_dir(&mounted).unwrap();
+    directory.write_config(
+        r#"
+        [[mount]]
+        source = "mounted"
+
+        [template.check]
+        backend = "docker"
+        "#,
+    );
+    let output = stdout(directory.run(&["run", "--dry-run", "--template", "check", "--", "true"]));
+    let mounted = mounted.canonicalize().unwrap();
+
+    assert!(output.contains(&format!(
+        "mount: {} -> {} (read-only)",
+        mounted.display(),
+        mounted.display()
+    )));
+}
+
+#[test]
+fn rejects_multiple_workspace_mounts_in_one_template() {
+    let directory = TestDirectory::new("multiple-workspace-mounts");
+    for path in ["first", "second"] {
+        std::fs::create_dir(directory.0.join(path)).unwrap();
+    }
+    directory.write_config(
+        r#"
+        [template.check]
+        backend = "docker"
+
+        [[template.check.workspace-mount]]
+        source = "first"
+
+        [[template.check.workspace-mount]]
+        source = "second"
+        "#,
+    );
+    let output = directory.run(&["run", "--dry-run", "--template", "check", "--", "true"]);
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr)
+        .contains("a template may contain at most one workspace-mount"));
+}
+
+#[test]
 fn template_false_overrides_enabled_project_networking() {
     let directory = TestDirectory::new("network");
     directory.write_config(
@@ -173,7 +222,11 @@ fn no_write_makes_every_host_mount_read_only() {
 
         [template.readonly]
         backend = "docker"
-        workspace_root = "/workspace"
+
+        [[template.readonly.workspace-mount]]
+        source = "."
+        destination = "/workspace"
+        access = "write"
 
         [[template.readonly.mount]]
         source = "template"

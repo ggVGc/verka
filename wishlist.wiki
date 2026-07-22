@@ -1,4 +1,8 @@
 - Should be able to run an agent session, producing an interaction log and final plan, and make that into a linka node with little friction
+- Some way of starting sessions with driva, closing the window, and having some kind of overview of when a session is waiting for action:
+  - TUI app
+  - Should then be able to see the history in a nice way, and also what was the last entry which was seen by me
+  - History a list of entries which can be expanded inline
 - Review gating before integrating into main
 - Implementation order: data structures, tests, logic (roughly). So I can review each chunk in isolation in a way that makes sense:
   - More generally, implement work on nodes in logically associated pieces that make sense for review

@@ -178,9 +178,11 @@ fn real_main() -> Result<()> {
             })
         })
         .transpose()?;
-    if let Some(template) = &mut template {
-        resolve_workspace(template)?;
-    }
+    let workspace_mount = template
+        .as_mut()
+        .map(resolve_workspace_mount)
+        .transpose()?
+        .flatten();
     if !shell {
         if let Some(template) = &template {
             let mut template_command: Vec<OsString> =
@@ -210,18 +212,20 @@ fn real_main() -> Result<()> {
     let mut mounts: Vec<Mount> = config
         .mounts
         .into_iter()
-        .map(|mount| Mount {
-            source: mount.source,
-            destination: mount.destination,
-            access: mount.access,
-        })
-        .collect();
+        .map(driva::MountConfig::resolve)
+        .collect::<Result<_>>()?;
     if let Some(template) = &template {
-        mounts.extend(template.mounts.iter().cloned().map(|mount| Mount {
-            source: mount.source,
-            destination: mount.destination,
-            access: mount.access,
-        }));
+        mounts.extend(
+            template
+                .mounts
+                .iter()
+                .cloned()
+                .map(driva::MountConfig::resolve)
+                .collect::<Result<Vec<_>>>()?,
+        );
+    }
+    if let Some(workspace_mount) = workspace_mount {
+        mounts.push(workspace_mount);
     }
     for spec in &policy.reads {
         mounts.push(parse_mount(spec, MountAccess::ReadOnly, &workdir)?);
@@ -380,35 +384,24 @@ fn resolve_backend(
     }
 }
 
-/// Mount a template workspace below its configured sandbox root while
-/// preserving the canonical host path.
-fn resolve_workspace(template: &mut driva::TemplateConfig) -> Result<()> {
-    let Some(root) = &template.workspace_root else {
-        if template.codex_trust_workspace {
-            bail!("codex_trust_workspace requires workspace_root");
-        }
-        return Ok(());
-    };
-    if !root.is_absolute() {
-        bail!(
-            "template workspace_root must be absolute: {}",
-            root.display()
-        );
+/// Resolve a template's workspace mount and use its destination as the
+/// isolated working directory.
+fn resolve_workspace_mount(template: &mut driva::TemplateConfig) -> Result<Option<Mount>> {
+    if template.workspace_mounts.len() > 1 {
+        bail!("a template may contain at most one workspace-mount");
     }
-    let host_path = std::fs::canonicalize(".").context("failed to resolve the current project")?;
-    let relative = host_path
-        .strip_prefix("/")
-        .context("the current project path is not absolute")?;
-    let destination = root.join(relative);
-    template.workdir = Some(destination.clone());
-    template.mounts.push(driva::MountConfig {
-        source: PathBuf::from("."),
-        destination: destination.clone(),
-        access: MountAccess::ReadWrite,
-    });
+    let Some(workspace_mount) = template.workspace_mounts.pop() else {
+        if template.codex_trust_workspace {
+            bail!("codex_trust_workspace requires a workspace-mount");
+        }
+        return Ok(None);
+    };
+    let workspace_mount = workspace_mount.resolve()?;
+    template.workdir = Some(workspace_mount.destination.clone());
 
     if template.codex_trust_workspace {
-        let destination = destination
+        let destination = workspace_mount
+            .destination
             .to_str()
             .context("the current project path is not valid UTF-8")?;
         if template.command.is_empty() {
@@ -422,7 +415,7 @@ fn resolve_workspace(template: &mut driva::TemplateConfig) -> Result<()> {
             ],
         );
     }
-    Ok(())
+    Ok(Some(workspace_mount))
 }
 
 fn runtime_command(config: &Config, command: RuntimeOperation) -> Result<()> {
