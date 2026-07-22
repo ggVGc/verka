@@ -254,6 +254,11 @@ fn real_main() -> Result<()> {
             environment.entry(OsString::from("HOME")).or_insert(home);
         }
     }
+    if backend_name == "bwrap" {
+        if let Some(term) = std::env::var_os("TERM") {
+            environment.entry(OsString::from("TERM")).or_insert(term);
+        }
+    }
     environment.extend(policy.environment.iter().cloned());
     let mut paths = template
         .as_ref()

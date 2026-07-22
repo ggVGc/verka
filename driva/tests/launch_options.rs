@@ -273,6 +273,67 @@ fn configured_home_overrides_the_inherited_host_home() {
 }
 
 #[test]
+fn bwrap_inherits_term_from_the_host_when_it_is_not_configured() {
+    let directory = TestDirectory::new("bwrap-term");
+    let rootfs = directory.0.join("rootfs");
+    for path in ["proc", "dev", "tmp", "work"] {
+        std::fs::create_dir_all(rootfs.join(path)).unwrap();
+    }
+    let output = Command::new(env!("CARGO_BIN_EXE_driva"))
+        .current_dir(&directory.0)
+        .env("TERM", "host-terminal")
+        .args([
+            "run",
+            "--dry-run",
+            "--backend",
+            "bwrap",
+            "--rootfs",
+            rootfs.to_str().unwrap(),
+            "--workdir",
+            "/work",
+            "--",
+            "true",
+        ])
+        .output()
+        .unwrap();
+    let output = stdout(output);
+
+    assert!(output.contains("\"--setenv\" \"TERM\" \"host-terminal\""));
+}
+
+#[test]
+fn configured_term_overrides_the_inherited_host_term_in_bwrap() {
+    let directory = TestDirectory::new("configured-bwrap-term");
+    let rootfs = directory.0.join("rootfs");
+    for path in ["proc", "dev", "tmp", "work"] {
+        std::fs::create_dir_all(rootfs.join(path)).unwrap();
+    }
+    let output = Command::new(env!("CARGO_BIN_EXE_driva"))
+        .current_dir(&directory.0)
+        .env("TERM", "host-terminal")
+        .args([
+            "run",
+            "--dry-run",
+            "--backend",
+            "bwrap",
+            "--rootfs",
+            rootfs.to_str().unwrap(),
+            "--workdir",
+            "/work",
+            "--env",
+            "TERM=configured-terminal",
+            "--",
+            "true",
+        ])
+        .output()
+        .unwrap();
+    let output = stdout(output);
+
+    assert!(output.contains("\"--setenv\" \"TERM\" \"configured-terminal\""));
+    assert!(!output.contains("host-terminal"));
+}
+
+#[test]
 fn cli_can_disable_template_interactivity() {
     let directory = TestDirectory::new("interactive");
     directory.write_config(

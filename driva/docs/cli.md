@@ -148,6 +148,10 @@ When a template is selected and the effective configuration does not set
 `HOME`, Driva inherits `HOME` from the host. An explicit project, template, or
 `--env` value overrides that inherited default.
 
+Bubblewrap also inherits `TERM` from the host when the effective configuration
+does not set it. An explicit project, template, or `--env` value takes
+precedence.
+
 ### Execution templates
 
 List effective built-in and project-defined templates with:
