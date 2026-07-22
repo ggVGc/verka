@@ -44,6 +44,7 @@ pub struct Config {
 #[serde(rename_all = "kebab-case")]
 pub enum AgentKind {
     Codex,
+    Claude,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -206,6 +207,14 @@ impl Config {
                     .unwrap_or_else(|| Path::new("codex"));
                 agent::codex(executable, layout)
             }
+            (Some(AgentKind::Claude), true) => {
+                let executable = self
+                    .agent
+                    .executable
+                    .as_deref()
+                    .unwrap_or_else(|| Path::new("claude"));
+                agent::claude(executable, layout)
+            }
             (None, false) => {
                 if self.agent.executable.is_some() {
                     bail!("agent.executable requires agent.kind");
@@ -309,6 +318,35 @@ mod tests {
             config.resolve().unwrap().backend,
             ResolvedBackend::Bwrap { .. }
         ));
+    }
+
+    #[test]
+    fn claude_profile_is_owned_and_resolved_by_orka() {
+        let config: Config = toml::from_str(
+            r#"
+            [agent]
+            kind = "claude"
+
+            [isolation]
+            backend = "bwrap"
+            rootfs = "/"
+            tmpfs = ["/root"]
+            "#,
+        )
+        .unwrap();
+        let policy = config.policy().unwrap();
+        assert_eq!(policy.command.first().unwrap(), "claude");
+        assert_eq!(policy.command.last().unwrap(), agent::AGENT_PROMPT);
+        assert_eq!(policy.protocol, AgentProtocol::ClaudeJsonl);
+        assert!(policy
+            .command
+            .windows(2)
+            .any(|pair| pair == ["--output-format", "stream-json"]));
+        assert!(policy.network);
+        assert!(policy
+            .extra_mounts
+            .iter()
+            .any(|mount| mount.destination == Path::new("/root/.claude/.credentials.json")));
     }
 
     #[test]

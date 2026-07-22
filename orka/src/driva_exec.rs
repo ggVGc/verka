@@ -7,8 +7,7 @@
 //! diagnostics, and the returned report carries harness-observed evidence.
 
 use crate::access::{read_access_summary, write_access_summary, AccessRecorder};
-use crate::agent::AgentProtocol;
-use crate::events::materialize_codex_events_with_checkpoints;
+use crate::events::materialize_events;
 use crate::executor::{ExecutionArtifacts, ExecutionReport, ExecutionSpec, IsolatedExecutor};
 use crate::file_changes::FileChangeRecorder;
 use anyhow::{anyhow, Context, Result};
@@ -81,17 +80,16 @@ impl IsolatedExecutor for DrivaExecutor {
             .with_context(|| format!("creating transcript {}", artifacts.transcript.display()))?;
         std::fs::write(&artifacts.diagnostics, b"")
             .with_context(|| format!("creating diagnostics {}", artifacts.diagnostics.display()))?;
-        let stdout = match spec.protocol {
-            AgentProtocol::Plain => append_handle(&artifacts.transcript)?,
-            AgentProtocol::CodexJsonl => {
-                let raw = artifacts
-                    .raw_events
-                    .as_ref()
-                    .context("Codex JSONL execution has no raw event path")?;
-                std::fs::write(raw, b"")
-                    .with_context(|| format!("creating event journal {}", raw.display()))?;
-                append_handle(raw)?
-            }
+        let stdout = if spec.protocol.journals_events() {
+            let raw = artifacts
+                .raw_events
+                .as_ref()
+                .context("journaled execution has no raw event path")?;
+            std::fs::write(raw, b"")
+                .with_context(|| format!("creating event journal {}", raw.display()))?;
+            append_handle(raw)?
+        } else {
+            append_handle(&artifacts.transcript)?
         };
         let io = ExecutionIo {
             stdin: File::open("/dev/null").context("opening /dev/null for agent stdin")?,
@@ -99,27 +97,28 @@ impl IsolatedExecutor for DrivaExecutor {
             stderr: append_handle(&artifacts.diagnostics)?,
         };
 
-        let file_change_recorder = if spec.protocol == AgentProtocol::CodexJsonl {
+        let file_change_recorder = if spec.protocol.journals_events() {
             let workspace = spec
                 .mounts
                 .iter()
                 .find(|mount| mount.destination == spec.working_directory)
-                .context("Codex JSONL execution has no workspace mount")?;
+                .context("journaled execution has no workspace mount")?;
             Some(FileChangeRecorder::start(
+                spec.protocol,
                 &workspace.source,
                 &spec.working_directory,
                 artifacts
                     .raw_events
                     .as_deref()
-                    .context("Codex JSONL execution has no raw event path")?,
+                    .context("journaled execution has no raw event path")?,
                 artifacts
                     .file_changes
                     .as_deref()
-                    .context("Codex JSONL execution has no file-change journal")?,
+                    .context("journaled execution has no file-change journal")?,
                 artifacts
                     .file_change_ref
                     .as_deref()
-                    .context("Codex JSONL execution has no file-change ref")?,
+                    .context("journaled execution has no file-change ref")?,
             )?)
         } else {
             None
@@ -186,17 +185,16 @@ impl IsolatedExecutor for DrivaExecutor {
             }
             _ => {}
         }
-        if spec.protocol == AgentProtocol::CodexJsonl {
+        if spec.protocol.journals_events() {
             let projection = match artifacts.events.as_ref() {
-                Some(events) => materialize_codex_events_with_checkpoints(
+                Some(events) => materialize_events(
+                    spec.protocol,
                     artifacts.raw_events.as_ref().expect("validated above"),
                     events,
                     &artifacts.transcript,
                     artifacts.file_changes.as_deref(),
                 ),
-                None => Err(anyhow!(
-                    "Codex JSONL execution has no normalized event path"
-                )),
+                None => Err(anyhow!("journaled execution has no normalized event path")),
             };
             if let Err(error) = projection {
                 // The raw stream and process outcome remain authoritative.
@@ -205,7 +203,7 @@ impl IsolatedExecutor for DrivaExecutor {
                 if let Ok(mut diagnostics) = append_handle(&artifacts.diagnostics) {
                     let _ = writeln!(
                         diagnostics,
-                        "orka: could not project Codex event journal: {error:#}"
+                        "orka: could not project agent event journal: {error:#}"
                     );
                 }
             }
@@ -236,6 +234,7 @@ fn unix_millis(at: SystemTime) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::AgentProtocol;
     use crate::executor::MountSpec;
     use driva::{ExecutionOutcome, ExecutionRequest, ProcessExit};
     use std::collections::BTreeMap;
@@ -433,7 +432,7 @@ mod tests {
         assert_eq!(report.exit_code, 7);
         assert!(std::fs::read_to_string(&artifacts.diagnostics)
             .unwrap()
-            .contains("could not project Codex event journal"));
+            .contains("could not project agent event journal"));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

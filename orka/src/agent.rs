@@ -23,6 +23,16 @@ pub enum AgentProtocol {
     #[default]
     Plain,
     CodexJsonl,
+    ClaudeJsonl,
+}
+
+impl AgentProtocol {
+    /// Whether this protocol produces a machine-readable event stream that
+    /// Orka journals, normalizes, checkpoints, and follows live. Plain-text
+    /// agents have no such stream and are captured verbatim as a transcript.
+    pub fn journals_events(self) -> bool {
+        matches!(self, AgentProtocol::CodexJsonl | AgentProtocol::ClaudeJsonl)
+    }
 }
 
 /// Stable paths inside one isolated Orka execution.
@@ -90,6 +100,43 @@ pub fn codex(executable: &Path, layout: &SandboxLayout) -> Result<AgentInvocatio
     })
 }
 
+pub fn claude(executable: &Path, _layout: &SandboxLayout) -> Result<AgentInvocation> {
+    Ok(AgentInvocation {
+        command: vec![
+            executable.to_string_lossy().into_owned(),
+            "--print".into(),
+            "--output-format".into(),
+            "stream-json".into(),
+            "--verbose".into(),
+            // Orka already isolates the attempt in a throwaway worktree behind
+            // Driva, so the agent is granted unattended tool access — the
+            // Claude analogue of Codex's `danger-full-access` sandbox.
+            "--dangerously-skip-permissions".into(),
+            AGENT_PROMPT.into(),
+        ],
+        protocol: AgentProtocol::ClaudeJsonl,
+        // The subscription credential (refreshed in place, hence writable) and
+        // the onboarding/trust state Claude Code needs to start unattended.
+        mounts: vec![
+            MountSpec {
+                source: "~/.claude/.credentials.json".into(),
+                destination: "/root/.claude/.credentials.json".into(),
+                writable: true,
+            },
+            MountSpec {
+                source: "~/.claude.json".into(),
+                destination: "/root/.claude.json".into(),
+                writable: true,
+            },
+        ],
+        environment: BTreeMap::from([
+            ("HOME".into(), "/root".into()),
+            ("TERM".into(), "xterm-256color".into()),
+        ]),
+        network: true,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -118,6 +165,29 @@ mod tests {
             .mounts
             .iter()
             .any(|mount| mount.destination == Path::new("/root/.codex/auth.json")));
+    }
+
+    #[test]
+    fn claude_profile_runs_headless_stream_json_with_its_credentials() {
+        let layout = SandboxLayout::default();
+        let invocation = claude(Path::new("claude"), &layout).unwrap();
+
+        assert_eq!(invocation.command[0], "claude");
+        assert_eq!(invocation.protocol, AgentProtocol::ClaudeJsonl);
+        assert!(invocation
+            .command
+            .windows(2)
+            .any(|pair| pair == ["--output-format", "stream-json"]));
+        assert!(invocation
+            .command
+            .iter()
+            .any(|argument| argument == "--dangerously-skip-permissions"));
+        assert_eq!(invocation.command.last().unwrap(), AGENT_PROMPT);
+        assert!(invocation.network);
+        assert!(invocation
+            .mounts
+            .iter()
+            .any(|mount| mount.destination == Path::new("/root/.claude/.credentials.json")));
     }
 
     #[test]

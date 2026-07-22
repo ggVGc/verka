@@ -4,7 +4,8 @@
 //! worktree's HEAD or touch its index, so Linka can still capture only the
 //! outputs declared by the agent when the attempt settles.
 
-use crate::events::{decode_codex_line, AgentEvent};
+use crate::agent::AgentProtocol;
+use crate::events::{AgentEvent, EventDecoder};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
@@ -39,6 +40,7 @@ pub struct FileChangeRecorder {
 
 impl FileChangeRecorder {
     pub fn start(
+        protocol: AgentProtocol,
         workspace: &Path,
         isolated_workspace: &Path,
         raw_events: &Path,
@@ -65,6 +67,7 @@ impl FileChangeRecorder {
         let reference = reference.to_string();
         let thread = std::thread::spawn(move || {
             follow_and_checkpoint(
+                protocol,
                 &workspace,
                 &isolated_workspace,
                 &raw_events,
@@ -90,7 +93,9 @@ impl FileChangeRecorder {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn follow_and_checkpoint(
+    protocol: AgentProtocol,
     workspace: &Path,
     isolated_workspace: &Path,
     raw_events: &Path,
@@ -114,6 +119,7 @@ fn follow_and_checkpoint(
     let mut input = BufReader::new(input);
     let mut output = BufWriter::new(output);
     let index = journal.with_extension("index");
+    let mut decoder = EventDecoder::new(protocol);
     let mut line = String::new();
     let mut pending = String::new();
     let mut parent = initial_parent.to_string();
@@ -125,6 +131,7 @@ fn follow_and_checkpoint(
             0 if done.load(Ordering::Acquire) => {
                 if !pending.trim().is_empty() {
                     process_line(
+                        &mut decoder,
                         workspace,
                         isolated_workspace,
                         reference,
@@ -142,6 +149,7 @@ fn follow_and_checkpoint(
                 pending.push_str(&line);
                 if pending.ends_with('\n') {
                     process_line(
+                        &mut decoder,
                         workspace,
                         isolated_workspace,
                         reference,
@@ -163,6 +171,7 @@ fn follow_and_checkpoint(
 
 #[allow(clippy::too_many_arguments)]
 fn process_line(
+    decoder: &mut EventDecoder,
     workspace: &Path,
     isolated_workspace: &Path,
     reference: &str,
@@ -172,9 +181,37 @@ fn process_line(
     line: &str,
     output: &mut dyn Write,
 ) -> Result<()> {
-    let AgentEvent::FileChanged { id, paths, .. } = decode_codex_line(line) else {
-        return Ok(());
-    };
+    for event in decoder.decode(line) {
+        let AgentEvent::FileChanged { id, paths, .. } = event else {
+            continue;
+        };
+        checkpoint_change(
+            workspace,
+            isolated_workspace,
+            reference,
+            index,
+            parent,
+            sequence,
+            id,
+            paths,
+            output,
+        )?;
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn checkpoint_change(
+    workspace: &Path,
+    isolated_workspace: &Path,
+    reference: &str,
+    index: &Path,
+    parent: &mut String,
+    sequence: &mut u64,
+    id: String,
+    paths: Vec<String>,
+    output: &mut dyn Write,
+) -> Result<()> {
     *sequence += 1;
     let paths = paths
         .iter()
@@ -379,6 +416,7 @@ mod tests {
         std::fs::write(&raw, b"").unwrap();
         let head = checked(&repository.0, &["rev-parse", "HEAD"]).unwrap();
         let recorder = FileChangeRecorder::start(
+            AgentProtocol::CodexJsonl,
             &repository.0,
             Path::new("/tmp/orka/workspace"),
             &raw,

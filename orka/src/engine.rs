@@ -97,6 +97,7 @@ pub enum RunProgress {
     },
     ExecutionStarted {
         attempt: AttemptId,
+        protocol: AgentProtocol,
         artifacts: ExecutionArtifacts,
     },
     ExecutionFinished {
@@ -184,6 +185,7 @@ impl Engine<'_> {
             .execution_artifacts(&attempt, self.policy.protocol);
         progress(&RunProgress::ExecutionStarted {
             attempt: attempt.clone(),
+            protocol: self.policy.protocol,
             artifacts: artifacts.clone(),
         });
         let report = match self.executor.run(&spec, &artifacts) {

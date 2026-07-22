@@ -217,11 +217,13 @@ impl FsAttemptStore {
         ExecutionArtifacts {
             transcript: self.transcript_path(id),
             diagnostics: self.diagnostics_path(id),
-            raw_events: (protocol == AgentProtocol::CodexJsonl).then(|| self.raw_events_path(id)),
-            events: (protocol == AgentProtocol::CodexJsonl).then(|| self.events_path(id)),
-            file_changes: (protocol == AgentProtocol::CodexJsonl)
+            raw_events: protocol.journals_events().then(|| self.raw_events_path(id)),
+            events: protocol.journals_events().then(|| self.events_path(id)),
+            file_changes: protocol
+                .journals_events()
                 .then(|| self.file_changes_path(id)),
-            file_change_ref: (protocol == AgentProtocol::CodexJsonl)
+            file_change_ref: protocol
+                .journals_events()
                 .then(|| format!("refs/orka/file-changes/{}", id.0)),
             accesses: self.accesses_path(id),
         }

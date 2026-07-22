@@ -3,9 +3,11 @@
 //! Provider wire formats stop here. The rest of Orka consumes a small stable
 //! event vocabulary and Driva remains an uninterpreted process transport.
 
+use crate::agent::AgentProtocol;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::Path;
@@ -486,15 +488,249 @@ fn changed_paths(item: &Value) -> Vec<String> {
     paths
 }
 
+/// A per-provider event decoder over an ordered raw journal.
+///
+/// Codex bundles a completed action into one self-contained line, so its
+/// decode is stateless. Claude Code splits a tool *call* (carrying the
+/// arguments) from the tool *result* that arrives on a later line keyed only by
+/// tool-use id, so its decoder correlates the two. A single input line may
+/// therefore yield zero, one, or several normalized events.
+pub enum EventDecoder {
+    Codex,
+    Claude(ClaudeDecoder),
+}
+
+impl EventDecoder {
+    pub fn new(protocol: AgentProtocol) -> Self {
+        match protocol {
+            AgentProtocol::ClaudeJsonl => EventDecoder::Claude(ClaudeDecoder::default()),
+            // Plain agents never journal events; any journaled protocol other
+            // than Claude is the Codex JSONL stream.
+            _ => EventDecoder::Codex,
+        }
+    }
+
+    pub fn decode(&mut self, line: &str) -> Vec<AgentEvent> {
+        match self {
+            EventDecoder::Codex => vec![decode_codex_line(line)],
+            EventDecoder::Claude(state) => state.decode(line),
+        }
+    }
+}
+
+struct PendingTool {
+    name: String,
+    command: Option<String>,
+    path: Option<String>,
+}
+
+impl PendingTool {
+    fn is_command(&self) -> bool {
+        self.command.is_some()
+    }
+}
+
+/// Decode a `claude --print --output-format stream-json` line into Orka's event
+/// vocabulary, remembering in-flight tool calls so a file edit is reported as a
+/// `FileChanged` only once its result confirms the write landed.
+#[derive(Default)]
+pub struct ClaudeDecoder {
+    pending: HashMap<String, PendingTool>,
+}
+
+impl ClaudeDecoder {
+    pub fn decode(&mut self, line: &str) -> Vec<AgentEvent> {
+        let value: Value = match serde_json::from_str(line) {
+            Ok(value) => value,
+            Err(error) => {
+                return vec![AgentEvent::Malformed {
+                    error: error.to_string(),
+                }]
+            }
+        };
+        match string(&value, "type").unwrap_or("unknown") {
+            "system" if string(&value, "subtype") == Some("init") => vec![
+                AgentEvent::ThreadStarted {
+                    thread_id: string(&value, "session_id").unwrap_or_default().into(),
+                },
+                AgentEvent::TurnStarted,
+            ],
+            "assistant" => self.decode_assistant(&value),
+            "user" => self.decode_user(&value),
+            "result" => decode_result(&value),
+            other => vec![AgentEvent::Unknown {
+                wire_type: other.into(),
+            }],
+        }
+    }
+
+    fn decode_assistant(&mut self, value: &Value) -> Vec<AgentEvent> {
+        let mut events = Vec::new();
+        for block in message_content(value) {
+            match string(block, "type") {
+                Some("text") => events.push(AgentEvent::AgentMessage {
+                    id: message_id(value),
+                    text: string(block, "text").unwrap_or_default().into(),
+                }),
+                Some("tool_use") => {
+                    let id = string(block, "id").unwrap_or_default().to_owned();
+                    let name = string(block, "name").unwrap_or("tool").to_owned();
+                    let input = block.get("input").unwrap_or(&Value::Null);
+                    let command = string(input, "command").map(str::to_owned);
+                    let path = edited_path(&name, input);
+                    if let Some(command) = &command {
+                        events.push(AgentEvent::CommandStarted {
+                            id: id.clone(),
+                            command: command.clone(),
+                        });
+                    } else if path.is_none() {
+                        // Non-editing tools (Read, Grep, WebSearch, …) show as
+                        // tool activity; edits stay silent until they land.
+                        events.push(AgentEvent::ToolStarted {
+                            id: id.clone(),
+                            name: name.clone(),
+                            detail: claude_tool_detail(input),
+                        });
+                    }
+                    self.pending
+                        .insert(id, PendingTool { name, command, path });
+                }
+                _ => {}
+            }
+        }
+        events
+    }
+
+    fn decode_user(&mut self, value: &Value) -> Vec<AgentEvent> {
+        let mut events = Vec::new();
+        for block in message_content(value) {
+            if string(block, "type") != Some("tool_result") {
+                continue;
+            }
+            let id = string(block, "tool_use_id").unwrap_or_default().to_owned();
+            let failed = block.get("is_error").and_then(Value::as_bool).unwrap_or(false);
+            let status = if failed { "failed" } else { "completed" };
+            let Some(pending) = self.pending.remove(&id) else {
+                continue;
+            };
+            if pending.is_command() {
+                events.push(AgentEvent::CommandCompleted {
+                    id,
+                    command: pending.command.unwrap_or_default(),
+                    status: status.into(),
+                    exit_code: None,
+                    output: tool_result_text(block),
+                });
+            } else if let Some(path) = pending.path.filter(|_| !failed) {
+                events.push(AgentEvent::FileChanged {
+                    id,
+                    paths: vec![path],
+                    checkpoint: None,
+                    checkpoint_error: None,
+                });
+            } else {
+                events.push(AgentEvent::ToolCompleted {
+                    id,
+                    name: pending.name,
+                    status: status.into(),
+                });
+            }
+        }
+        events
+    }
+}
+
+fn decode_result(value: &Value) -> Vec<AgentEvent> {
+    let mut events = Vec::new();
+    if string(value, "subtype") != Some("success")
+        || value.get("is_error").and_then(Value::as_bool) == Some(true)
+    {
+        events.push(AgentEvent::Error {
+            message: string(value, "result")
+                .or_else(|| string(value, "subtype"))
+                .unwrap_or("agent execution failed")
+                .into(),
+        });
+    }
+    events.push(AgentEvent::TurnCompleted {
+        usage: claude_usage(value.get("usage").unwrap_or(&Value::Null)),
+    });
+    events
+}
+
+fn claude_usage(usage: &Value) -> TokenUsage {
+    let field = |key: &str| usage.get(key).and_then(Value::as_u64).unwrap_or(0);
+    TokenUsage {
+        input_tokens: field("input_tokens") + field("cache_creation_input_tokens"),
+        cached_input_tokens: field("cache_read_input_tokens"),
+        output_tokens: field("output_tokens"),
+        reasoning_output_tokens: 0,
+    }
+}
+
+fn message_content(value: &Value) -> &[Value] {
+    value
+        .get("message")
+        .and_then(|message| message.get("content"))
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
+}
+
+fn message_id(value: &Value) -> String {
+    value
+        .get("message")
+        .and_then(|message| string(message, "id"))
+        .unwrap_or_default()
+        .into()
+}
+
+/// The primary path a Claude editing tool touches, or `None` for tools that do
+/// not change files.
+fn edited_path(tool: &str, input: &Value) -> Option<String> {
+    match tool {
+        "Edit" | "Write" | "MultiEdit" => string(input, "file_path").map(str::to_owned),
+        "NotebookEdit" => string(input, "notebook_path").map(str::to_owned),
+        _ => None,
+    }
+}
+
+fn claude_tool_detail(input: &Value) -> String {
+    string(input, "file_path")
+        .or_else(|| string(input, "path"))
+        .or_else(|| string(input, "pattern"))
+        .or_else(|| string(input, "query"))
+        .or_else(|| string(input, "url"))
+        .or_else(|| string(input, "description"))
+        .unwrap_or_default()
+        .into()
+}
+
+/// Flatten a `tool_result` payload, which is either a plain string or an array
+/// of content blocks, into displayable text.
+fn tool_result_text(block: &Value) -> String {
+    match block.get("content") {
+        Some(Value::String(text)) => text.clone(),
+        Some(Value::Array(parts)) => parts
+            .iter()
+            .filter_map(|part| string(part, "text"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    }
+}
+
 /// Convert the exact Codex journal into a versioned normalized journal and a
 /// compact human-readable transcript after execution completes.
 pub fn materialize_codex_events(raw: &Path, normalized: &Path, transcript: &Path) -> Result<()> {
-    materialize_codex_events_with_checkpoints(raw, normalized, transcript, None)
+    materialize_events(AgentProtocol::CodexJsonl, raw, normalized, transcript, None)
 }
 
-/// Materialize events and attach per-file-change checkpoint commits from the
-/// harness journal when one is available.
-pub fn materialize_codex_events_with_checkpoints(
+/// Convert an exact raw provider journal into a versioned normalized journal and
+/// a compact human-readable transcript, attaching per-file-change checkpoint
+/// commits from the harness journal when one is available.
+pub fn materialize_events(
+    protocol: AgentProtocol,
     raw: &Path,
     normalized: &Path,
     transcript: &Path,
@@ -512,31 +748,33 @@ pub fn materialize_codex_events_with_checkpoints(
         Some(path) => crate::file_changes::read_checkpoints(path)?.into_iter(),
         None => Vec::new().into_iter(),
     };
+    let mut decoder = EventDecoder::new(protocol);
     for line in BufReader::new(input).lines() {
         let line = line.with_context(|| format!("reading {}", raw.display()))?;
-        let mut event = decode_codex_line(&line);
-        if let AgentEvent::FileChanged {
-            id,
-            checkpoint,
-            checkpoint_error,
-            ..
-        } = &mut event
-        {
-            if let Some(record) = checkpoints.next() {
-                if record.event_id == *id {
-                    *checkpoint = record.commit;
-                    *checkpoint_error = record.error;
-                } else {
-                    *checkpoint_error = Some(format!(
-                        "checkpoint journal expected event `{}`, found `{id}`",
-                        record.event_id
-                    ));
+        for mut event in decoder.decode(&line) {
+            if let AgentEvent::FileChanged {
+                id,
+                checkpoint,
+                checkpoint_error,
+                ..
+            } = &mut event
+            {
+                if let Some(record) = checkpoints.next() {
+                    if record.event_id == *id {
+                        *checkpoint = record.commit;
+                        *checkpoint_error = record.error;
+                    } else {
+                        *checkpoint_error = Some(format!(
+                            "checkpoint journal expected event `{}`, found `{id}`",
+                            record.event_id
+                        ));
+                    }
                 }
             }
+            serde_json::to_writer(&mut events, &event)?;
+            events.write_all(b"\n")?;
+            write_transcript_event(&mut readable, &event)?;
         }
-        serde_json::to_writer(&mut events, &event)?;
-        events.write_all(b"\n")?;
-        write_transcript_event(&mut readable, &event)?;
     }
     events.flush()?;
     readable.flush()?;
@@ -586,7 +824,12 @@ fn write_transcript_event(out: &mut dyn Write, event: &AgentEvent) -> Result<()>
 
 /// Follow a growing raw journal until `done`, rendering complete JSONL records
 /// as soon as they become visible.
-pub fn follow_codex_events(path: &Path, done: &AtomicBool, color: bool) -> Result<()> {
+pub fn follow_events(
+    protocol: AgentProtocol,
+    path: &Path,
+    done: &AtomicBool,
+    color: bool,
+) -> Result<()> {
     while !path.exists() && !done.load(Ordering::Acquire) {
         std::thread::sleep(Duration::from_millis(25));
     }
@@ -601,6 +844,7 @@ pub fn follow_codex_events(path: &Path, done: &AtomicBool, color: bool) -> Resul
     let mut input = BufReader::new(file);
     let stderr = std::io::stderr();
     let mut renderer = RichRenderer::new(stderr.lock(), color);
+    let mut decoder = EventDecoder::new(protocol);
     let mut line = String::new();
     let mut pending = String::new();
     loop {
@@ -608,7 +852,9 @@ pub fn follow_codex_events(path: &Path, done: &AtomicBool, color: bool) -> Resul
         match input.read_line(&mut line)? {
             0 if done.load(Ordering::Acquire) => {
                 if !pending.is_empty() {
-                    renderer.render(&decode_codex_line(&pending))?;
+                    for event in decoder.decode(pending.trim_end()) {
+                        renderer.render(&event)?;
+                    }
                 }
                 break;
             }
@@ -616,7 +862,9 @@ pub fn follow_codex_events(path: &Path, done: &AtomicBool, color: bool) -> Resul
             _ => {
                 pending.push_str(&line);
                 if pending.ends_with('\n') {
-                    renderer.render(&decode_codex_line(pending.trim_end()))?;
+                    for event in decoder.decode(pending.trim_end()) {
+                        renderer.render(&event)?;
+                    }
                     pending.clear();
                 } else {
                     std::thread::sleep(Duration::from_millis(25));
@@ -822,6 +1070,66 @@ mod tests {
     }
 
     #[test]
+    fn claude_stream_correlates_tool_calls_with_their_results() {
+        let mut decoder = ClaudeDecoder::default();
+
+        assert_eq!(
+            decoder.decode(r#"{"type":"system","subtype":"init","session_id":"abc"}"#),
+            vec![
+                AgentEvent::ThreadStarted {
+                    thread_id: "abc".into()
+                },
+                AgentEvent::TurnStarted
+            ]
+        );
+
+        // An assistant turn can mix prose with a Bash call and a file edit; the
+        // edit stays silent until its result confirms the write.
+        let assistant = decoder.decode(
+            r#"{"type":"assistant","message":{"id":"m1","content":[
+                {"type":"text","text":"Working on it"},
+                {"type":"tool_use","id":"t1","name":"Bash","input":{"command":"cargo test"}},
+                {"type":"tool_use","id":"t2","name":"Edit","input":{"file_path":"src/lib.rs"}}
+            ]}}"#,
+        );
+        assert!(matches!(
+            assistant.as_slice(),
+            [
+                AgentEvent::AgentMessage { text, .. },
+                AgentEvent::CommandStarted { command, .. },
+            ] if text == "Working on it" && command == "cargo test"
+        ));
+
+        assert!(matches!(
+            decoder
+                .decode(
+                    r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}"#
+                )
+                .as_slice(),
+            [AgentEvent::CommandCompleted { command, output, .. }]
+                if command == "cargo test" && output == "ok"
+        ));
+        assert!(matches!(
+            decoder
+                .decode(
+                    r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t2","content":[{"type":"text","text":"done"}]}]}}"#
+                )
+                .as_slice(),
+            [AgentEvent::FileChanged { paths, .. }] if paths == &["src/lib.rs".to_string()]
+        ));
+
+        assert!(matches!(
+            decoder
+                .decode(
+                    r#"{"type":"result","subtype":"success","usage":{"input_tokens":10,"cache_read_input_tokens":4,"output_tokens":7}}"#
+                )
+                .as_slice(),
+            [AgentEvent::TurnCompleted { usage }]
+                if usage.input_tokens == 10 && usage.cached_input_tokens == 4 && usage.output_tokens == 7
+        ));
+    }
+
+    #[test]
     fn malformed_and_future_events_are_nonfatal() {
         assert!(matches!(
             decode_codex_line("{"),
@@ -943,7 +1251,8 @@ mod tests {
         )
         .unwrap();
 
-        materialize_codex_events_with_checkpoints(
+        materialize_events(
+            AgentProtocol::CodexJsonl,
             &raw,
             &normalized,
             &transcript,

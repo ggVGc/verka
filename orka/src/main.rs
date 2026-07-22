@@ -7,8 +7,9 @@ use linka::{Author, CandidateId, NodeId, Store};
 use orka::attempt::{AttemptId, FsAttemptStore, SealedState};
 use orka::candidate::Candidates;
 use orka::config::{Config, CONFIG_FILE};
+use orka::agent::AgentProtocol;
 use orka::engine::{Engine, RunProgress, RunReport};
-use orka::events::follow_codex_events;
+use orka::events::follow_events;
 use orka::linka_work::LinkaWork;
 use orka::review::{AbandonOutcome, FinishOutcome, ReviewVerdict, Reviews};
 use orka::review_worktree::{GitReviewWorktrees, ReviewCleanupOutcome};
@@ -619,11 +620,11 @@ struct LiveEventView {
 }
 
 impl LiveEventView {
-    fn start(path: PathBuf, color: bool) -> Self {
+    fn start(protocol: AgentProtocol, path: PathBuf, color: bool) -> Self {
         let done = Arc::new(AtomicBool::new(false));
         let follower_done = done.clone();
         let thread = std::thread::spawn(move || {
-            if let Err(error) = follow_codex_events(&path, &follower_done, color) {
+            if let Err(error) = follow_events(protocol, &path, &follower_done, color) {
                 eprintln!("[orka] event view failed: {error:#}");
             }
         });
@@ -669,14 +670,18 @@ impl ProgressPrinter {
             RunProgress::WorkspacePrepared { attempt } => {
                 eprintln!("[orka] {attempt}: workspace prepared")
             }
-            RunProgress::ExecutionStarted { attempt, artifacts } => {
+            RunProgress::ExecutionStarted {
+                attempt,
+                protocol,
+                artifacts,
+            } => {
                 eprintln!(
                     "[orka] {attempt}: agent running (transcript: {}; diagnostics: {})",
                     artifacts.transcript.display(),
                     artifacts.diagnostics.display()
                 );
                 if let Some(path) = &artifacts.raw_events {
-                    self.live = Some(LiveEventView::start(path.clone(), self.color));
+                    self.live = Some(LiveEventView::start(*protocol, path.clone(), self.color));
                 }
             }
             RunProgress::ExecutionFinished { attempt, exit_code } => {
