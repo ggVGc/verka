@@ -73,7 +73,8 @@ Options:
       --no-network             Disable networking, overriding configuration and templates
   -i, --interactive            Allocate an interactive terminal
       --no-interactive         Disable interactivity, overriding a template
-      --no-new-session         Keep the caller's terminal session instead of starting a new one
+      --new-session            Start a new terminal session, overriding a template (Bubblewrap's --new-session, which blocks TIOCSTI input injection)
+      --no-new-session         Keep the caller's terminal session instead of starting a new one (omits Bubblewrap's --new-session, which otherwise blocks TIOCSTI)
       --dry-run                Print the validated request and backend invocation without executing it
       --rootfs <DIRECTORY>     Override the Bubblewrap root filesystem
       --temporary <DIRECTORY>  Add an empty writable filesystem discarded after execution
@@ -115,6 +116,7 @@ Policy options (shared by `run` and `shell`):
 | `--no-network` | Disable networking, overriding global configuration and templates. |
 | `-i`, `--interactive` | Allocate an interactive terminal (stdin + TTY). |
 | `--no-interactive` | Disable interactivity requested by a template. |
+| `--new-session` | Start a new terminal session, overriding a template's `new-session = false`. |
 | `--no-new-session` | Run the command in the caller's terminal session instead of a new one. Bubblewrap otherwise passes `--new-session`, which detaches the controlling terminal to block TIOCSTI input injection; disable it only for tools that require the inherited session. |
 | `--dry-run` | Print the validated request and the exact backend invocation without executing anything. |
 | `--rootfs <DIRECTORY>` | Override the prepared root filesystem for Bubblewrap. |
@@ -145,7 +147,8 @@ initial arguments), after which arguments
 following `--` are appended. Explicit `network = false` in a template
 overrides enabled project networking, while `--network` and
 `--no-network` provide the final CLI choice. `--no-interactive` similarly
-overrides an interactive template. `--no-write` is applied after all mounts
+overrides an interactive template, and `--new-session`/`--no-new-session`
+override a template's `new-session`. `--no-write` is applied after all mounts
 are combined, making every host bind mount read-only regardless of its source;
 temporary filesystems are unaffected because
 they cannot modify mounted host data. Without a template or `--command`, at
@@ -364,7 +367,8 @@ Options:
       --no-network             Disable networking, overriding configuration and templates
   -i, --interactive            Allocate an interactive terminal
       --no-interactive         Disable interactivity, overriding a template
-      --no-new-session         Keep the caller's terminal session instead of starting a new one
+      --new-session            Start a new terminal session, overriding a template (Bubblewrap's --new-session, which blocks TIOCSTI input injection)
+      --no-new-session         Keep the caller's terminal session instead of starting a new one (omits Bubblewrap's --new-session, which otherwise blocks TIOCSTI)
       --dry-run                Print the validated request and backend invocation without executing it
       --rootfs <DIRECTORY>     Override the Bubblewrap root filesystem
       --temporary <DIRECTORY>  Add an empty writable filesystem discarded after execution
@@ -414,6 +418,7 @@ workdir = "/workspace"           # optional
 path = ["~/.cargo/bin"]          # optional; read-only PATH additions
 network = false
 interactive = false
+new-session = false              # optional; keep the caller's session
 
 [[template.lint.workspace-mount]] # optional; at most one per template
 source = "."
@@ -431,8 +436,8 @@ RUST_LOG = "info"
 Template fields are optional except that the effective command must be
 non-empty. Unknown fields are rejected. `command` is an array of the executable
 and its initial arguments. `backend`, `rootfs`, `workdir`,
-`path`, networking, interactivity, environment, and mounts correspond to the
-same per-run CLI concepts. `rootfs` overrides `[isolation.bwrap].rootfs` when
+`path`, networking, interactivity, session handling, environment, and mounts
+correspond to the same per-run CLI concepts. `rootfs` overrides `[isolation.bwrap].rootfs` when
 the template selects Bubblewrap, while `--rootfs` overrides both; `~` is
 expanded using `$HOME` and the tree is mounted read-only.
 When neither is set, Driva constructs a private root with conventional host

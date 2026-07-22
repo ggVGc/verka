@@ -99,9 +99,13 @@ struct PolicyArgs {
     /// Disable interactivity, overriding a template.
     #[arg(long, conflicts_with = "interactive")]
     no_interactive: bool,
+    /// Start a new terminal session, overriding a template
+    /// (Bubblewrap's --new-session, which blocks TIOCSTI input injection).
+    #[arg(long, conflicts_with = "no_new_session")]
+    new_session: bool,
     /// Keep the caller's terminal session instead of starting a new one
     /// (omits Bubblewrap's --new-session, which otherwise blocks TIOCSTI).
-    #[arg(long)]
+    #[arg(long, conflicts_with = "new_session")]
     no_new_session: bool,
     /// Print the validated request and backend invocation without executing it.
     #[arg(long)]
@@ -325,7 +329,16 @@ fn real_main() -> Result<()> {
                     .and_then(|value| value.interactive)
                     .unwrap_or(false)
             },
-        new_session: !policy.no_new_session,
+        new_session: if policy.no_new_session {
+            false
+        } else if policy.new_session {
+            true
+        } else {
+            template
+                .as_ref()
+                .and_then(|value| value.new_session)
+                .unwrap_or(true)
+        },
     };
     let request = validate_request(&request)?;
     match backend {

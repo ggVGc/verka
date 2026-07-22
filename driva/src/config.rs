@@ -145,6 +145,11 @@ pub struct TemplateConfig {
     pub paths: Vec<PathBuf>,
     pub network: Option<bool>,
     pub interactive: Option<bool>,
+    /// Start a new terminal session (Bubblewrap's `--new-session`, which
+    /// blocks TIOCSTI input injection). Omit for tools that require the
+    /// caller's inherited session.
+    #[serde(rename = "new-session")]
+    pub new_session: Option<bool>,
     #[serde(default)]
     pub environment: BTreeMap<String, String>,
 }
@@ -239,6 +244,9 @@ impl TemplateConfig {
         }
         if later.interactive.is_some() {
             self.interactive = later.interactive;
+        }
+        if later.new_session.is_some() {
+            self.new_session = later.new_session;
         }
         self.environment.extend(later.environment);
     }
