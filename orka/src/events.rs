@@ -6,8 +6,8 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::fs::{File, OpenOptions};
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::fs::OpenOptions;
+use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -308,33 +308,61 @@ fn closing_fence(line: &str, marker: char, width: usize) -> bool {
     line.chars().skip(width).all(char::is_whitespace)
 }
 
-/// Read the stable normalized journal and produce the same blocks consumed by
-/// the terminal renderer.
-pub fn read_work_log(path: &Path) -> Result<Vec<WorkLogBlock>> {
-    let input = File::open(path).with_context(|| format!("opening {}", path.display()))?;
-    work_log_from_reader(BufReader::new(input), &path.display().to_string())
+/// Render provider-independent work-log blocks on demand from the raw agent
+/// event stream — a fundamental fact — folding in the per-file-change checkpoint
+/// commits from the file-change journal when it is supplied. Both inputs are
+/// facts (the exact agent output and the harness's checkpoint mappings); the
+/// blocks are an interpretation produced here at read time and never persisted.
+///
+/// Used both for the local attempt directory and for the durable copy read back
+/// from Linka, so either path presents an identical work log.
+pub fn work_log_from_codex_raw(
+    raw: &[u8],
+    file_changes: Option<&[u8]>,
+) -> Result<Vec<WorkLogBlock>> {
+    let events = decode_codex_events(raw, file_changes)?;
+    Ok(events.iter().flat_map(event_blocks).collect())
 }
 
-/// Render the normalized journal from an in-memory buffer rather than the local
-/// attempt directory — used when the journal is read back from a Linka
-/// attachment, so the durable record is presented, never dumped as raw jsonl.
-/// `source` names the origin for error context.
-pub fn read_work_log_bytes(data: &[u8], source: &str) -> Result<Vec<WorkLogBlock>> {
-    work_log_from_reader(data, source)
-}
-
-fn work_log_from_reader<R: BufRead>(reader: R, source: &str) -> Result<Vec<WorkLogBlock>> {
-    let mut blocks = Vec::new();
-    for (index, line) in reader.lines().enumerate() {
-        let line = line.with_context(|| format!("reading {source}"))?;
-        if line.trim().is_empty() {
+/// Decode a raw Codex journal into the stable event vocabulary, attaching
+/// checkpoint commits from the file-change journal in event order. This is the
+/// single decode shared by every downstream view; its output is never written
+/// to disk.
+fn decode_codex_events(raw: &[u8], file_changes: Option<&[u8]>) -> Result<Vec<AgentEvent>> {
+    let mut checkpoints = match file_changes {
+        Some(bytes) => crate::file_changes::read_checkpoints_bytes(bytes)?,
+        None => Vec::new(),
+    }
+    .into_iter();
+    let mut events = Vec::new();
+    for line in raw.split(|&byte| byte == b'\n') {
+        if line.iter().all(u8::is_ascii_whitespace) {
             continue;
         }
-        let event: AgentEvent = serde_json::from_str(&line)
-            .with_context(|| format!("decoding {source} line {}", index + 1))?;
-        blocks.extend(event_blocks(&event));
+        let line = String::from_utf8_lossy(line);
+        let mut event = decode_codex_line(line.trim_end());
+        if let AgentEvent::FileChanged {
+            id,
+            checkpoint,
+            checkpoint_error,
+            ..
+        } = &mut event
+        {
+            if let Some(record) = checkpoints.next() {
+                if record.event_id == *id {
+                    *checkpoint = record.commit;
+                    *checkpoint_error = record.error;
+                } else {
+                    *checkpoint_error = Some(format!(
+                        "checkpoint journal expected event `{}`, found `{id}`",
+                        record.event_id
+                    ));
+                }
+            }
+        }
+        events.push(event);
     }
-    Ok(blocks)
+    Ok(events)
 }
 
 /// Wrap output from a plain-text agent — one that emits no event stream — in
@@ -484,104 +512,6 @@ fn changed_paths(item: &Value) -> Vec<String> {
         }
     }
     paths
-}
-
-/// Convert the exact Codex journal into a versioned normalized journal and a
-/// compact human-readable transcript after execution completes.
-pub fn materialize_codex_events(raw: &Path, normalized: &Path, transcript: &Path) -> Result<()> {
-    materialize_codex_events_with_checkpoints(raw, normalized, transcript, None)
-}
-
-/// Materialize events and attach per-file-change checkpoint commits from the
-/// harness journal when one is available.
-pub fn materialize_codex_events_with_checkpoints(
-    raw: &Path,
-    normalized: &Path,
-    transcript: &Path,
-    file_changes: Option<&Path>,
-) -> Result<()> {
-    let input = File::open(raw).with_context(|| format!("opening {}", raw.display()))?;
-    let mut events = BufWriter::new(
-        File::create(normalized).with_context(|| format!("creating {}", normalized.display()))?,
-    );
-    let mut readable = BufWriter::new(
-        File::create(transcript).with_context(|| format!("creating {}", transcript.display()))?,
-    );
-
-    let mut checkpoints = match file_changes {
-        Some(path) => crate::file_changes::read_checkpoints(path)?.into_iter(),
-        None => Vec::new().into_iter(),
-    };
-    for line in BufReader::new(input).lines() {
-        let line = line.with_context(|| format!("reading {}", raw.display()))?;
-        let mut event = decode_codex_line(&line);
-        if let AgentEvent::FileChanged {
-            id,
-            checkpoint,
-            checkpoint_error,
-            ..
-        } = &mut event
-        {
-            if let Some(record) = checkpoints.next() {
-                if record.event_id == *id {
-                    *checkpoint = record.commit;
-                    *checkpoint_error = record.error;
-                } else {
-                    *checkpoint_error = Some(format!(
-                        "checkpoint journal expected event `{}`, found `{id}`",
-                        record.event_id
-                    ));
-                }
-            }
-        }
-        serde_json::to_writer(&mut events, &event)?;
-        events.write_all(b"\n")?;
-        write_transcript_event(&mut readable, &event)?;
-    }
-    events.flush()?;
-    readable.flush()?;
-    Ok(())
-}
-
-fn write_transcript_event(out: &mut dyn Write, event: &AgentEvent) -> Result<()> {
-    match event {
-        AgentEvent::CommandStarted { command, .. } => {
-            writeln!(out, "$ {}", clean_terminal_text(command))?
-        }
-        AgentEvent::CommandCompleted {
-            exit_code, output, ..
-        } => {
-            writeln!(
-                out,
-                "[exit {}]",
-                exit_code.map_or("?".into(), |v| v.to_string())
-            )?;
-            if !output.is_empty() {
-                writeln!(out, "{}", clean_terminal_text(output))?;
-            }
-        }
-        AgentEvent::FileChanged { paths, .. } if !paths.is_empty() => {
-            writeln!(out, "[changed] {}", clean_terminal_text(&paths.join(", ")))?
-        }
-        AgentEvent::ToolStarted { name, detail, .. } => writeln!(
-            out,
-            "[tool] {} {}",
-            clean_terminal_text(name),
-            clean_terminal_text(detail)
-        )?,
-        AgentEvent::PlanUpdated { text, .. } => {
-            writeln!(out, "[plan]\n{}", clean_terminal_text(text))?
-        }
-        AgentEvent::AgentMessage { text, .. } => {
-            writeln!(out, "\n{}\n", clean_terminal_text(text))?
-        }
-        AgentEvent::Error { message } => writeln!(out, "[error] {}", clean_terminal_text(message))?,
-        AgentEvent::Malformed { error } => {
-            writeln!(out, "[malformed event] {}", clean_terminal_text(error))?
-        }
-        _ => {}
-    }
-    Ok(())
 }
 
 /// Follow a growing raw journal until `done`, rendering complete JSONL records
@@ -898,94 +828,43 @@ mod tests {
     }
 
     #[test]
-    fn materializes_normalized_events_and_readable_transcript() {
-        let directory = std::env::temp_dir().join(format!("orka-event-test-{}", ulid::Ulid::new()));
-        std::fs::create_dir_all(&directory).unwrap();
-        let raw = directory.join("events.raw.jsonl");
-        let normalized = directory.join("events.v1.jsonl");
-        let transcript = directory.join("transcript.log");
-        std::fs::write(
-            &raw,
-            concat!(
-                "{\"type\":\"item.started\",\"item\":{\"id\":\"c1\",\"type\":\"command_execution\",\"command\":\"cargo test\"}}\n",
-                "{\"type\":\"item.completed\",\"item\":{\"id\":\"m1\",\"type\":\"agent_message\",\"text\":\"All tests pass\"}}\n"
-            ),
-        )
-        .unwrap();
+    fn work_log_is_rendered_on_demand_from_the_raw_journal() {
+        let raw = concat!(
+            "{\"type\":\"item.started\",\"item\":{\"id\":\"c1\",\"type\":\"command_execution\",\"command\":\"cargo test\"}}\n",
+            "\n",
+            "{\"type\":\"item.completed\",\"item\":{\"id\":\"m1\",\"type\":\"agent_message\",\"text\":\"All tests pass\"}}\n"
+        );
 
-        materialize_codex_events(&raw, &normalized, &transcript).unwrap();
-
-        let events = std::fs::read_to_string(normalized).unwrap();
-        assert!(events.contains("command_started"));
-        assert!(events.contains("agent_message"));
-        let readable = std::fs::read_to_string(transcript).unwrap();
-        assert!(readable.contains("$ cargo test"));
-        assert!(readable.contains("All tests pass"));
-        std::fs::remove_dir_all(directory).unwrap();
+        // No file is written; interpretation is produced from the raw fact.
+        let blocks = work_log_from_codex_raw(raw.as_bytes(), None).unwrap();
+        assert!(matches!(
+            blocks.as_slice(),
+            [
+                WorkLogBlock::CommandStarted { command },
+                WorkLogBlock::AgentMessage { .. },
+            ] if command == "cargo test"
+        ));
     }
 
     #[test]
-    fn materialization_attaches_file_change_checkpoint_commits() {
-        let directory = std::env::temp_dir().join(format!("orka-event-test-{}", ulid::Ulid::new()));
-        std::fs::create_dir_all(&directory).unwrap();
-        let raw = directory.join("events.raw.jsonl");
-        let normalized = directory.join("events.v1.jsonl");
-        let transcript = directory.join("transcript.log");
-        let checkpoints = directory.join("file-changes.v1.jsonl");
-        std::fs::write(
-            &raw,
-            "{\"type\":\"item.completed\",\"item\":{\"id\":\"f1\",\"type\":\"file_change\",\"changes\":[{\"path\":\"src/lib.rs\"}]}}\n",
-        )
-        .unwrap();
-        std::fs::write(
-            &checkpoints,
-            "{\"schema\":1,\"sequence\":1,\"event_id\":\"f1\",\"paths\":[\"src/lib.rs\"],\"commit\":\"abc123\"}\n",
-        )
-        .unwrap();
+    fn rendering_folds_in_file_change_checkpoint_commits() {
+        let raw = "{\"type\":\"item.completed\",\"item\":{\"id\":\"f1\",\"type\":\"file_change\",\"changes\":[{\"path\":\"src/lib.rs\"}]}}\n";
+        let checkpoints =
+            "{\"schema\":1,\"sequence\":1,\"event_id\":\"f1\",\"paths\":[\"src/lib.rs\"],\"commit\":\"abc123\"}\n";
 
-        materialize_codex_events_with_checkpoints(
-            &raw,
-            &normalized,
-            &transcript,
-            Some(&checkpoints),
-        )
-        .unwrap();
-
-        assert!(std::fs::read_to_string(&normalized)
-            .unwrap()
-            .contains(r#""checkpoint":"abc123""#));
+        let blocks =
+            work_log_from_codex_raw(raw.as_bytes(), Some(checkpoints.as_bytes())).unwrap();
         assert!(matches!(
-            read_work_log(&normalized).unwrap().as_slice(),
+            blocks.as_slice(),
             [WorkLogBlock::FilesChanged { checkpoint: Some(commit), .. }] if commit == "abc123"
         ));
-        std::fs::remove_dir_all(directory).unwrap();
-    }
 
-    #[test]
-    fn work_log_from_bytes_matches_the_file_renderer() {
-        let directory = std::env::temp_dir().join(format!("orka-event-test-{}", ulid::Ulid::new()));
-        std::fs::create_dir_all(&directory).unwrap();
-        let raw = directory.join("events.raw.jsonl");
-        let normalized = directory.join("events.v1.jsonl");
-        let transcript = directory.join("transcript.log");
-        std::fs::write(
-            &raw,
-            concat!(
-                "{\"type\":\"item.started\",\"item\":{\"id\":\"c1\",\"type\":\"command_execution\",\"command\":\"cargo test\"}}\n",
-                "{\"type\":\"item.completed\",\"item\":{\"id\":\"m1\",\"type\":\"agent_message\",\"text\":\"All tests pass\"}}\n"
-            ),
-        )
-        .unwrap();
-        materialize_codex_events(&raw, &normalized, &transcript).unwrap();
-
-        // Rendering the durable attachment bytes yields exactly what reading the
-        // local journal file does, so a Linka fallback presents an identical
-        // work log and never surfaces raw jsonl.
-        let data = std::fs::read(&normalized).unwrap();
-        assert_eq!(
-            read_work_log_bytes(&data, "linka orka/attempt/worklog").unwrap(),
-            read_work_log(&normalized).unwrap()
-        );
-        std::fs::remove_dir_all(directory).unwrap();
+        // Without the checkpoint journal the same fact still renders, only
+        // without the commit annotation.
+        let bare = work_log_from_codex_raw(raw.as_bytes(), None).unwrap();
+        assert!(matches!(
+            bare.as_slice(),
+            [WorkLogBlock::FilesChanged { checkpoint: None, .. }]
+        ));
     }
 }

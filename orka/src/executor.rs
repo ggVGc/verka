@@ -40,12 +40,21 @@ pub struct ExecutionSpec {
 }
 
 /// Durable destinations for all streams produced by one execution.
+///
+/// Only fundamental facts are captured here — the agent's exact output and the
+/// harness's own observations. Interpretations (a normalized event journal, a
+/// readable transcript) are never written at rest; they are materialized on
+/// demand from these facts. For a plain-stdout agent the transcript *is* that
+/// raw output; for an event-stream agent the raw journal is, and no transcript
+/// is written.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExecutionArtifacts {
+    /// Raw agent stdout for a plain-protocol agent. Unused (and not created)
+    /// when the agent emits a structured event stream.
     pub transcript: PathBuf,
     pub diagnostics: PathBuf,
+    /// The agent's exact machine-readable event stream, when it emits one.
     pub raw_events: Option<PathBuf>,
-    pub events: Option<PathBuf>,
     /// Event-to-commit mappings for per-file-change Git checkpoints.
     pub file_changes: Option<PathBuf>,
     /// Attempt-owned ref retaining the checkpoint commit chain.

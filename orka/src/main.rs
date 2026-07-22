@@ -301,13 +301,13 @@ fn run(cli: Cli) -> Result<()> {
             if let Some(seal) = &snapshot.seal {
                 println!("sealed    {}", seal_line(&seal.state));
             }
+            let raw_events = attempts.raw_events_path(&id);
+            if raw_events.exists() {
+                println!("events     {}", raw_events.display());
+            }
             let transcript = attempts.transcript_path(&id);
             if transcript.exists() {
                 println!("transcript {}", transcript.display());
-            }
-            let events = attempts.events_path(&id);
-            if events.exists() {
-                println!("events     {}", events.display());
             }
             let diagnostics = attempts.diagnostics_path(&id);
             if diagnostics.exists() {

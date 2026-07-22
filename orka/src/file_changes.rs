@@ -319,7 +319,18 @@ pub fn read_checkpoints(path: &Path) -> Result<Vec<FileChangeCheckpoint>> {
         return Ok(Vec::new());
     }
     let input = File::open(path).with_context(|| format!("opening {}", path.display()))?;
-    BufReader::new(input)
+    read_checkpoints_from(BufReader::new(input))
+}
+
+/// Decode a file-change journal held in memory — used when the journal is read
+/// back from its durable Linka attachment rather than the local attempt
+/// directory.
+pub fn read_checkpoints_bytes(data: &[u8]) -> Result<Vec<FileChangeCheckpoint>> {
+    read_checkpoints_from(data)
+}
+
+fn read_checkpoints_from<R: BufRead>(reader: R) -> Result<Vec<FileChangeCheckpoint>> {
+    reader
         .lines()
         .filter(|line| line.as_ref().map_or(true, |line| !line.trim().is_empty()))
         .map(|line| {

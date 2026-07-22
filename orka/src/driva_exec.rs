@@ -8,10 +8,9 @@
 
 use crate::access::{read_access_summary, write_access_summary, AccessRecorder};
 use crate::agent::AgentProtocol;
-use crate::events::materialize_codex_events_with_checkpoints;
 use crate::executor::{ExecutionArtifacts, ExecutionReport, ExecutionSpec, IsolatedExecutor};
 use crate::file_changes::FileChangeRecorder;
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use driva::{ExecutionIo, Isolation, Mount, MountAccess};
 use std::ffi::OsString;
 use std::fs::{File, OpenOptions};
@@ -77,12 +76,20 @@ impl IsolatedExecutor for DrivaExecutor {
             new_session: true,
         };
 
-        std::fs::write(&artifacts.transcript, b"")
-            .with_context(|| format!("creating transcript {}", artifacts.transcript.display()))?;
         std::fs::write(&artifacts.diagnostics, b"")
             .with_context(|| format!("creating diagnostics {}", artifacts.diagnostics.display()))?;
+        // The agent's stdout is the fundamental fact and is captured verbatim:
+        // a plain agent's stdout is its transcript, an event-stream agent's is
+        // its raw journal. No normalized or rendered copy is written at rest;
+        // those interpretations are produced on demand from what is captured
+        // here.
         let stdout = match spec.protocol {
-            AgentProtocol::Plain => append_handle(&artifacts.transcript)?,
+            AgentProtocol::Plain => {
+                std::fs::write(&artifacts.transcript, b"").with_context(|| {
+                    format!("creating transcript {}", artifacts.transcript.display())
+                })?;
+                append_handle(&artifacts.transcript)?
+            }
             AgentProtocol::CodexJsonl => {
                 let raw = artifacts
                     .raw_events
@@ -186,30 +193,6 @@ impl IsolatedExecutor for DrivaExecutor {
             }
             _ => {}
         }
-        if spec.protocol == AgentProtocol::CodexJsonl {
-            let projection = match artifacts.events.as_ref() {
-                Some(events) => materialize_codex_events_with_checkpoints(
-                    artifacts.raw_events.as_ref().expect("validated above"),
-                    events,
-                    &artifacts.transcript,
-                    artifacts.file_changes.as_deref(),
-                ),
-                None => Err(anyhow!(
-                    "Codex JSONL execution has no normalized event path"
-                )),
-            };
-            if let Err(error) = projection {
-                // The raw stream and process outcome remain authoritative.
-                // A presentation failure must not erase harness evidence or
-                // make Orka treat completed agent work as never executed.
-                if let Ok(mut diagnostics) = append_handle(&artifacts.diagnostics) {
-                    let _ = writeln!(
-                        diagnostics,
-                        "orka: could not project Codex event journal: {error:#}"
-                    );
-                }
-            }
-        }
         let outcome = outcome?;
         Ok(ExecutionReport {
             backend: outcome.evidence.isolation_backend,
@@ -301,7 +284,6 @@ mod tests {
             diagnostics: dir.join("diagnostics.log"),
             raw_events: (protocol == AgentProtocol::CodexJsonl)
                 .then(|| dir.join("events.raw.jsonl")),
-            events: (protocol == AgentProtocol::CodexJsonl).then(|| dir.join("events.v1.jsonl")),
             file_changes: (protocol == AgentProtocol::CodexJsonl)
                 .then(|| dir.join("file-changes.v1.jsonl")),
             file_change_ref: (protocol == AgentProtocol::CodexJsonl)
@@ -382,7 +364,7 @@ mod tests {
     }
 
     #[test]
-    fn codex_jsonl_is_journaled_normalized_and_rendered_as_a_transcript() {
+    fn codex_jsonl_is_captured_raw_without_writing_any_interpretation() {
         let dir = std::env::temp_dir().join(format!("orka-codex-events-{}", ulid::Ulid::new()));
         std::fs::create_dir_all(dir.join("ws")).unwrap();
         std::fs::create_dir_all(dir.join("ctx")).unwrap();
@@ -398,42 +380,20 @@ mod tests {
 
         executor.run(&spec, &artifacts).unwrap();
 
-        let raw = std::fs::read_to_string(artifacts.raw_events.unwrap()).unwrap();
+        // The raw event stream is captured verbatim as the fundamental fact.
+        let raw = std::fs::read_to_string(artifacts.raw_events.as_ref().unwrap()).unwrap();
         assert!(raw.contains("agent_message"));
-        let normalized = std::fs::read_to_string(artifacts.events.unwrap()).unwrap();
-        assert!(normalized.contains("agent_message"));
-        let transcript = std::fs::read_to_string(artifacts.transcript).unwrap();
-        assert!(transcript.contains("Finished cleanly"));
+        // No transcript is written for an event-stream agent: the readable form
+        // is an interpretation, produced on demand, never stored at rest.
+        assert!(
+            !artifacts.transcript.exists(),
+            "no rendered transcript should be persisted for a Codex agent"
+        );
         assert_eq!(
             std::fs::read_to_string(artifacts.diagnostics).unwrap(),
             "to stderr\n"
         );
 
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[test]
-    fn event_projection_failure_does_not_erase_process_evidence() {
-        let dir = std::env::temp_dir().join(format!("orka-codex-events-{}", ulid::Ulid::new()));
-        std::fs::create_dir_all(dir.join("ws")).unwrap();
-        std::fs::create_dir_all(dir.join("ctx")).unwrap();
-        init_workspace_repository(&dir.join("ws"));
-        let executor = DrivaExecutor::new(Box::new(StubBackend {
-            seen: Arc::new(Mutex::new(Vec::new())),
-            exit: 7,
-            stdout: r#"{"type":"turn.completed","usage":{}}"#,
-        }));
-        let mut spec = spec(&dir);
-        spec.protocol = AgentProtocol::CodexJsonl;
-        let mut artifacts = artifacts(&dir, AgentProtocol::CodexJsonl);
-        artifacts.events = Some(dir.join("missing/events.v1.jsonl"));
-
-        let report = executor.run(&spec, &artifacts).unwrap();
-
-        assert_eq!(report.exit_code, 7);
-        assert!(std::fs::read_to_string(&artifacts.diagnostics)
-            .unwrap()
-            .contains("could not project Codex event journal"));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

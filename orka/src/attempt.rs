@@ -11,12 +11,11 @@
 //!     workspace.toml   the planned workspace, before it is created
 //!     prepared         marker: workspace creation completed
 //!     request.toml     the exact execution spec, before the command starts
-//!     events.raw.jsonl exact machine-readable agent stdout, when available
-//!     events.v1.jsonl  normalized Orka agent events
+//!     events.raw.jsonl exact machine-readable agent stdout, for event-stream agents
 //!     file-changes.v1.jsonl event-to-Git-checkpoint mappings
 //!     accesses.v1.jsonl harness-observed project file reads
 //!     diagnostics.log agent stderr, kept outside the event stream
-//!     transcript.log   readable transcript derived from agent stdout
+//!     transcript.log   raw agent stdout, for plain-stdout agents
 //!     evidence.toml    harness-observed exit and backend evidence
 //!     seal.toml        final state: how the attempt concluded
 //!     io/              the exchange directory mounted into the environment
@@ -197,10 +196,6 @@ impl FsAttemptStore {
         self.attempt_dir(id).join("events.raw.jsonl")
     }
 
-    pub fn events_path(&self, id: &AttemptId) -> PathBuf {
-        self.attempt_dir(id).join("events.v1.jsonl")
-    }
-
     pub fn file_changes_path(&self, id: &AttemptId) -> PathBuf {
         self.attempt_dir(id).join("file-changes.v1.jsonl")
     }
@@ -218,7 +213,6 @@ impl FsAttemptStore {
             transcript: self.transcript_path(id),
             diagnostics: self.diagnostics_path(id),
             raw_events: (protocol == AgentProtocol::CodexJsonl).then(|| self.raw_events_path(id)),
-            events: (protocol == AgentProtocol::CodexJsonl).then(|| self.events_path(id)),
             file_changes: (protocol == AgentProtocol::CodexJsonl)
                 .then(|| self.file_changes_path(id)),
             file_change_ref: (protocol == AgentProtocol::CodexJsonl)

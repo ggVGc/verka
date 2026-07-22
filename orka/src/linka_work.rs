@@ -55,7 +55,7 @@ pub const OUTPUT_EVIDENCE_PARTS: [&str; 6] = [
     "attempt",
     "prompt",
     "request",
-    "worklog",
+    "agent-output",
     "evidence",
     "outcome",
 ];
@@ -90,12 +90,13 @@ impl<'a> LinkaWork<'a> {
         GitVcs::for_execution(self.store, workspace.to_path_buf())
     }
 
-    /// Commit an attempt's work log as opaque, node-associated Linka data. The
-    /// stored form is the faithful machine-readable journal (`events.v1.jsonl`)
-    /// when the backend produced one; readable rendering happens on demand
-    /// downstream, never at rest. The stable key makes normal execution and
-    /// recovery retries idempotent.
-    pub fn attach_work_log(
+    /// Commit an attempt's agent-output fact as opaque, node-associated Linka
+    /// data: the raw event journal (`events.raw.jsonl`) for an event-stream
+    /// agent, or the raw stdout transcript for a plain one. Only the fact is
+    /// stored; the readable work log is rendered on demand downstream, never at
+    /// rest. The stable key makes normal execution and recovery retries
+    /// idempotent.
+    pub fn attach_agent_output(
         &self,
         node: &NodeId,
         attempt: &AttemptId,
@@ -103,19 +104,46 @@ impl<'a> LinkaWork<'a> {
         media_type: &str,
     ) -> Result<NodeAttachment> {
         let data =
-            std::fs::read(path).with_context(|| format!("reading work log for {attempt}"))?;
+            std::fs::read(path).with_context(|| format!("reading agent output for {attempt}"))?;
         ops::record_node_attachment(
             self.store,
             &self.vcs(),
             node.as_str(),
             NewNodeAttachment {
                 namespace: "orka".into(),
-                key: format!("{attempt}/worklog"),
+                key: format!("{attempt}/agent-output"),
                 media_type: Some(media_type.into()),
                 data,
             },
         )
-        .with_context(|| format!("attaching work log for {attempt} to node `{node}`"))
+        .with_context(|| format!("attaching agent output for {attempt} to node `{node}`"))
+    }
+
+    /// Preserve the file-change checkpoint journal as opaque attempt evidence.
+    /// The `(event → commit)` mappings are created live during execution and are
+    /// not reconstructible from anything else, so they are a fundamental fact;
+    /// on-demand rendering folds them back into the work log as checkpoint
+    /// annotations.
+    pub fn attach_file_changes(
+        &self,
+        node: &NodeId,
+        attempt: &AttemptId,
+        file_changes: &Path,
+    ) -> Result<NodeAttachment> {
+        let data = std::fs::read(file_changes)
+            .with_context(|| format!("reading file-change journal for {attempt}"))?;
+        ops::record_node_attachment(
+            self.store,
+            &self.vcs(),
+            node.as_str(),
+            NewNodeAttachment {
+                namespace: "orka".into(),
+                key: format!("{attempt}/file-changes"),
+                media_type: Some("application/x-ndjson".into()),
+                data,
+            },
+        )
+        .with_context(|| format!("attaching file-change journal for {attempt} to node `{node}`"))
     }
 
     /// Preserve the raw access journal as opaque attempt evidence. The

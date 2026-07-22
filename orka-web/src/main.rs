@@ -24,7 +24,7 @@ use linka::{
 };
 use orka::attempt::{AttemptId, AttemptPhase, FsAttemptStore, SealedState};
 use orka::candidate::Candidates;
-use orka::events::{read_work_log, transcript_blocks};
+use orka::events::{transcript_blocks, work_log_from_codex_raw};
 use orka::linka_work::LinkaWork;
 use orka::review::Reviews;
 
@@ -329,7 +329,8 @@ fn attempts_json(store: &FsAttemptStore) -> Result<Vec<Value>> {
         .into_iter()
         .map(|id| {
             let snapshot = store.load(&id)?;
-            let transcript = store.transcript_path(&id).is_file();
+            let transcript =
+                store.raw_events_path(&id).is_file() || store.transcript_path(&id).is_file();
             let evidence = snapshot.evidence.as_ref().map(|e| {
                 json!({
                     "backend": e.backend,
@@ -408,14 +409,16 @@ fn transcript_json(app: &App, raw_id: &str) -> Result<Value> {
     let snapshot = store.load(&id)?;
     let node = snapshot.record.input.node();
 
-    // Prefer the local attempt artifacts; fall back to the durable copy Linka
+    // Prefer the local attempt facts; fall back to the durable copies Linka
     // holds so the work log stays inspectable even once the attempt directory
-    // is gone. Either way the jsonl journal is rendered here, never surfaced
-    // raw.
-    let events = store.events_path(&id);
+    // is gone. The readable work log is rendered here on demand from the raw
+    // agent-output fact, never surfaced raw.
+    let raw_events = store.raw_events_path(&id);
     let transcript = store.transcript_path(&id);
-    let blocks = if events.is_file() {
-        read_work_log(&events)?
+    let blocks = if raw_events.is_file() {
+        let file_changes = store.file_changes_path(&id);
+        let file_changes = std::fs::read(&file_changes).ok();
+        work_log_from_codex_raw(&std::fs::read(&raw_events)?, file_changes.as_deref())?
     } else if transcript.is_file() {
         transcript_blocks(&std::fs::read_to_string(&transcript)?)
     } else {
@@ -431,16 +434,18 @@ fn transcript_json(app: &App, raw_id: &str) -> Result<Value> {
     }))
 }
 
-/// Render the work log from its durable Linka attachment when the local attempt
-/// directory no longer has it. The `worklog` attachment is the normalized
-/// journal (jsonl) for event-stream backends and a plain transcript otherwise;
-/// media type decides which renderer runs, so a caller never sees raw jsonl.
+/// Render the work log from its durable Linka attachments when the local
+/// attempt directory no longer has them. The `agent-output` attachment is the
+/// raw event journal (jsonl) for event-stream agents and a plain transcript
+/// otherwise; media type decides which renderer runs, so a caller never sees
+/// raw jsonl. The `file-changes` attachment, when present, supplies checkpoint
+/// annotations.
 fn work_log_from_linka(
     app: &App,
     node: &NodeId,
     id: &AttemptId,
 ) -> Result<Vec<orka::events::WorkLogBlock>> {
-    let key = format!("{id}/worklog");
+    let key = format!("{id}/agent-output");
     let (attachment, data) = app
         .store
         .read_node_attachment(node.as_str(), "orka", &key)?
@@ -448,7 +453,11 @@ fn work_log_from_linka(
             format!("attempt `{id}` has no local work log and none stored in Linka")
         })?;
     if attachment.media_type.as_deref() == Some("application/x-ndjson") {
-        orka::events::read_work_log_bytes(&data, &format!("linka orka/{key}"))
+        let file_changes = app
+            .store
+            .read_node_attachment(node.as_str(), "orka", &format!("{id}/file-changes"))?
+            .map(|(_, data)| data);
+        work_log_from_codex_raw(&data, file_changes.as_deref())
     } else {
         Ok(transcript_blocks(&String::from_utf8_lossy(&data)))
     }
