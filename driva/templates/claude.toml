@@ -4,6 +4,7 @@ path = ["~/.local/bin"]
 backend = "bwrap"
 network = true
 interactive = true
+new-session = false
 
 [environment]
 DISABLE_AUTOUPDATER = "1"
