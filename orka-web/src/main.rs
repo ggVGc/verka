@@ -24,7 +24,8 @@ use linka::{
 };
 use orka::attempt::{AttemptId, AttemptPhase, FsAttemptStore, SealedState};
 use orka::candidate::Candidates;
-use orka::events::{transcript_blocks, work_log_from_codex_raw};
+use orka::agent::AgentProtocol;
+use orka::events::work_log_from_raw;
 use orka::linka_work::LinkaWork;
 use orka::review::Reviews;
 
@@ -411,18 +412,22 @@ fn transcript_json(app: &App, raw_id: &str) -> Result<Value> {
 
     // Prefer the local attempt facts; fall back to the durable copies Linka
     // holds so the work log stays inspectable even once the attempt directory
-    // is gone. The readable work log is rendered here on demand from the raw
-    // agent-output fact, never surfaced raw.
-    let raw_events = store.raw_events_path(&id);
-    let transcript = store.transcript_path(&id);
-    let blocks = if raw_events.is_file() {
-        let file_changes = store.file_changes_path(&id);
-        let file_changes = std::fs::read(&file_changes).ok();
-        work_log_from_codex_raw(&std::fs::read(&raw_events)?, file_changes.as_deref())?
-    } else if transcript.is_file() {
-        transcript_blocks(&std::fs::read_to_string(&transcript)?)
-    } else {
-        work_log_from_linka(app, node, &id)?
+    // is gone. The readable work log is rendered here on demand, decoded through
+    // the attempt's own recorded protocol, and never surfaced raw.
+    let blocks = match snapshot.request.as_ref().map(|request| request.protocol) {
+        Some(protocol) => {
+            let output = match protocol {
+                AgentProtocol::Plain => store.transcript_path(&id),
+                AgentProtocol::CodexJsonl => store.raw_events_path(&id),
+            };
+            if output.is_file() {
+                let file_changes = std::fs::read(store.file_changes_path(&id)).ok();
+                work_log_from_raw(protocol, &std::fs::read(&output)?, file_changes.as_deref())?
+            } else {
+                work_log_from_linka(app, node, &id)?
+            }
+        }
+        None => work_log_from_linka(app, node, &id)?,
     };
 
     let mut blocks = serde_json::to_value(blocks)?;
@@ -435,11 +440,10 @@ fn transcript_json(app: &App, raw_id: &str) -> Result<Value> {
 }
 
 /// Render the work log from its durable Linka attachments when the local
-/// attempt directory no longer has them. The `agent-output` attachment is the
-/// raw event journal (jsonl) for event-stream agents and a plain transcript
-/// otherwise; media type decides which renderer runs, so a caller never sees
-/// raw jsonl. The `file-changes` attachment, when present, supplies checkpoint
-/// annotations.
+/// attempt directory no longer has them. The `agent-output` attachment carries
+/// its decoder identity in its media type, so the right decoder runs and a
+/// caller never sees raw jsonl. The `file-changes` attachment, when present,
+/// supplies checkpoint annotations.
 fn work_log_from_linka(
     app: &App,
     node: &NodeId,
@@ -452,15 +456,21 @@ fn work_log_from_linka(
         .with_context(|| {
             format!("attempt `{id}` has no local work log and none stored in Linka")
         })?;
-    if attachment.media_type.as_deref() == Some("application/x-ndjson") {
-        let file_changes = app
-            .store
-            .read_node_attachment(node.as_str(), "orka", &format!("{id}/file-changes"))?
-            .map(|(_, data)| data);
-        work_log_from_codex_raw(&data, file_changes.as_deref())
-    } else {
-        Ok(transcript_blocks(&String::from_utf8_lossy(&data)))
-    }
+    let protocol = attachment
+        .media_type
+        .as_deref()
+        .and_then(AgentProtocol::from_output_media_type)
+        .with_context(|| {
+            format!(
+                "attempt `{id}` agent output has media type {:?}, which this build has no decoder for",
+                attachment.media_type
+            )
+        })?;
+    let file_changes = app
+        .store
+        .read_node_attachment(node.as_str(), "orka", &format!("{id}/file-changes"))?
+        .map(|(_, data)| data);
+    work_log_from_raw(protocol, &data, file_changes.as_deref())
 }
 
 const MAX_WORK_LOG_FILE: u64 = 256 * 1024;

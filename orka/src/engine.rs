@@ -348,7 +348,7 @@ impl Engine<'_> {
             // same immutable batch after any crash.
             self.attach_output_evidence(input.node(), attempt)?;
         } else {
-            let (path, media_type) = self.agent_output_source(attempt);
+            let (path, media_type) = self.agent_output_source(attempt)?;
             self.linka
                 .attach_agent_output(input.node(), attempt, &path, media_type)?;
             let file_changes = self.attempts.file_changes_path(attempt);
@@ -491,20 +491,24 @@ impl Engine<'_> {
         Ok(())
     }
 
-    /// The durable agent-output fact for an attempt: the raw event journal
-    /// (`events.raw.jsonl`) for an event-stream agent, otherwise the transcript,
-    /// which for a plain-stdout agent already is the raw output. Only this fact
-    /// is stored; the readable rendering is derived downstream, never at rest.
-    fn agent_output_source(&self, attempt: &AttemptId) -> (PathBuf, &'static str) {
-        let raw = self.attempts.raw_events_path(attempt);
-        if raw.is_file() {
-            (raw, "application/x-ndjson")
-        } else {
-            (
-                self.attempts.transcript_path(attempt),
-                "text/plain; charset=utf-8",
-            )
-        }
+    /// The durable agent-output fact for an attempt and the media type its
+    /// stored copy is stamped with. The recorded protocol — itself a fact — names
+    /// both where the raw output lives (the raw event journal for an event-stream
+    /// agent, the transcript for a plain-stdout one) and the decoder that reads
+    /// it back. Only this fact is stored; the readable rendering is derived
+    /// downstream, never at rest.
+    fn agent_output_source(&self, attempt: &AttemptId) -> Result<(PathBuf, &'static str)> {
+        let protocol = self
+            .attempts
+            .load(attempt)?
+            .request
+            .map(|request| request.protocol)
+            .unwrap_or_default();
+        let path = match protocol {
+            AgentProtocol::Plain => self.attempts.transcript_path(attempt),
+            AgentProtocol::CodexJsonl => self.attempts.raw_events_path(attempt),
+        };
+        Ok((path, protocol.output_media_type()))
     }
 
     fn attach_output_evidence(&self, node: &NodeId, attempt: &AttemptId) -> Result<()> {
@@ -526,7 +530,7 @@ impl Engine<'_> {
                 self.attempts.request_path(attempt),
             ),
             {
-                let (path, media_type) = self.agent_output_source(attempt);
+                let (path, media_type) = self.agent_output_source(attempt)?;
                 ("agent-output", media_type, path)
             },
             (
@@ -563,7 +567,7 @@ impl Engine<'_> {
         for id in self.attempts.list()? {
             let snapshot = self.attempts.load(&id)?;
             let node = snapshot.record.input.node().clone();
-            let (agent_output, media_type) = self.agent_output_source(&id);
+            let (agent_output, media_type) = self.agent_output_source(&id)?;
             if agent_output.is_file() {
                 // Attachment is idempotent, including after a crash between
                 // writing the output fact and finishing the attempt.

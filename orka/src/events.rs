@@ -3,6 +3,7 @@
 //! Provider wire formats stop here. The rest of Orka consumes a small stable
 //! event vocabulary and Driva remains an uninterpreted process transport.
 
+use crate::agent::AgentProtocol;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -308,8 +309,28 @@ fn closing_fence(line: &str, marker: char, width: usize) -> bool {
     line.chars().skip(width).all(char::is_whitespace)
 }
 
-/// Render provider-independent work-log blocks on demand from the raw agent
-/// event stream — a fundamental fact — folding in the per-file-change checkpoint
+/// Render a work log from a raw agent-output fact, selecting the decoder by the
+/// [`AgentProtocol`] that produced it. This is the versioned dispatch point: a
+/// new agent wire format is a new `AgentProtocol` variant plus a match arm here,
+/// and the exhaustive match makes the compiler demand a decoder for it. An
+/// attempt always decodes through its own recorded protocol, so adding decoders
+/// never disturbs how older attempts read back.
+///
+/// `file_changes` supplies checkpoint annotations for decoders that carry
+/// file-change events; decoders that do not (e.g. a plain transcript) ignore it.
+pub fn work_log_from_raw(
+    protocol: AgentProtocol,
+    output: &[u8],
+    file_changes: Option<&[u8]>,
+) -> Result<Vec<WorkLogBlock>> {
+    match protocol {
+        AgentProtocol::Plain => Ok(transcript_blocks(&String::from_utf8_lossy(output))),
+        AgentProtocol::CodexJsonl => work_log_from_codex_raw(output, file_changes),
+    }
+}
+
+/// Render provider-independent work-log blocks on demand from a raw Codex event
+/// stream — a fundamental fact — folding in the per-file-change checkpoint
 /// commits from the file-change journal when it is supplied. Both inputs are
 /// facts (the exact agent output and the harness's checkpoint mappings); the
 /// blocks are an interpretation produced here at read time and never persisted.
@@ -843,6 +864,30 @@ mod tests {
                 WorkLogBlock::CommandStarted { command },
                 WorkLogBlock::AgentMessage { .. },
             ] if command == "cargo test"
+        ));
+    }
+
+    #[test]
+    fn the_protocol_selects_the_decoder() {
+        // Plain output is its own transcript; the dispatcher wraps it without
+        // interpreting it as an event stream.
+        let plain = work_log_from_raw(AgentProtocol::Plain, b"just some stdout\n", None).unwrap();
+        assert!(matches!(
+            plain.as_slice(),
+            [WorkLogBlock::Transcript { .. }]
+        ));
+
+        // The same bytes routed through the Codex decoder would instead be
+        // parsed as jsonl — here a real Codex line decodes to a message.
+        let codex = work_log_from_raw(
+            AgentProtocol::CodexJsonl,
+            br#"{"type":"item.completed","item":{"id":"m1","type":"agent_message","text":"hi"}}"#,
+            None,
+        )
+        .unwrap();
+        assert!(matches!(
+            codex.as_slice(),
+            [WorkLogBlock::AgentMessage { .. }]
         ));
     }
 
