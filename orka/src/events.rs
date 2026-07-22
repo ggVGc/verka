@@ -312,14 +312,26 @@ fn closing_fence(line: &str, marker: char, width: usize) -> bool {
 /// the terminal renderer.
 pub fn read_work_log(path: &Path) -> Result<Vec<WorkLogBlock>> {
     let input = File::open(path).with_context(|| format!("opening {}", path.display()))?;
+    work_log_from_reader(BufReader::new(input), &path.display().to_string())
+}
+
+/// Render the normalized journal from an in-memory buffer rather than the local
+/// attempt directory — used when the journal is read back from a Linka
+/// attachment, so the durable record is presented, never dumped as raw jsonl.
+/// `source` names the origin for error context.
+pub fn read_work_log_bytes(data: &[u8], source: &str) -> Result<Vec<WorkLogBlock>> {
+    work_log_from_reader(data, source)
+}
+
+fn work_log_from_reader<R: BufRead>(reader: R, source: &str) -> Result<Vec<WorkLogBlock>> {
     let mut blocks = Vec::new();
-    for (index, line) in BufReader::new(input).lines().enumerate() {
-        let line = line.with_context(|| format!("reading {}", path.display()))?;
+    for (index, line) in reader.lines().enumerate() {
+        let line = line.with_context(|| format!("reading {source}"))?;
         if line.trim().is_empty() {
             continue;
         }
         let event: AgentEvent = serde_json::from_str(&line)
-            .with_context(|| format!("decoding {} line {}", path.display(), index + 1))?;
+            .with_context(|| format!("decoding {source} line {}", index + 1))?;
         blocks.extend(event_blocks(&event));
     }
     Ok(blocks)
@@ -946,6 +958,34 @@ mod tests {
             read_work_log(&normalized).unwrap().as_slice(),
             [WorkLogBlock::FilesChanged { checkpoint: Some(commit), .. }] if commit == "abc123"
         ));
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn work_log_from_bytes_matches_the_file_renderer() {
+        let directory = std::env::temp_dir().join(format!("orka-event-test-{}", ulid::Ulid::new()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let raw = directory.join("events.raw.jsonl");
+        let normalized = directory.join("events.v1.jsonl");
+        let transcript = directory.join("transcript.log");
+        std::fs::write(
+            &raw,
+            concat!(
+                "{\"type\":\"item.started\",\"item\":{\"id\":\"c1\",\"type\":\"command_execution\",\"command\":\"cargo test\"}}\n",
+                "{\"type\":\"item.completed\",\"item\":{\"id\":\"m1\",\"type\":\"agent_message\",\"text\":\"All tests pass\"}}\n"
+            ),
+        )
+        .unwrap();
+        materialize_codex_events(&raw, &normalized, &transcript).unwrap();
+
+        // Rendering the durable attachment bytes yields exactly what reading the
+        // local journal file does, so a Linka fallback presents an identical
+        // work log and never surfaces raw jsonl.
+        let data = std::fs::read(&normalized).unwrap();
+        assert_eq!(
+            read_work_log_bytes(&data, "linka orka/attempt/worklog").unwrap(),
+            read_work_log(&normalized).unwrap()
+        );
         std::fs::remove_dir_all(directory).unwrap();
     }
 }

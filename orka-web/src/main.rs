@@ -406,25 +406,63 @@ fn transcript_json(app: &App, raw_id: &str) -> Result<Value> {
     // Loading first both validates the id against durable Orka state and keeps
     // arbitrary paths out of this read-only endpoint.
     let snapshot = store.load(&id)?;
-    let path = store.transcript_path(&id);
-    let transcript = std::fs::read_to_string(&path)
-        .with_context(|| format!("attempt `{id}` has no readable transcript"))?;
+    let node = snapshot.record.input.node();
+
+    // Prefer the local attempt artifacts; fall back to the durable copy Linka
+    // holds so the work log stays inspectable even once the attempt directory
+    // is gone. Either way the jsonl journal is rendered here, never surfaced
+    // raw.
     let events = store.events_path(&id);
-    let blocks = if events.is_file() {
-        read_work_log(&events)?
+    let transcript_path = store.transcript_path(&id);
+    let (blocks, transcript) = if events.is_file() {
+        let blocks = read_work_log(&events)?;
+        let transcript = std::fs::read_to_string(&transcript_path).unwrap_or_default();
+        (blocks, transcript)
+    } else if transcript_path.is_file() {
+        let transcript = std::fs::read_to_string(&transcript_path)?;
+        (transcript_blocks(&transcript), transcript)
     } else {
-        transcript_blocks(&transcript)
+        work_log_from_linka(app, node, &id)?
     };
+
     let mut blocks = serde_json::to_value(blocks)?;
     hydrate_file_changes(&app.root.join("project"), &mut blocks);
     Ok(json!({
         "attempt": id.0,
-        "node": snapshot.record.input.node(),
+        "node": node,
         "blocks": blocks,
         // Retained for read-only API clients written before structured work
         // logs were introduced. The page consumes `blocks`.
         "transcript": transcript,
     }))
+}
+
+/// Render the work log from its durable Linka attachment when the local attempt
+/// directory no longer has it. The `worklog` attachment is the normalized
+/// journal (jsonl) for event-stream backends and a plain transcript otherwise;
+/// media type decides which renderer runs, so a caller never sees raw jsonl.
+fn work_log_from_linka(
+    app: &App,
+    node: &NodeId,
+    id: &AttemptId,
+) -> Result<(Vec<orka::events::WorkLogBlock>, String)> {
+    let key = format!("{id}/worklog");
+    let (attachment, data) = app
+        .store
+        .read_node_attachment(node.as_str(), "orka", &key)?
+        .with_context(|| {
+            format!("attempt `{id}` has no local work log and none stored in Linka")
+        })?;
+    if attachment.media_type.as_deref() == Some("application/x-ndjson") {
+        let blocks = orka::events::read_work_log_bytes(&data, &format!("linka orka/{key}"))?;
+        // The rendered transcript is derived on demand from `blocks`; the
+        // legacy plain-text field has no separate durable source here.
+        Ok((blocks, String::new()))
+    } else {
+        let transcript = String::from_utf8_lossy(&data).into_owned();
+        let blocks = transcript_blocks(&transcript);
+        Ok((blocks, transcript))
+    }
 }
 
 const MAX_WORK_LOG_FILE: u64 = 256 * 1024;
