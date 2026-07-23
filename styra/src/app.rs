@@ -109,7 +109,7 @@ impl App {
             input: String::new(),
             status: Status::Running,
             follow: true,
-            show_minor: true,
+            show_minor: false,
             show_preview: false,
             profile_name: profile_name.into(),
             session_id: session_id.into(),
