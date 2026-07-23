@@ -1,5 +1,3 @@
-- No first line in expanded selected entry
-  - Less bright bg color in content also
 - Some indication on if agent output is finished or not, for this turn.
 - Clear options for driva invocation
 - Fix claude profile
@@ -23,4 +21,5 @@
   - Maybe use original transcripts unless model in styra was changed
 - Preview window on the side which shows the content of the current log entry:
   - Syntax highlighting for code blocks
-- Wrap lines in the log
+- For file change/read/write messages in logs, store a hash of the file just after that message:
+  - That way we can say in the preview window if we're viewing the same content that was originally written or not.
