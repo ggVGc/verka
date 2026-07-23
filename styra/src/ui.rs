@@ -96,7 +96,7 @@ fn summary_line(entry: &Entry) -> Line<'static> {
             format!("{tag:<8} "),
             Style::default().fg(tag_color(tag)).add_modifier(Modifier::BOLD),
         ),
-        Span::raw(entry.event.summary()),
+        Span::styled(entry.event.summary(), Style::default().fg(Color::White)),
     ])
 }
 
@@ -106,14 +106,17 @@ fn detail_lines(event: &StyraEvent) -> Vec<Line<'static>> {
         match block {
             DetailBlock::Text(text) => {
                 for line in text.lines() {
-                    lines.push(Line::from(format!("{DETAIL_INDENT}{line}")));
+                    lines.push(Line::from(vec![Span::styled(
+                        format!("{DETAIL_INDENT}{line}"),
+                        Style::default().fg(Color::White),
+                    )]));
                 }
             }
             DetailBlock::Code { text, .. } => {
                 for line in text.lines() {
                     lines.push(Line::from(vec![Span::styled(
                         format!("{DETAIL_INDENT}{line}"),
-                        Style::default().fg(Color::Gray),
+                        Style::default().fg(Color::White),
                     )]));
                 }
             }
@@ -168,7 +171,7 @@ fn input_text(app: &App) -> Vec<Line<'static>> {
     }
     app.input
         .split('\n')
-        .map(|line| Line::from(line.to_owned()))
+        .map(|line| Line::from(Span::styled(line.to_owned(), Style::default().fg(Color::White))))
         .collect()
 }
 
