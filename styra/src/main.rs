@@ -35,7 +35,7 @@ struct Cli {
     network: bool,
     /// Open a captured journal read-only instead of launching an agent.
     #[arg(long, value_name = "SESSION")]
-    attach: Option<PathBuf>,
+    view: Option<PathBuf>,
     /// Optional first message, sent to seed the opening turn.
     #[arg(trailing_var_arg = true)]
     prompt: Vec<String>,
@@ -46,16 +46,16 @@ fn main() -> Result<()> {
     let layout = SandboxLayout::default();
     let profile = Profile::builtin(&cli.profile, &layout)?;
 
-    // Build the application and, unless attaching, a live session up front so a
+    // Build the application and, unless viewing, a live session up front so a
     // setup failure is reported plainly before the terminal is taken over.
     let mut app;
     let mut session: Option<Session> = None;
     let mut updates: Option<Receiver<SessionUpdate>> = None;
 
-    if let Some(attach) = &cli.attach {
-        let events = styra::journal::replay(attach, profile.protocol)
-            .with_context(|| format!("attaching to journal {}", attach.display()))?;
-        app = App::new(profile.name.clone(), attach.display().to_string());
+    if let Some(view) = &cli.view {
+        let events = styra::journal::replay(view, profile.protocol)
+            .with_context(|| format!("opening journal {}", view.display()))?;
+        app = App::new(profile.name.clone(), view.display().to_string());
         for event in events {
             // Skip carried-but-viewless traffic (e.g. app-server control
             // lines), matching what a live session shows; it stays available
@@ -64,8 +64,8 @@ fn main() -> Result<()> {
                 app.push_event(event);
             }
         }
-        for line in styra::journal::replay_raw(attach)
-            .with_context(|| format!("attaching to journal {}", attach.display()))?
+        for line in styra::journal::replay_raw(view)
+            .with_context(|| format!("opening journal {}", view.display()))?
         {
             app.push_raw(line);
         }
@@ -243,7 +243,7 @@ fn handle_input_key(app: &mut App, session: Option<&Session>, key: KeyEvent) {
                         app.status.label()
                     ))),
                     None => app
-                        .push_log(LogEntry::warn("not sent: attached journal has no live agent")),
+                        .push_log(LogEntry::warn("not sent: viewed journal has no live agent")),
                 }
             }
         }

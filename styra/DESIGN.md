@@ -34,7 +34,7 @@ Styra owns, in its first form:
 - capturing the raw event journal verbatim as the session's fundamental record;
 - a terminal application that lists events, expands and collapses them, and
   sends operator messages to the agent;
-- session lifecycle: start, send, stop, and reattach to the captured journal.
+- session lifecycle: start, send, stop, and view the captured journal.
 
 Styra does **not**, in its first form:
 
@@ -205,7 +205,7 @@ This is what makes the wishlist's session properties fall out cheaply:
 
 - **Stop without losing context.** Stopping ends the child process; the journal
   remains. The context *is* the journal.
-- **Reattach.** Styra can open a journal and replay it into the same list view
+- **View.** Styra can open a journal and replay it into the same list view
   without a live agent.
 - **Resume / fork / switch model (later).** A new session is seeded by feeding a
   prior journal's context to a freshly launched agent — possibly a different
@@ -259,7 +259,7 @@ shown directly — useful for understanding an `Unknown`/`Malformed` event, or
 just watching the protocol. The raw view anchors to the newest line and scrolls
 back with `j`/`k` (`g`/`G` jump to top/bottom); a new line while scrolled up
 keeps the current content in place rather than yanking to the tail. Under
-`--attach` the raw view is reconstructed from the stored journal.
+`--view` the raw view is reconstructed from the stored journal.
 
 ### The log view
 
@@ -365,12 +365,12 @@ styra [OPTIONS] [-- PROMPT]
   --profile <NAME>     Agent profile to launch (default: the built-in codex)
   --workspace <DIR>    Host directory mounted writable as the agent workspace
   --network            Permit agent networking (profiles may default this on)
-  --attach <SESSION>   Open a captured journal read-only instead of launching
+  --view <SESSION>     Open a captured journal read-only instead of launching
 ```
 
 An optional trailing `PROMPT` seeds the first turn so a session can start with
 one message already sent; without it, the application opens in input focus with
-an empty box. `--attach` opens the reattach/replay path over a stored journal.
+an empty box. `--view` opens the view/replay path over a stored journal.
 
 ## Relationship to Orka and the wishlist
 

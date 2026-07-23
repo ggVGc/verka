@@ -25,4 +25,4 @@ Each is committed on its own. Check off as completed.
   and inline expansion, the message box, and the status line.
 - [x] **8. Event loop (`main.rs`).** CLI arguments, terminal setup/teardown,
   input handling per focus, and wiring the session threads to the app and
-  renderer. `--attach` replay path.
+  renderer. `--view` replay path.

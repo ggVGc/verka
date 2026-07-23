@@ -23,7 +23,7 @@ styra [OPTIONS] [-- PROMPT]
   --profile <NAME>     Agent profile to launch (default: codex)
   --workspace <DIR>    Host directory mounted writable as the agent workspace
   --network            Permit agent networking (profiles may default this on)
-  --attach <SESSION>   Open a captured journal read-only instead of launching
+  --view <SESSION>     Open a captured journal read-only instead of launching
 ```
 
 Built-in profiles:
