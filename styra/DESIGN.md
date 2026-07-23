@@ -211,6 +211,19 @@ The application is a single full-screen view with three regions:
   session state: `running`, `waiting` (turn complete, agent idle for input),
   or `stopped`. Token usage from the latest `TurnCompleted` is shown.
 
+### The raw view
+
+The event list is one interpretation of the journal; the journal itself is the
+verbatim wire interaction. `r` toggles the top region between the event list and
+a **raw view** that shows that interaction undecoded, one wire line per row:
+outgoing operator submissions marked `»` and incoming agent lines marked `«`, in
+occurrence order. It is the same fact the decoder reads and the journal stores,
+shown directly — useful for understanding an `Unknown`/`Malformed` event, or
+just watching the protocol. The raw view anchors to the newest line and scrolls
+back with `j`/`k` (`g`/`G` jump to top/bottom); a new line while scrolled up
+keeps the current content in place rather than yanking to the tail. Under
+`--attach` the raw view is reconstructed from the stored journal.
+
 ### Two focuses, like vim modes
 
 The wishlist asks to "go in and out of the main view, like vim insert/normal
@@ -233,6 +246,7 @@ current focus is shown in the status line and by which region draws the cursor.
 | `o` / `c`       | Expand / collapse the selected entry explicitly             |
 | `zR` / `zM`     | Expand all / collapse all                                   |
 | `g` / `G`       | Jump to first / last entry (`G` re-enables tail-follow)     |
+| `r`             | Toggle the raw wire view (in the raw view, `j`/`k`/`g`/`G` scroll) |
 | `i`             | Enter input focus                                           |
 | `s`             | Stop the session (keeps the journal)                        |
 | `q`             | Quit (prompts if the session is still running)              |

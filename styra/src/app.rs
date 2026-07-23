@@ -6,7 +6,7 @@
 //! `main` feeds it input and session updates.
 
 use crate::event::{StyraEvent, TokenUsage};
-use crate::session::SessionEnd;
+use crate::session::{RawLine, SessionEnd};
 
 /// Which region receives keys, like vim's normal/insert split.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -15,6 +15,13 @@ pub enum Focus {
     List,
     /// Type into the message box.
     Input,
+}
+
+/// What the main region shows: the decoded event list or the raw wire stream.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum View {
+    Events,
+    Raw,
 }
 
 /// The session's lifecycle as the operator sees it.
@@ -59,6 +66,7 @@ pub struct App {
     pub entries: Vec<Entry>,
     pub selected: usize,
     pub focus: Focus,
+    pub view: View,
     pub input: String,
     pub status: Status,
     /// When true, the selection tracks the newest entry as events arrive.
@@ -66,6 +74,10 @@ pub struct App {
     pub profile_name: String,
     pub session_id: String,
     pub latest_usage: Option<TokenUsage>,
+    /// The verbatim wire interaction, in occurrence order.
+    pub raw: Vec<RawLine>,
+    /// Lines scrolled back from the bottom of the raw view; 0 tracks the tail.
+    pub raw_scroll_back: u16,
     /// Set when the operator asks to quit; the event loop observes it.
     pub should_quit: bool,
 }
@@ -76,14 +88,50 @@ impl App {
             entries: Vec::new(),
             selected: 0,
             focus: Focus::List,
+            view: View::Events,
             input: String::new(),
             status: Status::Running,
             follow: true,
             profile_name: profile_name.into(),
             session_id: session_id.into(),
             latest_usage: None,
+            raw: Vec::new(),
+            raw_scroll_back: 0,
             should_quit: false,
         }
+    }
+
+    /// Append a verbatim wire line. When the operator has scrolled up, the
+    /// view is kept pinned to the same content; otherwise it tracks the tail.
+    pub fn push_raw(&mut self, line: RawLine) {
+        self.raw.push(line);
+        if self.raw_scroll_back > 0 {
+            self.raw_scroll_back = self.raw_scroll_back.saturating_add(1);
+        }
+    }
+
+    pub fn toggle_view(&mut self) {
+        self.view = match self.view {
+            View::Events => View::Raw,
+            View::Raw => View::Events,
+        };
+    }
+
+    pub fn raw_scroll_up(&mut self) {
+        let max = self.raw.len().saturating_sub(1) as u16;
+        self.raw_scroll_back = self.raw_scroll_back.saturating_add(1).min(max);
+    }
+
+    pub fn raw_scroll_down(&mut self) {
+        self.raw_scroll_back = self.raw_scroll_back.saturating_sub(1);
+    }
+
+    pub fn raw_to_top(&mut self) {
+        self.raw_scroll_back = self.raw.len().saturating_sub(1) as u16;
+    }
+
+    pub fn raw_to_bottom(&mut self) {
+        self.raw_scroll_back = 0;
     }
 
     /// True when the operator can still send messages.
@@ -323,6 +371,34 @@ mod tests {
         // A late event does not revive an ended session.
         app.push_event(StyraEvent::AgentMessage { text: "late".into() });
         assert!(matches!(app.status, Status::Ended { .. }));
+    }
+
+    #[test]
+    fn raw_view_toggles_and_scrolls_from_the_tail() {
+        use crate::session::{Direction, RawLine};
+        let mut app = app();
+        assert_eq!(app.view, View::Events);
+        app.toggle_view();
+        assert_eq!(app.view, View::Raw);
+
+        for i in 0..5 {
+            app.push_raw(RawLine {
+                direction: Direction::FromAgent,
+                text: format!("line {i}"),
+            });
+        }
+        assert_eq!(app.raw_scroll_back, 0, "starts pinned to the tail");
+
+        app.raw_scroll_up();
+        assert_eq!(app.raw_scroll_back, 1);
+        // A new line while scrolled up keeps the same content in view.
+        app.push_raw(RawLine { direction: Direction::ToAgent, text: "new".into() });
+        assert_eq!(app.raw_scroll_back, 2);
+
+        app.raw_to_bottom();
+        assert_eq!(app.raw_scroll_back, 0);
+        app.raw_to_top();
+        assert_eq!(app.raw_scroll_back, app.raw.len() as u16 - 1);
     }
 
     #[test]

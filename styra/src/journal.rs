@@ -9,6 +9,7 @@
 //! decoder, exactly as a live session decodes them.
 
 use crate::event::{decode_line, Protocol, StyraEvent};
+use crate::session::{Direction, RawLine};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
@@ -128,6 +129,37 @@ pub fn replay(path: &Path, protocol: Protocol) -> Result<Vec<StyraEvent>> {
         }
     }
     Ok(events)
+}
+
+/// Reconstruct the raw interaction from a stored journal: each agent record is
+/// its verbatim line, each operator record the message text that was sent.
+pub fn replay_raw(path: &Path) -> Result<Vec<RawLine>> {
+    let file_path = if path.is_dir() {
+        path.join(JOURNAL_FILE)
+    } else {
+        path.to_path_buf()
+    };
+    let file = File::open(&file_path)
+        .with_context(|| format!("opening journal {}", file_path.display()))?;
+    let mut raw = Vec::new();
+    for line in BufReader::new(file).lines() {
+        let line = line.context("reading journal line")?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<Record>(&line) {
+            Ok(Record::Agent { raw: text, .. }) => raw.push(RawLine {
+                direction: Direction::FromAgent,
+                text,
+            }),
+            Ok(Record::User { text, .. }) => raw.push(RawLine {
+                direction: Direction::ToAgent,
+                text,
+            }),
+            Err(_) => {}
+        }
+    }
+    Ok(raw)
 }
 
 fn now_ms() -> u64 {

@@ -4,8 +4,9 @@
 //! inline when expanded), the message box, and a one-line status/help footer.
 //! Rendering is a pure function of `App`; all state lives in [`crate::app`].
 
-use crate::app::{App, Entry, Focus};
+use crate::app::{App, Entry, Focus, View};
 use crate::event::{DetailBlock, StyraEvent};
+use crate::session::Direction as WireDirection;
 use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -28,9 +29,53 @@ pub fn render(frame: &mut Frame, app: &App) {
         ])
         .split(frame.area());
 
-    render_list(frame, app, chunks[0]);
+    match app.view {
+        View::Events => render_list(frame, app, chunks[0]),
+        View::Raw => render_raw(frame, app, chunks[0]),
+    }
     render_input(frame, app, chunks[1]);
     render_footer(frame, app, chunks[2]);
+}
+
+fn render_raw(frame: &mut Frame, app: &App, area: Rect) {
+    let border_style = if app.focus == Focus::List {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(border_style)
+        .title(format!(" styra · {} · {} · raw ", app.profile_name, app.status.label()));
+
+    if app.raw.is_empty() {
+        let empty = Paragraph::new(Line::from(Span::styled(
+            "  no wire traffic yet",
+            Style::default().fg(Color::DarkGray),
+        )))
+        .block(block);
+        frame.render_widget(empty, area);
+        return;
+    }
+
+    let lines: Vec<Line<'static>> = app.raw.iter().map(raw_line).collect();
+    // Anchor to the bottom, offset upward by how far the operator scrolled.
+    let viewport = area.height.saturating_sub(2) as usize;
+    let max_start = lines.len().saturating_sub(viewport);
+    let start = max_start.saturating_sub(app.raw_scroll_back as usize) as u16;
+    let paragraph = Paragraph::new(lines).block(block).scroll((start, 0));
+    frame.render_widget(paragraph, area);
+}
+
+fn raw_line(line: &crate::session::RawLine) -> Line<'static> {
+    let (marker, color) = match line.direction {
+        WireDirection::ToAgent => ("» ", Color::Cyan),
+        WireDirection::FromAgent => ("« ", Color::Green),
+    };
+    Line::from(vec![
+        Span::styled(marker, Style::default().fg(color)),
+        Span::styled(line.text.clone(), Style::default().fg(Color::White)),
+    ])
 }
 
 fn render_list(frame: &mut Frame, app: &App, area: Rect) {
@@ -176,9 +221,10 @@ fn input_text(app: &App) -> Vec<Line<'static>> {
 }
 
 fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
-    let hints = match app.focus {
-        Focus::List => "j/k move · space fold · i message · s stop · q quit",
-        Focus::Input => "Enter send · Alt+Enter newline · Esc back to list",
+    let hints = match (app.focus, app.view) {
+        (Focus::Input, _) => "Enter send · Alt+Enter newline · Esc back to list",
+        (Focus::List, View::Events) => "j/k move · space fold · r raw · i message · s stop · q quit",
+        (Focus::List, View::Raw) => "j/k scroll · g/G top/bottom · r events · i message · q quit",
     };
     let footer = Paragraph::new(Line::from(Span::styled(
         format!(" {hints}"),
@@ -280,5 +326,25 @@ mod tests {
         assert!(rendered(&app).contains("i message"));
         app.enter_input();
         assert!(rendered(&app).contains("Enter send"));
+    }
+
+    #[test]
+    fn raw_view_shows_wire_lines_with_direction_markers() {
+        use crate::session::{Direction, RawLine};
+        let mut app = App::new("codex", "s1");
+        app.push_raw(RawLine {
+            direction: Direction::ToAgent,
+            text: r#"{"op":"user_input"}"#.into(),
+        });
+        app.push_raw(RawLine {
+            direction: Direction::FromAgent,
+            text: r#"{"type":"turn.started"}"#.into(),
+        });
+        app.toggle_view();
+        let screen = rendered(&app);
+        assert!(screen.contains("raw"));
+        assert!(screen.contains('»'));
+        assert!(screen.contains('«'));
+        assert!(screen.contains("turn.started"));
     }
 }

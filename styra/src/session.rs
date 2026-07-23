@@ -40,8 +40,26 @@ pub struct SessionSpec {
 pub enum SessionUpdate {
     /// A decoded agent event or an operator message, in occurrence order.
     Event(StyraEvent),
+    /// One verbatim wire line, for the raw-interaction view.
+    Raw(RawLine),
     /// The agent process ended; no further events will arrive.
     Ended(SessionEnd),
+}
+
+/// Which way a wire line travelled.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Direction {
+    /// A line Styra wrote to the agent's stdin.
+    ToAgent,
+    /// A line received on the agent's stdout.
+    FromAgent,
+}
+
+/// One verbatim line of the agent interaction, undecoded.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RawLine {
+    pub direction: Direction,
+    pub text: String,
 }
 
 /// How a session finished.
@@ -112,6 +130,13 @@ impl Session {
                             if let Ok(mut journal) = reader_journal.lock() {
                                 let _ = journal.record_agent_line(raw);
                             }
+                            let raw_line = RawLine {
+                                direction: Direction::FromAgent,
+                                text: raw.to_owned(),
+                            };
+                            if reader_updates.send(SessionUpdate::Raw(raw_line)).is_err() {
+                                break;
+                            }
                             let event = decode_line(protocol, raw);
                             if reader_updates.send(SessionUpdate::Event(event)).is_err() {
                                 break;
@@ -169,6 +194,13 @@ impl Session {
         }));
 
         let bytes = self.profile.encode_message(text);
+        // Surface the exact bytes going onto the wire in the raw view.
+        let _ = self.updates.send(SessionUpdate::Raw(RawLine {
+            direction: Direction::ToAgent,
+            text: String::from_utf8_lossy(&bytes)
+                .trim_end_matches(['\r', '\n'])
+                .to_owned(),
+        }));
         let mut guard = self.stdin.lock().expect("session stdin lock poisoned");
         let writer = guard
             .as_mut()
@@ -323,15 +355,19 @@ mod tests {
 
         let mut user = None;
         let mut agent = None;
+        let mut raw_directions = Vec::new();
         let mut ended = false;
         // `Ended` (worker thread) and the echo event (reader thread) race, so
         // drain until all are seen rather than stopping on `Ended`.
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while std::time::Instant::now() < deadline && !(user.is_some() && agent.is_some() && ended) {
+        while std::time::Instant::now() < deadline
+            && !(user.is_some() && agent.is_some() && ended && raw_directions.len() >= 2)
+        {
             match updates.recv_timeout(Duration::from_millis(200)) {
                 Ok(SessionUpdate::Event(StyraEvent::UserMessage { text })) => user = Some(text),
                 Ok(SessionUpdate::Event(StyraEvent::AgentMessage { text })) => agent = Some(text),
                 Ok(SessionUpdate::Event(_)) => {}
+                Ok(SessionUpdate::Raw(line)) => raw_directions.push(line.direction),
                 Ok(SessionUpdate::Ended(_)) => ended = true,
                 Err(_) => {}
             }
@@ -340,6 +376,9 @@ mod tests {
         assert_eq!(user.as_deref(), Some("hello agent"));
         assert_eq!(agent.as_deref(), Some("echo: hello agent"));
         assert!(ended, "the session should report that it ended");
+        // The raw view sees both the outgoing submission and the agent reply.
+        assert!(raw_directions.contains(&Direction::ToAgent));
+        assert!(raw_directions.contains(&Direction::FromAgent));
 
         drop(session);
 

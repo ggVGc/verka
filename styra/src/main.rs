@@ -15,7 +15,7 @@ use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
 use styra::agent::{MountSpec, Profile, SandboxLayout};
-use styra::app::{App, Focus};
+use styra::app::{App, Focus, View};
 use styra::journal::Journal;
 use styra::session::{Session, SessionSpec, SessionUpdate};
 use styra::ui;
@@ -58,6 +58,11 @@ fn main() -> Result<()> {
         app = App::new(profile.name.clone(), attach.display().to_string());
         for event in events {
             app.push_event(event);
+        }
+        for line in styra::journal::replay_raw(attach)
+            .with_context(|| format!("attaching to journal {}", attach.display()))?
+        {
+            app.push_raw(line);
         }
         // A replayed session has no live agent to end; mark it stopped.
         app.on_ended(styra::session::SessionEnd { exit_code: None, error: None });
@@ -124,6 +129,7 @@ fn run(
             while let Ok(update) = updates.try_recv() {
                 match update {
                     SessionUpdate::Event(event) => app.push_event(event),
+                    SessionUpdate::Raw(line) => app.push_raw(line),
                     SessionUpdate::Ended(end) => app.on_ended(end),
                 }
             }
@@ -162,24 +168,39 @@ fn handle_list_key(app: &mut App, session: Option<&Session>, key: KeyEvent, pend
         }
         return;
     }
+    // Keys common to both views.
     match key.code {
-        KeyCode::Char('q') => app.request_quit(),
-        KeyCode::Char('j') | KeyCode::Down => app.select_next(),
-        KeyCode::Char('k') | KeyCode::Up => app.select_prev(),
-        KeyCode::Char(' ') | KeyCode::Enter => app.toggle_expand(),
-        KeyCode::Char('o') => app.expand_selected(),
-        KeyCode::Char('c') => app.collapse_selected(),
-        KeyCode::Char('g') => app.select_first(),
-        KeyCode::Char('G') => app.select_last(),
-        KeyCode::Char('z') => *pending_fold = true,
-        KeyCode::Char('i') => app.enter_input(),
-        KeyCode::Tab => app.toggle_focus(),
+        KeyCode::Char('q') => return app.request_quit(),
+        KeyCode::Char('i') => return app.enter_input(),
+        KeyCode::Tab => return app.toggle_focus(),
+        KeyCode::Char('r') => return app.toggle_view(),
         KeyCode::Char('s') => {
             if let Some(session) = session {
                 session.stop();
             }
+            return;
         }
         _ => {}
+    }
+    match app.view {
+        View::Events => match key.code {
+            KeyCode::Char('j') | KeyCode::Down => app.select_next(),
+            KeyCode::Char('k') | KeyCode::Up => app.select_prev(),
+            KeyCode::Char(' ') | KeyCode::Enter => app.toggle_expand(),
+            KeyCode::Char('o') => app.expand_selected(),
+            KeyCode::Char('c') => app.collapse_selected(),
+            KeyCode::Char('g') => app.select_first(),
+            KeyCode::Char('G') => app.select_last(),
+            KeyCode::Char('z') => *pending_fold = true,
+            _ => {}
+        },
+        View::Raw => match key.code {
+            KeyCode::Char('j') | KeyCode::Down => app.raw_scroll_down(),
+            KeyCode::Char('k') | KeyCode::Up => app.raw_scroll_up(),
+            KeyCode::Char('g') => app.raw_to_top(),
+            KeyCode::Char('G') => app.raw_to_bottom(),
+            _ => {}
+        },
     }
 }
 
