@@ -97,6 +97,9 @@ pub struct App {
     pub log_scroll_back: u16,
     /// Set when the operator asks to quit; the event loop observes it.
     pub should_quit: bool,
+    /// Set when the operator asks to switch to a different stored session;
+    /// the event loop observes it and opens the session picker.
+    pub switch_requested: bool,
 }
 
 impl App {
@@ -120,6 +123,7 @@ impl App {
             log: Vec::new(),
             log_scroll_back: 0,
             should_quit: false,
+            switch_requested: false,
         }
     }
 
@@ -393,6 +397,13 @@ impl App {
     pub fn request_quit(&mut self) {
         self.should_quit = true;
     }
+
+    /// Ask the event loop to open the session picker and, if the operator
+    /// picks one, switch to it: stop this session, launch a fresh one seeded
+    /// with the picked session's rendered transcript.
+    pub fn request_switch(&mut self) {
+        self.switch_requested = true;
+    }
 }
 
 #[cfg(test)]
@@ -474,6 +485,14 @@ mod tests {
         // A late event does not revive an ended session.
         app.push_event(AgentEvent::AgentMessage { text: "late".into() });
         assert!(matches!(app.status, Status::Ended { .. }));
+    }
+
+    #[test]
+    fn request_switch_sets_a_flag_for_the_event_loop_to_observe() {
+        let mut app = app();
+        assert!(!app.switch_requested);
+        app.request_switch();
+        assert!(app.switch_requested);
     }
 
     #[test]
