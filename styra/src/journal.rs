@@ -119,6 +119,86 @@ fn write_session_meta(directory: &Path, meta: &SessionMeta) -> Result<()> {
     std::fs::write(&path, json).with_context(|| format!("writing {}", path.display()))
 }
 
+/// A stored session, enough to display and select it from a list — see
+/// [`list_sessions`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionSummary {
+    /// The session's directory name, and the id `--view` expects.
+    pub id: String,
+    /// Its directory, ready to pass straight to `--view`.
+    pub path: PathBuf,
+    /// The agent that produced it, if recorded (see [`read_session_meta`]);
+    /// `None` for a session that predates provenance tracking.
+    pub profile: Option<String>,
+    /// Roughly how long ago it was created, e.g. "3h ago".
+    pub age: String,
+    /// The millisecond timestamp embedded in `id`, used to sort newest
+    /// first; `None` for an id that doesn't match the expected shape.
+    pub created_at_ms: Option<u64>,
+}
+
+/// List every session stored under `store_root`, newest first. An absent
+/// sessions directory (nothing has ever been recorded) is an empty list, not
+/// an error.
+pub fn list_sessions(store_root: &Path) -> Result<Vec<SessionSummary>> {
+    let dir = sessions_dir(store_root);
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+    let now = now_ms();
+    let mut sessions = Vec::new();
+    for entry in std::fs::read_dir(&dir).with_context(|| format!("reading {}", dir.display()))? {
+        let entry = entry.with_context(|| format!("reading an entry in {}", dir.display()))?;
+        if !entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let path = entry.path();
+        let id = entry.file_name().to_string_lossy().into_owned();
+        let profile = read_session_meta(&path)?.map(|meta| meta.profile);
+        let created_at_ms = session_created_at_ms(&id);
+        sessions.push(SessionSummary {
+            id,
+            path,
+            profile,
+            age: humanize_age(now, created_at_ms),
+            created_at_ms,
+        });
+    }
+    sort_newest_first(&mut sessions);
+    Ok(sessions)
+}
+
+fn sort_newest_first(sessions: &mut [SessionSummary]) {
+    sessions.sort_by(|a, b| b.created_at_ms.cmp(&a.created_at_ms));
+}
+
+/// Parse the millisecond timestamp [`new_session_id`] embeds as the leading
+/// field of a session id, for display and sorting. An id that doesn't match
+/// that shape (hand-crafted, or from some future format) parses to `None`
+/// rather than failing the whole listing.
+fn session_created_at_ms(id: &str) -> Option<u64> {
+    id.split('-').next()?.parse().ok()
+}
+
+/// A coarse, human-readable age bucket. `now_ms` and `created_at_ms` are both
+/// milliseconds since the epoch; passing them in rather than reading the
+/// clock keeps this pure and testable.
+fn humanize_age(now_ms: u64, created_at_ms: Option<u64>) -> String {
+    let Some(created_at_ms) = created_at_ms else {
+        return "unknown".into();
+    };
+    let elapsed_secs = now_ms.saturating_sub(created_at_ms) / 1000;
+    if elapsed_secs < 60 {
+        "just now".into()
+    } else if elapsed_secs < 3_600 {
+        format!("{}m ago", elapsed_secs / 60)
+    } else if elapsed_secs < 86_400 {
+        format!("{}h ago", elapsed_secs / 3_600)
+    } else {
+        format!("{}d ago", elapsed_secs / 86_400)
+    }
+}
+
 /// Read back which agent produced a stored session, if recorded. A journal
 /// directory or its file may be passed. Sessions created before this sidecar
 /// existed have none, so `Ok(None)` — not an error — means "unknown".
@@ -329,5 +409,78 @@ mod tests {
         assert!(matches!(events.as_slice(), [AgentEvent::Malformed { .. }]));
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn list_sessions_is_empty_when_the_store_has_no_sessions_yet() {
+        let root = temp_dir("list-empty");
+        assert_eq!(list_sessions(&root).unwrap(), Vec::new());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn list_sessions_finds_created_sessions_with_their_profile() {
+        let root = temp_dir("list");
+        let codex = test_profile("codex", Protocol::CodexJsonl);
+        let claude = test_profile("claude:opus", Protocol::ClaudeJsonl);
+        let (_journal_a, id_a) = Journal::create_in_store(&root, &codex).unwrap();
+        let (_journal_b, id_b) = Journal::create_in_store(&root, &claude).unwrap();
+
+        let sessions = list_sessions(&root).unwrap();
+        assert_eq!(sessions.len(), 2);
+        let by_id = |id: &str| sessions.iter().find(|s| s.id == id).unwrap();
+        assert_eq!(by_id(&id_a).profile.as_deref(), Some("codex"));
+        assert_eq!(by_id(&id_b).profile.as_deref(), Some("claude:opus"));
+        assert!(sessions.iter().all(|s| s.created_at_ms.is_some()));
+        assert!(sessions.iter().all(|s| s.path.is_dir()));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn list_sessions_reports_an_unknown_profile_for_sessions_without_metadata() {
+        // Sessions created before the session.json sidecar existed have none;
+        // they should still be listed, just without a profile.
+        let root = temp_dir("list-no-meta");
+        Journal::create(&sessions_dir(&root).join("legacy-session")).unwrap();
+
+        let sessions = list_sessions(&root).unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].id, "legacy-session");
+        assert_eq!(sessions[0].profile, None);
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn sessions_sort_newest_first_with_unknown_age_last() {
+        let summary = |created_at_ms: Option<u64>| SessionSummary {
+            id: format!("{created_at_ms:?}"),
+            path: PathBuf::new(),
+            profile: None,
+            age: String::new(),
+            created_at_ms,
+        };
+        let mut sessions =
+            vec![summary(Some(100)), summary(None), summary(Some(300)), summary(Some(200))];
+        sort_newest_first(&mut sessions);
+        let order: Vec<Option<u64>> = sessions.iter().map(|s| s.created_at_ms).collect();
+        assert_eq!(order, vec![Some(300), Some(200), Some(100), None]);
+    }
+
+    #[test]
+    fn session_created_at_ms_parses_the_leading_timestamp_field() {
+        assert_eq!(session_created_at_ms("0000000123456-42-7"), Some(123456));
+        assert_eq!(session_created_at_ms("not-an-id"), None);
+        assert_eq!(session_created_at_ms(""), None);
+    }
+
+    #[test]
+    fn humanize_age_buckets_elapsed_time() {
+        assert_eq!(humanize_age(1_000, None), "unknown");
+        assert_eq!(humanize_age(10_000, Some(9_500)), "just now");
+        assert_eq!(humanize_age(200_000, Some(0)), "3m ago");
+        assert_eq!(humanize_age(3_600_000 * 2, Some(0)), "2h ago");
+        assert_eq!(humanize_age(86_400_000 * 5, Some(0)), "5d ago");
     }
 }
