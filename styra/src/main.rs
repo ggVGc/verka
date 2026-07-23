@@ -34,13 +34,11 @@ struct Cli {
     /// Permit agent networking (profiles may default this on).
     #[arg(long)]
     network: bool,
-    /// Open a captured journal read-only instead of launching an agent.
-    #[arg(long, value_name = "SESSION")]
-    view: Option<PathBuf>,
-    /// Browse sessions stored under .styra and pick one to open read-only,
-    /// instead of launching a new agent.
-    #[arg(long, conflicts_with = "view")]
-    pick: bool,
+    /// Open a captured journal read-only instead of launching an agent: with
+    /// a path, that session directly; bare (no path), a picker to browse and
+    /// choose one from those stored under .styra.
+    #[arg(long, num_args = 0..=1, value_name = "SESSION")]
+    view: Option<Option<PathBuf>>,
     /// Optional first message, sent to seed the opening turn.
     #[arg(trailing_var_arg = true)]
     prompt: Vec<String>,
@@ -50,38 +48,41 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let layout = SandboxLayout::default();
 
-    // `--pick` needs an interactive terminal to browse sessions in, so it is
-    // opened early only in that case; the other paths below still report
-    // setup failures before taking over the terminal, and the terminal the
-    // picker opened is reused below rather than torn down and reopened.
+    // Bare `--view` (no path) needs an interactive terminal to browse
+    // sessions in, so it is opened early only in that case; the other paths
+    // below still report setup failures before taking over the terminal,
+    // and the terminal the picker opened is reused below rather than torn
+    // down and reopened.
     let mut terminal: Option<Terminal<CrosstermBackend<Stdout>>> = None;
-    let view_target: Option<PathBuf> = if cli.pick {
-        let store_root = std::env::current_dir()?.join(".styra");
-        let sessions = styra::journal::list_sessions(&store_root)?;
-        if sessions.is_empty() {
-            println!(
-                "No sessions found under {}",
-                styra::journal::sessions_dir(&store_root).display()
-            );
-            return Ok(());
-        }
-        let mut term = setup_terminal()?;
-        match run_picker(&mut term, &sessions) {
-            Ok(Some(path)) => {
-                terminal = Some(term);
-                Some(path)
-            }
-            Ok(None) => {
-                restore_terminal(&mut term)?;
+    let view_target: Option<PathBuf> = match &cli.view {
+        Some(Some(path)) => Some(path.clone()),
+        Some(None) => {
+            let store_root = std::env::current_dir()?.join(".styra");
+            let sessions = styra::journal::list_sessions(&store_root)?;
+            if sessions.is_empty() {
+                println!(
+                    "No sessions found under {}",
+                    styra::journal::sessions_dir(&store_root).display()
+                );
                 return Ok(());
             }
-            Err(error) => {
-                restore_terminal(&mut term)?;
-                return Err(error);
+            let mut term = setup_terminal()?;
+            match run_picker(&mut term, &sessions) {
+                Ok(Some(path)) => {
+                    terminal = Some(term);
+                    Some(path)
+                }
+                Ok(None) => {
+                    restore_terminal(&mut term)?;
+                    return Ok(());
+                }
+                Err(error) => {
+                    restore_terminal(&mut term)?;
+                    return Err(error);
+                }
             }
         }
-    } else {
-        cli.view.clone()
+        None => None,
     };
 
     // Build the application and, unless viewing, a live session up front so a
