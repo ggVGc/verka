@@ -359,6 +359,7 @@ fn handle_list_key(app: &mut App, session: Option<&Session>, key: KeyEvent, pend
         KeyCode::Tab => return app.toggle_focus(),
         KeyCode::Char('r') => return app.toggle_raw(),
         KeyCode::Char('l') => return app.toggle_log(),
+        KeyCode::Char('t') => return app.toggle_transcript(),
         KeyCode::Char('s') => {
             if let Some(session) = session {
                 session.stop();
@@ -396,6 +397,13 @@ fn handle_list_key(app: &mut App, session: Option<&Session>, key: KeyEvent, pend
             KeyCode::Char('k') | KeyCode::Up => app.log_scroll_up(),
             KeyCode::Char('g') => app.log_to_top(),
             KeyCode::Char('G') => app.log_to_bottom(),
+            _ => {}
+        },
+        View::Transcript => match key.code {
+            KeyCode::Char('j') | KeyCode::Down => app.transcript_scroll_down(),
+            KeyCode::Char('k') | KeyCode::Up => app.transcript_scroll_up(),
+            KeyCode::Char('g') => app.transcript_to_top(),
+            KeyCode::Char('G') => app.transcript_to_bottom(),
             _ => {}
         },
     }

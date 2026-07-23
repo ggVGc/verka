@@ -18,13 +18,14 @@ pub enum Focus {
     Input,
 }
 
-/// What the main region shows: the decoded event list, the raw wire stream, or
-/// the diagnostic log.
+/// What the main region shows: the decoded event list, the raw wire stream,
+/// the diagnostic log, or the rendered transcript.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum View {
     Events,
     Raw,
     Log,
+    Transcript,
 }
 
 /// The session's lifecycle as the operator sees it.
@@ -95,6 +96,10 @@ pub struct App {
     pub log: Vec<LogEntry>,
     /// Lines scrolled back from the bottom of the log view; 0 tracks the tail.
     pub log_scroll_back: u16,
+    /// Lines scrolled down from the top of the rendered transcript view; 0
+    /// shows its start. Unlike the raw/log views, the transcript reads as a
+    /// document from the beginning rather than anchoring to the tail.
+    pub transcript_scroll: u16,
     /// Set when the operator asks to quit; the event loop observes it.
     pub should_quit: bool,
     /// Set when the operator asks to switch to a different stored session;
@@ -122,6 +127,7 @@ impl App {
             raw_scroll_back: 0,
             log: Vec::new(),
             log_scroll_back: 0,
+            transcript_scroll: 0,
             should_quit: false,
             switch_requested: false,
         }
@@ -180,6 +186,15 @@ impl App {
         };
     }
 
+    /// Toggle the rendered transcript view on, or back to the event list.
+    pub fn toggle_transcript(&mut self) {
+        self.view = if self.view == View::Transcript {
+            View::Events
+        } else {
+            View::Transcript
+        };
+    }
+
     pub fn raw_scroll_up(&mut self) {
         let max = self.raw.len().saturating_sub(1) as u16;
         self.raw_scroll_back = self.raw_scroll_back.saturating_add(1).min(max);
@@ -195,6 +210,26 @@ impl App {
 
     pub fn raw_to_bottom(&mut self) {
         self.raw_scroll_back = 0;
+    }
+
+    /// Scroll the transcript view forward (towards its end).
+    pub fn transcript_scroll_down(&mut self) {
+        self.transcript_scroll = self.transcript_scroll.saturating_add(1);
+    }
+
+    /// Scroll the transcript view backward (towards its start).
+    pub fn transcript_scroll_up(&mut self) {
+        self.transcript_scroll = self.transcript_scroll.saturating_sub(1);
+    }
+
+    pub fn transcript_to_top(&mut self) {
+        self.transcript_scroll = 0;
+    }
+
+    /// Jump past the transcript's true end; rendering clamps this back to
+    /// the last page, so the exact rendered line count need not be known here.
+    pub fn transcript_to_bottom(&mut self) {
+        self.transcript_scroll = u16::MAX;
     }
 
     /// True when the operator can still send messages.
@@ -545,6 +580,33 @@ mod tests {
         assert_eq!(app.log_scroll_back, 2, "scrolled-up view stays put");
         app.log_to_bottom();
         assert_eq!(app.log_scroll_back, 0);
+    }
+
+    #[test]
+    fn transcript_view_toggles_independently_and_scrolls_from_the_top() {
+        let mut app = app();
+        app.toggle_raw();
+        assert_eq!(app.view, View::Raw);
+        // Toggling the transcript from the raw view switches to it, not back
+        // to events.
+        app.toggle_transcript();
+        assert_eq!(app.view, View::Transcript);
+        app.toggle_transcript();
+        assert_eq!(app.view, View::Events);
+
+        app.toggle_transcript();
+        assert_eq!(app.transcript_scroll, 0, "starts at the beginning, not the tail");
+
+        app.transcript_scroll_down();
+        app.transcript_scroll_down();
+        assert_eq!(app.transcript_scroll, 2);
+        app.transcript_scroll_up();
+        assert_eq!(app.transcript_scroll, 1);
+
+        app.transcript_to_bottom();
+        assert_eq!(app.transcript_scroll, u16::MAX);
+        app.transcript_to_top();
+        assert_eq!(app.transcript_scroll, 0);
     }
 
     #[test]

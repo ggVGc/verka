@@ -332,6 +332,19 @@ it here (rather than only persisting it to `diagnostics.log`) is what makes a
 session that produces no events diagnosable from inside the interface. The log
 view shares the raw view's bottom-anchored scrolling.
 
+### The transcript view
+
+`t` toggles a **transcript view**: the current session's decoded events laid
+out as plain text through genta's `render_events` — the same rendering
+`journal::render_transcript` uses to seed a switched-to session (see *Session
+switching*), just read from the live entries in memory each frame rather than
+a stored journal. It exists for operators who want to skim or copy the whole
+conversation as prose instead of navigating the folded event list one entry
+at a time. Unlike the raw and log views, it anchors to the *start*: a
+transcript reads as a document front-to-back, not a tail-following stream, so
+there is no "stays put while scrolled up" logic to speak of — new content
+just extends past whatever is already below the viewport.
+
 ### Two focuses, like vim modes
 
 The wishlist asks to "go in and out of the main view, like vim insert/normal
@@ -356,6 +369,7 @@ current focus is shown in the status line and by which region draws the cursor.
 | `g` / `G`       | Jump to first / last entry (`G` re-enables tail-follow)     |
 | `r`             | Toggle the raw wire view (in the raw view, `j`/`k`/`g`/`G` scroll) |
 | `l`             | Toggle the diagnostic log view (same scrolling as the raw view) |
+| `t`             | Toggle the rendered transcript view (`j`/`k`/`g`/`G` scroll from the start) |
 | `i`             | Enter input focus                                           |
 | `s`             | Stop the session (keeps the journal)                        |
 | `V`             | Switch to a different stored session (see *Session switching*) |

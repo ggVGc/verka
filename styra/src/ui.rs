@@ -68,6 +68,7 @@ pub fn render(frame: &mut Frame, app: &App) {
         View::Events => render_list(frame, app, chunks[0]),
         View::Raw => render_raw(frame, app, chunks[0]),
         View::Log => render_log(frame, app, chunks[0]),
+        View::Transcript => render_transcript_view(frame, app, chunks[0]),
     }
     render_input(frame, app, chunks[1]);
     render_footer(frame, app, chunks[2]);
@@ -153,6 +154,47 @@ fn log_line(entry: &crate::session::LogEntry) -> Line<'static> {
         Span::styled(format!("{label} "), Style::default().fg(color).add_modifier(Modifier::BOLD)),
         Span::styled(entry.message.clone(), Style::default().fg(Color::White)),
     ])
+}
+
+/// A quick way to read the current session as a plain-text transcript,
+/// rendered fresh from the decoded events each frame with genta's
+/// `render_events` — the same rendering `journal::render_transcript` uses to
+/// seed a switched-to session, just over the in-memory entries instead of a
+/// stored journal. Unlike the raw/log views, it reads as a document from the
+/// start rather than anchoring to the tail.
+fn render_transcript_view(frame: &mut Frame, app: &App, area: Rect) {
+    let border_style = if app.focus == Focus::List {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(border_style)
+        .title(title_line(&app.profile_name, &app.status, Some("transcript")));
+
+    if app.entries.is_empty() {
+        let empty = Paragraph::new(Line::from(Span::styled(
+            "  nothing to render yet",
+            Style::default().fg(Color::Gray),
+        )))
+        .block(block);
+        frame.render_widget(empty, area);
+        return;
+    }
+
+    let events: Vec<AgentEvent> = app.entries.iter().map(|entry| entry.event.clone()).collect();
+    let text = crate::render::render_events(&events, false);
+    let lines: Vec<Line<'static>> = text
+        .lines()
+        .map(|line| Line::from(Span::styled(line.to_owned(), Style::default().fg(Color::White))))
+        .collect();
+
+    let viewport = area.height.saturating_sub(2) as usize;
+    let max_start = lines.len().saturating_sub(viewport) as u16;
+    let start = app.transcript_scroll.min(max_start);
+    let paragraph = Paragraph::new(lines).block(block).scroll((start, 0));
+    frame.render_widget(paragraph, area);
 }
 
 fn render_raw(frame: &mut Frame, app: &App, area: Rect) {
@@ -566,13 +608,16 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     let hints = match (app.focus, app.view) {
         (Focus::Input, _) => "Enter send · Alt+Enter newline · Esc back to list",
         (Focus::List, View::Events) => {
-            "j/k move · space fold · C collapse all · m minor · p preview · r raw · l log · i message · s stop · V switch · q quit"
+            "j/k move · space fold · C collapse all · m minor · p preview · t transcript · r raw · l log · i message · s stop · V switch · q quit"
         }
         (Focus::List, View::Raw) => {
-            "j/k scroll · g/G top/bottom · r events · l log · i message · s stop · V switch · q quit"
+            "j/k scroll · g/G top/bottom · r events · l log · t transcript · i message · s stop · V switch · q quit"
         }
         (Focus::List, View::Log) => {
-            "j/k scroll · g/G top/bottom · l events · r raw · i message · s stop · V switch · q quit"
+            "j/k scroll · g/G top/bottom · l events · r raw · t transcript · i message · s stop · V switch · q quit"
+        }
+        (Focus::List, View::Transcript) => {
+            "j/k scroll · g/G top/bottom · t events · r raw · l log · i message · s stop · V switch · q quit"
         }
     };
     let footer = Paragraph::new(Line::from(Span::styled(
@@ -936,6 +981,25 @@ mod tests {
         assert!(screen.contains("info"));
         assert!(screen.contains("error"));
         assert!(screen.contains("bwrap missing"));
+    }
+
+    #[test]
+    fn transcript_view_renders_the_current_session() {
+        let mut app = App::new("codex", "s1");
+        app.push_event(AgentEvent::UserMessage { text: "implement retry backoff".into() });
+        app.push_event(AgentEvent::AgentMessage { text: "Added backoff, tests pass.".into() });
+        app.toggle_transcript();
+        let screen = rendered(&app);
+        assert!(screen.contains("transcript"));
+        assert!(screen.contains("implement retry backoff"));
+        assert!(screen.contains("Added backoff"));
+    }
+
+    #[test]
+    fn transcript_view_shows_a_placeholder_before_anything_happens() {
+        let mut app = App::new("codex", "s1");
+        app.toggle_transcript();
+        assert!(rendered(&app).contains("nothing to render yet"));
     }
 
     fn picker_summary(id: &str, profile: Option<&str>, age: &str) -> SessionSummary {
