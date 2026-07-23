@@ -16,9 +16,12 @@ use serde_json::Value;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Protocol {
-    /// The codex item/thread/turn newline-delimited JSON event schema.
+    /// The one-shot `codex exec --json` item/thread/turn event schema.
     #[default]
     CodexJsonl,
+    /// The bidirectional `codex app-server` JSON-RPC protocol (v2). Notification
+    /// lines carry the events; requests and responses are control traffic.
+    CodexAppServer,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -218,6 +221,124 @@ impl StyraEvent {
 pub fn decode_line(protocol: Protocol, line: &str) -> StyraEvent {
     match protocol {
         Protocol::CodexJsonl => decode_codex_line(line),
+        Protocol::CodexAppServer => decode_appserver_line(line),
+    }
+}
+
+/// Decode one `codex app-server` line. Notifications (which carry a `method`)
+/// map to events; requests and responses are control traffic and decode to
+/// [`StyraEvent::Unknown`] so they are carried without cluttering the list.
+fn decode_appserver_line(line: &str) -> StyraEvent {
+    let value: Value = match serde_json::from_str(line) {
+        Ok(value) => value,
+        Err(error) => {
+            return StyraEvent::Malformed {
+                error: clean_terminal_text(&format!("{error}")),
+            }
+        }
+    };
+    match string(&value, "method") {
+        Some(method) => {
+            decode_appserver_notification(method, value.get("params").unwrap_or(&Value::Null))
+        }
+        None => StyraEvent::Unknown {
+            wire_type: "response".into(),
+        },
+    }
+}
+
+fn decode_appserver_notification(method: &str, params: &Value) -> StyraEvent {
+    match method {
+        "thread/started" => StyraEvent::ThreadStarted {
+            thread_id: clean_terminal_text(
+                params
+                    .get("thread")
+                    .and_then(|thread| string(thread, "id"))
+                    .unwrap_or_default(),
+            ),
+        },
+        "turn/started" => StyraEvent::TurnStarted,
+        // The turn's usage arrives here, just before `turn/completed` (which
+        // carries none), so this is what marks a turn done and shows usage.
+        "thread/tokenUsage/updated" => StyraEvent::TurnCompleted {
+            usage: appserver_usage(params),
+        },
+        "item/started" => {
+            decode_appserver_item(params.get("item").unwrap_or(&Value::Null), false)
+        }
+        "item/completed" => {
+            decode_appserver_item(params.get("item").unwrap_or(&Value::Null), true)
+        }
+        "error" | "warning" | "guardianWarning" | "configWarning" => StyraEvent::Error {
+            message: clean_terminal_text(
+                string(params, "message").unwrap_or("agent reported an error"),
+            ),
+        },
+        other => StyraEvent::Unknown {
+            wire_type: clean_terminal_text(other),
+        },
+    }
+}
+
+fn decode_appserver_item(item: &Value, completed: bool) -> StyraEvent {
+    let kind = string(item, "type").unwrap_or("unknown");
+    let clean = |value: &str| clean_terminal_text(value);
+    match (kind, completed) {
+        ("agentMessage", true) => StyraEvent::AgentMessage {
+            text: clean(string(item, "text").unwrap_or_default()),
+        },
+        ("commandExecution", false) => StyraEvent::CommandStarted {
+            command: clean(string(item, "command").unwrap_or_default()),
+        },
+        ("commandExecution", true) => StyraEvent::CommandCompleted {
+            command: clean(string(item, "command").unwrap_or_default()),
+            status: clean(string(item, "status").unwrap_or("completed")),
+            exit_code: item.get("exitCode").and_then(Value::as_i64),
+            output: clean(string(item, "aggregatedOutput").unwrap_or_default()),
+        },
+        ("fileChange", true) => StyraEvent::FileChanged {
+            paths: item
+                .get("changes")
+                .and_then(Value::as_array)
+                .map(|changes| {
+                    changes
+                        .iter()
+                        .filter_map(|change| string(change, "path"))
+                        .map(clean)
+                        .collect()
+                })
+                .unwrap_or_default(),
+        },
+        ("plan", true) => StyraEvent::PlanUpdated {
+            text: clean(string(item, "text").unwrap_or_default()),
+        },
+        ("mcpToolCall", false) | ("webSearch", false) => StyraEvent::ToolStarted {
+            name: clean(tool_name(item, kind)),
+            detail: clean(tool_detail(item)),
+        },
+        ("mcpToolCall", true) | ("webSearch", true) => StyraEvent::ToolCompleted {
+            name: clean(tool_name(item, kind)),
+            status: clean(string(item, "status").unwrap_or("completed")),
+        },
+        // userMessage (echoed back — Styra shows its own), reasoning, deltas,
+        // and item lifecycles with no view carry without rendering.
+        _ => StyraEvent::Unknown {
+            wire_type: format!("item:{kind}"),
+        },
+    }
+}
+
+fn appserver_usage(params: &Value) -> TokenUsage {
+    let total = params
+        .get("tokenUsage")
+        .and_then(|usage| usage.get("total"))
+        .unwrap_or(&Value::Null);
+    let field = |key: &str| total.get(key).and_then(Value::as_u64).unwrap_or(0);
+    TokenUsage {
+        input_tokens: field("inputTokens"),
+        cached_input_tokens: field("cachedInputTokens"),
+        output_tokens: field("outputTokens"),
+        reasoning_output_tokens: field("reasoningOutputTokens"),
     }
 }
 
@@ -617,5 +738,84 @@ mod tests {
         let summary = event.summary();
         assert!(summary.chars().count() <= 200);
         assert!(summary.ends_with('…'));
+    }
+
+    // The following lines are copied verbatim from a live `codex app-server`
+    // session (codex-cli 0.145) captured during development.
+
+    #[test]
+    fn appserver_notifications_decode_from_real_output() {
+        let d = |line| decode_line(Protocol::CodexAppServer, line);
+        assert_eq!(
+            d(r#"{"method":"thread/started","params":{"thread":{"id":"019f8f61-b7df-7291-81fc-04ff0bfb786f"}}}"#),
+            StyraEvent::ThreadStarted { thread_id: "019f8f61-b7df-7291-81fc-04ff0bfb786f".into() }
+        );
+        assert_eq!(d(r#"{"method":"turn/started","params":{"threadId":"t"}}"#), StyraEvent::TurnStarted);
+        assert_eq!(
+            d(r#"{"method":"item/completed","params":{"item":{"type":"agentMessage","id":"msg_1","text":"hello","phase":"final_answer"}}}"#),
+            StyraEvent::AgentMessage { text: "hello".into() }
+        );
+    }
+
+    #[test]
+    fn appserver_command_execution_decodes_both_ends() {
+        let started = decode_line(
+            Protocol::CodexAppServer,
+            r#"{"method":"item/started","params":{"item":{"type":"commandExecution","id":"i0","command":"/usr/bin/bash -lc 'echo hi'","status":"in_progress","exitCode":null}}}"#,
+        );
+        assert_eq!(
+            started,
+            StyraEvent::CommandStarted { command: "/usr/bin/bash -lc 'echo hi'".into() }
+        );
+        let completed = decode_line(
+            Protocol::CodexAppServer,
+            r#"{"method":"item/completed","params":{"item":{"type":"commandExecution","id":"i0","command":"/usr/bin/bash -lc 'echo hi'","aggregatedOutput":"hi\n","exitCode":0,"status":"completed"}}}"#,
+        );
+        assert_eq!(
+            completed,
+            StyraEvent::CommandCompleted {
+                command: "/usr/bin/bash -lc 'echo hi'".into(),
+                status: "completed".into(),
+                exit_code: Some(0),
+                output: "hi\n".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn appserver_token_usage_maps_to_turn_completed() {
+        let event = decode_line(
+            Protocol::CodexAppServer,
+            r#"{"method":"thread/tokenUsage/updated","params":{"tokenUsage":{"total":{"totalTokens":12603,"inputTokens":12598,"cachedInputTokens":9600,"cacheWriteInputTokens":0,"outputTokens":5,"reasoningOutputTokens":0}}}}"#,
+        );
+        assert_eq!(
+            event,
+            StyraEvent::TurnCompleted {
+                usage: TokenUsage {
+                    input_tokens: 12598,
+                    cached_input_tokens: 9600,
+                    output_tokens: 5,
+                    reasoning_output_tokens: 0,
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn appserver_control_and_echoed_user_message_carry_without_rendering() {
+        // A response (no "method") is control traffic.
+        assert_eq!(
+            decode_line(Protocol::CodexAppServer, r#"{"id":2,"result":{"thread":{"id":"t"}}}"#),
+            StyraEvent::Unknown { wire_type: "response".into() }
+        );
+        // The server echoes the operator's own message; Styra shows its own, so
+        // this decodes to Unknown rather than duplicating it.
+        assert_eq!(
+            decode_line(
+                Protocol::CodexAppServer,
+                r#"{"method":"item/completed","params":{"item":{"type":"userMessage","id":"u","content":[{"type":"text","text":"hi"}]}}}"#
+            ),
+            StyraEvent::Unknown { wire_type: "item:userMessage".into() }
+        );
     }
 }

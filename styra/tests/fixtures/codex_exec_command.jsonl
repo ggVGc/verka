@@ -1,0 +1,6 @@
+{"type":"thread.started","thread_id":"019f8f5f-d00b-7232-869b-80153290b9de"}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"item_0","type":"command_execution","command":"/usr/bin/bash -lc 'echo hello-from-codex'","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_0","type":"command_execution","command":"/usr/bin/bash -lc 'echo hello-from-codex'","aggregated_output":"hello-from-codex\n","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"done"}}
+{"type":"turn.completed","usage":{"input_tokens":26011,"cached_input_tokens":22272,"cache_write_input_tokens":0,"output_tokens":42,"reasoning_output_tokens":0}}
