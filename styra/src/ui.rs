@@ -188,7 +188,7 @@ fn file_content_lines(paths: &[String], workspace_root: Option<&Path>) -> Vec<Li
     let Some(root) = workspace_root else {
         return vec![Line::from(Span::styled(
             format!("{DETAIL_INDENT}(workspace path unknown; file content unavailable)"),
-            Style::default().fg(Color::Gray).bg(DETAIL_BG),
+            Style::default().fg(Color::Gray),
         ))];
     };
 
@@ -196,24 +196,21 @@ fn file_content_lines(paths: &[String], workspace_root: Option<&Path>) -> Vec<Li
     for path in paths {
         lines.push(Line::from(Span::styled(
             format!("{DETAIL_INDENT}── {path} ──"),
-            Style::default()
-                .fg(Color::Cyan)
-                .bg(DETAIL_BG)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
         )));
         match std::fs::read_to_string(resolve_workspace_path(root, path)) {
             Ok(content) => {
                 for line in content.lines() {
                     lines.push(Line::from(Span::styled(
                         format!("{DETAIL_INDENT}{line}"),
-                        Style::default().fg(Color::White).bg(DETAIL_BG),
+                        Style::default().fg(Color::White),
                     )));
                 }
             }
             Err(error) => {
                 lines.push(Line::from(Span::styled(
                     format!("{DETAIL_INDENT}could not read file: {error}"),
-                    Style::default().fg(Color::Red).bg(DETAIL_BG),
+                    Style::default().fg(Color::Red),
                 )));
             }
         }
@@ -825,6 +822,44 @@ mod tests {
         assert!(screen.contains("notes.txt"));
         assert!(screen.contains("line one"));
         assert!(screen.contains("line two"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn preview_text_is_never_highlighted() {
+        let dir = std::env::temp_dir().join(format!(
+            "styra-preview-nohighlight-test-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("notes.txt"), "line one\nline two").unwrap();
+
+        let mut app = App::new("codex", "s1");
+        app.set_workspace_root(dir.clone());
+        // A FileChanged entry exercises both the ordinary detail body and the
+        // file-content lines, the two sources of preview text.
+        app.push_event(AgentEvent::FileChanged {
+            id: "f1".into(),
+            paths: vec!["notes.txt".into()],
+            checkpoint: None,
+            checkpoint_error: None,
+        });
+        app.toggle_preview();
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        terminal.draw(|frame| render(frame, &app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+
+        // The preview occupies the right ~40% of the frame (the list's own
+        // selection highlight lives to the left of that and is unaffected).
+        // `Style::default()` renders as `Some(Color::Reset)`, not `None`, so
+        // check for the specific highlight color rather than any `Some` bg.
+        let preview_columns = 50..buffer.area.width;
+        let has_highlight = preview_columns
+            .flat_map(|x| (0..buffer.area.height).map(move |y| (x, y)))
+            .any(|(x, y)| buffer.cell((x, y)).unwrap().style().bg == Some(Color::DarkGray));
+        assert!(!has_highlight, "preview text should never carry a background highlight");
 
         std::fs::remove_dir_all(&dir).ok();
     }
