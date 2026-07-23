@@ -59,6 +59,10 @@ pub struct Profile {
     pub environment: BTreeMap<String, String>,
     pub network: bool,
     pub message_format: MessageFormat,
+    /// The agent reads one prompt to end-of-input, then runs to completion (a
+    /// one-shot `exec` agent). The session closes stdin after the operator's
+    /// message so the turn can start; a further message is not possible.
+    pub single_turn: bool,
 }
 
 impl Profile {
@@ -81,7 +85,7 @@ impl Profile {
     }
 }
 
-/// The built-in codex interactive profile.
+/// The built-in codex profile.
 ///
 /// Isolation follows Orka's proven codex shape: the workspace is trusted so
 /// codex does not prompt, its inner sandbox is disabled in favour of Driva's
@@ -89,12 +93,12 @@ impl Profile {
 /// credential refreshes persist, and stable `HOME`/`TERM` are set because
 /// Bubblewrap clears the environment.
 ///
-/// The command drives codex's interactive protocol stream rather than Orka's
-/// one-shot `exec`. NOTE: the exact interactive subcommand and the submission
-/// schema in [`codex_submission`] must be confirmed against the installed codex
-/// version; both are deliberately isolated so adapting to a different wire
-/// contract is a localized change plus, if the event schema differs, a new
-/// [`Protocol`] variant and decoder.
+/// The command is `codex exec --json -`: a single-turn run that reads the
+/// prompt from stdin and streams `thread`/`turn`/`item` events, verified
+/// against codex-cli 0.145. codex has no bidirectional protocol subcommand in
+/// this line — true multi-turn interaction needs the experimental `app-server`
+/// JSON-RPC protocol, which would be a new [`Protocol`] variant and decoder and
+/// a non-`single_turn` profile. Until then, one session is one turn.
 pub fn codex(layout: &SandboxLayout) -> Profile {
     let workspace = layout.workspace.to_string_lossy();
     let trust = format!("projects.{workspace:?}.trust_level=\"trusted\"");
@@ -106,20 +110,27 @@ pub fn codex(layout: &SandboxLayout) -> Profile {
             trust,
             "--sandbox".into(),
             "danger-full-access".into(),
-            "proto".into(),
+            "exec".into(),
+            "--skip-git-repo-check".into(),
+            "--json".into(),
+            "-".into(),
         ],
         protocol: Protocol::CodexJsonl,
+        // HOME lives under /tmp, the writable tmpfs Driva always provides, so
+        // codex has a disposable, always-present home without depending on
+        // /root existing in the host rootfs. The auth file is bound in below it.
         mounts: vec![MountSpec {
             source: "~/.codex/auth.json".into(),
-            destination: "/root/.codex/auth.json".into(),
+            destination: "/tmp/agent-home/.codex/auth.json".into(),
             writable: true,
         }],
         environment: BTreeMap::from([
-            ("HOME".into(), "/root".into()),
+            ("HOME".into(), "/tmp/agent-home".into()),
             ("TERM".into(), "xterm-256color".into()),
         ]),
         network: true,
-        message_format: MessageFormat::CodexSubmission,
+        message_format: MessageFormat::PlainLine,
+        single_turn: true,
     }
 }
 
@@ -160,17 +171,21 @@ mod tests {
 
         assert_eq!(profile.protocol, Protocol::CodexJsonl);
         assert!(profile.network);
+        assert!(profile.single_turn);
         assert_eq!(profile.command[0], "codex");
         assert!(profile.command.iter().any(|arg| arg == "danger-full-access"));
+        assert!(profile.command.iter().any(|arg| arg == "exec"));
+        assert!(profile.command.iter().any(|arg| arg == "--json"));
+        assert_eq!(profile.command.last().unwrap(), "-", "prompt is read from stdin");
         assert!(profile
             .command
             .iter()
             .any(|arg| arg.contains("/tmp/styra/workspace") && arg.contains("trusted")));
-        assert!(profile
-            .mounts
-            .iter()
-            .any(|mount| mount.destination == std::path::Path::new("/root/.codex/auth.json") && mount.writable));
-        assert_eq!(profile.environment.get("HOME"), Some(&"/root".to_string()));
+        assert!(profile.mounts.iter().any(|mount| {
+            mount.destination == std::path::Path::new("/tmp/agent-home/.codex/auth.json")
+                && mount.writable
+        }));
+        assert_eq!(profile.environment.get("HOME"), Some(&"/tmp/agent-home".to_string()));
     }
 
     #[test]
@@ -178,9 +193,16 @@ mod tests {
         assert!(Profile::builtin("gpt5", &SandboxLayout::default()).is_err());
     }
 
+    fn codex_submission_profile() -> Profile {
+        Profile {
+            message_format: MessageFormat::CodexSubmission,
+            ..codex(&SandboxLayout::default())
+        }
+    }
+
     #[test]
     fn codex_submission_is_valid_json_carrying_the_text_and_one_line() {
-        let profile = codex(&SandboxLayout::default());
+        let profile = codex_submission_profile();
         let encoded = profile.encode_message("fix the bug\nand test it");
         assert_eq!(*encoded.last().unwrap(), b'\n');
         assert_eq!(
@@ -196,7 +218,7 @@ mod tests {
 
     #[test]
     fn distinct_submissions_get_distinct_ids() {
-        let profile = codex(&SandboxLayout::default());
+        let profile = codex_submission_profile();
         let a = String::from_utf8(profile.encode_message("a")).unwrap();
         let b = String::from_utf8(profile.encode_message("b")).unwrap();
         let id = |s: &str| {

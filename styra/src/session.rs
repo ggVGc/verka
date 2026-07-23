@@ -278,15 +278,25 @@ impl Session {
                 .to_owned(),
         }));
         let mut guard = self.stdin.lock().expect("session stdin lock poisoned");
-        let writer = guard
-            .as_mut()
-            .context("the session input is closed; the agent has stopped")?;
-        writer.write_all(&bytes).context("writing to agent stdin")?;
-        writer.flush().context("flushing agent stdin")?;
+        {
+            let writer = guard
+                .as_mut()
+                .context("the session input is closed; the agent has stopped")?;
+            writer.write_all(&bytes).context("writing to agent stdin")?;
+            writer.flush().context("flushing agent stdin")?;
+        }
         let _ = self.updates.send(SessionUpdate::Log(LogEntry::info(format!(
             "sent {} bytes to the agent",
             bytes.len()
         ))));
+        if self.profile.single_turn {
+            // A one-shot exec agent reads the prompt to end-of-input; close
+            // stdin so the turn starts.
+            guard.take();
+            let _ = self.updates.send(SessionUpdate::Log(LogEntry::info(
+                "closed input (single-turn profile); the agent is running the turn",
+            )));
+        }
         Ok(())
     }
 
@@ -407,6 +417,9 @@ mod tests {
         profile.mounts.clear();
         profile.network = false;
         profile.message_format = MessageFormat::CodexSubmission;
+        // Keep input open across the turn so the test's explicit stop() is what
+        // signals end-of-input (exercises the multi-turn-capable path).
+        profile.single_turn = false;
         SessionSpec {
             profile,
             working_directory: dir.to_path_buf(),

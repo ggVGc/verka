@@ -87,7 +87,9 @@ fn main() -> Result<()> {
                 destination: layout.workspace.clone(),
                 writable: true,
             },
-            temporary_mounts: vec![PathBuf::from("/root")],
+            // No extra temporary mounts: the profile's HOME lives under the
+            // /tmp tmpfs Driva always provides.
+            temporary_mounts: Vec::new(),
         };
         let backend = Box::new(driva::BwrapIsolation {
             executable: "bwrap".into(),

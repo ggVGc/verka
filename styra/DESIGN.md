@@ -105,15 +105,14 @@ denied. Styra does not invent new isolation concepts; it selects Driva policy.
 
 A profile is the only agent-specific knowledge in Styra. It defines:
 
-- `command` — the argument vector Driva executes, configured for the agent's
-  **interactive protocol stream** (a bidirectional, newline-delimited JSON mode)
-  rather than a one-shot exec;
+- `command` — the argument vector Driva executes;
 - `protocol` — a versioned identity for the wire format, exactly like Orka's
   `AgentProtocol`, selecting both the encoder for outgoing messages and the
   decoder for incoming events;
 - `mounts`, `environment`, `network` — the Driva policy the agent needs;
-- `encode_message(text) -> Vec<u8>` — how an operator message becomes one
-  protocol input line.
+- `message_format` — how an operator message becomes one input line;
+- `single_turn` — whether the agent reads one prompt to end-of-input and then
+  runs to completion, so the session closes stdin after the first message.
 
 The first profile targets the same provider Orka uses. Its wire event schema is
 the `thread.started` / `turn.started` / `turn.completed` / `item.{started,
@@ -122,6 +121,29 @@ The protocol is versioned: a new wire format, or a new revision of an existing
 one, is a new `protocol` variant plus a decoder arm, and the match is
 exhaustive, so a missing decoder is a compile error rather than a silent
 mis-decode. This is the same discipline as Orka's decoder registry.
+
+### Interactive vs. single-turn, and the codex reality
+
+The session and pipe machinery is genuinely bidirectional and multi-turn: it
+holds the agent's stdin open and writes each operator message as it is sent.
+Whether a session is *actually* multi-turn is a property of the agent's
+protocol, carried by the profile's `single_turn` flag.
+
+The installed codex line (verified against codex-cli 0.145) has **no
+bidirectional protocol subcommand** — `proto` does not exist, and a bare token
+is treated as a prompt that launches the interactive terminal UI, which refuses
+a piped stdin. What it does have is `codex exec --json -`: a one-shot run that
+reads the prompt from stdin, streams the `thread`/`turn`/`item` events above,
+and exits. So the built-in codex profile is `single_turn`: one session is one
+turn. Styra sends the operator's message, closes stdin so the turn starts, and
+renders the streamed events; the session then ends.
+
+True multi-turn codex would use the experimental `app-server` JSON-RPC protocol
+over stdio. That is a distinct wire contract (a request/notification protocol,
+not newline-delimited turn events), so it belongs behind a new `Protocol`
+variant and decoder and a non-`single_turn` profile — exactly the versioned
+seam this design established. It is deferred, not designed away; the codex
+profile's command and encoding are isolated so the switch is localized.
 
 ## Event vocabulary
 
