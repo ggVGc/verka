@@ -162,6 +162,11 @@ fn log_line(entry: &crate::session::LogEntry) -> Line<'static> {
 /// seed a switched-to session, just over the in-memory entries instead of a
 /// stored journal. Unlike the raw/log views, it reads as a document from the
 /// start rather than anchoring to the tail.
+///
+/// Follows `app.show_minor`, same as the event list; since this recomputes
+/// from `app.entries` fresh every frame rather than caching anything,
+/// toggling `m` while the transcript is open re-renders it with no extra
+/// wiring needed.
 fn render_transcript_view(frame: &mut Frame, app: &App, area: Rect) {
     let border_style = if app.focus == Focus::List {
         Style::default().fg(Color::Cyan)
@@ -184,7 +189,7 @@ fn render_transcript_view(frame: &mut Frame, app: &App, area: Rect) {
     }
 
     let events: Vec<AgentEvent> = app.entries.iter().map(|entry| entry.event.clone()).collect();
-    let text = crate::render::render_events(&events, false);
+    let text = crate::render::render_events(&events, false, app.show_minor);
     let lines: Vec<Line<'static>> = text
         .lines()
         .map(|line| Line::from(Span::styled(line.to_owned(), Style::default().fg(Color::White))))
@@ -993,6 +998,22 @@ mod tests {
         assert!(screen.contains("transcript"));
         assert!(screen.contains("implement retry backoff"));
         assert!(screen.contains("Added backoff"));
+    }
+
+    #[test]
+    fn transcript_view_follows_the_minor_toggle_and_rerenders_when_flipped() {
+        let mut app = App::new("codex", "s1");
+        app.push_event(AgentEvent::ThreadStarted { thread_id: "t-1".into() });
+        app.push_event(AgentEvent::AgentMessage { text: "hello world".into() });
+        app.toggle_transcript();
+
+        assert!(!app.show_minor);
+        assert!(!rendered(&app).contains("t-1"));
+
+        // Toggling minor visibility while the transcript is already open must
+        // re-render it on the very next frame, not require reopening the view.
+        app.toggle_minor();
+        assert!(rendered(&app).contains("t-1"));
     }
 
     #[test]

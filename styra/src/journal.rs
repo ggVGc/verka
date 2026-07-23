@@ -252,9 +252,13 @@ pub fn replay(path: &Path, protocol: Protocol) -> Result<Vec<AgentEvent>> {
 /// session left off. See [`replay`] for the decode this builds on, and
 /// `DESIGN.md`'s *Session switching* for why a rendered transcript rather
 /// than a native protocol resume.
+///
+/// Always includes minor lifecycle events (thread/turn markers, usage) —
+/// this seeds a *different* session's context, not the operator's own
+/// `show_minor` toggle for the one being switched away from.
 pub fn render_transcript(path: &Path, protocol: Protocol) -> Result<String> {
     let events = replay(path, protocol)?;
-    Ok(crate::render::render_events(&events, false))
+    Ok(crate::render::render_events(&events, false, true))
 }
 
 /// Reconstruct the raw interaction from a stored journal: each agent record is
@@ -355,7 +359,7 @@ mod tests {
         }
 
         let events = replay(&dir, Protocol::CodexJsonl).unwrap();
-        let expected = crate::render::render_events(&events, false);
+        let expected = crate::render::render_events(&events, false, true);
         assert_eq!(render_transcript(&dir, Protocol::CodexJsonl).unwrap(), expected);
         assert!(expected.contains("do the thing"));
         assert!(expected.contains("done"));
