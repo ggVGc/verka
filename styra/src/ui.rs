@@ -170,8 +170,9 @@ fn render_preview(frame: &mut Frame, app: &App, area: Rect) {
         return;
     };
 
-    let mut lines = vec![summary_line(entry)];
-    lines.extend(detail_lines(&entry.event, None));
+    let detail = detail_lines(&entry.event, None);
+    let mut lines = vec![summary_line(entry, !detail.is_empty())];
+    lines.extend(detail);
     let paragraph = Paragraph::new(lines).block(block).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, area);
 }
@@ -258,9 +259,10 @@ fn render_list(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn entry_item(entry: &Entry, width: usize) -> ListItem<'static> {
-    let mut lines = vec![summary_line(entry)];
+    let detail = detail_lines(&entry.event, Some(MAX_DETAIL_LINES));
+    let mut lines = vec![summary_line(entry, !detail.is_empty())];
     if entry.expanded {
-        lines.extend(detail_lines(&entry.event, Some(MAX_DETAIL_LINES)));
+        lines.extend(detail);
     }
     let wrapped: Vec<Line<'static>> = lines
         .into_iter()
@@ -357,8 +359,15 @@ fn split_keep_whitespace(s: &str) -> Vec<String> {
     tokens
 }
 
-fn summary_line(entry: &Entry) -> Line<'static> {
-    let marker = if entry.expanded { "▾" } else { "▸" };
+/// `has_detail` is false when the entry has nothing beyond its summary (e.g.
+/// a bare `turn started` marker); folding is meaningless there, so no arrow
+/// is shown at all rather than one that never does anything when pressed.
+fn summary_line(entry: &Entry, has_detail: bool) -> Line<'static> {
+    let marker = match (has_detail, entry.expanded) {
+        (false, _) => " ",
+        (true, true) => "▾",
+        (true, false) => "▸",
+    };
     let tag = entry.event.tag();
     Line::from(vec![
         Span::raw(format!("{marker} ")),
@@ -557,13 +566,25 @@ mod tests {
     }
 
     #[test]
-    fn a_collapsed_entry_shows_its_summary_and_a_fold_marker() {
+    fn a_collapsed_entry_with_more_to_show_has_a_fold_marker() {
         let mut app = App::new("codex", "s1");
-        app.push_event(AgentEvent::AgentMessage { text: "hello world".into() });
+        app.push_event(AgentEvent::AgentMessage { text: "hello world\nmore detail".into() });
         let screen = rendered(&app);
         assert!(screen.contains("hello world"));
         assert!(screen.contains('▸'));
         assert!(screen.contains("agent"));
+    }
+
+    #[test]
+    fn an_entry_with_nothing_beyond_its_summary_has_no_fold_marker() {
+        let mut app = App::new("codex", "s1");
+        // A single-line agent message: its detail body is identical to the
+        // summary already shown, so there is nothing left to expand into.
+        app.push_event(AgentEvent::AgentMessage { text: "hello world".into() });
+        let screen = rendered(&app);
+        assert!(screen.contains("hello world"));
+        assert!(!screen.contains('▸'));
+        assert!(!screen.contains('▾'));
     }
 
     #[test]
