@@ -18,7 +18,7 @@ Each is committed on its own. Check off as completed.
 - [x] **5. Session (`session.rs`).** Driva launch with piped stdin/stdout, the
   execution and reader threads, and the channel protocol delivering events and
   lifecycle changes to the UI. Journal writing wired in.
-- [ ] **6. Application state (`app.rs`).** The event list, selection, per-entry
+- [x] **6. Application state (`app.rs`).** The event list, selection, per-entry
   expand/collapse, focus (list vs. input), the message buffer, and session
   status. Pure state transitions, unit tested.
 - [ ] **7. Rendering (`ui.rs`).** The ratatui layout: event list with summaries
