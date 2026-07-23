@@ -174,7 +174,11 @@ fn render_list(frame: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    let items: Vec<ListItem> = visible.iter().map(|(_, entry)| entry_item(entry)).collect();
+    let width = area.width.saturating_sub(2) as usize;
+    let items: Vec<ListItem> = visible
+        .iter()
+        .map(|(_, entry)| entry_item(entry, width))
+        .collect();
     let list = List::new(items)
         .block(block)
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
@@ -187,12 +191,104 @@ fn render_list(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_stateful_widget(list, area, &mut state);
 }
 
-fn entry_item(entry: &Entry) -> ListItem<'static> {
+fn entry_item(entry: &Entry, width: usize) -> ListItem<'static> {
     let mut lines = vec![summary_line(entry)];
     if entry.expanded {
         lines.extend(detail_lines(&entry.event));
     }
-    ListItem::new(lines)
+    let wrapped: Vec<Line<'static>> = lines
+        .into_iter()
+        .flat_map(|line| wrap_line(line, width))
+        .collect();
+    ListItem::new(wrapped)
+}
+
+/// Word-wrap one logical line to `width` columns, preserving each span's
+/// style across the break. `List` does not wrap on its own, so long lines
+/// would otherwise be clipped at the right edge instead of continuing below.
+fn wrap_line(line: Line<'static>, width: usize) -> Vec<Line<'static>> {
+    if width == 0 {
+        return vec![line];
+    }
+
+    let mut lines = Vec::new();
+    let mut current: Vec<Span<'static>> = Vec::new();
+    let mut current_width = 0usize;
+
+    for span in line.spans {
+        let style = span.style;
+        for token in split_keep_whitespace(&span.content) {
+            let token_width = token.chars().count();
+
+            if token == " " {
+                if current_width + token_width > width {
+                    if !current.is_empty() {
+                        lines.push(Line::from(std::mem::take(&mut current)));
+                        current_width = 0;
+                    }
+                    continue;
+                }
+                current.push(Span::styled(token, style));
+                current_width += token_width;
+                continue;
+            }
+
+            if token_width > width {
+                // A single token longer than the line: hard-split it.
+                let mut remaining = token.as_str();
+                while !remaining.is_empty() {
+                    if current_width >= width {
+                        lines.push(Line::from(std::mem::take(&mut current)));
+                        current_width = 0;
+                    }
+                    let take = width - current_width;
+                    let split_at = remaining
+                        .char_indices()
+                        .nth(take)
+                        .map(|(i, _)| i)
+                        .unwrap_or(remaining.len());
+                    let (chunk, rest) = remaining.split_at(split_at);
+                    current.push(Span::styled(chunk.to_owned(), style));
+                    current_width += chunk.chars().count();
+                    remaining = rest;
+                }
+                continue;
+            }
+
+            if current_width + token_width > width && !current.is_empty() {
+                lines.push(Line::from(std::mem::take(&mut current)));
+                current_width = 0;
+            }
+            current.push(Span::styled(token, style));
+            current_width += token_width;
+        }
+    }
+
+    if !current.is_empty() || lines.is_empty() {
+        lines.push(Line::from(current));
+    }
+    lines
+}
+
+/// Split into words and single-space tokens, so a wrap can drop a leading
+/// space on the next line without losing the boundary information.
+fn split_keep_whitespace(s: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut word = String::new();
+    for ch in s.chars() {
+        if ch == ' ' {
+            if !word.is_empty() {
+                tokens.push(std::mem::take(&mut word));
+            }
+            tokens.push(" ".to_owned());
+        } else {
+            word.push(ch);
+        }
+    }
+    if !word.is_empty() {
+        tokens.push(word);
+    }
+    tokens
 }
 
 fn summary_line(entry: &Entry) -> Line<'static> {
@@ -423,6 +519,20 @@ mod tests {
         assert!(screen.contains('»'));
         assert!(screen.contains('«'));
         assert!(screen.contains("turn.started"));
+    }
+
+    #[test]
+    fn long_summary_lines_wrap_instead_of_being_clipped() {
+        let mut app = App::new("codex", "s1");
+        // Long enough that a single 80-column row (minus borders) could not
+        // hold it; a fixed-width row concatenation of the test buffer would
+        // otherwise cut this down to a handful of repetitions.
+        app.push_event(AgentEvent::AgentMessage { text: "word ".repeat(40) });
+        let screen = rendered(&app);
+        assert!(
+            screen.matches("word").count() > 20,
+            "expected wrapped continuation lines, only found: {screen:?}"
+        );
     }
 
     #[test]
