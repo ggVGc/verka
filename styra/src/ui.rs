@@ -19,10 +19,10 @@ use std::path::{Path, PathBuf};
 /// cannot bury the rest of the session.
 const MAX_DETAIL_LINES: usize = 40;
 const DETAIL_INDENT: &str = "    ";
-/// Backdrop for expanded detail content, so it reads as a distinct panel
-/// under its summary line. Deliberately not white — combined with the list's
-/// selection highlight, a `White` foreground reversed onto the background
-/// would otherwise flip the whole block to a glaring full-white fill.
+/// Backdrop painted behind a selected list row (including its expanded detail
+/// lines, if any), via the list's `highlight_style`. Deliberately not white —
+/// with `Modifier::REVERSED`, a `White` foreground would reverse onto the
+/// background and flip the whole selected row to a glaring full-white fill.
 const DETAIL_BG: Color = Color::DarkGray;
 
 /// Color coding for the status dot, so running vs. waiting for input reads at
@@ -302,9 +302,8 @@ fn render_list(frame: &mut Frame, app: &App, area: Rect) {
         .map(|(_, entry)| entry_item(entry, width))
         .collect();
     // An explicit background rather than `Modifier::REVERSED`: reversing
-    // would swap a detail line's `White` foreground into the background,
-    // undoing the deliberately muted `DETAIL_BG` panel behind expanded
-    // content and flashing it back to full white when selected.
+    // would swap a `White` foreground (summary and detail text alike) into
+    // the background, flashing the selected row to a glaring full white.
     let list = List::new(items)
         .block(block)
         .highlight_style(Style::default().bg(DETAIL_BG).add_modifier(Modifier::BOLD));
@@ -449,7 +448,7 @@ fn detail_lines(event: &AgentEvent, cap: Option<usize>) -> Vec<Line<'static>> {
                 for line in text.lines() {
                     lines.push(Line::from(vec![Span::styled(
                         format!("{DETAIL_INDENT}{line}"),
-                        Style::default().fg(Color::White).bg(DETAIL_BG),
+                        Style::default().fg(Color::White),
                     )]));
                 }
             }
@@ -457,7 +456,7 @@ fn detail_lines(event: &AgentEvent, cap: Option<usize>) -> Vec<Line<'static>> {
                 for line in text.lines() {
                     lines.push(Line::from(vec![Span::styled(
                         format!("{DETAIL_INDENT}{line}"),
-                        Style::default().fg(Color::White).bg(DETAIL_BG),
+                        Style::default().fg(Color::White),
                     )]));
                 }
             }
@@ -475,7 +474,7 @@ fn detail_lines(event: &AgentEvent, cap: Option<usize>) -> Vec<Line<'static>> {
             lines.truncate(cap);
             lines.push(Line::from(Span::styled(
                 format!("{DETAIL_INDENT}… {hidden} more lines"),
-                Style::default().fg(Color::Gray).bg(DETAIL_BG),
+                Style::default().fg(Color::Gray),
             )));
         }
     }
@@ -611,6 +610,41 @@ mod tests {
 
         assert!(!backgrounds.contains(&Color::White));
         assert!(backgrounds.contains(&Color::DarkGray));
+    }
+
+    #[test]
+    fn only_the_selected_entrys_expanded_content_gets_a_gray_backdrop() {
+        let mut app = App::new("codex", "s1");
+        app.push_event(AgentEvent::AgentMessage { text: "one\ntwo".into() });
+        app.push_event(AgentEvent::AgentMessage { text: "three\nfour".into() });
+        // `push_event` leaves the second (last) entry selected via follow;
+        // both get expanded, but only the selected one should be highlighted.
+        app.expand_all();
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        terminal.draw(|frame| render(frame, &app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+
+        let row_containing = |text: &str| -> u16 {
+            (0..buffer.area.height)
+                .find(|&y| {
+                    let row: String = (0..buffer.area.width)
+                        .map(|x| buffer.cell((x, y)).unwrap().symbol())
+                        .collect();
+                    row.contains(text)
+                })
+                .unwrap_or_else(|| panic!("no row contains {text:?}"))
+        };
+        let row_has_gray_backdrop = |y: u16| {
+            (0..buffer.area.width).any(|x| {
+                buffer.cell((x, y)).unwrap().style().bg == Some(Color::DarkGray)
+            })
+        };
+
+        let unselected_detail_row = row_containing("two");
+        let selected_detail_row = row_containing("four");
+        assert!(!row_has_gray_backdrop(unselected_detail_row));
+        assert!(row_has_gray_backdrop(selected_detail_row));
     }
 
     #[test]
