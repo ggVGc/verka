@@ -416,7 +416,7 @@ mod tests {
     fn moving_up_pins_the_view_and_reaching_the_tail_resumes_follow() {
         let mut app = app();
         for _ in 0..3 {
-            app.push_event(AgentEvent::TurnStarted);
+            app.push_event(AgentEvent::AgentMessage { text: "x".into() });
         }
         app.select_prev();
         assert!(!app.follow);
@@ -537,7 +537,7 @@ mod tests {
         app.push_event(AgentEvent::AgentMessage { text: "b".into() });
         app.push_event(AgentEvent::TurnCompleted { usage: TokenUsage::default() });
 
-        app.toggle_minor();
+        // Hidden by default; no toggle needed to get here.
         assert!(!app.show_minor);
 
         app.select_first();
@@ -560,12 +560,16 @@ mod tests {
     #[test]
     fn toggling_minor_off_moves_selection_off_a_hidden_entry() {
         let mut app = app();
+        app.toggle_minor(); // show minor events so follow can land on one
+        assert!(app.show_minor);
+
         app.push_event(AgentEvent::AgentMessage { text: "a".into() });
         app.push_event(AgentEvent::TurnStarted);
         // Selection sits on the just-pushed minor entry via follow.
         assert_eq!(app.selected, 1);
 
-        app.toggle_minor();
+        app.toggle_minor(); // hide them again
+        assert!(!app.show_minor);
         assert!(app.is_visible(app.selected));
         assert_eq!(app.entries[app.selected].event, AgentEvent::AgentMessage { text: "a".into() });
     }

@@ -766,7 +766,8 @@ mod tests {
         let mut app = App::new("codex", "s1");
         app.push_event(AgentEvent::ThreadStarted { thread_id: "t-1".into() });
         app.push_event(AgentEvent::AgentMessage { text: "hello world".into() });
-        app.toggle_minor();
+        // Hidden by default; no toggle needed to get here.
+        assert!(!app.show_minor);
         let screen = rendered(&app);
         assert!(!screen.contains("t-1"));
         assert!(screen.contains("hello world"));
