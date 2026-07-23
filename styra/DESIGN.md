@@ -207,12 +207,48 @@ This is what makes the wishlist's session properties fall out cheaply:
   remains. The context *is* the journal.
 - **View.** Styra can open a journal and replay it into the same list view
   without a live agent.
-- **Resume / fork / switch model (later).** A new session is seeded by feeding a
-  prior journal's context to a freshly launched agent — possibly a different
-  profile, hence a different model — while preserving the original journal. Fork
-  is resume that keeps both branches. These reuse the launch and decode paths
-  and add no new persistence concept; they are deferred past the first
-  milestone but the journal-as-truth design is chosen so they stay cheap.
+- **Resume / fork / switch model.** A new session is seeded by feeding a prior
+  journal's context to a freshly launched agent — possibly a different
+  profile, hence a different model — while preserving the original journal.
+  Fork is resume that keeps both branches. These reuse the launch and decode
+  paths and add no new persistence concept, so they stay cheap. The first cut
+  (see *Session switching* below) does this the simple way: render the old
+  journal to a text transcript and send it as the new session's opening
+  message. A native alternative, deferred for now, is described next.
+
+### Future idea: native resume instead of a rendered seed message
+
+Both codex and Claude Code implement their own `resume` by replaying a
+persisted transcript to reconstruct context, not by restoring literal model
+state — so underneath, they aren't fundamentally different from Styra
+rendering its journal into a seed message. But operationally, neither expects
+its *client* to invent that seed text: each has its own native resume path,
+keyed by the same thread/session id genta already captures via
+`ThreadStarted`.
+
+- **Codex app-server** exposes a `thread/resume` JSON-RPC method that
+  reconstructs the thread's internal context by replaying **codex's own
+  rollout file** (`~/.codex/sessions/...`) — storage separate from Styra's
+  journal. genta doesn't implement or send this RPC today (only
+  `initialize` → `thread/start` → `turn/start`), so this is new protocol
+  surface, not something already wired up. Forking works the same way
+  (`forked_from_id`): a new thread inheriting the parent's history as context.
+- **Claude Code** has no equivalent mid-stream RPC; resume is a
+  process-launch-time CLI flag (`--resume <session_id>` / `--continue`) that
+  reloads Claude's own locally stored transcript before the new process's
+  first turn.
+
+Using these would mean handing the freshly spawned agent process *its own*
+thread/session id and letting its native resume machinery reconstruct context
+from *its own* storage, rather than Styra reconstructing a prompt from *its*
+journal. That should be more faithful (each agent's own well-tested
+reconstruction of its own format) but is real new work — `thread/resume`
+isn't in genta yet, and using it means "load a session" needs the *agent's*
+thread id, not just a Styra session directory, plus the picker would need to
+distinguish sessions it can natively resume from ones it can only seed as
+text. Worth revisiting once the simple version is in and its limits (token
+cost of the rendered transcript, fidelity of the reconstruction) are felt in
+practice.
 
 Journals live under a per-session directory in a Styra store (`.styra/` in the
 workbench, separately owned from `.orka/` and `.linka/`), named by a session id.
