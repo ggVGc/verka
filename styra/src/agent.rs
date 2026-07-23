@@ -42,6 +42,9 @@ impl Default for SandboxLayout {
 pub enum MessageFormat {
     /// A codex protocol submission envelope carrying the text as a user turn.
     CodexSubmission,
+    /// A Claude Code `stream-json` user message envelope. Newlines survive as
+    /// JSON string escapes, so the envelope is still exactly one input line.
+    ClaudeStreamJson,
     /// The bare message text as a single line, for agents that read plain
     /// stdin turns.
     PlainLine,
@@ -67,13 +70,25 @@ pub struct Profile {
 
 impl Profile {
     /// Resolve a built-in profile by name.
+    ///
+    /// `claude` selects the Claude Code profile with its configured default
+    /// model; `claude:<model>` pins a model (`claude:opus`, `claude:sonnet`,
+    /// `claude:haiku`, or a full id such as `claude:claude-opus-4-8`).
     pub fn builtin(name: &str, layout: &SandboxLayout) -> Result<Profile> {
         match name {
             "codex" => Ok(codex_appserver(layout)),
             "codex-exec" => Ok(codex(layout)),
-            other => {
-                bail!("unknown agent profile {other:?}; known profiles: codex, codex-exec")
+            "claude" => Ok(claude(layout, None)),
+            other if other.starts_with("claude:") => {
+                let model = other.trim_start_matches("claude:").trim();
+                if model.is_empty() {
+                    bail!("empty model in profile {other:?}; use e.g. claude:opus");
+                }
+                Ok(claude(layout, Some(model)))
             }
+            other => bail!(
+                "unknown agent profile {other:?}; known profiles: codex, codex-exec, claude, claude:<model>"
+            ),
         }
     }
 
@@ -81,6 +96,7 @@ impl Profile {
     pub fn encode_message(&self, text: &str) -> Vec<u8> {
         let mut line = match self.message_format {
             MessageFormat::CodexSubmission => codex_submission(text),
+            MessageFormat::ClaudeStreamJson => claude_submission(text),
             MessageFormat::PlainLine => text.replace('\n', " "),
         };
         line.push('\n');
@@ -168,6 +184,80 @@ fn codex_submission(text: &str) -> String {
     submission.to_string()
 }
 
+/// The built-in Claude Code interactive profile.
+///
+/// The isolation mirrors the codex shape: Driva's outer Bubblewrap sandbox is
+/// the boundary, so Claude Code's own permission prompt is skipped with
+/// `--dangerously-skip-permissions`. `HOME` lives under `/tmp`, the writable
+/// tmpfs Driva always provides, matching the codex profile's rationale: a
+/// disposable, always-present home without depending on a particular
+/// directory existing in the host rootfs. `~/.claude/.credentials.json` is
+/// bound in under it, writable, so a refreshed OAuth token persists across
+/// sessions; the rest of the config directory is discarded with the tmpfs.
+///
+/// The command drives Claude Code's bidirectional `stream-json` mode: it reads
+/// `stream-json` user messages on stdin and emits `stream-json` events on
+/// stdout, staying alive until stdin closes (so, like the app-server codex
+/// profile, it spans many turns rather than running once to completion).
+/// `--verbose` is required alongside `--output-format stream-json` under
+/// `--print`. An optional `model` becomes a `--model` argument; when absent,
+/// Claude Code uses its configured default.
+///
+/// NOTE: the exact flags and the `stream-json` envelope in [`claude_submission`]
+/// must be confirmed against the installed `claude` version; both are isolated
+/// here so adapting to a different contract is a localized change plus, if the
+/// event schema differs, the [`Protocol::ClaudeJsonl`](crate::event::Protocol)
+/// decoder.
+pub fn claude(_layout: &SandboxLayout, model: Option<&str>) -> Profile {
+    let mut command = vec![
+        "claude".to_string(),
+        "--print".into(),
+        "--input-format".into(),
+        "stream-json".into(),
+        "--output-format".into(),
+        "stream-json".into(),
+        "--verbose".into(),
+        "--dangerously-skip-permissions".into(),
+    ];
+    if let Some(model) = model {
+        command.push("--model".into());
+        command.push(model.to_string());
+    }
+    Profile {
+        name: match model {
+            Some(model) => format!("claude:{model}"),
+            None => "claude".into(),
+        },
+        command,
+        protocol: Protocol::ClaudeJsonl,
+        mounts: vec![MountSpec {
+            source: "~/.claude/.credentials.json".into(),
+            destination: "/tmp/agent-home/.claude/.credentials.json".into(),
+            writable: true,
+        }],
+        environment: BTreeMap::from([
+            ("HOME".into(), "/tmp/agent-home".into()),
+            ("TERM".into(), "xterm-256color".into()),
+        ]),
+        network: true,
+        message_format: MessageFormat::ClaudeStreamJson,
+        single_turn: false,
+    }
+}
+
+/// Build a Claude Code `stream-json` user message carrying the operator's text.
+///
+/// The text becomes the `content` of one user turn. Because it is a JSON string
+/// value, embedded newlines are escaped rather than split, so the envelope
+/// remains exactly one input line.
+fn claude_submission(text: &str) -> String {
+    let submission = serde_json::json!({
+        "type": "user",
+        "message": { "role": "user", "content": text },
+    });
+    submission.to_string()
+}
+
 fn submission_id() -> String {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -231,6 +321,63 @@ mod tests {
             message_format: MessageFormat::CodexSubmission,
             ..codex(&SandboxLayout::default())
         }
+    }
+
+    #[test]
+    fn claude_profile_speaks_stream_json_and_isolates_credentials() {
+        let profile = Profile::builtin("claude", &SandboxLayout::default()).unwrap();
+
+        assert_eq!(profile.name, "claude");
+        assert_eq!(profile.protocol, Protocol::ClaudeJsonl);
+        assert_eq!(profile.message_format, MessageFormat::ClaudeStreamJson);
+        assert!(profile.network);
+        assert_eq!(profile.command[0], "claude");
+        assert!(profile.command.iter().any(|arg| arg == "stream-json"));
+        assert!(profile
+            .command
+            .iter()
+            .any(|arg| arg == "--dangerously-skip-permissions"));
+        // Without an explicit model, no --model argument is passed.
+        assert!(!profile.command.iter().any(|arg| arg == "--model"));
+        assert!(!profile.single_turn, "an interactive claude session spans many turns");
+        assert!(profile.mounts.iter().any(|mount| mount.destination
+            == std::path::Path::new("/tmp/agent-home/.claude/.credentials.json")
+            && mount.writable));
+        assert_eq!(profile.environment.get("HOME"), Some(&"/tmp/agent-home".to_string()));
+    }
+
+    #[test]
+    fn claude_model_is_selected_by_the_profile_suffix() {
+        let profile = Profile::builtin("claude:opus", &SandboxLayout::default()).unwrap();
+        assert_eq!(profile.name, "claude:opus");
+        let model = profile
+            .command
+            .windows(2)
+            .find(|pair| pair[0] == "--model")
+            .map(|pair| pair[1].as_str());
+        assert_eq!(model, Some("opus"));
+    }
+
+    #[test]
+    fn empty_claude_model_suffix_is_rejected() {
+        assert!(Profile::builtin("claude:", &SandboxLayout::default()).is_err());
+    }
+
+    #[test]
+    fn claude_submission_is_valid_json_carrying_the_text_and_one_line() {
+        let profile = claude(&SandboxLayout::default(), None);
+        let encoded = profile.encode_message("fix the bug\nand test it");
+        assert_eq!(*encoded.last().unwrap(), b'\n');
+        assert_eq!(
+            encoded.iter().filter(|&&b| b == b'\n').count(),
+            1,
+            "a stream-json message must be exactly one input line"
+        );
+        let line = std::str::from_utf8(&encoded).unwrap().trim_end();
+        let value: Value = serde_json::from_str(line).expect("submission is valid JSON");
+        assert_eq!(value["type"], "user");
+        assert_eq!(value["message"]["role"], "user");
+        assert_eq!(value["message"]["content"], "fix the bug\nand test it");
     }
 
     #[test]

@@ -22,6 +22,10 @@ pub enum Protocol {
     /// The bidirectional `codex app-server` JSON-RPC protocol (v2). Notification
     /// lines carry the events; requests and responses are control traffic.
     CodexAppServer,
+    /// The Claude Code `stream-json` schema: a `system`/`assistant`/`user`/
+    /// `result` newline-delimited JSON stream, as emitted by
+    /// `claude --output-format stream-json`.
+    ClaudeJsonl,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -222,6 +226,7 @@ pub fn decode_line(protocol: Protocol, line: &str) -> StyraEvent {
     match protocol {
         Protocol::CodexJsonl => decode_codex_line(line),
         Protocol::CodexAppServer => decode_appserver_line(line),
+        Protocol::ClaudeJsonl => decode_claude_line(line),
     }
 }
 
@@ -431,6 +436,144 @@ fn decode_codex_item(event_type: &str, item: &Value) -> StyraEvent {
         (_, _) => StyraEvent::Unknown {
             wire_type: format!("{event_type}:{kind}"),
         },
+    }
+}
+
+/// Decode one Claude Code `stream-json` line. Its schema differs from codex's:
+/// a top-level `system` (session/init metadata), `assistant` and `user`
+/// messages carrying Anthropic content blocks, and a `result` turn summary.
+///
+/// One wire line maps to one [`StyraEvent`], as in the codex decoder. An
+/// `assistant` message may carry several content blocks; the salient one is
+/// chosen (a tool call over prose, prose over reasoning) and the rest remain in
+/// the verbatim raw view. NOTE: the exact `stream-json` shape must be confirmed
+/// against the installed `claude` version; it is isolated here so adapting to a
+/// revised contract is a localized change.
+fn decode_claude_line(line: &str) -> StyraEvent {
+    let value: Value = match serde_json::from_str(line) {
+        Ok(value) => value,
+        Err(error) => {
+            return StyraEvent::Malformed {
+                error: clean_terminal_text(&format!("{error}")),
+            }
+        }
+    };
+    decode_claude_value(&value)
+}
+
+fn decode_claude_value(value: &Value) -> StyraEvent {
+    let wire_type = string(value, "type").unwrap_or("unknown");
+    match wire_type {
+        "system" => {
+            let subtype = string(value, "subtype").unwrap_or_default();
+            if subtype == "init" {
+                StyraEvent::ThreadStarted {
+                    thread_id: clean_terminal_text(string(value, "session_id").unwrap_or_default()),
+                }
+            } else {
+                StyraEvent::Unknown {
+                    wire_type: clean_terminal_text(&format!("system:{subtype}")),
+                }
+            }
+        }
+        "assistant" => decode_claude_assistant(value.get("message").unwrap_or(&Value::Null)),
+        "user" => decode_claude_user(value.get("message").unwrap_or(&Value::Null)),
+        "result" => decode_claude_result(value),
+        other => StyraEvent::Unknown {
+            wire_type: clean_terminal_text(other),
+        },
+    }
+}
+
+/// Choose the salient block of an assistant message: a tool call is the action
+/// worth surfacing, then visible prose, then reasoning. The full message stays
+/// available verbatim in the raw view.
+fn decode_claude_assistant(message: &Value) -> StyraEvent {
+    match message.get("content") {
+        Some(Value::String(text)) => {
+            return StyraEvent::AgentMessage {
+                text: clean_terminal_text(text),
+            }
+        }
+        Some(Value::Array(blocks)) => {
+            let mut text = None;
+            let mut thinking = None;
+            for block in blocks {
+                match string(block, "type") {
+                    Some("tool_use") => return claude_tool_started(block),
+                    Some("text") if text.is_none() => text = string(block, "text"),
+                    Some("thinking") if thinking.is_none() => {
+                        thinking = string(block, "thinking")
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(text) = text.or(thinking) {
+                return StyraEvent::AgentMessage {
+                    text: clean_terminal_text(text),
+                };
+            }
+        }
+        _ => {}
+    }
+    StyraEvent::Unknown { wire_type: "assistant".into() }
+}
+
+fn claude_tool_started(block: &Value) -> StyraEvent {
+    let detail = block
+        .get("input")
+        .filter(|input| !input.is_null())
+        .map(|input| input.to_string())
+        .unwrap_or_default();
+    StyraEvent::ToolStarted {
+        name: clean_terminal_text(string(block, "name").unwrap_or("tool")),
+        detail: clean_terminal_text(&detail),
+    }
+}
+
+/// A Claude `user` message is a synthetic turn carrying tool results back to the
+/// model; it is not an echo of the operator's input (Styra records that itself).
+fn decode_claude_user(message: &Value) -> StyraEvent {
+    if let Some(Value::Array(blocks)) = message.get("content") {
+        for block in blocks {
+            if string(block, "type") == Some("tool_result") {
+                let is_error = block.get("is_error").and_then(Value::as_bool).unwrap_or(false);
+                return StyraEvent::ToolCompleted {
+                    name: clean_terminal_text(string(block, "tool_use_id").unwrap_or("tool")),
+                    status: if is_error { "error".into() } else { "completed".into() },
+                };
+            }
+        }
+    }
+    StyraEvent::Unknown { wire_type: "user".into() }
+}
+
+fn decode_claude_result(value: &Value) -> StyraEvent {
+    let subtype = string(value, "subtype").unwrap_or_default();
+    let is_error = value.get("is_error").and_then(Value::as_bool).unwrap_or(false);
+    if is_error || subtype.starts_with("error") {
+        return StyraEvent::Error {
+            message: clean_terminal_text(
+                string(value, "result")
+                    .or_else(|| string(value, "error"))
+                    .unwrap_or("agent reported an error"),
+            ),
+        };
+    }
+    StyraEvent::TurnCompleted {
+        usage: claude_usage(value.get("usage").unwrap_or(&Value::Null)),
+    }
+}
+
+/// Map Claude's usage object onto Styra's [`TokenUsage`]. Claude reports cached
+/// input as `cache_read_input_tokens`; the rest align by name.
+fn claude_usage(usage: &Value) -> TokenUsage {
+    let count = |key: &str| usage.get(key).and_then(Value::as_u64).unwrap_or(0);
+    TokenUsage {
+        input_tokens: count("input_tokens"),
+        cached_input_tokens: count("cache_read_input_tokens"),
+        output_tokens: count("output_tokens"),
+        reasoning_output_tokens: 0,
     }
 }
 
@@ -729,6 +872,119 @@ mod tests {
                 DetailBlock::Code { language: None, text: "code\n".into() },
             ]
         );
+    }
+
+    #[test]
+    fn claude_init_starts_a_thread_and_other_system_lines_are_unknown() {
+        assert_eq!(
+            decode_line(
+                Protocol::ClaudeJsonl,
+                r#"{"type":"system","subtype":"init","session_id":"s-9","model":"claude-opus-4-8"}"#,
+            ),
+            StyraEvent::ThreadStarted { thread_id: "s-9".into() }
+        );
+        assert_eq!(
+            decode_line(
+                Protocol::ClaudeJsonl,
+                r#"{"type":"system","subtype":"compact_boundary"}"#,
+            ),
+            StyraEvent::Unknown { wire_type: "system:compact_boundary".into() }
+        );
+    }
+
+    #[test]
+    fn claude_assistant_text_decodes_to_an_agent_message() {
+        let event = decode_line(
+            Protocol::ClaudeJsonl,
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Added backoff.\nTests pass."}]},"session_id":"s"}"#,
+        );
+        assert_eq!(
+            event,
+            StyraEvent::AgentMessage { text: "Added backoff.\nTests pass.".into() }
+        );
+        assert_eq!(event.summary(), "Added backoff.");
+    }
+
+    #[test]
+    fn claude_tool_use_is_preferred_over_prose_in_the_same_message() {
+        // A tool call is the action worth surfacing; the preamble text stays in
+        // the verbatim raw view.
+        let event = decode_line(
+            Protocol::ClaudeJsonl,
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Running the tests."},{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"cargo test"}}]}}"#,
+        );
+        assert_eq!(
+            event,
+            StyraEvent::ToolStarted { name: "Bash".into(), detail: "{\"command\":\"cargo test\"}".into() }
+        );
+        assert_eq!(event.summary(), "Bash: {\"command\":\"cargo test\"}");
+    }
+
+    #[test]
+    fn claude_thinking_only_message_falls_back_to_an_agent_message() {
+        let event = decode_line(
+            Protocol::ClaudeJsonl,
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"weigh the options"}]}}"#,
+        );
+        assert_eq!(event, StyraEvent::AgentMessage { text: "weigh the options".into() });
+    }
+
+    #[test]
+    fn claude_tool_result_completes_a_tool_with_its_status() {
+        assert_eq!(
+            decode_line(
+                Protocol::ClaudeJsonl,
+                r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"ok"}]}}"#,
+            ),
+            StyraEvent::ToolCompleted { name: "toolu_1".into(), status: "completed".into() }
+        );
+        assert_eq!(
+            decode_line(
+                Protocol::ClaudeJsonl,
+                r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_2","is_error":true,"content":"boom"}]}}"#,
+            ),
+            StyraEvent::ToolCompleted { name: "toolu_2".into(), status: "error".into() }
+        );
+    }
+
+    #[test]
+    fn claude_result_carries_usage_or_surfaces_an_error() {
+        let usage = decode_line(
+            Protocol::ClaudeJsonl,
+            r#"{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":12,"output_tokens":3,"cache_read_input_tokens":8}}"#,
+        );
+        assert_eq!(
+            usage,
+            StyraEvent::TurnCompleted {
+                usage: TokenUsage {
+                    input_tokens: 12,
+                    cached_input_tokens: 8,
+                    output_tokens: 3,
+                    reasoning_output_tokens: 0,
+                }
+            }
+        );
+        assert_eq!(usage.summary(), "in 12 · out 3 · cached 8");
+
+        assert_eq!(
+            decode_line(
+                Protocol::ClaudeJsonl,
+                r#"{"type":"result","subtype":"error_max_turns","is_error":true,"result":"hit the turn limit"}"#,
+            ),
+            StyraEvent::Error { message: "hit the turn limit".into() }
+        );
+    }
+
+    #[test]
+    fn claude_unknown_and_malformed_are_preserved() {
+        assert_eq!(
+            decode_line(Protocol::ClaudeJsonl, r#"{"type":"stream_event"}"#),
+            StyraEvent::Unknown { wire_type: "stream_event".into() }
+        );
+        assert!(matches!(
+            decode_line(Protocol::ClaudeJsonl, "not json"),
+            StyraEvent::Malformed { .. }
+        ));
     }
 
     #[test]

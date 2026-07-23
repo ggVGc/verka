@@ -32,6 +32,9 @@ Built-in profiles:
   each submitted message starts a new turn in the same thread.
 - `codex-exec` — one-shot `codex exec --json`; the first message is the prompt
   and the session ends when the turn completes.
+- `claude` — multi-turn session over Claude Code's bidirectional `stream-json`
+  mode; each submitted message starts a new turn in the same session.
+  `claude:<model>` (e.g. `claude:opus`) pins a model.
 
 Two focuses, like vim modes: list focus navigates and folds the event list,
 input focus types into the message box. `i` or `Tab` enters input focus; `Esc`

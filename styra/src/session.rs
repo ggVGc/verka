@@ -151,7 +151,7 @@ impl Session {
                     spec.working_directory.to_string_lossy().into_owned(),
                 ),
             )),
-            crate::event::Protocol::CodexJsonl => None,
+            crate::event::Protocol::CodexJsonl | crate::event::Protocol::ClaudeJsonl => None,
         };
 
         let _ = updates.send(SessionUpdate::Log(LogEntry::info(format!(
