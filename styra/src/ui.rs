@@ -17,6 +17,11 @@ use ratatui::Frame;
 /// cannot bury the rest of the session.
 const MAX_DETAIL_LINES: usize = 40;
 const DETAIL_INDENT: &str = "    ";
+/// Backdrop for expanded detail content, so it reads as a distinct panel
+/// under its summary line. Deliberately not white — combined with the list's
+/// selection highlight, a `White` foreground reversed onto the background
+/// would otherwise flip the whole block to a glaring full-white fill.
+const DETAIL_BG: Color = Color::DarkGray;
 
 /// Color coding for the status dot, so running vs. waiting for input reads at
 /// a glance instead of requiring the operator to read the label text.
@@ -236,9 +241,13 @@ fn render_list(frame: &mut Frame, app: &App, area: Rect) {
         .iter()
         .map(|(_, entry)| entry_item(entry, width))
         .collect();
+    // An explicit background rather than `Modifier::REVERSED`: reversing
+    // would swap a detail line's `White` foreground into the background,
+    // undoing the deliberately muted `DETAIL_BG` panel behind expanded
+    // content and flashing it back to full white when selected.
     let list = List::new(items)
         .block(block)
-        .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+        .highlight_style(Style::default().bg(DETAIL_BG).add_modifier(Modifier::BOLD));
     let mut state = ListState::default();
     let position = visible
         .iter()
@@ -372,7 +381,7 @@ fn detail_lines(event: &AgentEvent, cap: Option<usize>) -> Vec<Line<'static>> {
                 for line in text.lines() {
                     lines.push(Line::from(vec![Span::styled(
                         format!("{DETAIL_INDENT}{line}"),
-                        Style::default().fg(Color::White),
+                        Style::default().fg(Color::White).bg(DETAIL_BG),
                     )]));
                 }
             }
@@ -380,7 +389,7 @@ fn detail_lines(event: &AgentEvent, cap: Option<usize>) -> Vec<Line<'static>> {
                 for line in text.lines() {
                     lines.push(Line::from(vec![Span::styled(
                         format!("{DETAIL_INDENT}{line}"),
-                        Style::default().fg(Color::White),
+                        Style::default().fg(Color::White).bg(DETAIL_BG),
                     )]));
                 }
             }
@@ -398,7 +407,7 @@ fn detail_lines(event: &AgentEvent, cap: Option<usize>) -> Vec<Line<'static>> {
             lines.truncate(cap);
             lines.push(Line::from(Span::styled(
                 format!("{DETAIL_INDENT}… {hidden} more lines"),
-                Style::default().fg(Color::Gray),
+                Style::default().fg(Color::Gray).bg(DETAIL_BG),
             )));
         }
     }
@@ -513,6 +522,27 @@ mod tests {
         assert!(screen.contains("styra"));
         assert!(screen.contains("codex"));
         assert!(screen.contains("running"));
+    }
+
+    #[test]
+    fn expanded_and_selected_content_uses_a_gray_backdrop_not_white() {
+        let mut app = App::new("codex", "s1");
+        app.push_event(AgentEvent::AgentMessage { text: "hello\nworld".into() });
+        // `push_event` leaves the newest entry both selected (via follow) and,
+        // once expanded, the case that used to flip to a reversed-white fill.
+        app.expand_all();
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        terminal.draw(|frame| render(frame, &app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let backgrounds: Vec<Color> = buffer
+            .content()
+            .iter()
+            .map(|cell| cell.style().bg.unwrap_or(Color::Reset))
+            .collect();
+
+        assert!(!backgrounds.contains(&Color::White));
+        assert!(backgrounds.contains(&Color::DarkGray));
     }
 
     #[test]
