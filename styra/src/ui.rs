@@ -527,7 +527,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     let hints = match (app.focus, app.view) {
         (Focus::Input, _) => "Enter send · Alt+Enter newline · Esc back to list",
         (Focus::List, View::Events) => {
-            "j/k move · space fold · m minor · p preview · r raw · l log · i message · s stop · q quit"
+            "j/k move · space fold · C collapse all · m minor · p preview · r raw · l log · i message · s stop · q quit"
         }
         (Focus::List, View::Raw) => "j/k scroll · g/G top/bottom · r events · l log · i message · q quit",
         (Focus::List, View::Log) => "j/k scroll · g/G top/bottom · l events · r raw · i message · q quit",
@@ -736,9 +736,17 @@ mod tests {
     #[test]
     fn footer_hints_depend_on_focus() {
         let mut app = App::new("codex", "s1");
-        assert!(rendered(&app).contains("i message"));
+        // The full hint line is longer than the 80-column test terminal, so
+        // check a marker near its start rather than one that may be clipped.
+        assert!(rendered(&app).contains("j/k move"));
         app.enter_input();
         assert!(rendered(&app).contains("Enter send"));
+    }
+
+    #[test]
+    fn footer_advertises_the_collapse_all_shortcut() {
+        let app = App::new("codex", "s1");
+        assert!(rendered(&app).contains("collapse all"));
     }
 
     #[test]
