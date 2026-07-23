@@ -566,10 +566,14 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     let hints = match (app.focus, app.view) {
         (Focus::Input, _) => "Enter send · Alt+Enter newline · Esc back to list",
         (Focus::List, View::Events) => {
-            "j/k move · space fold · C collapse all · m minor · p preview · r raw · l log · i message · s stop · q quit"
+            "j/k move · space fold · C collapse all · m minor · p preview · r raw · l log · i message · s stop · V switch · q quit"
         }
-        (Focus::List, View::Raw) => "j/k scroll · g/G top/bottom · r events · l log · i message · q quit",
-        (Focus::List, View::Log) => "j/k scroll · g/G top/bottom · l events · r raw · i message · q quit",
+        (Focus::List, View::Raw) => {
+            "j/k scroll · g/G top/bottom · r events · l log · i message · s stop · V switch · q quit"
+        }
+        (Focus::List, View::Log) => {
+            "j/k scroll · g/G top/bottom · l events · r raw · i message · s stop · V switch · q quit"
+        }
     };
     let footer = Paragraph::new(Line::from(Span::styled(
         format!(" {hints}"),

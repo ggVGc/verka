@@ -44,9 +44,11 @@ Styra does **not**, in its first form:
 - interpret which program produced a stream inside Driva (Driva transports
   bytes; Styra owns interpretation, exactly as Orka does).
 
-Later phases — session forking, resuming an old context in a new session, and
-switching models mid-context — are described under *Sessions and context* but
-are explicitly out of the first milestone.
+Session switching — seeding a fresh session with a prior one's rendered
+context, described under *The raw journal is the session* and *Session
+switching* — has since landed. Forking (keeping both branches) and native,
+protocol-level resume remain later phases, described under the same sections'
+future-ideas notes.
 
 ## Ownership and boundaries
 
@@ -356,6 +358,7 @@ current focus is shown in the status line and by which region draws the cursor.
 | `l`             | Toggle the diagnostic log view (same scrolling as the raw view) |
 | `i`             | Enter input focus                                           |
 | `s`             | Stop the session (keeps the journal)                        |
+| `V`             | Switch to a different stored session (see *Session switching*) |
 | `q`             | Quit (prompts if the session is still running)              |
 
 ### Input-focus keys
@@ -377,6 +380,25 @@ cannot bury the rest of the session. Rich external viewing of diffs (the
 wishlist's "show the diff in two vim buffers") is a later hook: a `FileChanged`
 entry can offer to open the change in a configured external viewer against a
 temporary worktree, but the first form only summarizes the paths.
+
+### Session switching
+
+`V` opens the same session picker `--view` (bare) shows at startup, but from
+inside an already-running session. Picking one: stops the current session
+(same effect as `s`, then the child is joined), renders the picked session's
+journal to a plain-text transcript (`journal::render_transcript`, built on
+genta's `render_events`), and launches a fresh session on the same profile the
+process was started with — `cli.profile`, not the picked session's own
+recorded one, so switching changes *what you're talking about*, not *what
+you're talking to* — sending that transcript as its opening message. The
+outgoing session's journal is untouched; only the current view moves on. See
+*The raw journal is the session* for why this is a rendered seed message
+rather than a native protocol resume, and the future ideas recorded there for
+alternatives.
+
+Cancelling out of the picker (`Esc`/`q`) leaves the current session running
+untouched. Picking one when there is nothing stored yet logs a message in the
+diagnostic log view rather than doing nothing silently.
 
 ## Concurrency model
 
