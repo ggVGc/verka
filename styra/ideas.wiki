@@ -1,4 +1,6 @@
 - Some indication on if agent output is finished or not, for this turn.
+- Preview sessions on right side of selection screen:
+  - Render lines in the same way as in the main log view, but without the arrows and body contents. Only single lines.
 - Clear options for driva invocation
 - Fix claude profile
 - Maybe get rid of other profiles like codex-exec? Not sure what their purpose is.

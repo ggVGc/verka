@@ -61,7 +61,9 @@ fn main() -> Result<()> {
     match cli.command {
         Command::Render { path, protocol, all } => {
             let log = read_input(&path)?;
-            print!("{}", genta::render::render(&log, protocol.into(), all));
+            // The CLI has no notion of "minor" lifecycle events to hide, unlike
+            // Styra's TUI toggle; always show them here.
+            print!("{}", genta::render::render(&log, protocol.into(), all, true));
         }
     }
     Ok(())
