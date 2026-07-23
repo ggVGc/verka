@@ -31,6 +31,9 @@ pub enum View {
 /// The session's lifecycle as the operator sees it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Status {
+    /// No agent process has been launched yet; it starts on the operator's
+    /// first submitted message (see `App::pending`).
+    Pending,
     /// The agent is working.
     Running,
     /// A turn completed; the agent is idle, awaiting input.
@@ -44,6 +47,7 @@ pub enum Status {
 impl Status {
     pub fn label(&self) -> String {
         match self {
+            Status::Pending => "not started".into(),
             Status::Running => "running".into(),
             Status::Waiting => "waiting".into(),
             Status::Stopped => "stopped".into(),
@@ -54,7 +58,7 @@ impl Status {
     }
 
     pub fn is_active(&self) -> bool {
-        matches!(self, Status::Running | Status::Waiting)
+        matches!(self, Status::Pending | Status::Running | Status::Waiting)
     }
 }
 
@@ -131,6 +135,27 @@ impl App {
             should_quit: false,
             switch_requested: false,
         }
+    }
+
+    /// A fresh App with no agent process launched yet: no journal or session
+    /// id exists until the operator submits a first message, at which point
+    /// the event loop spawns the session and fills those in. Used both for a
+    /// bare startup with no seed prompt and after picking a session to
+    /// switch to (see `set_input` for prefilling that pick's transcript).
+    /// Opens directly in input focus, since typing there is the only thing
+    /// that moves the session forward.
+    pub fn pending(profile_name: impl Into<String>) -> Self {
+        let mut app = Self::new(profile_name, String::new());
+        app.status = Status::Pending;
+        app.focus = Focus::Input;
+        app
+    }
+
+    /// Replace the message box's contents outright: used to prefill it with
+    /// a switched-from session's rendered transcript, or to restore a
+    /// message that failed to launch so it isn't lost.
+    pub fn set_input(&mut self, text: String) {
+        self.input = text;
     }
 
     /// Append a diagnostic log entry, keeping the tail in view unless the
@@ -520,6 +545,25 @@ mod tests {
         // A late event does not revive an ended session.
         app.push_event(AgentEvent::AgentMessage { text: "late".into() });
         assert!(matches!(app.status, Status::Ended { .. }));
+    }
+
+    #[test]
+    fn pending_opens_in_input_focus_with_no_session_yet_and_allows_sending() {
+        let app = App::pending("codex");
+        assert_eq!(app.status, Status::Pending);
+        assert_eq!(app.focus, Focus::Input);
+        assert!(app.session_id.is_empty());
+        assert!(app.input.is_empty());
+        // The message box must not read "session ended" before anything ran.
+        assert!(app.can_send());
+    }
+
+    #[test]
+    fn set_input_prefills_the_message_box_for_the_operator_to_edit_or_send() {
+        let mut app = App::pending("codex");
+        app.set_input("earlier session's transcript".into());
+        assert_eq!(app.input, "earlier session's transcript");
+        assert_eq!(app.take_message(), Some("earlier session's transcript".into()));
     }
 
     #[test]

@@ -15,7 +15,7 @@ use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
 use styra::agent::{MountSpec, Profile, SandboxLayout, SessionMeta};
-use styra::app::{App, Focus, View};
+use styra::app::{App, Focus, Status, View};
 use styra::journal::Journal;
 use styra::session::{LogEntry, Session, SessionSpec, SessionUpdate};
 use styra::ui;
@@ -84,11 +84,11 @@ fn main() -> Result<()> {
         None => None,
     };
 
-    // Build the application and, unless viewing, a live session up front so a
-    // setup failure is reported plainly before the terminal is taken over.
+    // Build the application and, unless viewing or awaiting the operator's
+    // first message, a live session up front so a setup failure is reported
+    // plainly before the terminal is taken over.
     let mut app;
-    let mut session: Option<Session> = None;
-    let mut updates: Option<Receiver<SessionUpdate>> = None;
+    let mut live: Live;
 
     if let Some(view) = &view_target {
         let meta = read_session_meta_or_error(view)?;
@@ -110,13 +110,26 @@ fn main() -> Result<()> {
         }
         // A replayed session has no live agent to end; mark it stopped.
         app.on_ended(styra::session::SessionEnd { exit_code: None, error: None });
+        live = Live::Viewing;
     } else {
         let prompt = cli.prompt.join(" ");
         let seed = (!prompt.trim().is_empty()).then_some(prompt.as_str());
-        let (new_app, spawned, receiver) = launch_live_session(&cli, &layout, seed)?;
-        app = new_app;
-        session = Some(spawned);
-        updates = Some(receiver);
+        match seed {
+            // A trailing prompt is input the operator already gave (as a CLI
+            // argument), so it is fine to launch immediately.
+            Some(seed) => {
+                let (new_app, spawned, receiver) = launch_live_session(&cli, &layout, Some(seed))?;
+                app = new_app;
+                live = Live::Running { session: Box::new(spawned), updates: receiver };
+            }
+            // No seed: nothing has been said to an agent yet, so nothing is
+            // launched yet either. The event loop spawns the session the
+            // moment the operator submits their first message.
+            None => {
+                app = App::pending(cli.profile.clone());
+                live = Live::Pending;
+            }
+        }
     }
 
     let mut terminal = match terminal {
@@ -125,10 +138,11 @@ fn main() -> Result<()> {
     };
 
     // Runs until the operator quits; a session switch stops the outgoing
-    // session, seeds a fresh one from the picked session's transcript, and
-    // loops back into run() with it, all inside the same terminal.
+    // session, prefills the message box with the picked session's transcript,
+    // and loops back into run() pending a fresh launch, all inside the same
+    // terminal.
     let result = loop {
-        let outcome = match run(&mut terminal, &mut app, session.as_ref(), updates.as_ref()) {
+        let outcome = match run(&mut terminal, &mut app, &cli, &layout, &mut live) {
             Ok(outcome) => outcome,
             Err(error) => break Err(error),
         };
@@ -137,15 +151,15 @@ fn main() -> Result<()> {
             RunOutcome::Switch(seed_path) => {
                 // Stopped and joined before the next session spawns; both
                 // write under .styra and there is no reason to overlap them.
-                drop(session.take());
-                match switch_to_session(&cli, &layout, &seed_path) {
-                    Ok((new_app, spawned, receiver)) => {
-                        app = new_app;
-                        session = Some(spawned);
-                        updates = Some(receiver);
+                if let Live::Running { session, .. } = std::mem::replace(&mut live, Live::Pending) {
+                    drop(session);
+                }
+                match render_switch_seed(&seed_path) {
+                    Ok(transcript) => {
+                        app = App::pending(cli.profile.clone());
+                        app.set_input(transcript);
                     }
                     Err(error) => {
-                        updates = None;
                         app.push_log(LogEntry::error(format!(
                             "could not switch session: {error:#}"
                         )));
@@ -158,7 +172,9 @@ fn main() -> Result<()> {
     restore_terminal(&mut terminal)?;
     // Dropping the session here (after the terminal is restored) closes stdin
     // and joins the worker threads.
-    drop(session);
+    if let Live::Running { session, .. } = live {
+        drop(session);
+    }
     result
 }
 
@@ -183,15 +199,23 @@ fn read_session_meta_or_error(path: &Path) -> Result<SessionMeta> {
         })
 }
 
-/// Launch a fresh live session on `cli.profile`: create its journal, spawn
-/// the sandboxed agent process through Driva, and — if `seed` is given —
-/// send it as the opening message. Used both for the CLI's trailing prompt
-/// on first launch and a rendered transcript when switching sessions.
-fn launch_live_session(
-    cli: &Cli,
-    layout: &SandboxLayout,
-    seed: Option<&str>,
-) -> Result<(App, Session, Receiver<SessionUpdate>)> {
+/// What a freshly spawned live session hands back, before it is wired into
+/// an `App` and the event loop's `Live` state.
+struct Spawned {
+    session: Session,
+    updates: Receiver<SessionUpdate>,
+    profile_name: String,
+    session_id: String,
+    workspace: PathBuf,
+    journal_path: PathBuf,
+}
+
+/// Create a session's journal, spawn the sandboxed agent process through
+/// Driva on `cli.profile`, and — if `seed` is given — send it as the
+/// opening message. This is the point at which the agent actually starts
+/// running, so callers only reach it once the operator has provided some
+/// input: a CLI trailing prompt, or a message typed into the box.
+fn spawn_session(cli: &Cli, layout: &SandboxLayout, seed: Option<&str>) -> Result<Spawned> {
     let profile = Profile::builtin(&cli.profile, layout)?;
     let workspace = resolve_workspace(cli.workspace.as_deref())?;
     let root = store_root()?;
@@ -201,9 +225,10 @@ fn launch_live_session(
 
     let mut profile = profile;
     profile.network = profile.network || cli.network;
+    let profile_name = profile.name.clone();
 
     let spec = SessionSpec {
-        profile: profile.clone(),
+        profile,
         working_directory: layout.workspace.clone(),
         workspace: MountSpec {
             source: workspace.clone(),
@@ -219,32 +244,41 @@ fn launch_live_session(
         rootfs: Some(PathBuf::from("/")),
     });
 
-    let (spawned, receiver) =
+    let (session, updates) =
         Session::spawn(spec, backend, journal, session_id.clone(), diagnostics)?;
-    let mut app = App::new(profile.name.clone(), session_id);
-    app.set_workspace_root(workspace);
-    app.push_log(LogEntry::info(format!("journal: {}", journal_path.display())));
 
     if let Some(seed) = seed.map(str::trim).filter(|seed| !seed.is_empty()) {
-        spawned.send(seed)?;
+        session.send(seed)?;
     }
 
-    Ok((app, spawned, receiver))
+    Ok(Spawned { session, updates, profile_name, session_id, workspace, journal_path })
 }
 
-/// Render the picked stored session's journal to a transcript and launch a
-/// fresh live session (still on `cli.profile`) seeded with it. See
-/// `DESIGN.md`'s *Session switching* for why a rendered transcript rather
-/// than a native protocol resume.
-fn switch_to_session(
+/// Spawn a session and wrap it in a fresh `App`. Used for the CLI's trailing
+/// prompt on first launch, the only case where the agent starts before the
+/// event loop takes over.
+fn launch_live_session(
     cli: &Cli,
     layout: &SandboxLayout,
-    seed_path: &Path,
+    seed: Option<&str>,
 ) -> Result<(App, Session, Receiver<SessionUpdate>)> {
+    let spawned = spawn_session(cli, layout, seed)?;
+    let mut app = App::new(spawned.profile_name, spawned.session_id);
+    app.set_workspace_root(spawned.workspace);
+    app.push_log(LogEntry::info(format!("journal: {}", spawned.journal_path.display())));
+    Ok((app, spawned.session, spawned.updates))
+}
+
+/// Render the picked stored session's journal to a plain-text transcript, to
+/// prefill the message box with. Nothing is sent and no process is launched
+/// here: switching stops the outgoing session and starts fresh, but the new
+/// agent only starts once the operator submits (or edits, or replaces) this
+/// transcript themselves. See `DESIGN.md`'s *Session switching* for why a
+/// rendered transcript rather than a native protocol resume.
+fn render_switch_seed(seed_path: &Path) -> Result<String> {
     let meta = read_session_meta_or_error(seed_path)?;
-    let transcript = styra::journal::render_transcript(seed_path, meta.protocol)
-        .with_context(|| format!("rendering a transcript for {}", seed_path.display()))?;
-    launch_live_session(cli, layout, Some(&transcript))
+    styra::journal::render_transcript(seed_path, meta.protocol)
+        .with_context(|| format!("rendering a transcript for {}", seed_path.display()))
 }
 
 /// The session picker loop: j/k or arrows to move, Enter to choose a
@@ -286,17 +320,35 @@ enum RunOutcome {
     Switch(PathBuf),
 }
 
+/// The live-agent side of the interactive loop: no process yet (awaiting the
+/// operator's first message), a spawned agent, or a replayed journal with no
+/// live agent to send to.
+enum Live {
+    /// Nothing has been launched; the event loop spawns the session itself
+    /// the moment the operator submits a message from `Focus::Input`.
+    Pending,
+    /// A spawned agent process and the channel its threads report through.
+    /// Boxed: `Pending` and `Viewing` carry nothing, so leaving `Session`
+    /// unboxed would size every `Live` to its largest variant.
+    Running { session: Box<Session>, updates: Receiver<SessionUpdate> },
+    /// A replayed journal (`--view`); there is no live agent to launch.
+    Viewing,
+}
+
 /// The event loop: apply pending session updates, render, and handle input
-/// until the operator quits or asks to switch sessions.
+/// until the operator quits or asks to switch sessions. `cli` and `layout`
+/// are only needed to spawn a session lazily out of `Live::Pending` once the
+/// operator writes a first message.
 fn run(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     app: &mut App,
-    session: Option<&Session>,
-    updates: Option<&Receiver<SessionUpdate>>,
+    cli: &Cli,
+    layout: &SandboxLayout,
+    live: &mut Live,
 ) -> Result<RunOutcome> {
     let mut pending_fold = false;
     loop {
-        if let Some(updates) = updates {
+        if let Live::Running { updates, .. } = live {
             while let Ok(update) = updates.try_recv() {
                 match update {
                     SessionUpdate::Event(event) => app.push_event(event),
@@ -320,8 +372,8 @@ fn run(
         }
 
         match app.focus {
-            Focus::List => handle_list_key(app, session, key, &mut pending_fold),
-            Focus::Input => handle_input_key(app, session, key),
+            Focus::List => handle_list_key(app, live, key, &mut pending_fold),
+            Focus::Input => handle_input_key(app, cli, layout, live, key),
         }
 
         if app.should_quit {
@@ -342,7 +394,7 @@ fn run(
     }
 }
 
-fn handle_list_key(app: &mut App, session: Option<&Session>, key: KeyEvent, pending_fold: &mut bool) {
+fn handle_list_key(app: &mut App, live: &Live, key: KeyEvent, pending_fold: &mut bool) {
     // Vim-style fold chord: `z` then `R` (expand all) or `M` (collapse all).
     if std::mem::take(pending_fold) {
         match key.code {
@@ -361,7 +413,7 @@ fn handle_list_key(app: &mut App, session: Option<&Session>, key: KeyEvent, pend
         KeyCode::Char('l') => return app.toggle_log(),
         KeyCode::Char('t') => return app.toggle_transcript(),
         KeyCode::Char('s') => {
-            if let Some(session) = session {
+            if let Live::Running { session, .. } = live {
                 session.stop();
                 app.push_log(LogEntry::info("stop requested; closing agent input"));
             }
@@ -409,27 +461,53 @@ fn handle_list_key(app: &mut App, session: Option<&Session>, key: KeyEvent, pend
     }
 }
 
-fn handle_input_key(app: &mut App, session: Option<&Session>, key: KeyEvent) {
+fn handle_input_key(app: &mut App, cli: &Cli, layout: &SandboxLayout, live: &mut Live, key: KeyEvent) {
     match key.code {
         KeyCode::Esc => app.enter_list(),
         KeyCode::Tab => app.toggle_focus(),
         KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => app.input_newline(),
         KeyCode::Enter => {
             if let Some(message) = app.take_message() {
-                match session {
+                match live {
                     // The sent message returns as a UserMessage event, so it is
                     // not pushed here; send failures surface in the log view.
-                    Some(session) if app.can_send() => {
+                    Live::Running { session, .. } if app.can_send() => {
                         if let Err(error) = session.send(&message) {
                             app.push_log(LogEntry::error(format!("send failed: {error:#}")));
                         }
                     }
-                    Some(_) => app.push_log(LogEntry::warn(format!(
+                    Live::Running { .. } => app.push_log(LogEntry::warn(format!(
                         "not sent (session {}): {message}",
                         app.status.label()
                     ))),
-                    None => app
+                    Live::Viewing => app
                         .push_log(LogEntry::warn("not sent: viewed journal has no live agent")),
+                    // The operator's first message: this is what actually
+                    // starts the agent. Nothing was launched or sent before
+                    // this point.
+                    Live::Pending => match spawn_session(cli, layout, Some(&message)) {
+                        Ok(spawned) => {
+                            app.profile_name = spawned.profile_name;
+                            app.session_id = spawned.session_id;
+                            app.set_workspace_root(spawned.workspace);
+                            app.push_log(LogEntry::info(format!(
+                                "journal: {}",
+                                spawned.journal_path.display()
+                            )));
+                            app.status = Status::Running;
+                            *live = Live::Running {
+                                session: Box::new(spawned.session),
+                                updates: spawned.updates,
+                            };
+                        }
+                        Err(error) => {
+                            app.push_log(LogEntry::error(format!(
+                                "could not launch the agent: {error:#}"
+                            )));
+                            // Don't lose what they typed; let them retry.
+                            app.set_input(message);
+                        }
+                    },
                 }
             }
         }

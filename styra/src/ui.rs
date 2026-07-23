@@ -30,6 +30,7 @@ const DETAIL_BG: Color = Color::DarkGray;
 /// a glance instead of requiring the operator to read the label text.
 fn status_color(status: &Status) -> Color {
     match status {
+        Status::Pending => Color::Blue,
         Status::Running => Color::Green,
         Status::Waiting => Color::Yellow,
         Status::Stopped => Color::DarkGray,

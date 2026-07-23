@@ -305,8 +305,10 @@ The application is a single full-screen view with three regions:
   text to the agent (encoded by the profile) and appends a `UserMessage` entry
   to the list.
 - **Status line (top border).** Application name, active profile/model, and
-  session state: `running`, `waiting` (turn complete, agent idle for input),
-  or `stopped`. Token usage from the latest `TurnCompleted` is shown.
+  session state: `not started` (no process launched yet, awaiting the
+  operator's first message), `running`, `waiting` (turn complete, agent idle
+  for input), or `stopped`. Token usage from the latest `TurnCompleted` is
+  shown.
 
 ### The raw view
 
@@ -398,21 +400,44 @@ temporary worktree, but the first form only summarizes the paths.
 ### Session switching
 
 `V` opens the same session picker `--view` (bare) shows at startup, but from
-inside an already-running session. Picking one: stops the current session
-(same effect as `s`, then the child is joined), renders the picked session's
-journal to a plain-text transcript (`journal::render_transcript`, built on
-genta's `render_events`), and launches a fresh session on the same profile the
-process was started with — `cli.profile`, not the picked session's own
-recorded one, so switching changes *what you're talking about*, not *what
-you're talking to* — sending that transcript as its opening message. The
-outgoing session's journal is untouched; only the current view moves on. See
-*The raw journal is the session* for why this is a rendered seed message
-rather than a native protocol resume, and the future ideas recorded there for
+inside an already-running session. Picking one stops the current session
+(same effect as `s`, then the child is joined) and renders the picked
+session's journal to a plain-text transcript (`journal::render_transcript`,
+built on genta's `render_events`) — but nothing is launched or sent yet. The
+transcript is only prefilled into the message box, and the view resets to a
+fresh, unlaunched `App` in input focus (`Status::Pending`, see *Starting and
+switching send nothing on their own* below): the operator reviews it, edits
+or appends to it, or clears it and writes something else, and only their own
+`Enter` starts the new session — on the same profile the process was started
+with (`cli.profile`, not the picked session's own recorded one, so switching
+changes *what you're talking about*, not *what you're talking to*) — sending
+whatever is currently in the box as its opening message. The outgoing
+session's journal is untouched; only the current view moves on. See *The raw
+journal is the session* for why the seed is a rendered transcript rather than
+a native protocol resume, and the future ideas recorded there for
 alternatives.
 
 Cancelling out of the picker (`Esc`/`q`) leaves the current session running
 untouched. Picking one when there is nothing stored yet logs a message in the
 diagnostic log view rather than doing nothing silently.
+
+### Starting and switching send nothing on their own
+
+Neither a bare `styra` invocation nor a session switch spawns the agent
+process by itself. Both land in `Status::Pending` (`App::pending`): an `App`
+with no session id yet, opened directly in input focus, and a `Live::Pending`
+event-loop state that holds no process and no channel. The message box may be
+empty (a bare start) or prefilled with a switched-from transcript, but either
+way the operator's own submitted message is what triggers
+`spawn_session` — creating the journal, launching the sandboxed process
+through Driva, and sending that first message once the agent is ready. A
+launch failure (e.g. a missing binary) is logged in the diagnostic view and
+the typed message is restored to the box rather than lost, so the operator
+can fix the problem and retry without retyping.
+
+The one exception is a trailing CLI `PROMPT`: since that is already input the
+operator gave (as a command-line argument, before the terminal even took
+over), it launches immediately, exactly as it always has.
 
 ## Concurrency model
 
@@ -463,8 +488,10 @@ styra [OPTIONS] [-- PROMPT]
 ```
 
 An optional trailing `PROMPT` seeds the first turn so a session can start with
-one message already sent; without it, the application opens in input focus with
-an empty box. `--view` opens the view/replay path over a stored journal; it
+one message already sent, launching the agent process immediately; without it,
+the application opens in input focus with an empty box and launches nothing
+until the operator submits a message (see *Starting and switching send nothing
+on their own*). `--view` opens the view/replay path over a stored journal; it
 decodes with the session's own recorded profile and protocol, so `--profile`
 is not read in this mode.
 
