@@ -157,12 +157,33 @@ fn render_list(frame: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    let items: Vec<ListItem> = app.entries.iter().map(entry_item).collect();
+    let visible: Vec<(usize, &Entry)> = app
+        .entries
+        .iter()
+        .enumerate()
+        .filter(|(idx, _)| app.is_visible(*idx))
+        .collect();
+
+    if visible.is_empty() {
+        let empty = Paragraph::new(Line::from(vec![Span::styled(
+            "  all entries hidden — press m to show minor events",
+            Style::default().fg(Color::Gray),
+        )]))
+        .block(block);
+        frame.render_widget(empty, area);
+        return;
+    }
+
+    let items: Vec<ListItem> = visible.iter().map(|(_, entry)| entry_item(entry)).collect();
     let list = List::new(items)
         .block(block)
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
     let mut state = ListState::default();
-    state.select(Some(app.selected.min(app.entries.len().saturating_sub(1))));
+    let position = visible
+        .iter()
+        .position(|(idx, _)| *idx == app.selected)
+        .or_else(|| visible.iter().rposition(|(idx, _)| *idx < app.selected));
+    state.select(position);
     frame.render_stateful_widget(list, area, &mut state);
 }
 
@@ -266,7 +287,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     let hints = match (app.focus, app.view) {
         (Focus::Input, _) => "Enter send · Alt+Enter newline · Esc back to list",
         (Focus::List, View::Events) => {
-            "j/k move · space fold · r raw · l log · i message · s stop · q quit"
+            "j/k move · space fold · m minor · r raw · l log · i message · s stop · q quit"
         }
         (Focus::List, View::Raw) => "j/k scroll · g/G top/bottom · r events · l log · i message · q quit",
         (Focus::List, View::Log) => "j/k scroll · g/G top/bottom · l events · r raw · i message · q quit",
@@ -363,6 +384,17 @@ mod tests {
         });
         let screen = rendered(&app);
         assert!(screen.contains("in 12"));
+    }
+
+    #[test]
+    fn minor_events_are_omitted_from_the_list_when_hidden() {
+        let mut app = App::new("codex", "s1");
+        app.push_event(StyraEvent::ThreadStarted { thread_id: "t-1".into() });
+        app.push_event(StyraEvent::AgentMessage { text: "hello world".into() });
+        app.toggle_minor();
+        let screen = rendered(&app);
+        assert!(!screen.contains("t-1"));
+        assert!(screen.contains("hello world"));
     }
 
     #[test]

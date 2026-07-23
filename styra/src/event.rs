@@ -121,6 +121,16 @@ impl StyraEvent {
         }
     }
 
+    /// True for high-frequency lifecycle/bookkeeping events — thread and turn
+    /// markers, token usage — that carry little signal turn over turn. The UI
+    /// hides these by default so the list reads as the agent's actual work.
+    pub fn is_minor(&self) -> bool {
+        matches!(
+            self,
+            StyraEvent::ThreadStarted { .. } | StyraEvent::TurnStarted | StyraEvent::TurnCompleted { .. }
+        )
+    }
+
     /// A single collapsed-line summary. Never contains newlines.
     pub fn summary(&self) -> String {
         let line = match self {

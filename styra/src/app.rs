@@ -73,6 +73,9 @@ pub struct App {
     pub status: Status,
     /// When true, the selection tracks the newest entry as events arrive.
     pub follow: bool,
+    /// When false, minor lifecycle events (thread/turn/usage) are hidden from
+    /// the list and skipped by navigation.
+    pub show_minor: bool,
     pub profile_name: String,
     pub session_id: String,
     pub latest_usage: Option<TokenUsage>,
@@ -98,6 +101,7 @@ impl App {
             input: String::new(),
             status: Status::Running,
             follow: true,
+            show_minor: true,
             profile_name: profile_name.into(),
             session_id: session_id.into(),
             latest_usage: None,
@@ -223,28 +227,60 @@ impl App {
 
     // --- List navigation ----------------------------------------------------
 
-    pub fn select_next(&mut self) {
-        if self.selected + 1 < self.entries.len() {
-            self.selected += 1;
+    /// Whether an entry is shown in the list under the current minor filter.
+    pub fn is_visible(&self, idx: usize) -> bool {
+        self.show_minor || !self.entries[idx].event.is_minor()
+    }
+
+    /// The nearest visible index at or after `from`, if any.
+    fn next_visible(&self, from: usize) -> Option<usize> {
+        (from..self.entries.len()).find(|&i| self.is_visible(i))
+    }
+
+    /// The nearest visible index at or before `from`, if any.
+    fn prev_visible(&self, from: usize) -> Option<usize> {
+        (0..=from).rev().find(|&i| self.is_visible(i))
+    }
+
+    /// Toggle whether minor lifecycle events (thread/turn/usage) are shown.
+    pub fn toggle_minor(&mut self) {
+        self.show_minor = !self.show_minor;
+        if !self.entries.is_empty() && !self.is_visible(self.selected) {
+            if let Some(idx) = self.prev_visible(self.selected).or_else(|| self.next_visible(self.selected)) {
+                self.selected = idx;
+            }
         }
-        // Re-enable follow only when the selection reaches the tail.
-        self.follow = !self.entries.is_empty() && self.selected + 1 == self.entries.len();
+    }
+
+    pub fn select_next(&mut self) {
+        if let Some(next) = self.next_visible(self.selected + 1) {
+            self.selected = next;
+        }
+        // Re-enable follow only when the selection reaches the visible tail.
+        self.follow = !self.entries.is_empty() && self.next_visible(self.selected + 1).is_none();
     }
 
     pub fn select_prev(&mut self) {
-        self.selected = self.selected.saturating_sub(1);
+        if let Some(prev) = self.selected.checked_sub(1).and_then(|from| self.prev_visible(from)) {
+            self.selected = prev;
+        }
         // Moving off the tail pins the view.
         self.follow = false;
     }
 
     pub fn select_first(&mut self) {
-        self.selected = 0;
-        self.follow = self.entries.len() <= 1;
+        if let Some(first) = self.next_visible(0) {
+            self.selected = first;
+        }
+        self.follow = !self.entries.is_empty() && self.next_visible(self.selected + 1).is_none();
     }
 
     pub fn select_last(&mut self) {
-        if !self.entries.is_empty() {
-            self.selected = self.entries.len() - 1;
+        if self.entries.is_empty() {
+            return;
+        }
+        if let Some(last) = self.prev_visible(self.entries.len() - 1) {
+            self.selected = last;
         }
         self.follow = true;
     }
@@ -468,6 +504,48 @@ mod tests {
         assert_eq!(app.log_scroll_back, 2, "scrolled-up view stays put");
         app.log_to_bottom();
         assert_eq!(app.log_scroll_back, 0);
+    }
+
+    #[test]
+    fn minor_events_are_hidden_and_skipped_by_navigation() {
+        let mut app = app();
+        app.push_event(StyraEvent::ThreadStarted { thread_id: "t".into() });
+        app.push_event(StyraEvent::AgentMessage { text: "a".into() });
+        app.push_event(StyraEvent::TurnStarted);
+        app.push_event(StyraEvent::AgentMessage { text: "b".into() });
+        app.push_event(StyraEvent::TurnCompleted { usage: TokenUsage::default() });
+
+        app.toggle_minor();
+        assert!(!app.show_minor);
+
+        app.select_first();
+        assert_eq!(app.entries[app.selected].event, StyraEvent::AgentMessage { text: "a".into() });
+
+        app.select_next();
+        assert_eq!(app.entries[app.selected].event, StyraEvent::AgentMessage { text: "b".into() });
+
+        // No more visible entries after "b"; select_next is a no-op.
+        app.select_next();
+        assert_eq!(app.entries[app.selected].event, StyraEvent::AgentMessage { text: "b".into() });
+
+        app.select_prev();
+        assert_eq!(app.entries[app.selected].event, StyraEvent::AgentMessage { text: "a".into() });
+
+        app.toggle_minor();
+        assert!(app.show_minor);
+    }
+
+    #[test]
+    fn toggling_minor_off_moves_selection_off_a_hidden_entry() {
+        let mut app = app();
+        app.push_event(StyraEvent::AgentMessage { text: "a".into() });
+        app.push_event(StyraEvent::TurnStarted);
+        // Selection sits on the just-pushed minor entry via follow.
+        assert_eq!(app.selected, 1);
+
+        app.toggle_minor();
+        assert!(app.is_visible(app.selected));
+        assert_eq!(app.entries[app.selected].event, StyraEvent::AgentMessage { text: "a".into() });
     }
 
     #[test]
