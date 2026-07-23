@@ -1,0 +1,26 @@
+- No first line in expanded selected entry
+  - Less bright bg color in content also
+- Some indication on if agent output is finished or not, for this turn.
+- Clear options for driva invocation
+- Fix claude profile
+- Maybe get rid of other profiles like codex-exec? Not sure what their purpose is.
+- Some way of listing models and selecting between them on-the-fly:
+  - This will affect caching, I suppose?
+- Tag sessions
+- Store more metadata in sessions:
+  - Git repo, if any
+  - Dir with parent .git
+  - Dir where launched
+- Concept of a Styra session is not the same as an agent session:
+  - Maybe it's a "project", or workspace?
+  - It can have many associated agent sessions
+  - And other things, like notes, todo list etc.
+- Probably need some kind of daemon so sessions can run in background:
+- When resuming sessions with the same model provider, use the actual raw session logged from the agent.
+  - Otherwise do a translation between the JSON formats
+  - Or, if we can't, a text transcript
+- Resuming of sessions (copy of functionality in codex/claude):
+  - Maybe use original transcripts unless model in styra was changed
+- Preview window on the side which shows the content of the current log entry:
+  - Syntax highlighting for code blocks
+- Wrap lines in the log
