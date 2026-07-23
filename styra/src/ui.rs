@@ -51,7 +51,7 @@ fn render_raw(frame: &mut Frame, app: &App, area: Rect) {
     if app.raw.is_empty() {
         let empty = Paragraph::new(Line::from(Span::styled(
             "  no wire traffic yet",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(Color::Gray),
         )))
         .block(block);
         frame.render_widget(empty, area);
@@ -108,7 +108,7 @@ fn render_list(frame: &mut Frame, app: &App, area: Rect) {
     if app.entries.is_empty() {
         let empty = Paragraph::new(Line::from(vec![Span::styled(
             "  waiting for the agent — press i to send a message",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(Color::Gray),
         )]))
         .block(block);
         frame.render_widget(empty, area);
@@ -172,7 +172,7 @@ fn detail_lines(event: &StyraEvent) -> Vec<Line<'static>> {
         lines.truncate(MAX_DETAIL_LINES);
         lines.push(Line::from(Span::styled(
             format!("{DETAIL_INDENT}… {hidden} more lines"),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(Color::Gray),
         )));
     }
     lines
@@ -211,7 +211,7 @@ fn input_text(app: &App) -> Vec<Line<'static>> {
     if app.input.is_empty() {
         return vec![Line::from(Span::styled(
             "type a message, Enter to send",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(Color::Gray),
         ))];
     }
     app.input
@@ -228,7 +228,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     };
     let footer = Paragraph::new(Line::from(Span::styled(
         format!(" {hints}"),
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(Color::Gray),
     )));
     frame.render_widget(footer, area);
 }
