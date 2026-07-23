@@ -12,7 +12,7 @@ Each is committed on its own. Check off as completed.
 - [x] **3. Journal (`journal.rs`).** Verbatim capture of the agent event stream
   and the operator input log; replay of a stored journal into events. Unit
   tested.
-- [ ] **4. Agent profile (`agent.rs`).** The `Profile` (command, protocol,
+- [x] **4. Agent profile (`agent.rs`).** The `Profile` (command, protocol,
   mounts, environment, network) and outgoing-message encoding; the built-in
   codex interactive profile and its Driva isolation policy. Unit tested.
 - [ ] **5. Session (`session.rs`).** Driva launch with piped stdin/stdout, the
