@@ -9,6 +9,7 @@
 pub use genta::agent;
 pub use genta::appserver;
 pub use genta::event;
+pub use genta::render;
 
 pub mod app;
 pub mod journal;

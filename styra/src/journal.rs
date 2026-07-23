@@ -247,6 +247,16 @@ pub fn replay(path: &Path, protocol: Protocol) -> Result<Vec<AgentEvent>> {
     Ok(events)
 }
 
+/// Render a stored journal as a plain-text transcript, suitable as a seed
+/// message for a freshly launched agent that should pick up where this
+/// session left off. See [`replay`] for the decode this builds on, and
+/// `DESIGN.md`'s *Session switching* for why a rendered transcript rather
+/// than a native protocol resume.
+pub fn render_transcript(path: &Path, protocol: Protocol) -> Result<String> {
+    let events = replay(path, protocol)?;
+    Ok(crate::render::render_events(&events, false))
+}
+
 /// Reconstruct the raw interaction from a stored journal: each agent record is
 /// its verbatim line, each operator record the message text that was sent.
 pub fn replay_raw(path: &Path) -> Result<Vec<RawLine>> {
@@ -327,6 +337,28 @@ mod tests {
                 AgentEvent::UserMessage { text: "thanks".into() },
             ]
         );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn render_transcript_matches_rendering_the_replayed_events() {
+        let dir = temp_dir("render-transcript");
+        {
+            let mut journal = Journal::create(&dir).unwrap();
+            journal.record_user_message("do the thing").unwrap();
+            journal
+                .record_agent_line(
+                    r#"{"type":"item.completed","item":{"type":"agent_message","text":"done"}}"#,
+                )
+                .unwrap();
+        }
+
+        let events = replay(&dir, Protocol::CodexJsonl).unwrap();
+        let expected = crate::render::render_events(&events, false);
+        assert_eq!(render_transcript(&dir, Protocol::CodexJsonl).unwrap(), expected);
+        assert!(expected.contains("do the thing"));
+        assert!(expected.contains("done"));
 
         std::fs::remove_dir_all(&dir).ok();
     }

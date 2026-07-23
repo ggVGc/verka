@@ -250,6 +250,19 @@ text. Worth revisiting once the simple version is in and its limits (token
 cost of the rendered transcript, fidelity of the reconstruction) are felt in
 practice.
 
+A structurally different alternative, seen in the `pi.dev` harness: rather
+than replaying raw or rendered history, generate a goal-first **recap**
+(why the session exists, current state, decisions, relevant files, likely
+next action) and seed with that instead of — or once a session gets long,
+alongside — the full transcript. Pi can do this because it talks to model
+provider APIs directly, so it owns the conversation's message array end to
+end; Styra only ever owns a subprocess's text-shaped input. A recap here
+would mean Styra itself calling out to a model to summarize before seeding
+the new session — a real new capability (an API client, a key, a cost),
+not a reshaping of what already exists. Deferred alongside native resume;
+worth it if the rendered transcript's token cost becomes the actual pain
+point in practice.
+
 Journals live under a per-session directory in a Styra store (`.styra/` in the
 workbench, separately owned from `.orka/` and `.linka/`), named by a session id.
 
