@@ -4,7 +4,7 @@
 //! inline when expanded), the message box, and a one-line status/help footer.
 //! Rendering is a pure function of `App`; all state lives in [`crate::app`].
 
-use crate::app::{App, Entry, Focus, View};
+use crate::app::{App, Entry, Focus, Status, View};
 use crate::event::{DetailBlock, AgentEvent};
 use crate::session::{Direction as WireDirection, LogLevel};
 use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
@@ -17,6 +17,33 @@ use ratatui::Frame;
 /// cannot bury the rest of the session.
 const MAX_DETAIL_LINES: usize = 40;
 const DETAIL_INDENT: &str = "    ";
+
+/// Color coding for the status dot, so running vs. waiting for input reads at
+/// a glance instead of requiring the operator to read the label text.
+fn status_color(status: &Status) -> Color {
+    match status {
+        Status::Running => Color::Green,
+        Status::Waiting => Color::Yellow,
+        Status::Stopped => Color::DarkGray,
+        Status::Ended { error: Some(_), .. } => Color::Red,
+        Status::Ended { .. } => Color::DarkGray,
+    }
+}
+
+/// Build a block title of the form " styra · profile · ● status[ · suffix] ".
+fn title_line(profile: &str, status: &Status, suffix: Option<&str>) -> Line<'static> {
+    let color = status_color(status);
+    let mut spans = vec![
+        Span::raw(format!(" styra · {profile} · ")),
+        Span::styled("● ", Style::default().fg(color)),
+        Span::styled(status.label(), Style::default().fg(color).add_modifier(Modifier::BOLD)),
+    ];
+    spans.push(match suffix {
+        Some(suffix) => Span::raw(format!(" · {suffix} ")),
+        None => Span::raw(" "),
+    });
+    Line::from(spans)
+}
 
 pub fn render(frame: &mut Frame, app: &App) {
     let input_height = input_area_height(app);
@@ -47,7 +74,7 @@ fn render_log(frame: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(border_style)
-        .title(format!(" styra · {} · {} · log ", app.profile_name, app.status.label()));
+        .title(title_line(&app.profile_name, &app.status, Some("log")));
 
     if app.log.is_empty() {
         let empty = Paragraph::new(Line::from(Span::styled(
@@ -88,7 +115,7 @@ fn render_raw(frame: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(border_style)
-        .title(format!(" styra · {} · {} · raw ", app.profile_name, app.status.label()));
+        .title(title_line(&app.profile_name, &app.status, Some("raw")));
 
     if app.raw.is_empty() {
         let empty = Paragraph::new(Line::from(Span::styled(
@@ -131,11 +158,6 @@ fn render_list(frame: &mut Frame, app: &App, area: Rect) {
             )
         })
         .unwrap_or_default();
-    let title = format!(
-        " styra · {} · {} ",
-        app.profile_name,
-        app.status.label()
-    );
     let border_style = if app.focus == Focus::List {
         Style::default().fg(Color::Cyan)
     } else {
@@ -144,7 +166,7 @@ fn render_list(frame: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(border_style)
-        .title(title)
+        .title(title_line(&app.profile_name, &app.status, None))
         .title_bottom(Line::from(usage).right_aligned());
 
     if app.entries.is_empty() {
@@ -445,6 +467,17 @@ mod tests {
         assert!(screen.contains("styra"));
         assert!(screen.contains("codex"));
         assert!(screen.contains("running"));
+    }
+
+    #[test]
+    fn header_shows_a_dot_indicating_running_vs_waiting() {
+        let mut app = App::new("codex", "s1");
+        assert!(rendered(&app).contains('●'));
+        assert_eq!(status_color(&app.status), Color::Green);
+
+        app.push_event(AgentEvent::TurnCompleted { usage: TokenUsage::default() });
+        assert!(rendered(&app).contains("waiting"));
+        assert_eq!(status_color(&app.status), Color::Yellow);
     }
 
     #[test]
