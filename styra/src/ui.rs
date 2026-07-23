@@ -348,6 +348,12 @@ fn detail_lines(event: &AgentEvent) -> Vec<Line<'static>> {
             }
         }
     }
+    // The detail body's first line is invariably a restatement of what the
+    // summary line above it already shows (the command, the message's first
+    // line, ...); drop it so expanding an entry doesn't just echo itself.
+    if !lines.is_empty() {
+        lines.remove(0);
+    }
     if lines.len() > MAX_DETAIL_LINES {
         let hidden = lines.len() - MAX_DETAIL_LINES;
         lines.truncate(MAX_DETAIL_LINES);
@@ -502,6 +508,23 @@ mod tests {
         app.expand_all();
         let screen = rendered(&app);
         assert!(screen.contains('▾'));
+        assert!(screen.contains("24 passed"));
+    }
+
+    #[test]
+    fn expanding_does_not_repeat_the_summary_as_the_first_detail_line() {
+        let mut app = App::new("codex", "s1");
+        app.push_event(AgentEvent::CommandCompleted {
+            command: "cargo test".into(),
+            status: "completed".into(),
+            exit_code: Some(0),
+            output: "24 passed".into(),
+        });
+        app.expand_all();
+        let screen = rendered(&app);
+        // "$ cargo test" is the detail body's first line and only restates
+        // the summary shown just above it; it must not be printed again.
+        assert!(!screen.contains("$ cargo test"));
         assert!(screen.contains("24 passed"));
     }
 
