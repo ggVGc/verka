@@ -6,7 +6,7 @@
 //! `main` feeds it input and session updates.
 
 use crate::event::{StyraEvent, TokenUsage};
-use crate::session::{RawLine, SessionEnd};
+use crate::session::{LogEntry, RawLine, SessionEnd};
 
 /// Which region receives keys, like vim's normal/insert split.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -17,11 +17,13 @@ pub enum Focus {
     Input,
 }
 
-/// What the main region shows: the decoded event list or the raw wire stream.
+/// What the main region shows: the decoded event list, the raw wire stream, or
+/// the diagnostic log.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum View {
     Events,
     Raw,
+    Log,
 }
 
 /// The session's lifecycle as the operator sees it.
@@ -78,6 +80,10 @@ pub struct App {
     pub raw: Vec<RawLine>,
     /// Lines scrolled back from the bottom of the raw view; 0 tracks the tail.
     pub raw_scroll_back: u16,
+    /// Diagnostic log entries, in occurrence order.
+    pub log: Vec<LogEntry>,
+    /// Lines scrolled back from the bottom of the log view; 0 tracks the tail.
+    pub log_scroll_back: u16,
     /// Set when the operator asks to quit; the event loop observes it.
     pub should_quit: bool,
 }
@@ -97,8 +103,36 @@ impl App {
             latest_usage: None,
             raw: Vec::new(),
             raw_scroll_back: 0,
+            log: Vec::new(),
+            log_scroll_back: 0,
             should_quit: false,
         }
+    }
+
+    /// Append a diagnostic log entry, keeping the tail in view unless the
+    /// operator has scrolled up (mirrors [`push_raw`](Self::push_raw)).
+    pub fn push_log(&mut self, entry: LogEntry) {
+        self.log.push(entry);
+        if self.log_scroll_back > 0 {
+            self.log_scroll_back = self.log_scroll_back.saturating_add(1);
+        }
+    }
+
+    pub fn log_scroll_up(&mut self) {
+        let max = self.log.len().saturating_sub(1) as u16;
+        self.log_scroll_back = self.log_scroll_back.saturating_add(1).min(max);
+    }
+
+    pub fn log_scroll_down(&mut self) {
+        self.log_scroll_back = self.log_scroll_back.saturating_sub(1);
+    }
+
+    pub fn log_to_top(&mut self) {
+        self.log_scroll_back = self.log.len().saturating_sub(1) as u16;
+    }
+
+    pub fn log_to_bottom(&mut self) {
+        self.log_scroll_back = 0;
     }
 
     /// Append a verbatim wire line. When the operator has scrolled up, the
@@ -110,10 +144,21 @@ impl App {
         }
     }
 
-    pub fn toggle_view(&mut self) {
-        self.view = match self.view {
-            View::Events => View::Raw,
-            View::Raw => View::Events,
+    /// Toggle the raw wire view on, or back to the event list.
+    pub fn toggle_raw(&mut self) {
+        self.view = if self.view == View::Raw {
+            View::Events
+        } else {
+            View::Raw
+        };
+    }
+
+    /// Toggle the diagnostic log view on, or back to the event list.
+    pub fn toggle_log(&mut self) {
+        self.view = if self.view == View::Log {
+            View::Events
+        } else {
+            View::Log
         };
     }
 
@@ -378,7 +423,7 @@ mod tests {
         use crate::session::{Direction, RawLine};
         let mut app = app();
         assert_eq!(app.view, View::Events);
-        app.toggle_view();
+        app.toggle_raw();
         assert_eq!(app.view, View::Raw);
 
         for i in 0..5 {
@@ -399,6 +444,30 @@ mod tests {
         assert_eq!(app.raw_scroll_back, 0);
         app.raw_to_top();
         assert_eq!(app.raw_scroll_back, app.raw.len() as u16 - 1);
+    }
+
+    #[test]
+    fn log_view_toggles_independently_and_scrolls() {
+        use crate::session::LogEntry;
+        let mut app = app();
+        app.toggle_raw();
+        assert_eq!(app.view, View::Raw);
+        // Toggling the log from the raw view switches to it, not back to events.
+        app.toggle_log();
+        assert_eq!(app.view, View::Log);
+        app.toggle_log();
+        assert_eq!(app.view, View::Events);
+
+        for i in 0..4 {
+            app.push_log(LogEntry::info(format!("entry {i}")));
+        }
+        assert_eq!(app.log_scroll_back, 0);
+        app.log_scroll_up();
+        assert_eq!(app.log_scroll_back, 1);
+        app.push_log(LogEntry::warn("more"));
+        assert_eq!(app.log_scroll_back, 2, "scrolled-up view stays put");
+        app.log_to_bottom();
+        assert_eq!(app.log_scroll_back, 0);
     }
 
     #[test]

@@ -6,7 +6,7 @@
 
 use crate::app::{App, Entry, Focus, View};
 use crate::event::{DetailBlock, StyraEvent};
-use crate::session::Direction as WireDirection;
+use crate::session::{Direction as WireDirection, LogLevel};
 use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -32,9 +32,51 @@ pub fn render(frame: &mut Frame, app: &App) {
     match app.view {
         View::Events => render_list(frame, app, chunks[0]),
         View::Raw => render_raw(frame, app, chunks[0]),
+        View::Log => render_log(frame, app, chunks[0]),
     }
     render_input(frame, app, chunks[1]);
     render_footer(frame, app, chunks[2]);
+}
+
+fn render_log(frame: &mut Frame, app: &App, area: Rect) {
+    let border_style = if app.focus == Focus::List {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(border_style)
+        .title(format!(" styra · {} · {} · log ", app.profile_name, app.status.label()));
+
+    if app.log.is_empty() {
+        let empty = Paragraph::new(Line::from(Span::styled(
+            "  no log entries yet",
+            Style::default().fg(Color::Gray),
+        )))
+        .block(block);
+        frame.render_widget(empty, area);
+        return;
+    }
+
+    let lines: Vec<Line<'static>> = app.log.iter().map(log_line).collect();
+    let viewport = area.height.saturating_sub(2) as usize;
+    let max_start = lines.len().saturating_sub(viewport);
+    let start = max_start.saturating_sub(app.log_scroll_back as usize) as u16;
+    let paragraph = Paragraph::new(lines).block(block).scroll((start, 0));
+    frame.render_widget(paragraph, area);
+}
+
+fn log_line(entry: &crate::session::LogEntry) -> Line<'static> {
+    let (label, color) = match entry.level {
+        LogLevel::Info => ("info ", Color::Gray),
+        LogLevel::Warn => ("warn ", Color::Yellow),
+        LogLevel::Error => ("error", Color::Red),
+    };
+    Line::from(vec![
+        Span::styled(format!("{label} "), Style::default().fg(color).add_modifier(Modifier::BOLD)),
+        Span::styled(entry.message.clone(), Style::default().fg(Color::White)),
+    ])
 }
 
 fn render_raw(frame: &mut Frame, app: &App, area: Rect) {
@@ -223,8 +265,11 @@ fn input_text(app: &App) -> Vec<Line<'static>> {
 fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     let hints = match (app.focus, app.view) {
         (Focus::Input, _) => "Enter send · Alt+Enter newline · Esc back to list",
-        (Focus::List, View::Events) => "j/k move · space fold · r raw · i message · s stop · q quit",
-        (Focus::List, View::Raw) => "j/k scroll · g/G top/bottom · r events · i message · q quit",
+        (Focus::List, View::Events) => {
+            "j/k move · space fold · r raw · l log · i message · s stop · q quit"
+        }
+        (Focus::List, View::Raw) => "j/k scroll · g/G top/bottom · r events · l log · i message · q quit",
+        (Focus::List, View::Log) => "j/k scroll · g/G top/bottom · l events · r raw · i message · q quit",
     };
     let footer = Paragraph::new(Line::from(Span::styled(
         format!(" {hints}"),
@@ -340,11 +385,25 @@ mod tests {
             direction: Direction::FromAgent,
             text: r#"{"type":"turn.started"}"#.into(),
         });
-        app.toggle_view();
+        app.toggle_raw();
         let screen = rendered(&app);
         assert!(screen.contains("raw"));
         assert!(screen.contains('»'));
         assert!(screen.contains('«'));
         assert!(screen.contains("turn.started"));
+    }
+
+    #[test]
+    fn log_view_shows_entries_with_levels() {
+        use crate::session::LogEntry;
+        let mut app = App::new("codex", "s1");
+        app.push_log(LogEntry::info("launching codex"));
+        app.push_log(LogEntry::error("could not run the agent: bwrap missing"));
+        app.toggle_log();
+        let screen = rendered(&app);
+        assert!(screen.contains("log"));
+        assert!(screen.contains("info"));
+        assert!(screen.contains("error"));
+        assert!(screen.contains("bwrap missing"));
     }
 }

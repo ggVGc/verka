@@ -42,8 +42,37 @@ pub enum SessionUpdate {
     Event(StyraEvent),
     /// One verbatim wire line, for the raw-interaction view.
     Raw(RawLine),
+    /// A diagnostic message for the log view.
+    Log(LogEntry),
     /// The agent process ended; no further events will arrive.
     Ended(SessionEnd),
+}
+
+/// Severity of a [`LogEntry`], used to colour the log view.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LogLevel {
+    Info,
+    Warn,
+    Error,
+}
+
+/// One line in the log view: a Styra-internal note or a line of agent stderr.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LogEntry {
+    pub level: LogLevel,
+    pub message: String,
+}
+
+impl LogEntry {
+    pub fn info(message: impl Into<String>) -> Self {
+        Self { level: LogLevel::Info, message: message.into() }
+    }
+    pub fn warn(message: impl Into<String>) -> Self {
+        Self { level: LogLevel::Warn, message: message.into() }
+    }
+    pub fn error(message: impl Into<String>) -> Self {
+        Self { level: LogLevel::Error, message: message.into() }
+    }
 }
 
 /// Which way a wire line travelled.
@@ -78,6 +107,7 @@ pub struct Session {
     updates: Sender<SessionUpdate>,
     exec: Option<JoinHandle<()>>,
     reader: Option<JoinHandle<()>>,
+    stderr: Option<JoinHandle<()>>,
 }
 
 impl Session {
@@ -93,21 +123,60 @@ impl Session {
         let request = build_request(&spec);
         let protocol = spec.profile.protocol;
 
-        // stdin: we write, the child reads. stdout: the child writes, we read.
+        // stdin: we write, the child reads. stdout/stderr: the child writes,
+        // we read. Streaming stderr through a pipe lets the log view show
+        // agent diagnostics live instead of only persisting them to a file.
         let (stdin_read, stdin_write) = std::io::pipe().context("creating agent stdin pipe")?;
         let (stdout_read, stdout_write) = std::io::pipe().context("creating agent stdout pipe")?;
-        let diagnostics = File::create(&diagnostics_path).with_context(|| {
-            format!("creating diagnostics file {}", diagnostics_path.display())
-        })?;
+        let (stderr_read, stderr_write) = std::io::pipe().context("creating agent stderr pipe")?;
 
         let io = ExecutionIo {
             stdin: File::from(OwnedFd::from(stdin_read)),
             stdout: File::from(OwnedFd::from(stdout_write)),
-            stderr: diagnostics,
+            stderr: File::from(OwnedFd::from(stderr_write)),
         };
 
         let (updates, receiver) = channel();
         let journal = Arc::new(Mutex::new(journal));
+
+        let _ = updates.send(SessionUpdate::Log(LogEntry::info(format!(
+            "launching {} (network {})",
+            spec.profile.command.join(" "),
+            if spec.profile.network { "on" } else { "off" }
+        ))));
+
+        // Stderr thread: append agent diagnostics to the log file and stream
+        // each line to the log view.
+        let stderr_updates = updates.clone();
+        let stderr = std::thread::Builder::new()
+            .name("styra-stderr".into())
+            .spawn(move || {
+                let mut diagnostics = File::create(&diagnostics_path).ok();
+                let mut lines = BufReader::new(stderr_read);
+                let mut line = String::new();
+                loop {
+                    line.clear();
+                    match lines.read_line(&mut line) {
+                        Ok(0) => break,
+                        Ok(_) => {
+                            if let Some(file) = diagnostics.as_mut() {
+                                let _ = file.write_all(line.as_bytes());
+                                let _ = file.flush();
+                            }
+                            let text = line.trim_end_matches(['\r', '\n']);
+                            if text.is_empty() {
+                                continue;
+                            }
+                            let entry = LogEntry::warn(format!("agent: {text}"));
+                            if stderr_updates.send(SessionUpdate::Log(entry)).is_err() {
+                                break;
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
+            })
+            .context("starting the stderr thread")?;
 
         // Reader thread: decode events from the child's stdout, journal each
         // verbatim line, and forward the decoded event to the UI.
@@ -154,14 +223,20 @@ impl Session {
             .name("styra-exec".into())
             .spawn(move || {
                 let end = match driva::execute(backend.as_ref(), &request, io) {
-                    Ok(outcome) => SessionEnd {
-                        exit_code: Some(outcome.exit.code()),
-                        error: None,
-                    },
-                    Err(error) => SessionEnd {
-                        exit_code: None,
-                        error: Some(format!("{error:#}")),
-                    },
+                    Ok(outcome) => {
+                        let code = outcome.exit.code();
+                        let _ = exec_updates.send(SessionUpdate::Log(LogEntry::info(format!(
+                            "agent process exited with code {code}"
+                        ))));
+                        SessionEnd { exit_code: Some(code), error: None }
+                    }
+                    Err(error) => {
+                        let message = format!("{error:#}");
+                        let _ = exec_updates.send(SessionUpdate::Log(LogEntry::error(format!(
+                            "could not run the agent: {message}"
+                        ))));
+                        SessionEnd { exit_code: None, error: Some(message) }
+                    }
                 };
                 let _ = exec_updates.send(SessionUpdate::Ended(end));
             })
@@ -175,6 +250,7 @@ impl Session {
             updates,
             exec: Some(exec),
             reader: Some(reader),
+            stderr: Some(stderr),
         };
         Ok((session, receiver))
     }
@@ -207,6 +283,10 @@ impl Session {
             .context("the session input is closed; the agent has stopped")?;
         writer.write_all(&bytes).context("writing to agent stdin")?;
         writer.flush().context("flushing agent stdin")?;
+        let _ = self.updates.send(SessionUpdate::Log(LogEntry::info(format!(
+            "sent {} bytes to the agent",
+            bytes.len()
+        ))));
         Ok(())
     }
 
@@ -226,6 +306,9 @@ impl Drop for Session {
             let _ = handle.join();
         }
         if let Some(handle) = self.exec.take() {
+            let _ = handle.join();
+        }
+        if let Some(handle) = self.stderr.take() {
             let _ = handle.join();
         }
     }
@@ -284,6 +367,8 @@ mod tests {
 
     impl Isolation for EchoBackend {
         fn run(&self, request: &ExecutionRequest, mut io: ExecutionIo) -> Result<ExecutionOutcome> {
+            writeln!(io.stderr, "echo backend online").ok();
+            io.stderr.flush().ok();
             let reader = BufReader::new(io.stdin);
             for line in reader.lines() {
                 let line = line?;
@@ -356,18 +441,25 @@ mod tests {
         let mut user = None;
         let mut agent = None;
         let mut raw_directions = Vec::new();
+        let mut logs: Vec<String> = Vec::new();
         let mut ended = false;
         // `Ended` (worker thread) and the echo event (reader thread) race, so
         // drain until all are seen rather than stopping on `Ended`.
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let stderr_seen = |logs: &[String]| logs.iter().any(|l| l.contains("echo backend online"));
         while std::time::Instant::now() < deadline
-            && !(user.is_some() && agent.is_some() && ended && raw_directions.len() >= 2)
+            && !(user.is_some()
+                && agent.is_some()
+                && ended
+                && raw_directions.len() >= 2
+                && stderr_seen(&logs))
         {
             match updates.recv_timeout(Duration::from_millis(200)) {
                 Ok(SessionUpdate::Event(StyraEvent::UserMessage { text })) => user = Some(text),
                 Ok(SessionUpdate::Event(StyraEvent::AgentMessage { text })) => agent = Some(text),
                 Ok(SessionUpdate::Event(_)) => {}
                 Ok(SessionUpdate::Raw(line)) => raw_directions.push(line.direction),
+                Ok(SessionUpdate::Log(entry)) => logs.push(entry.message),
                 Ok(SessionUpdate::Ended(_)) => ended = true,
                 Err(_) => {}
             }
@@ -379,6 +471,8 @@ mod tests {
         // The raw view sees both the outgoing submission and the agent reply.
         assert!(raw_directions.contains(&Direction::ToAgent));
         assert!(raw_directions.contains(&Direction::FromAgent));
+        // Agent stderr is streamed to the log view.
+        assert!(stderr_seen(&logs), "agent stderr should reach the log");
 
         drop(session);
 

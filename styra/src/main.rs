@@ -17,7 +17,7 @@ use std::time::Duration;
 use styra::agent::{MountSpec, Profile, SandboxLayout};
 use styra::app::{App, Focus, View};
 use styra::journal::Journal;
-use styra::session::{Session, SessionSpec, SessionUpdate};
+use styra::session::{LogEntry, Session, SessionSpec, SessionUpdate};
 use styra::ui;
 
 /// Run an interactive, isolated agent session in a terminal interface.
@@ -70,8 +70,8 @@ fn main() -> Result<()> {
         let workspace = resolve_workspace(cli.workspace.as_deref())?;
         let store_root = std::env::current_dir()?.join(".styra");
         let (journal, session_id) = Journal::create_in_store(&store_root)?;
-        let diagnostics = journal
-            .path()
+        let journal_path = journal.path().to_path_buf();
+        let diagnostics = journal_path
             .parent()
             .unwrap_or(&store_root)
             .join("diagnostics.log");
@@ -97,6 +97,7 @@ fn main() -> Result<()> {
         let (spawned, receiver) =
             Session::spawn(spec, backend, journal, session_id.clone(), diagnostics)?;
         app = App::new(profile.name.clone(), session_id);
+        app.push_log(LogEntry::info(format!("journal: {}", journal_path.display())));
 
         let prompt = cli.prompt.join(" ");
         if !prompt.trim().is_empty() {
@@ -130,6 +131,7 @@ fn run(
                 match update {
                     SessionUpdate::Event(event) => app.push_event(event),
                     SessionUpdate::Raw(line) => app.push_raw(line),
+                    SessionUpdate::Log(entry) => app.push_log(entry),
                     SessionUpdate::Ended(end) => app.on_ended(end),
                 }
             }
@@ -173,10 +175,12 @@ fn handle_list_key(app: &mut App, session: Option<&Session>, key: KeyEvent, pend
         KeyCode::Char('q') => return app.request_quit(),
         KeyCode::Char('i') => return app.enter_input(),
         KeyCode::Tab => return app.toggle_focus(),
-        KeyCode::Char('r') => return app.toggle_view(),
+        KeyCode::Char('r') => return app.toggle_raw(),
+        KeyCode::Char('l') => return app.toggle_log(),
         KeyCode::Char('s') => {
             if let Some(session) = session {
                 session.stop();
+                app.push_log(LogEntry::info("stop requested; closing agent input"));
             }
             return;
         }
@@ -201,6 +205,13 @@ fn handle_list_key(app: &mut App, session: Option<&Session>, key: KeyEvent, pend
             KeyCode::Char('G') => app.raw_to_bottom(),
             _ => {}
         },
+        View::Log => match key.code {
+            KeyCode::Char('j') | KeyCode::Down => app.log_scroll_down(),
+            KeyCode::Char('k') | KeyCode::Up => app.log_scroll_up(),
+            KeyCode::Char('g') => app.log_to_top(),
+            KeyCode::Char('G') => app.log_to_bottom(),
+            _ => {}
+        },
     }
 }
 
@@ -211,12 +222,20 @@ fn handle_input_key(app: &mut App, session: Option<&Session>, key: KeyEvent) {
         KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => app.input_newline(),
         KeyCode::Enter => {
             if let Some(message) = app.take_message() {
-                if let Some(session) = session {
-                    if app.can_send() {
-                        // The sent message returns as a UserMessage event, so
-                        // it is not pushed here.
-                        let _ = session.send(&message);
+                match session {
+                    // The sent message returns as a UserMessage event, so it is
+                    // not pushed here; send failures surface in the log view.
+                    Some(session) if app.can_send() => {
+                        if let Err(error) = session.send(&message) {
+                            app.push_log(LogEntry::error(format!("send failed: {error:#}")));
+                        }
                     }
+                    Some(_) => app.push_log(LogEntry::warn(format!(
+                        "not sent (session {}): {message}",
+                        app.status.label()
+                    ))),
+                    None => app
+                        .push_log(LogEntry::warn("not sent: attached journal has no live agent")),
                 }
             }
         }

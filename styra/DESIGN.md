@@ -224,6 +224,17 @@ back with `j`/`k` (`g`/`G` jump to top/bottom); a new line while scrolled up
 keeps the current content in place rather than yanking to the tail. Under
 `--attach` the raw view is reconstructed from the stored journal.
 
+### The log view
+
+`l` toggles a **log view** for diagnostics that are neither agent events nor
+wire lines: Styra's own notes (launch command, bytes sent, exit code, why a
+message was not sent) and the agent's stderr streamed live. Entries are tagged
+`info`/`warn`/`error`. The agent's stderr is the usual place a failure explains
+itself — a missing credential, a rejected flag, a backend error — so streaming
+it here (rather than only persisting it to `diagnostics.log`) is what makes a
+session that produces no events diagnosable from inside the interface. The log
+view shares the raw view's bottom-anchored scrolling.
+
 ### Two focuses, like vim modes
 
 The wishlist asks to "go in and out of the main view, like vim insert/normal
@@ -247,6 +258,7 @@ current focus is shown in the status line and by which region draws the cursor.
 | `zR` / `zM`     | Expand all / collapse all                                   |
 | `g` / `G`       | Jump to first / last entry (`G` re-enables tail-follow)     |
 | `r`             | Toggle the raw wire view (in the raw view, `j`/`k`/`g`/`G` scroll) |
+| `l`             | Toggle the diagnostic log view (same scrolling as the raw view) |
 | `i`             | Enter input focus                                           |
 | `s`             | Stop the session (keeps the journal)                        |
 | `q`             | Quit (prompts if the session is still running)              |
