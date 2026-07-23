@@ -6,6 +6,7 @@
 
 pub mod agent;
 pub mod app;
+pub mod appserver;
 pub mod event;
 pub mod journal;
 pub mod session;

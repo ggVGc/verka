@@ -105,6 +105,9 @@ pub struct Session {
     stdin: Arc<Mutex<Option<PipeWriter>>>,
     journal: Arc<Mutex<Journal>>,
     updates: Sender<SessionUpdate>,
+    /// Present when the profile speaks the stateful app-server protocol; owns
+    /// the JSON-RPC handshake and turn dispatch.
+    appserver: Option<Arc<crate::appserver::AppServer>>,
     exec: Option<JoinHandle<()>>,
     reader: Option<JoinHandle<()>>,
     stderr: Option<JoinHandle<()>>,
@@ -138,6 +141,18 @@ impl Session {
 
         let (updates, receiver) = channel();
         let journal = Arc::new(Mutex::new(journal));
+        let stdin = Arc::new(Mutex::new(Some(stdin_write)));
+
+        // A stateful protocol gets a client that owns its handshake; the
+        // reader thread routes lines through it instead of plain decoding.
+        let appserver = match protocol {
+            crate::event::Protocol::CodexAppServer => Some(Arc::new(
+                crate::appserver::AppServer::new(
+                    spec.working_directory.to_string_lossy().into_owned(),
+                ),
+            )),
+            crate::event::Protocol::CodexJsonl => None,
+        };
 
         let _ = updates.send(SessionUpdate::Log(LogEntry::info(format!(
             "launching {} (network {})",
@@ -178,10 +193,13 @@ impl Session {
             })
             .context("starting the stderr thread")?;
 
-        // Reader thread: decode events from the child's stdout, journal each
-        // verbatim line, and forward the decoded event to the UI.
+        // Reader thread: journal each verbatim line, then either decode it
+        // directly (streaming protocols) or hand it to the app-server client,
+        // which drives the handshake and forwards the decoded events itself.
         let reader_updates = updates.clone();
         let reader_journal = Arc::clone(&journal);
+        let reader_stdin = Arc::clone(&stdin);
+        let reader_client = appserver.clone();
         let reader = std::thread::Builder::new()
             .name("styra-reader".into())
             .spawn(move || {
@@ -206,9 +224,16 @@ impl Session {
                             if reader_updates.send(SessionUpdate::Raw(raw_line)).is_err() {
                                 break;
                             }
-                            let event = decode_line(protocol, raw);
-                            if reader_updates.send(SessionUpdate::Event(event)).is_err() {
-                                break;
+                            match &reader_client {
+                                Some(client) => {
+                                    client.handle_line(raw, &reader_stdin, &reader_updates)
+                                }
+                                None => {
+                                    let event = decode_line(protocol, raw);
+                                    if reader_updates.send(SessionUpdate::Event(event)).is_err() {
+                                        break;
+                                    }
+                                }
                             }
                         }
                         Err(_) => break,
@@ -242,12 +267,18 @@ impl Session {
             })
             .context("starting the execution thread")?;
 
+        // A stateful protocol opens its handshake as soon as the process runs.
+        if let Some(client) = &appserver {
+            client.start(&stdin, &updates);
+        }
+
         let session = Session {
             profile: spec.profile,
             session_id,
-            stdin: Arc::new(Mutex::new(Some(stdin_write))),
+            stdin,
             journal,
             updates,
+            appserver,
             exec: Some(exec),
             reader: Some(reader),
             stderr: Some(stderr),
@@ -260,7 +291,8 @@ impl Session {
     }
 
     /// Send an operator message to the agent. It is journaled, echoed to the UI
-    /// as a [`StyraEvent::UserMessage`], then written as one protocol input line.
+    /// as a [`StyraEvent::UserMessage`], then written as one protocol input line
+    /// (or dispatched as an app-server turn).
     pub fn send(&self, text: &str) -> Result<()> {
         if let Ok(mut journal) = self.journal.lock() {
             let _ = journal.record_user_message(text);
@@ -268,6 +300,13 @@ impl Session {
         let _ = self.updates.send(SessionUpdate::Event(StyraEvent::UserMessage {
             text: text.to_owned(),
         }));
+
+        // The app-server client owns turn dispatch (and emits its own raw
+        // update for the exact wire line).
+        if let Some(client) = &self.appserver {
+            client.send(text, &self.stdin, &self.updates);
+            return Ok(());
+        }
 
         let bytes = self.profile.encode_message(text);
         // Surface the exact bytes going onto the wire in the raw view.

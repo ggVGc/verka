@@ -69,8 +69,11 @@ impl Profile {
     /// Resolve a built-in profile by name.
     pub fn builtin(name: &str, layout: &SandboxLayout) -> Result<Profile> {
         match name {
-            "codex" => Ok(codex(layout)),
-            other => bail!("unknown agent profile {other:?}; known profiles: codex"),
+            "codex" => Ok(codex_appserver(layout)),
+            "codex-exec" => Ok(codex(layout)),
+            other => {
+                bail!("unknown agent profile {other:?}; known profiles: codex, codex-exec")
+            }
         }
     }
 
@@ -85,7 +88,26 @@ impl Profile {
     }
 }
 
-/// The built-in codex profile.
+/// The built-in multi-turn codex profile, over the `app-server` JSON-RPC
+/// protocol (verified against codex-cli 0.145).
+///
+/// The process is `codex app-server` on stdio; [`crate::appserver::AppServer`]
+/// owns the initialize → thread/start → turn/start handshake and per-message
+/// turn dispatch, so `message_format` is unused here and the session keeps
+/// stdin open across turns. Isolation matches the exec profile below; the
+/// thread itself is started with `approvalPolicy: never` and a
+/// danger-full-access inner sandbox, delegating real isolation to Driva.
+pub fn codex_appserver(layout: &SandboxLayout) -> Profile {
+    Profile {
+        name: "codex".into(),
+        command: vec!["codex".into(), "app-server".into()],
+        protocol: Protocol::CodexAppServer,
+        single_turn: false,
+        ..codex(layout)
+    }
+}
+
+/// The built-in single-turn codex profile.
 ///
 /// Isolation follows Orka's proven codex shape: the workspace is trusted so
 /// codex does not prompt, its inner sandbox is disabled in favour of Driva's
@@ -95,15 +117,12 @@ impl Profile {
 ///
 /// The command is `codex exec --json -`: a single-turn run that reads the
 /// prompt from stdin and streams `thread`/`turn`/`item` events, verified
-/// against codex-cli 0.145. codex has no bidirectional protocol subcommand in
-/// this line — true multi-turn interaction needs the experimental `app-server`
-/// JSON-RPC protocol, which would be a new [`Protocol`] variant and decoder and
-/// a non-`single_turn` profile. Until then, one session is one turn.
+/// against codex-cli 0.145.
 pub fn codex(layout: &SandboxLayout) -> Profile {
     let workspace = layout.workspace.to_string_lossy();
     let trust = format!("projects.{workspace:?}.trust_level=\"trusted\"");
     Profile {
-        name: "codex".into(),
+        name: "codex-exec".into(),
         command: vec![
             "codex".into(),
             "-c".into(),
@@ -165,9 +184,9 @@ mod tests {
     use serde_json::Value;
 
     #[test]
-    fn codex_profile_isolates_the_workspace_and_speaks_the_decoded_protocol() {
+    fn codex_exec_profile_isolates_the_workspace_and_speaks_the_decoded_protocol() {
         let layout = SandboxLayout::default();
-        let profile = Profile::builtin("codex", &layout).unwrap();
+        let profile = Profile::builtin("codex-exec", &layout).unwrap();
 
         assert_eq!(profile.protocol, Protocol::CodexJsonl);
         assert!(profile.network);
@@ -184,6 +203,20 @@ mod tests {
         assert!(profile.mounts.iter().any(|mount| {
             mount.destination == std::path::Path::new("/tmp/agent-home/.codex/auth.json")
                 && mount.writable
+        }));
+        assert_eq!(profile.environment.get("HOME"), Some(&"/tmp/agent-home".to_string()));
+    }
+
+    #[test]
+    fn default_codex_profile_is_the_multi_turn_app_server() {
+        let profile = Profile::builtin("codex", &SandboxLayout::default()).unwrap();
+        assert_eq!(profile.protocol, Protocol::CodexAppServer);
+        assert!(!profile.single_turn, "app-server sessions span many turns");
+        assert_eq!(profile.command, vec!["codex", "app-server"]);
+        assert!(profile.network);
+        // Isolation policy is shared with the exec profile.
+        assert!(profile.mounts.iter().any(|mount| {
+            mount.destination == std::path::Path::new("/tmp/agent-home/.codex/auth.json")
         }));
         assert_eq!(profile.environment.get("HOME"), Some(&"/tmp/agent-home".to_string()));
     }

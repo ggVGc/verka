@@ -122,28 +122,43 @@ one, is a new `protocol` variant plus a decoder arm, and the match is
 exhaustive, so a missing decoder is a compile error rather than a silent
 mis-decode. This is the same discipline as Orka's decoder registry.
 
-### Interactive vs. single-turn, and the codex reality
+### Interactive vs. single-turn, and the two codex profiles
 
 The session and pipe machinery is genuinely bidirectional and multi-turn: it
 holds the agent's stdin open and writes each operator message as it is sent.
 Whether a session is *actually* multi-turn is a property of the agent's
-protocol, carried by the profile's `single_turn` flag.
+protocol, carried by the profile's `single_turn` flag. Both codex profiles were
+verified live against codex-cli 0.145.
 
-The installed codex line (verified against codex-cli 0.145) has **no
-bidirectional protocol subcommand** — `proto` does not exist, and a bare token
-is treated as a prompt that launches the interactive terminal UI, which refuses
-a piped stdin. What it does have is `codex exec --json -`: a one-shot run that
-reads the prompt from stdin, streams the `thread`/`turn`/`item` events above,
-and exits. So the built-in codex profile is `single_turn`: one session is one
-turn. Styra sends the operator's message, closes stdin so the turn starts, and
-renders the streamed events; the session then ends.
+The default `codex` profile is multi-turn over the experimental **`app-server`
+JSON-RPC protocol** on stdio. This is a stateful wire contract, not a plain
+event stream, so it has two cooperating parts:
 
-True multi-turn codex would use the experimental `app-server` JSON-RPC protocol
-over stdio. That is a distinct wire contract (a request/notification protocol,
-not newline-delimited turn events), so it belongs behind a new `Protocol`
-variant and decoder and a non-`single_turn` profile — exactly the versioned
-seam this design established. It is deferred, not designed away; the codex
-profile's command and encoding are isolated so the switch is localized.
+- the `codex-app-server` `Protocol` variant decodes *notification* lines
+  (`thread/started`, `turn/started`, `item/started`, `item/completed`,
+  `thread/tokenUsage/updated`, errors) into the event vocabulary — shared by
+  live sessions and journal replay; requests and responses decode as `Unknown`
+  control traffic;
+- an `AppServer` client owns the session state machine: `initialize` →
+  `initialized` → `thread/start` (capturing the thread id) → one `turn/start`
+  per operator message. Messages sent before the thread is ready are queued and
+  flushed on readiness. The reader thread routes every line through this client;
+  the client forwards decoded events and answers control traffic.
+
+The turn's token usage arrives as `thread/tokenUsage/updated` just before
+`turn/completed` (which itself carries none), so that notification is what maps
+to `TurnCompleted` — flipping the status line to `waiting` between turns. The
+server exits on stdin end-of-input, so stopping a session tears it down cleanly.
+Threads are started with `approvalPolicy: never` and a `danger-full-access`
+inner sandbox: approvals never stall a turn, and real isolation stays Driva's.
+Any server-to-client request that does appear is surfaced in the log view
+rather than silently dropped.
+
+The `codex-exec` profile remains the one-shot alternative: `codex exec --json -`
+reads the prompt from stdin, streams the `thread.`/`turn.`/`item.` events, and
+exits — `single_turn`, so Styra closes stdin after the first message and the
+session is one turn. Its simpler stream is also the format Orka's attempts
+capture, which keeps the two applications' decoders aligned.
 
 ## Event vocabulary
 
