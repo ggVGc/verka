@@ -9,7 +9,7 @@ Each is committed on its own. Check off as completed.
 - [x] **2. Event vocabulary and decode (`event.rs`).** The stable `StyraEvent`
   set, a versioned `Protocol`, a decoder for the codex item/thread/turn wire
   schema, terminal-escape cleaning, and summary + detail rendering. Unit tested.
-- [ ] **3. Journal (`journal.rs`).** Verbatim capture of the agent event stream
+- [x] **3. Journal (`journal.rs`).** Verbatim capture of the agent event stream
   and the operator input log; replay of a stored journal into events. Unit
   tested.
 - [ ] **4. Agent profile (`agent.rs`).** The `Profile` (command, protocol,

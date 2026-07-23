@@ -153,12 +153,16 @@ decode, as Orka does.
 
 ## The raw journal is the session
 
-The fundamental record of a session is the verbatim newline-delimited event
-stream captured from the agent's stdout, interleaved with the operator's own
-input lines in a parallel input log. Nothing rendered or normalized is written
-at rest; the list, the summaries, and the detail bodies are all interpretations
-produced on demand from the journal — the same stance Orka takes toward its raw
-logs.
+The fundamental record of a session is an append-only journal of source-tagged
+records, one per line: each agent record carries the verbatim line received on
+the agent's stdout, and each operator record carries a message the operator
+sent. Append order is receive order, so a single ordered file reconstructs the
+whole session — agent turns and operator turns interleaved — without a separate
+clock. The agent's line is preserved byte-for-byte inside its record, so the
+protocol decoder still reads it as the fundamental fact. Nothing rendered or
+normalized is written at rest; the list, the summaries, and the detail bodies
+are all interpretations produced on demand from the journal — the same stance
+Orka takes toward its raw logs.
 
 This is what makes the wishlist's session properties fall out cheaply:
 
