@@ -24,6 +24,7 @@ styra [OPTIONS] [-- PROMPT]
   --workspace <DIR>    Host directory mounted writable as the agent workspace
   --network            Permit agent networking (profiles may default this on)
   --view <SESSION>     Open a captured journal read-only instead of launching
+  --pick               Browse sessions under .styra and pick one to open
 ```
 
 Built-in profiles:

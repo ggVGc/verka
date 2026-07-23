@@ -37,6 +37,10 @@ struct Cli {
     /// Open a captured journal read-only instead of launching an agent.
     #[arg(long, value_name = "SESSION")]
     view: Option<PathBuf>,
+    /// Browse sessions stored under .styra and pick one to open read-only,
+    /// instead of launching a new agent.
+    #[arg(long, conflicts_with = "view")]
+    pick: bool,
     /// Optional first message, sent to seed the opening turn.
     #[arg(trailing_var_arg = true)]
     prompt: Vec<String>,
@@ -46,13 +50,47 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let layout = SandboxLayout::default();
 
+    // `--pick` needs an interactive terminal to browse sessions in, so it is
+    // opened early only in that case; the other paths below still report
+    // setup failures before taking over the terminal, and the terminal the
+    // picker opened is reused below rather than torn down and reopened.
+    let mut terminal: Option<Terminal<CrosstermBackend<Stdout>>> = None;
+    let view_target: Option<PathBuf> = if cli.pick {
+        let store_root = std::env::current_dir()?.join(".styra");
+        let sessions = styra::journal::list_sessions(&store_root)?;
+        if sessions.is_empty() {
+            println!(
+                "No sessions found under {}",
+                styra::journal::sessions_dir(&store_root).display()
+            );
+            return Ok(());
+        }
+        let mut term = setup_terminal()?;
+        match run_picker(&mut term, &sessions) {
+            Ok(Some(path)) => {
+                terminal = Some(term);
+                Some(path)
+            }
+            Ok(None) => {
+                restore_terminal(&mut term)?;
+                return Ok(());
+            }
+            Err(error) => {
+                restore_terminal(&mut term)?;
+                return Err(error);
+            }
+        }
+    } else {
+        cli.view.clone()
+    };
+
     // Build the application and, unless viewing, a live session up front so a
     // setup failure is reported plainly before the terminal is taken over.
     let mut app;
     let mut session: Option<Session> = None;
     let mut updates: Option<Receiver<SessionUpdate>> = None;
 
-    if let Some(view) = &cli.view {
+    if let Some(view) = &view_target {
         // The session's own recorded provenance is the only source of which
         // protocol to decode with; there is no `--profile` fallback, so a
         // session predating the sidecar (or missing its `session.json`) is an
@@ -129,13 +167,47 @@ fn main() -> Result<()> {
         updates = Some(receiver);
     }
 
-    let mut terminal = setup_terminal()?;
+    let mut terminal = match terminal {
+        Some(terminal) => terminal,
+        None => setup_terminal()?,
+    };
     let result = run(&mut terminal, &mut app, session.as_ref(), updates.as_ref());
     restore_terminal(&mut terminal)?;
     // Dropping the session here (after the terminal is restored) closes stdin
     // and joins the worker threads.
     drop(session);
     result
+}
+
+/// The session picker loop: j/k or arrows to move, Enter to choose a
+/// session, Esc or q to back out without picking one.
+fn run_picker(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    sessions: &[styra::journal::SessionSummary],
+) -> Result<Option<PathBuf>> {
+    let mut selected = 0usize;
+    loop {
+        terminal.draw(|frame| ui::render_picker(frame, sessions, selected))?;
+
+        if !event::poll(Duration::from_millis(100))? {
+            continue;
+        }
+        let Event::Key(key) = event::read()? else {
+            continue;
+        };
+        if key.kind != KeyEventKind::Press {
+            continue;
+        }
+        match key.code {
+            KeyCode::Char('q') | KeyCode::Esc => return Ok(None),
+            KeyCode::Char('j') | KeyCode::Down => {
+                selected = (selected + 1).min(sessions.len() - 1);
+            }
+            KeyCode::Char('k') | KeyCode::Up => selected = selected.saturating_sub(1),
+            KeyCode::Enter => return Ok(Some(sessions[selected].path.clone())),
+            _ => {}
+        }
+    }
 }
 
 /// The event loop: apply pending session updates, render, and handle input
