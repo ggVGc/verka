@@ -217,6 +217,15 @@ This is what makes the wishlist's session properties fall out cheaply:
 Journals live under a per-session directory in a Styra store (`.styra/` in the
 workbench, separately owned from `.orka/` and `.linka/`), named by a session id.
 
+Alongside `journal.jsonl`, one `session.json` is written once at session
+creation: genta's `SessionMeta` (the profile name and wire protocol that
+launched the session). The journal itself is agent-agnostic — it stores
+whatever raw line arrived — so without this sidecar there is no record of
+which agent a stored session came from. `--view` reads `session.json` and
+decodes with the protocol it names; there is no `--profile` fallback, since an
+operator-supplied guess could silently mis-decode a mismatched session. A
+session predating this sidecar has no `session.json` and so cannot be viewed.
+
 ## Terminal interface
 
 The application is a single full-screen view with three regions:
@@ -362,7 +371,7 @@ suite's existing choices.
 ```text
 styra [OPTIONS] [-- PROMPT]
 
-  --profile <NAME>     Agent profile to launch (default: the built-in codex)
+  --profile <NAME>     Agent profile to launch a live session with (default: codex)
   --workspace <DIR>    Host directory mounted writable as the agent workspace
   --network            Permit agent networking (profiles may default this on)
   --view <SESSION>     Open a captured journal read-only instead of launching
@@ -370,7 +379,9 @@ styra [OPTIONS] [-- PROMPT]
 
 An optional trailing `PROMPT` seeds the first turn so a session can start with
 one message already sent; without it, the application opens in input focus with
-an empty box. `--view` opens the view/replay path over a stored journal.
+an empty box. `--view` opens the view/replay path over a stored journal; it
+decodes with the session's own recorded profile and protocol, so `--profile`
+is not read in this mode.
 
 ## Relationship to Orka and the wishlist
 

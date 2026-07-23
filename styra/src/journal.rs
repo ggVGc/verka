@@ -7,7 +7,13 @@
 //! session with agent and operator turns interleaved. Nothing rendered is
 //! stored — [`replay`] reproduces events on demand through the protocol
 //! decoder, exactly as a live session decodes them.
+//!
+//! Alongside the journal, one [`SessionMeta`] (genta's record of which agent
+//! produced a session) is written once at session creation, so a stored
+//! session can later be replayed — and understood by a human browsing the
+//! store — without depending on an operator re-supplying the same profile.
 
+use crate::agent::{Profile, SessionMeta};
 use crate::event::{decode_line, Protocol, AgentEvent};
 use crate::session::{Direction, RawLine};
 use anyhow::{Context, Result};
@@ -55,10 +61,13 @@ impl Journal {
 
     /// Create a fresh session directory under `store_root` and open its
     /// journal, returning the generated session id alongside the handle.
-    pub fn create_in_store(store_root: &Path) -> Result<(Self, String)> {
+    /// `profile` is the agent launching this session; its provenance is
+    /// written once as [`SessionMeta`] beside the journal.
+    pub fn create_in_store(store_root: &Path, profile: &Profile) -> Result<(Self, String)> {
         let id = new_session_id();
         let directory = sessions_dir(store_root).join(&id);
         let journal = Self::create(&directory)?;
+        write_session_meta(&directory, &SessionMeta::for_profile(profile))?;
         Ok((journal, id))
     }
 
@@ -97,10 +106,37 @@ impl Journal {
 }
 
 const JOURNAL_FILE: &str = "journal.jsonl";
+const SESSION_META_FILE: &str = "session.json";
 
 /// The sessions directory within a Styra store root (default store: `.styra`).
 pub fn sessions_dir(store_root: &Path) -> PathBuf {
     store_root.join("sessions")
+}
+
+fn write_session_meta(directory: &Path, meta: &SessionMeta) -> Result<()> {
+    let path = directory.join(SESSION_META_FILE);
+    let json = serde_json::to_string_pretty(meta).context("serializing session metadata")?;
+    std::fs::write(&path, json).with_context(|| format!("writing {}", path.display()))
+}
+
+/// Read back which agent produced a stored session, if recorded. A journal
+/// directory or its file may be passed. Sessions created before this sidecar
+/// existed have none, so `Ok(None)` — not an error — means "unknown".
+pub fn read_session_meta(path: &Path) -> Result<Option<SessionMeta>> {
+    let directory = if path.is_dir() {
+        path.to_path_buf()
+    } else {
+        path.parent().map(Path::to_path_buf).unwrap_or_default()
+    };
+    let meta_path = directory.join(SESSION_META_FILE);
+    if !meta_path.exists() {
+        return Ok(None);
+    }
+    let text = std::fs::read_to_string(&meta_path)
+        .with_context(|| format!("reading {}", meta_path.display()))?;
+    let meta = serde_json::from_str(&text)
+        .with_context(|| format!("parsing {}", meta_path.display()))?;
+    Ok(Some(meta))
 }
 
 /// Decode a stored journal back into the ordered event list, reproducing agent
@@ -231,17 +267,58 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    fn test_profile(name: &str, protocol: Protocol) -> Profile {
+        Profile {
+            name: name.into(),
+            command: vec!["true".into()],
+            protocol,
+            mounts: Vec::new(),
+            environment: Default::default(),
+            network: false,
+            message_format: crate::agent::MessageFormat::PlainLine,
+            single_turn: true,
+        }
+    }
+
     #[test]
     fn create_in_store_makes_a_unique_session_directory() {
         let root = temp_dir("store");
-        let (journal_a, id_a) = Journal::create_in_store(&root).unwrap();
-        let (journal_b, id_b) = Journal::create_in_store(&root).unwrap();
+        let profile = test_profile("codex-exec", Protocol::CodexJsonl);
+        let (journal_a, id_a) = Journal::create_in_store(&root, &profile).unwrap();
+        let (journal_b, id_b) = Journal::create_in_store(&root, &profile).unwrap();
         assert_ne!(id_a, id_b, "session ids must be unique");
         assert!(journal_a.path().exists());
         assert!(journal_b.path().exists());
         assert!(journal_a.path().starts_with(sessions_dir(&root)));
 
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn create_in_store_persists_which_agent_produced_the_session() {
+        let root = temp_dir("provenance");
+        let profile = test_profile("claude:opus", Protocol::ClaudeJsonl);
+        let (journal, _id) = Journal::create_in_store(&root, &profile).unwrap();
+
+        let meta = read_session_meta(journal.path()).unwrap();
+        assert_eq!(
+            meta,
+            Some(SessionMeta { profile: "claude:opus".into(), protocol: Protocol::ClaudeJsonl })
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_session_without_stored_meta_reads_as_unknown_not_an_error() {
+        // Sessions created before this sidecar existed have no session.json;
+        // that must read as "unknown", not fail.
+        let dir = temp_dir("no-meta");
+        Journal::create(&dir).unwrap();
+
+        assert_eq!(read_session_meta(&dir).unwrap(), None);
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

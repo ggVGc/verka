@@ -24,7 +24,8 @@ use styra::ui;
 #[derive(Parser)]
 #[command(name = "styra", about, version)]
 struct Cli {
-    /// Agent profile to launch.
+    /// Agent profile to launch a live session with. Not used with `--view`:
+    /// a viewed session carries its own recorded profile and protocol.
     #[arg(long, default_value = "codex")]
     profile: String,
     /// Host directory mounted writable as the agent workspace (default: cwd).
@@ -44,7 +45,6 @@ struct Cli {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let layout = SandboxLayout::default();
-    let profile = Profile::builtin(&cli.profile, &layout)?;
 
     // Build the application and, unless viewing, a live session up front so a
     // setup failure is reported plainly before the terminal is taken over.
@@ -53,9 +53,22 @@ fn main() -> Result<()> {
     let mut updates: Option<Receiver<SessionUpdate>> = None;
 
     if let Some(view) = &cli.view {
-        let events = styra::journal::replay(view, profile.protocol)
+        // The session's own recorded provenance is the only source of which
+        // protocol to decode with; there is no `--profile` fallback, so a
+        // session predating the sidecar (or missing its `session.json`) is an
+        // error rather than a silent guess.
+        let meta = styra::journal::read_session_meta(view)
+            .with_context(|| format!("reading session metadata for {}", view.display()))?
+            .with_context(|| {
+                format!(
+                    "session {} has no recorded agent metadata (session.json); \
+                     it predates provenance tracking and cannot be replayed",
+                    view.display()
+                )
+            })?;
+        let events = styra::journal::replay(view, meta.protocol)
             .with_context(|| format!("opening journal {}", view.display()))?;
-        app = App::new(profile.name.clone(), view.display().to_string());
+        app = App::new(meta.profile, view.display().to_string());
         for event in events {
             // Skip carried-but-viewless traffic (e.g. app-server control
             // lines), matching what a live session shows; it stays available
@@ -72,9 +85,10 @@ fn main() -> Result<()> {
         // A replayed session has no live agent to end; mark it stopped.
         app.on_ended(styra::session::SessionEnd { exit_code: None, error: None });
     } else {
+        let profile = Profile::builtin(&cli.profile, &layout)?;
         let workspace = resolve_workspace(cli.workspace.as_deref())?;
         let store_root = std::env::current_dir()?.join(".styra");
-        let (journal, session_id) = Journal::create_in_store(&store_root)?;
+        let (journal, session_id) = Journal::create_in_store(&store_root, &profile)?;
         let journal_path = journal.path().to_path_buf();
         let diagnostics = journal_path
             .parent()

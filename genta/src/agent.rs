@@ -8,6 +8,7 @@
 
 use crate::event::Protocol;
 use anyhow::{bail, Result};
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -101,6 +102,29 @@ impl Profile {
         };
         line.push('\n');
         line.into_bytes()
+    }
+}
+
+/// Which agent produced a session, recorded so a host can persist it
+/// alongside a session's journal and later know what to decode the journal
+/// with — and, for a human reading the store, which agent and model actually
+/// ran — without depending on an operator re-supplying the same profile name.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionMeta {
+    /// The profile name that launched the session (e.g. `codex`, `claude:opus`).
+    pub profile: String,
+    /// The wire protocol the agent speaks, and thus the decoder its journal
+    /// must be replayed with.
+    pub protocol: Protocol,
+}
+
+impl SessionMeta {
+    /// Capture the provenance of a session launched with `profile`.
+    pub fn for_profile(profile: &Profile) -> Self {
+        Self {
+            profile: profile.name.clone(),
+            protocol: profile.protocol,
+        }
     }
 }
 
@@ -322,6 +346,18 @@ mod tests {
     #[test]
     fn unknown_profile_is_rejected() {
         assert!(Profile::builtin("gpt5", &SandboxLayout::default()).is_err());
+    }
+
+    #[test]
+    fn session_meta_captures_the_launching_profile_and_survives_json_round_trip() {
+        let profile = Profile::builtin("claude:opus", &SandboxLayout::default()).unwrap();
+        let meta = SessionMeta::for_profile(&profile);
+        assert_eq!(meta.profile, "claude:opus");
+        assert_eq!(meta.protocol, Protocol::ClaudeJsonl);
+
+        let json = serde_json::to_string(&meta).unwrap();
+        let restored: SessionMeta = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, meta);
     }
 
     fn codex_submission_profile() -> Profile {

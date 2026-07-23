@@ -73,7 +73,7 @@ fn main() -> anyhow::Result<()> {
     let single_turn = profile.single_turn;
     let workspace = std::env::current_dir()?.canonicalize()?;
     let store = std::env::temp_dir().join("styra-headless");
-    let (journal, id) = Journal::create_in_store(&store)?;
+    let (journal, id) = Journal::create_in_store(&store, &profile)?;
     let diagnostics = journal
         .path()
         .parent()
