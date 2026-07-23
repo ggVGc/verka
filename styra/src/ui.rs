@@ -10,7 +10,7 @@ use crate::session::{Direction as WireDirection, LogLevel};
 use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::Frame;
 
 /// Cap on detail lines shown for one expanded entry, so a single noisy command
@@ -147,7 +147,42 @@ fn raw_line(line: &crate::session::RawLine) -> Line<'static> {
     ])
 }
 
+/// The togglable side panel: the full, uncapped expanded content of the
+/// selected entry, regardless of whether it is folded in the list.
+fn render_preview(frame: &mut Frame, app: &App, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::DarkGray))
+        .title(" preview ");
+
+    let Some(entry) = app.selected_entry() else {
+        let empty = Paragraph::new(Line::from(Span::styled(
+            "  no entry selected",
+            Style::default().fg(Color::Gray),
+        )))
+        .block(block);
+        frame.render_widget(empty, area);
+        return;
+    };
+
+    let mut lines = vec![summary_line(entry)];
+    lines.extend(detail_lines(&entry.event, None));
+    let paragraph = Paragraph::new(lines).block(block).wrap(Wrap { trim: false });
+    frame.render_widget(paragraph, area);
+}
+
 fn render_list(frame: &mut Frame, app: &App, area: Rect) {
+    let area = if app.show_preview {
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+            .split(area);
+        render_preview(frame, app, chunks[1]);
+        chunks[0]
+    } else {
+        area
+    };
+
     let usage = app
         .latest_usage
         .as_ref()
@@ -216,7 +251,7 @@ fn render_list(frame: &mut Frame, app: &App, area: Rect) {
 fn entry_item(entry: &Entry, width: usize) -> ListItem<'static> {
     let mut lines = vec![summary_line(entry)];
     if entry.expanded {
-        lines.extend(detail_lines(&entry.event));
+        lines.extend(detail_lines(&entry.event, Some(MAX_DETAIL_LINES)));
     }
     let wrapped: Vec<Line<'static>> = lines
         .into_iter()
@@ -326,7 +361,10 @@ fn summary_line(entry: &Entry) -> Line<'static> {
     ])
 }
 
-fn detail_lines(event: &AgentEvent) -> Vec<Line<'static>> {
+/// The expandable body of an entry. `cap` bounds how many lines are shown
+/// inline in the list (so one noisy command cannot bury the rest of the
+/// session); pass `None` for the preview panel, which shows the body in full.
+fn detail_lines(event: &AgentEvent, cap: Option<usize>) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     for block in event.detail() {
         match block {
@@ -354,13 +392,15 @@ fn detail_lines(event: &AgentEvent) -> Vec<Line<'static>> {
     if !lines.is_empty() {
         lines.remove(0);
     }
-    if lines.len() > MAX_DETAIL_LINES {
-        let hidden = lines.len() - MAX_DETAIL_LINES;
-        lines.truncate(MAX_DETAIL_LINES);
-        lines.push(Line::from(Span::styled(
-            format!("{DETAIL_INDENT}… {hidden} more lines"),
-            Style::default().fg(Color::Gray),
-        )));
+    if let Some(cap) = cap {
+        if lines.len() > cap {
+            let hidden = lines.len() - cap;
+            lines.truncate(cap);
+            lines.push(Line::from(Span::styled(
+                format!("{DETAIL_INDENT}… {hidden} more lines"),
+                Style::default().fg(Color::Gray),
+            )));
+        }
     }
     lines
 }
@@ -411,7 +451,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     let hints = match (app.focus, app.view) {
         (Focus::Input, _) => "Enter send · Alt+Enter newline · Esc back to list",
         (Focus::List, View::Events) => {
-            "j/k move · space fold · m minor · r raw · l log · i message · s stop · q quit"
+            "j/k move · space fold · m minor · p preview · r raw · l log · i message · s stop · q quit"
         }
         (Focus::List, View::Raw) => "j/k scroll · g/G top/bottom · r events · l log · i message · q quit",
         (Focus::List, View::Log) => "j/k scroll · g/G top/bottom · l events · r raw · i message · q quit",
@@ -589,6 +629,25 @@ mod tests {
             screen.matches("word").count() > 20,
             "expected wrapped continuation lines, only found: {screen:?}"
         );
+    }
+
+    #[test]
+    fn preview_panel_shows_full_content_of_the_selected_entry_when_toggled() {
+        let mut app = App::new("codex", "s1");
+        app.push_event(AgentEvent::CommandCompleted {
+            command: "cargo test".into(),
+            status: "completed".into(),
+            exit_code: Some(0),
+            output: "24 passed".into(),
+        });
+        // The preview must not depend on the entry being expanded in the list.
+        assert!(!app.entries[0].expanded);
+        assert!(!rendered(&app).contains("24 passed"));
+
+        app.toggle_preview();
+        let shown = rendered(&app);
+        assert!(shown.contains("preview"));
+        assert!(shown.contains("24 passed"));
     }
 
     #[test]

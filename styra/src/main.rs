@@ -204,6 +204,7 @@ fn handle_list_key(app: &mut App, session: Option<&Session>, key: KeyEvent, pend
             KeyCode::Char('G') => app.select_last(),
             KeyCode::Char('z') => *pending_fold = true,
             KeyCode::Char('m') => app.toggle_minor(),
+            KeyCode::Char('p') => app.toggle_preview(),
             _ => {}
         },
         View::Raw => match key.code {

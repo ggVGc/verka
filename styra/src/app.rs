@@ -76,6 +76,9 @@ pub struct App {
     /// When false, minor lifecycle events (thread/turn/usage) are hidden from
     /// the list and skipped by navigation.
     pub show_minor: bool,
+    /// When true, a side panel shows the full expanded content of the
+    /// selected entry, independent of whether it is folded in the list.
+    pub show_preview: bool,
     pub profile_name: String,
     pub session_id: String,
     pub latest_usage: Option<TokenUsage>,
@@ -102,6 +105,7 @@ impl App {
             status: Status::Running,
             follow: true,
             show_minor: true,
+            show_preview: false,
             profile_name: profile_name.into(),
             session_id: session_id.into(),
             latest_usage: None,
@@ -240,6 +244,11 @@ impl App {
     /// The nearest visible index at or before `from`, if any.
     fn prev_visible(&self, from: usize) -> Option<usize> {
         (0..=from).rev().find(|&i| self.is_visible(i))
+    }
+
+    /// Toggle the side panel that previews the selected entry's full content.
+    pub fn toggle_preview(&mut self) {
+        self.show_preview = !self.show_preview;
     }
 
     /// Toggle whether minor lifecycle events (thread/turn/usage) are shown.
@@ -546,6 +555,16 @@ mod tests {
         app.toggle_minor();
         assert!(app.is_visible(app.selected));
         assert_eq!(app.entries[app.selected].event, AgentEvent::AgentMessage { text: "a".into() });
+    }
+
+    #[test]
+    fn preview_toggles_independently_of_other_view_state() {
+        let mut app = app();
+        assert!(!app.show_preview);
+        app.toggle_preview();
+        assert!(app.show_preview);
+        app.toggle_preview();
+        assert!(!app.show_preview);
     }
 
     #[test]
