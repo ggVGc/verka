@@ -7,6 +7,7 @@
 use crate::agent::SandboxLayout;
 use crate::app::{App, Entry, Focus, Status, View};
 use crate::event::{DetailBlock, AgentEvent};
+use crate::journal::SessionSummary;
 use crate::session::{Direction as WireDirection, LogLevel};
 use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -70,6 +71,47 @@ pub fn render(frame: &mut Frame, app: &App) {
     }
     render_input(frame, app, chunks[1]);
     render_footer(frame, app, chunks[2]);
+}
+
+/// Render the session picker screen: every stored session, newest first,
+/// with `selected` highlighted. Standalone from [`App`] — the picker runs
+/// before any session is loaded, so it has no state of its own to render.
+pub fn render_picker(frame: &mut Frame, sessions: &[SessionSummary], selected: usize) {
+    let area = frame.area();
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .title(" styra · choose a session · Enter open · q cancel ");
+
+    if sessions.is_empty() {
+        let empty = Paragraph::new(Line::from(Span::styled(
+            "  no sessions found",
+            Style::default().fg(Color::Gray),
+        )))
+        .block(block);
+        frame.render_widget(empty, area);
+        return;
+    }
+
+    let items: Vec<ListItem> = sessions.iter().map(session_item).collect();
+    let list = List::new(items)
+        .block(block)
+        .highlight_style(Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD));
+    let mut state = ListState::default();
+    state.select(Some(selected.min(sessions.len() - 1)));
+    frame.render_stateful_widget(list, area, &mut state);
+}
+
+fn session_item(session: &SessionSummary) -> ListItem<'static> {
+    let profile = session.profile.clone().unwrap_or_else(|| "unknown".into());
+    ListItem::new(Line::from(vec![
+        Span::styled(
+            format!("{profile:<14} "),
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(format!("{:<10} ", session.age), Style::default().fg(Color::Gray)),
+        Span::styled(session.id.clone(), Style::default().fg(Color::White)),
+    ]))
 }
 
 fn render_log(frame: &mut Frame, app: &App, area: Rect) {
@@ -889,5 +931,78 @@ mod tests {
         assert!(screen.contains("info"));
         assert!(screen.contains("error"));
         assert!(screen.contains("bwrap missing"));
+    }
+
+    fn picker_summary(id: &str, profile: Option<&str>, age: &str) -> SessionSummary {
+        SessionSummary {
+            id: id.into(),
+            path: std::path::PathBuf::from(id),
+            profile: profile.map(str::to_owned),
+            age: age.into(),
+            created_at_ms: None,
+        }
+    }
+
+    fn rendered_picker(sessions: &[SessionSummary], selected: usize) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        terminal.draw(|frame| render_picker(frame, sessions, selected)).unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .clone()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>()
+    }
+
+    #[test]
+    fn picker_lists_sessions_with_profile_and_age() {
+        let sessions = vec![
+            picker_summary("s-1", Some("codex"), "2m ago"),
+            picker_summary("s-2", None, "3h ago"),
+        ];
+        let screen = rendered_picker(&sessions, 0);
+        assert!(screen.contains("choose a session"));
+        assert!(screen.contains("codex"));
+        assert!(screen.contains("2m ago"));
+        assert!(screen.contains("s-1"));
+        assert!(screen.contains("unknown"));
+        assert!(screen.contains("3h ago"));
+        assert!(screen.contains("s-2"));
+    }
+
+    #[test]
+    fn picker_shows_a_placeholder_when_there_are_no_sessions() {
+        let screen = rendered_picker(&[], 0);
+        assert!(screen.contains("no sessions found"));
+    }
+
+    #[test]
+    fn picker_highlights_the_selected_session() {
+        let sessions =
+            vec![picker_summary("s-1", Some("codex"), "2m ago"), picker_summary("s-2", Some("codex"), "3h ago")];
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        terminal.draw(|frame| render_picker(frame, &sessions, 1)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+
+        let row_containing = |text: &str| -> u16 {
+            (0..buffer.area.height)
+                .find(|&y| {
+                    let row: String = (0..buffer.area.width)
+                        .map(|x| buffer.cell((x, y)).unwrap().symbol())
+                        .collect();
+                    row.contains(text)
+                })
+                .unwrap_or_else(|| panic!("no row contains {text:?}"))
+        };
+        let row_has_gray_backdrop = |y: u16| {
+            (0..buffer.area.width)
+                .any(|x| buffer.cell((x, y)).unwrap().style().bg == Some(Color::DarkGray))
+        };
+
+        assert!(!row_has_gray_backdrop(row_containing("s-1")));
+        assert!(row_has_gray_backdrop(row_containing("s-2")));
     }
 }
