@@ -4,6 +4,7 @@
 //! inline when expanded), the message box, and a one-line status/help footer.
 //! Rendering is a pure function of `App`; all state lives in [`crate::app`].
 
+use crate::agent::SandboxLayout;
 use crate::app::{App, Entry, Focus, Status, View};
 use crate::event::{DetailBlock, AgentEvent};
 use crate::session::{Direction as WireDirection, LogLevel};
@@ -12,6 +13,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::Frame;
+use std::path::{Path, PathBuf};
 
 /// Cap on detail lines shown for one expanded entry, so a single noisy command
 /// cannot bury the rest of the session.
@@ -173,8 +175,65 @@ fn render_preview(frame: &mut Frame, app: &App, area: Rect) {
     let detail = detail_lines(&entry.event, None);
     let mut lines = vec![summary_line(entry, !detail.is_empty())];
     lines.extend(detail);
+    if let AgentEvent::FileChanged { paths, .. } = &entry.event {
+        lines.extend(file_content_lines(paths, app.workspace_root.as_deref()));
+    }
     let paragraph = Paragraph::new(lines).block(block).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, area);
+}
+
+/// Read back the current content of files a `FileChanged` event touched, so
+/// the preview shows what changed rather than just the bare path list.
+fn file_content_lines(paths: &[String], workspace_root: Option<&Path>) -> Vec<Line<'static>> {
+    let Some(root) = workspace_root else {
+        return vec![Line::from(Span::styled(
+            format!("{DETAIL_INDENT}(workspace path unknown; file content unavailable)"),
+            Style::default().fg(Color::Gray).bg(DETAIL_BG),
+        ))];
+    };
+
+    let mut lines = Vec::new();
+    for path in paths {
+        lines.push(Line::from(Span::styled(
+            format!("{DETAIL_INDENT}── {path} ──"),
+            Style::default()
+                .fg(Color::Cyan)
+                .bg(DETAIL_BG)
+                .add_modifier(Modifier::BOLD),
+        )));
+        match std::fs::read_to_string(resolve_workspace_path(root, path)) {
+            Ok(content) => {
+                for line in content.lines() {
+                    lines.push(Line::from(Span::styled(
+                        format!("{DETAIL_INDENT}{line}"),
+                        Style::default().fg(Color::White).bg(DETAIL_BG),
+                    )));
+                }
+            }
+            Err(error) => {
+                lines.push(Line::from(Span::styled(
+                    format!("{DETAIL_INDENT}could not read file: {error}"),
+                    Style::default().fg(Color::Red).bg(DETAIL_BG),
+                )));
+            }
+        }
+    }
+    lines
+}
+
+/// Map a path as the agent reported it onto the host filesystem. A relative
+/// path joins directly onto the host workspace root (the sandbox's working
+/// directory mirrors it 1:1 through a bind mount); an absolute path inside
+/// the sandbox's mount destination is rewritten onto that same host root.
+fn resolve_workspace_path(root: &Path, reported: &str) -> PathBuf {
+    let reported_path = Path::new(reported);
+    if reported_path.is_absolute() {
+        return match reported_path.strip_prefix(&SandboxLayout::default().workspace) {
+            Ok(relative) => root.join(relative),
+            Err(_) => reported_path.to_path_buf(),
+        };
+    }
+    root.join(reported_path)
 }
 
 fn render_list(frame: &mut Frame, app: &App, area: Rect) {
@@ -699,6 +758,46 @@ mod tests {
         let shown = rendered(&app);
         assert!(shown.contains("preview"));
         assert!(shown.contains("24 passed"));
+    }
+
+    #[test]
+    fn preview_shows_the_current_content_of_a_changed_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "styra-preview-file-test-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("notes.txt"), "line one\nline two").unwrap();
+
+        let mut app = App::new("codex", "s1");
+        app.set_workspace_root(dir.clone());
+        app.push_event(AgentEvent::FileChanged {
+            id: "f1".into(),
+            paths: vec!["notes.txt".into()],
+            checkpoint: None,
+            checkpoint_error: None,
+        });
+        app.toggle_preview();
+
+        let screen = rendered(&app);
+        assert!(screen.contains("notes.txt"));
+        assert!(screen.contains("line one"));
+        assert!(screen.contains("line two"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn preview_notes_an_unknown_workspace_instead_of_failing_to_read_a_file() {
+        let mut app = App::new("codex", "s1");
+        app.push_event(AgentEvent::FileChanged {
+            id: "f1".into(),
+            paths: vec!["notes.txt".into()],
+            checkpoint: None,
+            checkpoint_error: None,
+        });
+        app.toggle_preview();
+        assert!(rendered(&app).contains("workspace path unknown"));
     }
 
     #[test]

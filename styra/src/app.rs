@@ -7,6 +7,7 @@
 
 use crate::event::{AgentEvent, TokenUsage};
 use crate::session::{LogEntry, RawLine, SessionEnd};
+use std::path::PathBuf;
 
 /// Which region receives keys, like vim's normal/insert split.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -81,6 +82,10 @@ pub struct App {
     pub show_preview: bool,
     pub profile_name: String,
     pub session_id: String,
+    /// The host directory backing the agent's sandboxed workspace, when
+    /// known (a live session; a replayed journal has no live workspace).
+    /// Lets the preview panel read a changed file's current content.
+    pub workspace_root: Option<PathBuf>,
     pub latest_usage: Option<TokenUsage>,
     /// The verbatim wire interaction, in occurrence order.
     pub raw: Vec<RawLine>,
@@ -108,6 +113,7 @@ impl App {
             show_preview: false,
             profile_name: profile_name.into(),
             session_id: session_id.into(),
+            workspace_root: None,
             latest_usage: None,
             raw: Vec::new(),
             raw_scroll_back: 0,
@@ -249,6 +255,13 @@ impl App {
     /// Toggle the side panel that previews the selected entry's full content.
     pub fn toggle_preview(&mut self) {
         self.show_preview = !self.show_preview;
+    }
+
+    /// Record the host directory backing the agent's workspace, so the
+    /// preview panel can resolve a changed file's path to its current
+    /// content on disk.
+    pub fn set_workspace_root(&mut self, path: PathBuf) {
+        self.workspace_root = Some(path);
     }
 
     /// Toggle whether minor lifecycle events (thread/turn/usage) are shown.
@@ -555,6 +568,14 @@ mod tests {
         app.toggle_minor();
         assert!(app.is_visible(app.selected));
         assert_eq!(app.entries[app.selected].event, AgentEvent::AgentMessage { text: "a".into() });
+    }
+
+    #[test]
+    fn workspace_root_is_unset_until_the_host_records_it() {
+        let mut app = app();
+        assert_eq!(app.workspace_root, None);
+        app.set_workspace_root(PathBuf::from("/home/op/project"));
+        assert_eq!(app.workspace_root, Some(PathBuf::from("/home/op/project")));
     }
 
     #[test]

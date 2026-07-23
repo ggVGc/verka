@@ -88,7 +88,7 @@ fn main() -> Result<()> {
             profile: profile.clone(),
             working_directory: layout.workspace.clone(),
             workspace: MountSpec {
-                source: workspace,
+                source: workspace.clone(),
                 destination: layout.workspace.clone(),
                 writable: true,
             },
@@ -104,6 +104,7 @@ fn main() -> Result<()> {
         let (spawned, receiver) =
             Session::spawn(spec, backend, journal, session_id.clone(), diagnostics)?;
         app = App::new(profile.name.clone(), session_id);
+        app.set_workspace_root(workspace);
         app.push_log(LogEntry::info(format!("journal: {}", journal_path.display())));
 
         let prompt = cli.prompt.join(" ");
