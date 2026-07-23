@@ -169,7 +169,7 @@ mod tests {
         assert!(profile
             .mounts
             .iter()
-            .any(|mount| mount.destination == PathBuf::from("/root/.codex/auth.json") && mount.writable));
+            .any(|mount| mount.destination == std::path::Path::new("/root/.codex/auth.json") && mount.writable));
         assert_eq!(profile.environment.get("HOME"), Some(&"/root".to_string()));
     }
 

@@ -283,7 +283,7 @@ mod tests {
         }
     }
 
-    fn workspace_spec(dir: &PathBuf) -> SessionSpec {
+    fn workspace_spec(dir: &std::path::Path) -> SessionSpec {
         // A profile with no credential mounts so request validation only needs
         // the workspace directory to exist.
         let mut profile = crate::agent::codex(&SandboxLayout::default());
@@ -292,10 +292,10 @@ mod tests {
         profile.message_format = MessageFormat::CodexSubmission;
         SessionSpec {
             profile,
-            working_directory: dir.clone(),
+            working_directory: dir.to_path_buf(),
             workspace: MountSpec {
-                source: dir.clone(),
-                destination: dir.clone(),
+                source: dir.to_path_buf(),
+                destination: dir.to_path_buf(),
                 writable: true,
             },
             temporary_mounts: Vec::new(),

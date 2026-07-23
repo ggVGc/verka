@@ -23,6 +23,6 @@ Each is committed on its own. Check off as completed.
   status. Pure state transitions, unit tested.
 - [x] **7. Rendering (`ui.rs`).** The ratatui layout: event list with summaries
   and inline expansion, the message box, and the status line.
-- [ ] **8. Event loop (`main.rs`).** CLI arguments, terminal setup/teardown,
+- [x] **8. Event loop (`main.rs`).** CLI arguments, terminal setup/teardown,
   input handling per focus, and wiring the session threads to the app and
   renderer. `--attach` replay path.
