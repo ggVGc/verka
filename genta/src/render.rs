@@ -14,16 +14,25 @@ use crate::event::{decode_line, AgentEvent, DetailBlock, Protocol};
 /// Events with no rendered view (control traffic, unknown envelopes) are
 /// skipped unless `all` is set.
 pub fn render(log: &str, protocol: Protocol, all: bool) -> String {
+    let events: Vec<AgentEvent> = log
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| decode_line(protocol, line))
+        .collect();
+    render_events(&events, all)
+}
+
+/// Lay out already-decoded events as a tagged transcript — the same rendering
+/// [`render`] does, for a caller (e.g. a host reconstructing a journal via its
+/// own record format) that already has a `Vec<AgentEvent>` rather than raw
+/// wire lines to decode.
+pub fn render_events(events: &[AgentEvent], all: bool) -> String {
     let mut out = String::new();
-    for line in log.lines() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let event = decode_line(protocol, line);
+    for event in events {
         if !all && matches!(event, AgentEvent::Unknown { .. }) {
             continue;
         }
-        render_event(&mut out, &event);
+        render_event(&mut out, event);
     }
     out
 }
@@ -96,6 +105,22 @@ mod tests {
         let text = render(log, Protocol::ClaudeJsonl, false);
         assert!(text.contains("session s-1"));
         assert!(text.contains("agent Done."));
+    }
+
+    #[test]
+    fn render_events_matches_rendering_the_equivalent_raw_log() {
+        // A caller that already decoded events (e.g. a host replaying its own
+        // journal format) must get exactly what render() would have produced
+        // from the equivalent raw wire lines.
+        let log = concat!(
+            "{\"type\":\"thread.started\",\"thread_id\":\"t-1\"}\n",
+            "{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"done\"}}\n",
+        );
+        let events = vec![
+            AgentEvent::ThreadStarted { thread_id: "t-1".into() },
+            AgentEvent::AgentMessage { text: "done".into() },
+        ];
+        assert_eq!(render_events(&events, false), render(log, Protocol::CodexJsonl, false));
     }
 
     #[test]
