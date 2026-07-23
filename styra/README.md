@@ -1,0 +1,31 @@
+# Styra
+
+Styra runs one interactive agent session in isolation and presents it as a
+navigable terminal application. It uses [Driva](../driva) to execute the agent
+with deny-by-default isolation, speaks the agent's machine-readable protocol
+over piped standard streams, and shows every agent output as a selectable
+one-line entry that can be expanded in place. A message box sends input to the
+running agent.
+
+Styra is the interactive counterpart to an [Orka](../orka) attempt: the same
+isolation, the same raw-event-journal-as-truth stance, but steered turn by turn
+by an operator rather than run to completion against a Linka node. It depends
+only on Driva.
+
+See [`DESIGN.md`](DESIGN.md) for the architecture and [`TASKS.md`](TASKS.md) for
+the implementation plan.
+
+## Usage
+
+```sh
+styra [OPTIONS] [-- PROMPT]
+
+  --profile <NAME>     Agent profile to launch (default: the built-in codex)
+  --workspace <DIR>    Host directory mounted writable as the agent workspace
+  --network            Permit agent networking (profiles may default this on)
+  --attach <SESSION>   Open a captured journal read-only instead of launching
+```
+
+Two focuses, like vim modes: list focus navigates and folds the event list,
+input focus types into the message box. `i` or `Tab` enters input focus; `Esc`
+or `Tab` returns to list focus.

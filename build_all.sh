@@ -7,3 +7,4 @@ set -e
 (cd ./driva && cargo build --release)
 (cd ./orka && cargo build --release)
 (cd ./nota && cargo build --release)
+(cd ./styra && cargo build --release)
