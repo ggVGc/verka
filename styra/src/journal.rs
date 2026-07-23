@@ -8,7 +8,7 @@
 //! stored — [`replay`] reproduces events on demand through the protocol
 //! decoder, exactly as a live session decodes them.
 
-use crate::event::{decode_line, Protocol, StyraEvent};
+use crate::event::{decode_line, Protocol, AgentEvent};
 use crate::session::{Direction, RawLine};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -104,9 +104,9 @@ pub fn sessions_dir(store_root: &Path) -> PathBuf {
 }
 
 /// Decode a stored journal back into the ordered event list, reproducing agent
-/// events through `protocol` and operator turns as [`StyraEvent::UserMessage`].
+/// events through `protocol` and operator turns as [`AgentEvent::UserMessage`].
 /// A journal directory or its file may be passed.
-pub fn replay(path: &Path, protocol: Protocol) -> Result<Vec<StyraEvent>> {
+pub fn replay(path: &Path, protocol: Protocol) -> Result<Vec<AgentEvent>> {
     let file_path = if path.is_dir() {
         path.join(JOURNAL_FILE)
     } else {
@@ -122,8 +122,8 @@ pub fn replay(path: &Path, protocol: Protocol) -> Result<Vec<StyraEvent>> {
         }
         match serde_json::from_str::<Record>(&line) {
             Ok(Record::Agent { raw, .. }) => events.push(decode_line(protocol, &raw)),
-            Ok(Record::User { text, .. }) => events.push(StyraEvent::UserMessage { text }),
-            Err(error) => events.push(StyraEvent::Malformed {
+            Ok(Record::User { text, .. }) => events.push(AgentEvent::UserMessage { text }),
+            Err(error) => events.push(AgentEvent::Malformed {
                 error: format!("unreadable journal record: {error}"),
             }),
         }
@@ -206,9 +206,9 @@ mod tests {
         assert_eq!(
             events,
             vec![
-                StyraEvent::UserMessage { text: "do the thing".into() },
-                StyraEvent::AgentMessage { text: "done".into() },
-                StyraEvent::UserMessage { text: "thanks".into() },
+                AgentEvent::UserMessage { text: "do the thing".into() },
+                AgentEvent::AgentMessage { text: "done".into() },
+                AgentEvent::UserMessage { text: "thanks".into() },
             ]
         );
 
@@ -249,7 +249,7 @@ mod tests {
         let dir = temp_dir("corrupt");
         std::fs::write(dir.join(JOURNAL_FILE), "not a record\n").unwrap();
         let events = replay(&dir, Protocol::CodexJsonl).unwrap();
-        assert!(matches!(events.as_slice(), [StyraEvent::Malformed { .. }]));
+        assert!(matches!(events.as_slice(), [AgentEvent::Malformed { .. }]));
 
         std::fs::remove_dir_all(&dir).ok();
     }

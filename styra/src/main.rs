@@ -60,7 +60,7 @@ fn main() -> Result<()> {
             // Skip carried-but-viewless traffic (e.g. app-server control
             // lines), matching what a live session shows; it stays available
             // in the raw view below.
-            if !matches!(event, styra::event::StyraEvent::Unknown { .. }) {
+            if !matches!(event, styra::event::AgentEvent::Unknown { .. }) {
                 app.push_event(event);
             }
         }

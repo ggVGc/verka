@@ -12,7 +12,7 @@
 //! - the UI thread writes operator messages to the stdin-write end.
 
 use crate::agent::{MountSpec, Profile};
-use crate::event::{decode_line, StyraEvent};
+use crate::event::{decode_line, AgentEvent};
 use crate::journal::Journal;
 use anyhow::{Context, Result};
 use driva::{ExecutionIo, ExecutionRequest, Isolation, Mount, MountAccess};
@@ -39,7 +39,7 @@ pub struct SessionSpec {
 /// An update delivered from the session threads to the UI.
 pub enum SessionUpdate {
     /// A decoded agent event or an operator message, in occurrence order.
-    Event(StyraEvent),
+    Event(AgentEvent),
     /// One verbatim wire line, for the raw-interaction view.
     Raw(RawLine),
     /// A diagnostic message for the log view.
@@ -225,9 +225,11 @@ impl Session {
                                 break;
                             }
                             match &reader_client {
-                                Some(client) => {
-                                    client.handle_line(raw, &reader_stdin, &reader_updates)
-                                }
+                                Some(client) => apply_appserver_actions(
+                                    client.handle_line(raw),
+                                    &reader_stdin,
+                                    &reader_updates,
+                                ),
                                 None => {
                                     let event = decode_line(protocol, raw);
                                     if reader_updates.send(SessionUpdate::Event(event)).is_err() {
@@ -269,7 +271,7 @@ impl Session {
 
         // A stateful protocol opens its handshake as soon as the process runs.
         if let Some(client) = &appserver {
-            client.start(&stdin, &updates);
+            apply_appserver_actions(client.start(), &stdin, &updates);
         }
 
         let session = Session {
@@ -291,20 +293,20 @@ impl Session {
     }
 
     /// Send an operator message to the agent. It is journaled, echoed to the UI
-    /// as a [`StyraEvent::UserMessage`], then written as one protocol input line
+    /// as a [`AgentEvent::UserMessage`], then written as one protocol input line
     /// (or dispatched as an app-server turn).
     pub fn send(&self, text: &str) -> Result<()> {
         if let Ok(mut journal) = self.journal.lock() {
             let _ = journal.record_user_message(text);
         }
-        let _ = self.updates.send(SessionUpdate::Event(StyraEvent::UserMessage {
+        let _ = self.updates.send(SessionUpdate::Event(AgentEvent::UserMessage {
             text: text.to_owned(),
         }));
 
         // The app-server client owns turn dispatch (and emits its own raw
         // update for the exact wire line).
         if let Some(client) = &self.appserver {
-            client.send(text, &self.stdin, &self.updates);
+            apply_appserver_actions(client.send(text), &self.stdin, &self.updates);
             return Ok(());
         }
 
@@ -359,6 +361,43 @@ impl Drop for Session {
         }
         if let Some(handle) = self.stderr.take() {
             let _ = handle.join();
+        }
+    }
+}
+
+/// Carry out the actions the pure app-server client asked for: write outgoing
+/// lines to the agent's stdin (surfacing them in the raw view), and forward
+/// events and diagnostics as session updates.
+fn apply_appserver_actions(
+    actions: Vec<crate::appserver::Action>,
+    stdin: &Mutex<Option<PipeWriter>>,
+    updates: &Sender<SessionUpdate>,
+) {
+    use crate::appserver::Action;
+    for action in actions {
+        match action {
+            Action::Send(line) => {
+                let _ = updates.send(SessionUpdate::Raw(RawLine {
+                    direction: Direction::ToAgent,
+                    text: line.clone(),
+                }));
+                if let Ok(mut guard) = stdin.lock() {
+                    if let Some(writer) = guard.as_mut() {
+                        let _ = writer.write_all(line.as_bytes());
+                        let _ = writer.write_all(b"\n");
+                        let _ = writer.flush();
+                    }
+                }
+            }
+            Action::Event(event) => {
+                let _ = updates.send(SessionUpdate::Event(event));
+            }
+            Action::Info(message) => {
+                let _ = updates.send(SessionUpdate::Log(LogEntry::info(message)));
+            }
+            Action::Warn(message) => {
+                let _ = updates.send(SessionUpdate::Log(LogEntry::warn(message)));
+            }
         }
     }
 }
@@ -507,8 +546,8 @@ mod tests {
                 && stderr_seen(&logs))
         {
             match updates.recv_timeout(Duration::from_millis(200)) {
-                Ok(SessionUpdate::Event(StyraEvent::UserMessage { text })) => user = Some(text),
-                Ok(SessionUpdate::Event(StyraEvent::AgentMessage { text })) => agent = Some(text),
+                Ok(SessionUpdate::Event(AgentEvent::UserMessage { text })) => user = Some(text),
+                Ok(SessionUpdate::Event(AgentEvent::AgentMessage { text })) => agent = Some(text),
                 Ok(SessionUpdate::Event(_)) => {}
                 Ok(SessionUpdate::Raw(line)) => raw_directions.push(line.direction),
                 Ok(SessionUpdate::Log(entry)) => logs.push(entry.message),
@@ -533,8 +572,8 @@ mod tests {
         assert_eq!(
             replayed,
             vec![
-                StyraEvent::UserMessage { text: "hello agent".into() },
-                StyraEvent::AgentMessage { text: "echo: hello agent".into() },
+                AgentEvent::UserMessage { text: "hello agent".into() },
+                AgentEvent::AgentMessage { text: "echo: hello agent".into() },
             ]
         );
 

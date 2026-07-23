@@ -103,20 +103,15 @@ pub fn codex(executable: &Path, layout: &SandboxLayout) -> Result<AgentInvocatio
         .workspace
         .to_str()
         .context("Orka's isolated workspace path is not valid UTF-8")?;
-    let trust = format!("projects.{workspace:?}.trust_level=\"trusted\"");
 
     Ok(AgentInvocation {
-        command: vec![
-            executable.to_string_lossy().into_owned(),
-            "-c".into(),
-            trust,
-            "--sandbox".into(),
-            "danger-full-access".into(),
-            "exec".into(),
-            "--skip-git-repo-check".into(),
-            "--json".into(),
-            AGENT_PROMPT.into(),
-        ],
+        // The codex flag/trust shape is shared coding-agent knowledge and
+        // lives in Genta; Orka contributes only its prompt indirection.
+        command: genta::agent::codex_exec_command(
+            &executable.to_string_lossy(),
+            workspace,
+            AGENT_PROMPT,
+        ),
         protocol: AgentProtocol::CodexJsonl,
         mounts: vec![MountSpec {
             source: "~/.codex/auth.json".into(),

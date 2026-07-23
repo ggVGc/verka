@@ -1,13 +1,12 @@
 //! Agent event vocabulary, wire decoding, and presentation.
 //!
-//! The provider wire format stops here. The rest of Styra consumes only
-//! [`StyraEvent`] and its rendered [`summary`](StyraEvent::summary) and
-//! [`detail`](StyraEvent::detail); Driva remains an uninterpreted transport.
+//! The provider wire format stops here. Hosts consume only [`AgentEvent`] and
+//! its rendered [`summary`](AgentEvent::summary) and
+//! [`detail`](AgentEvent::detail); their process transport stays uninterpreted.
 //!
-//! Decoding is versioned by [`Protocol`], exactly as Orka versions its agent
-//! output: a new wire format is a new `Protocol` variant plus a decode arm, and
-//! the match is exhaustive, so a missing decoder is a compile error rather than
-//! a silent mis-decode.
+//! Decoding is versioned by [`Protocol`]: a new wire format is a new
+//! `Protocol` variant plus a decode arm, and the match is exhaustive, so a
+//! missing decoder is a compile error rather than a silent mis-decode.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -40,12 +39,12 @@ pub struct TokenUsage {
     pub reasoning_output_tokens: u64,
 }
 
-/// Styra's stable, provider-independent event vocabulary.
+/// The stable, provider-independent event vocabulary.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum StyraEvent {
+pub enum AgentEvent {
     /// A message the operator sent to the agent, recorded so their own turns
-    /// appear inline in the same list. Styra-originated, never decoded.
+    /// appear inline in the same list. Host-originated, never decoded.
     UserMessage { text: String },
     ThreadStarted {
         thread_id: String,
@@ -65,7 +64,17 @@ pub enum StyraEvent {
         output: String,
     },
     FileChanged {
+        /// The provider's item id, used by hosts that correlate file changes
+        /// with their own journals (e.g. Orka's checkpoint commits).
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        id: String,
         paths: Vec<String>,
+        /// A host-attached checkpoint commit for this change, never decoded
+        /// from the wire.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        checkpoint: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        checkpoint_error: Option<String>,
     },
     ToolStarted {
         name: String,
@@ -84,7 +93,7 @@ pub enum StyraEvent {
     Error {
         message: String,
     },
-    /// A recognised envelope with no Styra view; carried, not rendered as prose.
+    /// A recognised envelope with no rendered view; carried, not shown as prose.
     Unknown {
         wire_type: String,
     },
@@ -102,22 +111,22 @@ pub enum DetailBlock {
     Code { language: Option<String>, text: String },
 }
 
-impl StyraEvent {
+impl AgentEvent {
     /// The short tag shown at the head of the collapsed list line.
     pub fn tag(&self) -> &'static str {
         match self {
-            StyraEvent::UserMessage { .. } => "user",
-            StyraEvent::ThreadStarted { .. } => "thread",
-            StyraEvent::TurnStarted => "turn",
-            StyraEvent::TurnCompleted { .. } => "usage",
-            StyraEvent::CommandStarted { .. } | StyraEvent::CommandCompleted { .. } => "command",
-            StyraEvent::FileChanged { .. } => "files",
-            StyraEvent::ToolStarted { .. } | StyraEvent::ToolCompleted { .. } => "tool",
-            StyraEvent::PlanUpdated { .. } => "plan",
-            StyraEvent::AgentMessage { .. } => "agent",
-            StyraEvent::Error { .. } => "error",
-            StyraEvent::Unknown { .. } => "unknown",
-            StyraEvent::Malformed { .. } => "malformed",
+            AgentEvent::UserMessage { .. } => "user",
+            AgentEvent::ThreadStarted { .. } => "thread",
+            AgentEvent::TurnStarted => "turn",
+            AgentEvent::TurnCompleted { .. } => "usage",
+            AgentEvent::CommandStarted { .. } | AgentEvent::CommandCompleted { .. } => "command",
+            AgentEvent::FileChanged { .. } => "files",
+            AgentEvent::ToolStarted { .. } | AgentEvent::ToolCompleted { .. } => "tool",
+            AgentEvent::PlanUpdated { .. } => "plan",
+            AgentEvent::AgentMessage { .. } => "agent",
+            AgentEvent::Error { .. } => "error",
+            AgentEvent::Unknown { .. } => "unknown",
+            AgentEvent::Malformed { .. } => "malformed",
         }
     }
 
@@ -127,22 +136,22 @@ impl StyraEvent {
     pub fn is_minor(&self) -> bool {
         matches!(
             self,
-            StyraEvent::ThreadStarted { .. } | StyraEvent::TurnStarted | StyraEvent::TurnCompleted { .. }
+            AgentEvent::ThreadStarted { .. } | AgentEvent::TurnStarted | AgentEvent::TurnCompleted { .. }
         )
     }
 
     /// A single collapsed-line summary. Never contains newlines.
     pub fn summary(&self) -> String {
         let line = match self {
-            StyraEvent::UserMessage { text } => first_line(text),
-            StyraEvent::ThreadStarted { thread_id } => format!("session {thread_id}"),
-            StyraEvent::TurnStarted => "turn started".into(),
-            StyraEvent::TurnCompleted { usage } => format!(
+            AgentEvent::UserMessage { text } => first_line(text),
+            AgentEvent::ThreadStarted { thread_id } => format!("session {thread_id}"),
+            AgentEvent::TurnStarted => "turn started".into(),
+            AgentEvent::TurnCompleted { usage } => format!(
                 "in {} · out {} · cached {}",
                 usage.input_tokens, usage.output_tokens, usage.cached_input_tokens
             ),
-            StyraEvent::CommandStarted { command } => first_line(command),
-            StyraEvent::CommandCompleted {
+            AgentEvent::CommandStarted { command } => first_line(command),
+            AgentEvent::CommandCompleted {
                 command,
                 status,
                 exit_code,
@@ -151,16 +160,16 @@ impl StyraEvent {
                 Some(code) => format!("{} ({status}, exit {code})", first_line(command)),
                 None => format!("{} ({status})", first_line(command)),
             },
-            StyraEvent::FileChanged { paths } => paths.join(", "),
-            StyraEvent::ToolStarted { name, detail } if !detail.is_empty() => {
+            AgentEvent::FileChanged { paths, .. } => paths.join(", "),
+            AgentEvent::ToolStarted { name, detail } if !detail.is_empty() => {
                 format!("{name}: {}", first_line(detail))
             }
-            StyraEvent::ToolStarted { name, .. } => name.clone(),
-            StyraEvent::ToolCompleted { name, status } => format!("{name} ({status})"),
-            StyraEvent::PlanUpdated { text } | StyraEvent::AgentMessage { text } => first_line(text),
-            StyraEvent::Error { message } => first_line(message),
-            StyraEvent::Unknown { wire_type } => wire_type.clone(),
-            StyraEvent::Malformed { error } => first_line(error),
+            AgentEvent::ToolStarted { name, .. } => name.clone(),
+            AgentEvent::ToolCompleted { name, status } => format!("{name} ({status})"),
+            AgentEvent::PlanUpdated { text } | AgentEvent::AgentMessage { text } => first_line(text),
+            AgentEvent::Error { message } => first_line(message),
+            AgentEvent::Unknown { wire_type } => wire_type.clone(),
+            AgentEvent::Malformed { error } => first_line(error),
         };
         truncate_line(&line, 200)
     }
@@ -168,25 +177,25 @@ impl StyraEvent {
     /// The expandable detail body as escape-free structured blocks.
     pub fn detail(&self) -> Vec<DetailBlock> {
         match self {
-            StyraEvent::UserMessage { text } => markdown_blocks(text),
-            StyraEvent::ThreadStarted { thread_id } => {
+            AgentEvent::UserMessage { text } => markdown_blocks(text),
+            AgentEvent::ThreadStarted { thread_id } => {
                 vec![DetailBlock::Text(format!("thread id: {thread_id}"))]
             }
-            StyraEvent::TurnStarted => Vec::new(),
-            StyraEvent::TurnCompleted { usage } => vec![DetailBlock::Text(format!(
+            AgentEvent::TurnStarted => Vec::new(),
+            AgentEvent::TurnCompleted { usage } => vec![DetailBlock::Text(format!(
                 "input {} · cached input {} · output {} · reasoning {}",
                 usage.input_tokens,
                 usage.cached_input_tokens,
                 usage.output_tokens,
                 usage.reasoning_output_tokens
             ))],
-            StyraEvent::CommandStarted { command } => {
+            AgentEvent::CommandStarted { command } => {
                 vec![DetailBlock::Code {
                     language: None,
                     text: command.clone(),
                 }]
             }
-            StyraEvent::CommandCompleted {
+            AgentEvent::CommandCompleted {
                 command,
                 status,
                 exit_code,
@@ -204,10 +213,10 @@ impl StyraEvent {
                 }
                 blocks
             }
-            StyraEvent::FileChanged { paths } => {
+            AgentEvent::FileChanged { paths, .. } => {
                 vec![DetailBlock::Text(paths.join("\n"))]
             }
-            StyraEvent::ToolStarted { name, detail } => {
+            AgentEvent::ToolStarted { name, detail } => {
                 let mut text = name.clone();
                 if !detail.is_empty() {
                     text.push('\n');
@@ -215,24 +224,24 @@ impl StyraEvent {
                 }
                 vec![DetailBlock::Text(text)]
             }
-            StyraEvent::ToolCompleted { name, status } => {
+            AgentEvent::ToolCompleted { name, status } => {
                 vec![DetailBlock::Text(format!("{name}: {status}"))]
             }
-            StyraEvent::PlanUpdated { text } | StyraEvent::AgentMessage { text } => {
+            AgentEvent::PlanUpdated { text } | AgentEvent::AgentMessage { text } => {
                 markdown_blocks(text)
             }
-            StyraEvent::Error { message } => vec![DetailBlock::Text(message.clone())],
-            StyraEvent::Unknown { wire_type } => {
+            AgentEvent::Error { message } => vec![DetailBlock::Text(message.clone())],
+            AgentEvent::Unknown { wire_type } => {
                 vec![DetailBlock::Text(format!("unrecognised event: {wire_type}"))]
             }
-            StyraEvent::Malformed { error } => vec![DetailBlock::Text(error.clone())],
+            AgentEvent::Malformed { error } => vec![DetailBlock::Text(error.clone())],
         }
     }
 }
 
 /// Decode one wire line under the given protocol. Never fails: undecodable
-/// input becomes [`StyraEvent::Malformed`] so nothing is silently lost.
-pub fn decode_line(protocol: Protocol, line: &str) -> StyraEvent {
+/// input becomes [`AgentEvent::Malformed`] so nothing is silently lost.
+pub fn decode_line(protocol: Protocol, line: &str) -> AgentEvent {
     match protocol {
         Protocol::CodexJsonl => decode_codex_line(line),
         Protocol::CodexAppServer => decode_appserver_line(line),
@@ -242,12 +251,12 @@ pub fn decode_line(protocol: Protocol, line: &str) -> StyraEvent {
 
 /// Decode one `codex app-server` line. Notifications (which carry a `method`)
 /// map to events; requests and responses are control traffic and decode to
-/// [`StyraEvent::Unknown`] so they are carried without cluttering the list.
-fn decode_appserver_line(line: &str) -> StyraEvent {
+/// [`AgentEvent::Unknown`] so they are carried without cluttering the list.
+fn decode_appserver_line(line: &str) -> AgentEvent {
     let value: Value = match serde_json::from_str(line) {
         Ok(value) => value,
         Err(error) => {
-            return StyraEvent::Malformed {
+            return AgentEvent::Malformed {
                 error: clean_terminal_text(&format!("{error}")),
             }
         }
@@ -256,15 +265,15 @@ fn decode_appserver_line(line: &str) -> StyraEvent {
         Some(method) => {
             decode_appserver_notification(method, value.get("params").unwrap_or(&Value::Null))
         }
-        None => StyraEvent::Unknown {
+        None => AgentEvent::Unknown {
             wire_type: "response".into(),
         },
     }
 }
 
-fn decode_appserver_notification(method: &str, params: &Value) -> StyraEvent {
+fn decode_appserver_notification(method: &str, params: &Value) -> AgentEvent {
     match method {
-        "thread/started" => StyraEvent::ThreadStarted {
+        "thread/started" => AgentEvent::ThreadStarted {
             thread_id: clean_terminal_text(
                 params
                     .get("thread")
@@ -272,10 +281,10 @@ fn decode_appserver_notification(method: &str, params: &Value) -> StyraEvent {
                     .unwrap_or_default(),
             ),
         },
-        "turn/started" => StyraEvent::TurnStarted,
+        "turn/started" => AgentEvent::TurnStarted,
         // The turn's usage arrives here, just before `turn/completed` (which
         // carries none), so this is what marks a turn done and shows usage.
-        "thread/tokenUsage/updated" => StyraEvent::TurnCompleted {
+        "thread/tokenUsage/updated" => AgentEvent::TurnCompleted {
             usage: appserver_usage(params),
         },
         "item/started" => {
@@ -284,60 +293,53 @@ fn decode_appserver_notification(method: &str, params: &Value) -> StyraEvent {
         "item/completed" => {
             decode_appserver_item(params.get("item").unwrap_or(&Value::Null), true)
         }
-        "error" | "warning" | "guardianWarning" | "configWarning" => StyraEvent::Error {
+        "error" | "warning" | "guardianWarning" | "configWarning" => AgentEvent::Error {
             message: clean_terminal_text(
                 string(params, "message").unwrap_or("agent reported an error"),
             ),
         },
-        other => StyraEvent::Unknown {
+        other => AgentEvent::Unknown {
             wire_type: clean_terminal_text(other),
         },
     }
 }
 
-fn decode_appserver_item(item: &Value, completed: bool) -> StyraEvent {
+fn decode_appserver_item(item: &Value, completed: bool) -> AgentEvent {
     let kind = string(item, "type").unwrap_or("unknown");
     let clean = |value: &str| clean_terminal_text(value);
     match (kind, completed) {
-        ("agentMessage", true) => StyraEvent::AgentMessage {
+        ("agentMessage", true) => AgentEvent::AgentMessage {
             text: clean(string(item, "text").unwrap_or_default()),
         },
-        ("commandExecution", false) => StyraEvent::CommandStarted {
+        ("commandExecution", false) => AgentEvent::CommandStarted {
             command: clean(string(item, "command").unwrap_or_default()),
         },
-        ("commandExecution", true) => StyraEvent::CommandCompleted {
+        ("commandExecution", true) => AgentEvent::CommandCompleted {
             command: clean(string(item, "command").unwrap_or_default()),
             status: clean(string(item, "status").unwrap_or("completed")),
             exit_code: item.get("exitCode").and_then(Value::as_i64),
             output: clean(string(item, "aggregatedOutput").unwrap_or_default()),
         },
-        ("fileChange", true) => StyraEvent::FileChanged {
-            paths: item
-                .get("changes")
-                .and_then(Value::as_array)
-                .map(|changes| {
-                    changes
-                        .iter()
-                        .filter_map(|change| string(change, "path"))
-                        .map(clean)
-                        .collect()
-                })
-                .unwrap_or_default(),
+        ("fileChange", true) => AgentEvent::FileChanged {
+            id: clean(string(item, "id").unwrap_or_default()),
+            paths: changed_paths(item),
+            checkpoint: None,
+            checkpoint_error: None,
         },
-        ("plan", true) => StyraEvent::PlanUpdated {
+        ("plan", true) => AgentEvent::PlanUpdated {
             text: clean(string(item, "text").unwrap_or_default()),
         },
-        ("mcpToolCall", false) | ("webSearch", false) => StyraEvent::ToolStarted {
+        ("mcpToolCall", false) | ("webSearch", false) => AgentEvent::ToolStarted {
             name: clean(tool_name(item, kind)),
             detail: clean(tool_detail(item)),
         },
-        ("mcpToolCall", true) | ("webSearch", true) => StyraEvent::ToolCompleted {
+        ("mcpToolCall", true) | ("webSearch", true) => AgentEvent::ToolCompleted {
             name: clean(tool_name(item, kind)),
             status: clean(string(item, "status").unwrap_or("completed")),
         },
-        // userMessage (echoed back — Styra shows its own), reasoning, deltas,
+        // userMessage (echoed back — the host shows its own), reasoning, deltas,
         // and item lifecycles with no view carry without rendering.
-        _ => StyraEvent::Unknown {
+        _ => AgentEvent::Unknown {
             wire_type: format!("item:{kind}"),
         },
     }
@@ -357,11 +359,11 @@ fn appserver_usage(params: &Value) -> TokenUsage {
     }
 }
 
-fn decode_codex_line(line: &str) -> StyraEvent {
+fn decode_codex_line(line: &str) -> AgentEvent {
     let value: Value = match serde_json::from_str(line) {
         Ok(value) => value,
         Err(error) => {
-            return StyraEvent::Malformed {
+            return AgentEvent::Malformed {
                 error: clean_terminal_text(&format!("{error}")),
             }
         }
@@ -369,40 +371,40 @@ fn decode_codex_line(line: &str) -> StyraEvent {
     decode_codex_value(&value)
 }
 
-fn decode_codex_value(value: &Value) -> StyraEvent {
+fn decode_codex_value(value: &Value) -> AgentEvent {
     let wire_type = string(value, "type").unwrap_or("unknown");
     match wire_type {
-        "thread.started" => StyraEvent::ThreadStarted {
+        "thread.started" => AgentEvent::ThreadStarted {
             thread_id: clean_terminal_text(string(value, "thread_id").unwrap_or_default()),
         },
-        "turn.started" => StyraEvent::TurnStarted,
-        "turn.completed" => StyraEvent::TurnCompleted {
+        "turn.started" => AgentEvent::TurnStarted,
+        "turn.completed" => AgentEvent::TurnCompleted {
             usage: value
                 .get("usage")
                 .and_then(|usage| serde_json::from_value(usage.clone()).ok())
                 .unwrap_or_default(),
         },
-        "turn.failed" | "error" => StyraEvent::Error {
+        "turn.failed" | "error" => AgentEvent::Error {
             message: clean_terminal_text(error_message(value)),
         },
         "item.started" | "item.updated" | "item.completed" => {
             decode_codex_item(wire_type, value.get("item").unwrap_or(&Value::Null))
         }
-        other => StyraEvent::Unknown {
+        other => AgentEvent::Unknown {
             wire_type: clean_terminal_text(other),
         },
     }
 }
 
-fn decode_codex_item(event_type: &str, item: &Value) -> StyraEvent {
+fn decode_codex_item(event_type: &str, item: &Value) -> AgentEvent {
     let kind = string(item, "type").unwrap_or("unknown");
     let completed = event_type == "item.completed";
     let clean = |value: &str| clean_terminal_text(value);
     match (kind, completed) {
-        ("command_execution", false) => StyraEvent::CommandStarted {
+        ("command_execution", false) => AgentEvent::CommandStarted {
             command: clean(string(item, "command").unwrap_or_default()),
         },
-        ("command_execution", true) => StyraEvent::CommandCompleted {
+        ("command_execution", true) => AgentEvent::CommandCompleted {
             command: clean(string(item, "command").unwrap_or_default()),
             status: clean(string(item, "status").unwrap_or("completed")),
             exit_code: item.get("exit_code").and_then(Value::as_i64),
@@ -412,38 +414,31 @@ fn decode_codex_item(event_type: &str, item: &Value) -> StyraEvent {
                     .unwrap_or_default(),
             ),
         },
-        ("file_change", true) => StyraEvent::FileChanged {
-            paths: item
-                .get("changes")
-                .and_then(Value::as_array)
-                .map(|changes| {
-                    changes
-                        .iter()
-                        .filter_map(|change| string(change, "path"))
-                        .map(clean)
-                        .collect()
-                })
-                .unwrap_or_default(),
+        ("file_change", true) => AgentEvent::FileChanged {
+            id: clean(string(item, "id").unwrap_or_default()),
+            paths: changed_paths(item),
+            checkpoint: None,
+            checkpoint_error: None,
         },
-        ("agent_message", true) => StyraEvent::AgentMessage {
+        ("agent_message", true) => AgentEvent::AgentMessage {
             text: clean(string(item, "text").unwrap_or_default()),
         },
-        ("plan", true) | ("plan_update", true) => StyraEvent::PlanUpdated {
+        ("plan", true) | ("plan_update", true) => AgentEvent::PlanUpdated {
             text: clean(
                 string(item, "text")
                     .or_else(|| string(item, "plan"))
                     .unwrap_or_default(),
             ),
         },
-        ("mcp_tool_call", false) | ("web_search", false) => StyraEvent::ToolStarted {
+        ("mcp_tool_call", false) | ("web_search", false) => AgentEvent::ToolStarted {
             name: clean(tool_name(item, kind)),
             detail: clean(tool_detail(item)),
         },
-        ("mcp_tool_call", true) | ("web_search", true) => StyraEvent::ToolCompleted {
+        ("mcp_tool_call", true) | ("web_search", true) => AgentEvent::ToolCompleted {
             name: clean(tool_name(item, kind)),
             status: clean(string(item, "status").unwrap_or("completed")),
         },
-        (_, _) => StyraEvent::Unknown {
+        (_, _) => AgentEvent::Unknown {
             wire_type: format!("{event_type}:{kind}"),
         },
     }
@@ -453,17 +448,17 @@ fn decode_codex_item(event_type: &str, item: &Value) -> StyraEvent {
 /// a top-level `system` (session/init metadata), `assistant` and `user`
 /// messages carrying Anthropic content blocks, and a `result` turn summary.
 ///
-/// One wire line maps to one [`StyraEvent`], as in the codex decoder. An
+/// One wire line maps to one [`AgentEvent`], as in the codex decoder. An
 /// `assistant` message may carry several content blocks; the salient one is
 /// chosen (a tool call over prose, prose over reasoning) and the rest remain in
 /// the verbatim raw view. NOTE: the exact `stream-json` shape must be confirmed
 /// against the installed `claude` version; it is isolated here so adapting to a
 /// revised contract is a localized change.
-fn decode_claude_line(line: &str) -> StyraEvent {
+fn decode_claude_line(line: &str) -> AgentEvent {
     let value: Value = match serde_json::from_str(line) {
         Ok(value) => value,
         Err(error) => {
-            return StyraEvent::Malformed {
+            return AgentEvent::Malformed {
                 error: clean_terminal_text(&format!("{error}")),
             }
         }
@@ -471,17 +466,17 @@ fn decode_claude_line(line: &str) -> StyraEvent {
     decode_claude_value(&value)
 }
 
-fn decode_claude_value(value: &Value) -> StyraEvent {
+fn decode_claude_value(value: &Value) -> AgentEvent {
     let wire_type = string(value, "type").unwrap_or("unknown");
     match wire_type {
         "system" => {
             let subtype = string(value, "subtype").unwrap_or_default();
             if subtype == "init" {
-                StyraEvent::ThreadStarted {
+                AgentEvent::ThreadStarted {
                     thread_id: clean_terminal_text(string(value, "session_id").unwrap_or_default()),
                 }
             } else {
-                StyraEvent::Unknown {
+                AgentEvent::Unknown {
                     wire_type: clean_terminal_text(&format!("system:{subtype}")),
                 }
             }
@@ -489,7 +484,7 @@ fn decode_claude_value(value: &Value) -> StyraEvent {
         "assistant" => decode_claude_assistant(value.get("message").unwrap_or(&Value::Null)),
         "user" => decode_claude_user(value.get("message").unwrap_or(&Value::Null)),
         "result" => decode_claude_result(value),
-        other => StyraEvent::Unknown {
+        other => AgentEvent::Unknown {
             wire_type: clean_terminal_text(other),
         },
     }
@@ -498,10 +493,10 @@ fn decode_claude_value(value: &Value) -> StyraEvent {
 /// Choose the salient block of an assistant message: a tool call is the action
 /// worth surfacing, then visible prose, then reasoning. The full message stays
 /// available verbatim in the raw view.
-fn decode_claude_assistant(message: &Value) -> StyraEvent {
+fn decode_claude_assistant(message: &Value) -> AgentEvent {
     match message.get("content") {
         Some(Value::String(text)) => {
-            return StyraEvent::AgentMessage {
+            return AgentEvent::AgentMessage {
                 text: clean_terminal_text(text),
             }
         }
@@ -519,50 +514,50 @@ fn decode_claude_assistant(message: &Value) -> StyraEvent {
                 }
             }
             if let Some(text) = text.or(thinking) {
-                return StyraEvent::AgentMessage {
+                return AgentEvent::AgentMessage {
                     text: clean_terminal_text(text),
                 };
             }
         }
         _ => {}
     }
-    StyraEvent::Unknown { wire_type: "assistant".into() }
+    AgentEvent::Unknown { wire_type: "assistant".into() }
 }
 
-fn claude_tool_started(block: &Value) -> StyraEvent {
+fn claude_tool_started(block: &Value) -> AgentEvent {
     let detail = block
         .get("input")
         .filter(|input| !input.is_null())
         .map(|input| input.to_string())
         .unwrap_or_default();
-    StyraEvent::ToolStarted {
+    AgentEvent::ToolStarted {
         name: clean_terminal_text(string(block, "name").unwrap_or("tool")),
         detail: clean_terminal_text(&detail),
     }
 }
 
 /// A Claude `user` message is a synthetic turn carrying tool results back to the
-/// model; it is not an echo of the operator's input (Styra records that itself).
-fn decode_claude_user(message: &Value) -> StyraEvent {
+/// model; it is not an echo of the operator's input (the host records that itself).
+fn decode_claude_user(message: &Value) -> AgentEvent {
     if let Some(Value::Array(blocks)) = message.get("content") {
         for block in blocks {
             if string(block, "type") == Some("tool_result") {
                 let is_error = block.get("is_error").and_then(Value::as_bool).unwrap_or(false);
-                return StyraEvent::ToolCompleted {
+                return AgentEvent::ToolCompleted {
                     name: clean_terminal_text(string(block, "tool_use_id").unwrap_or("tool")),
                     status: if is_error { "error".into() } else { "completed".into() },
                 };
             }
         }
     }
-    StyraEvent::Unknown { wire_type: "user".into() }
+    AgentEvent::Unknown { wire_type: "user".into() }
 }
 
-fn decode_claude_result(value: &Value) -> StyraEvent {
+fn decode_claude_result(value: &Value) -> AgentEvent {
     let subtype = string(value, "subtype").unwrap_or_default();
     let is_error = value.get("is_error").and_then(Value::as_bool).unwrap_or(false);
     if is_error || subtype.starts_with("error") {
-        return StyraEvent::Error {
+        return AgentEvent::Error {
             message: clean_terminal_text(
                 string(value, "result")
                     .or_else(|| string(value, "error"))
@@ -570,12 +565,12 @@ fn decode_claude_result(value: &Value) -> StyraEvent {
             ),
         };
     }
-    StyraEvent::TurnCompleted {
+    AgentEvent::TurnCompleted {
         usage: claude_usage(value.get("usage").unwrap_or(&Value::Null)),
     }
 }
 
-/// Map Claude's usage object onto Styra's [`TokenUsage`]. Claude reports cached
+/// Map Claude's usage object onto [`TokenUsage`]. Claude reports cached
 /// input as `cache_read_input_tokens`; the rest align by name.
 fn claude_usage(usage: &Value) -> TokenUsage {
     let count = |key: &str| usage.get(key).and_then(Value::as_u64).unwrap_or(0);
@@ -585,6 +580,26 @@ fn claude_usage(usage: &Value) -> TokenUsage {
         output_tokens: count("output_tokens"),
         reasoning_output_tokens: 0,
     }
+}
+
+/// Collect the changed paths of a file-change item, tolerating the schema
+/// variants seen across codex versions (`path` or `file_path` per change, or a
+/// single path on the item itself).
+fn changed_paths(item: &Value) -> Vec<String> {
+    let mut paths = Vec::new();
+    if let Some(changes) = item.get("changes").and_then(Value::as_array) {
+        for change in changes {
+            if let Some(path) = string(change, "path").or_else(|| string(change, "file_path")) {
+                paths.push(clean_terminal_text(path));
+            }
+        }
+    }
+    if paths.is_empty() {
+        if let Some(path) = string(item, "path").or_else(|| string(item, "file_path")) {
+            paths.push(clean_terminal_text(path));
+        }
+    }
+    paths
 }
 
 fn tool_name<'a>(item: &'a Value, kind: &'a str) -> &'a str {
@@ -764,7 +779,7 @@ mod tests {
         );
         assert_eq!(
             event,
-            StyraEvent::AgentMessage {
+            AgentEvent::AgentMessage {
                 text: "Added backoff.\nTests pass.".into()
             }
         );
@@ -778,7 +793,7 @@ mod tests {
             Protocol::CodexJsonl,
             r#"{"type":"item.started","item":{"id":"c1","type":"command_execution","command":"cargo test"}}"#,
         );
-        assert_eq!(started, StyraEvent::CommandStarted { command: "cargo test".into() });
+        assert_eq!(started, AgentEvent::CommandStarted { command: "cargo test".into() });
 
         let completed = decode_line(
             Protocol::CodexJsonl,
@@ -786,7 +801,7 @@ mod tests {
         );
         assert_eq!(
             completed,
-            StyraEvent::CommandCompleted {
+            AgentEvent::CommandCompleted {
                 command: "cargo test".into(),
                 status: "completed".into(),
                 exit_code: Some(0),
@@ -800,11 +815,11 @@ mod tests {
     fn thread_and_turn_events_decode() {
         assert_eq!(
             decode_line(Protocol::CodexJsonl, r#"{"type":"thread.started","thread_id":"t-7"}"#),
-            StyraEvent::ThreadStarted { thread_id: "t-7".into() }
+            AgentEvent::ThreadStarted { thread_id: "t-7".into() }
         );
         assert_eq!(
             decode_line(Protocol::CodexJsonl, r#"{"type":"turn.started"}"#),
-            StyraEvent::TurnStarted
+            AgentEvent::TurnStarted
         );
         let usage = decode_line(
             Protocol::CodexJsonl,
@@ -812,7 +827,7 @@ mod tests {
         );
         assert_eq!(
             usage,
-            StyraEvent::TurnCompleted {
+            AgentEvent::TurnCompleted {
                 usage: TokenUsage {
                     input_tokens: 10,
                     output_tokens: 3,
@@ -832,7 +847,12 @@ mod tests {
         );
         assert_eq!(
             event,
-            StyraEvent::FileChanged { paths: vec!["src/a.rs".into(), "src/b.rs".into()] }
+            AgentEvent::FileChanged {
+                id: "f1".into(),
+                paths: vec!["src/a.rs".into(), "src/b.rs".into()],
+                checkpoint: None,
+                checkpoint_error: None,
+            }
         );
         assert_eq!(event.summary(), "src/a.rs, src/b.rs");
     }
@@ -841,11 +861,11 @@ mod tests {
     fn unknown_and_malformed_are_preserved_not_dropped() {
         assert_eq!(
             decode_line(Protocol::CodexJsonl, r#"{"type":"future.event"}"#),
-            StyraEvent::Unknown { wire_type: "future.event".into() }
+            AgentEvent::Unknown { wire_type: "future.event".into() }
         );
         assert!(matches!(
             decode_line(Protocol::CodexJsonl, "not json"),
-            StyraEvent::Malformed { .. }
+            AgentEvent::Malformed { .. }
         ));
     }
 
@@ -856,7 +876,7 @@ mod tests {
             Protocol::CodexJsonl,
             "{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"\\u001b[31mred\\u001b[0m done\"}}",
         );
-        assert_eq!(event, StyraEvent::AgentMessage { text: "red done".into() });
+        assert_eq!(event, AgentEvent::AgentMessage { text: "red done".into() });
     }
 
     #[test]
@@ -874,7 +894,7 @@ mod tests {
 
     #[test]
     fn agent_message_detail_uses_markdown_blocks() {
-        let event = StyraEvent::AgentMessage { text: "text\n```\ncode\n```".into() };
+        let event = AgentEvent::AgentMessage { text: "text\n```\ncode\n```".into() };
         assert_eq!(
             event.detail(),
             vec![
@@ -891,14 +911,14 @@ mod tests {
                 Protocol::ClaudeJsonl,
                 r#"{"type":"system","subtype":"init","session_id":"s-9","model":"claude-opus-4-8"}"#,
             ),
-            StyraEvent::ThreadStarted { thread_id: "s-9".into() }
+            AgentEvent::ThreadStarted { thread_id: "s-9".into() }
         );
         assert_eq!(
             decode_line(
                 Protocol::ClaudeJsonl,
                 r#"{"type":"system","subtype":"compact_boundary"}"#,
             ),
-            StyraEvent::Unknown { wire_type: "system:compact_boundary".into() }
+            AgentEvent::Unknown { wire_type: "system:compact_boundary".into() }
         );
     }
 
@@ -910,7 +930,7 @@ mod tests {
         );
         assert_eq!(
             event,
-            StyraEvent::AgentMessage { text: "Added backoff.\nTests pass.".into() }
+            AgentEvent::AgentMessage { text: "Added backoff.\nTests pass.".into() }
         );
         assert_eq!(event.summary(), "Added backoff.");
     }
@@ -925,7 +945,7 @@ mod tests {
         );
         assert_eq!(
             event,
-            StyraEvent::ToolStarted { name: "Bash".into(), detail: "{\"command\":\"cargo test\"}".into() }
+            AgentEvent::ToolStarted { name: "Bash".into(), detail: "{\"command\":\"cargo test\"}".into() }
         );
         assert_eq!(event.summary(), "Bash: {\"command\":\"cargo test\"}");
     }
@@ -936,7 +956,7 @@ mod tests {
             Protocol::ClaudeJsonl,
             r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"weigh the options"}]}}"#,
         );
-        assert_eq!(event, StyraEvent::AgentMessage { text: "weigh the options".into() });
+        assert_eq!(event, AgentEvent::AgentMessage { text: "weigh the options".into() });
     }
 
     #[test]
@@ -946,14 +966,14 @@ mod tests {
                 Protocol::ClaudeJsonl,
                 r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"ok"}]}}"#,
             ),
-            StyraEvent::ToolCompleted { name: "toolu_1".into(), status: "completed".into() }
+            AgentEvent::ToolCompleted { name: "toolu_1".into(), status: "completed".into() }
         );
         assert_eq!(
             decode_line(
                 Protocol::ClaudeJsonl,
                 r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_2","is_error":true,"content":"boom"}]}}"#,
             ),
-            StyraEvent::ToolCompleted { name: "toolu_2".into(), status: "error".into() }
+            AgentEvent::ToolCompleted { name: "toolu_2".into(), status: "error".into() }
         );
     }
 
@@ -965,7 +985,7 @@ mod tests {
         );
         assert_eq!(
             usage,
-            StyraEvent::TurnCompleted {
+            AgentEvent::TurnCompleted {
                 usage: TokenUsage {
                     input_tokens: 12,
                     cached_input_tokens: 8,
@@ -981,7 +1001,7 @@ mod tests {
                 Protocol::ClaudeJsonl,
                 r#"{"type":"result","subtype":"error_max_turns","is_error":true,"result":"hit the turn limit"}"#,
             ),
-            StyraEvent::Error { message: "hit the turn limit".into() }
+            AgentEvent::Error { message: "hit the turn limit".into() }
         );
     }
 
@@ -989,18 +1009,18 @@ mod tests {
     fn claude_unknown_and_malformed_are_preserved() {
         assert_eq!(
             decode_line(Protocol::ClaudeJsonl, r#"{"type":"stream_event"}"#),
-            StyraEvent::Unknown { wire_type: "stream_event".into() }
+            AgentEvent::Unknown { wire_type: "stream_event".into() }
         );
         assert!(matches!(
             decode_line(Protocol::ClaudeJsonl, "not json"),
-            StyraEvent::Malformed { .. }
+            AgentEvent::Malformed { .. }
         ));
     }
 
     #[test]
     fn summary_is_flattened_and_truncated() {
         let long = "x".repeat(500);
-        let event = StyraEvent::AgentMessage { text: long };
+        let event = AgentEvent::AgentMessage { text: long };
         let summary = event.summary();
         assert!(summary.chars().count() <= 200);
         assert!(summary.ends_with('…'));
@@ -1014,12 +1034,12 @@ mod tests {
         let d = |line| decode_line(Protocol::CodexAppServer, line);
         assert_eq!(
             d(r#"{"method":"thread/started","params":{"thread":{"id":"019f8f61-b7df-7291-81fc-04ff0bfb786f"}}}"#),
-            StyraEvent::ThreadStarted { thread_id: "019f8f61-b7df-7291-81fc-04ff0bfb786f".into() }
+            AgentEvent::ThreadStarted { thread_id: "019f8f61-b7df-7291-81fc-04ff0bfb786f".into() }
         );
-        assert_eq!(d(r#"{"method":"turn/started","params":{"threadId":"t"}}"#), StyraEvent::TurnStarted);
+        assert_eq!(d(r#"{"method":"turn/started","params":{"threadId":"t"}}"#), AgentEvent::TurnStarted);
         assert_eq!(
             d(r#"{"method":"item/completed","params":{"item":{"type":"agentMessage","id":"msg_1","text":"hello","phase":"final_answer"}}}"#),
-            StyraEvent::AgentMessage { text: "hello".into() }
+            AgentEvent::AgentMessage { text: "hello".into() }
         );
     }
 
@@ -1031,7 +1051,7 @@ mod tests {
         );
         assert_eq!(
             started,
-            StyraEvent::CommandStarted { command: "/usr/bin/bash -lc 'echo hi'".into() }
+            AgentEvent::CommandStarted { command: "/usr/bin/bash -lc 'echo hi'".into() }
         );
         let completed = decode_line(
             Protocol::CodexAppServer,
@@ -1039,7 +1059,7 @@ mod tests {
         );
         assert_eq!(
             completed,
-            StyraEvent::CommandCompleted {
+            AgentEvent::CommandCompleted {
                 command: "/usr/bin/bash -lc 'echo hi'".into(),
                 status: "completed".into(),
                 exit_code: Some(0),
@@ -1056,7 +1076,7 @@ mod tests {
         );
         assert_eq!(
             event,
-            StyraEvent::TurnCompleted {
+            AgentEvent::TurnCompleted {
                 usage: TokenUsage {
                     input_tokens: 12598,
                     cached_input_tokens: 9600,
@@ -1072,16 +1092,16 @@ mod tests {
         // A response (no "method") is control traffic.
         assert_eq!(
             decode_line(Protocol::CodexAppServer, r#"{"id":2,"result":{"thread":{"id":"t"}}}"#),
-            StyraEvent::Unknown { wire_type: "response".into() }
+            AgentEvent::Unknown { wire_type: "response".into() }
         );
-        // The server echoes the operator's own message; Styra shows its own, so
+        // The server echoes the operator's own message; the host shows its own, so
         // this decodes to Unknown rather than duplicating it.
         assert_eq!(
             decode_line(
                 Protocol::CodexAppServer,
                 r#"{"method":"item/completed","params":{"item":{"type":"userMessage","id":"u","content":[{"type":"text","text":"hi"}]}}}"#
             ),
-            StyraEvent::Unknown { wire_type: "item:userMessage".into() }
+            AgentEvent::Unknown { wire_type: "item:userMessage".into() }
         );
     }
 }

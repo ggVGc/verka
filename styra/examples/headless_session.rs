@@ -15,7 +15,7 @@ use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
 use styra::agent::{MountSpec, Profile, SandboxLayout};
-use styra::event::StyraEvent;
+use styra::event::AgentEvent;
 use styra::journal::Journal;
 use styra::session::{Session, SessionSpec, SessionUpdate};
 
@@ -100,7 +100,7 @@ fn main() -> anyhow::Result<()> {
     session.send(&prompt)?;
 
     let turn_done = |update: &SessionUpdate| {
-        matches!(update, SessionUpdate::Event(StyraEvent::TurnCompleted { .. }))
+        matches!(update, SessionUpdate::Event(AgentEvent::TurnCompleted { .. }))
     };
     if single_turn {
         wait_for(&updates, "session end", |u| matches!(u, SessionUpdate::Ended(_)));

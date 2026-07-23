@@ -1,10 +1,10 @@
-//! Agent profiles: the only agent-specific knowledge in Styra.
+//! Agent profiles: how each coding agent is launched and spoken to.
 //!
-//! A profile names the isolated command, the wire protocol it speaks, the Driva
-//! policy it needs, and how an operator message is encoded as one protocol
-//! input line. Driva remains the isolation executor; interpretation of the
-//! streams belongs here and in [`crate::event`], exactly as Orka keeps provider
-//! knowledge out of Driva.
+//! A profile names the isolated command, the wire protocol it speaks, the
+//! sandbox policy it needs, and how an operator message is encoded as one
+//! protocol input line. The host's executor (Driva) stays an uninterpreted
+//! transport; interpretation of the streams belongs here and in
+//! [`crate::event`].
 
 use crate::event::Protocol;
 use anyhow::{bail, Result};
@@ -13,8 +13,8 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// A host path exposed at an isolated destination. Mirrors Orka's mount spec so
-/// the Driva translation in [`crate::session`] is a direct mapping.
+/// A host path exposed at an isolated destination, translated by the host into
+/// its executor's bind-mount spec.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MountSpec {
     pub source: PathBuf,
@@ -22,7 +22,7 @@ pub struct MountSpec {
     pub writable: bool,
 }
 
-/// Stable paths inside one isolated Styra session. The workspace is where the
+/// Stable paths inside one isolated agent session. The workspace is where the
 /// operator's project (or a throwaway worktree) is mounted writable.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SandboxLayout {
@@ -50,7 +50,7 @@ pub enum MessageFormat {
     PlainLine,
 }
 
-/// Everything Styra needs to launch and drive one agent. The workspace bind
+/// Everything a host needs to launch and drive one agent. The workspace bind
 /// mount is added by the session from the operator's `--workspace`; the profile
 /// contributes only its own agent-specific mounts (credentials, state).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -135,21 +135,9 @@ pub fn codex_appserver(layout: &SandboxLayout) -> Profile {
 /// prompt from stdin and streams `thread`/`turn`/`item` events, verified
 /// against codex-cli 0.145.
 pub fn codex(layout: &SandboxLayout) -> Profile {
-    let workspace = layout.workspace.to_string_lossy();
-    let trust = format!("projects.{workspace:?}.trust_level=\"trusted\"");
     Profile {
         name: "codex-exec".into(),
-        command: vec![
-            "codex".into(),
-            "-c".into(),
-            trust,
-            "--sandbox".into(),
-            "danger-full-access".into(),
-            "exec".into(),
-            "--skip-git-repo-check".into(),
-            "--json".into(),
-            "-".into(),
-        ],
+        command: codex_exec_command("codex", &layout.workspace.to_string_lossy(), "-"),
         protocol: Protocol::CodexJsonl,
         // HOME lives under /tmp, the writable tmpfs Driva always provides, so
         // codex has a disposable, always-present home without depending on
@@ -167,6 +155,26 @@ pub fn codex(layout: &SandboxLayout) -> Profile {
         message_format: MessageFormat::PlainLine,
         single_turn: true,
     }
+}
+
+/// The `codex exec --json` command line shared by hosts: the workspace is
+/// trusted so codex does not prompt, its inner sandbox is disabled
+/// (`danger-full-access`) in favour of the host's outer isolation, and the
+/// prompt is the final argument (`-` reads it from stdin; hosts that stage a
+/// prompt file pass their own instruction text instead).
+pub fn codex_exec_command(executable: &str, workspace: &str, prompt: &str) -> Vec<String> {
+    let trust = format!("projects.{workspace:?}.trust_level=\"trusted\"");
+    vec![
+        executable.into(),
+        "-c".into(),
+        trust,
+        "--sandbox".into(),
+        "danger-full-access".into(),
+        "exec".into(),
+        "--skip-git-repo-check".into(),
+        "--json".into(),
+        prompt.into(),
+    ]
 }
 
 /// Build a codex protocol submission line carrying the operator's text.

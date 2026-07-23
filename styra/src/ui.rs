@@ -5,7 +5,7 @@
 //! Rendering is a pure function of `App`; all state lives in [`crate::app`].
 
 use crate::app::{App, Entry, Focus, View};
-use crate::event::{DetailBlock, StyraEvent};
+use crate::event::{DetailBlock, AgentEvent};
 use crate::session::{Direction as WireDirection, LogLevel};
 use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -208,7 +208,7 @@ fn summary_line(entry: &Entry) -> Line<'static> {
     ])
 }
 
-fn detail_lines(event: &StyraEvent) -> Vec<Line<'static>> {
+fn detail_lines(event: &AgentEvent) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     for block in event.detail() {
         match block {
@@ -327,7 +327,7 @@ fn tag_color(tag: &str) -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::{StyraEvent, TokenUsage};
+    use crate::event::{AgentEvent, TokenUsage};
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
 
@@ -354,7 +354,7 @@ mod tests {
     #[test]
     fn a_collapsed_entry_shows_its_summary_and_a_fold_marker() {
         let mut app = App::new("codex", "s1");
-        app.push_event(StyraEvent::AgentMessage { text: "hello world".into() });
+        app.push_event(AgentEvent::AgentMessage { text: "hello world".into() });
         let screen = rendered(&app);
         assert!(screen.contains("hello world"));
         assert!(screen.contains('▸'));
@@ -364,7 +364,7 @@ mod tests {
     #[test]
     fn an_expanded_command_shows_detail_lines() {
         let mut app = App::new("codex", "s1");
-        app.push_event(StyraEvent::CommandCompleted {
+        app.push_event(AgentEvent::CommandCompleted {
             command: "cargo test".into(),
             status: "completed".into(),
             exit_code: Some(0),
@@ -379,7 +379,7 @@ mod tests {
     #[test]
     fn usage_is_shown_once_recorded() {
         let mut app = App::new("codex", "s1");
-        app.push_event(StyraEvent::TurnCompleted {
+        app.push_event(AgentEvent::TurnCompleted {
             usage: TokenUsage { input_tokens: 12, output_tokens: 3, ..Default::default() },
         });
         let screen = rendered(&app);
@@ -389,8 +389,8 @@ mod tests {
     #[test]
     fn minor_events_are_omitted_from_the_list_when_hidden() {
         let mut app = App::new("codex", "s1");
-        app.push_event(StyraEvent::ThreadStarted { thread_id: "t-1".into() });
-        app.push_event(StyraEvent::AgentMessage { text: "hello world".into() });
+        app.push_event(AgentEvent::ThreadStarted { thread_id: "t-1".into() });
+        app.push_event(AgentEvent::AgentMessage { text: "hello world".into() });
         app.toggle_minor();
         let screen = rendered(&app);
         assert!(!screen.contains("t-1"));

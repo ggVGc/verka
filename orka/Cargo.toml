@@ -21,6 +21,7 @@ toml = "0.8"
 ulid = "1"
 linka = { path = "../linka" }
 driva = { path = "../driva" }
+genta = { path = "../genta" }
 nota = { path = "../nota" }
 
 [target.'cfg(target_os = "linux")'.dependencies]

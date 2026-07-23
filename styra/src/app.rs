@@ -5,7 +5,7 @@
 //! so the whole interaction model is unit-testable. [`crate::ui`] renders it and
 //! `main` feeds it input and session updates.
 
-use crate::event::{StyraEvent, TokenUsage};
+use crate::event::{AgentEvent, TokenUsage};
 use crate::session::{LogEntry, RawLine, SessionEnd};
 
 /// Which region receives keys, like vim's normal/insert split.
@@ -59,7 +59,7 @@ impl Status {
 /// One event in the list, with its fold state.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Entry {
-    pub event: StyraEvent,
+    pub event: AgentEvent,
     pub expanded: bool,
 }
 
@@ -191,20 +191,20 @@ impl App {
     // --- Ingesting session updates -----------------------------------------
 
     /// Append a decoded event, advancing status and, while following, selection.
-    pub fn push_event(&mut self, event: StyraEvent) {
+    pub fn push_event(&mut self, event: AgentEvent) {
         match &event {
-            StyraEvent::TurnCompleted { usage } => {
+            AgentEvent::TurnCompleted { usage } => {
                 self.latest_usage = Some(usage.clone());
                 if self.status.is_active() {
                     self.status = Status::Waiting;
                 }
             }
-            StyraEvent::UserMessage { .. }
-            | StyraEvent::TurnStarted
-            | StyraEvent::CommandStarted { .. }
-            | StyraEvent::ToolStarted { .. }
-            | StyraEvent::AgentMessage { .. }
-            | StyraEvent::PlanUpdated { .. } => {
+            AgentEvent::UserMessage { .. }
+            | AgentEvent::TurnStarted
+            | AgentEvent::CommandStarted { .. }
+            | AgentEvent::ToolStarted { .. }
+            | AgentEvent::AgentMessage { .. }
+            | AgentEvent::PlanUpdated { .. } => {
                 if self.status.is_active() {
                     self.status = Status::Running;
                 }
@@ -384,8 +384,8 @@ mod tests {
     #[test]
     fn following_tracks_the_newest_entry() {
         let mut app = app();
-        app.push_event(StyraEvent::TurnStarted);
-        app.push_event(StyraEvent::AgentMessage { text: "hi".into() });
+        app.push_event(AgentEvent::TurnStarted);
+        app.push_event(AgentEvent::AgentMessage { text: "hi".into() });
         assert!(app.follow);
         assert_eq!(app.selected, 1);
     }
@@ -394,14 +394,14 @@ mod tests {
     fn moving_up_pins_the_view_and_reaching_the_tail_resumes_follow() {
         let mut app = app();
         for _ in 0..3 {
-            app.push_event(StyraEvent::TurnStarted);
+            app.push_event(AgentEvent::TurnStarted);
         }
         app.select_prev();
         assert!(!app.follow);
         assert_eq!(app.selected, 1);
 
         // New events no longer move the selection while pinned.
-        app.push_event(StyraEvent::AgentMessage { text: "x".into() });
+        app.push_event(AgentEvent::AgentMessage { text: "x".into() });
         assert_eq!(app.selected, 1);
 
         // Walking back down to the tail re-enables follow.
@@ -415,8 +415,8 @@ mod tests {
     #[test]
     fn expansion_is_per_entry_and_bulk_toggles_work() {
         let mut app = app();
-        app.push_event(StyraEvent::AgentMessage { text: "a".into() });
-        app.push_event(StyraEvent::AgentMessage { text: "b".into() });
+        app.push_event(AgentEvent::AgentMessage { text: "a".into() });
+        app.push_event(AgentEvent::AgentMessage { text: "b".into() });
 
         app.select_first();
         app.toggle_expand();
@@ -433,13 +433,13 @@ mod tests {
     fn status_follows_turn_lifecycle_and_captures_usage() {
         let mut app = app();
         assert_eq!(app.status, Status::Running);
-        app.push_event(StyraEvent::TurnCompleted {
+        app.push_event(AgentEvent::TurnCompleted {
             usage: TokenUsage { input_tokens: 7, ..Default::default() },
         });
         assert_eq!(app.status, Status::Waiting);
         assert_eq!(app.latest_usage.as_ref().unwrap().input_tokens, 7);
 
-        app.push_event(StyraEvent::UserMessage { text: "more".into() });
+        app.push_event(AgentEvent::UserMessage { text: "more".into() });
         assert_eq!(app.status, Status::Running);
     }
 
@@ -450,7 +450,7 @@ mod tests {
         assert_eq!(app.status, Status::Ended { exit_code: Some(0), error: None });
         assert!(!app.can_send());
         // A late event does not revive an ended session.
-        app.push_event(StyraEvent::AgentMessage { text: "late".into() });
+        app.push_event(AgentEvent::AgentMessage { text: "late".into() });
         assert!(matches!(app.status, Status::Ended { .. }));
     }
 
@@ -509,27 +509,27 @@ mod tests {
     #[test]
     fn minor_events_are_hidden_and_skipped_by_navigation() {
         let mut app = app();
-        app.push_event(StyraEvent::ThreadStarted { thread_id: "t".into() });
-        app.push_event(StyraEvent::AgentMessage { text: "a".into() });
-        app.push_event(StyraEvent::TurnStarted);
-        app.push_event(StyraEvent::AgentMessage { text: "b".into() });
-        app.push_event(StyraEvent::TurnCompleted { usage: TokenUsage::default() });
+        app.push_event(AgentEvent::ThreadStarted { thread_id: "t".into() });
+        app.push_event(AgentEvent::AgentMessage { text: "a".into() });
+        app.push_event(AgentEvent::TurnStarted);
+        app.push_event(AgentEvent::AgentMessage { text: "b".into() });
+        app.push_event(AgentEvent::TurnCompleted { usage: TokenUsage::default() });
 
         app.toggle_minor();
         assert!(!app.show_minor);
 
         app.select_first();
-        assert_eq!(app.entries[app.selected].event, StyraEvent::AgentMessage { text: "a".into() });
+        assert_eq!(app.entries[app.selected].event, AgentEvent::AgentMessage { text: "a".into() });
 
         app.select_next();
-        assert_eq!(app.entries[app.selected].event, StyraEvent::AgentMessage { text: "b".into() });
+        assert_eq!(app.entries[app.selected].event, AgentEvent::AgentMessage { text: "b".into() });
 
         // No more visible entries after "b"; select_next is a no-op.
         app.select_next();
-        assert_eq!(app.entries[app.selected].event, StyraEvent::AgentMessage { text: "b".into() });
+        assert_eq!(app.entries[app.selected].event, AgentEvent::AgentMessage { text: "b".into() });
 
         app.select_prev();
-        assert_eq!(app.entries[app.selected].event, StyraEvent::AgentMessage { text: "a".into() });
+        assert_eq!(app.entries[app.selected].event, AgentEvent::AgentMessage { text: "a".into() });
 
         app.toggle_minor();
         assert!(app.show_minor);
@@ -538,14 +538,14 @@ mod tests {
     #[test]
     fn toggling_minor_off_moves_selection_off_a_hidden_entry() {
         let mut app = app();
-        app.push_event(StyraEvent::AgentMessage { text: "a".into() });
-        app.push_event(StyraEvent::TurnStarted);
+        app.push_event(AgentEvent::AgentMessage { text: "a".into() });
+        app.push_event(AgentEvent::TurnStarted);
         // Selection sits on the just-pushed minor entry via follow.
         assert_eq!(app.selected, 1);
 
         app.toggle_minor();
         assert!(app.is_visible(app.selected));
-        assert_eq!(app.entries[app.selected].event, StyraEvent::AgentMessage { text: "a".into() });
+        assert_eq!(app.entries[app.selected].event, AgentEvent::AgentMessage { text: "a".into() });
     }
 
     #[test]

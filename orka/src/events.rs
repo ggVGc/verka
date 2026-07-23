@@ -6,84 +6,16 @@
 use crate::agent::AgentProtocol;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TokenUsage {
-    #[serde(default)]
-    pub input_tokens: u64,
-    #[serde(default)]
-    pub cached_input_tokens: u64,
-    #[serde(default)]
-    pub output_tokens: u64,
-    #[serde(default)]
-    pub reasoning_output_tokens: u64,
-}
-
-/// Provider-independent events retained by Orka and consumed by its views.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum AgentEvent {
-    ThreadStarted {
-        thread_id: String,
-    },
-    TurnStarted,
-    CommandStarted {
-        id: String,
-        command: String,
-    },
-    CommandCompleted {
-        id: String,
-        command: String,
-        status: String,
-        exit_code: Option<i64>,
-        #[serde(default, skip_serializing_if = "String::is_empty")]
-        output: String,
-    },
-    FileChanged {
-        id: String,
-        paths: Vec<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        checkpoint: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        checkpoint_error: Option<String>,
-    },
-    ToolStarted {
-        id: String,
-        name: String,
-        detail: String,
-    },
-    ToolCompleted {
-        id: String,
-        name: String,
-        status: String,
-    },
-    PlanUpdated {
-        id: String,
-        text: String,
-    },
-    AgentMessage {
-        id: String,
-        text: String,
-    },
-    TurnCompleted {
-        usage: TokenUsage,
-    },
-    Error {
-        message: String,
-    },
-    Unknown {
-        wire_type: String,
-    },
-    Malformed {
-        error: String,
-    },
-}
+// The event vocabulary and its decoders live in Genta, the shared
+// coding-agent library; Orka re-exports them so downstream modules keep their
+// import paths.
+pub use genta::event::{clean_terminal_text, AgentEvent, TokenUsage};
 
 /// Provider-independent blocks used by every human-facing work-log view.
 ///
@@ -218,7 +150,10 @@ pub fn event_blocks(event: &AgentEvent) -> Vec<WorkLogBlock> {
         AgentEvent::Malformed { error } => WorkLogBlock::Error {
             message: format!("malformed agent event: {}", clean(error)),
         },
-        AgentEvent::Unknown { .. } => return Vec::new(),
+        // Unknown provider events have no presentation; a UserMessage is a
+        // host echo of the operator's own input, which Orka's batch runs never
+        // produce and its views do not render.
+        AgentEvent::Unknown { .. } | AgentEvent::UserMessage { .. } => return Vec::new(),
     };
     vec![block]
 }
@@ -401,138 +336,11 @@ pub fn transcript_blocks(transcript: &str) -> Vec<WorkLogBlock> {
     }
 }
 
-/// Decode one `codex exec --json` line without assuming every future event is
-/// known. Unknown events remain visible and the exact input remains in the raw
+/// Decode one `codex exec --json` line through Genta's versioned decoder.
+/// Unknown events remain visible and the exact input remains in the raw
 /// journal.
 pub fn decode_codex_line(line: &str) -> AgentEvent {
-    match serde_json::from_str::<Value>(line) {
-        Ok(value) => decode_codex_value(&value),
-        Err(error) => AgentEvent::Malformed {
-            error: error.to_string(),
-        },
-    }
-}
-
-fn decode_codex_value(value: &Value) -> AgentEvent {
-    let wire_type = string(value, "type").unwrap_or("unknown");
-    match wire_type {
-        "thread.started" => AgentEvent::ThreadStarted {
-            thread_id: string(value, "thread_id").unwrap_or_default().into(),
-        },
-        "turn.started" => AgentEvent::TurnStarted,
-        "turn.completed" => AgentEvent::TurnCompleted {
-            usage: serde_json::from_value(value.get("usage").cloned().unwrap_or_default())
-                .unwrap_or_default(),
-        },
-        "turn.failed" | "error" => AgentEvent::Error {
-            message: error_message(value),
-        },
-        "item.started" | "item.updated" | "item.completed" => {
-            decode_item(wire_type, value.get("item").unwrap_or(&Value::Null))
-        }
-        other => AgentEvent::Unknown {
-            wire_type: other.into(),
-        },
-    }
-}
-
-fn decode_item(event_type: &str, item: &Value) -> AgentEvent {
-    let id = string(item, "id").unwrap_or_default().to_owned();
-    let kind = string(item, "type").unwrap_or("unknown");
-    let completed = event_type == "item.completed";
-    match (kind, completed) {
-        ("command_execution", false) => AgentEvent::CommandStarted {
-            id,
-            command: string(item, "command").unwrap_or_default().into(),
-        },
-        ("command_execution", true) => AgentEvent::CommandCompleted {
-            id,
-            command: string(item, "command").unwrap_or_default().into(),
-            status: string(item, "status").unwrap_or("completed").into(),
-            exit_code: item.get("exit_code").and_then(Value::as_i64),
-            output: string(item, "aggregated_output")
-                .or_else(|| string(item, "output"))
-                .unwrap_or_default()
-                .into(),
-        },
-        ("file_change", true) => AgentEvent::FileChanged {
-            id,
-            paths: changed_paths(item),
-            checkpoint: None,
-            checkpoint_error: None,
-        },
-        ("agent_message", true) => AgentEvent::AgentMessage {
-            id,
-            text: string(item, "text").unwrap_or_default().into(),
-        },
-        ("plan", true) | ("plan_update", true) => AgentEvent::PlanUpdated {
-            id,
-            text: string(item, "text")
-                .or_else(|| string(item, "plan"))
-                .unwrap_or_default()
-                .into(),
-        },
-        ("mcp_tool_call", false) | ("web_search", false) => AgentEvent::ToolStarted {
-            id,
-            name: tool_name(item, kind),
-            detail: tool_detail(item),
-        },
-        ("mcp_tool_call", true) | ("web_search", true) => AgentEvent::ToolCompleted {
-            id,
-            name: tool_name(item, kind),
-            status: string(item, "status").unwrap_or("completed").into(),
-        },
-        _ => AgentEvent::Unknown {
-            wire_type: format!("{event_type}:{kind}"),
-        },
-    }
-}
-
-fn string<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
-    value.get(key).and_then(Value::as_str)
-}
-
-fn error_message(value: &Value) -> String {
-    string(value, "message")
-        .or_else(|| {
-            value
-                .get("error")
-                .and_then(|error| string(error, "message"))
-        })
-        .unwrap_or("agent execution failed")
-        .into()
-}
-
-fn tool_name(item: &Value, fallback: &str) -> String {
-    string(item, "tool")
-        .or_else(|| string(item, "name"))
-        .or_else(|| string(item, "query"))
-        .unwrap_or(fallback)
-        .into()
-}
-
-fn tool_detail(item: &Value) -> String {
-    string(item, "server")
-        .or_else(|| string(item, "query"))
-        .unwrap_or_default()
-        .into()
-}
-
-fn changed_paths(item: &Value) -> Vec<String> {
-    let mut paths = Vec::new();
-    if let Some(changes) = item.get("changes").and_then(Value::as_array) {
-        for change in changes {
-            if let Some(path) = string(change, "path").or_else(|| string(change, "file_path")) {
-                paths.push(path.into());
-            }
-        }
-    }
-    if paths.is_empty() {
-        if let Some(path) = string(item, "path").or_else(|| string(item, "file_path")) {
-            paths.push(path.into());
-        }
-    }
-    paths
+    genta::event::decode_line(genta::event::Protocol::CodexJsonl, line)
 }
 
 /// Follow a growing raw journal until `done`, rendering complete JSONL records
@@ -698,56 +506,6 @@ impl<W: Write> RichRenderer<W> {
     }
 }
 
-/// Remove terminal control sequences before placing agent-controlled content
-/// in the operator's terminal. Newlines and tabs remain useful formatting.
-pub fn clean_terminal_text(text: &str) -> String {
-    let bytes = text.as_bytes();
-    let mut clean = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == 0x1b {
-            i += 1;
-            if i >= bytes.len() {
-                break;
-            }
-            match bytes[i] {
-                b'[' => {
-                    i += 1;
-                    while i < bytes.len() {
-                        let byte = bytes[i];
-                        i += 1;
-                        if (0x40..=0x7e).contains(&byte) {
-                            break;
-                        }
-                    }
-                }
-                b']' => {
-                    i += 1;
-                    while i < bytes.len() {
-                        if bytes[i] == 0x07 {
-                            i += 1;
-                            break;
-                        }
-                        if bytes[i] == 0x1b && bytes.get(i + 1) == Some(&b'\\') {
-                            i += 2;
-                            break;
-                        }
-                        i += 1;
-                    }
-                }
-                _ => i += 1,
-            }
-            continue;
-        }
-        let byte = bytes[i];
-        if byte >= 0x20 || matches!(byte, b'\n' | b'\t') {
-            clean.push(byte);
-        }
-        i += 1;
-    }
-    String::from_utf8_lossy(&clean).into_owned()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -791,7 +549,6 @@ mod tests {
         let mut output = Vec::new();
         RichRenderer::new(&mut output, false)
             .render(&AgentEvent::AgentMessage {
-                id: "1".into(),
                 text: "safe\x1b[31mred\x1b[0m\x1b]0;title\x07".into(),
             })
             .unwrap();
@@ -804,7 +561,6 @@ mod tests {
     #[test]
     fn work_log_blocks_split_fenced_code_and_retain_its_language() {
         let blocks = event_blocks(&AgentEvent::AgentMessage {
-            id: "message".into(),
             text: "Before\n\n```rust\nlet answer = 42;\n```\n\nAfter".into(),
         });
         assert_eq!(
