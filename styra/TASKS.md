@@ -21,7 +21,7 @@ Each is committed on its own. Check off as completed.
 - [x] **6. Application state (`app.rs`).** The event list, selection, per-entry
   expand/collapse, focus (list vs. input), the message buffer, and session
   status. Pure state transitions, unit tested.
-- [ ] **7. Rendering (`ui.rs`).** The ratatui layout: event list with summaries
+- [x] **7. Rendering (`ui.rs`).** The ratatui layout: event list with summaries
   and inline expansion, the message box, and the status line.
 - [ ] **8. Event loop (`main.rs`).** CLI arguments, terminal setup/teardown,
   input handling per focus, and wiring the session threads to the app and
