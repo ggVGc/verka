@@ -268,10 +268,18 @@ impl App {
     pub fn push_event(&mut self, event: AgentEvent) {
         match &event {
             AgentEvent::TurnCompleted { usage } => {
-                self.latest_usage = Some(usage.clone());
+                // The app-server protocol's `turn/completed` carries no usage
+                // figures of its own (a default, empty one); keep whatever the
+                // last `UsageUpdated` reported rather than blanking the display.
+                if *usage != TokenUsage::default() {
+                    self.latest_usage = Some(usage.clone());
+                }
                 if self.status.is_active() {
                     self.status = Status::Waiting;
                 }
+            }
+            AgentEvent::UsageUpdated { usage } => {
+                self.latest_usage = Some(usage.clone());
             }
             AgentEvent::UserMessage { .. }
             | AgentEvent::TurnStarted
@@ -534,6 +542,37 @@ mod tests {
 
         app.push_event(AgentEvent::UserMessage { text: "more".into() });
         assert_eq!(app.status, Status::Running);
+    }
+
+    #[test]
+    fn usage_updates_mid_turn_refresh_the_display_without_ending_the_turn() {
+        // The app-server protocol reports a token-usage snapshot after every
+        // step within a turn (each tool call, each model round), not just the
+        // last one. Only a real `TurnCompleted` should flip the status to
+        // waiting; `UsageUpdated` must not, or the indicator falsely reads
+        // idle while the agent is still actively working.
+        let mut app = app();
+        app.push_event(AgentEvent::CommandStarted { command: "cargo test".into() });
+        assert_eq!(app.status, Status::Running);
+
+        app.push_event(AgentEvent::UsageUpdated {
+            usage: TokenUsage { input_tokens: 10, ..Default::default() },
+        });
+        assert_eq!(app.status, Status::Running, "a usage ping mid-turn must not end it");
+        assert_eq!(app.latest_usage.as_ref().unwrap().input_tokens, 10);
+
+        app.push_event(AgentEvent::CommandStarted { command: "cargo build".into() });
+        app.push_event(AgentEvent::UsageUpdated {
+            usage: TokenUsage { input_tokens: 20, ..Default::default() },
+        });
+        assert_eq!(app.status, Status::Running);
+        assert_eq!(app.latest_usage.as_ref().unwrap().input_tokens, 20);
+
+        // The app-server's real end-of-turn signal carries no usage of its
+        // own; the last reported usage must survive it, not reset to zero.
+        app.push_event(AgentEvent::TurnCompleted { usage: TokenUsage::default() });
+        assert_eq!(app.status, Status::Waiting);
+        assert_eq!(app.latest_usage.as_ref().unwrap().input_tokens, 20);
     }
 
     #[test]

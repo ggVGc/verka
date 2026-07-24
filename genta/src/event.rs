@@ -53,6 +53,13 @@ pub enum AgentEvent {
     TurnCompleted {
         usage: TokenUsage,
     },
+    /// A token-usage snapshot that arrives independently of a turn's end (the
+    /// app-server protocol reports it after every step within a turn, not just
+    /// the last). Updates the usage display without signalling that the agent
+    /// has gone idle — see `TurnCompleted` for the actual end-of-turn signal.
+    UsageUpdated {
+        usage: TokenUsage,
+    },
     CommandStarted {
         command: String,
     },
@@ -118,7 +125,7 @@ impl AgentEvent {
             AgentEvent::UserMessage { .. } => "user",
             AgentEvent::ThreadStarted { .. } => "thread",
             AgentEvent::TurnStarted => "turn",
-            AgentEvent::TurnCompleted { .. } => "usage",
+            AgentEvent::TurnCompleted { .. } | AgentEvent::UsageUpdated { .. } => "usage",
             AgentEvent::CommandStarted { .. } | AgentEvent::CommandCompleted { .. } => "command",
             AgentEvent::FileChanged { .. } => "files",
             AgentEvent::ToolStarted { .. } | AgentEvent::ToolCompleted { .. } => "tool",
@@ -136,7 +143,10 @@ impl AgentEvent {
     pub fn is_minor(&self) -> bool {
         matches!(
             self,
-            AgentEvent::ThreadStarted { .. } | AgentEvent::TurnStarted | AgentEvent::TurnCompleted { .. }
+            AgentEvent::ThreadStarted { .. }
+                | AgentEvent::TurnStarted
+                | AgentEvent::TurnCompleted { .. }
+                | AgentEvent::UsageUpdated { .. }
         )
     }
 
@@ -146,7 +156,7 @@ impl AgentEvent {
             AgentEvent::UserMessage { text } => first_line(text),
             AgentEvent::ThreadStarted { thread_id } => format!("session {thread_id}"),
             AgentEvent::TurnStarted => "turn started".into(),
-            AgentEvent::TurnCompleted { usage } => format!(
+            AgentEvent::TurnCompleted { usage } | AgentEvent::UsageUpdated { usage } => format!(
                 "in {} · out {} · cached {}",
                 usage.input_tokens, usage.output_tokens, usage.cached_input_tokens
             ),
@@ -182,13 +192,15 @@ impl AgentEvent {
                 vec![DetailBlock::Text(format!("thread id: {thread_id}"))]
             }
             AgentEvent::TurnStarted => Vec::new(),
-            AgentEvent::TurnCompleted { usage } => vec![DetailBlock::Text(format!(
-                "input {} · cached input {} · output {} · reasoning {}",
-                usage.input_tokens,
-                usage.cached_input_tokens,
-                usage.output_tokens,
-                usage.reasoning_output_tokens
-            ))],
+            AgentEvent::TurnCompleted { usage } | AgentEvent::UsageUpdated { usage } => {
+                vec![DetailBlock::Text(format!(
+                    "input {} · cached input {} · output {} · reasoning {}",
+                    usage.input_tokens,
+                    usage.cached_input_tokens,
+                    usage.output_tokens,
+                    usage.reasoning_output_tokens
+                ))]
+            }
             AgentEvent::CommandStarted { command } => {
                 vec![DetailBlock::Code {
                     language: None,
@@ -282,9 +294,16 @@ fn decode_appserver_notification(method: &str, params: &Value) -> AgentEvent {
             ),
         },
         "turn/started" => AgentEvent::TurnStarted,
-        // The turn's usage arrives here, just before `turn/completed` (which
-        // carries none), so this is what marks a turn done and shows usage.
-        "thread/tokenUsage/updated" => AgentEvent::TurnCompleted {
+        // `turn/completed` is the actual end-of-turn signal; it carries no
+        // usage figures of its own.
+        "turn/completed" => AgentEvent::TurnCompleted {
+            usage: TokenUsage::default(),
+        },
+        // Fires after every step within a turn (each tool call, each model
+        // round), not just the last one, so it must not be treated as
+        // end-of-turn — that previously made the UI's running/waiting
+        // indicator flip idle mid-turn. It only refreshes the usage display.
+        "thread/tokenUsage/updated" => AgentEvent::UsageUpdated {
             usage: appserver_usage(params),
         },
         "item/started" => {
@@ -1069,14 +1088,17 @@ mod tests {
     }
 
     #[test]
-    fn appserver_token_usage_maps_to_turn_completed() {
+    fn appserver_token_usage_updates_usage_without_ending_the_turn() {
+        // A real session reports this after every step within a turn (each
+        // tool call, each model round), not just the last, so it must not be
+        // read as the turn ending — only `turn/completed` is that signal.
         let event = decode_line(
             Protocol::CodexAppServer,
             r#"{"method":"thread/tokenUsage/updated","params":{"tokenUsage":{"total":{"totalTokens":12603,"inputTokens":12598,"cachedInputTokens":9600,"cacheWriteInputTokens":0,"outputTokens":5,"reasoningOutputTokens":0}}}}"#,
         );
         assert_eq!(
             event,
-            AgentEvent::TurnCompleted {
+            AgentEvent::UsageUpdated {
                 usage: TokenUsage {
                     input_tokens: 12598,
                     cached_input_tokens: 9600,
@@ -1085,6 +1107,15 @@ mod tests {
                 }
             }
         );
+    }
+
+    #[test]
+    fn appserver_turn_completed_is_the_end_of_turn_signal() {
+        let event = decode_line(
+            Protocol::CodexAppServer,
+            r#"{"method":"turn/completed","params":{"threadId":"t","turn":{"id":"t1","status":"completed"}}}"#,
+        );
+        assert_eq!(event, AgentEvent::TurnCompleted { usage: TokenUsage::default() });
     }
 
     #[test]
