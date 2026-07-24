@@ -36,6 +36,34 @@ pub struct SessionSpec {
     pub temporary_mounts: Vec<PathBuf>,
 }
 
+/// A human-facing summary of the Driva policy a session was launched with:
+/// the isolation backend, the command it runs, and the mount/network policy
+/// enforced around it. Captured once at spawn time from the same
+/// [`ExecutionRequest`] Driva itself executes, so it can never drift from
+/// what is actually running.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DrivaOptions {
+    pub isolation_backend: String,
+    pub command: Vec<String>,
+    pub working_directory: PathBuf,
+    pub network: bool,
+    pub mounts: Vec<Mount>,
+}
+
+impl DrivaOptions {
+    /// Capture the policy a `spec` would launch under, without running it.
+    pub fn capture(spec: &SessionSpec, isolation_backend: impl Into<String>) -> Self {
+        let request = build_request(spec);
+        Self {
+            isolation_backend: isolation_backend.into(),
+            command: spec.profile.command.clone(),
+            working_directory: request.working_directory,
+            network: request.network,
+            mounts: request.mounts,
+        }
+    }
+}
+
 /// An update delivered from the session threads to the UI.
 pub enum SessionUpdate {
     /// A decoded agent event or an operator message, in occurrence order.
@@ -599,5 +627,22 @@ mod tests {
             request.environment.get(&OsString::from("HOME")),
             Some(&OsString::from("/root"))
         );
+    }
+
+    #[test]
+    fn driva_options_capture_the_backend_command_and_effective_mounts() {
+        let dir = PathBuf::from("/tmp/styra/workspace");
+        let spec = workspace_spec(&dir);
+        let command = spec.profile.command.clone();
+        let options = DrivaOptions::capture(&spec, "bwrap");
+
+        assert_eq!(options.isolation_backend, "bwrap");
+        assert_eq!(options.command, command);
+        assert_eq!(options.working_directory, dir);
+        assert!(!options.network);
+        assert!(options.mounts.iter().any(|mount| matches!(
+            mount,
+            Mount::Bind { destination, .. } if destination == &dir
+        )));
     }
 }

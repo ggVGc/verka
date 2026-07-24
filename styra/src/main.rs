@@ -17,7 +17,7 @@ use std::time::Duration;
 use styra::agent::{MountSpec, Profile, SandboxLayout, SessionMeta};
 use styra::app::{App, Focus, Status, View};
 use styra::journal::Journal;
-use styra::session::{LogEntry, Session, SessionSpec, SessionUpdate};
+use styra::session::{DrivaOptions, LogEntry, Session, SessionSpec, SessionUpdate};
 use styra::ui;
 
 /// Run an interactive, isolated agent session in a terminal interface.
@@ -208,6 +208,7 @@ struct Spawned {
     session_id: String,
     workspace: PathBuf,
     journal_path: PathBuf,
+    driva_options: DrivaOptions,
 }
 
 /// Create a session's journal, spawn the sandboxed agent process through
@@ -239,8 +240,10 @@ fn spawn_session(cli: &Cli, layout: &SandboxLayout, seed: Option<&str>) -> Resul
         // /tmp tmpfs Driva always provides.
         temporary_mounts: Vec::new(),
     };
+    let isolation_backend = "bwrap";
+    let driva_options = DrivaOptions::capture(&spec, isolation_backend);
     let backend = Box::new(driva::BwrapIsolation {
-        executable: "bwrap".into(),
+        executable: isolation_backend.into(),
         rootfs: Some(PathBuf::from("/")),
     });
 
@@ -251,7 +254,15 @@ fn spawn_session(cli: &Cli, layout: &SandboxLayout, seed: Option<&str>) -> Resul
         session.send(seed)?;
     }
 
-    Ok(Spawned { session, updates, profile_name, session_id, workspace, journal_path })
+    Ok(Spawned {
+        session,
+        updates,
+        profile_name,
+        session_id,
+        workspace,
+        journal_path,
+        driva_options,
+    })
 }
 
 /// Spawn a session and wrap it in a fresh `App`. Used for the CLI's trailing
@@ -265,6 +276,7 @@ fn launch_live_session(
     let spawned = spawn_session(cli, layout, seed)?;
     let mut app = App::new(spawned.profile_name, spawned.session_id);
     app.set_workspace_root(spawned.workspace);
+    app.set_driva_options(spawned.driva_options);
     app.push_log(LogEntry::info(format!("journal: {}", spawned.journal_path.display())));
     Ok((app, spawned.session, spawned.updates))
 }
@@ -412,6 +424,7 @@ fn handle_list_key(app: &mut App, live: &Live, key: KeyEvent, pending_fold: &mut
         KeyCode::Char('r') => return app.toggle_raw(),
         KeyCode::Char('l') => return app.toggle_log(),
         KeyCode::Char('t') => return app.toggle_transcript(),
+        KeyCode::Char('d') => return app.toggle_driva(),
         KeyCode::Char('s') => {
             if let Live::Running { session, .. } = live {
                 session.stop();
@@ -458,6 +471,8 @@ fn handle_list_key(app: &mut App, live: &Live, key: KeyEvent, pending_fold: &mut
             KeyCode::Char('G') => app.transcript_to_bottom(),
             _ => {}
         },
+        // A short, static summary; nothing to scroll.
+        View::Driva => {}
     }
 }
 
@@ -490,6 +505,7 @@ fn handle_input_key(app: &mut App, cli: &Cli, layout: &SandboxLayout, live: &mut
                             app.profile_name = spawned.profile_name;
                             app.session_id = spawned.session_id;
                             app.set_workspace_root(spawned.workspace);
+                            app.set_driva_options(spawned.driva_options);
                             app.push_log(LogEntry::info(format!(
                                 "journal: {}",
                                 spawned.journal_path.display()

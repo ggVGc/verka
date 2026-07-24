@@ -6,7 +6,7 @@
 //! `main` feeds it input and session updates.
 
 use crate::event::{AgentEvent, TokenUsage};
-use crate::session::{LogEntry, RawLine, SessionEnd};
+use crate::session::{DrivaOptions, LogEntry, RawLine, SessionEnd};
 use std::path::PathBuf;
 
 /// Which region receives keys, like vim's normal/insert split.
@@ -19,13 +19,14 @@ pub enum Focus {
 }
 
 /// What the main region shows: the decoded event list, the raw wire stream,
-/// the diagnostic log, or the rendered transcript.
+/// the diagnostic log, the rendered transcript, or the session's Driva policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum View {
     Events,
     Raw,
     Log,
     Transcript,
+    Driva,
 }
 
 /// The session's lifecycle as the operator sees it.
@@ -91,6 +92,10 @@ pub struct App {
     /// known (a live session; a replayed journal has no live workspace).
     /// Lets the preview panel read a changed file's current content.
     pub workspace_root: Option<PathBuf>,
+    /// The Driva policy the live session was launched under (mounts, network,
+    /// isolation backend). `None` for a session that has not launched yet, or
+    /// a replayed journal, which has no live sandbox to describe.
+    pub driva_options: Option<DrivaOptions>,
     pub latest_usage: Option<TokenUsage>,
     /// The verbatim wire interaction, in occurrence order.
     pub raw: Vec<RawLine>,
@@ -126,6 +131,7 @@ impl App {
             profile_name: profile_name.into(),
             session_id: session_id.into(),
             workspace_root: None,
+            driva_options: None,
             latest_usage: None,
             raw: Vec::new(),
             raw_scroll_back: 0,
@@ -217,6 +223,15 @@ impl App {
             View::Events
         } else {
             View::Transcript
+        };
+    }
+
+    /// Toggle the Driva policy view on, or back to the event list.
+    pub fn toggle_driva(&mut self) {
+        self.view = if self.view == View::Driva {
+            View::Events
+        } else {
+            View::Driva
         };
     }
 
@@ -334,6 +349,11 @@ impl App {
     /// content on disk.
     pub fn set_workspace_root(&mut self, path: PathBuf) {
         self.workspace_root = Some(path);
+    }
+
+    /// Record the Driva policy the live session was launched under.
+    pub fn set_driva_options(&mut self, options: DrivaOptions) {
+        self.driva_options = Some(options);
     }
 
     /// Toggle whether minor lifecycle events (thread/turn/usage) are shown.
@@ -744,6 +764,33 @@ mod tests {
         assert_eq!(app.workspace_root, None);
         app.set_workspace_root(PathBuf::from("/home/op/project"));
         assert_eq!(app.workspace_root, Some(PathBuf::from("/home/op/project")));
+    }
+
+    #[test]
+    fn driva_options_are_unset_until_the_host_records_them_and_the_view_toggles() {
+        use crate::session::DrivaOptions;
+        use driva::{Mount, MountAccess};
+
+        let mut app = app();
+        assert_eq!(app.driva_options, None);
+        app.set_driva_options(DrivaOptions {
+            isolation_backend: "bwrap".into(),
+            command: vec!["codex".into(), "app-server".into()],
+            working_directory: PathBuf::from("/tmp/styra/workspace"),
+            network: true,
+            mounts: vec![Mount::Bind {
+                source: PathBuf::from("/home/op/project"),
+                destination: PathBuf::from("/tmp/styra/workspace"),
+                access: MountAccess::ReadWrite,
+            }],
+        });
+        assert_eq!(app.driva_options.as_ref().unwrap().isolation_backend, "bwrap");
+
+        assert_eq!(app.view, View::Events);
+        app.toggle_driva();
+        assert_eq!(app.view, View::Driva);
+        app.toggle_driva();
+        assert_eq!(app.view, View::Events);
     }
 
     #[test]

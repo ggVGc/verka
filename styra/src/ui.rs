@@ -9,6 +9,7 @@ use crate::app::{App, Entry, Focus, Status, View};
 use crate::event::{DetailBlock, AgentEvent};
 use crate::journal::SessionSummary;
 use crate::session::{Direction as WireDirection, LogLevel};
+use driva::{Mount, MountAccess};
 use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -70,6 +71,7 @@ pub fn render(frame: &mut Frame, app: &App) {
         View::Raw => render_raw(frame, app, chunks[0]),
         View::Log => render_log(frame, app, chunks[0]),
         View::Transcript => render_transcript_view(frame, app, chunks[0]),
+        View::Driva => render_driva(frame, app, chunks[0]),
     }
     render_input(frame, app, chunks[1]);
     render_footer(frame, app, chunks[2]);
@@ -242,6 +244,83 @@ fn raw_line(line: &crate::session::RawLine) -> Line<'static> {
         Span::styled(marker, Style::default().fg(color)),
         Span::styled(line.text.clone(), Style::default().fg(Color::White)),
     ])
+}
+
+/// What the session was actually launched with: the isolation backend, the
+/// command it runs, and the mount/network policy enforced around it — an
+/// answer to "what can this agent touch" without having to go dig through
+/// `main.rs`.
+fn render_driva(frame: &mut Frame, app: &App, area: Rect) {
+    let border_style = if app.focus == Focus::List {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(border_style)
+        .title(title_line(&app.profile_name, &app.status, Some("driva")));
+
+    let Some(options) = &app.driva_options else {
+        let empty = Paragraph::new(Line::from(Span::styled(
+            "  no live session yet; nothing to describe",
+            Style::default().fg(Color::Gray),
+        )))
+        .block(block);
+        frame.render_widget(empty, area);
+        return;
+    };
+
+    let mut lines = vec![
+        driva_field_line("backend", &options.isolation_backend),
+        driva_field_line("command", &options.command.join(" ")),
+        driva_field_line("workdir", &options.working_directory.display().to_string()),
+        driva_field_line("network", if options.network { "on" } else { "off" }),
+        Line::from(""),
+        Line::from(Span::styled(
+            "mounts",
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        )),
+    ];
+    lines.extend(options.mounts.iter().map(mount_line));
+
+    let paragraph = Paragraph::new(lines).block(block).wrap(Wrap { trim: false });
+    frame.render_widget(paragraph, area);
+}
+
+fn driva_field_line(label: &str, value: &str) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            format!("  {label:<8} "),
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(value.to_owned(), Style::default().fg(Color::White)),
+    ])
+}
+
+fn mount_line(mount: &Mount) -> Line<'static> {
+    match mount {
+        Mount::Bind { source, destination, access } => {
+            let (label, color) = match access {
+                MountAccess::ReadWrite => ("rw", Color::Yellow),
+                MountAccess::ReadOnly => ("ro", Color::Gray),
+            };
+            Line::from(vec![
+                Span::styled(
+                    format!("  {label} "),
+                    Style::default().fg(color).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("{} → {}", source.display(), destination.display()),
+                    Style::default().fg(Color::White),
+                ),
+            ])
+        }
+        Mount::Temporary { destination } => Line::from(vec![
+            Span::styled("  tmp ", Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD)),
+            Span::styled(destination.display().to_string(), Style::default().fg(Color::White)),
+        ]),
+    }
 }
 
 /// The togglable side panel: the full, uncapped expanded content of the
@@ -614,16 +693,19 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     let hints = match (app.focus, app.view) {
         (Focus::Input, _) => "Enter send · Alt+Enter newline · Esc back to list",
         (Focus::List, View::Events) => {
-            "j/k move · space fold · C collapse all · m minor · p preview · t transcript · r raw · l log · i message · s stop · V switch · q quit"
+            "j/k move · space fold · C collapse all · m minor · p preview · t transcript · r raw · l log · d driva · i message · s stop · V switch · q quit"
         }
         (Focus::List, View::Raw) => {
-            "j/k scroll · g/G top/bottom · r events · l log · t transcript · i message · s stop · V switch · q quit"
+            "j/k scroll · g/G top/bottom · r events · l log · t transcript · d driva · i message · s stop · V switch · q quit"
         }
         (Focus::List, View::Log) => {
-            "j/k scroll · g/G top/bottom · l events · r raw · t transcript · i message · s stop · V switch · q quit"
+            "j/k scroll · g/G top/bottom · l events · r raw · t transcript · d driva · i message · s stop · V switch · q quit"
         }
         (Focus::List, View::Transcript) => {
-            "j/k scroll · g/G top/bottom · t events · r raw · l log · i message · s stop · V switch · q quit"
+            "j/k scroll · g/G top/bottom · t events · r raw · l log · d driva · i message · s stop · V switch · q quit"
+        }
+        (Focus::List, View::Driva) => {
+            "d events · r raw · l log · t transcript · i message · s stop · V switch · q quit"
         }
     };
     let footer = Paragraph::new(Line::from(Span::styled(
@@ -862,6 +944,36 @@ mod tests {
         assert!(screen.contains('»'));
         assert!(screen.contains('«'));
         assert!(screen.contains("turn.started"));
+    }
+
+    #[test]
+    fn driva_view_shows_the_launch_policy_or_a_placeholder_before_launch() {
+        use crate::session::DrivaOptions;
+        use driva::{Mount, MountAccess};
+
+        let mut app = App::new("codex", "s1");
+        app.toggle_driva();
+        let placeholder = rendered(&app);
+        assert!(placeholder.contains("no live session"));
+
+        app.set_driva_options(DrivaOptions {
+            isolation_backend: "bwrap".into(),
+            command: vec!["codex".into(), "app-server".into()],
+            working_directory: PathBuf::from("/tmp/styra/workspace"),
+            network: false,
+            mounts: vec![Mount::Bind {
+                source: PathBuf::from("/home/op/project"),
+                destination: PathBuf::from("/tmp/styra/workspace"),
+                access: MountAccess::ReadWrite,
+            }],
+        });
+        let screen = rendered(&app);
+        assert!(screen.contains("driva"));
+        assert!(screen.contains("bwrap"));
+        assert!(screen.contains("codex app-server"));
+        assert!(screen.contains("off"));
+        assert!(screen.contains("/home/op/project"));
+        assert!(screen.contains("/tmp/styra/workspace"));
     }
 
     #[test]
