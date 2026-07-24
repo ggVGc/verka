@@ -293,12 +293,23 @@ fn render_raw(frame: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    let lines: Vec<Line<'static>> = app.raw.iter().map(raw_line).collect();
-    // Anchor to the bottom, offset upward by how far the operator scrolled.
+    // Wire lines are long; wrap them so the whole line is readable instead of
+    // being clipped at the right edge. Scrollback still counts whole lines, so
+    // wrap first and keep each line's rows together.
+    let width = area.width.saturating_sub(2) as usize;
     let viewport = area.height.saturating_sub(2) as usize;
-    let max_start = lines.len().saturating_sub(viewport);
-    let start = max_start.saturating_sub(app.raw_scroll_back as usize) as u16;
-    let paragraph = Paragraph::new(lines).block(block).scroll((start, 0));
+    let keep = app.raw.len().saturating_sub(app.raw_scroll_back as usize);
+    let mut rows: Vec<Line<'static>> = app
+        .raw
+        .iter()
+        .take(keep)
+        .flat_map(|line| wrap_line(raw_line(line), width))
+        .collect();
+    // Anchor to the bottom of what is left after the operator's scrollback.
+    if rows.len() > viewport {
+        rows.drain(..rows.len() - viewport);
+    }
+    let paragraph = Paragraph::new(rows).block(block);
     frame.render_widget(paragraph, area);
 }
 
@@ -1122,6 +1133,20 @@ mod tests {
         assert!(screen.contains('»'));
         assert!(screen.contains('«'));
         assert!(screen.contains("turn.started"));
+    }
+
+    #[test]
+    fn long_raw_lines_wrap_instead_of_being_clipped() {
+        use styra_server::{Direction, RawLine};
+        let mut app = App::new("codex", "s1");
+        app.push_raw(RawLine {
+            direction: Direction::FromAgent,
+            text: format!(r#"{{"type":"item.completed","text":"{}END"}}"#, "a".repeat(200)),
+        });
+        app.toggle_raw();
+        let screen = rendered(&app);
+        assert!(screen.contains("item.completed"), "start of the line is shown");
+        assert!(screen.contains("END"), "the tail wraps into view instead of being clipped");
     }
 
     #[test]
