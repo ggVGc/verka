@@ -15,7 +15,8 @@ definition and inputs it covered and may declare output artifacts.
 Graph state is derived, never stored as one `status` value. It has four
 independent dimensions:
 
-- **Recorded outcome** is `open`, `succeeded`, or `failed`.
+- **Recorded outcome** is `open`, `succeeded`, or `failed` for ordinary work,
+  and `open`, `accepted`, or `rejected` for verification.
 - **Currency** is `current` or `stale` against the exact definition, inputs,
   context, and artifact the result recorded.
 - **Integration** is `not-required`, `pending`, `accepted`, `published`, or
@@ -43,14 +44,20 @@ candidate pins its artifact and intended target branch and may carry a display
 branch and opaque producer identity. Linka never interprets producer
 namespaces; an executor such as Orka remains a one-way client.
 
-A verification is an ordinary node with one additional typed fact: `verifies`
-names the exact candidate under review. Its `derived_from` lineage must include
-that candidate's source node. This makes a completed verification pin the exact
-source artifact through the existing result protocol. Verification content,
-results, readiness, staleness, and history otherwise use normal node semantics;
-Linka does not interpret a verifier's report or make it an acceptance gate.
-Several verification nodes may refer to the same candidate. A tool such as Nota
-can create or fill these nodes without Linka depending on Nota.
+A verification is a review node with the typed fact `verifies`, which names the
+exact candidate under review. Its `derived_from` lineage must include that
+candidate's source node, so its result pins the exact source result and artifact.
+Unlike ordinary work, a verification cannot be completed or failed: its result
+is either `accepted` or `rejected`. Both conclusions finish that review, while a
+rejected verification does not satisfy a downstream `depends_on` edge.
+
+Candidate decisions are authorized by an exact, current verification result.
+Accepting a candidate requires an `accepted` verification; rejecting it requires
+a `rejected` verification. Linka checks that the verification names the
+candidate and pinned that candidate's exact result and artifact. Several
+verification nodes may refer to the same candidate, but the candidate decision
+records which one authorized it. Review tooling may attach opaque producer
+evidence, while Linka owns and interprets the review conclusion itself.
 
 Applications may also associate opaque attachments with a node under a
 namespaced key. Linka commits the exact bytes and basic content metadata but
@@ -69,6 +76,8 @@ Linka mutation.
 | succeeded | current | pending or accepted | complete | awaiting-integration |
 | succeeded | current | rejected | complete | ready |
 | succeeded | stale | any | complete | ready |
+| accepted or rejected | current | not-required | complete | complete |
+| accepted or rejected | stale | not-required | complete | ready |
 | any | any | any | incomplete | blocked |
 | unreadable | unknown | unknown | unknown | error |
 
@@ -79,9 +88,9 @@ to inspect context, and artifact-backend failures are errors. Queries must
 return those errors rather than converting them to `open`, `ready`, `blocked`,
 or `stale`.
 
-Review discussion and authorization policy belong to other applications.
-Linka records exact accept/reject decisions and owns safe publication after an
-authorized caller requests it.
+Review discussion and reviewer authorization policy belong to other
+applications. Linka enforces that candidate decisions agree with current review
+results and owns safe publication after an authorized caller requests it.
 
 ## Storage
 
@@ -138,10 +147,10 @@ operations to people and scripts. An agent-facing protocol may adapt those
 operations, but protocol-specific concepts do not enter the graph model.
 
 Orka consumes a narrow graph interface for reading ready work, freezing
-versioned input, submitting version-checked results, and registering candidate
-outputs. Nota may use an
-optional adapter to fill verification node descriptions and results, but Linka
-never interprets their schema.
+versioned input, submitting version-checked work and verification results, and
+registering candidate outputs. Nota may use an optional adapter to fill
+verification descriptions and evidence; Linka interprets only the
+accepted/rejected conclusion, never Nota's own schema.
 
 Long-running workers must call `snapshot_work` before starting and
 `submit_result` when finished. Submission compares the frozen definition,

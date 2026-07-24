@@ -74,6 +74,43 @@ fn register(store: &Store, vcs: &FakeVcs, node: &NodeId) -> CandidateRecord {
         .unwrap()
 }
 
+fn conclude(
+    store: &Store,
+    vcs: &FakeVcs,
+    candidate: &CandidateRecord,
+    outcome: crate::VerificationOutcome,
+) -> NodeId {
+    let verification: NodeId = ops::add_verification(
+        store,
+        vcs,
+        &candidate.id,
+        NewNode {
+            description: "Verify the candidate".into(),
+            author: Author::Human,
+            assignee: Some(Author::Human),
+            depends_on: vec![],
+            derived_from: vec![],
+        },
+    )
+    .unwrap()
+    .parse()
+    .unwrap();
+    let snapshot = ops::snapshot_work(store, vcs, verification.as_str(), &[]).unwrap();
+    ops::submit_verification(
+        store,
+        vcs,
+        crate::VerificationSubmission {
+            snapshot,
+            outcome,
+            notes: format!("candidate is {}", outcome.as_str()),
+            author: Author::Human,
+            producer: None,
+        },
+    )
+    .unwrap();
+    verification
+}
+
 #[test]
 fn candidate_acceptance_and_publication_are_first_class_node_state() {
     let (_temp, store, vcs, node, output) = successful_output();
@@ -93,8 +130,20 @@ fn candidate_acceptance_and_publication_are_first_class_node_state() {
     assert!(!state.is_complete());
 
     let candidates = CandidateStore::new(&store);
+    let verification = conclude(
+        &store,
+        &vcs,
+        &candidate,
+        crate::VerificationOutcome::Accepted,
+    );
     candidates
-        .accept(&vcs, &candidate.id, Author::Human, "looks good".into())
+        .accept(
+            &vcs,
+            &candidate.id,
+            &verification,
+            Author::Human,
+            "looks good".into(),
+        )
         .unwrap();
     assert_eq!(
         ops::node_state(&store, &vcs, node.as_str())
@@ -116,8 +165,20 @@ fn candidate_acceptance_and_publication_are_first_class_node_state() {
 fn rejection_returns_the_source_node_to_ready_without_losing_the_candidate() {
     let (_temp, store, vcs, node, _) = successful_output();
     let candidate = register(&store, &vcs, &node);
+    let verification = conclude(
+        &store,
+        &vcs,
+        &candidate,
+        crate::VerificationOutcome::Rejected,
+    );
     CandidateStore::new(&store)
-        .reject(&vcs, &candidate.id, Author::Human, "needs changes".into())
+        .reject(
+            &vcs,
+            &candidate.id,
+            &verification,
+            Author::Human,
+            "needs changes".into(),
+        )
         .unwrap();
     let state = ops::node_state(&store, &vcs, node.as_str()).unwrap();
     assert_eq!(state.integration, IntegrationStatus::Rejected);
@@ -129,12 +190,51 @@ fn rejection_returns_the_source_node_to_ready_without_losing_the_candidate() {
 }
 
 #[test]
+fn candidate_decision_must_match_the_exact_verification_outcome() {
+    let (_temp, store, vcs, node, _) = successful_output();
+    let candidate = register(&store, &vcs, &node);
+    let rejected = conclude(
+        &store,
+        &vcs,
+        &candidate,
+        crate::VerificationOutcome::Rejected,
+    );
+    let error = CandidateStore::new(&store)
+        .accept(&vcs, &candidate.id, &rejected, Author::Human, String::new())
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("rejected, not accepted"),
+        "{error:#}"
+    );
+    assert_eq!(
+        CandidateStore::new(&store)
+            .load(&candidate.id)
+            .unwrap()
+            .integration(&vcs)
+            .unwrap(),
+        IntegrationStatus::Pending
+    );
+}
+
+#[test]
 fn a_moved_source_cannot_accept_an_obsolete_candidate() {
     let (_temp, store, vcs, node, _) = successful_output();
     let candidate = register(&store, &vcs, &node);
+    let verification = conclude(
+        &store,
+        &vcs,
+        &candidate,
+        crate::VerificationOutcome::Accepted,
+    );
     ops::edit(&store, &vcs, node.as_str(), "candidate work changed".into()).unwrap();
     let error = CandidateStore::new(&store)
-        .accept(&vcs, &candidate.id, Author::Human, String::new())
+        .accept(
+            &vcs,
+            &candidate.id,
+            &verification,
+            Author::Human,
+            String::new(),
+        )
         .unwrap_err();
     assert!(error.to_string().contains("not the current"), "{error:#}");
 }
@@ -144,9 +244,21 @@ fn candidate_branch_is_informational_after_registration() {
     let (_temp, store, vcs, node, _) = successful_output();
     let candidate = register(&store, &vcs, &node);
     vcs.refs.borrow_mut().remove("refs/heads/candidates/a");
+    let verification = conclude(
+        &store,
+        &vcs,
+        &candidate,
+        crate::VerificationOutcome::Accepted,
+    );
 
     CandidateStore::new(&store)
-        .accept(&vcs, &candidate.id, Author::Human, String::new())
+        .accept(
+            &vcs,
+            &candidate.id,
+            &verification,
+            Author::Human,
+            String::new(),
+        )
         .unwrap();
 }
 
@@ -173,8 +285,20 @@ fn publication_is_derived_and_target_corruption_is_detected() {
     let (_temp, store, vcs, node, _) = successful_output();
     let candidate = register(&store, &vcs, &node);
     let candidates = CandidateStore::new(&store);
+    let verification = conclude(
+        &store,
+        &vcs,
+        &candidate,
+        crate::VerificationOutcome::Accepted,
+    );
     candidates
-        .accept(&vcs, &candidate.id, Author::Human, String::new())
+        .accept(
+            &vcs,
+            &candidate.id,
+            &verification,
+            Author::Human,
+            String::new(),
+        )
         .unwrap();
     assert_eq!(
         candidates
@@ -199,7 +323,7 @@ fn publication_is_derived_and_target_corruption_is_detected() {
 }
 
 #[test]
-fn verification_is_an_ordinary_node_with_candidate_lineage() {
+fn verification_has_a_review_outcome_and_candidate_lineage() {
     let (_temp, store, vcs, source, output) = successful_output();
     let candidate = register(&store, &vcs, &source);
 
@@ -228,18 +352,24 @@ fn verification_is_an_ordinary_node_with_candidate_lineage() {
         .unwrap()
         .is_ready());
 
-    ops::complete(
+    let snapshot = ops::snapshot_work(&store, &vcs, &verification, &[]).unwrap();
+    ops::submit_verification(
         &store,
         &vcs,
-        &verification,
-        &[],
-        &[],
-        None,
-        "candidate is valid",
-        Author::Machine,
+        crate::VerificationSubmission {
+            snapshot,
+            outcome: crate::VerificationOutcome::Accepted,
+            notes: "candidate is valid".into(),
+            author: Author::Machine,
+            producer: None,
+        },
     )
     .unwrap();
     let (result, _) = store.read_result(&verification).unwrap().unwrap();
+    assert_eq!(
+        result.outcome,
+        crate::ResultOutcome::Verification(crate::VerificationOutcome::Accepted)
+    );
     assert_eq!(result.consumed.len(), 1);
     assert_eq!(result.consumed[0].id, source);
     assert_eq!(
@@ -266,15 +396,17 @@ fn completed_verification_becomes_stale_when_its_source_is_reworked() {
         },
     )
     .unwrap();
-    ops::complete(
+    let snapshot = ops::snapshot_work(&store, &vcs, &verification, &[]).unwrap();
+    ops::submit_verification(
         &store,
         &vcs,
-        &verification,
-        &[],
-        &[],
-        None,
-        "candidate is valid",
-        Author::Machine,
+        crate::VerificationSubmission {
+            snapshot,
+            outcome: crate::VerificationOutcome::Rejected,
+            notes: "candidate requires rework".into(),
+            author: Author::Machine,
+            producer: None,
+        },
     )
     .unwrap();
     assert!(ops::staleness(&store, &vcs, &verification)
@@ -282,7 +414,13 @@ fn completed_verification_becomes_stale_when_its_source_is_reworked() {
         .is_empty());
 
     CandidateStore::new(&store)
-        .reject(&vcs, &candidate.id, Author::Human, "requires rework".into())
+        .reject(
+            &vcs,
+            &candidate.id,
+            &verification.parse().unwrap(),
+            Author::Human,
+            "requires rework".into(),
+        )
         .unwrap();
     ops::edit(
         &store,

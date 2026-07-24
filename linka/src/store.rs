@@ -606,7 +606,7 @@ mod tests {
             at: 0,
             author: Author::Machine,
             definition: v2.clone(),
-            outcome: Outcome::Done,
+            outcome: Outcome::Done.into(),
             project: None,
             consumed: vec![],
             context: vec![],
@@ -622,7 +622,7 @@ mod tests {
             .unwrap();
         let (r, notes) = store.read_result("node-1").unwrap().unwrap();
         assert_eq!(r.output.as_ref().map(|a| a.id.as_str()), Some("abc"));
-        assert_eq!(r.outcome, Outcome::Done);
+        assert_eq!(r.outcome, Outcome::Done.into());
         assert_eq!(notes, "did the thing");
         assert_eq!(store.node_version("node-1").unwrap(), v2);
 

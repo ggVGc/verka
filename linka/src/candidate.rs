@@ -54,12 +54,16 @@ pub enum CandidateState {
         decided_at_ms: i64,
         author: Author,
         notes: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        verification: Option<NodeId>,
         target_previous: String,
     },
     Rejected {
         decided_at_ms: i64,
         author: Author,
         notes: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        verification: Option<NodeId>,
     },
 }
 

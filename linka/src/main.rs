@@ -13,7 +13,7 @@ use linka::model::{Blocker, BlockerReason, NodeState, StalenessReason};
 use linka::ops::{self, NewNode};
 use linka::{
     Author, CandidateId, CandidateState, CandidateStore, DepKind, GitVcs, NewNodeAttachment,
-    NodeId, ProjectPath, Store,
+    NodeId, ProjectPath, Store, VerificationOutcome, VerificationSubmission,
 };
 
 #[derive(Parser)]
@@ -62,7 +62,7 @@ enum Cmd {
         derived_from: Vec<NodeId>,
     },
 
-    /// Add an ordinary node that verifies an exact candidate. Prints its id.
+    /// Add a review node that verifies an exact candidate. Prints its id.
     AddVerification {
         /// Candidate to verify.
         candidate: String,
@@ -138,6 +138,19 @@ enum Cmd {
         author: Author,
     },
 
+    /// Record an accepted or rejected review result for a verification node.
+    Verify {
+        id: NodeId,
+        #[arg(long, value_enum)]
+        outcome: VerificationOutcome,
+        #[arg(long)]
+        notes: Option<String>,
+        #[arg(long, conflicts_with = "notes")]
+        notes_file: Option<PathBuf>,
+        #[arg(long, value_enum, default_value = "human")]
+        author: Author,
+    },
+
     /// Show a node: definition, derived status, result, and staleness reasons.
     Show { id: NodeId },
 
@@ -153,6 +166,8 @@ enum Cmd {
     /// Accept an exact candidate for its recorded target branch.
     Accept {
         id: String,
+        /// Accepted verification authorizing this exact candidate.
+        verification: NodeId,
         #[arg(long, default_value = "")]
         notes: String,
         #[arg(long, value_enum, default_value = "human")]
@@ -162,6 +177,8 @@ enum Cmd {
     /// Reject a candidate; rejection notes are required.
     Reject {
         id: String,
+        /// Rejected verification deciding this exact candidate.
+        verification: NodeId,
         #[arg(long)]
         notes: String,
         #[arg(long, value_enum, default_value = "human")]
@@ -354,6 +371,38 @@ fn main() -> Result<()> {
             println!("{id}");
         }
 
+        Cmd::Verify {
+            id,
+            outcome,
+            notes,
+            notes_file,
+            author,
+        } => {
+            let store = Store::open(store)?;
+            let vcs = GitVcs::for_store(&store);
+            let snapshot = ops::snapshot_work(&store, &vcs, id.as_str(), &[])?;
+            let notes = resolve_notes(
+                notes,
+                notes_file,
+                &store,
+                &id,
+                "what did the review conclude?",
+            )?;
+            ops::submit_verification(
+                &store,
+                &vcs,
+                VerificationSubmission {
+                    snapshot,
+                    outcome,
+                    notes,
+                    author,
+                    producer: None,
+                },
+            )
+            .map_err(anyhow::Error::msg)?;
+            println!("{} {id}", outcome.as_str());
+        }
+
         Cmd::Link { from, to, rel } => {
             let store = Store::open(store)?;
             let vcs = GitVcs::for_store(&store);
@@ -466,14 +515,30 @@ fn main() -> Result<()> {
             }
             match &candidate.state {
                 CandidateState::Pending => {}
-                CandidateState::Accepted { author, notes, .. } => {
+                CandidateState::Accepted {
+                    author,
+                    notes,
+                    verification,
+                    ..
+                } => {
                     println!("decision  accepted by {}", author.as_str());
+                    if let Some(verification) = verification {
+                        println!("authorized {verification}");
+                    }
                     if !notes.is_empty() {
                         println!("notes     {notes}");
                     }
                 }
-                CandidateState::Rejected { author, notes, .. } => {
+                CandidateState::Rejected {
+                    author,
+                    notes,
+                    verification,
+                    ..
+                } => {
                     println!("decision  rejected by {}", author.as_str());
+                    if let Some(verification) = verification {
+                        println!("authorized {verification}");
+                    }
                     println!("notes     {notes}");
                 }
             }
@@ -494,17 +559,39 @@ fn main() -> Result<()> {
             }
         }
 
-        Cmd::Accept { id, notes, author } => {
+        Cmd::Accept {
+            id,
+            verification,
+            notes,
+            author,
+        } => {
             let store = Store::open(store)?;
             let vcs = GitVcs::for_store(&store);
-            CandidateStore::new(&store).accept(&vcs, &CandidateId(id.clone()), author, notes)?;
+            CandidateStore::new(&store).accept(
+                &vcs,
+                &CandidateId(id.clone()),
+                &verification,
+                author,
+                notes,
+            )?;
             println!("accepted {id}");
         }
 
-        Cmd::Reject { id, notes, author } => {
+        Cmd::Reject {
+            id,
+            verification,
+            notes,
+            author,
+        } => {
             let store = Store::open(store)?;
             let vcs = GitVcs::for_store(&store);
-            CandidateStore::new(&store).reject(&vcs, &CandidateId(id.clone()), author, notes)?;
+            CandidateStore::new(&store).reject(
+                &vcs,
+                &CandidateId(id.clone()),
+                &verification,
+                author,
+                notes,
+            )?;
             println!("rejected {id}");
         }
 
@@ -848,6 +935,13 @@ fn finish_node_queries(errors: usize) -> Result<()> {
 }
 
 fn state_summary(state: &NodeState) -> String {
+    if state.currency == linka::Currency::Current {
+        match state.outcome {
+            linka::RecordedOutcome::Accepted => return "review accepted".into(),
+            linka::RecordedOutcome::Rejected => return "review rejected".into(),
+            _ => {}
+        }
+    }
     if state.is_complete() {
         return "complete".into();
     }
@@ -883,6 +977,7 @@ fn format_blocker(blocker: &Blocker) -> String {
         BlockerReason::Missing => "missing",
         BlockerReason::Open => "not complete (open)",
         BlockerReason::Failed => "not complete (failed)",
+        BlockerReason::Rejected => "review rejected",
         BlockerReason::Stale => "not complete (stale)",
         BlockerReason::AwaitingIntegration => "awaiting candidate integration",
     };

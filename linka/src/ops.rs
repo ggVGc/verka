@@ -42,8 +42,8 @@ use crate::model::{
     ArtifactRef, Author, Blocker, BlockerReason, CandidateId, ConsumedNode, ContextPin, Currency,
     DefinitionVersion, DepKind, IntegrationStatus, NewNodeAttachment, NodeAttachment, NodeId,
     NodeMeta, NodeState, Outcome, ProducerEvidence, ProjectPath, ProjectSnapshot, RecordedOutcome,
-    ResultMeta, ResultSubmission, ResultVersion, StalenessReason, Status, SubmissionConflict,
-    WorkSnapshot,
+    ResultMeta, ResultOutcome, ResultSubmission, ResultVersion, StalenessReason, Status,
+    SubmissionConflict, VerificationOutcome, VerificationSubmission, WorkSnapshot,
 };
 use crate::model::{
     ATTACHMENT_SCHEMA, DEFINITION_SCHEMA, OBSERVATION_SCHEMA, RESULT_SCHEMA, SNAPSHOT_SCHEMA,
@@ -99,7 +99,7 @@ pub fn add(store: &Store, vcs: &dyn Vcs, new: NewNode) -> Result<String> {
     add_node(store, vcs, new, None)
 }
 
-/// Create an ordinary node that verifies an exact candidate. The candidate's
+/// Create a review node that verifies an exact candidate. The candidate's
 /// source node is added as lineage so completing the verification pins the
 /// candidate artifact through the normal result protocol.
 pub fn add_verification(
@@ -242,10 +242,13 @@ pub fn complete(
     // store cannot leave a new project commit behind before being rejected.
     let mutation = store.mutation_lock(vcs)?;
     require_consistent_project_head(store, vcs)?;
+    let (meta, description) = store.read_node(id)?;
+    if meta.verifies.is_some() {
+        bail!("verification node `{id}` requires an accepted or rejected review result");
+    }
     // The only uncommitted project changes allowed are the outputs we are about
     // to commit — completion is where output provenance is asserted.
     require_clean_except(vcs, &outputs)?;
-    let (_, description) = store.read_node(id)?;
 
     let input_commit = vcs.head_commit()?;
     let snapshot = snapshot_work(store, vcs, id, context)?;
@@ -266,9 +269,9 @@ pub fn complete(
     let submitted = submit_result_locked(
         store,
         vcs,
-        ResultSubmission {
+        RecordedSubmission {
             snapshot,
-            outcome: Outcome::Done,
+            outcome: Outcome::Done.into(),
             output: output_commit
                 .as_deref()
                 .map(|commit| git_artifact(store, commit))
@@ -364,13 +367,16 @@ pub fn respond(store: &Store, vcs: &dyn Vcs, id: &str, notes: &str, author: Auth
 pub fn fail(store: &Store, vcs: &dyn Vcs, id: &str, notes: &str, author: Author) -> Result<()> {
     let mutation = store.mutation_lock(vcs)?;
     let (meta, _) = store.read_node(id)?;
+    if meta.verifies.is_some() {
+        bail!("verification node `{id}` requires an accepted or rejected review result");
+    }
     let consumed = pin_deps(store, &meta)?;
     let result = ResultMeta {
         schema: RESULT_SCHEMA,
         at: now_millis(),
         author,
         definition: store.node_version(id)?,
-        outcome: Outcome::Failed,
+        outcome: Outcome::Failed.into(),
         project: current_project_snapshot(store, vcs)?,
         consumed,
         context: Vec::new(),
@@ -574,9 +580,24 @@ fn node_state_inner(
                 Vec::new(),
             ),
             Some((result, _)) => {
+                match (meta.verifies.is_some(), result.outcome) {
+                    (false, ResultOutcome::Work(_)) | (true, ResultOutcome::Verification(_)) => {}
+                    (false, ResultOutcome::Verification(_)) => {
+                        bail!("ordinary node `{id}` has a verification outcome")
+                    }
+                    (true, ResultOutcome::Work(_)) => bail!(
+                        "verification node `{id}` has a legacy work outcome; run `linka migrate`"
+                    ),
+                }
                 let outcome = match result.outcome {
-                    Outcome::Done => RecordedOutcome::Succeeded,
-                    Outcome::Failed => RecordedOutcome::Failed,
+                    ResultOutcome::Work(Outcome::Done) => RecordedOutcome::Succeeded,
+                    ResultOutcome::Work(Outcome::Failed) => RecordedOutcome::Failed,
+                    ResultOutcome::Verification(VerificationOutcome::Accepted) => {
+                        RecordedOutcome::Accepted
+                    }
+                    ResultOutcome::Verification(VerificationOutcome::Rejected) => {
+                        RecordedOutcome::Rejected
+                    }
                 };
                 let candidate = candidate_for_result(store, id, result)?;
                 (
@@ -605,14 +626,18 @@ fn node_state_inner(
                 continue;
             }
             let dependency_state = node_state_inner(store, vcs, dependency, revision, visiting)?;
-            if !dependency_state.is_complete() {
+            if !dependency_state.is_complete()
+                || dependency_state.outcome == RecordedOutcome::Rejected
+            {
                 let reason = if dependency_state.currency == Currency::Stale {
                     BlockerReason::Stale
                 } else {
                     match dependency_state.outcome {
                         RecordedOutcome::Open => BlockerReason::Open,
                         RecordedOutcome::Failed => BlockerReason::Failed,
+                        RecordedOutcome::Rejected => BlockerReason::Rejected,
                         RecordedOutcome::Succeeded => BlockerReason::AwaitingIntegration,
+                        RecordedOutcome::Accepted => unreachable!(),
                     }
                 };
                 blockers.push(Blocker {
@@ -745,6 +770,7 @@ pub fn current_status(store: &Store, vcs: &dyn Vcs, id: &str) -> Result<Status> 
         RecordedOutcome::Failed => Status::Failed,
         RecordedOutcome::Succeeded if state.is_complete() => Status::Done,
         RecordedOutcome::Succeeded => Status::Open,
+        RecordedOutcome::Accepted | RecordedOutcome::Rejected => Status::Done,
     })
 }
 
@@ -857,13 +883,56 @@ pub fn submit_result(
     submission: ResultSubmission,
 ) -> std::result::Result<(), SubmissionError> {
     let mutation = store.mutation_lock(vcs)?;
-    submit_result_locked(store, vcs, submission, mutation)
+    submit_result_locked(
+        store,
+        vcs,
+        RecordedSubmission {
+            snapshot: submission.snapshot,
+            outcome: submission.outcome.into(),
+            output: submission.output,
+            notes: submission.notes,
+            author: submission.author,
+            producer: submission.producer,
+        },
+        mutation,
+    )
+}
+
+/// Submit the accepted/rejected conclusion for a verification node.
+pub fn submit_verification(
+    store: &Store,
+    vcs: &dyn Vcs,
+    submission: VerificationSubmission,
+) -> std::result::Result<(), SubmissionError> {
+    let mutation = store.mutation_lock(vcs)?;
+    submit_result_locked(
+        store,
+        vcs,
+        RecordedSubmission {
+            snapshot: submission.snapshot,
+            outcome: submission.outcome.into(),
+            output: None,
+            notes: submission.notes,
+            author: submission.author,
+            producer: submission.producer,
+        },
+        mutation,
+    )
+}
+
+struct RecordedSubmission {
+    snapshot: WorkSnapshot,
+    outcome: ResultOutcome,
+    output: Option<ArtifactRef>,
+    notes: String,
+    author: Author,
+    producer: Option<ProducerEvidence>,
 }
 
 fn submit_result_locked(
     store: &Store,
     vcs: &dyn Vcs,
-    submission: ResultSubmission,
+    submission: RecordedSubmission,
     mutation: MutationLock,
 ) -> std::result::Result<(), SubmissionError> {
     let snapshot = &submission.snapshot;
@@ -877,6 +946,19 @@ fn submit_result_locked(
         }
     }
     let (meta, _) = store.read_node(id)?;
+    match (meta.verifies.is_some(), submission.outcome) {
+        (false, ResultOutcome::Work(_)) | (true, ResultOutcome::Verification(_)) => {}
+        (false, ResultOutcome::Verification(_)) => {
+            return Err(SubmissionError::Evaluation(anyhow::anyhow!(
+                "ordinary node `{id}` requires a done or failed work result"
+            )))
+        }
+        (true, ResultOutcome::Work(_)) => {
+            return Err(SubmissionError::Evaluation(anyhow::anyhow!(
+                "verification node `{id}` requires an accepted or rejected review result"
+            )))
+        }
+    }
     if store.node_version(id)? != snapshot.definition {
         conflicts.push(SubmissionConflict::DefinitionChanged);
     }
@@ -913,11 +995,14 @@ fn submit_result_locked(
     if !node_state(store, vcs, id)?.is_ready() {
         conflicts.push(SubmissionConflict::ReadinessChanged);
     }
-    if submission.outcome == Outcome::Done {
+    if matches!(
+        submission.outcome,
+        ResultOutcome::Work(Outcome::Done) | ResultOutcome::Verification(_)
+    ) {
         for dependency in &snapshot.dependencies {
             let state = node_state(store, vcs, &dependency.id)?;
             if !state.is_complete()
-                || dependency.outcome != Some(Outcome::Done)
+                || !dependency.outcome.is_some_and(result_satisfies_dependency)
                 || dependency.result.is_none()
             {
                 if !conflicts.contains(&SubmissionConflict::ReadinessChanged) {
@@ -990,6 +1075,11 @@ pub fn capture_submission(
     producer: Option<ProducerEvidence>,
 ) -> std::result::Result<Option<String>, SubmissionError> {
     let id = snapshot.node.as_str().to_string();
+    if store.read_node(&id)?.0.verifies.is_some() {
+        return Err(SubmissionError::Evaluation(anyhow::anyhow!(
+            "verification node `{id}` requires an accepted or rejected review result"
+        )));
+    }
     let output_paths: Vec<String> = outputs.iter().map(ToString::to_string).collect();
     if outcome == Outcome::Done {
         // The only uncommitted project changes allowed are the declared
@@ -1064,6 +1154,11 @@ pub fn capture_execution_submission(
     producer: Option<ProducerEvidence>,
 ) -> std::result::Result<Option<String>, SubmissionError> {
     let id = snapshot.node.as_str().to_string();
+    if store.read_node(&id)?.0.verifies.is_some() {
+        return Err(SubmissionError::Evaluation(anyhow::anyhow!(
+            "verification node `{id}` requires an accepted or rejected review result"
+        )));
+    }
     let origin = snapshot.project.revision.clone();
     let message = match message {
         Some(message) => message,
@@ -1201,6 +1296,8 @@ pub fn unsettled(store: &Store, vcs: &dyn Vcs, id: &str) -> Result<Vec<String>> 
                     RecordedOutcome::Open => "open",
                     RecordedOutcome::Failed => "failed",
                     RecordedOutcome::Succeeded => unreachable!(),
+                    RecordedOutcome::Accepted => "accepted but stale",
+                    RecordedOutcome::Rejected => "rejected but stale",
                 };
                 reasons.push(format!("{node}: not done ({outcome})"));
             }
@@ -1315,6 +1412,18 @@ fn validate_result_semantics(
     if !(1..=RESULT_SCHEMA).contains(&result.schema) {
         problems.push(format!("{id}: unsupported result schema {}", result.schema));
     }
+    match (meta.verifies.is_some(), result.outcome) {
+        (false, ResultOutcome::Work(_)) | (true, ResultOutcome::Verification(_)) => {}
+        (false, ResultOutcome::Verification(_)) => {
+            problems.push(format!("{id}: ordinary node has a verification outcome"))
+        }
+        (true, ResultOutcome::Work(_)) => {
+            problems.push(format!("{id}: verification node has a work outcome"))
+        }
+    }
+    if meta.verifies.is_some() && result.output.is_some() {
+        problems.push(format!("{id}: verification result declares project output"));
+    }
     let mut seen = std::collections::HashSet::new();
     for pin in &result.consumed {
         if !seen.insert(pin.id.as_str()) {
@@ -1329,8 +1438,11 @@ fn validate_result_semantics(
             ));
         }
         if required
-            && result.outcome == Outcome::Done
-            && (pin.result.is_none() || pin.outcome != Some(Outcome::Done))
+            && matches!(
+                result.outcome,
+                ResultOutcome::Work(Outcome::Done) | ResultOutcome::Verification(_)
+            )
+            && (pin.result.is_none() || !pin.outcome.is_some_and(result_satisfies_dependency))
         {
             problems.push(format!(
                 "{id}: successful result has no successful evidence for required dependency `{}`",
@@ -1341,7 +1453,10 @@ fn validate_result_semantics(
             validate_artifact(id, output, repository, problems);
         }
     }
-    if result.outcome == Outcome::Done {
+    if matches!(
+        result.outcome,
+        ResultOutcome::Work(Outcome::Done) | ResultOutcome::Verification(_)
+    ) {
         for edge in meta.depends_on.iter().chain(&meta.derived_from) {
             if !result.consumed.iter().any(|pin| &pin.id == edge) {
                 problems.push(format!(
@@ -1359,6 +1474,14 @@ fn validate_result_semantics(
     if let Some(output) = &result.output {
         validate_artifact(id, output, repository, problems);
     }
+}
+
+fn result_satisfies_dependency(outcome: ResultOutcome) -> bool {
+    matches!(
+        outcome,
+        ResultOutcome::Work(Outcome::Done)
+            | ResultOutcome::Verification(VerificationOutcome::Accepted)
+    )
 }
 
 fn validate_artifact(
@@ -1428,6 +1551,9 @@ pub fn migration_plan(store: &Store) -> Result<Vec<String>> {
                     result.schema
                 ));
             }
+            if meta.verifies.is_some() && matches!(result.outcome, ResultOutcome::Work(_)) {
+                changes.push(format!("{id}: convert legacy review outcome"));
+            }
             if repository.is_some()
                 && result
                     .output
@@ -1474,6 +1600,14 @@ pub fn migrate(store: &Store, vcs: &dyn Vcs) -> Result<Vec<String>> {
     let repository = Pairing::load(store.root())?.map(|pairing| pairing.root_commit);
     for id in &ids {
         if let Some((mut result, notes)) = store.read_result(id)? {
+            let (meta, _) = store.read_node(id)?;
+            if meta.verifies.is_some() && matches!(result.outcome, ResultOutcome::Work(_)) {
+                result.outcome = ResultOutcome::Verification(
+                    legacy_verification_outcome(&result).with_context(|| {
+                        format!("cannot migrate legacy verification result for `{id}`")
+                    })?,
+                );
+            }
             result.schema = RESULT_SCHEMA;
             if result.definition == old_versions[id] {
                 result.definition = new_versions[id].clone();
@@ -1508,6 +1642,22 @@ pub fn migrate(store: &Store, vcs: &dyn Vcs) -> Result<Vec<String>> {
     }
     mutation.commit(vcs, "linka: migrate schema")?;
     Ok(changes)
+}
+
+fn legacy_verification_outcome(result: &ResultMeta) -> Option<VerificationOutcome> {
+    let producer = result.producer.as_ref()?;
+    match producer
+        .data
+        .get("verdict")
+        .and_then(|value| value.as_str())
+    {
+        Some("approved" | "accepted") => Some(VerificationOutcome::Accepted),
+        Some("changes_requested" | "rejected") => Some(VerificationOutcome::Rejected),
+        _ if producer.data.get("status").and_then(|value| value.as_str()) == Some("abandoned") => {
+            Some(VerificationOutcome::Rejected)
+        }
+        _ => None,
+    }
 }
 
 /// Report each `depends_on` cycle once, as an explicit `a -> b -> a` path.
@@ -2666,7 +2816,10 @@ mod tests {
         assert_eq!(snapshot.node.as_str(), work);
         assert_eq!(snapshot.definition, store.node_version(&work).unwrap());
         assert_eq!(snapshot.dependencies[0].id.as_str(), dependency);
-        assert_eq!(snapshot.dependencies[0].outcome, Some(Outcome::Done));
+        assert_eq!(
+            snapshot.dependencies[0].outcome,
+            Some(ResultOutcome::Work(Outcome::Done))
+        );
         assert_eq!(snapshot.lineage[0].id.as_str(), lineage);
         assert_eq!(snapshot.context[0].path.as_str(), "input");
         assert_eq!(snapshot.project.revision, "project-revision");
@@ -2806,7 +2959,7 @@ mod tests {
         fail(&store, &fake, &blocked, "blocked attempt", Author::Machine).unwrap();
         assert_eq!(
             store.read_result(&blocked).unwrap().unwrap().0.outcome,
-            Outcome::Failed
+            ResultOutcome::Work(Outcome::Failed)
         );
 
         let lineage = add(&store, &fake, new_node("lineage", vec![])).unwrap();

@@ -28,7 +28,7 @@ impl CandidateStore<'_> {
             .store
             .read_result(new.node.as_str())?
             .with_context(|| format!("node `{}` has no successful result to register", new.node))?;
-        if result.outcome != crate::Outcome::Done {
+        if result.outcome != crate::ResultOutcome::Work(crate::Outcome::Done) {
             bail!("node `{}` does not have a successful result", new.node);
         }
         let artifact = result
@@ -69,17 +69,35 @@ impl CandidateStore<'_> {
         &self,
         vcs: &dyn Vcs,
         id: &CandidateId,
+        verification: &crate::NodeId,
         author: Author,
         notes: String,
     ) -> Result<CandidateRecord> {
         let mutation = self.store.mutation_lock(vcs)?;
         let mut candidate = self.load(id)?;
-        match candidate.state {
-            CandidateState::Accepted { .. } => return Ok(candidate),
+        match &candidate.state {
+            CandidateState::Accepted {
+                verification: existing,
+                ..
+            } if existing
+                .as_ref()
+                .is_none_or(|existing| existing == verification) =>
+            {
+                return Ok(candidate)
+            }
+            CandidateState::Accepted { .. } => {
+                bail!("candidate `{id}` was accepted by a different verification")
+            }
             CandidateState::Rejected { .. } => bail!("candidate `{id}` was already rejected"),
             CandidateState::Pending => {}
         }
         self.require_current(vcs, &candidate, IntegrationStatus::Pending)?;
+        self.require_verification(
+            vcs,
+            &candidate,
+            verification,
+            crate::VerificationOutcome::Accepted,
+        )?;
         let target_ref = branch_ref(&candidate.target);
         let target_previous = vcs
             .ref_commit(&target_ref)?
@@ -88,6 +106,7 @@ impl CandidateStore<'_> {
             decided_at_ms: now_millis(),
             author,
             notes,
+            verification: Some(verification.clone()),
             target_previous,
         };
         storage::write_toml(&self.record_path(id), &candidate)?;
@@ -99,6 +118,7 @@ impl CandidateStore<'_> {
         &self,
         vcs: &dyn Vcs,
         id: &CandidateId,
+        verification: &crate::NodeId,
         author: Author,
         notes: String,
     ) -> Result<CandidateRecord> {
@@ -110,15 +130,32 @@ impl CandidateStore<'_> {
         match &candidate.state {
             CandidateState::Rejected {
                 notes: existing, ..
-            } if existing == &notes => return Ok(candidate),
+            } if existing == &notes
+                && matches!(
+                    &candidate.state,
+                    CandidateState::Rejected {
+                        verification: existing,
+                        ..
+                    } if existing.as_ref().is_none_or(|existing| existing == verification)
+                ) =>
+            {
+                return Ok(candidate)
+            }
             CandidateState::Pending => {}
             _ => bail!("candidate `{id}` already has a different decision"),
         }
         self.require_current(vcs, &candidate, IntegrationStatus::Pending)?;
+        self.require_verification(
+            vcs,
+            &candidate,
+            verification,
+            crate::VerificationOutcome::Rejected,
+        )?;
         candidate.state = CandidateState::Rejected {
             decided_at_ms: now_millis(),
             author,
             notes,
+            verification: Some(verification.clone()),
         };
         storage::write_toml(&self.record_path(id), &candidate)?;
         mutation.commit(vcs, &format!("linka: reject candidate {id}"))?;
@@ -175,6 +212,53 @@ impl CandidateStore<'_> {
                 expected,
                 candidate.node
             );
+        }
+        Ok(())
+    }
+
+    fn require_verification(
+        &self,
+        vcs: &dyn Vcs,
+        candidate: &CandidateRecord,
+        verification: &crate::NodeId,
+        expected: crate::VerificationOutcome,
+    ) -> Result<()> {
+        let (meta, _) = self.store.read_node(verification.as_str())?;
+        if meta.verifies.as_ref() != Some(&candidate.id) {
+            bail!(
+                "verification `{verification}` does not verify candidate `{}`",
+                candidate.id
+            );
+        }
+        let (result, _) = self
+            .store
+            .read_result(verification.as_str())?
+            .with_context(|| format!("verification `{verification}` has no result"))?;
+        if result.outcome != crate::ResultOutcome::Verification(expected) {
+            bail!(
+                "verification `{verification}` is {}, not {}",
+                result.outcome.as_str(),
+                expected.as_str()
+            );
+        }
+        let source_pin = result
+            .consumed
+            .iter()
+            .find(|pin| pin.id == candidate.node)
+            .with_context(|| {
+                format!(
+                    "verification `{verification}` does not pin candidate source `{}`",
+                    candidate.node
+                )
+            })?;
+        if source_pin.result.as_ref() != Some(&candidate.result)
+            || source_pin.output.as_ref() != Some(&candidate.artifact)
+        {
+            bail!("verification `{verification}` did not review the exact candidate artifact");
+        }
+        let state = crate::ops::node_state(self.store, vcs, verification.as_str())?;
+        if state.currency != crate::Currency::Current {
+            bail!("verification `{verification}` is stale");
         }
         Ok(())
     }

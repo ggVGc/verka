@@ -12,7 +12,7 @@ use std::fmt;
 use std::str::FromStr;
 
 pub const DEFINITION_SCHEMA: u32 = 3;
-pub const RESULT_SCHEMA: u32 = 2;
+pub const RESULT_SCHEMA: u32 = 3;
 pub const SNAPSHOT_SCHEMA: u32 = 2;
 pub const OBSERVATION_SCHEMA: u32 = 2;
 pub const ATTACHMENT_SCHEMA: u32 = 1;
@@ -207,7 +207,7 @@ pub struct NodeMeta {
     pub depends_on: Vec<NodeId>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub derived_from: Vec<NodeId>,
-    /// Exact candidate whose output this ordinary node verifies.
+    /// Exact candidate whose output this review node verifies.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verifies: Option<CandidateId>,
     /// Namespaced application metadata (e.g. from an execution harness) is
@@ -246,7 +246,7 @@ pub struct ConsumedNode {
     pub definition: DefinitionVersion,
     pub result: Option<ResultVersion>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub outcome: Option<Outcome>,
+    pub outcome: Option<ResultOutcome>,
     pub output: Option<ArtifactRef>,
 }
 
@@ -311,6 +311,76 @@ impl Outcome {
     }
 }
 
+/// The conclusion of reviewing an exact candidate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "snake_case")]
+pub enum VerificationOutcome {
+    Accepted,
+    Rejected,
+}
+impl VerificationOutcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Accepted => "accepted",
+            Self::Rejected => "rejected",
+        }
+    }
+}
+
+/// A result has the outcome kind required by its node definition.
+///
+/// This remains a single `outcome = "..."` value on disk, while the Rust type
+/// keeps work completion and review conclusions distinct.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResultOutcome {
+    Work(Outcome),
+    Verification(VerificationOutcome),
+}
+impl ResultOutcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Work(outcome) => outcome.as_str(),
+            Self::Verification(outcome) => outcome.as_str(),
+        }
+    }
+}
+impl From<Outcome> for ResultOutcome {
+    fn from(value: Outcome) -> Self {
+        Self::Work(value)
+    }
+}
+impl From<VerificationOutcome> for ResultOutcome {
+    fn from(value: VerificationOutcome) -> Self {
+        Self::Verification(value)
+    }
+}
+impl Serialize for ResultOutcome {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+impl<'de> Deserialize<'de> for ResultOutcome {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        match value.as_str() {
+            "done" => Ok(Self::Work(Outcome::Done)),
+            "failed" => Ok(Self::Work(Outcome::Failed)),
+            "accepted" => Ok(Self::Verification(VerificationOutcome::Accepted)),
+            "rejected" => Ok(Self::Verification(VerificationOutcome::Rejected)),
+            _ => Err(serde::de::Error::unknown_variant(
+                &value,
+                &["done", "failed", "accepted", "rejected"],
+            )),
+        }
+    }
+}
+
 /// Namespaced evidence about what produced a result. Written by external
 /// harnesses (e.g. an execution driver); preserved but never interpreted here.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -329,7 +399,7 @@ pub struct ResultMeta {
     /// Who recorded the result.
     pub author: Author,
     pub definition: DefinitionVersion,
-    pub outcome: Outcome,
+    pub outcome: ResultOutcome,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<ProjectSnapshot>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -357,6 +427,8 @@ pub enum RecordedOutcome {
     Open,
     Succeeded,
     Failed,
+    Accepted,
+    Rejected,
 }
 
 /// Whether recorded evidence still covers the current graph and project facts.
@@ -388,6 +460,7 @@ pub enum BlockerReason {
     Missing,
     Open,
     Failed,
+    Rejected,
     Stale,
     AwaitingIntegration,
 }
@@ -464,6 +537,15 @@ pub struct ResultSubmission {
     pub producer: Option<ProducerEvidence>,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct VerificationSubmission {
+    pub snapshot: WorkSnapshot,
+    pub outcome: VerificationOutcome,
+    pub notes: String,
+    pub author: Author,
+    pub producer: Option<ProducerEvidence>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SubmissionConflict {
@@ -478,12 +560,15 @@ pub enum SubmissionConflict {
 
 impl NodeState {
     pub fn is_complete(&self) -> bool {
-        self.outcome == RecordedOutcome::Succeeded
-            && self.currency == Currency::Current
-            && matches!(
-                self.integration,
-                IntegrationStatus::NotRequired | IntegrationStatus::Published
-            )
+        self.currency == Currency::Current
+            && match self.outcome {
+                RecordedOutcome::Accepted | RecordedOutcome::Rejected => true,
+                RecordedOutcome::Succeeded => matches!(
+                    self.integration,
+                    IntegrationStatus::NotRequired | IntegrationStatus::Published
+                ),
+                RecordedOutcome::Open | RecordedOutcome::Failed => false,
+            }
     }
 
     pub fn is_ready(&self) -> bool {
@@ -514,8 +599,18 @@ impl Status {
 pub fn status(current: &DefinitionVersion, result: Option<&ResultMeta>) -> Status {
     match result {
         None => Status::Open,
-        Some(result) if result.outcome == Outcome::Failed => Status::Failed,
-        Some(result) if &result.definition == current => Status::Done,
+        Some(result) if result.outcome == Outcome::Failed.into() => Status::Failed,
+        Some(result)
+            if &result.definition == current
+                && matches!(
+                    result.outcome,
+                    ResultOutcome::Work(Outcome::Done)
+                        | ResultOutcome::Verification(VerificationOutcome::Accepted)
+                        | ResultOutcome::Verification(VerificationOutcome::Rejected)
+                ) =>
+        {
+            Status::Done
+        }
         Some(_) => Status::Open,
     }
 }
@@ -555,7 +650,7 @@ mod tests {
             at: 0,
             author: Author::Human,
             definition: version.clone(),
-            outcome: Outcome::Done,
+            outcome: Outcome::Done.into(),
             project: None,
             consumed: vec![],
             context: vec![],
@@ -570,7 +665,7 @@ mod tests {
         };
         assert_eq!(status(&moved, Some(&result)), Status::Open);
         let failed = ResultMeta {
-            outcome: Outcome::Failed,
+            outcome: Outcome::Failed.into(),
             ..result
         };
         assert_eq!(status(&version, Some(&failed)), Status::Failed);
