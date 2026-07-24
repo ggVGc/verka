@@ -87,7 +87,7 @@ has no TCP listener or remote-access configuration.
   never interprets the bytes on those streams.
 - **Styra server** owns the agent profile (command, wire protocol, how a user message
   is encoded as an input line), the decoding of provider wire events into
-  Styra's event vocabulary, the raw journal, and live session lifecycle.
+  Styra's event vocabulary, the raw journal, and live job lifecycle.
 - **Styra clients** own presentation and operator interaction. They consume
   only the versioned JSON API and never receive process or journal handles.
 
@@ -109,19 +109,20 @@ Driva's execution interface already fits an interactive session without change.
 `driva::execute` takes an `ExecutionRequest` and an `ExecutionIo { stdin,
 stdout, stderr }` whose fields are ordinary `File` handles wired directly to the
 child's `Stdio`. Orka passes `/dev/null` for stdin and a file for stdout because
-its run is one-shot; Styra instead passes the ends of OS pipes:
+its run is one-shot; the server instead passes the ends of OS pipes:
 
-1. Styra creates two pipes: one for the child's stdin, one for its stdout. A
-   third file receives stderr as diagnostics, as in Orka.
+1. The server creates two pipes: one for the child's stdin, one for its stdout.
+   A third file receives stderr as diagnostics, as in Orka.
 2. The child's stdin-read end and stdout-write end become the `ExecutionIo`
-   handed to `driva::execute`. Styra keeps the stdin-write end and the
+   handed to `driva::execute`. The server keeps the stdin-write end and the
    stdout-read end.
 3. `driva::execute` is called on a dedicated worker thread. It blocks for the
    life of the job (the agent process runs until it exits or is stopped),
-   which is why it must not run on the UI thread.
+   which is why it runs off the thread accepting socket requests.
 4. A reader thread pulls newline-delimited JSON from the stdout-read end,
-   decodes each line, and forwards events to the UI. The UI thread writes
-   operator messages as protocol input lines to the stdin-write end.
+   decodes each line, and forwards events to the update collector. Operator
+   messages, arriving over the socket, are written by the server as protocol
+   input lines to the stdin-write end.
 5. Closing the stdin-write end signals end-of-input to the agent; dropping the
    child (job stop) tears the job down. The worker thread's return value
    carries the exit report.
@@ -171,7 +172,7 @@ event stream, so it has two cooperating parts:
 - the `codex-app-server` `Protocol` variant decodes *notification* lines
   (`thread/started`, `turn/started`, `item/started`, `item/completed`,
   `thread/tokenUsage/updated`, errors) into the event vocabulary — shared by
-  live sessions and journal replay; requests and responses decode as `Unknown`
+  live jobs and journal replay; requests and responses decode as `Unknown`
   control traffic;
 - an `AppServer` client owns the session state machine: `initialize` →
   `initialized` → `thread/start` (capturing the thread id) → one `turn/start`
@@ -338,10 +339,10 @@ The application is a single full-screen view with three regions:
   text to the agent (encoded by the profile) and appends a `UserMessage` entry
   to the list.
 - **Status line (top border).** Application name, active profile/model, and
-  session state: `not started` (no process launched yet, awaiting the
-  operator's first message), `running`, `waiting` (turn complete, agent idle
-  for input), or `stopped`. Token usage from the latest `TurnCompleted` is
-  shown.
+  session state: `not started` (no job launched yet, awaiting the operator's
+  first message), `running`, `idle` (turn complete, agent idle for input),
+  `stopped`, or `ended`/`failed` once the agent process exits. Token usage from
+  the latest `TurnCompleted` is shown.
 
 ### The raw view
 
@@ -459,14 +460,14 @@ diagnostic log view rather than doing nothing silently.
 Neither a bare `styra` invocation nor a session switch spawns the agent
 process by itself. Both land in `Status::Pending` (`App::pending`): an `App`
 with no session id yet, opened directly in input focus, and a `Live::Pending`
-event-loop state that holds no process and no channel. The message box may be
+event-loop state that holds no session id or cursor. The message box may be
 empty (a bare start) or prefilled with a switched-from transcript, but either
-way the operator's own submitted message is what triggers
-`spawn_session` — creating the journal, launching the sandboxed process
+way the operator's own submitted message is what triggers a `create_session`
+request to the server — creating the journal, launching the sandboxed job
 through Driva, and sending that first message once the agent is ready. A
-launch failure (e.g. a missing binary) is logged in the diagnostic view and
-the typed message is restored to the box rather than lost, so the operator
-can fix the problem and retry without retyping.
+launch failure (e.g. a missing binary) is reported by the server, logged in the
+diagnostic view, and the typed message is restored to the box rather than lost,
+so the operator can fix the problem and retry without retyping.
 
 The one exception is a trailing CLI `PROMPT`: since that is already input the
 operator gave (as a command-line argument, before the terminal even took
@@ -474,17 +475,25 @@ over), it launches immediately, exactly as it always has.
 
 ## Concurrency model
 
-Three threads, communicating over channels:
+A live job runs entirely inside `styra-server`, on threads the job owns, each
+forwarding over a channel to a per-job update collector:
 
-- **UI thread** — owns terminal state and all rendering, reads input events, and
-  writes operator messages to the stdin-write pipe. Never blocks on the agent.
 - **Execution thread** — calls `driva::execute` and blocks for the job's
-  lifetime; on return it sends the exit report to the UI thread.
-- **Reader thread** — reads lines from the stdout-read pipe, decodes each into a
-  Styra event, appends it to the journal, and forwards it to the UI thread.
+  lifetime; on return it sends the exit report.
+- **Reader thread** — reads lines from the job's stdout pipe, records each
+  verbatim to the journal, decodes it into a Styra event (or routes it through
+  the app-server client), and forwards the result.
+- **Stderr thread** — reads the agent's stderr, appends it to the diagnostics
+  file, and streams each line to the log view as a diagnostic entry. Stderr is
+  never interleaved into the event list.
 
-Diagnostics (stderr) are captured to a file as Orka does and surfaced on demand;
-they are not interleaved into the event list.
+The collector serializes these into a monotonically sequenced update history.
+The `styra` TUI is a separate process and never touches the agent's pipes: it
+owns terminal state and input, polls the update history over the socket with an
+`after` cursor, and sends operator messages back over the socket for the server
+to write to the job's stdin. Because updates are pulled by cursor rather than
+pushed over a channel, a client can reconnect — or observe alongside other
+clients — without coupling to the job's threads.
 
 ## Crate layout
 
@@ -543,19 +552,22 @@ Dependencies: `styra-server` depends on `driva` and `genta` (path),
 ```text
 styra [OPTIONS] [-- PROMPT]
 
+  --socket <PATH>      styra-server socket (default: $XDG_RUNTIME_DIR/styra/styra.sock)
   --profile <NAME>     Agent profile to launch a live session with (default: codex)
   --workspace <DIR>    Host directory mounted writable as the agent workspace
   --network            Permit agent networking (profiles may default this on)
   --view <SESSION>     Open a captured journal read-only instead of launching
 ```
 
-An optional trailing `PROMPT` seeds the first turn so a session can start with
-one message already sent, launching the agent process immediately; without it,
-the application opens in input focus with an empty box and launches nothing
-until the operator submits a message (see *Starting and switching send nothing
-on their own*). `--view` opens the view/replay path over a stored journal; it
-decodes with the session's own recorded profile and protocol, so `--profile`
-is not read in this mode.
+The `styra` TUI is a client and does nothing without a running `styra-server`
+to connect to; `--socket` selects which server, and the TUI reports plainly if
+none is listening there. An optional trailing `PROMPT` seeds the first turn so a
+session can start with one message already sent, launching the job immediately;
+without it, the application opens in input focus with an empty box and launches
+nothing until the operator submits a message (see *Starting and switching send
+nothing on their own*). `--view` opens the view/replay path over a stored
+journal; it decodes with the session's own recorded profile and protocol, so
+`--profile` is not read in this mode.
 
 ## Relationship to Orka and the wishlist
 
