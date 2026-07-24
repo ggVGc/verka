@@ -25,7 +25,9 @@ const DETAIL_INDENT: &str = "    ";
 /// lines, if any), via the list's `highlight_style`. Deliberately not white —
 /// with `Modifier::REVERSED`, a `White` foreground would reverse onto the
 /// background and flip the whole selected row to a glaring full-white fill.
-const DETAIL_BG: Color = Color::DarkGray;
+/// A custom RGB rather than `Color::DarkGray`: the latter reads as too light
+/// a highlight against the app's otherwise dark palette.
+const SELECTION_BG: Color = Color::Rgb(38, 38, 38);
 
 /// Color coding for the status dot, so running vs. idle for input reads at
 /// a glance instead of requiring the operator to read the label text.
@@ -107,7 +109,7 @@ pub fn render_picker(frame: &mut Frame, sessions: &[SessionSummary], selected: u
     let items: Vec<ListItem> = sessions.iter().map(session_item).collect();
     let list = List::new(items)
         .block(block)
-        .highlight_style(Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD));
+        .highlight_style(Style::default().bg(SELECTION_BG).add_modifier(Modifier::BOLD));
     let mut state = ListState::default();
     state.select(Some(selected.min(sessions.len() - 1)));
     frame.render_stateful_widget(list, area, &mut state);
@@ -479,7 +481,7 @@ fn render_list(frame: &mut Frame, app: &App, area: Rect) {
     // the background, flashing the selected row to a glaring full white.
     let list = List::new(items)
         .block(block)
-        .highlight_style(Style::default().bg(DETAIL_BG).add_modifier(Modifier::BOLD));
+        .highlight_style(Style::default().bg(SELECTION_BG).add_modifier(Modifier::BOLD));
     let mut state = ListState::default();
     let position = visible
         .iter()
@@ -839,7 +841,7 @@ mod tests {
             .collect();
 
         assert!(!backgrounds.contains(&Color::White));
-        assert!(backgrounds.contains(&Color::DarkGray));
+        assert!(backgrounds.contains(&SELECTION_BG));
     }
 
     #[test]
@@ -867,7 +869,7 @@ mod tests {
         };
         let row_has_gray_backdrop = |y: u16| {
             (0..buffer.area.width).any(|x| {
-                buffer.cell((x, y)).unwrap().style().bg == Some(Color::DarkGray)
+                buffer.cell((x, y)).unwrap().style().bg == Some(SELECTION_BG)
             })
         };
 
@@ -1139,7 +1141,7 @@ mod tests {
         let preview_columns = 50..buffer.area.width;
         let has_highlight = preview_columns
             .flat_map(|x| (0..buffer.area.height).map(move |y| (x, y)))
-            .any(|(x, y)| buffer.cell((x, y)).unwrap().style().bg == Some(Color::DarkGray));
+            .any(|(x, y)| buffer.cell((x, y)).unwrap().style().bg == Some(SELECTION_BG));
         assert!(!has_highlight, "preview text should never carry a background highlight");
 
         std::fs::remove_dir_all(&dir).ok();
@@ -1291,7 +1293,7 @@ mod tests {
         };
         let row_has_gray_backdrop = |y: u16| {
             (0..buffer.area.width)
-                .any(|x| buffer.cell((x, y)).unwrap().style().bg == Some(Color::DarkGray))
+                .any(|x| buffer.cell((x, y)).unwrap().style().bg == Some(SELECTION_BG))
         };
 
         assert!(!row_has_gray_backdrop(row_containing("s-1")));
