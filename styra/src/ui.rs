@@ -336,7 +336,7 @@ fn render_preview(frame: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::DarkGray))
-        .title(" preview ");
+        .title(Span::styled(" preview ", Style::default().fg(Color::Gray)));
 
     let Some(entry) = app.selected_entry() else {
         let empty = Paragraph::new(Line::from(Span::styled(
@@ -669,7 +669,7 @@ fn render_input(frame: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(border_style)
-        .title(title);
+        .title(Span::styled(title, Style::default().fg(Color::Gray)));
     let inner = block.inner(area);
     let paragraph = Paragraph::new(input_text(app)).block(block);
     frame.render_widget(paragraph, area);
@@ -752,6 +752,7 @@ mod tests {
     use super::*;
     use crate::event::{AgentEvent, TokenUsage};
     use ratatui::backend::TestBackend;
+    use ratatui::buffer::Buffer;
     use ratatui::Terminal;
 
     fn rendered(app: &App) -> String {
@@ -763,6 +764,30 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect::<String>()
+    }
+
+    /// The (x, y) of `needle`'s first character in the buffer. Column-based
+    /// rather than a byte offset into a joined `String`: title rows carry
+    /// multi-byte box-drawing and separator glyphs (`┌`, `·`, `●`) ahead of
+    /// plain-ASCII text, so a byte offset from `str::find` would overshoot the
+    /// actual column whenever the needle sits after one of those.
+    fn find_column(buffer: &Buffer, needle: &str) -> (u16, u16) {
+        let needle_chars: Vec<char> = needle.chars().collect();
+        for y in 0..buffer.area.height {
+            let symbols: Vec<&str> = (0..buffer.area.width)
+                .map(|x| buffer.cell((x, y)).unwrap().symbol())
+                .collect();
+            let found = (0..symbols.len()).find(|&start| {
+                needle_chars
+                    .iter()
+                    .enumerate()
+                    .all(|(i, &ch)| symbols.get(start + i).and_then(|s| s.chars().next()) == Some(ch))
+            });
+            if let Some(x) = found {
+                return (x as u16, y);
+            }
+        }
+        panic!("no cell contains {needle:?}");
     }
 
     #[test]
@@ -787,19 +812,8 @@ mod tests {
         terminal.draw(|frame| render(frame, &app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
 
-        let title_row = (0..buffer.area.height)
-            .find(|&y| {
-                let row: String =
-                    (0..buffer.area.width).map(|x| buffer.cell((x, y)).unwrap().symbol()).collect();
-                row.contains("styra")
-            })
-            .expect("no row contains the title");
-        let row_text: String = (0..buffer.area.width)
-            .map(|x| buffer.cell((x, title_row)).unwrap().symbol())
-            .collect();
-        let title_start = row_text.find("styra").unwrap() as u16;
-
-        let cell = buffer.cell((title_start, title_row)).unwrap();
+        let (x, y) = find_column(&buffer, "styra");
+        let cell = buffer.cell((x, y)).unwrap();
         assert_ne!(
             cell.style().fg,
             Some(Color::DarkGray),
@@ -961,6 +975,23 @@ mod tests {
     }
 
     #[test]
+    fn message_box_title_stays_legible_when_unfocused() {
+        // Same bug as the header/preview titles: an unstyled title patches
+        // onto the border paint underneath it, so it dimmed to `DarkGray`
+        // whenever the message box lost focus.
+        let app = App::new("codex", "s1");
+        assert_eq!(app.focus, Focus::List);
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        terminal.draw(|frame| render(frame, &app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+
+        let (x, y) = find_column(&buffer, "message");
+        let cell = buffer.cell((x, y)).unwrap();
+        assert_ne!(cell.style().fg, Some(Color::DarkGray));
+    }
+
+    #[test]
     fn footer_advertises_the_collapse_all_shortcut() {
         let app = App::new("codex", "s1");
         assert!(rendered(&app).contains("collapse all"));
@@ -1112,6 +1143,24 @@ mod tests {
         assert!(!has_highlight, "preview text should never carry a background highlight");
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn preview_title_stays_legible_against_its_always_dark_border() {
+        // The preview panel's border is unconditionally `DarkGray` (it has no
+        // separate focus state), so its unstyled title used to inherit that
+        // same dim color from the border paint underneath it.
+        let mut app = App::new("codex", "s1");
+        app.push_event(AgentEvent::AgentMessage { text: "hello".into() });
+        app.toggle_preview();
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        terminal.draw(|frame| render(frame, &app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+
+        let (x, y) = find_column(&buffer, "preview");
+        let cell = buffer.cell((x, y)).unwrap();
+        assert_ne!(cell.style().fg, Some(Color::DarkGray));
     }
 
     #[test]
