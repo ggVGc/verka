@@ -27,7 +27,7 @@ Then start the TUI in another terminal:
 ```sh
 styra [OPTIONS] [-- PROMPT]
 
-  --socket <PATH>      Server socket (default: $XDG_CONFIG_HOME/styra/styra.sock)
+  --socket <PATH>      Server socket (default: $XDG_RUNTIME_DIR/styra/styra.sock)
   --profile <NAME>     Agent profile to launch (default: codex)
   --workspace <DIR>    Host directory mounted writable as the agent workspace
   --network            Permit agent networking (profiles may default this on)
@@ -35,10 +35,11 @@ styra [OPTIONS] [-- PROMPT]
                        bare, browse sessions in the server's store and pick one
 ```
 
-The server accepts `--store <DIR>` and `--socket <PATH>`. By default the store
-is `$XDG_CONFIG_HOME/styra`, or `$HOME/.config/styra` when
-`XDG_CONFIG_HOME` is unset. The socket defaults to `styra.sock` inside that
-store and is created with mode `0600`.
+The server accepts `--store <DIR>` and `--socket <PATH>`. By default, durable
+sessions live under `$XDG_STATE_HOME/styra`, or `$HOME/.local/state/styra`
+when `XDG_STATE_HOME` is unset. The socket lives independently at
+`$XDG_RUNTIME_DIR/styra/styra.sock`. Default Styra directories use mode `0700`
+and the socket uses mode `0600`.
 
 ## Socket API
 
@@ -69,7 +70,7 @@ For example, a shell tool can check the server with `socat`:
 
 ```sh
 printf '%s\n' '{"api_version":"v1","operation":"health"}' \
-  | socat - UNIX-CONNECT:"${XDG_CONFIG_HOME:-$HOME/.config}/styra/styra.sock"
+  | socat - UNIX-CONNECT:"$XDG_RUNTIME_DIR/styra/styra.sock"
 ```
 
 The Rust wire types are in `styra::api`, and the blocking client used by the

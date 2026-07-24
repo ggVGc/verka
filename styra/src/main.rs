@@ -23,7 +23,7 @@ use styra::ui;
 #[derive(Parser)]
 #[command(name = "styra", about, version)]
 struct Cli {
-    /// Styra server Unix socket (default: $XDG_CONFIG_HOME/styra/styra.sock).
+    /// Styra server Unix socket (default: $XDG_RUNTIME_DIR/styra/styra.sock).
     #[arg(long)]
     socket: Option<PathBuf>,
     /// Agent profile to launch a live session with. Not used with `--view`:

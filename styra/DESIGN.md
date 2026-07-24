@@ -74,10 +74,11 @@ calls Driva. The headless example uses the same client. Public wire types live
 in `api.rs`, the reusable Rust client in `client.rs`, and server dispatch in
 `server.rs`.
 
-The store defaults to `$XDG_CONFIG_HOME/styra` (falling back to
-`$HOME/.config/styra`), and the socket defaults to `styra.sock` inside it with
-mode `0600`. This is deliberately a local API: it has no TCP listener or
-remote-access configuration.
+Durable sessions default to `$XDG_STATE_HOME/styra` (falling back to
+`$HOME/.local/state/styra`). The socket is independent, ephemeral runtime state
+at `$XDG_RUNTIME_DIR/styra/styra.sock`. Default Styra directories use mode
+`0700`, and the socket uses mode `0600`. This is deliberately a local API: it
+has no TCP listener or remote-access configuration.
 
 ## Ownership and boundaries
 
@@ -297,7 +298,7 @@ worth it if the rendered transcript's token cost becomes the actual pain
 point in practice.
 
 Journals live under a per-session directory in the Styra store
-(`$XDG_CONFIG_HOME/styra` by default, separately owned from `.orka/` and
+(`$XDG_STATE_HOME/styra` by default, separately owned from `.orka/` and
 `.linka/`), named by a session id.
 
 Alongside `journal.jsonl`, one `session.json` is written once at session
