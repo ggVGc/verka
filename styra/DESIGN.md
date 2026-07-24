@@ -512,7 +512,9 @@ styra-server/            # the server application + its client interface library
   Cargo.toml             # [lib] styra_server  +  [[bin]] styra-server
   src/
     lib.rs               # curated interface; server modules are pub for the binary
-    main.rs              # server binary: socket bind, store setup, serve loop
+    main.rs              # server binary: a thin CLI shim over daemon::run
+    daemon.rs            # server bootstrap: socket bind, store setup, serve loop
+    spawn.rs             # connect-or-spawn: re-exec self as a detached daemon
     api.rs               # versioned JSON wire types (interface)
     client.rs            # blocking Rust client over the socket (interface)
     types.rs             # data vocabulary that crosses the wire (interface)
@@ -559,9 +561,13 @@ styra [OPTIONS] [-- PROMPT]
   --view <SESSION>     Open a captured journal read-only instead of launching
 ```
 
-The `styra` TUI is a client and does nothing without a running `styra-server`
-to connect to; `--socket` selects which server, and the TUI reports plainly if
-none is listening there. An optional trailing `PROMPT` seeds the first turn so a
+The `styra` TUI is a client of `styra-server`, but it need not be started
+separately: `--socket` selects the server, and if none is listening there the
+TUI spawns one as a detached daemon by re-exec'ing its own executable with a
+serve sentinel in the environment (`styra_server::spawn`). Because `styra`
+links the `styra_server` crate, that re-exec'd copy *is* the server — there is
+no second binary to locate or install — and it outlives the client so live
+jobs survive detach and quit. An optional trailing `PROMPT` seeds the first turn so a
 session can start with one message already sent, launching the job immediately;
 without it, the application opens in input focus with an empty box and launches
 nothing until the operator submits a message (see *Starting and switching send

@@ -1,9 +1,8 @@
-use anyhow::{bail, Context, Result};
+use anyhow::Result;
 use clap::Parser;
-use std::os::unix::fs::PermissionsExt;
-use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::{Path, PathBuf};
-use styra_server::server::{serve, ServerState};
+use std::path::PathBuf;
+use std::time::Duration;
+use styra_server::ServerConfig;
 
 #[derive(Parser)]
 #[command(
@@ -20,97 +19,22 @@ struct Cli {
     socket: Option<PathBuf>,
     /// Exit after this many seconds with no live jobs and no client activity
     /// (0 keeps the server running until it is killed).
-    #[arg(long, default_value_t = 300)]
+    #[arg(long, default_value_t = styra_server::daemon::DEFAULT_IDLE_TIMEOUT_SECS)]
     idle_timeout: u64,
 }
 
 fn main() -> Result<()> {
+    // A process re-exec'd by the connect-or-spawn path carries the serve
+    // sentinel in its environment; honour it before touching the CLI so the
+    // same binary can act as either a hand-launched server or a self-spawned
+    // daemon.
+    if let Some(result) = styra_server::serve_if_requested() {
+        return result;
+    }
     let cli = Cli::parse();
-    let (store, private_store) = match cli.store {
-        Some(path) => (path, false),
-        None => (styra_server::paths::default_store()?, true),
-    };
-    let (socket, private_socket_directory) = match cli.socket {
-        Some(path) => (path, false),
-        None => (styra_server::paths::default_socket()?, true),
-    };
-    if private_store {
-        ensure_private_directory(&store)?;
-    }
-    let listener = bind_socket(&socket, private_socket_directory)?;
-    let _socket_guard = SocketGuard(socket.clone());
-    println!(
-        "styra-server listening on {} (store {})",
-        socket.display(),
-        store.display()
-    );
-    let state = ServerState::new(store);
-    state.spawn_idle_monitor(socket, std::time::Duration::from_secs(cli.idle_timeout));
-    serve(listener, state)
-}
-
-fn bind_socket(path: &Path, private_parent: bool) -> Result<UnixListener> {
-    if let Some(parent) = path.parent() {
-        if private_parent {
-            ensure_private_directory(parent)?;
-        } else {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("creating socket directory {}", parent.display()))?;
-        }
-    }
-    if path.exists() {
-        if UnixStream::connect(path).is_ok() {
-            bail!("a Styra server is already listening on {}", path.display());
-        }
-        std::fs::remove_file(path)
-            .with_context(|| format!("removing stale socket {}", path.display()))?;
-    }
-    let listener =
-        UnixListener::bind(path).with_context(|| format!("binding socket {}", path.display()))?;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
-        .with_context(|| format!("restricting socket permissions {}", path.display()))?;
-    Ok(listener)
-}
-
-fn ensure_private_directory(path: &Path) -> Result<()> {
-    std::fs::create_dir_all(path)
-        .with_context(|| format!("creating private directory {}", path.display()))?;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
-        .with_context(|| format!("restricting directory permissions {}", path.display()))
-}
-
-struct SocketGuard(PathBuf);
-
-impl Drop for SocketGuard {
-    fn drop(&mut self) {
-        std::fs::remove_file(&self.0).ok();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn default_socket_directory_and_socket_are_private() {
-        let root = std::env::temp_dir().join(format!(
-            "styra-server-permissions-{}",
-            std::process::id()
-        ));
-        std::fs::remove_dir_all(&root).ok();
-        let socket = root.join("styra/styra.sock");
-        let listener = bind_socket(&socket, true).unwrap();
-
-        let directory_mode = std::fs::metadata(socket.parent().unwrap())
-            .unwrap()
-            .permissions()
-            .mode()
-            & 0o777;
-        let socket_mode = std::fs::metadata(&socket).unwrap().permissions().mode() & 0o777;
-        assert_eq!(directory_mode, 0o700);
-        assert_eq!(socket_mode, 0o600);
-
-        drop(listener);
-        std::fs::remove_dir_all(root).ok();
-    }
+    styra_server::run(ServerConfig {
+        store: cli.store,
+        socket: cli.socket,
+        idle_timeout: Duration::from_secs(cli.idle_timeout),
+    })
 }

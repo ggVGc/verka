@@ -48,6 +48,13 @@ struct Cli {
 }
 
 fn main() -> Result<()> {
+    // The connect-or-spawn path spawns the daemon by re-exec'ing *this* binary
+    // with the serve sentinel in its environment; honour it before parsing the
+    // client CLI so the re-exec'd copy becomes the server instead of a second
+    // TUI. See `styra_server::spawn`.
+    if let Some(result) = styra_server::serve_if_requested() {
+        return result;
+    }
     let cli = Cli::parse();
     let socket = match &cli.socket {
         Some(path) => path.clone(),

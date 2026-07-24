@@ -32,11 +32,13 @@ pub use driva::{Mount, MountAccess};
 // --- The client-facing interface ---
 pub mod api;
 pub mod client;
+pub mod daemon;
 pub mod paths;
 pub mod spawn;
 pub mod types;
 
 pub use client::Client;
+pub use daemon::{run, serve_if_requested, ServerConfig};
 pub use spawn::ensure_server;
 pub use types::{
     Direction, DrivaOptions, JobEnd, JobSummary, JobUpdate, LogEntry, LogLevel, RawLine,

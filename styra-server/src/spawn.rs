@@ -6,8 +6,15 @@
 //! nothing answers does it launch the heavy long-lived server and detach from
 //! it. For Styra the payoff is not a warm JVM but live jobs — an agent turn
 //! keeps running while the TUI detaches, and is still there when it reattaches.
+//!
+//! The daemon is not a separate `styra-server` binary but *this very
+//! executable* re-exec'd with the [`daemon::SERVE_ENV`] sentinel: because the
+//! `styra` client links this crate, it can host the server itself. Re-exec
+//! (rather than a bare `fork`) hands the daemon a clean single-threaded address
+//! space, and locating the binary is trivial — it is `current_exe()`.
 
 use crate::client::Client;
+use crate::daemon;
 use anyhow::{bail, Context, Result};
 use std::fs::OpenOptions;
 use std::os::unix::process::CommandExt;
@@ -38,8 +45,11 @@ pub fn ensure_server(socket: impl Into<PathBuf>) -> Result<Client> {
     Ok(client)
 }
 
-/// Launch `styra-server --socket <socket>` fully detached from this process's
-/// terminal so it survives the client exiting and ignores terminal signals.
+/// Re-exec this executable as a Styra server bound to `socket`, fully detached
+/// from this process's terminal so it survives the client exiting and ignores
+/// terminal signals. The serve sentinel and socket are passed in the
+/// environment (see [`daemon::serve_if_requested`]), so no server-specific CLI
+/// flags are needed and the client's own argument parser is never involved.
 fn spawn_detached(socket: &Path) -> Result<()> {
     let exe = server_binary();
     let log = server_log_path(socket);
@@ -56,8 +66,8 @@ fn spawn_detached(socket: &Path) -> Result<()> {
 
     let mut command = Command::new(&exe);
     command
-        .arg("--socket")
-        .arg(socket)
+        .env(daemon::SERVE_ENV, "1")
+        .env(daemon::SERVE_SOCKET_ENV, socket)
         // Nothing on the terminal: stdin is closed and all output goes to the
         // log, so the daemon can never read from or scribble over the TUI.
         .stdin(Stdio::null())
@@ -83,25 +93,20 @@ fn spawn_detached(socket: &Path) -> Result<()> {
 }
 
 /// Environment override for the server binary, for unusual install layouts
-/// and tests.
+/// and for callers whose own executable cannot host the server (e.g. the
+/// integration tests, whose test harness is not a Styra binary).
 const SERVER_BIN_ENV: &str = "STYRA_SERVER_BIN";
 
-/// Locate the `styra-server` binary. An explicit [`SERVER_BIN_ENV`] wins;
-/// otherwise prefer one sitting next to the current executable so a dev build
-/// (`target/debug`) or an installed bin directory keeps the client and server
-/// paired; otherwise fall back to `PATH`.
+/// The executable to re-exec as the daemon. An explicit [`SERVER_BIN_ENV`]
+/// wins; otherwise it is this very process's executable, which — because it
+/// links this crate and honours [`daemon::serve_if_requested`] — can serve.
+/// The last-resort `styra-server` on `PATH` covers the rare case where
+/// `current_exe()` is unavailable.
 fn server_binary() -> PathBuf {
     if let Some(path) = std::env::var_os(SERVER_BIN_ENV).filter(|value| !value.is_empty()) {
         return PathBuf::from(path);
     }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(sibling) = exe.parent().map(|dir| dir.join("styra-server")) {
-            if sibling.is_file() {
-                return sibling;
-            }
-        }
-    }
-    PathBuf::from("styra-server")
+    std::env::current_exe().unwrap_or_else(|_| PathBuf::from("styra-server"))
 }
 
 /// The daemon's log, kept beside its socket.
