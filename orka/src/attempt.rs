@@ -34,6 +34,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 /// The current attempt-record schema.
 pub const ATTEMPT_SCHEMA: u32 = 1;
+pub const SEAL_SCHEMA: u32 = 1;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -281,6 +282,12 @@ impl FsAttemptStore {
         let path = self.attempt_dir(id).join("seal.toml");
         if path.exists() {
             let existing: SealRecord = read_toml(&path)?;
+            if existing.schema != SEAL_SCHEMA {
+                bail!(
+                    "attempt `{id}` seal uses unsupported schema {}",
+                    existing.schema
+                );
+            }
             if existing.state == state {
                 return Ok(existing);
             }
@@ -291,7 +298,7 @@ impl FsAttemptStore {
             );
         }
         let record = SealRecord {
-            schema: 1,
+            schema: SEAL_SCHEMA,
             sealed_at_ms: now_millis(),
             state,
         };
@@ -311,13 +318,22 @@ impl FsAttemptStore {
                 record.schema
             );
         }
+        let seal: Option<SealRecord> = read_toml_optional(&dir.join("seal.toml"))?;
+        if let Some(seal) = &seal {
+            if seal.schema != SEAL_SCHEMA {
+                bail!(
+                    "attempt `{id}` seal uses unsupported schema {}",
+                    seal.schema
+                );
+            }
+        }
         Ok(AttemptSnapshot {
             record,
             workspace: read_toml_optional(&dir.join("workspace.toml"))?,
             prepared: dir.join("prepared").exists(),
             request: read_toml_optional(&dir.join("request.toml"))?,
             evidence: read_toml_optional(&dir.join("evidence.toml"))?,
-            seal: read_toml_optional(&dir.join("seal.toml"))?,
+            seal,
         })
     }
 

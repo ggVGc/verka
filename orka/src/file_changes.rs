@@ -335,7 +335,15 @@ fn read_checkpoints_from<R: BufRead>(reader: R) -> Result<Vec<FileChangeCheckpoi
         .filter(|line| line.as_ref().map_or(true, |line| !line.trim().is_empty()))
         .map(|line| {
             let line = line?;
-            serde_json::from_str(&line).context("decoding file-change checkpoint")
+            let checkpoint: FileChangeCheckpoint =
+                serde_json::from_str(&line).context("decoding file-change checkpoint")?;
+            if checkpoint.schema != FILE_CHANGE_SCHEMA {
+                bail!(
+                    "unsupported file-change checkpoint schema {}",
+                    checkpoint.schema
+                );
+            }
+            Ok(checkpoint)
         })
         .collect()
 }

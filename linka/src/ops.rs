@@ -6,7 +6,7 @@
 //! before releasing the lock. The project repository is checked only where output
 //! provenance is asserted: [`complete`] refuses undeclared dirty writes
 //! ([`require_clean_except`]); pure graph edits never gate on project state.
-//! The derived queries ([`current_status`], [`staleness`], [`blockers`],
+//! The derived queries ([`node_state`], [`staleness`], [`blockers`],
 //! [`is_ready`]) recompute from the node files and are never stored.
 //!
 //! All git interaction goes through `&dyn Vcs`, so the whole module is
@@ -42,7 +42,7 @@ use crate::model::{
     ArtifactRef, Author, Blocker, BlockerReason, CandidateId, ConsumedNode, ContextPin, Currency,
     DefinitionVersion, DepKind, IntegrationStatus, NewNodeAttachment, NodeAttachment, NodeId,
     NodeMeta, NodeState, Outcome, ProducerEvidence, ProjectPath, ProjectSnapshot, RecordedOutcome,
-    ResultMeta, ResultOutcome, ResultSubmission, ResultVersion, StalenessReason, Status,
+    ResultMeta, ResultOutcome, ResultSubmission, ResultVersion, StalenessReason,
     SubmissionConflict, VerificationOutcome, VerificationSubmission, WorkSnapshot,
 };
 use crate::model::{
@@ -438,11 +438,8 @@ pub fn record_context_observation(
         // the content the accepted result actually ran against. Never hash a
         // possibly modified execution worktree or a checkout that has moved
         // since the attempt's frozen project snapshot.
-        let frozen_revision = result
-            .project
-            .as_ref()
-            .map(|project| project.revision.as_str())
-            .filter(|revision| !revision.is_empty());
+        let frozen_revision =
+            (!result.project.revision.is_empty()).then_some(result.project.revision.as_str());
         let blob = match frozen_revision {
             Some(revision) => vcs.file_blob_at(revision, project_path.as_str())?,
             None => project_file_blob(&root, &project_path)?,
@@ -490,8 +487,8 @@ pub fn record_node_attachment(
 }
 
 /// Atomically commit several opaque attachments in one Linka mutation.
-/// Existing identical items are accepted, so a caller can recover from a
-/// partially completed older workflow without duplicating data or commits.
+/// Existing identical items are accepted, so a caller can retry a partially
+/// completed attachment batch without duplicating data or commits.
 pub fn record_node_attachments(
     store: &Store,
     vcs: &dyn Vcs,
@@ -589,9 +586,9 @@ fn node_state_inner(
                     (false, ResultOutcome::Verification(_)) => {
                         bail!("ordinary node `{id}` has a verification outcome")
                     }
-                    (true, ResultOutcome::Work(_)) => bail!(
-                        "verification node `{id}` has a legacy work outcome; run `linka migrate`"
-                    ),
+                    (true, ResultOutcome::Work(_)) => {
+                        bail!("verification node `{id}` has a work outcome")
+                    }
                 }
                 let outcome = match result.outcome {
                     ResultOutcome::Work(Outcome::Done) => RecordedOutcome::Succeeded,
@@ -773,20 +770,6 @@ fn candidate_for_result(
     CandidateStore::new(store).for_result(&node, &version, artifact)
 }
 
-#[deprecated(note = "use node_state; Status cannot represent stale or evaluation errors")]
-pub fn current_status(store: &Store, vcs: &dyn Vcs, id: &str) -> Result<Status> {
-    let state = node_state(store, vcs, id)?;
-    Ok(match state.outcome {
-        RecordedOutcome::Open => Status::Open,
-        RecordedOutcome::Failed => Status::Failed,
-        RecordedOutcome::Succeeded if state.is_complete() => Status::Done,
-        RecordedOutcome::Succeeded => Status::Open,
-        RecordedOutcome::Accepted | RecordedOutcome::Rejected | RecordedOutcome::Abandoned => {
-            Status::Done
-        }
-    })
-}
-
 pub fn staleness(store: &Store, vcs: &dyn Vcs, id: &str) -> Result<Vec<StalenessReason>> {
     Ok(node_state(store, vcs, id)?.staleness)
 }
@@ -950,9 +933,15 @@ fn submit_result_locked(
 ) -> std::result::Result<(), SubmissionError> {
     let snapshot = &submission.snapshot;
     let id = snapshot.node.as_str();
+    if snapshot.schema != SNAPSHOT_SCHEMA {
+        return Err(SubmissionError::Evaluation(anyhow::anyhow!(
+            "work snapshot uses unsupported schema {}",
+            snapshot.schema
+        )));
+    }
     let mut conflicts = Vec::new();
     if let Some(output) = &submission.output {
-        if !output.repository.is_empty() && output.repository != snapshot.project.repository {
+        if output.repository != snapshot.project.repository {
             return Err(SubmissionError::Evaluation(anyhow::anyhow!(
                 "output artifact belongs to a different project repository"
             )));
@@ -1044,7 +1033,7 @@ fn submit_result_locked(
         author: submission.author,
         definition: snapshot.definition.clone(),
         outcome: submission.outcome,
-        project: Some(snapshot.project.clone()),
+        project: snapshot.project.clone(),
         consumed,
         context: snapshot.context.clone(),
         output: submission.output,
@@ -1349,7 +1338,7 @@ pub fn unsettled(store: &Store, vcs: &dyn Vcs, id: &str) -> Result<Vec<String>> 
 
 /// Integrity-check the whole store, fsck-style: every problem that write-time
 /// validation cannot see because it entered sideways (hand edits, git merges of
-/// individually-valid branches, older tools). Returns explicit problem reports;
+/// individually-valid branches, or unsupported writers). Returns explicit problem reports;
 /// empty means the store is consistent. Read-only and git-free.
 ///
 /// Checked per node: definition and result files parse; dependency lists hold no
@@ -1369,7 +1358,7 @@ pub fn check(store: &Store) -> Result<Vec<String>> {
                 continue;
             }
         };
-        if !(1..=DEFINITION_SCHEMA).contains(&meta.schema) {
+        if meta.schema != DEFINITION_SCHEMA {
             problems.push(format!(
                 "{id}: unsupported definition schema {}",
                 meta.schema
@@ -1395,7 +1384,7 @@ pub fn check(store: &Store) -> Result<Vec<String>> {
             }
             Ok(observations) => {
                 for observation in observations {
-                    if !(1..=OBSERVATION_SCHEMA).contains(&observation.schema) {
+                    if observation.schema != OBSERVATION_SCHEMA {
                         problems.push(format!(
                             "{id}: unsupported context observation schema {}",
                             observation.schema
@@ -1454,7 +1443,7 @@ fn validate_result_semantics(
     repository: Option<&str>,
     problems: &mut Vec<String>,
 ) {
-    if !(1..=RESULT_SCHEMA).contains(&result.schema) {
+    if result.schema != RESULT_SCHEMA {
         problems.push(format!("{id}: unsupported result schema {}", result.schema));
     }
     match (meta.verifies.is_some(), result.outcome) {
@@ -1536,25 +1525,17 @@ fn validate_verification_decision(
     };
     let decided_by_this = match &candidate.state {
         CandidateState::Accepted { verification, .. }
-        | CandidateState::Rejected { verification, .. } => verification
-            .as_ref()
-            .is_some_and(|verification| verification.as_str() == id),
+        | CandidateState::Rejected { verification, .. } => verification.as_str() == id,
         CandidateState::Pending => false,
     };
     let matches = match result.outcome {
         ResultOutcome::Verification(VerificationOutcome::Accepted) => matches!(
             &candidate.state,
-            CandidateState::Accepted {
-                verification: Some(verification),
-                ..
-            } if verification.as_str() == id
+            CandidateState::Accepted { verification, .. } if verification.as_str() == id
         ),
         ResultOutcome::Verification(VerificationOutcome::Rejected) => matches!(
             &candidate.state,
-            CandidateState::Rejected {
-                verification: Some(verification),
-                ..
-            } if verification.as_str() == id
+            CandidateState::Rejected { verification, .. } if verification.as_str() == id
         ),
         ResultOutcome::Verification(VerificationOutcome::Abandoned) => !decided_by_this,
         ResultOutcome::Work(_) => true,
@@ -1587,12 +1568,11 @@ fn validate_artifact(
             artifact.scheme
         ));
     }
-    if !artifact.repository.is_empty()
-        && (artifact.repository.len() != 40
-            || !artifact
-                .repository
-                .bytes()
-                .all(|byte| byte.is_ascii_hexdigit()))
+    if artifact.repository.len() != 40
+        || !artifact
+            .repository
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
     {
         problems.push(format!(
             "{id}: invalid artifact repository identity `{}`",
@@ -1600,7 +1580,7 @@ fn validate_artifact(
         ));
     }
     if let Some(expected) = repository {
-        if !artifact.repository.is_empty() && artifact.repository != expected {
+        if artifact.repository != expected {
             problems.push(format!("{id}: artifact belongs to a different repository"));
         }
     }
@@ -1622,181 +1602,6 @@ pub fn check_artifacts(store: &Store, vcs: &dyn Vcs) -> Result<Vec<String>> {
         }
     }
     Ok(problems)
-}
-
-pub fn migration_plan(store: &Store) -> Result<Vec<String>> {
-    let repository = Pairing::load(store.root())?.map(|pairing| pairing.root_commit);
-    let mut changes = Vec::new();
-    for id in store.list_ids()? {
-        let (meta, _) = store.read_node(&id)?;
-        if meta.schema != DEFINITION_SCHEMA {
-            changes.push(format!(
-                "{id}: definition schema {} -> {DEFINITION_SCHEMA}",
-                meta.schema
-            ));
-        }
-        if let Some((result, _)) = store.read_result(&id)? {
-            if result.schema != RESULT_SCHEMA {
-                changes.push(format!(
-                    "{id}: result schema {} -> {RESULT_SCHEMA}",
-                    result.schema
-                ));
-            }
-            if meta.verifies.is_some() && matches!(result.outcome, ResultOutcome::Work(_)) {
-                changes.push(format!("{id}: convert legacy review outcome"));
-            } else if result.schema < RESULT_SCHEMA && is_legacy_abandonment(&result) {
-                changes.push(format!("{id}: distinguish abandoned review outcome"));
-            }
-            if repository.is_some()
-                && result
-                    .output
-                    .iter()
-                    .chain(result.consumed.iter().filter_map(|pin| pin.output.as_ref()))
-                    .any(|artifact| artifact.repository.is_empty())
-            {
-                changes.push(format!("{id}: fill legacy artifact repository identity"));
-            }
-        }
-        if store
-            .read_context_observations(&id)?
-            .iter()
-            .any(|observation| observation.schema != OBSERVATION_SCHEMA)
-        {
-            changes.push(format!(
-                "{id}: context observation schema -> {OBSERVATION_SCHEMA}"
-            ));
-        }
-    }
-    Ok(changes)
-}
-
-pub fn migrate(store: &Store, vcs: &dyn Vcs) -> Result<Vec<String>> {
-    let mutation = store.mutation_lock(vcs)?;
-    let changes = migration_plan(store)?;
-    if changes.is_empty() {
-        return Ok(changes);
-    }
-    let ids = store.list_ids()?;
-    let old_versions: std::collections::HashMap<_, _> = ids
-        .iter()
-        .map(|id| Ok((id.clone(), store.node_version(id)?)))
-        .collect::<Result<_>>()?;
-    for id in &ids {
-        let (mut meta, description) = store.read_node(id)?;
-        meta.schema = DEFINITION_SCHEMA;
-        store.write_node(id, &meta, &description)?;
-    }
-    let new_versions: std::collections::HashMap<_, _> = ids
-        .iter()
-        .map(|id| Ok((id.clone(), store.node_version(id)?)))
-        .collect::<Result<_>>()?;
-    let repository = Pairing::load(store.root())?.map(|pairing| pairing.root_commit);
-    for id in &ids {
-        if let Some((mut result, notes)) = store.read_result(id)? {
-            let (meta, _) = store.read_node(id)?;
-            if meta.verifies.is_some() && matches!(result.outcome, ResultOutcome::Work(_)) {
-                result.outcome = ResultOutcome::Verification(
-                    legacy_verification_outcome(&result).with_context(|| {
-                        format!("cannot migrate legacy verification result for `{id}`")
-                    })?,
-                );
-            } else if result.schema < RESULT_SCHEMA && is_legacy_abandonment(&result) {
-                result.outcome = ResultOutcome::Verification(VerificationOutcome::Abandoned);
-            }
-            result.schema = RESULT_SCHEMA;
-            if result.definition == old_versions[id] {
-                result.definition = new_versions[id].clone();
-            }
-            for pin in &mut result.consumed {
-                if let (Some(old), Some(new)) = (
-                    old_versions.get(pin.id.as_str()),
-                    new_versions.get(pin.id.as_str()),
-                ) {
-                    if &pin.definition == old {
-                        pin.definition = new.clone();
-                    }
-                }
-                if let (Some(repository), Some(output)) = (&repository, &mut pin.output) {
-                    if output.repository.is_empty() {
-                        output.repository = repository.clone();
-                    }
-                }
-            }
-            if let (Some(repository), Some(output)) = (&repository, &mut result.output) {
-                if output.repository.is_empty() {
-                    output.repository = repository.clone();
-                }
-            }
-            let candidate_decision = match (&meta.verifies, result.outcome) {
-                (
-                    Some(candidate_id),
-                    ResultOutcome::Verification(
-                        VerificationOutcome::Accepted | VerificationOutcome::Rejected,
-                    ),
-                ) if matches!(
-                    CandidateStore::new(store).load(candidate_id)?.state,
-                    CandidateState::Pending
-                ) =>
-                {
-                    let verification: NodeId = id.parse().map_err(anyhow::Error::msg)?;
-                    let decision_notes = if result.outcome
-                        == ResultOutcome::Verification(VerificationOutcome::Rejected)
-                        && notes.trim().is_empty()
-                    {
-                        "Legacy verification rejected the candidate.".into()
-                    } else {
-                        notes.clone()
-                    };
-                    Some(CandidateStore::new(store).prepare_verification_decision(
-                        vcs,
-                        candidate_id,
-                        &verification,
-                        &result,
-                        result.author,
-                        decision_notes,
-                    )?)
-                }
-                _ => None,
-            };
-            store.write_result(id, &result, &notes)?;
-            if let Some(candidate) = &candidate_decision {
-                CandidateStore::new(store).write_prepared_decision(candidate)?;
-            }
-        }
-        let mut observations = store.read_context_observations(id)?;
-        for observation in &mut observations {
-            observation.schema = OBSERVATION_SCHEMA;
-        }
-        store.replace_context_observations(id, &observations)?;
-    }
-    mutation.commit(vcs, "linka: migrate schema")?;
-    Ok(changes)
-}
-
-fn legacy_verification_outcome(result: &ResultMeta) -> Option<VerificationOutcome> {
-    let producer = result.producer.as_ref()?;
-    match producer
-        .data
-        .get("verdict")
-        .and_then(|value| value.as_str())
-    {
-        Some("approved" | "accepted") => Some(VerificationOutcome::Accepted),
-        Some("changes_requested" | "rejected") => Some(VerificationOutcome::Rejected),
-        _ if producer.data.get("status").and_then(|value| value.as_str()) == Some("abandoned") => {
-            Some(VerificationOutcome::Abandoned)
-        }
-        _ => None,
-    }
-}
-
-fn is_legacy_abandonment(result: &ResultMeta) -> bool {
-    result.outcome == ResultOutcome::Verification(VerificationOutcome::Rejected)
-        && result
-            .producer
-            .as_ref()
-            .and_then(|producer| producer.data.get("status"))
-            .and_then(|value| value.as_str())
-            == Some("abandoned")
 }
 
 /// Report each `depends_on` cycle once, as an explicit `a -> b -> a` path.
@@ -2105,19 +1910,22 @@ fn project_file_blob(
     }
 }
 
-fn current_project_snapshot(store: &Store, vcs: &dyn Vcs) -> Result<Option<ProjectSnapshot>> {
-    let Some(revision) = vcs.head_commit()? else {
-        return Ok(None);
-    };
+fn current_project_snapshot(store: &Store, vcs: &dyn Vcs) -> Result<ProjectSnapshot> {
+    let revision = vcs.head_commit()?.unwrap_or_default();
     let repository = Pairing::load(store.root())?
         .map(|pairing| pairing.root_commit)
         .unwrap_or_default();
-    Ok(Some(ProjectSnapshot {
+    let tree = if revision.is_empty() {
+        String::new()
+    } else {
+        vcs.tree_id(&revision)?
+    };
+    Ok(ProjectSnapshot {
         scheme: "git".into(),
         repository,
-        tree: vcs.tree_id(&revision)?,
+        tree,
         revision,
-    }))
+    })
 }
 
 fn git_artifact(store: &Store, commit: &str) -> Result<ArtifactRef> {
@@ -2139,7 +1947,6 @@ fn now_millis() -> i64 {
 }
 
 #[cfg(test)]
-#[allow(deprecated)]
 mod tests {
     use super::*;
     use crate::vcs::FakeVcs;
@@ -2406,7 +2213,7 @@ mod tests {
 
         let id = add(&store, &fake, new_node("a", vec![])).unwrap();
         assert!(store.exists(&id));
-        assert_eq!(current_status(&store, &fake, &id).unwrap(), Status::Open);
+        assert!(!node_state(&store, &fake, &id).unwrap().is_complete());
         assert!(
             staleness(&store, &fake, &id).unwrap().is_empty(),
             "no result, nothing to invalidate"
@@ -2434,7 +2241,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(commit.as_deref(), Some("commit-abc"));
-        assert_eq!(current_status(&store, &fake, &id).unwrap(), Status::Done);
+        assert!(node_state(&store, &fake, &id).unwrap().is_complete());
         assert_eq!(
             output_of(&store, &id).unwrap().as_deref(),
             Some("commit-abc")
@@ -2470,7 +2277,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(commit, None);
-        assert_eq!(current_status(&store, &fake, &id).unwrap(), Status::Done);
+        assert!(node_state(&store, &fake, &id).unwrap().is_complete());
         assert!(fake.captured.borrow().is_empty(), "nothing captured");
     }
 
@@ -2480,10 +2287,10 @@ mod tests {
         let fake = FakeVcs::default();
         let id = add(&store, &fake, new_node("a", vec![])).unwrap();
         done(&store, &fake, &id);
-        assert_eq!(current_status(&store, &fake, &id).unwrap(), Status::Done);
+        assert!(node_state(&store, &fake, &id).unwrap().is_complete());
 
         edit(&store, &fake, &id, "revised".into()).unwrap();
-        assert_eq!(current_status(&store, &fake, &id).unwrap(), Status::Open);
+        assert!(!node_state(&store, &fake, &id).unwrap().is_complete());
         let reasons = staleness(&store, &fake, &id).unwrap();
         assert!(matches!(
             reasons.as_slice(),
@@ -2510,7 +2317,7 @@ mod tests {
         assert_eq!(outcome, EditOutcome::Unchanged);
         assert_eq!(*fake.store_commits.borrow(), commits);
         assert_eq!(store.node_version(&id).unwrap(), version);
-        assert_eq!(current_status(&store, &fake, &id).unwrap(), Status::Done);
+        assert!(node_state(&store, &fake, &id).unwrap().is_complete());
     }
 
     #[test]
@@ -2524,7 +2331,7 @@ mod tests {
         meta.assignee = Some(Author::Human);
         store.write_node(&id, &meta, &description).unwrap();
 
-        assert_eq!(current_status(&store, &fake, &id).unwrap(), Status::Open);
+        assert!(!node_state(&store, &fake, &id).unwrap().is_complete());
         let reasons = staleness(&store, &fake, &id).unwrap();
         assert!(matches!(
             reasons.as_slice(),
@@ -2876,7 +2683,10 @@ mod tests {
         let b = add(&store, &fake, new_node("b", vec![a.clone()])).unwrap();
 
         fail(&store, &fake, &a, "build broke", Author::Human).unwrap();
-        assert_eq!(current_status(&store, &fake, &a).unwrap(), Status::Failed);
+        assert_eq!(
+            node_state(&store, &fake, &a).unwrap().outcome,
+            RecordedOutcome::Failed
+        );
         assert!(
             is_ready(&store, &fake, &a).unwrap(),
             "a failed node can be retried"
@@ -2888,7 +2698,7 @@ mod tests {
 
         // Retry succeeds: the result is overwritten, B unblocks.
         done(&store, &fake, &a);
-        assert_eq!(current_status(&store, &fake, &a).unwrap(), Status::Done);
+        assert!(node_state(&store, &fake, &a).unwrap().is_complete());
         assert!(is_ready(&store, &fake, &b).unwrap());
     }
 
@@ -3223,7 +3033,6 @@ mod tests {
         done(&store, &fake, &consumer);
 
         let (mut result, notes) = store.read_result(&consumer).unwrap().unwrap();
-        result.schema = 99;
         result.consumed[0].outcome = None;
         result.consumed.push(result.consumed[0].clone());
         result.consumed.push(ConsumedNode {
@@ -3250,83 +3059,11 @@ mod tests {
         store.write_result(&consumer, &result, &notes).unwrap();
 
         let problems = check(&store).unwrap().join("\n");
-        assert!(problems.contains("unsupported result schema"));
         assert!(problems.contains("duplicate consumed-node pin"));
         assert!(problems.contains("no declared edge"));
         assert!(problems.contains("no successful evidence"));
         assert!(problems.contains("duplicate context pin"));
         assert!(problems.contains("unsupported artifact scheme"));
-    }
-
-    #[test]
-    fn schema_migration_is_previewable_deterministic_and_idempotent() {
-        let (_t, store) = temp_store();
-        let root = "a".repeat(40);
-        let fake = FakeVcs {
-            root: Some(root.clone()),
-            next_id: "output".into(),
-            ..Default::default()
-        };
-        pair(&store, &fake, None, false).unwrap();
-        let id = add(&store, &fake, new_node("legacy", vec![])).unwrap();
-        complete(
-            &store,
-            &fake,
-            &id,
-            &["out".into()],
-            &[],
-            None,
-            "legacy",
-            Author::Human,
-        )
-        .unwrap();
-        let (mut meta, description) = store.read_node(&id).unwrap();
-        meta.schema = 1;
-        store.write_node(&id, &meta, &description).unwrap();
-        let (mut result, notes) = store.read_result(&id).unwrap().unwrap();
-        result.schema = 1;
-        result.output.as_mut().unwrap().repository.clear();
-        store.write_result(&id, &result, &notes).unwrap();
-
-        let preview = migration_plan(&store).unwrap();
-        assert!(!preview.is_empty());
-        assert_eq!(migrate(&store, &fake).unwrap(), preview);
-        assert!(migration_plan(&store).unwrap().is_empty());
-        assert!(migrate(&store, &fake).unwrap().is_empty());
-        assert_eq!(store.read_node(&id).unwrap().0.schema, DEFINITION_SCHEMA);
-        let migrated = store.read_result(&id).unwrap().unwrap().0;
-        assert_eq!(migrated.schema, RESULT_SCHEMA);
-        assert_eq!(migrated.output.unwrap().repository, root);
-    }
-
-    #[test]
-    fn legacy_review_evidence_distinguishes_rejection_from_abandonment() {
-        let (_t, store) = temp_store();
-        let fake = FakeVcs::default();
-        let id = add(&store, &fake, new_node("review evidence", vec![])).unwrap();
-        complete(&store, &fake, &id, &[], &[], None, "", Author::Human).unwrap();
-        let mut result = store.read_result(&id).unwrap().unwrap().0;
-
-        result.producer = Some(ProducerEvidence {
-            namespace: "orka.nota".into(),
-            data: serde_json::json!({"verdict": "changes_requested"}),
-        });
-        assert_eq!(
-            legacy_verification_outcome(&result),
-            Some(VerificationOutcome::Rejected)
-        );
-
-        result.producer = Some(ProducerEvidence {
-            namespace: "orka.nota".into(),
-            data: serde_json::json!({"status": "abandoned"}),
-        });
-        assert_eq!(
-            legacy_verification_outcome(&result),
-            Some(VerificationOutcome::Abandoned)
-        );
-        result.schema = RESULT_SCHEMA - 1;
-        result.outcome = ResultOutcome::Verification(VerificationOutcome::Rejected);
-        assert!(is_legacy_abandonment(&result));
     }
 
     #[test]
@@ -3506,7 +3243,7 @@ mod tests {
         );
         respond(&store, &dirty, &q, "concept A", Author::Human).unwrap();
 
-        assert_eq!(current_status(&store, &dirty, &q).unwrap(), Status::Done);
+        assert!(node_state(&store, &dirty, &q).unwrap().is_complete());
         let (result, notes) = store.read_result(&q).unwrap().unwrap();
         assert_eq!(notes, "concept A");
         assert_eq!(result.author, Author::Human);
@@ -3519,7 +3256,7 @@ mod tests {
 
         // Editing the question afterwards invalidates the answer as usual.
         edit(&store, &dirty, &q, "Question: revised".into()).unwrap();
-        assert_eq!(current_status(&store, &dirty, &q).unwrap(), Status::Open);
+        assert!(!node_state(&store, &dirty, &q).unwrap().is_complete());
     }
 
     #[test]
@@ -3803,7 +3540,7 @@ mod tests {
             fake.captured.borrow().is_empty(),
             "no project commit for graph-only work"
         );
-        assert_eq!(current_status(&store, &fake, &id).unwrap(), Status::Done);
+        assert!(node_state(&store, &fake, &id).unwrap().is_complete());
     }
 
     #[test]
@@ -3864,7 +3601,7 @@ mod tests {
         .unwrap();
         assert_eq!(commit, None);
         assert!(fake.captured.borrow().is_empty());
-        assert_eq!(current_status(&store, &fake, &id).unwrap(), Status::Done);
+        assert!(node_state(&store, &fake, &id).unwrap().is_complete());
     }
 
     #[test]
@@ -3915,7 +3652,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(commit, None);
-        assert_eq!(current_status(&store, &fake, &id).unwrap(), Status::Failed);
+        assert_eq!(
+            node_state(&store, &fake, &id).unwrap().outcome,
+            RecordedOutcome::Failed
+        );
         assert!(fake.captured.borrow().is_empty());
     }
 

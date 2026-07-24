@@ -11,14 +11,11 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
 
-pub const DEFINITION_SCHEMA: u32 = 3;
-pub const RESULT_SCHEMA: u32 = 4;
-pub const SNAPSHOT_SCHEMA: u32 = 2;
-pub const OBSERVATION_SCHEMA: u32 = 2;
+pub const DEFINITION_SCHEMA: u32 = 1;
+pub const RESULT_SCHEMA: u32 = 1;
+pub const SNAPSHOT_SCHEMA: u32 = 1;
+pub const OBSERVATION_SCHEMA: u32 = 1;
 pub const ATTACHMENT_SCHEMA: u32 = 1;
-fn legacy_schema() -> u32 {
-    1
-}
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
@@ -255,13 +252,11 @@ pub struct ConsumedNode {
 pub struct ContextPin {
     pub path: ProjectPath,
     pub identity: String,
-    #[serde(default)]
     pub observed: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContextObservation {
-    #[serde(default = "legacy_schema")]
     pub schema: u32,
     pub result: ResultVersion,
     pub context: Vec<ContextPin>,
@@ -395,7 +390,6 @@ pub struct ProducerEvidence {
 /// Contents of `result.toml`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ResultMeta {
-    #[serde(default = "legacy_schema")]
     pub schema: u32,
     /// Unix milliseconds when the result was recorded.
     pub at: i64,
@@ -403,8 +397,7 @@ pub struct ResultMeta {
     pub author: Author,
     pub definition: DefinitionVersion,
     pub outcome: ResultOutcome,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub project: Option<ProjectSnapshot>,
+    pub project: ProjectSnapshot,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub consumed: Vec<ConsumedNode>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -413,14 +406,6 @@ pub struct ResultMeta {
     pub output: Option<ArtifactRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub producer: Option<ProducerEvidence>,
-}
-
-/// A node's derived status — never stored.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Status {
-    Open,
-    Done,
-    Failed,
 }
 
 /// The result evidence currently recorded for a node.
@@ -521,7 +506,6 @@ pub struct ProjectSnapshot {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkSnapshot {
-    #[serde(default = "legacy_schema")]
     pub schema: u32,
     pub node: NodeId,
     pub definition: DefinitionVersion,
@@ -590,39 +574,6 @@ impl NodeState {
         !self.is_complete() && !self.blockers.is_empty()
     }
 }
-impl Status {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Open => "open",
-            Self::Done => "done",
-            Self::Failed => "failed",
-        }
-    }
-}
-
-/// Derive a node's status from its current definition version and its result.
-/// `done` holds only while the result's definition version still matches:
-/// editing the definition after completion reopens the node.
-pub fn status(current: &DefinitionVersion, result: Option<&ResultMeta>) -> Status {
-    match result {
-        None => Status::Open,
-        Some(result) if result.outcome == Outcome::Failed.into() => Status::Failed,
-        Some(result)
-            if &result.definition == current
-                && matches!(
-                    result.outcome,
-                    ResultOutcome::Work(Outcome::Done)
-                        | ResultOutcome::Verification(VerificationOutcome::Accepted)
-                        | ResultOutcome::Verification(VerificationOutcome::Rejected)
-                        | ResultOutcome::Verification(VerificationOutcome::Abandoned)
-                ) =>
-        {
-            Status::Done
-        }
-        Some(_) => Status::Open,
-    }
-}
-
 /// A node's display title: the first non-empty line of its description. There
 /// is no stored title — the description is the definition, and its opening
 /// line names the node wherever a one-liner is needed.
@@ -645,38 +596,6 @@ mod tests {
         assert_eq!(title_of("one-liner"), "one-liner");
         assert_eq!(title_of(""), "(no description)");
         assert_eq!(title_of("  \n\t\n"), "(no description)");
-    }
-
-    #[test]
-    fn status_follows_outcome_and_definition_version() {
-        let version = DefinitionVersion {
-            metadata: "m".into(),
-            description: "d".into(),
-        };
-        let result = ResultMeta {
-            schema: 1,
-            at: 0,
-            author: Author::Human,
-            definition: version.clone(),
-            outcome: Outcome::Done.into(),
-            project: None,
-            consumed: vec![],
-            context: vec![],
-            output: None,
-            producer: None,
-        };
-        assert_eq!(status(&version, None), Status::Open);
-        assert_eq!(status(&version, Some(&result)), Status::Done);
-        let moved = DefinitionVersion {
-            metadata: "m2".into(),
-            description: "d".into(),
-        };
-        assert_eq!(status(&moved, Some(&result)), Status::Open);
-        let failed = ResultMeta {
-            outcome: Outcome::Failed.into(),
-            ..result
-        };
-        assert_eq!(status(&version, Some(&failed)), Status::Failed);
     }
 
     #[test]

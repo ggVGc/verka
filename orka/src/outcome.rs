@@ -14,8 +14,7 @@
 //! The agent is required to commit all its work with Git before declaring
 //! success; Orka captures the diff between the frozen input commit and the
 //! committed worktree. A declared success that leaves uncommitted changes has
-//! not captured its output and is rejected as a contract violation. (An
-//! `outputs` key from an older agent is accepted and ignored.)
+//! not captured its output and is rejected as a contract violation.
 //!
 //! Interpreting the declaration is Orka's own concern: [`decide`] combines it
 //! with the harness-observed exit code into an Orka [`AgentOutcome`], per the
@@ -34,6 +33,7 @@ pub const OUTCOME_FILE: &str = "outcome.toml";
 pub const PROMPT_FILE: &str = "prompt.md";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DeclaredOutcome {
     pub outcome: DeclaredKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -132,16 +132,21 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         assert_eq!(read_declared(&dir).unwrap(), None);
 
-        // An `outputs` key from an older agent is accepted and ignored: the
-        // produced file set is discovered from the workspace, not declared.
         std::fs::write(
             dir.join(OUTCOME_FILE),
-            "outcome = \"succeeded\"\noutputs = [\"out.txt\"]\nnotes = \"did it\"\n",
+            "outcome = \"succeeded\"\nnotes = \"did it\"\n",
         )
         .unwrap();
         let declared = read_declared(&dir).unwrap().unwrap();
         assert_eq!(declared.outcome, DeclaredKind::Succeeded);
         assert_eq!(declared.notes, "did it");
+
+        std::fs::write(
+            dir.join(OUTCOME_FILE),
+            "outcome = \"succeeded\"\noutputs = [\"out.txt\"]\n",
+        )
+        .unwrap();
+        assert!(read_declared(&dir).is_err(), "unknown fields are errors");
 
         std::fs::write(dir.join(OUTCOME_FILE), "outcome = \"maybe\"").unwrap();
         assert!(read_declared(&dir).is_err(), "garbage is an error");

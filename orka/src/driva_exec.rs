@@ -171,7 +171,7 @@ impl IsolatedExecutor for DrivaExecutor {
             }
         }
         match read_access_summary(&artifacts.accesses) {
-            Ok(Some(summary)) if !summary.complete => {
+            Ok(summary) if !summary.complete => {
                 if let Ok(mut diagnostics) = append_handle(&artifacts.diagnostics) {
                     let _ = writeln!(
                         diagnostics,

@@ -26,9 +26,8 @@ repository even if local `.orka/` state is later unavailable. Success or
 failure is submitted against the snapshot through Linka's version-checked
 `capture_submission`. Every step is recorded before its side effect, so `orka
 recover` can classify any crash from the files present and finish the
-idempotent remainder. Recovery also backfills complete evidence for outputs
-sealed by older Orka versions. Stale work — a graph that moved between snapshot
-and submit — is refused and sealed as such, never silently completed.
+idempotent remainder. Stale work — a graph that moved between snapshot and
+submit — is refused and sealed as such, never silently completed.
 
 ## Use
 
@@ -151,7 +150,7 @@ target, and opaque Orka attempt identity. Linka validates the exact verification
 authorizing the decision and derives publication from Git history; Orka supplies
 the attempt-oriented UI and coordinates Nota evidence with that verification.
 patch view. The patch base comes from the attempt input attached durably to the
-Linka node, with local `.orka/` state used only as a compatibility fallback.
+Linka node.
 Acceptance pins the exact artifact and previous target commit.
 Publication refuses dirty or concurrently moved targets and is safe to retry
 after a crash.

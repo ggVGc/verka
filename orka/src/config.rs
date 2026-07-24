@@ -328,8 +328,8 @@ mod tests {
 
     #[test]
     fn rejects_driva_templates_and_ambiguous_agent_configuration() {
-        let old = toml::from_str::<Config>("[agent]\ntemplate = \"codex-exec\"\n");
-        assert!(old
+        let unsupported = toml::from_str::<Config>("[agent]\ntemplate = \"codex-exec\"\n");
+        assert!(unsupported
             .unwrap_err()
             .to_string()
             .contains("unknown field `template`"));

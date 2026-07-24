@@ -42,7 +42,7 @@ use std::path::{Path, PathBuf};
 
 use crate::model::{
     ContextObservation, DefinitionVersion, NodeAttachment, NodeId, NodeMeta, ResultMeta,
-    ResultVersion, ATTACHMENT_SCHEMA,
+    ResultVersion, ATTACHMENT_SCHEMA, DEFINITION_SCHEMA, OBSERVATION_SCHEMA, RESULT_SCHEMA,
 };
 
 /// Git's blob id for `bytes`, computed locally so version identity needs no
@@ -186,6 +186,9 @@ impl Store {
 
     pub fn write_node(&self, id: &str, meta: &NodeMeta, description: &str) -> Result<()> {
         validate_node_id(id)?;
+        if meta.schema != DEFINITION_SCHEMA {
+            bail!("cannot write unsupported definition schema {}", meta.schema);
+        }
         fs::create_dir_all(self.node_dir(id))?;
         let data = toml::to_string_pretty(meta).context("serialising node metadata")?;
         fs::write(self.node_path(id), data).with_context(|| format!("writing node `{id}`"))?;
@@ -198,8 +201,11 @@ impl Store {
         validate_node_id(id)?;
         let data = fs::read_to_string(self.node_path(id))
             .with_context(|| format!("unknown node `{id}`"))?;
-        let meta =
+        let meta: NodeMeta =
             toml::from_str(&data).with_context(|| format!("parsing node.toml for `{id}`"))?;
+        if meta.schema != DEFINITION_SCHEMA {
+            bail!("node `{id}` uses unsupported schema {}", meta.schema);
+        }
         let description = fs::read_to_string(self.description_path(id))
             .with_context(|| format!("reading description.md for `{id}`"))?;
         Ok((meta, description))
@@ -222,6 +228,9 @@ impl Store {
 
     pub fn write_result(&self, id: &str, meta: &ResultMeta, notes: &str) -> Result<()> {
         validate_node_id(id)?;
+        if meta.schema != RESULT_SCHEMA {
+            bail!("cannot write unsupported result schema {}", meta.schema);
+        }
         if !self.exists(id) {
             bail!("unknown node `{id}`");
         }
@@ -257,8 +266,11 @@ impl Store {
             }
             Err(e) => return Err(e).with_context(|| format!("reading result for `{id}`")),
         };
-        let meta =
+        let meta: ResultMeta =
             toml::from_str(&data).with_context(|| format!("parsing result.toml for `{id}`"))?;
+        if meta.schema != RESULT_SCHEMA {
+            bail!("result for `{id}` uses unsupported schema {}", meta.schema);
+        }
         let notes = match fs::read_to_string(self.result_path(id)) {
             Ok(notes) => notes,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
@@ -382,6 +394,12 @@ impl Store {
         observation: &ContextObservation,
     ) -> Result<()> {
         validate_node_id(id)?;
+        if observation.schema != OBSERVATION_SCHEMA {
+            bail!(
+                "cannot write unsupported context observation schema {}",
+                observation.schema
+            );
+        }
         let data =
             toml::to_string_pretty(observation).context("serialising context observation")?;
         let identity = blob_id(data.as_bytes());
@@ -415,28 +433,18 @@ impl Store {
         for entry in entries {
             let path = entry?.path();
             let data = fs::read_to_string(&path)?;
-            observations.push(
-                toml::from_str(&data).with_context(|| format!("parsing {}", path.display()))?,
-            );
+            let observation: ContextObservation =
+                toml::from_str(&data).with_context(|| format!("parsing {}", path.display()))?;
+            if observation.schema != OBSERVATION_SCHEMA {
+                bail!(
+                    "context observation {} uses unsupported schema {}",
+                    path.display(),
+                    observation.schema
+                );
+            }
+            observations.push(observation);
         }
         Ok(observations)
-    }
-
-    pub fn replace_context_observations(
-        &self,
-        id: &str,
-        observations: &[ContextObservation],
-    ) -> Result<()> {
-        let dir = self.node_dir(id).join("observations");
-        match fs::remove_dir_all(&dir) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
-        }
-        for observation in observations {
-            self.write_context_observation(id, observation)?;
-        }
-        Ok(())
     }
 
     // --- listing -----------------------------------------------------------------
@@ -607,7 +615,12 @@ mod tests {
             author: Author::Machine,
             definition: v2.clone(),
             outcome: Outcome::Done.into(),
-            project: None,
+            project: crate::ProjectSnapshot {
+                scheme: "git".into(),
+                repository: String::new(),
+                revision: String::new(),
+                tree: String::new(),
+            },
             consumed: vec![],
             context: vec![],
             output: Some(ArtifactRef {

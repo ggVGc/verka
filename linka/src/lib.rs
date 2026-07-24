@@ -28,7 +28,7 @@ pub use model::{
     ContextObservation, ContextPin, Currency, DefinitionVersion, DepKind, IntegrationStatus,
     NewNodeAttachment, NodeAttachment, NodeId, NodeMeta, NodeState, Outcome, ProducerEvidence,
     ProjectPath, ProjectSnapshot, RecordedOutcome, ResultMeta, ResultOutcome, ResultSubmission,
-    ResultVersion, StalenessReason, Status, SubmissionConflict, VerificationOutcome,
+    ResultVersion, StalenessReason, SubmissionConflict, VerificationOutcome,
     VerificationSubmission, WorkSnapshot, ATTACHMENT_SCHEMA, DEFINITION_SCHEMA, OBSERVATION_SCHEMA,
     RESULT_SCHEMA, SNAPSHOT_SCHEMA,
 };

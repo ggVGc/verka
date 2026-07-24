@@ -4,7 +4,7 @@
 //! Orka adds attempt-oriented lookup and patch display, but stores no duplicate
 //! candidate state and performs no publication side effect itself.
 
-use crate::attempt::{AttemptId, AttemptRecord, FsAttemptStore};
+use crate::attempt::{AttemptId, AttemptRecord};
 use anyhow::{bail, Context, Result};
 use linka::{
     Author, CandidateId, CandidateRecord, CandidateStore, GitVcs, IntegrationStatus, Store,
@@ -38,12 +38,11 @@ impl Candidate {
 
 pub struct Candidates<'a> {
     store: &'a Store,
-    attempts: &'a FsAttemptStore,
 }
 
 impl<'a> Candidates<'a> {
-    pub fn new(store: &'a Store, attempts: &'a FsAttemptStore) -> Self {
-        Self { store, attempts }
+    pub fn new(store: &'a Store) -> Self {
+        Self { store }
     }
 
     pub fn list(&self) -> Result<Vec<Candidate>> {
@@ -152,16 +151,6 @@ impl<'a> Candidates<'a> {
                         bail!("Orka attempt attachment does not match its Linka candidate");
                     }
                     return Ok(Some(attached.input.input_commit().to_string()));
-                }
-                if self.attempts.contains(attempt) {
-                    return Ok(Some(
-                        self.attempts
-                            .load(attempt)?
-                            .record
-                            .input
-                            .input_commit()
-                            .to_string(),
-                    ));
                 }
                 Ok(None)
             })

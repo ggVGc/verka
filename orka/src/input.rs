@@ -19,10 +19,7 @@ use serde::{Deserialize, Serialize};
 pub struct AttemptInput {
     /// Linka's frozen, version-checked work input. Authoritative for submission.
     pub snapshot: WorkSnapshot,
-    /// Named project branch this attempt proposes to integrate into. Older
-    /// durable attempts may not carry it; recovery then uses the current
-    /// project branch.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
+    /// Named project branch this attempt proposes to integrate into.
     pub target_branch: String,
     /// The node's definition prose, as shown to the agent.
     pub description: String,

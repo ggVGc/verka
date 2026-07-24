@@ -252,13 +252,6 @@ enum Cmd {
         artifacts: bool,
     },
 
-    /// Preview or apply deterministic stored-schema upgrades.
-    Migrate {
-        /// Preview required changes without writing them.
-        #[arg(long)]
-        check: bool,
-    },
-
     /// Check whether a node is settled: done, not stale, and all work derived
     /// from it (transitively) also done and not stale. Exits non-zero if not.
     Settled { id: NodeId },
@@ -522,9 +515,7 @@ fn main() -> Result<()> {
                     ..
                 } => {
                     println!("decision  accepted by {}", author.as_str());
-                    if let Some(verification) = verification {
-                        println!("authorized {verification}");
-                    }
+                    println!("authorized {verification}");
                     if !notes.is_empty() {
                         println!("notes     {notes}");
                     }
@@ -536,9 +527,7 @@ fn main() -> Result<()> {
                     ..
                 } => {
                     println!("decision  rejected by {}", author.as_str());
-                    if let Some(verification) = verification {
-                        println!("authorized {verification}");
-                    }
+                    println!("authorized {verification}");
                     println!("notes     {notes}");
                 }
             }
@@ -831,26 +820,6 @@ fn main() -> Result<()> {
             }
         }
 
-        Cmd::Migrate { check } => {
-            let store = Store::open(store)?;
-            let changes = if check {
-                ops::migration_plan(&store)?
-            } else {
-                let vcs = GitVcs::for_store(&store);
-                ops::migrate(&store, &vcs)?
-            };
-            if changes.is_empty() {
-                println!("store schema is current");
-            } else {
-                for change in &changes {
-                    println!("{change}");
-                }
-                if check {
-                    std::process::exit(1);
-                }
-            }
-        }
-
         Cmd::Settled { id } => {
             let store = Store::open(store)?;
             let vcs = GitVcs::for_store(&store);
@@ -1062,9 +1031,6 @@ fn show_node(store: &Store, vcs: &GitVcs, id: &str) -> Result<String> {
         writeln!(out, "result:")?;
         writeln!(out, "  outcome: {}", result.outcome.as_str())?;
         writeln!(out, "  author:  {}", result.author.as_str())?;
-        if result.project.is_none() {
-            writeln!(out, "  warning: legacy result has no project revision")?;
-        }
         if let Some(producer) = &result.producer {
             writeln!(out, "  producer: {} {}", producer.namespace, producer.data)?;
         }

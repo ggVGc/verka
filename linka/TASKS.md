@@ -4,8 +4,7 @@ This backlog brings Linka's implementation into line with `DESIGN.md`: Linka
 owns versioned graph facts and their derived state, while execution, worktree,
 retry, review, and publication policy belong to applications such as Orka.
 
-Tasks are ordered by dependency. Semantic correctness comes before API cleanup
-and migration.
+Tasks are ordered by dependency. Semantic correctness comes before API cleanup.
 
 ## 1. Specify the graph-state contract
 
@@ -222,8 +221,6 @@ Tests:
 - [x] Populate `ArtifactRef.repository` from the verified project pairing rather
   than leaving it empty.
 - [x] Reject artifacts from a different paired repository.
-- [x] Provide temporary compatibility for legacy empty repository fields, with
-  a warning or schema migration.
 
 Tests:
 
@@ -265,7 +262,6 @@ Acceptance criteria:
 
 - [x] Move `work.jsonl`, `read_work_log`, `open_work_log`, and
   `commit_work_log` to Orka's attempt/session storage.
-- [x] Provide a compatibility reader or migration for existing logs.
 - [x] Replace transcript-specific `amend_context` with a neutral context
   observation input, if Linka needs such an operation at all.
 - [x] Prefer immutable observation records keyed by result version over
@@ -321,25 +317,19 @@ node-...  blocked by A: stale
 node-...  error: malformed result.toml
 ```
 
-## 15. Version and migrate the stored schema
+## 15. Version the stored schema
 
 - [x] Introduce explicit supported schema versions for definitions, results,
   snapshots, and any observation records.
-- [x] Make readers accept the old and new schemas during migration.
-- [x] Make writers emit only the new schema.
-- [x] Add `linka migrate --check` to preview deterministic changes.
-- [x] Add `linka migrate` to apply them in one explicit store commit.
-- [x] Interpret legacy empty artifact repository fields through the current
-  pairing during the compatibility window.
-- [x] Provide compatibility projections for old `Status` and `complete` APIs
-  until Orka and other consumers migrate.
-- [x] Remove compatibility APIs only after all in-repository consumers use the
-  new interfaces.
+- [x] Require readers and writers to use the current schema exactly.
+- [x] Keep work completion and verification conclusions distinct in the stored
+  result model.
+- [x] Require candidate decisions to identify their authorizing verification.
 
 Acceptance criteria:
 
-- Existing stores can be opened and migrated without losing history or facts.
-- Migration is deterministic, reviewable, and idempotent.
+- Unsupported schemas fail explicitly instead of being interpreted.
+- Every newly initialized project uses the sole current format.
 
 ## Final verification
 

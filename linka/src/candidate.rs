@@ -14,7 +14,7 @@ mod storage;
 #[cfg(test)]
 mod tests;
 
-pub const CANDIDATE_SCHEMA: u32 = 3;
+pub const CANDIDATE_SCHEMA: u32 = 1;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExternalIdentity {
@@ -54,16 +54,14 @@ pub enum CandidateState {
         decided_at_ms: i64,
         author: Author,
         notes: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        verification: Option<NodeId>,
+        verification: NodeId,
         target_previous: String,
     },
     Rejected {
         decided_at_ms: i64,
         author: Author,
         notes: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        verification: Option<NodeId>,
+        verification: NodeId,
     },
 }
 

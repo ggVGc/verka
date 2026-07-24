@@ -501,7 +501,7 @@ fn a_review_can_be_abandoned_when_nota_branch_creation_was_interrupted() {
 }
 
 #[test]
-fn cli_lists_active_reviews_and_accepts_stop_as_an_abandon_alias() {
+fn cli_lists_active_reviews_and_abandons_one() {
     let (_temp, root) = workbench();
     let candidate = candidate(&root);
     let store = store_at(&root);
@@ -519,24 +519,24 @@ fn cli_lists_active_reviews_and_accepts_stop_as_an_abandon_alias() {
     assert!(stdout.contains(candidate.id.0.as_str()));
     assert!(stdout.contains(&started.record.branch));
 
-    let stopped = Command::new(binary)
+    let abandoned = Command::new(binary)
         .args([
             "--workbench",
             root.to_str().unwrap(),
             "review",
-            "stop",
+            "abandon",
             started.record.verification.as_str(),
             "--notes",
-            "stopped from the CLI",
+            "abandoned from the CLI",
         ])
         .output()
         .unwrap();
     assert!(
-        stopped.status.success(),
+        abandoned.status.success(),
         "{}",
-        String::from_utf8_lossy(&stopped.stderr)
+        String::from_utf8_lossy(&abandoned.stderr)
     );
-    assert!(String::from_utf8_lossy(&stopped.stdout).contains("abandoned"));
+    assert!(String::from_utf8_lossy(&abandoned.stdout).contains("abandoned"));
     assert!(reviews.list().unwrap().is_empty());
 }
 

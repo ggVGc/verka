@@ -1,6 +1,7 @@
 use super::*;
 use crate::ops::{self, NewNode};
 use crate::vcs::FakeVcs;
+use crate::Pairing;
 use std::fs;
 use std::path::PathBuf;
 
@@ -14,14 +15,24 @@ impl Drop for TempDir {
 fn successful_output() -> (TempDir, Store, FakeVcs, NodeId, String) {
     let root = std::env::temp_dir().join(format!("linka-candidate-test-{}", ulid::Ulid::new()));
     let store = Store::init(root.join(".linka")).unwrap();
+    let root_commit = "b".repeat(40);
     let mut vcs = FakeVcs {
-        root: Some("base".into()),
+        root: Some(root_commit.clone()),
         next_id: "output".into(),
         ..Default::default()
     };
     vcs.commits
         .borrow_mut()
-        .extend(["base".into(), "output".into()]);
+        .extend([root_commit.clone(), "output".into()]);
+    Pairing {
+        schema: 1,
+        root_commit: root_commit.clone(),
+        paired_at: 0,
+        name: None,
+        remote: None,
+    }
+    .save(store.root())
+    .unwrap();
     let node: NodeId = ops::add(
         &store,
         &vcs,
@@ -52,7 +63,7 @@ fn successful_output() -> (TempDir, Store, FakeVcs, NodeId, String) {
         .insert("refs/heads/candidates/a".into(), "output".into());
     vcs.refs
         .get_mut()
-        .insert("refs/heads/main".into(), "base".into());
+        .insert("refs/heads/main".into(), root_commit);
     vcs.drift_for.insert("output".into(), "A out.txt".into());
     (TempDir(root), store, vcs, node, "output".into())
 }
@@ -189,7 +200,7 @@ fn rejected_verification_atomically_rejects_the_exact_candidate() {
     assert!(matches!(
         stored.state,
         CandidateState::Rejected {
-            verification: Some(ref id),
+            verification: ref id,
             ..
         } if id == &rejected
     ));

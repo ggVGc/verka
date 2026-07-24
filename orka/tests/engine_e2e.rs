@@ -201,7 +201,7 @@ fn a_full_attempt_lands_a_version_checked_result_from_an_isolated_worktree() {
         .is_empty());
 
     // Orka exposes the candidate with its source node and its complete patch.
-    let candidates = Candidates::new(&store, &attempts);
+    let candidates = Candidates::new(&store);
     let listed = candidates.list().unwrap();
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].attempt.as_ref(), Some(&report.attempt));
@@ -319,7 +319,7 @@ fn observed_workspace_reads_are_pinned_to_the_exact_accepted_result() {
     assert!(pins[0].observed);
 
     let (result, _) = store.read_result(&node).unwrap().unwrap();
-    assert_eq!(result.project.unwrap().revision, input_commit);
+    assert_eq!(result.project.revision, input_commit);
     let tracking = result
         .producer
         .unwrap()
@@ -621,7 +621,7 @@ fn an_attempt_against_a_graph_that_moved_mid_run_seals_stale() {
 
     // Linka records no candidate for a result it rejected. The attempt and
     // retained branch remain Orka evidence for inspection/recovery.
-    let candidates = Candidates::new(&store, &attempts);
+    let candidates = Candidates::new(&store);
     assert!(candidates.list().unwrap().is_empty());
     let error = candidates.get(&report.attempt.0).unwrap_err();
     assert!(
@@ -671,6 +671,7 @@ fn recovery_settles_an_executed_attempt_and_a_second_pass_duplicates_nothing() {
             },
         )
         .unwrap();
+    write_access_summary(&attempts.accesses_path(&id), "test", &[], true, None).unwrap();
 
     let reports = engine.recover().unwrap();
     assert_eq!(reports.len(), 1);
@@ -719,7 +720,7 @@ fn recovery_after_linka_accepted_but_before_seal_recognizes_its_own_result() {
     stage_recorded_execution(&attempts, &id, &io);
     std::fs::write(
         io.join("outcome.toml"),
-        "outcome = \"succeeded\"\noutputs = [\"out.txt\"]\nnotes = \"done\"\n",
+        "outcome = \"succeeded\"\nnotes = \"done\"\n",
     )
     .unwrap();
     let evidence = ExecutionReport {
@@ -759,7 +760,7 @@ fn recovery_after_linka_accepted_but_before_seal_recognizes_its_own_result() {
         "recovery recognized its own accepted result: {:?}",
         reports[0].sealed
     );
-    let candidate = Candidates::new(&store, &attempts).get(&id.0).unwrap();
+    let candidate = Candidates::new(&store).get(&id.0).unwrap();
     assert_eq!(candidate.node.as_str(), node);
     assert_eq!(candidate.integration, linka::IntegrationStatus::Pending);
     let version = store.result_version(&node).unwrap();

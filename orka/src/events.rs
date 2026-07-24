@@ -178,8 +178,7 @@ pub fn markdown_blocks(markdown: &str) -> Vec<ContentBlock> {
 /// Render a work log from a raw agent-output fact, selecting the decoder by the
 /// [`OutputFormat`] that produced it. This is the versioned dispatch point: a
 /// Genta owns the structured protocol registry and its exhaustive decoder
-/// dispatch. An attempt always decodes through its own recorded protocol, so
-/// adding decoders never disturbs how older attempts read back.
+/// dispatch. An attempt always decodes through its own recorded protocol.
 ///
 /// `file_changes` supplies checkpoint annotations for decoders that carry
 /// file-change events; decoders that do not (e.g. a plain transcript) ignore it.

@@ -26,12 +26,13 @@
 //! remote = "git@host:me/splurt.git"  # optional, informational only
 //! ```
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 /// The pairing file's name inside the store root.
 pub const PAIRING_FILE: &str = "pairing.toml";
+pub const PAIRING_SCHEMA: u32 = 1;
 
 /// The recorded pairing: which project repository this store describes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,14 +65,20 @@ impl Pairing {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
         };
-        toml::from_str(&text)
-            .map(Some)
-            .with_context(|| format!("parsing {}", path.display()))
+        let pairing: Self =
+            toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+        if pairing.schema != PAIRING_SCHEMA {
+            bail!("pairing uses unsupported schema {}", pairing.schema);
+        }
+        Ok(Some(pairing))
     }
 
     /// Write `<store_root>/pairing.toml`. The caller commits it to the
     /// workbench repository like any other store change.
     pub fn save(&self, store_root: &Path) -> Result<()> {
+        if self.schema != PAIRING_SCHEMA {
+            bail!("cannot write unsupported pairing schema {}", self.schema);
+        }
         let path = store_root.join(PAIRING_FILE);
         let data = toml::to_string_pretty(self).context("serialising pairing")?;
         std::fs::write(&path, data).with_context(|| format!("writing {}", path.display()))

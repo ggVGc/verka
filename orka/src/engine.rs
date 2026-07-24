@@ -373,13 +373,11 @@ impl Engine<'_> {
                 self.linka
                     .attach_file_changes(input.node(), attempt, &file_changes)?;
             }
-            if self.attempts.accesses_path(attempt).is_file() {
-                self.linka.attach_accesses(
-                    input.node(),
-                    attempt,
-                    &self.attempts.accesses_path(attempt),
-                )?;
-            }
+            self.linka.attach_accesses(
+                input.node(),
+                attempt,
+                &self.attempts.accesses_path(attempt),
+            )?;
         }
         match decision {
             Decision::Submit {
@@ -408,7 +406,7 @@ impl Engine<'_> {
                         input,
                         workspace,
                         &recorded.version,
-                        access_summary.as_ref(),
+                        &access_summary,
                     )?;
                     self.attempts.seal(attempt, sealed.clone())?;
                     return Ok((sealed, backend_failed, candidate));
@@ -416,7 +414,7 @@ impl Engine<'_> {
                 let producer = linka_work::producer_evidence_with_accesses(
                     attempt,
                     report,
-                    access_summary.as_ref(),
+                    Some(&access_summary),
                 );
                 let (settled, succeeded, candidate) = match outcome {
                     AgentOutcome::Succeeded { message, notes } => {
@@ -457,7 +455,7 @@ impl Engine<'_> {
                         input,
                         workspace,
                         &recorded.version,
-                        access_summary.as_ref(),
+                        &access_summary,
                     )?;
                 }
                 self.attempts.seal(attempt, sealed.clone())?;
@@ -481,12 +479,8 @@ impl Engine<'_> {
         input: &AttemptInput,
         workspace: &PreparedWorkspace,
         result: &linka::ResultVersion,
-        accesses: Option<&AccessSummary>,
+        accesses: &AccessSummary,
     ) -> Result<()> {
-        let Some(accesses) = accesses else {
-            // Compatibility with attempts created before access journals.
-            return Ok(());
-        };
         self.linka.record_observed_context(
             input,
             &workspace.path,
@@ -549,10 +543,11 @@ impl Engine<'_> {
         if file_changes.is_file() {
             files.push(("file-changes", "application/x-ndjson", file_changes));
         }
-        let accesses = self.attempts.accesses_path(attempt);
-        if accesses.is_file() {
-            files.push(("accesses", "application/x-ndjson", accesses));
-        }
+        files.push((
+            "accesses",
+            "application/x-ndjson",
+            self.attempts.accesses_path(attempt),
+        ));
         let mut parts = Vec::with_capacity(files.len());
         for (name, media_type, path) in files {
             parts.push(AttemptEvidencePart {
@@ -572,17 +567,6 @@ impl Engine<'_> {
         for id in self.attempts.list()? {
             let snapshot = self.attempts.load(&id)?;
             let node = snapshot.record.input.node().clone();
-            let (agent_output, media_type) = self.agent_output_source(&id)?;
-            if agent_output.is_file() {
-                // Attachment is idempotent, including after a crash between
-                // writing the output fact and finishing the attempt.
-                self.linka
-                    .attach_agent_output(&node, &id, &agent_output, media_type)?;
-                let file_changes = self.attempts.file_changes_path(&id);
-                if file_changes.is_file() {
-                    self.linka.attach_file_changes(&node, &id, &file_changes)?;
-                }
-            }
             let report = match snapshot.phase() {
                 AttemptPhase::Sealed => {
                     let action = self.recover_cleanup(snapshot.workspace.as_ref())?;

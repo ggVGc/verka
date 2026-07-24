@@ -293,12 +293,8 @@ fn project_path(root: &Path, path: &Path) -> Option<String> {
         .map(|p| p.to_string())
 }
 
-pub fn read_access_summary(path: &Path) -> Result<Option<AccessSummary>> {
-    let input = match File::open(path) {
-        Ok(input) => input,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error).with_context(|| format!("opening {}", path.display())),
-    };
+pub fn read_access_summary(path: &Path) -> Result<AccessSummary> {
+    let input = File::open(path).with_context(|| format!("opening {}", path.display()))?;
     let mut summary = AccessSummary::default();
     let mut started = false;
     let mut finished = false;
@@ -331,7 +327,7 @@ pub fn read_access_summary(path: &Path) -> Result<Option<AccessSummary>> {
         summary.complete = false;
         summary.reason = Some("access journal is missing lifecycle records".into());
     }
-    Ok(Some(summary))
+    Ok(summary)
 }
 
 /// Used by test executors and by startup-failure handling to produce the same
@@ -396,10 +392,14 @@ mod tests {
             None,
         )
         .unwrap();
-        let summary = read_access_summary(&journal).unwrap().unwrap();
+        let summary = read_access_summary(&journal).unwrap();
         assert!(summary.complete);
         // The timeline keeps every read, in order, each carrying a timestamp.
-        let paths: Vec<_> = summary.reads.iter().map(|read| read.path.as_str()).collect();
+        let paths: Vec<_> = summary
+            .reads
+            .iter()
+            .map(|read| read.path.as_str())
+            .collect();
         assert_eq!(paths, ["src/lib.rs", "src/lib.rs", "README.md"]);
         assert!(summary.reads.iter().all(|read| read.at_ms > 0));
         // Set-oriented callers still see each path once, in first-seen order.
@@ -422,7 +422,7 @@ mod tests {
         let _ = std::fs::read_to_string(workspace.join(".git/config")).unwrap();
         recorder.finish().unwrap();
 
-        let summary = read_access_summary(&journal).unwrap().unwrap();
+        let summary = read_access_summary(&journal).unwrap();
         assert!(summary.complete, "{:?}", summary.reason);
         // A single read may surface as several kernel events (ACCESS plus
         // CLOSE_NOWRITE); every one is journaled, but only the project file —

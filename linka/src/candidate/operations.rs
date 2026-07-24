@@ -43,7 +43,7 @@ impl CandidateStore<'_> {
                     decided_at_ms: now_millis(),
                     author,
                     notes,
-                    verification: Some(verification.clone()),
+                    verification: verification.clone(),
                     target_previous,
                 }
             }
@@ -51,7 +51,7 @@ impl CandidateStore<'_> {
                 decided_at_ms: now_millis(),
                 author,
                 notes,
-                verification: Some(verification.clone()),
+                verification: verification.clone(),
             },
             crate::VerificationOutcome::Abandoned => unreachable!(),
         };
@@ -138,12 +138,7 @@ impl CandidateStore<'_> {
             CandidateState::Accepted {
                 verification: existing,
                 ..
-            } if existing
-                .as_ref()
-                .is_none_or(|existing| existing == verification) =>
-            {
-                return Ok(candidate)
-            }
+            } if existing == verification => return Ok(candidate),
             CandidateState::Accepted { .. } => {
                 bail!("candidate `{id}` was accepted by a different verification")
             }
@@ -165,7 +160,7 @@ impl CandidateStore<'_> {
             decided_at_ms: now_millis(),
             author,
             notes,
-            verification: Some(verification.clone()),
+            verification: verification.clone(),
             target_previous,
         };
         storage::write_toml(&self.record_path(id), &candidate)?;
@@ -195,7 +190,7 @@ impl CandidateStore<'_> {
                     CandidateState::Rejected {
                         verification: existing,
                         ..
-                    } if existing.as_ref().is_none_or(|existing| existing == verification)
+                    } if existing == verification
                 ) =>
             {
                 return Ok(candidate)
@@ -214,7 +209,7 @@ impl CandidateStore<'_> {
             decided_at_ms: now_millis(),
             author,
             notes,
-            verification: Some(verification.clone()),
+            verification: verification.clone(),
         };
         storage::write_toml(&self.record_path(id), &candidate)?;
         mutation.commit(vcs, &format!("linka: reject candidate {id}"))?;

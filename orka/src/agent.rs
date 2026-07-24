@@ -19,7 +19,7 @@ pub const AGENT_PROMPT: &str =
 /// The protocol is also the identity of the decoder that reads an attempt's raw
 /// agent-output fact back into a work log. Genta owns the versioned structured
 /// protocol registry; Orka adds only its plain-output case and durable media
-/// types. Old attempts therefore keep decoding through their recorded protocol.
+/// types. Each attempt therefore decodes through its recorded protocol.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum OutputFormat {
     #[default]

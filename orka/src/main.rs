@@ -128,7 +128,6 @@ enum ReviewCommand {
         author: Author,
     },
     /// Stop a review and record an abandoned verification result.
-    #[command(visible_alias = "stop")]
     Abandon {
         verification: String,
         #[arg(long)]
@@ -316,14 +315,13 @@ fn run(cli: Cli) -> Result<()> {
                 println!("diagnostics {}", diagnostics.display());
             }
             let store = workbench.linka_store()?;
-            if let Ok(candidate) = Candidates::new(&store, &attempts).get(&id.0) {
+            if let Ok(candidate) = Candidates::new(&store).get(&id.0) {
                 println!("linka     {} ({})", candidate.id, candidate.status());
             }
         }
         Command::Candidates => {
             let store = workbench.linka_store()?;
-            let attempts = workbench.attempts();
-            let candidates = Candidates::new(&store, &attempts).list()?;
+            let candidates = Candidates::new(&store).list()?;
             if candidates.is_empty() {
                 println!("no project candidates");
             }
@@ -345,8 +343,7 @@ fn run(cli: Cli) -> Result<()> {
         }
         Command::Candidate { candidate } => {
             let store = workbench.linka_store()?;
-            let attempts = workbench.attempts();
-            let candidates = Candidates::new(&store, &attempts);
+            let candidates = Candidates::new(&store);
             let candidate = candidates.get(&candidate)?;
             println!("candidate {}", candidate.id);
             println!("node      {}", candidate.node);
@@ -373,10 +370,8 @@ fn run(cli: Cli) -> Result<()> {
             notes,
         } => {
             let store = workbench.linka_store()?;
-            let attempts = workbench.attempts();
             let verification = parse_node(verification)?;
-            let accepted =
-                Candidates::new(&store, &attempts).accept(&candidate, &verification, notes)?;
+            let accepted = Candidates::new(&store).accept(&candidate, &verification, notes)?;
             println!("accepted {} for {}", accepted.id, accepted.target);
         }
         Command::Reject {
@@ -385,16 +380,13 @@ fn run(cli: Cli) -> Result<()> {
             notes,
         } => {
             let store = workbench.linka_store()?;
-            let attempts = workbench.attempts();
             let verification = parse_node(verification)?;
-            let rejected =
-                Candidates::new(&store, &attempts).reject(&candidate, &verification, notes)?;
+            let rejected = Candidates::new(&store).reject(&candidate, &verification, notes)?;
             println!("rejected {}", rejected.id);
         }
         Command::Publish { candidate } => {
             let store = workbench.linka_store()?;
-            let attempts = workbench.attempts();
-            let published = Candidates::new(&store, &attempts).publish(&candidate)?;
+            let published = Candidates::new(&store).publish(&candidate)?;
             println!("published {} at {}", published.id, published.head_commit);
         }
         Command::Review { command } => {

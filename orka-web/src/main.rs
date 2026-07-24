@@ -215,7 +215,7 @@ fn state_json(app: &App) -> Result<Value> {
     let store = &app.store;
     let vcs = &app.vcs;
     let attempts = attempts_json(&app.attempts)?;
-    let candidates = candidates_json(store, &app.attempts)?;
+    let candidates = candidates_json(store)?;
     let reviews = reviews_json(store, app.attempts.root())?;
     let ready = LinkaWork::new(store).ready_for_machine()?;
     let ready_ids = ready
@@ -370,8 +370,8 @@ fn attempts_json(store: &FsAttemptStore) -> Result<Vec<Value>> {
         .collect()
 }
 
-fn candidates_json(store: &Store, attempts: &FsAttemptStore) -> Result<Vec<Value>> {
-    Candidates::new(store, attempts)
+fn candidates_json(store: &Store) -> Result<Vec<Value>> {
+    Candidates::new(store)
         .list()?
         .into_iter()
         .map(|candidate| {

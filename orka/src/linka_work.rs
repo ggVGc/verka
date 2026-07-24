@@ -418,19 +418,12 @@ impl<'a> LinkaWork<'a> {
         attempt: &AttemptId,
         output_commit: &str,
     ) -> Result<CandidateId> {
-        let target = if input.target_branch.is_empty() {
-            self.vcs()
-                .current_branch()?
-                .context("cannot recover candidate without a checked-out target branch")?
-        } else {
-            input.target_branch.clone()
-        };
         let candidate = CandidateStore::new(self.store).register(
             &self.vcs(),
             NewCandidate {
                 node: input.node().clone(),
                 branch: workspace.branch.clone(),
-                target,
+                target: input.target_branch.clone(),
                 external: Some(ExternalIdentity {
                     namespace: "orka".into(),
                     id: attempt.0.clone(),
