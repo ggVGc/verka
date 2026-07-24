@@ -22,6 +22,16 @@ pub struct MountSpec {
     pub writable: bool,
 }
 
+impl From<genta::agent::MountSpec> for MountSpec {
+    fn from(mount: genta::agent::MountSpec) -> Self {
+        Self {
+            source: mount.source,
+            destination: mount.destination,
+            writable: mount.writable,
+        }
+    }
+}
+
 /// The concrete command and capability grant chosen for one execution. This
 /// is the whole grant: nothing is mounted, networked, or inherited implicitly.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

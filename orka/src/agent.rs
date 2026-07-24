@@ -4,11 +4,8 @@
 //! narrowly scoped capabilities it needs. Driva remains only the isolation
 //! executor; its user-facing template registry is deliberately not involved.
 
-use crate::executor::MountSpec;
-use anyhow::{Context, Result};
 use genta::event::Protocol;
 use serde::{de::Error as _, Deserialize, Deserializer, Serialize, Serializer};
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 pub const AGENT_PROMPT: &str =
@@ -125,49 +122,21 @@ impl Default for SandboxLayout {
     }
 }
 
-/// Agent-specific parts of an execution request. The engine adds the concrete
-/// attempt worktree and prompt/outcome exchange mounts.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AgentInvocation {
-    pub command: Vec<String>,
-    pub protocol: OutputFormat,
-    pub mounts: Vec<MountSpec>,
-    pub environment: BTreeMap<String, String>,
-    pub network: bool,
-}
-
-pub fn codex(executable: &Path, layout: &SandboxLayout) -> Result<AgentInvocation> {
-    let workspace = layout
-        .workspace
-        .to_str()
-        .context("Orka's isolated workspace path is not valid UTF-8")?;
-
-    Ok(AgentInvocation {
-        // The codex flag/trust shape is shared coding-agent knowledge and
-        // lives in Genta; Orka contributes only its prompt indirection.
-        command: genta::agent::codex_exec_command(
-            &executable.to_string_lossy(),
-            workspace,
-            AGENT_PROMPT,
-        ),
-        protocol: OutputFormat::Agent(Protocol::CodexJsonl),
-        mounts: vec![MountSpec {
-            source: "~/.codex/auth.json".into(),
-            destination: "/root/.codex/auth.json".into(),
-            writable: true,
-        }],
-        environment: BTreeMap::from([
-            ("HOME".into(), "/root".into()),
-            ("TERM".into(), "xterm-256color".into()),
-        ]),
-        network: true,
-    })
+/// Resolve Orka's batch Codex session through Genta's complete agent profile.
+/// Orka contributes its workspace and staged-prompt instruction; Genta owns all
+/// Codex-specific command, protocol, credential, environment, and network data.
+pub fn codex(executable: &Path, layout: &SandboxLayout) -> genta::agent::Profile {
+    let agent_layout = genta::agent::SandboxLayout {
+        workspace: layout.workspace.clone(),
+    };
+    genta::agent::codex_exec(&agent_layout, &executable.to_string_lossy(), AGENT_PROMPT)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use driva::{BwrapIsolation, ExecutionRequest, Mount, MountAccess};
+    use std::collections::BTreeMap;
     use std::ffi::OsString;
 
     /// A stored agent-output fact is self-describing: each protocol stamps a
@@ -218,15 +187,12 @@ mod tests {
     #[test]
     fn codex_profile_uses_the_orka_layout_and_trusts_only_its_workspace() {
         let layout = SandboxLayout::default();
-        let invocation = codex(Path::new("codex"), &layout).unwrap();
+        let invocation = codex(Path::new("codex"), &layout);
 
         assert_eq!(layout.workspace, Path::new("/tmp/orka/workspace"));
         assert_eq!(layout.exchange, Path::new("/tmp/orka/exchange"));
         assert_eq!(invocation.command[0], "codex");
-        assert_eq!(
-            invocation.protocol,
-            OutputFormat::Agent(Protocol::CodexJsonl)
-        );
+        assert_eq!(invocation.protocol, Protocol::CodexJsonl);
         assert!(invocation
             .command
             .iter()
@@ -239,22 +205,20 @@ mod tests {
         assert!(invocation
             .mounts
             .iter()
-            .any(|mount| mount.destination == Path::new("/root/.codex/auth.json")));
+            .any(|mount| mount.destination == Path::new("/tmp/agent-home/.codex/auth.json")));
+        assert_eq!(invocation.environment["HOME"], "/tmp/agent-home");
     }
 
     #[test]
     fn codex_layout_needs_no_workspace_directory_in_a_bubblewrap_rootfs() {
         let rootfs = std::env::temp_dir().join(format!("orka-agent-rootfs-{}", ulid::Ulid::new()));
-        for directory in ["proc", "dev", "tmp", "root"] {
+        for directory in ["proc", "dev", "tmp"] {
             std::fs::create_dir_all(rootfs.join(directory)).unwrap();
         }
 
         let layout = SandboxLayout::default();
-        let invocation = codex(Path::new("codex"), &layout).unwrap();
+        let invocation = codex(Path::new("codex"), &layout);
         let mut mounts = vec![
-            Mount::Temporary {
-                destination: "/root".into(),
-            },
             Mount::Bind {
                 source: "/host/attempt".into(),
                 destination: layout.workspace.clone(),

@@ -4,7 +4,7 @@
 //! workspace, and outcome protocol. Driva receives a fully resolved execution
 //! request and contributes no templates or agent-specific behavior.
 
-use crate::agent::{self, AgentInvocation, OutputFormat, SandboxLayout};
+use crate::agent::{self, OutputFormat, SandboxLayout};
 use crate::driva_exec::DrivaExecutor;
 use crate::engine::ExecutionPolicy;
 use crate::executor::MountSpec;
@@ -16,14 +16,13 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 pub const CONFIG_FILE: &str = "orka.toml";
-pub const DEFAULT_CONFIG: &str = r#"# Orka owns the Codex invocation and delegates only isolation to Driva.
+pub const DEFAULT_CONFIG: &str = r#"# Genta describes the Codex process; Orka launches it through Driva.
 [agent]
 kind = "codex"
 
 [isolation]
 backend = "bwrap"
 rootfs = "/"
-tmpfs = ["/root"]
 "#;
 
 #[derive(Clone, Debug, Deserialize)]
@@ -116,6 +115,11 @@ struct ResolvedAgent {
     backend: ResolvedBackend,
 }
 
+enum Invocation {
+    Agent(genta::agent::Profile),
+    Plain(Vec<String>),
+}
+
 enum ResolvedBackend {
     Bwrap {
         executable: PathBuf,
@@ -173,28 +177,42 @@ impl Config {
         let invocation = self.resolve_invocation(&layout)?;
         let backend = self.resolve_backend()?;
 
-        let mut mounts = invocation.mounts;
+        let (command, protocol, mut mounts, mut environment, network) = match invocation {
+            Invocation::Agent(profile) => (
+                profile.command,
+                OutputFormat::Agent(profile.protocol),
+                profile.mounts.into_iter().map(Into::into).collect(),
+                profile.environment,
+                profile.network,
+            ),
+            Invocation::Plain(command) => (
+                command,
+                OutputFormat::Plain,
+                Vec::new(),
+                BTreeMap::new(),
+                false,
+            ),
+        };
         mounts.extend(self.mounts.iter().map(|mount| MountSpec {
             source: mount.source.clone(),
             destination: mount.destination.clone(),
             writable: mount.writable,
         }));
 
-        let mut environment = invocation.environment;
         environment.extend(self.environment.clone());
 
         Ok(ResolvedAgent {
-            command: invocation.command,
-            protocol: invocation.protocol,
+            command,
+            protocol,
             layout,
             mounts,
             environment,
-            network: invocation.network || self.network.enabled,
+            network: network || self.network.enabled,
             backend,
         })
     }
 
-    fn resolve_invocation(&self, layout: &SandboxLayout) -> Result<AgentInvocation> {
+    fn resolve_invocation(&self, layout: &SandboxLayout) -> Result<Invocation> {
         match (self.agent.kind, self.agent.command.is_empty()) {
             (Some(_), false) => bail!("agent.kind and agent.command are mutually exclusive"),
             (None, true) => bail!("either agent.kind or agent.command is required"),
@@ -204,19 +222,13 @@ impl Config {
                     .executable
                     .as_deref()
                     .unwrap_or_else(|| Path::new("codex"));
-                agent::codex(executable, layout)
+                Ok(Invocation::Agent(agent::codex(executable, layout)))
             }
             (None, false) => {
                 if self.agent.executable.is_some() {
                     bail!("agent.executable requires agent.kind");
                 }
-                Ok(AgentInvocation {
-                    command: self.agent.command.clone(),
-                    protocol: OutputFormat::Plain,
-                    mounts: Vec::new(),
-                    environment: BTreeMap::new(),
-                    network: false,
-                })
+                Ok(Invocation::Plain(self.agent.command.clone()))
             }
         }
     }
@@ -278,7 +290,7 @@ mod tests {
     }
 
     #[test]
-    fn codex_profile_is_owned_and_resolved_by_orka() {
+    fn codex_profile_is_resolved_from_genta() {
         let config: Config = toml::from_str(
             r#"
             [agent]
@@ -287,7 +299,6 @@ mod tests {
             [isolation]
             backend = "bwrap"
             rootfs = "/"
-            tmpfs = ["/root"]
             "#,
         )
         .unwrap();
@@ -307,7 +318,8 @@ mod tests {
         assert!(policy
             .extra_mounts
             .iter()
-            .any(|mount| mount.destination == Path::new("/root/.codex/auth.json")));
+            .any(|mount| mount.destination == Path::new("/tmp/agent-home/.codex/auth.json")));
+        assert_eq!(policy.environment["HOME"], "/tmp/agent-home");
         assert!(matches!(
             config.resolve().unwrap().backend,
             ResolvedBackend::Bwrap { .. }
