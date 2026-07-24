@@ -4,7 +4,7 @@
 //! This mirrors how `sbt`/`bloop` keep a warm build server alive across client
 //! invocations: a cheap client tries the well-known socket, and only when
 //! nothing answers does it launch the heavy long-lived server and detach from
-//! it. For Styra the payoff is not a warm JVM but live jobs — an agent turn
+//! it. For Styra the payoff is not a warm JVM but live tracks — an agent turn
 //! keeps running while the TUI detaches, and is still there when it reattaches.
 //!
 //! The daemon is not a separate `styra-server` binary but *this very

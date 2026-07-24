@@ -6,7 +6,7 @@
 //! `main` feeds it input and session updates.
 
 use styra_server::event::{AgentEvent, DetailBlock, TokenUsage};
-use styra_server::{DrivaOptions, LogEntry, RawLine, JobEnd};
+use styra_server::{DrivaOptions, LogEntry, RawLine, TrackEnd};
 use std::path::PathBuf;
 
 /// Which region receives keys, like vim's normal/insert split.
@@ -143,10 +143,10 @@ pub struct App {
     /// Set when the operator asks to switch to a different stored session;
     /// the event loop observes it and opens the session picker.
     pub switch_requested: bool,
-    /// Set when the operator asks to list the server's live jobs; the event
-    /// loop observes it and opens the jobs picker to attach to one.
-    pub jobs_requested: bool,
-    /// Set when the operator asks to stop the current job and return to the
+    /// Set when the operator asks to list the server's live tracks; the event
+    /// loop observes it and opens the tracks picker to attach to one.
+    pub tracks_requested: bool,
+    /// Set when the operator asks to stop the current track and return to the
     /// blank start screen; the event loop observes it.
     pub reset_requested: bool,
 }
@@ -175,7 +175,7 @@ impl App {
             transcript_scroll: 0,
             should_quit: false,
             switch_requested: false,
-            jobs_requested: false,
+            tracks_requested: false,
             reset_requested: false,
         }
     }
@@ -362,7 +362,7 @@ impl App {
     }
 
     /// Record that the session ended. This is terminal regardless of `Stopped`.
-    pub fn on_ended(&mut self, end: JobEnd) {
+    pub fn on_ended(&mut self, end: TrackEnd) {
         self.status = Status::Ended {
             exit_code: end.exit_code,
             error: end.error,
@@ -597,15 +597,15 @@ impl App {
         self.switch_requested = true;
     }
 
-    /// Ask the event loop to list the server's live jobs and, if the operator
-    /// picks one, attach to it. The current job is left running on the server,
+    /// Ask the event loop to list the server's live tracks and, if the operator
+    /// picks one, attach to it. The current track is left running on the server,
     /// not stopped: attaching only changes what this client views.
-    pub fn request_jobs(&mut self) {
-        self.jobs_requested = true;
+    pub fn request_tracks(&mut self) {
+        self.tracks_requested = true;
     }
 
-    /// Ask the event loop to stop the current job and return to the blank
-    /// start screen, with no job viewed.
+    /// Ask the event loop to stop the current track and return to the blank
+    /// start screen, with no track viewed.
     pub fn request_reset(&mut self) {
         self.reset_requested = true;
     }
@@ -740,7 +740,7 @@ mod tests {
     #[test]
     fn ending_is_terminal_and_disables_sending() {
         let mut app = app();
-        app.on_ended(JobEnd { exit_code: Some(0), error: None });
+        app.on_ended(TrackEnd { exit_code: Some(0), error: None });
         assert_eq!(app.status, Status::Ended { exit_code: Some(0), error: None });
         assert!(!app.can_send());
         // A late event does not revive an ended session.
@@ -776,13 +776,13 @@ mod tests {
     }
 
     #[test]
-    fn request_jobs_and_reset_set_flags_for_the_event_loop_to_observe() {
+    fn request_tracks_and_reset_set_flags_for_the_event_loop_to_observe() {
         let mut app = app();
-        assert!(!app.jobs_requested);
+        assert!(!app.tracks_requested);
         assert!(!app.reset_requested);
-        app.request_jobs();
+        app.request_tracks();
         app.request_reset();
-        assert!(app.jobs_requested);
+        assert!(app.tracks_requested);
         assert!(app.reset_requested);
     }
 

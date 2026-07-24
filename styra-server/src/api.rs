@@ -1,7 +1,7 @@
 //! Stable JSON contract shared by the Styra Unix-socket server and its clients.
 
 use crate::event::AgentEvent;
-use crate::types::{DrivaOptions, JobSummary, RawLine, SessionSummary, JobUpdate};
+use crate::types::{DrivaOptions, TrackSummary, RawLine, SessionSummary, TrackUpdate};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -40,7 +40,7 @@ pub struct SendMessage {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SequencedUpdate {
     pub sequence: u64,
-    pub update: JobUpdate,
+    pub update: TrackUpdate,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -71,11 +71,11 @@ pub enum Request {
     SendMessage { id: String, message: SendMessage },
     StopSession { id: String },
     Updates { id: String, after: u64 },
-    ListJobs,
+    ListTracks,
     ListStoredSessions,
     StoredSession { id: String },
     Transcript { id: String },
-    /// Ask the server to remove its socket and exit. Any live jobs it owns die
+    /// Ask the server to remove its socket and exit. Any live tracks it owns die
     /// with it, so this is the deliberate counterpart to the daemon outliving
     /// its clients.
     Shutdown,
@@ -97,7 +97,7 @@ pub enum Response {
     SessionCreated(SessionInfo),
     Accepted,
     Updates(Updates),
-    Jobs(Vec<JobSummary>),
+    Tracks(Vec<TrackSummary>),
     StoredSessions(Vec<SessionSummary>),
     StoredSession(StoredSession),
     Transcript(Transcript),
@@ -114,14 +114,14 @@ pub enum WireResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{LogEntry, JobUpdate};
+    use crate::types::{LogEntry, TrackUpdate};
 
     #[test]
     fn update_stream_has_an_explicit_cursor_and_tagged_payload() {
         let response = Updates {
             updates: vec![SequencedUpdate {
                 sequence: 4,
-                update: JobUpdate::Log(LogEntry::info("ready")),
+                update: TrackUpdate::Log(LogEntry::info("ready")),
             }],
             next: 4,
         };

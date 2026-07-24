@@ -7,7 +7,7 @@
 use styra_server::agent::SandboxLayout;
 use crate::app::{App, Entry, Focus, Status, View};
 use styra_server::event::{DetailBlock, AgentEvent};
-use styra_server::{JobSummary, SessionSummary};
+use styra_server::{TrackSummary, SessionSummary};
 use styra_server::{Direction as WireDirection, LogLevel};
 use styra_server::{Mount, MountAccess};
 use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
@@ -124,20 +124,20 @@ pub fn render_picker(frame: &mut Frame, sessions: &[SessionSummary], selected: u
     frame.render_stateful_widget(list, area, &mut state);
 }
 
-/// Render the current-jobs picker: every job the server is running, newest
+/// Render the current-tracks picker: every track the server is running, newest
 /// first, with `selected` highlighted. Like [`render_picker`], it stands apart
 /// from [`App`] — it overlays whatever session is loaded, so it renders purely
-/// from the passed job list.
-pub fn render_jobs_picker(frame: &mut Frame, jobs: &[JobSummary], selected: usize) {
+/// from the passed track list.
+pub fn render_tracks_picker(frame: &mut Frame, tracks: &[TrackSummary], selected: usize) {
     let area = frame.area();
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
-        .title(" styra · current jobs · Enter attach · q cancel ");
+        .title(" styra · current tracks · Enter attach · q cancel ");
 
-    if jobs.is_empty() {
+    if tracks.is_empty() {
         let empty = Paragraph::new(Line::from(Span::styled(
-            "  no live jobs on the server",
+            "  no live tracks on the server",
             Style::default().fg(Color::Gray),
         )))
         .block(block);
@@ -145,31 +145,31 @@ pub fn render_jobs_picker(frame: &mut Frame, jobs: &[JobSummary], selected: usiz
         return;
     }
 
-    let items: Vec<ListItem> = jobs.iter().map(job_item).collect();
+    let items: Vec<ListItem> = tracks.iter().map(track_item).collect();
     let list = List::new(items)
         .block(block)
         .highlight_style(Style::default().bg(SELECTION_BG).add_modifier(Modifier::BOLD));
     let mut state = ListState::default();
-    state.select(Some(selected.min(jobs.len() - 1)));
+    state.select(Some(selected.min(tracks.len() - 1)));
     frame.render_stateful_widget(list, area, &mut state);
 }
 
-fn job_item(job: &JobSummary) -> ListItem<'static> {
-    let (label, color) = if job.accepting {
+fn track_item(track: &TrackSummary) -> ListItem<'static> {
+    let (label, color) = if track.accepting {
         ("live", Color::Green)
     } else {
         ("ended", Color::DarkGray)
     };
     ListItem::new(Line::from(vec![
         Span::styled(
-            format!("{:<14} ", job.profile),
+            format!("{:<14} ", track.profile),
             Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             format!("{label:<6} "),
             Style::default().fg(color).add_modifier(Modifier::BOLD),
         ),
-        Span::styled(job.id.clone(), Style::default().fg(Color::White)),
+        Span::styled(track.id.clone(), Style::default().fg(Color::White)),
     ]))
 }
 
@@ -776,22 +776,22 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     let hints = match (app.focus, app.view) {
         (Focus::Input, _) => "Enter send · Alt+Enter newline · Ctrl+W delete word · Esc back to list",
         (Focus::List, View::Events) => {
-            "j/k next/prev with detail · J/K next/prev line · space fold · C collapse all · m minor · p preview · P full-screen · t transcript · r raw · l log · d driva · i message · s stop · A jobs · S reset · V switch · q quit"
+            "j/k next/prev with detail · J/K next/prev line · space fold · C collapse all · m minor · p preview · P full-screen · t transcript · r raw · l log · d driva · i message · s stop · A tracks · S reset · V switch · q quit"
         }
         (Focus::List, View::Raw) => {
-            "j/k scroll · g/G top/bottom · r events · l log · t transcript · d driva · i message · s stop · A jobs · S reset · V switch · q quit"
+            "j/k scroll · g/G top/bottom · r events · l log · t transcript · d driva · i message · s stop · A tracks · S reset · V switch · q quit"
         }
         (Focus::List, View::Log) => {
-            "j/k scroll · g/G top/bottom · l events · r raw · t transcript · d driva · i message · s stop · A jobs · S reset · V switch · q quit"
+            "j/k scroll · g/G top/bottom · l events · r raw · t transcript · d driva · i message · s stop · A tracks · S reset · V switch · q quit"
         }
         (Focus::List, View::Transcript) => {
-            "j/k scroll · g/G top/bottom · t events · r raw · l log · d driva · i message · s stop · A jobs · S reset · V switch · q quit"
+            "j/k scroll · g/G top/bottom · t events · r raw · l log · d driva · i message · s stop · A tracks · S reset · V switch · q quit"
         }
         (Focus::List, View::Driva) => {
-            "d events · r raw · l log · t transcript · i message · s stop · A jobs · S reset · V switch · q quit"
+            "d events · r raw · l log · t transcript · i message · s stop · A tracks · S reset · V switch · q quit"
         }
         (Focus::List, View::Preview) => {
-            "j/k next/prev with detail · J/K next/prev line · g/G top/bottom · P events · i message · s stop · A jobs · S reset · V switch · q quit"
+            "j/k next/prev with detail · J/K next/prev line · g/G top/bottom · P events · i message · s stop · A tracks · S reset · V switch · q quit"
         }
     };
     let footer = Paragraph::new(Line::from(Span::styled(
@@ -1419,8 +1419,8 @@ mod tests {
         assert!(screen.contains("no sessions found"));
     }
 
-    fn job_summary(id: &str, profile: &str, accepting: bool) -> JobSummary {
-        JobSummary {
+    fn track_summary(id: &str, profile: &str, accepting: bool) -> TrackSummary {
+        TrackSummary {
             id: id.into(),
             profile: profile.into(),
             workspace: std::path::PathBuf::from("/home/op/project"),
@@ -1435,10 +1435,10 @@ mod tests {
         }
     }
 
-    fn rendered_jobs_picker(jobs: &[JobSummary], selected: usize) -> String {
+    fn rendered_tracks_picker(tracks: &[TrackSummary], selected: usize) -> String {
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
         terminal
-            .draw(|frame| render_jobs_picker(frame, jobs, selected))
+            .draw(|frame| render_tracks_picker(frame, tracks, selected))
             .unwrap();
         terminal
             .backend()
@@ -1451,13 +1451,13 @@ mod tests {
     }
 
     #[test]
-    fn jobs_picker_lists_jobs_with_profile_and_live_state() {
-        let jobs = vec![
-            job_summary("s-1", "codex", true),
-            job_summary("s-2", "claude", false),
+    fn tracks_picker_lists_tracks_with_profile_and_live_state() {
+        let tracks = vec![
+            track_summary("s-1", "codex", true),
+            track_summary("s-2", "claude", false),
         ];
-        let screen = rendered_jobs_picker(&jobs, 0);
-        assert!(screen.contains("current jobs"));
+        let screen = rendered_tracks_picker(&tracks, 0);
+        assert!(screen.contains("current tracks"));
         assert!(screen.contains("codex"));
         assert!(screen.contains("live"));
         assert!(screen.contains("s-1"));
@@ -1467,9 +1467,9 @@ mod tests {
     }
 
     #[test]
-    fn jobs_picker_shows_a_placeholder_when_there_are_no_live_jobs() {
-        let screen = rendered_jobs_picker(&[], 0);
-        assert!(screen.contains("no live jobs"));
+    fn tracks_picker_shows_a_placeholder_when_there_are_no_live_tracks() {
+        let screen = rendered_tracks_picker(&[], 0);
+        assert!(screen.contains("no live tracks"));
     }
 
     #[test]

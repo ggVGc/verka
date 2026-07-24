@@ -1,4 +1,4 @@
-//! Styra's Unix-socket server and server-owned job manager.
+//! Styra's Unix-socket server and server-owned track manager.
 
 use crate::agent::{MountSpec, Profile, SandboxLayout};
 use crate::api::{
@@ -6,8 +6,8 @@ use crate::api::{
     Transcript, Updates, WireRequest, WireResponse, API_VERSION,
 };
 use crate::journal::{self, Journal};
-use crate::job::{Job, JobSpec};
-use crate::types::{DrivaOptions, JobSummary, SessionSummary};
+use crate::track::{Track, TrackSpec};
+use crate::types::{DrivaOptions, TrackSummary, SessionSummary};
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
@@ -29,28 +29,28 @@ struct ServerInner {
     /// the next client sees no stale socket to trip over.
     socket: PathBuf,
     layout: SandboxLayout,
-    jobs: Mutex<HashMap<String, Arc<ManagedJob>>>,
+    tracks: Mutex<HashMap<String, Arc<ManagedTrack>>>,
     /// Set by a [`Request::Shutdown`]; the connection thread checks it after
     /// acknowledging and then exits the process.
     shutdown: AtomicBool,
 }
 
-struct ManagedJob {
-    job: Job,
+struct ManagedTrack {
+    track: Track,
     updates: Arc<Mutex<Vec<SequencedUpdate>>>,
     accepting_messages: Arc<AtomicBool>,
     single_turn: bool,
-    /// Captured at spawn so the job can be listed and reattached to without
+    /// Captured at spawn so the track can be listed and reattached to without
     /// re-deriving them: the profile name, host workspace, and launch policy.
     profile: String,
     workspace: PathBuf,
     driva: DrivaOptions,
 }
 
-impl ManagedJob {
-    fn summary(&self) -> JobSummary {
-        JobSummary {
-            id: self.job.session_id().to_owned(),
+impl ManagedTrack {
+    fn summary(&self) -> TrackSummary {
+        TrackSummary {
+            id: self.track.session_id().to_owned(),
             profile: self.profile.clone(),
             workspace: self.workspace.clone(),
             driva: self.driva.clone(),
@@ -59,15 +59,15 @@ impl ManagedJob {
     }
 }
 
-impl ManagedJob {
+impl ManagedTrack {
     fn send(&self, text: &str) -> Result<()> {
         if !self.accepting_messages.load(Ordering::Acquire) {
             anyhow::bail!(
                 "session {} is not accepting messages",
-                self.job.session_id()
+                self.track.session_id()
             );
         }
-        self.job.send(text)?;
+        self.track.send(text)?;
         if self.single_turn {
             self.accepting_messages.store(false, Ordering::Release);
         }
@@ -76,7 +76,7 @@ impl ManagedJob {
 
     fn stop(&self) {
         self.accepting_messages.store(false, Ordering::Release);
-        self.job.stop();
+        self.track.stop();
     }
 }
 
@@ -87,7 +87,7 @@ impl ServerState {
                 store_root,
                 socket,
                 layout: SandboxLayout::default(),
-                jobs: Mutex::new(HashMap::new()),
+                tracks: Mutex::new(HashMap::new()),
                 shutdown: AtomicBool::new(false),
             }),
         }
@@ -122,7 +122,7 @@ impl ServerState {
             .parent()
             .unwrap_or(&self.inner.store_root)
             .join("diagnostics.log");
-        let spec = JobSpec {
+        let spec = TrackSpec {
             profile,
             working_directory: self.inner.layout.workspace.clone(),
             workspace: MountSpec {
@@ -139,11 +139,11 @@ impl ServerState {
             executable: "bwrap".into(),
             rootfs: Some(PathBuf::from("/")),
         });
-        let (job, receiver) = Job::spawn(spec, backend, journal, id.clone(), diagnostics)?;
+        let (track, receiver) = Track::spawn(spec, backend, journal, id.clone(), diagnostics)?;
         let updates = Arc::new(Mutex::new(Vec::new()));
         let accepting_messages = Arc::new(AtomicBool::new(true));
-        let managed = Arc::new(ManagedJob {
-            job,
+        let managed = Arc::new(ManagedTrack {
+            track,
             updates: Arc::clone(&updates),
             accepting_messages: Arc::clone(&accepting_messages),
             single_turn,
@@ -155,19 +155,19 @@ impl ServerState {
             .name(format!("styra-updates-{id}"))
             .spawn(move || {
                 while let Ok(update) = receiver.recv() {
-                    if matches!(update, crate::types::JobUpdate::Ended(_)) {
+                    if matches!(update, crate::types::TrackUpdate::Ended(_)) {
                         accepting_messages.store(false, Ordering::Release);
                     }
-                    let mut history = updates.lock().expect("job update lock poisoned");
+                    let mut history = updates.lock().expect("track update lock poisoned");
                     let sequence = history.len() as u64 + 1;
                     history.push(SequencedUpdate { sequence, update });
                 }
             })
-            .context("starting the job update collector")?;
+            .context("starting the track update collector")?;
         self.inner
-            .jobs
+            .tracks
             .lock()
-            .expect("server job lock poisoned")
+            .expect("server track lock poisoned")
             .insert(id.clone(), Arc::clone(&managed));
 
         if let Some(message) = request
@@ -179,9 +179,9 @@ impl ServerState {
             if let Err(error) = managed.send(message) {
                 managed.stop();
                 self.inner
-                    .jobs
+                    .tracks
                     .lock()
-                    .expect("server job lock poisoned")
+                    .expect("server track lock poisoned")
                     .remove(&id);
                 return Err(error);
             }
@@ -196,14 +196,14 @@ impl ServerState {
         })
     }
 
-    fn job(&self, id: &str) -> Result<Arc<ManagedJob>> {
+    fn track(&self, id: &str) -> Result<Arc<ManagedTrack>> {
         self.inner
-            .jobs
+            .tracks
             .lock()
-            .expect("server job lock poisoned")
+            .expect("server track lock poisoned")
             .get(id)
             .cloned()
-            .with_context(|| format!("no live job for session {id:?}"))
+            .with_context(|| format!("no live track for session {id:?}"))
     }
 
     fn stored_summary(&self, id: &str) -> Result<SessionSummary> {
@@ -223,19 +223,19 @@ impl ServerState {
                 Ok(Response::SessionCreated(self.create_session(request)?))
             }
             Request::SendMessage { id, message } => {
-                self.job(&id)?.send(&message.text)?;
+                self.track(&id)?.send(&message.text)?;
                 Ok(Response::Accepted)
             }
             Request::StopSession { id } => {
-                self.job(&id)?.stop();
+                self.track(&id)?.stop();
                 Ok(Response::Accepted)
             }
             Request::Updates { id, after } => {
-                let job = self.job(&id)?;
-                let all = job
+                let track = self.track(&id)?;
+                let all = track
                     .updates
                     .lock()
-                    .expect("job update lock poisoned");
+                    .expect("track update lock poisoned");
                 let updates = all
                     .iter()
                     .filter(|update| update.sequence > after)
@@ -244,14 +244,14 @@ impl ServerState {
                 let next = all.last().map(|update| update.sequence).unwrap_or(after);
                 Ok(Response::Updates(Updates { updates, next }))
             }
-            Request::ListJobs => {
-                let jobs = self.inner.jobs.lock().expect("server job lock poisoned");
-                let mut summaries: Vec<JobSummary> =
-                    jobs.values().map(|managed| managed.summary()).collect();
+            Request::ListTracks => {
+                let tracks = self.inner.tracks.lock().expect("server track lock poisoned");
+                let mut summaries: Vec<TrackSummary> =
+                    tracks.values().map(|managed| managed.summary()).collect();
                 // Newest first: the id embeds a millisecond timestamp, so a
-                // descending id sort orders jobs by creation time.
+                // descending id sort orders tracks by creation time.
                 summaries.sort_by(|a, b| b.id.cmp(&a.id));
-                Ok(Response::Jobs(summaries))
+                Ok(Response::Tracks(summaries))
             }
             Request::ListStoredSessions => Ok(Response::StoredSessions(journal::list_sessions(
                 self.store_root(),

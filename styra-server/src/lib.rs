@@ -2,7 +2,7 @@
 //! interface a client uses to drive it.
 //!
 //! This crate is two things at once. As an application, its `styra-server`
-//! binary owns all mutable and durable state for a session and its live job —
+//! binary owns all mutable and durable state for a session and its live track —
 //! process launch, agent
 //! stdin/stdout, Genta protocol state, journals, update ordering, and
 //! stored-session replay — behind a versioned JSON Unix-socket API. As a
@@ -41,14 +41,14 @@ pub use client::Client;
 pub use daemon::{run, serve_if_requested, ServerConfig};
 pub use spawn::ensure_server;
 pub use types::{
-    Direction, DrivaOptions, JobEnd, JobSummary, JobUpdate, LogEntry, LogLevel, RawLine,
+    Direction, DrivaOptions, TrackEnd, TrackSummary, TrackUpdate, LogEntry, LogLevel, RawLine,
     SessionSummary,
 };
 
 // --- The session runner ---
-// A `job` is one live agent process serving a persistent session. Public so
+// A `track` is one live agent process serving a persistent session. Public so
 // the `styra-server` binary can drive these; not part of the interface a
 // client depends on.
-pub mod job;
+pub mod track;
 pub mod journal;
 pub mod server;

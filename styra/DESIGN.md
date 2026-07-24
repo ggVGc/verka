@@ -62,14 +62,14 @@ other tools ─────────────>       │
 ```
 
 `styra-server` owns all mutable and durable state for a session and its live
-job: process launch, agent stdin/stdout, Genta protocol state, journals, update
+track: process launch, agent stdin/stdout, Genta protocol state, journals, update
 ordering, and stored-session replay. Each socket connection carries one newline-terminated
 JSON request and response. Live updates have monotonically increasing sequence
 numbers; clients poll with an `after` cursor, which supports reconnects and
 multiple independent observers without coupling them to Rust channels.
 
 The TUI is an ordinary socket client. It owns presentation and input state, but
-never constructs a `Job`, opens a journal, decodes provider traffic, or
+never constructs a `Track`, opens a journal, decodes provider traffic, or
 calls Driva. The headless example uses the same client. Public wire types live
 in `api.rs`, the reusable Rust client in `client.rs`, and server dispatch in
 `server.rs`.
@@ -87,7 +87,7 @@ has no TCP listener or remote-access configuration.
   never interprets the bytes on those streams.
 - **Styra server** owns the agent profile (command, wire protocol, how a user message
   is encoded as an input line), the decoding of provider wire events into
-  Styra's event vocabulary, the raw journal, and live job lifecycle.
+  Styra's event vocabulary, the raw journal, and live track lifecycle.
 - **Styra clients** own presentation and operator interaction. They consume
   only the versioned JSON API and never receive process or journal handles.
 
@@ -117,14 +117,14 @@ its run is one-shot; the server instead passes the ends of OS pipes:
    handed to `driva::execute`. The server keeps the stdin-write end and the
    stdout-read end.
 3. `driva::execute` is called on a dedicated worker thread. It blocks for the
-   life of the job (the agent process runs until it exits or is stopped),
+   life of the track (the agent process runs until it exits or is stopped),
    which is why it runs off the thread accepting socket requests.
 4. A reader thread pulls newline-delimited JSON from the stdout-read end,
    decodes each line, and forwards events to the update collector. Operator
    messages, arriving over the socket, are written by the server as protocol
    input lines to the stdin-write end.
 5. Closing the stdin-write end signals end-of-input to the agent; dropping the
-   child (job stop) tears the job down. The worker thread's return value
+   child (track stop) tears the track down. The worker thread's return value
    carries the exit report.
 
 No change to Driva is required, and this is a deliberate check on Driva's
@@ -172,7 +172,7 @@ event stream, so it has two cooperating parts:
 - the `codex-app-server` `Protocol` variant decodes *notification* lines
   (`thread/started`, `turn/started`, `item/started`, `item/completed`,
   `thread/tokenUsage/updated`, errors) into the event vocabulary — shared by
-  live jobs and journal replay; requests and responses decode as `Unknown`
+  live tracks and journal replay; requests and responses decode as `Unknown`
   control traffic;
 - an `AppServer` client owns the session state machine: `initialize` →
   `initialized` → `thread/start` (capturing the thread id) → one `turn/start`
@@ -339,7 +339,7 @@ The application is a single full-screen view with three regions:
   text to the agent (encoded by the profile) and appends a `UserMessage` entry
   to the list.
 - **Status line (top border).** Application name, active profile/model, and
-  session state: `not started` (no job launched yet, awaiting the operator's
+  session state: `not started` (no track launched yet, awaiting the operator's
   first message), `running`, `idle` (turn complete, agent idle for input),
   `stopped`, or `ended`/`failed` once the agent process exits. Token usage from
   the latest `TurnCompleted` is shown.
@@ -463,7 +463,7 @@ with no session id yet, opened directly in input focus, and a `Live::Pending`
 event-loop state that holds no session id or cursor. The message box may be
 empty (a bare start) or prefilled with a switched-from transcript, but either
 way the operator's own submitted message is what triggers a `create_session`
-request to the server — creating the journal, launching the sandboxed job
+request to the server — creating the journal, launching the sandboxed track
 through Driva, and sending that first message once the agent is ready. A
 launch failure (e.g. a missing binary) is reported by the server, logged in the
 diagnostic view, and the typed message is restored to the box rather than lost,
@@ -475,12 +475,12 @@ over), it launches immediately, exactly as it always has.
 
 ## Concurrency model
 
-A live job runs entirely inside `styra-server`, on threads the job owns, each
-forwarding over a channel to a per-job update collector:
+A live track runs entirely inside `styra-server`, on threads the track owns, each
+forwarding over a channel to a per-track update collector:
 
-- **Execution thread** — calls `driva::execute` and blocks for the job's
+- **Execution thread** — calls `driva::execute` and blocks for the track's
   lifetime; on return it sends the exit report.
-- **Reader thread** — reads lines from the job's stdout pipe, records each
+- **Reader thread** — reads lines from the track's stdout pipe, records each
   verbatim to the journal, decodes it into a Styra event (or routes it through
   the app-server client), and forwards the result.
 - **Stderr thread** — reads the agent's stderr, appends it to the diagnostics
@@ -491,9 +491,9 @@ The collector serializes these into a monotonically sequenced update history.
 The `styra` TUI is a separate process and never touches the agent's pipes: it
 owns terminal state and input, polls the update history over the socket with an
 `after` cursor, and sends operator messages back over the socket for the server
-to write to the job's stdin. Because updates are pulled by cursor rather than
+to write to the track's stdin. Because updates are pulled by cursor rather than
 pushed over a channel, a client can reconnect — or observe alongside other
-clients — without coupling to the job's threads.
+clients — without coupling to the track's threads.
 
 ## Crate layout
 
@@ -503,9 +503,9 @@ to `orka/` and `driva/`, linked by a plain path dependency (no workspace).
 Two things are called out by distinct names to avoid the overloaded word
 "session": a **session** is the persistent, server-owned unit — a session id, a
 journal, and its `session.json`, listed and replayable from the store — while a
-**job** is one live agent process serving a session (the Driva launch, the
-pipes, the protocol, steered turn by turn). A session outlives any single job;
-resume/fork/switch spawn a fresh job against a preserved session journal.
+**track** is one live agent process serving a session (the Driva launch, the
+pipes, the protocol, steered turn by turn). A session outlives any single track;
+resume/fork/switch spawn a fresh track against a preserved session journal.
 
 ```text
 styra-server/            # the server application + its client interface library
@@ -519,8 +519,8 @@ styra-server/            # the server application + its client interface library
     client.rs            # blocking Rust client over the socket (interface)
     types.rs             # data vocabulary that crosses the wire (interface)
     paths.rs             # default socket/store locations (interface + server)
-    server.rs            # socket dispatch and the server-owned job manager
-    job.rs               # one live agent job: Driva launch, pipes, threads
+    server.rs            # socket dispatch and the server-owned track manager
+    track.rs               # one live agent track: Driva launch, pipes, threads
     journal.rs           # raw event/input capture and replay
 
 styra/                   # the terminal client application
@@ -540,7 +540,7 @@ than depending on `genta` or `driva` directly.
 The `styra-server` library deliberately exposes only what a client needs to
 speak the API — `api`, `Client`, the `types` vocabulary, `paths`, and the
 re-exported event/render surface. Its session-runner modules (`server`,
-`job`, `journal`) are `pub` because the `styra-server` binary drives them,
+`track`, `journal`) are `pub` because the `styra-server` binary drives them,
 but they are not part of the interface the client depends on. A headless client
 example lives under `styra-server/examples/`.
 
@@ -569,15 +569,15 @@ TUI spawns one as a detached daemon by re-exec'ing its own executable with a
 serve sentinel in the environment (`styra_server::spawn`). Because `styra`
 links the `styra_server` crate, that re-exec'd copy *is* the server — there is
 no second binary to locate or install — and it outlives the client so live
-jobs survive detach and quit.
+tracks survive detach and quit.
 
 The daemon runs until it is stopped or killed; it does not retire itself when
 idle. `-d`/`--daemon` brings it up in the background without opening the
 interface (idempotent — a no-op if one is already listening), and `--stop`
 asks the daemon on the socket to remove the socket and exit, ending any live
-jobs it owns with it. Both are pure lifecycle commands: they act and exit
+tracks it owns with it. Both are pure lifecycle commands: they act and exit
 without touching the terminal. An optional trailing `PROMPT` seeds the first turn so a
-session can start with one message already sent, launching the job immediately;
+session can start with one message already sent, launching the track immediately;
 without it, the application opens in input focus with an empty box and launches
 nothing until the operator submits a message (see *Starting and switching send
 nothing on their own*). `--view` opens the view/replay path over a stored

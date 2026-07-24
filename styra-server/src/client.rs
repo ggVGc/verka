@@ -4,7 +4,7 @@ use crate::api::{
     CreateSession, Health, Request, Response, SendMessage, SessionInfo, StoredSession, Updates,
     WireRequest, WireResponse, API_VERSION,
 };
-use crate::types::{JobSummary, SessionSummary};
+use crate::types::{TrackSummary, SessionSummary};
 use anyhow::{bail, Context, Result};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
@@ -69,10 +69,10 @@ impl Client {
         }
     }
 
-    pub fn list_jobs(&self) -> Result<Vec<JobSummary>> {
-        match self.request(Request::ListJobs)? {
-            Response::Jobs(value) => Ok(value),
-            other => unexpected("jobs", other),
+    pub fn list_tracks(&self) -> Result<Vec<TrackSummary>> {
+        match self.request(Request::ListTracks)? {
+            Response::Tracks(value) => Ok(value),
+            other => unexpected("tracks", other),
         }
     }
 
@@ -99,7 +99,7 @@ impl Client {
 
     /// Ask the server to shut down. It acknowledges before exiting, so a
     /// successful return means the daemon received the request and is on its
-    /// way out (any live jobs it owns go with it).
+    /// way out (any live tracks it owns go with it).
     pub fn shutdown(&self) -> Result<()> {
         match self.request(Request::Shutdown)? {
             Response::Accepted => Ok(()),

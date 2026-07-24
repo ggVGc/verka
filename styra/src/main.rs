@@ -18,7 +18,7 @@ mod ui;
 
 use app::{App, Focus, Status, View};
 use styra_server::api::{CreateSession, SessionInfo};
-use styra_server::{Client, JobSummary, JobUpdate, LogEntry};
+use styra_server::{Client, TrackSummary, TrackUpdate, LogEntry};
 
 /// Run an interactive, isolated agent session in a terminal interface.
 #[derive(Parser)]
@@ -32,7 +32,7 @@ struct Cli {
     #[arg(short = 'd', long = "daemon", conflicts_with = "stop")]
     daemon: bool,
     /// Stop the Styra daemon listening on the socket (if any) and exit. Any
-    /// live jobs it owns are ended with it.
+    /// live tracks it owns are ended with it.
     #[arg(long)]
     stop: bool,
     /// Agent profile to launch a live session with. Not used with `--view`:
@@ -146,7 +146,7 @@ fn main() -> Result<()> {
             app.push_raw(line);
         }
         // A replayed session has no live agent to end; mark it stopped.
-        app.on_ended(styra_server::JobEnd {
+        app.on_ended(styra_server::TrackEnd {
             exit_code: None,
             error: None,
         });
@@ -209,23 +209,23 @@ fn main() -> Result<()> {
                     }
                 }
             }
-            // Attach to another live job. The outgoing one is left running on
-            // the server (jobs outlive a client); we just stop viewing it.
-            RunOutcome::Attach(job) => {
-                let id = job.id.clone();
-                match attach_live_job(&client, job) {
+            // Attach to another live track. The outgoing one is left running on
+            // the server (tracks outlive a client); we just stop viewing it.
+            RunOutcome::Attach(track) => {
+                let id = track.id.clone();
+                match attach_live_track(&client, track) {
                     Ok((new_app, new_live)) => {
                         app = new_app;
                         live = new_live;
                     }
                     Err(error) => {
                         app.push_log(LogEntry::error(format!(
-                            "could not attach to job {id}: {error:#}"
+                            "could not attach to track {id}: {error:#}"
                         )));
                     }
                 }
             }
-            // Stop the current job and return to the blank start screen.
+            // Stop the current track and return to the blank start screen.
             RunOutcome::Reset => {
                 if let Live::Running { session_id, .. } =
                     std::mem::replace(&mut live, Live::Pending)
@@ -302,19 +302,19 @@ fn launch_live_session(
     Ok((app, info))
 }
 
-/// Attach to a live job: rebuild an `App` from its summary and replay the
-/// updates the server has accumulated for it, so the view matches what the job
+/// Attach to a live track: rebuild an `App` from its summary and replay the
+/// updates the server has accumulated for it, so the view matches what the track
 /// has done so far and the event loop can continue polling from the cursor.
-fn attach_live_job(client: &Client, job: JobSummary) -> Result<(App, Live)> {
-    let mut app = App::new(job.profile.clone(), job.id.clone());
-    app.set_workspace_root(job.workspace.clone());
-    app.set_driva_options(job.driva.clone());
-    let batch = client.updates(&job.id, 0)?;
+fn attach_live_track(client: &Client, track: TrackSummary) -> Result<(App, Live)> {
+    let mut app = App::new(track.profile.clone(), track.id.clone());
+    app.set_workspace_root(track.workspace.clone());
+    app.set_driva_options(track.driva.clone());
+    let batch = client.updates(&track.id, 0)?;
     let cursor = batch.next;
     for sequenced in batch.updates {
         apply_update(&mut app, sequenced.update);
     }
-    Ok((app, Live::Running { session_id: job.id, cursor }))
+    Ok((app, Live::Running { session_id: track.id, cursor }))
 }
 
 fn session_id_from_target(target: &Path) -> Result<String> {
@@ -356,16 +356,16 @@ fn run_picker(
     }
 }
 
-/// The current-jobs picker loop: j/k or arrows to move, Enter to attach to a
-/// live job, Esc or q to back out. Mirrors [`run_picker`] but over the
-/// server's live jobs rather than the stored-session store.
-fn run_jobs_picker(
+/// The current-tracks picker loop: j/k or arrows to move, Enter to attach to a
+/// live track, Esc or q to back out. Mirrors [`run_picker`] but over the
+/// server's live tracks rather than the stored-session store.
+fn run_tracks_picker(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
-    jobs: &[JobSummary],
-) -> Result<Option<JobSummary>> {
+    tracks: &[TrackSummary],
+) -> Result<Option<TrackSummary>> {
     let mut selected = 0usize;
     loop {
-        terminal.draw(|frame| ui::render_jobs_picker(frame, jobs, selected))?;
+        terminal.draw(|frame| ui::render_tracks_picker(frame, tracks, selected))?;
 
         if !event::poll(Duration::from_millis(100))? {
             continue;
@@ -379,10 +379,10 @@ fn run_jobs_picker(
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => return Ok(None),
             KeyCode::Char('j') | KeyCode::Down => {
-                selected = (selected + 1).min(jobs.len() - 1);
+                selected = (selected + 1).min(tracks.len() - 1);
             }
             KeyCode::Char('k') | KeyCode::Up => selected = selected.saturating_sub(1),
-            KeyCode::Enter => return Ok(Some(jobs[selected].clone())),
+            KeyCode::Enter => return Ok(Some(tracks[selected].clone())),
             _ => {}
         }
     }
@@ -394,10 +394,10 @@ enum RunOutcome {
     Quit,
     /// The operator picked a stored session to switch to.
     Switch(String),
-    /// The operator picked a live job to attach this client to. The outgoing
-    /// job is left running on the server, not stopped.
-    Attach(JobSummary),
-    /// The operator stopped the current job and asked to return to the blank
+    /// The operator picked a live track to attach this client to. The outgoing
+    /// track is left running on the server, not stopped.
+    Attach(TrackSummary),
+    /// The operator stopped the current track and asked to return to the blank
     /// start screen.
     Reset,
 }
@@ -440,7 +440,7 @@ fn run(
                 }
                 Err(error) => {
                     app.push_log(LogEntry::error(format!("update poll failed: {error:#}")));
-                    app.on_ended(styra_server::JobEnd {
+                    app.on_ended(styra_server::TrackEnd {
                         exit_code: None,
                         error: Some(error.to_string()),
                     });
@@ -485,14 +485,14 @@ fn run(
             // Cancelled: the next iteration redraws the normal session view.
         }
 
-        if std::mem::take(&mut app.jobs_requested) {
-            let jobs = client.list_jobs()?;
-            if jobs.is_empty() {
-                app.push_log(LogEntry::warn("no live jobs on the server"));
+        if std::mem::take(&mut app.tracks_requested) {
+            let tracks = client.list_tracks()?;
+            if tracks.is_empty() {
+                app.push_log(LogEntry::warn("no live tracks on the server"));
                 continue;
             }
-            if let Some(job) = run_jobs_picker(terminal, &jobs)? {
-                return Ok(RunOutcome::Attach(job));
+            if let Some(track) = run_tracks_picker(terminal, &tracks)? {
+                return Ok(RunOutcome::Attach(track));
             }
             // Cancelled: the next iteration redraws the normal session view.
         }
@@ -504,13 +504,13 @@ fn run(
 }
 
 /// Apply one session update to the app. Shared by the live event loop and by
-/// [`attach_live_job`], which replays a job's accumulated updates the same way.
-fn apply_update(app: &mut App, update: JobUpdate) {
+/// [`attach_live_track`], which replays a track's accumulated updates the same way.
+fn apply_update(app: &mut App, update: TrackUpdate) {
     match update {
-        JobUpdate::Event(event) => app.push_event(event),
-        JobUpdate::Raw(line) => app.push_raw(line),
-        JobUpdate::Log(entry) => app.push_log(entry),
-        JobUpdate::Ended(end) => app.on_ended(end),
+        TrackUpdate::Event(event) => app.push_event(event),
+        TrackUpdate::Raw(line) => app.push_raw(line),
+        TrackUpdate::Log(entry) => app.push_log(entry),
+        TrackUpdate::Ended(end) => app.on_ended(end),
     }
 }
 
@@ -550,7 +550,7 @@ fn handle_list_key(
             return;
         }
         KeyCode::Char('V') => return app.request_switch(),
-        KeyCode::Char('A') => return app.request_jobs(),
+        KeyCode::Char('A') => return app.request_tracks(),
         KeyCode::Char('S') => return app.request_reset(),
         _ => {}
     }

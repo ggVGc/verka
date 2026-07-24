@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use styra_server::api::CreateSession;
 use styra_server::event::AgentEvent;
-use styra_server::{Client, JobUpdate};
+use styra_server::{Client, TrackUpdate};
 
 fn main() -> anyhow::Result<()> {
     let prompt = {
@@ -39,18 +39,18 @@ fn main() -> anyhow::Result<()> {
         cursor = batch.next;
         for item in batch.updates {
             match item.update {
-                JobUpdate::Event(event) => {
+                TrackUpdate::Event(event) => {
                     println!("EVENT  {:<9} {}", event.tag(), event.summary());
                     if matches!(event, AgentEvent::TurnCompleted { .. }) {
                         client.stop_session(&session.id)?;
                         return Ok(());
                     }
                 }
-                JobUpdate::Raw(raw) => println!("RAW    {:?}: {}", raw.direction, raw.text),
-                JobUpdate::Log(entry) => {
+                TrackUpdate::Raw(raw) => println!("RAW    {:?}: {}", raw.direction, raw.text),
+                TrackUpdate::Log(entry) => {
                     println!("LOG    {:?}: {}", entry.level, entry.message)
                 }
-                JobUpdate::Ended(end) => {
+                TrackUpdate::Ended(end) => {
                     println!("ENDED  exit={:?} error={:?}", end.exit_code, end.error);
                     return Ok(());
                 }

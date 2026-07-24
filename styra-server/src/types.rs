@@ -1,22 +1,22 @@
 //! The data vocabulary that crosses the Styra socket boundary.
 //!
 //! These are the types a client receives and renders: the live update stream
-//! ([`JobUpdate`] and its parts), the captured Driva policy
+//! ([`TrackUpdate`] and its parts), the captured Driva policy
 //! ([`DrivaOptions`]), and the stored-session listing ([`SessionSummary`]).
-//! They carry no behaviour tied to running a job — the server machinery
-//! that produces them lives in [`crate::job`], [`crate::journal`], and
+//! They carry no behaviour tied to running a track — the server machinery
+//! that produces them lives in [`crate::track`], [`crate::journal`], and
 //! [`crate::server`]. Keeping them here lets a client depend on the interface
-//! without pulling in the job runner.
+//! without pulling in the track runner.
 
 use crate::event::AgentEvent;
 use driva::Mount;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// An update delivered from the job's threads to the UI.
+/// An update delivered from the track's threads to the UI.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
-pub enum JobUpdate {
+pub enum TrackUpdate {
     /// A decoded agent event or an operator message, in occurrence order.
     Event(AgentEvent),
     /// One verbatim wire line, for the raw-interaction view.
@@ -24,7 +24,7 @@ pub enum JobUpdate {
     /// A diagnostic message for the log view.
     Log(LogEntry),
     /// The agent process ended; no further events will arrive.
-    Ended(JobEnd),
+    Ended(TrackEnd),
 }
 
 /// Severity of a [`LogEntry`], used to colour the log view.
@@ -72,18 +72,18 @@ pub struct RawLine {
     pub text: String,
 }
 
-/// How a job finished.
+/// How a track finished.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct JobEnd {
+pub struct TrackEnd {
     pub exit_code: Option<i32>,
     pub error: Option<String>,
 }
 
-/// A human-facing summary of the Driva policy a job was launched with:
+/// A human-facing summary of the Driva policy a track was launched with:
 /// the isolation backend, the command it runs, and the mount/network policy
 /// enforced around it. Captured once at spawn time from the same
 /// `ExecutionRequest` Driva itself executes (see [`DrivaOptions::capture`] in
-/// [`crate::job`]), so it can never drift from what is actually running.
+/// [`crate::track`]), so it can never drift from what is actually running.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DrivaOptions {
     pub isolation_backend: String,
@@ -93,22 +93,22 @@ pub struct DrivaOptions {
     pub mounts: Vec<Mount>,
 }
 
-/// A job the server is currently running (this process's live sessions),
+/// A track the server is currently running (this process's live sessions),
 /// enough to list it and to reattach a client to it. Distinct from
 /// [`SessionSummary`], which describes a session persisted in the store
 /// whether or not it is still live.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct JobSummary {
+pub struct TrackSummary {
     /// The session id, as used everywhere else on the wire.
     pub id: String,
-    /// The agent profile the job is running.
+    /// The agent profile the track is running.
     pub profile: String,
     /// The host directory bound as the agent's workspace, so a reattaching
     /// client can resolve changed-file previews.
     pub workspace: PathBuf,
-    /// The Driva policy the job was launched under, for the driva view.
+    /// The Driva policy the track was launched under, for the driva view.
     pub driva: DrivaOptions,
-    /// Whether the job still takes messages: its agent process is alive and,
+    /// Whether the track still takes messages: its agent process is alive and,
     /// for a single-turn profile, it has not spent its one turn yet.
     pub accepting: bool,
 }
