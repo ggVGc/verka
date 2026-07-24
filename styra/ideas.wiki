@@ -2,6 +2,20 @@
   - And old entries should have some indication that they were loaded and not part of this actual session.
 - When a session is loaded, it should not create a new session until any input is given by the user.
 - Some indication on if agent output is finished or not, for this turn.
+- Should be able to edit driva conf while running:
+  - Probably requires edits to driva, or bwrap, or not possible
+  - Maybe have to re-launch driva session, which will trigger a session resume.
+- pgup/down in log list
+- Open diff of edited file in vim
+- Open diff of all edits in vim
+- Side-by-side diff with delta?
+- Generic run command on file in file action
+- Parse bash commands and render them nicer
+- G/gg bindings
+- j/k, up/down should move between the entries that have extended info available, only
+- ctrl-w, delete word:
+  - Maybe should use some existing text edit component instead?
+  - Launch vim?
 - Preview sessions on right side of selection screen:
   - Render lines in the same way as in the main log view, but without the arrows and body contents. Only single lines.
 - Clear options for driva invocation
@@ -28,3 +42,8 @@
   - Syntax highlighting for code blocks
 - For file change/read/write messages in logs, store a hash of the file just after that message:
   - That way we can say in the preview window if we're viewing the same content that was originally written or not.
+- Experimental workflow:
+  - Git commit after any agent response that makes an edit
+  - Forking a session also branches the repo
+  - Allows resetting both session and branch to some previous state and continue from there
+  - Easier to launch multiple agents from the same starting point, seeing what results they come up with
