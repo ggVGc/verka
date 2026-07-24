@@ -1,0 +1,6 @@
+description = "Rust/Cargo"
+path = ["~/.rustup", "~/.cargo/bin"]
+
+[[mount]]
+source = "~/.cargo"
+access = "read"

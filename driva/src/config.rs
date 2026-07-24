@@ -263,6 +263,7 @@ fn builtin_templates() -> BTreeMap<String, TemplateConfig> {
             include_str!("../templates/codex-runtime.toml"),
         ),
         ("sbt", include_str!("../templates/sbt.toml")),
+        ("rust", include_str!("../templates/rust.toml")),
     ]
     .into_iter()
     .map(|(name, source)| {
