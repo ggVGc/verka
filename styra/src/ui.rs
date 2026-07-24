@@ -500,9 +500,13 @@ fn render_list(frame: &mut Frame, app: &App, area: Rect) {
     // An explicit background rather than `Modifier::REVERSED`: reversing
     // would swap a `White` foreground (summary and detail text alike) into
     // the background, flashing the selected row to a glaring full white.
+    // No `Modifier::BOLD` either: `highlight_style` applies to the whole
+    // selected row as one unit, so an expanded entry's detail body would be
+    // forced bold right along with its summary line, with no way to exempt
+    // it — the background alone is enough to mark the selection.
     let list = List::new(items)
         .block(block)
-        .highlight_style(Style::default().bg(SELECTION_BG).add_modifier(Modifier::BOLD));
+        .highlight_style(Style::default().bg(SELECTION_BG));
     let mut state = ListState::default();
     let position = visible
         .iter()
@@ -866,6 +870,34 @@ mod tests {
 
         assert!(!backgrounds.contains(&Color::White));
         assert!(backgrounds.contains(&SELECTION_BG));
+    }
+
+    #[test]
+    fn an_expanded_selected_entrys_detail_body_is_never_bold() {
+        let mut app = App::new("codex", "s1");
+        app.push_event(AgentEvent::AgentMessage { text: "hello\nworld".into() });
+        app.expand_all();
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        terminal.draw(|frame| render(frame, &app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+
+        let detail_row = (0..buffer.area.height)
+            .find(|&y| {
+                let row: String =
+                    (0..buffer.area.width).map(|x| buffer.cell((x, y)).unwrap().symbol()).collect();
+                row.contains("world")
+            })
+            .expect("no row contains the detail line");
+        let is_bold = (0..buffer.area.width).any(|x| {
+            buffer
+                .cell((x, detail_row))
+                .unwrap()
+                .style()
+                .add_modifier
+                .contains(Modifier::BOLD)
+        });
+        assert!(!is_bold, "an expanded, selected entry's detail body must not be forced bold");
     }
 
     #[test]
