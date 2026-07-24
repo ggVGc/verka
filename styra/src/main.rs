@@ -18,7 +18,7 @@ mod ui;
 
 use app::{App, Focus, Status, View};
 use styra_server::api::{CreateSession, SessionInfo};
-use styra_server::{Client, LogEntry, SessionUpdate};
+use styra_server::{Client, LogEntry, JobUpdate};
 
 /// Run an interactive, isolated agent session in a terminal interface.
 #[derive(Parser)]
@@ -119,7 +119,7 @@ fn main() -> Result<()> {
             app.push_raw(line);
         }
         // A replayed session has no live agent to end; mark it stopped.
-        app.on_ended(styra_server::SessionEnd { exit_code: None, error: None });
+        app.on_ended(styra_server::JobEnd { exit_code: None, error: None });
         live = Live::Viewing;
     } else {
         let prompt = cli.prompt.join(" ");
@@ -293,16 +293,16 @@ fn run(
                     *cursor = batch.next;
                     for sequenced in batch.updates {
                         match sequenced.update {
-                    SessionUpdate::Event(event) => app.push_event(event),
-                    SessionUpdate::Raw(line) => app.push_raw(line),
-                    SessionUpdate::Log(entry) => app.push_log(entry),
-                    SessionUpdate::Ended(end) => app.on_ended(end),
+                    JobUpdate::Event(event) => app.push_event(event),
+                    JobUpdate::Raw(line) => app.push_raw(line),
+                    JobUpdate::Log(entry) => app.push_log(entry),
+                    JobUpdate::Ended(end) => app.on_ended(end),
                         }
                     }
                 }
                 Err(error) => {
                     app.push_log(LogEntry::error(format!("update poll failed: {error:#}")));
-                    app.on_ended(styra_server::SessionEnd {
+                    app.on_ended(styra_server::JobEnd {
                         exit_code: None,
                         error: Some(error.to_string()),
                     });

@@ -61,15 +61,15 @@ other tools ─────────────>       │
                                  └──> XDG journal store
 ```
 
-`styra-server` owns all mutable and durable session state: process launch,
-agent stdin/stdout, Genta protocol state, journals, update ordering, and
-stored-session replay. Each socket connection carries one newline-terminated
+`styra-server` owns all mutable and durable state for a session and its live
+job: process launch, agent stdin/stdout, Genta protocol state, journals, update
+ordering, and stored-session replay. Each socket connection carries one newline-terminated
 JSON request and response. Live updates have monotonically increasing sequence
 numbers; clients poll with an `after` cursor, which supports reconnects and
 multiple independent observers without coupling them to Rust channels.
 
 The TUI is an ordinary socket client. It owns presentation and input state, but
-never constructs a `Session`, opens a journal, decodes provider traffic, or
+never constructs a `Job`, opens a journal, decodes provider traffic, or
 calls Driva. The headless example uses the same client. Public wire types live
 in `api.rs`, the reusable Rust client in `client.rs`, and server dispatch in
 `server.rs`.
@@ -117,13 +117,13 @@ its run is one-shot; Styra instead passes the ends of OS pipes:
    handed to `driva::execute`. Styra keeps the stdin-write end and the
    stdout-read end.
 3. `driva::execute` is called on a dedicated worker thread. It blocks for the
-   life of the session (the agent process runs until it exits or is stopped),
+   life of the job (the agent process runs until it exits or is stopped),
    which is why it must not run on the UI thread.
 4. A reader thread pulls newline-delimited JSON from the stdout-read end,
    decodes each line, and forwards events to the UI. The UI thread writes
    operator messages as protocol input lines to the stdin-write end.
 5. Closing the stdin-write end signals end-of-input to the agent; dropping the
-   child (session stop) tears the session down. The worker thread's return value
+   child (job stop) tears the job down. The worker thread's return value
    carries the exit report.
 
 No change to Driva is required, and this is a deliberate check on Driva's
@@ -478,7 +478,7 @@ Three threads, communicating over channels:
 
 - **UI thread** — owns terminal state and all rendering, reads input events, and
   writes operator messages to the stdin-write pipe. Never blocks on the agent.
-- **Execution thread** — calls `driva::execute` and blocks for the session's
+- **Execution thread** — calls `driva::execute` and blocks for the job's
   lifetime; on return it sends the exit report to the UI thread.
 - **Reader thread** — reads lines from the stdout-read pipe, decodes each into a
   Styra event, appends it to the journal, and forwards it to the UI thread.
@@ -491,6 +491,13 @@ they are not interleaved into the event list.
 The server-client split is also a crate split: two standalone crates, siblings
 to `orka/` and `driva/`, linked by a plain path dependency (no workspace).
 
+Two things are called out by distinct names to avoid the overloaded word
+"session": a **session** is the persistent, server-owned unit — a session id, a
+journal, and its `session.json`, listed and replayable from the store — while a
+**job** is one live agent process serving a session (the Driva launch, the
+pipes, the protocol, steered turn by turn). A session outlives any single job;
+resume/fork/switch spawn a fresh job against a preserved session journal.
+
 ```text
 styra-server/            # the server application + its client interface library
   Cargo.toml             # [lib] styra_server  +  [[bin]] styra-server
@@ -501,8 +508,8 @@ styra-server/            # the server application + its client interface library
     client.rs            # blocking Rust client over the socket (interface)
     types.rs             # data vocabulary that crosses the wire (interface)
     paths.rs             # default socket/store locations (interface + server)
-    server.rs            # socket dispatch and the server-owned session manager
-    session.rs           # Driva launch, pipe plumbing, execution + reader threads
+    server.rs            # socket dispatch and the server-owned job manager
+    job.rs               # one live agent job: Driva launch, pipes, threads
     journal.rs           # raw event/input capture and replay
 
 styra/                   # the terminal client application
@@ -522,7 +529,7 @@ than depending on `genta` or `driva` directly.
 The `styra-server` library deliberately exposes only what a client needs to
 speak the API — `api`, `Client`, the `types` vocabulary, `paths`, and the
 re-exported event/render surface. Its session-runner modules (`server`,
-`session`, `journal`) are `pub` because the `styra-server` binary drives them,
+`job`, `journal`) are `pub` because the `styra-server` binary drives them,
 but they are not part of the interface the client depends on. A headless client
 example lives under `styra-server/examples/`.
 

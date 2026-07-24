@@ -1,7 +1,7 @@
 //! Stable JSON contract shared by the Styra Unix-socket server and its clients.
 
 use crate::event::AgentEvent;
-use crate::types::{DrivaOptions, RawLine, SessionSummary, SessionUpdate};
+use crate::types::{DrivaOptions, RawLine, SessionSummary, JobUpdate};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -40,7 +40,7 @@ pub struct SendMessage {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SequencedUpdate {
     pub sequence: u64,
-    pub update: SessionUpdate,
+    pub update: JobUpdate,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -108,14 +108,14 @@ pub enum WireResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{LogEntry, SessionUpdate};
+    use crate::types::{LogEntry, JobUpdate};
 
     #[test]
     fn update_stream_has_an_explicit_cursor_and_tagged_payload() {
         let response = Updates {
             updates: vec![SequencedUpdate {
                 sequence: 4,
-                update: SessionUpdate::Log(LogEntry::info("ready")),
+                update: JobUpdate::Log(LogEntry::info("ready")),
             }],
             next: 4,
         };

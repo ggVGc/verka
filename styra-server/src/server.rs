@@ -1,4 +1,4 @@
-//! Styra's Unix-socket server and server-owned session manager.
+//! Styra's Unix-socket server and server-owned job manager.
 
 use crate::agent::{MountSpec, Profile, SandboxLayout};
 use crate::api::{
@@ -6,7 +6,7 @@ use crate::api::{
     Transcript, Updates, WireRequest, WireResponse, API_VERSION,
 };
 use crate::journal::{self, Journal};
-use crate::session::{Session, SessionSpec};
+use crate::job::{Job, JobSpec};
 use crate::types::{DrivaOptions, SessionSummary};
 use anyhow::{Context, Result};
 use std::collections::HashMap;
@@ -26,25 +26,25 @@ pub struct ServerState {
 struct ServerInner {
     store_root: PathBuf,
     layout: SandboxLayout,
-    sessions: Mutex<HashMap<String, Arc<ManagedSession>>>,
+    jobs: Mutex<HashMap<String, Arc<ManagedJob>>>,
 }
 
-struct ManagedSession {
-    session: Session,
+struct ManagedJob {
+    job: Job,
     updates: Arc<Mutex<Vec<SequencedUpdate>>>,
     accepting_messages: Arc<AtomicBool>,
     single_turn: bool,
 }
 
-impl ManagedSession {
+impl ManagedJob {
     fn send(&self, text: &str) -> Result<()> {
         if !self.accepting_messages.load(Ordering::Acquire) {
             anyhow::bail!(
                 "session {} is not accepting messages",
-                self.session.session_id()
+                self.job.session_id()
             );
         }
-        self.session.send(text)?;
+        self.job.send(text)?;
         if self.single_turn {
             self.accepting_messages.store(false, Ordering::Release);
         }
@@ -53,7 +53,7 @@ impl ManagedSession {
 
     fn stop(&self) {
         self.accepting_messages.store(false, Ordering::Release);
-        self.session.stop();
+        self.job.stop();
     }
 }
 
@@ -63,7 +63,7 @@ impl ServerState {
             inner: Arc::new(ServerInner {
                 store_root,
                 layout: SandboxLayout::default(),
-                sessions: Mutex::new(HashMap::new()),
+                jobs: Mutex::new(HashMap::new()),
             }),
         }
     }
@@ -87,7 +87,7 @@ impl ServerState {
             .parent()
             .unwrap_or(&self.inner.store_root)
             .join("diagnostics.log");
-        let spec = SessionSpec {
+        let spec = JobSpec {
             profile,
             working_directory: self.inner.layout.workspace.clone(),
             workspace: MountSpec {
@@ -104,11 +104,11 @@ impl ServerState {
             executable: "bwrap".into(),
             rootfs: Some(PathBuf::from("/")),
         });
-        let (session, receiver) = Session::spawn(spec, backend, journal, id.clone(), diagnostics)?;
+        let (job, receiver) = Job::spawn(spec, backend, journal, id.clone(), diagnostics)?;
         let updates = Arc::new(Mutex::new(Vec::new()));
         let accepting_messages = Arc::new(AtomicBool::new(true));
-        let managed = Arc::new(ManagedSession {
-            session,
+        let managed = Arc::new(ManagedJob {
+            job,
             updates: Arc::clone(&updates),
             accepting_messages: Arc::clone(&accepting_messages),
             single_turn,
@@ -117,19 +117,19 @@ impl ServerState {
             .name(format!("styra-updates-{id}"))
             .spawn(move || {
                 while let Ok(update) = receiver.recv() {
-                    if matches!(update, crate::types::SessionUpdate::Ended(_)) {
+                    if matches!(update, crate::types::JobUpdate::Ended(_)) {
                         accepting_messages.store(false, Ordering::Release);
                     }
-                    let mut history = updates.lock().expect("session update lock poisoned");
+                    let mut history = updates.lock().expect("job update lock poisoned");
                     let sequence = history.len() as u64 + 1;
                     history.push(SequencedUpdate { sequence, update });
                 }
             })
-            .context("starting the session update collector")?;
+            .context("starting the job update collector")?;
         self.inner
-            .sessions
+            .jobs
             .lock()
-            .expect("server session lock poisoned")
+            .expect("server job lock poisoned")
             .insert(id.clone(), Arc::clone(&managed));
 
         if let Some(message) = request
@@ -141,9 +141,9 @@ impl ServerState {
             if let Err(error) = managed.send(message) {
                 managed.stop();
                 self.inner
-                    .sessions
+                    .jobs
                     .lock()
-                    .expect("server session lock poisoned")
+                    .expect("server job lock poisoned")
                     .remove(&id);
                 return Err(error);
             }
@@ -158,14 +158,14 @@ impl ServerState {
         })
     }
 
-    fn session(&self, id: &str) -> Result<Arc<ManagedSession>> {
+    fn job(&self, id: &str) -> Result<Arc<ManagedJob>> {
         self.inner
-            .sessions
+            .jobs
             .lock()
-            .expect("server session lock poisoned")
+            .expect("server job lock poisoned")
             .get(id)
             .cloned()
-            .with_context(|| format!("live session {id:?} was not found"))
+            .with_context(|| format!("no live job for session {id:?}"))
     }
 
     fn stored_summary(&self, id: &str) -> Result<SessionSummary> {
@@ -185,19 +185,19 @@ impl ServerState {
                 Ok(Response::SessionCreated(self.create_session(request)?))
             }
             Request::SendMessage { id, message } => {
-                self.session(&id)?.send(&message.text)?;
+                self.job(&id)?.send(&message.text)?;
                 Ok(Response::Accepted)
             }
             Request::StopSession { id } => {
-                self.session(&id)?.stop();
+                self.job(&id)?.stop();
                 Ok(Response::Accepted)
             }
             Request::Updates { id, after } => {
-                let session = self.session(&id)?;
-                let all = session
+                let job = self.job(&id)?;
+                let all = job
                     .updates
                     .lock()
-                    .expect("session update lock poisoned");
+                    .expect("job update lock poisoned");
                 let updates = all
                     .iter()
                     .filter(|update| update.sequence > after)

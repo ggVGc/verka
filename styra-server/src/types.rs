@@ -1,22 +1,22 @@
 //! The data vocabulary that crosses the Styra socket boundary.
 //!
 //! These are the types a client receives and renders: the live update stream
-//! ([`SessionUpdate`] and its parts), the captured Driva policy
+//! ([`JobUpdate`] and its parts), the captured Driva policy
 //! ([`DrivaOptions`]), and the stored-session listing ([`SessionSummary`]).
-//! They carry no behaviour tied to running a session — the server machinery
-//! that produces them lives in [`crate::session`], [`crate::journal`], and
+//! They carry no behaviour tied to running a job — the server machinery
+//! that produces them lives in [`crate::job`], [`crate::journal`], and
 //! [`crate::server`]. Keeping them here lets a client depend on the interface
-//! without pulling in the session runner.
+//! without pulling in the job runner.
 
 use crate::event::AgentEvent;
 use driva::Mount;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// An update delivered from the session threads to the UI.
+/// An update delivered from the job's threads to the UI.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
-pub enum SessionUpdate {
+pub enum JobUpdate {
     /// A decoded agent event or an operator message, in occurrence order.
     Event(AgentEvent),
     /// One verbatim wire line, for the raw-interaction view.
@@ -24,7 +24,7 @@ pub enum SessionUpdate {
     /// A diagnostic message for the log view.
     Log(LogEntry),
     /// The agent process ended; no further events will arrive.
-    Ended(SessionEnd),
+    Ended(JobEnd),
 }
 
 /// Severity of a [`LogEntry`], used to colour the log view.
@@ -72,18 +72,18 @@ pub struct RawLine {
     pub text: String,
 }
 
-/// How a session finished.
+/// How a job finished.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SessionEnd {
+pub struct JobEnd {
     pub exit_code: Option<i32>,
     pub error: Option<String>,
 }
 
-/// A human-facing summary of the Driva policy a session was launched with:
+/// A human-facing summary of the Driva policy a job was launched with:
 /// the isolation backend, the command it runs, and the mount/network policy
 /// enforced around it. Captured once at spawn time from the same
 /// `ExecutionRequest` Driva itself executes (see [`DrivaOptions::capture`] in
-/// [`crate::session`]), so it can never drift from what is actually running.
+/// [`crate::job`]), so it can never drift from what is actually running.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DrivaOptions {
     pub isolation_backend: String,

@@ -1,20 +1,22 @@
-//! One live agent session: Driva launch, pipe plumbing, and the threads that
-//! carry events to the UI.
+//! One live agent job: the Driva launch, pipe plumbing, and threads behind a
+//! single running agent process. A `Job` belongs to a persistent Styra
+//! session (identified by `session_id`) and carries that session's events to
+//! the UI while it runs.
 //!
-//! Driva's interface fits an interactive session without change. Its
+//! Driva's interface fits a live job without change. Its
 //! [`ExecutionIo`] takes plain `File` handles wired to the child's stdio; where
 //! Orka passes `/dev/null` for a one-shot run, Styra passes the ends of OS
 //! pipes and drives a bidirectional protocol:
 //!
 //! - the child's stdin-read and stdout-write ends become the `ExecutionIo`;
-//! - `driva::execute` runs on a worker thread and blocks for the session's life;
+//! - `driva::execute` runs on a worker thread and blocks for the job's life;
 //! - a reader thread decodes newline-delimited events from the stdout-read end;
 //! - the UI thread writes operator messages to the stdin-write end.
 
 use crate::agent::{MountSpec, Profile};
 use crate::event::{decode_line, AgentEvent};
 use crate::journal::Journal;
-use crate::types::{Direction, DrivaOptions, LogEntry, RawLine, SessionEnd, SessionUpdate};
+use crate::types::{Direction, DrivaOptions, LogEntry, RawLine, JobEnd, JobUpdate};
 use anyhow::{Context, Result};
 use driva::{ExecutionIo, ExecutionRequest, Isolation, Mount, MountAccess};
 use std::ffi::OsString;
@@ -26,9 +28,9 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
-/// What Styra needs to launch one session: an agent profile plus the concrete
+/// What Styra needs to launch one job: an agent profile plus the concrete
 /// workspace mount and working directory the operator selected.
-pub struct SessionSpec {
+pub struct JobSpec {
     pub profile: Profile,
     pub working_directory: PathBuf,
     /// The operator's project, mounted writable as the agent workspace.
@@ -37,12 +39,12 @@ pub struct SessionSpec {
     pub temporary_mounts: Vec<PathBuf>,
 }
 
-/// Capture the Driva policy a [`SessionSpec`] would launch under, without
+/// Capture the Driva policy a [`JobSpec`] would launch under, without
 /// running it. This fills the [`DrivaOptions`] the server reports for a live
-/// session, taken from the same [`ExecutionRequest`] Driva executes, so it can
+/// job, taken from the same [`ExecutionRequest`] Driva executes, so it can
 /// never drift from what is actually running.
 impl DrivaOptions {
-    pub fn capture(spec: &SessionSpec, isolation_backend: impl Into<String>) -> Self {
+    pub fn capture(spec: &JobSpec, isolation_backend: impl Into<String>) -> Self {
         let request = build_request(spec);
         Self {
             isolation_backend: isolation_backend.into(),
@@ -54,14 +56,14 @@ impl DrivaOptions {
     }
 }
 
-/// A running session. Dropping it closes the agent's stdin, which ends most
+/// A running agent job. Dropping it closes the agent's stdin, which ends most
 /// protocol agents; the worker thread then observes the child exit.
-pub struct Session {
+pub struct Job {
     profile: Profile,
     session_id: String,
     stdin: Arc<Mutex<Option<PipeWriter>>>,
     journal: Arc<Mutex<Journal>>,
-    updates: Sender<SessionUpdate>,
+    updates: Sender<JobUpdate>,
     /// Present when the profile speaks the stateful app-server protocol; owns
     /// the JSON-RPC handshake and turn dispatch.
     appserver: Option<Arc<crate::appserver::AppServer>>,
@@ -70,16 +72,16 @@ pub struct Session {
     stderr: Option<JoinHandle<()>>,
 }
 
-impl Session {
+impl Job {
     /// Launch the agent and start the worker and reader threads. Returns the
-    /// session and the receiver the UI polls for updates.
+    /// job and the receiver the UI polls for updates.
     pub fn spawn(
-        spec: SessionSpec,
+        spec: JobSpec,
         backend: Box<dyn Isolation + Send>,
         journal: Journal,
         session_id: String,
         diagnostics_path: PathBuf,
-    ) -> Result<(Session, Receiver<SessionUpdate>)> {
+    ) -> Result<(Job, Receiver<JobUpdate>)> {
         let request = build_request(&spec);
         let protocol = spec.profile.protocol;
 
@@ -111,7 +113,7 @@ impl Session {
             crate::event::Protocol::CodexJsonl | crate::event::Protocol::ClaudeJsonl => None,
         };
 
-        let _ = updates.send(SessionUpdate::Log(LogEntry::info(format!(
+        let _ = updates.send(JobUpdate::Log(LogEntry::info(format!(
             "launching {} (network {})",
             spec.profile.command.join(" "),
             if spec.profile.network { "on" } else { "off" }
@@ -140,7 +142,7 @@ impl Session {
                                 continue;
                             }
                             let entry = LogEntry::warn(format!("agent: {text}"));
-                            if stderr_updates.send(SessionUpdate::Log(entry)).is_err() {
+                            if stderr_updates.send(JobUpdate::Log(entry)).is_err() {
                                 break;
                             }
                         }
@@ -178,7 +180,7 @@ impl Session {
                                 direction: Direction::FromAgent,
                                 text: raw.to_owned(),
                             };
-                            if reader_updates.send(SessionUpdate::Raw(raw_line)).is_err() {
+                            if reader_updates.send(JobUpdate::Raw(raw_line)).is_err() {
                                 break;
                             }
                             match &reader_client {
@@ -189,7 +191,7 @@ impl Session {
                                 ),
                                 None => {
                                     let event = decode_line(protocol, raw);
-                                    if reader_updates.send(SessionUpdate::Event(event)).is_err() {
+                                    if reader_updates.send(JobUpdate::Event(event)).is_err() {
                                         break;
                                     }
                                 }
@@ -209,20 +211,20 @@ impl Session {
                 let end = match driva::execute(backend.as_ref(), &request, io) {
                     Ok(outcome) => {
                         let code = outcome.exit.code();
-                        let _ = exec_updates.send(SessionUpdate::Log(LogEntry::info(format!(
+                        let _ = exec_updates.send(JobUpdate::Log(LogEntry::info(format!(
                             "agent process exited with code {code}"
                         ))));
-                        SessionEnd { exit_code: Some(code), error: None }
+                        JobEnd { exit_code: Some(code), error: None }
                     }
                     Err(error) => {
                         let message = format!("{error:#}");
-                        let _ = exec_updates.send(SessionUpdate::Log(LogEntry::error(format!(
+                        let _ = exec_updates.send(JobUpdate::Log(LogEntry::error(format!(
                             "could not run the agent: {message}"
                         ))));
-                        SessionEnd { exit_code: None, error: Some(message) }
+                        JobEnd { exit_code: None, error: Some(message) }
                     }
                 };
-                let _ = exec_updates.send(SessionUpdate::Ended(end));
+                let _ = exec_updates.send(JobUpdate::Ended(end));
             })
             .context("starting the execution thread")?;
 
@@ -231,7 +233,7 @@ impl Session {
             apply_appserver_actions(client.start(), &stdin, &updates);
         }
 
-        let session = Session {
+        let job = Job {
             profile: spec.profile,
             session_id,
             stdin,
@@ -242,7 +244,7 @@ impl Session {
             reader: Some(reader),
             stderr: Some(stderr),
         };
-        Ok((session, receiver))
+        Ok((job, receiver))
     }
 
     pub fn session_id(&self) -> &str {
@@ -256,7 +258,7 @@ impl Session {
         if let Ok(mut journal) = self.journal.lock() {
             let _ = journal.record_user_message(text);
         }
-        let _ = self.updates.send(SessionUpdate::Event(AgentEvent::UserMessage {
+        let _ = self.updates.send(JobUpdate::Event(AgentEvent::UserMessage {
             text: text.to_owned(),
         }));
 
@@ -269,21 +271,21 @@ impl Session {
 
         let bytes = self.profile.encode_message(text);
         // Surface the exact bytes going onto the wire in the raw view.
-        let _ = self.updates.send(SessionUpdate::Raw(RawLine {
+        let _ = self.updates.send(JobUpdate::Raw(RawLine {
             direction: Direction::ToAgent,
             text: String::from_utf8_lossy(&bytes)
                 .trim_end_matches(['\r', '\n'])
                 .to_owned(),
         }));
-        let mut guard = self.stdin.lock().expect("session stdin lock poisoned");
+        let mut guard = self.stdin.lock().expect("job stdin lock poisoned");
         {
             let writer = guard
                 .as_mut()
-                .context("the session input is closed; the agent has stopped")?;
+                .context("the job input is closed; the agent has stopped")?;
             writer.write_all(&bytes).context("writing to agent stdin")?;
             writer.flush().context("flushing agent stdin")?;
         }
-        let _ = self.updates.send(SessionUpdate::Log(LogEntry::info(format!(
+        let _ = self.updates.send(JobUpdate::Log(LogEntry::info(format!(
             "sent {} bytes to the agent",
             bytes.len()
         ))));
@@ -291,7 +293,7 @@ impl Session {
             // A one-shot exec agent reads the prompt to end-of-input; close
             // stdin so the turn starts.
             guard.take();
-            let _ = self.updates.send(SessionUpdate::Log(LogEntry::info(
+            let _ = self.updates.send(JobUpdate::Log(LogEntry::info(
                 "closed input (single-turn profile); the agent is running the turn",
             )));
         }
@@ -299,7 +301,7 @@ impl Session {
     }
 
     /// Close the agent's stdin, signalling end-of-input. Most protocol agents
-    /// exit on stdin EOF; the worker thread then delivers [`SessionUpdate::Ended`].
+    /// exit on stdin EOF; the worker thread then delivers [`JobUpdate::Ended`].
     pub fn stop(&self) {
         if let Ok(mut guard) = self.stdin.lock() {
             guard.take();
@@ -307,7 +309,7 @@ impl Session {
     }
 }
 
-impl Drop for Session {
+impl Drop for Job {
     fn drop(&mut self) {
         self.stop();
         if let Some(handle) = self.reader.take() {
@@ -324,17 +326,17 @@ impl Drop for Session {
 
 /// Carry out the actions the pure app-server client asked for: write outgoing
 /// lines to the agent's stdin (surfacing them in the raw view), and forward
-/// events and diagnostics as session updates.
+/// events and diagnostics as job updates.
 fn apply_appserver_actions(
     actions: Vec<crate::appserver::Action>,
     stdin: &Mutex<Option<PipeWriter>>,
-    updates: &Sender<SessionUpdate>,
+    updates: &Sender<JobUpdate>,
 ) {
     use crate::appserver::Action;
     for action in actions {
         match action {
             Action::Send(line) => {
-                let _ = updates.send(SessionUpdate::Raw(RawLine {
+                let _ = updates.send(JobUpdate::Raw(RawLine {
                     direction: Direction::ToAgent,
                     text: line.clone(),
                 }));
@@ -347,21 +349,21 @@ fn apply_appserver_actions(
                 }
             }
             Action::Event(event) => {
-                let _ = updates.send(SessionUpdate::Event(event));
+                let _ = updates.send(JobUpdate::Event(event));
             }
             Action::Info(message) => {
-                let _ = updates.send(SessionUpdate::Log(LogEntry::info(message)));
+                let _ = updates.send(JobUpdate::Log(LogEntry::info(message)));
             }
             Action::Warn(message) => {
-                let _ = updates.send(SessionUpdate::Log(LogEntry::warn(message)));
+                let _ = updates.send(JobUpdate::Log(LogEntry::warn(message)));
             }
         }
     }
 }
 
-/// Translate a [`SessionSpec`] into a validated-shape Driva request. Mount and
+/// Translate a [`JobSpec`] into a validated-shape Driva request. Mount and
 /// policy translation mirrors Orka's Driva adapter.
-fn build_request(spec: &SessionSpec) -> ExecutionRequest {
+fn build_request(spec: &JobSpec) -> ExecutionRequest {
     let mut mounts: Vec<Mount> = spec
         .temporary_mounts
         .iter()
@@ -445,7 +447,7 @@ mod tests {
         }
     }
 
-    fn workspace_spec(dir: &std::path::Path) -> SessionSpec {
+    fn workspace_spec(dir: &std::path::Path) -> JobSpec {
         // A profile with no credential mounts so request validation only needs
         // the workspace directory to exist.
         let mut profile = crate::agent::codex(&SandboxLayout::default());
@@ -455,7 +457,7 @@ mod tests {
         // Keep input open across the turn so the test's explicit stop() is what
         // signals end-of-input (exercises the multi-turn-capable path).
         profile.single_turn = false;
-        SessionSpec {
+        JobSpec {
             profile,
             working_directory: dir.to_path_buf(),
             workspace: MountSpec {
@@ -473,7 +475,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let journal = Journal::create(&dir).unwrap();
 
-        let (session, updates) = Session::spawn(
+        let (job, updates) = Job::spawn(
             workspace_spec(&dir),
             Box::new(EchoBackend),
             journal,
@@ -482,9 +484,9 @@ mod tests {
         )
         .unwrap();
 
-        session.send("hello agent").unwrap();
+        job.send("hello agent").unwrap();
         // Closing stdin lets the echo backend finish after replying.
-        session.stop();
+        job.stop();
 
         let mut user = None;
         let mut agent = None;
@@ -503,26 +505,26 @@ mod tests {
                 && stderr_seen(&logs))
         {
             match updates.recv_timeout(Duration::from_millis(200)) {
-                Ok(SessionUpdate::Event(AgentEvent::UserMessage { text })) => user = Some(text),
-                Ok(SessionUpdate::Event(AgentEvent::AgentMessage { text })) => agent = Some(text),
-                Ok(SessionUpdate::Event(_)) => {}
-                Ok(SessionUpdate::Raw(line)) => raw_directions.push(line.direction),
-                Ok(SessionUpdate::Log(entry)) => logs.push(entry.message),
-                Ok(SessionUpdate::Ended(_)) => ended = true,
+                Ok(JobUpdate::Event(AgentEvent::UserMessage { text })) => user = Some(text),
+                Ok(JobUpdate::Event(AgentEvent::AgentMessage { text })) => agent = Some(text),
+                Ok(JobUpdate::Event(_)) => {}
+                Ok(JobUpdate::Raw(line)) => raw_directions.push(line.direction),
+                Ok(JobUpdate::Log(entry)) => logs.push(entry.message),
+                Ok(JobUpdate::Ended(_)) => ended = true,
                 Err(_) => {}
             }
         }
 
         assert_eq!(user.as_deref(), Some("hello agent"));
         assert_eq!(agent.as_deref(), Some("echo: hello agent"));
-        assert!(ended, "the session should report that it ended");
+        assert!(ended, "the job should report that it ended");
         // The raw view sees both the outgoing submission and the agent reply.
         assert!(raw_directions.contains(&Direction::ToAgent));
         assert!(raw_directions.contains(&Direction::FromAgent));
         // Agent stderr is streamed to the log view.
         assert!(stderr_seen(&logs), "agent stderr should reach the log");
 
-        drop(session);
+        drop(job);
 
         // The journal captured both the operator turn and the agent reply.
         let replayed = crate::journal::replay(&dir, Protocol::CodexJsonl).unwrap();

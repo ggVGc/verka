@@ -232,7 +232,7 @@ pub fn replay(path: &Path, protocol: Protocol) -> Result<Vec<AgentEvent>> {
 /// Render a stored journal as a plain-text transcript, suitable as a seed
 /// message for a freshly launched agent that should pick up where this
 /// session left off. See [`replay`] for the decode this builds on, and
-/// `DESIGN.md`'s *Session switching* for why a rendered transcript rather
+/// `DESIGN.md`'s *Job switching* for why a rendered transcript rather
 /// than a native protocol resume.
 ///
 /// Always includes minor lifecycle events (thread/turn markers, usage) —

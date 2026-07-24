@@ -6,7 +6,7 @@
 //! `main` feeds it input and session updates.
 
 use styra_server::event::{AgentEvent, DetailBlock, TokenUsage};
-use styra_server::{DrivaOptions, LogEntry, RawLine, SessionEnd};
+use styra_server::{DrivaOptions, LogEntry, RawLine, JobEnd};
 use std::path::PathBuf;
 
 /// Which region receives keys, like vim's normal/insert split.
@@ -354,7 +354,7 @@ impl App {
     }
 
     /// Record that the session ended. This is terminal regardless of `Stopped`.
-    pub fn on_ended(&mut self, end: SessionEnd) {
+    pub fn on_ended(&mut self, end: JobEnd) {
         self.status = Status::Ended {
             exit_code: end.exit_code,
             error: end.error,
@@ -719,7 +719,7 @@ mod tests {
     #[test]
     fn ending_is_terminal_and_disables_sending() {
         let mut app = app();
-        app.on_ended(SessionEnd { exit_code: Some(0), error: None });
+        app.on_ended(JobEnd { exit_code: Some(0), error: None });
         assert_eq!(app.status, Status::Ended { exit_code: Some(0), error: None });
         assert!(!app.can_send());
         // A late event does not revive an ended session.
