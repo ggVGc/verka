@@ -72,3 +72,13 @@
 - Driva should have some concept of hidden, or read-only, files within writeable mounts:
   - Main use-case is isolating files which are human-authored and should never be written, or even read, by coding agents
   - Also, for restricting work when, for example, implementation should be modified without touching tests, or vice-versa
+
+
+Example workflow, some rough edges:
+  - Create a linka node with a statement like "X should use Y in this way"
+  - 'orka run' picks it up and produces a candidate
+  - A new verification node is created referencing the result output node and the initial statement, but not the implementation work node.
+  - orka runs an agent on the verification node, which should look at the produced implementation and assert if it fulfils the initial goal or not.
+  - If not, it leaves a review in the verification node and submits the result of the verification verdict: ChangesRequested
+  - The candidate should then be rejected in orka
+  - 'orka run' then produces
