@@ -13,8 +13,9 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 const MAX_REQUEST_BYTES: usize = 8 * 1024 * 1024;
 
@@ -27,6 +28,21 @@ struct ServerInner {
     store_root: PathBuf,
     layout: SandboxLayout,
     jobs: Mutex<HashMap<String, Arc<ManagedJob>>>,
+    /// Jobs whose agent process is still running. Idle shutdown keys off this:
+    /// the server stays up while any job is live, independent of whether a
+    /// client is attached, so a detached agent turn is never killed.
+    live_jobs: AtomicUsize,
+    /// When the server last saw a job change or a client request. Combined
+    /// with a zero `live_jobs`, staleness past the idle timeout ends the
+    /// process.
+    last_active: Mutex<Instant>,
+}
+
+impl ServerInner {
+    /// Record that the server just did something worth staying alive for.
+    fn touch(&self) {
+        *self.last_active.lock().expect("activity lock poisoned") = Instant::now();
+    }
 }
 
 struct ManagedJob {
@@ -64,12 +80,53 @@ impl ServerState {
                 store_root,
                 layout: SandboxLayout::default(),
                 jobs: Mutex::new(HashMap::new()),
+                live_jobs: AtomicUsize::new(0),
+                last_active: Mutex::new(Instant::now()),
             }),
         }
     }
 
     pub fn store_root(&self) -> &Path {
         &self.inner.store_root
+    }
+
+    /// Record that the server just did something worth staying alive for.
+    fn touch(&self) {
+        self.inner.touch();
+    }
+
+    /// Start a background thread that ends the process once it has had no live
+    /// jobs and no client activity for `timeout`, removing `socket` on the way
+    /// out. A zero `timeout` disables idle shutdown (the server runs until
+    /// killed). Mirrors the idle timeout that lets a bloop/sbt server retire
+    /// itself when nothing is using it.
+    pub fn spawn_idle_monitor(&self, socket: PathBuf, timeout: Duration) {
+        if timeout.is_zero() {
+            return;
+        }
+        let inner = Arc::clone(&self.inner);
+        // Check several times per timeout so shutdown lands promptly, but never
+        // busy-spin on a long timeout.
+        let interval = (timeout / 4).clamp(Duration::from_millis(200), Duration::from_secs(30));
+        std::thread::Builder::new()
+            .name("styra-idle-monitor".into())
+            .spawn(move || loop {
+                std::thread::sleep(interval);
+                if inner.live_jobs.load(Ordering::Acquire) != 0 {
+                    continue;
+                }
+                let idle = inner
+                    .last_active
+                    .lock()
+                    .expect("activity lock poisoned")
+                    .elapsed();
+                if idle >= timeout {
+                    eprintln!("styra-server: no live jobs and idle for {timeout:?}; shutting down");
+                    std::fs::remove_file(&socket).ok();
+                    std::process::exit(0);
+                }
+            })
+            .expect("spawning the idle monitor");
     }
 
     fn create_session(&self, request: CreateSession) -> Result<SessionInfo> {
@@ -113,12 +170,17 @@ impl ServerState {
             accepting_messages: Arc::clone(&accepting_messages),
             single_turn,
         });
+        let collector_inner = Arc::clone(&self.inner);
         std::thread::Builder::new()
             .name(format!("styra-updates-{id}"))
             .spawn(move || {
                 while let Ok(update) = receiver.recv() {
                     if matches!(update, crate::types::JobUpdate::Ended(_)) {
                         accepting_messages.store(false, Ordering::Release);
+                        // The agent process is gone: drop the live-job count
+                        // and mark the moment so the idle clock starts here.
+                        collector_inner.live_jobs.fetch_sub(1, Ordering::AcqRel);
+                        collector_inner.touch();
                     }
                     let mut history = updates.lock().expect("job update lock poisoned");
                     let sequence = history.len() as u64 + 1;
@@ -131,6 +193,8 @@ impl ServerState {
             .lock()
             .expect("server job lock poisoned")
             .insert(id.clone(), Arc::clone(&managed));
+        self.inner.live_jobs.fetch_add(1, Ordering::AcqRel);
+        self.touch();
 
         if let Some(message) = request
             .message
@@ -176,6 +240,9 @@ impl ServerState {
     }
 
     fn handle(&self, request: Request) -> Result<Response> {
+        // Any request is activity: keep the server alive while a client is
+        // using it, even when it is only browsing stored sessions.
+        self.touch();
         match request {
             Request::Health => Ok(Response::Health(Health {
                 service: "styra".into(),

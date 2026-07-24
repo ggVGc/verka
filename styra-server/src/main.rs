@@ -18,6 +18,10 @@ struct Cli {
     /// Unix socket path (default: $XDG_RUNTIME_DIR/styra/styra.sock).
     #[arg(long)]
     socket: Option<PathBuf>,
+    /// Exit after this many seconds with no live jobs and no client activity
+    /// (0 keeps the server running until it is killed).
+    #[arg(long, default_value_t = 300)]
+    idle_timeout: u64,
 }
 
 fn main() -> Result<()> {
@@ -40,7 +44,9 @@ fn main() -> Result<()> {
         socket.display(),
         store.display()
     );
-    serve(listener, ServerState::new(store))
+    let state = ServerState::new(store);
+    state.spawn_idle_monitor(socket, std::time::Duration::from_secs(cli.idle_timeout));
+    serve(listener, state)
 }
 
 fn bind_socket(path: &Path, private_parent: bool) -> Result<UnixListener> {
