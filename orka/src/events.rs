@@ -164,86 +164,15 @@ pub fn event_blocks(event: &AgentEvent) -> Vec<WorkLogBlock> {
 /// Markdown text. The language info string is retained so browser views can
 /// select a syntax highlighter.
 pub fn markdown_blocks(markdown: &str) -> Vec<ContentBlock> {
-    let markdown = clean_terminal_text(markdown);
-    let mut blocks = Vec::new();
-    let mut prose = String::new();
-    let mut code = String::new();
-    let mut fence: Option<(char, usize, Option<String>)> = None;
-
-    for line in markdown.split_inclusive('\n') {
-        let candidate = line.trim_end_matches(['\r', '\n']);
-        if let Some((marker, width, language)) = &fence {
-            if closing_fence(candidate, *marker, *width) {
-                blocks.push(ContentBlock::Code {
-                    language: language.clone(),
-                    text: std::mem::take(&mut code),
-                });
-                fence = None;
-            } else {
-                code.push_str(line);
+    genta::event::markdown_blocks(markdown)
+        .into_iter()
+        .map(|block| match block {
+            genta::event::DetailBlock::Text(text) => ContentBlock::Text { text },
+            genta::event::DetailBlock::Code { language, text } => {
+                ContentBlock::Code { language, text }
             }
-            continue;
-        }
-
-        if let Some(opening) = opening_fence(candidate) {
-            if !prose.is_empty() {
-                blocks.push(ContentBlock::Text {
-                    text: std::mem::take(&mut prose),
-                });
-            }
-            fence = Some(opening);
-        } else {
-            prose.push_str(line);
-        }
-    }
-
-    if let Some((_, _, language)) = fence {
-        blocks.push(ContentBlock::Code {
-            language,
-            text: code,
-        });
-    }
-    if !prose.is_empty() {
-        blocks.push(ContentBlock::Text { text: prose });
-    }
-    if blocks.is_empty() && !markdown.is_empty() {
-        blocks.push(ContentBlock::Text { text: markdown });
-    }
-    blocks
-}
-
-fn opening_fence(line: &str) -> Option<(char, usize, Option<String>)> {
-    let line = line
-        .strip_prefix("   ")
-        .or_else(|| line.strip_prefix("  "))
-        .or_else(|| line.strip_prefix(' '))
-        .unwrap_or(line);
-    let marker = line.chars().next()?;
-    if marker != '`' && marker != '~' {
-        return None;
-    }
-    let width = line.chars().take_while(|ch| *ch == marker).count();
-    if width < 3 {
-        return None;
-    }
-    let info = line[width..].trim();
-    if marker == '`' && info.contains('`') {
-        return None;
-    }
-    let language = info
-        .split_whitespace()
-        .next()
-        .filter(|language| !language.is_empty())
-        .map(str::to_owned);
-    Some((marker, width, language))
-}
-
-fn closing_fence(line: &str, marker: char, width: usize) -> bool {
-    let line = line.trim_start_matches(' ');
-    if line.len() < width || !line.chars().take(width).all(|ch| ch == marker) {
-        return false;
-    }
-    line.chars().skip(width).all(char::is_whitespace)
+        })
+        .collect()
 }
 
 /// Render a work log from a raw agent-output fact, selecting the decoder by the
@@ -581,7 +510,7 @@ mod tests {
             vec![WorkLogBlock::AgentMessage {
                 content: vec![
                     ContentBlock::Text {
-                        text: "Before\n\n".into(),
+                        text: "Before".into(),
                     },
                     ContentBlock::Code {
                         language: Some("rust".into()),
