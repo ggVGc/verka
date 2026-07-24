@@ -650,6 +650,7 @@ dependencies = [
  "clap",
  "driva",
  "genta",
+ "libc",
  "serde",
  "serde_json",
 ]

@@ -18,7 +18,7 @@ mod ui;
 
 use app::{App, Focus, Status, View};
 use styra_server::api::{CreateSession, SessionInfo};
-use styra_server::{Client, LogEntry, JobUpdate};
+use styra_server::{Client, JobUpdate, LogEntry};
 
 /// Run an interactive, isolated agent session in a terminal interface.
 #[derive(Parser)]
@@ -53,12 +53,11 @@ fn main() -> Result<()> {
         Some(path) => path.clone(),
         None => styra_server::paths::default_socket()?,
     };
-    let client = Client::new(&socket);
-    client.health().with_context(|| {
-        format!(
-            "Styra server is unavailable at {}; start `styra-server` in this project",
-            socket.display()
-        )
+    // Connect-or-spawn: use the running server if one answers, otherwise start
+    // a detached `styra-server` daemon bound to this socket and wait for it.
+    // The daemon outlives this client, so live sessions survive detach/quit.
+    let client = styra_server::ensure_server(&socket).with_context(|| {
+        format!("Styra server is unavailable at {}", socket.display())
     })?;
 
     // Bare `--view` (no path) needs an interactive terminal to browse
@@ -104,7 +103,11 @@ fn main() -> Result<()> {
         let id = session_id_from_target(view)?;
         let stored = client.stored_session(&id)?;
         app = App::new(
-            stored.summary.profile.clone().unwrap_or_else(|| "unknown".into()),
+            stored
+                .summary
+                .profile
+                .clone()
+                .unwrap_or_else(|| "unknown".into()),
             stored.summary.id,
         );
         for event in stored.events {
@@ -119,7 +122,10 @@ fn main() -> Result<()> {
             app.push_raw(line);
         }
         // A replayed session has no live agent to end; mark it stopped.
-        app.on_ended(styra_server::JobEnd { exit_code: None, error: None });
+        app.on_ended(styra_server::JobEnd {
+            exit_code: None,
+            error: None,
+        });
         live = Live::Viewing;
     } else {
         let prompt = cli.prompt.join(" ");
@@ -130,7 +136,10 @@ fn main() -> Result<()> {
             Some(seed) => {
                 let (new_app, info) = launch_live_session(&client, &cli, Some(seed))?;
                 app = new_app;
-                live = Live::Running { session_id: info.id, cursor: 0 };
+                live = Live::Running {
+                    session_id: info.id,
+                    cursor: 0,
+                };
             }
             // No seed: nothing has been said to an agent yet, so nothing is
             // launched yet either. The event loop spawns the session the
@@ -208,7 +217,10 @@ fn launch_live_session(
     let mut app = App::new(info.profile.clone(), info.id.clone());
     app.set_workspace_root(info.workspace.clone());
     app.set_driva_options(info.driva.clone());
-    app.push_log(LogEntry::info(format!("journal: {}", info.journal_path.display())));
+    app.push_log(LogEntry::info(format!(
+        "journal: {}",
+        info.journal_path.display()
+    )));
     Ok((app, info))
 }
 
@@ -293,10 +305,10 @@ fn run(
                     *cursor = batch.next;
                     for sequenced in batch.updates {
                         match sequenced.update {
-                    JobUpdate::Event(event) => app.push_event(event),
-                    JobUpdate::Raw(line) => app.push_raw(line),
-                    JobUpdate::Log(entry) => app.push_log(entry),
-                    JobUpdate::Ended(end) => app.on_ended(end),
+                            JobUpdate::Event(event) => app.push_event(event),
+                            JobUpdate::Raw(line) => app.push_raw(line),
+                            JobUpdate::Log(entry) => app.push_log(entry),
+                            JobUpdate::Ended(end) => app.on_ended(end),
                         }
                     }
                 }
@@ -459,8 +471,9 @@ fn handle_input_key(app: &mut App, client: &Client, cli: &Cli, live: &mut Live, 
                         "not sent (session {}): {message}",
                         app.status.label()
                     ))),
-                    Live::Viewing => app
-                        .push_log(LogEntry::warn("not sent: viewed journal has no live agent")),
+                    Live::Viewing => {
+                        app.push_log(LogEntry::warn("not sent: viewed journal has no live agent"))
+                    }
                     // The operator's first message: this is what actually
                     // starts the agent. Nothing was launched or sent before
                     // this point.
