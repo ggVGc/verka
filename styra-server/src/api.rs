@@ -1,7 +1,7 @@
 //! Stable JSON contract shared by the Styra Unix-socket server and its clients.
 
 use crate::event::AgentEvent;
-use crate::types::{DrivaOptions, RawLine, SessionSummary, JobUpdate};
+use crate::types::{DrivaOptions, JobSummary, RawLine, SessionSummary, JobUpdate};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -71,6 +71,7 @@ pub enum Request {
     SendMessage { id: String, message: SendMessage },
     StopSession { id: String },
     Updates { id: String, after: u64 },
+    ListJobs,
     ListStoredSessions,
     StoredSession { id: String },
     Transcript { id: String },
@@ -92,6 +93,7 @@ pub enum Response {
     SessionCreated(SessionInfo),
     Accepted,
     Updates(Updates),
+    Jobs(Vec<JobSummary>),
     StoredSessions(Vec<SessionSummary>),
     StoredSession(StoredSession),
     Transcript(Transcript),

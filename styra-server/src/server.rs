@@ -7,7 +7,7 @@ use crate::api::{
 };
 use crate::journal::{self, Journal};
 use crate::job::{Job, JobSpec};
-use crate::types::{DrivaOptions, SessionSummary};
+use crate::types::{DrivaOptions, JobSummary, SessionSummary};
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
@@ -50,6 +50,23 @@ struct ManagedJob {
     updates: Arc<Mutex<Vec<SequencedUpdate>>>,
     accepting_messages: Arc<AtomicBool>,
     single_turn: bool,
+    /// Captured at spawn so the job can be listed and reattached to without
+    /// re-deriving them: the profile name, host workspace, and launch policy.
+    profile: String,
+    workspace: PathBuf,
+    driva: DrivaOptions,
+}
+
+impl ManagedJob {
+    fn summary(&self) -> JobSummary {
+        JobSummary {
+            id: self.job.session_id().to_owned(),
+            profile: self.profile.clone(),
+            workspace: self.workspace.clone(),
+            driva: self.driva.clone(),
+            accepting: self.accepting_messages.load(Ordering::Acquire),
+        }
+    }
 }
 
 impl ManagedJob {
@@ -169,6 +186,9 @@ impl ServerState {
             updates: Arc::clone(&updates),
             accepting_messages: Arc::clone(&accepting_messages),
             single_turn,
+            profile: profile_name.clone(),
+            workspace: workspace.clone(),
+            driva: driva.clone(),
         });
         let collector_inner = Arc::clone(&self.inner);
         std::thread::Builder::new()
@@ -272,6 +292,15 @@ impl ServerState {
                     .collect();
                 let next = all.last().map(|update| update.sequence).unwrap_or(after);
                 Ok(Response::Updates(Updates { updates, next }))
+            }
+            Request::ListJobs => {
+                let jobs = self.inner.jobs.lock().expect("server job lock poisoned");
+                let mut summaries: Vec<JobSummary> =
+                    jobs.values().map(|managed| managed.summary()).collect();
+                // Newest first: the id embeds a millisecond timestamp, so a
+                // descending id sort orders jobs by creation time.
+                summaries.sort_by(|a, b| b.id.cmp(&a.id));
+                Ok(Response::Jobs(summaries))
             }
             Request::ListStoredSessions => Ok(Response::StoredSessions(journal::list_sessions(
                 self.store_root(),

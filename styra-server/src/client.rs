@@ -4,7 +4,7 @@ use crate::api::{
     CreateSession, Health, Request, Response, SendMessage, SessionInfo, StoredSession, Updates,
     WireRequest, WireResponse, API_VERSION,
 };
-use crate::types::SessionSummary;
+use crate::types::{JobSummary, SessionSummary};
 use anyhow::{bail, Context, Result};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
@@ -66,6 +66,13 @@ impl Client {
         })? {
             Response::Updates(value) => Ok(value),
             other => unexpected("updates", other),
+        }
+    }
+
+    pub fn list_jobs(&self) -> Result<Vec<JobSummary>> {
+        match self.request(Request::ListJobs)? {
+            Response::Jobs(value) => Ok(value),
+            other => unexpected("jobs", other),
         }
     }
 

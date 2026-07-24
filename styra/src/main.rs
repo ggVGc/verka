@@ -18,7 +18,7 @@ mod ui;
 
 use app::{App, Focus, Status, View};
 use styra_server::api::{CreateSession, SessionInfo};
-use styra_server::{Client, JobUpdate, LogEntry};
+use styra_server::{Client, JobSummary, JobUpdate, LogEntry};
 
 /// Run an interactive, isolated agent session in a terminal interface.
 #[derive(Parser)]
@@ -185,6 +185,31 @@ fn main() -> Result<()> {
                     }
                 }
             }
+            // Attach to another live job. The outgoing one is left running on
+            // the server (jobs outlive a client); we just stop viewing it.
+            RunOutcome::Attach(job) => {
+                let id = job.id.clone();
+                match attach_live_job(&client, job) {
+                    Ok((new_app, new_live)) => {
+                        app = new_app;
+                        live = new_live;
+                    }
+                    Err(error) => {
+                        app.push_log(LogEntry::error(format!(
+                            "could not attach to job {id}: {error:#}"
+                        )));
+                    }
+                }
+            }
+            // Stop the current job and return to the blank start screen.
+            RunOutcome::Reset => {
+                if let Live::Running { session_id, .. } =
+                    std::mem::replace(&mut live, Live::Pending)
+                {
+                    client.stop_session(&session_id).ok();
+                }
+                app = App::pending(cli.profile.clone());
+            }
         }
     };
 
@@ -222,6 +247,21 @@ fn launch_live_session(
         info.journal_path.display()
     )));
     Ok((app, info))
+}
+
+/// Attach to a live job: rebuild an `App` from its summary and replay the
+/// updates the server has accumulated for it, so the view matches what the job
+/// has done so far and the event loop can continue polling from the cursor.
+fn attach_live_job(client: &Client, job: JobSummary) -> Result<(App, Live)> {
+    let mut app = App::new(job.profile.clone(), job.id.clone());
+    app.set_workspace_root(job.workspace.clone());
+    app.set_driva_options(job.driva.clone());
+    let batch = client.updates(&job.id, 0)?;
+    let cursor = batch.next;
+    for sequenced in batch.updates {
+        apply_update(&mut app, sequenced.update);
+    }
+    Ok((app, Live::Running { session_id: job.id, cursor }))
 }
 
 fn session_id_from_target(target: &Path) -> Result<String> {
@@ -263,12 +303,50 @@ fn run_picker(
     }
 }
 
+/// The current-jobs picker loop: j/k or arrows to move, Enter to attach to a
+/// live job, Esc or q to back out. Mirrors [`run_picker`] but over the
+/// server's live jobs rather than the stored-session store.
+fn run_jobs_picker(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    jobs: &[JobSummary],
+) -> Result<Option<JobSummary>> {
+    let mut selected = 0usize;
+    loop {
+        terminal.draw(|frame| ui::render_jobs_picker(frame, jobs, selected))?;
+
+        if !event::poll(Duration::from_millis(100))? {
+            continue;
+        }
+        let Event::Key(key) = event::read()? else {
+            continue;
+        };
+        if key.kind != KeyEventKind::Press {
+            continue;
+        }
+        match key.code {
+            KeyCode::Char('q') | KeyCode::Esc => return Ok(None),
+            KeyCode::Char('j') | KeyCode::Down => {
+                selected = (selected + 1).min(jobs.len() - 1);
+            }
+            KeyCode::Char('k') | KeyCode::Up => selected = selected.saturating_sub(1),
+            KeyCode::Enter => return Ok(Some(jobs[selected].clone())),
+            _ => {}
+        }
+    }
+}
+
 /// What the interactive loop returned control to `main` for.
 enum RunOutcome {
     /// The operator quit.
     Quit,
     /// The operator picked a stored session to switch to.
     Switch(String),
+    /// The operator picked a live job to attach this client to. The outgoing
+    /// job is left running on the server, not stopped.
+    Attach(JobSummary),
+    /// The operator stopped the current job and asked to return to the blank
+    /// start screen.
+    Reset,
 }
 
 /// The live-agent side of the interactive loop: no process yet (awaiting the
@@ -304,12 +382,7 @@ fn run(
                 Ok(batch) => {
                     *cursor = batch.next;
                     for sequenced in batch.updates {
-                        match sequenced.update {
-                            JobUpdate::Event(event) => app.push_event(event),
-                            JobUpdate::Raw(line) => app.push_raw(line),
-                            JobUpdate::Log(entry) => app.push_log(entry),
-                            JobUpdate::Ended(end) => app.on_ended(end),
-                        }
+                        apply_update(app, sequenced.update);
                     }
                 }
                 Err(error) => {
@@ -358,6 +431,33 @@ fn run(
             }
             // Cancelled: the next iteration redraws the normal session view.
         }
+
+        if std::mem::take(&mut app.jobs_requested) {
+            let jobs = client.list_jobs()?;
+            if jobs.is_empty() {
+                app.push_log(LogEntry::warn("no live jobs on the server"));
+                continue;
+            }
+            if let Some(job) = run_jobs_picker(terminal, &jobs)? {
+                return Ok(RunOutcome::Attach(job));
+            }
+            // Cancelled: the next iteration redraws the normal session view.
+        }
+
+        if std::mem::take(&mut app.reset_requested) {
+            return Ok(RunOutcome::Reset);
+        }
+    }
+}
+
+/// Apply one session update to the app. Shared by the live event loop and by
+/// [`attach_live_job`], which replays a job's accumulated updates the same way.
+fn apply_update(app: &mut App, update: JobUpdate) {
+    match update {
+        JobUpdate::Event(event) => app.push_event(event),
+        JobUpdate::Raw(line) => app.push_raw(line),
+        JobUpdate::Log(entry) => app.push_log(entry),
+        JobUpdate::Ended(end) => app.on_ended(end),
     }
 }
 
@@ -397,6 +497,8 @@ fn handle_list_key(
             return;
         }
         KeyCode::Char('V') => return app.request_switch(),
+        KeyCode::Char('A') => return app.request_jobs(),
+        KeyCode::Char('S') => return app.request_reset(),
         _ => {}
     }
     match app.view {

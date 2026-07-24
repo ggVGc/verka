@@ -31,6 +31,11 @@ fn spawns_reuses_and_outlives_the_caller() {
     let again = ensure_server(&socket).expect("second ensure_server should reuse the daemon");
     again.health().expect("daemon should still be healthy");
 
+    // The live-jobs listing round-trips over the socket; a fresh daemon has
+    // none running yet.
+    let jobs = client.list_jobs().expect("listing live jobs should succeed");
+    assert!(jobs.is_empty(), "a fresh daemon should report no live jobs");
+
     // The daemon is detached, so it is still serving after we would have exited.
     let deadline = Instant::now() + Duration::from_secs(1);
     while Instant::now() < deadline {

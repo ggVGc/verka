@@ -93,6 +93,26 @@ pub struct DrivaOptions {
     pub mounts: Vec<Mount>,
 }
 
+/// A job the server is currently running (this process's live sessions),
+/// enough to list it and to reattach a client to it. Distinct from
+/// [`SessionSummary`], which describes a session persisted in the store
+/// whether or not it is still live.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JobSummary {
+    /// The session id, as used everywhere else on the wire.
+    pub id: String,
+    /// The agent profile the job is running.
+    pub profile: String,
+    /// The host directory bound as the agent's workspace, so a reattaching
+    /// client can resolve changed-file previews.
+    pub workspace: PathBuf,
+    /// The Driva policy the job was launched under, for the driva view.
+    pub driva: DrivaOptions,
+    /// Whether the job still takes messages: its agent process is alive and,
+    /// for a single-turn profile, it has not spent its one turn yet.
+    pub accepting: bool,
+}
+
 /// A stored session, enough to display and select it from a list — see
 /// [`crate::journal::list_sessions`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

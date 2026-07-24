@@ -143,6 +143,12 @@ pub struct App {
     /// Set when the operator asks to switch to a different stored session;
     /// the event loop observes it and opens the session picker.
     pub switch_requested: bool,
+    /// Set when the operator asks to list the server's live jobs; the event
+    /// loop observes it and opens the jobs picker to attach to one.
+    pub jobs_requested: bool,
+    /// Set when the operator asks to stop the current job and return to the
+    /// blank start screen; the event loop observes it.
+    pub reset_requested: bool,
 }
 
 impl App {
@@ -169,6 +175,8 @@ impl App {
             transcript_scroll: 0,
             should_quit: false,
             switch_requested: false,
+            jobs_requested: false,
+            reset_requested: false,
         }
     }
 
@@ -588,6 +596,19 @@ impl App {
     pub fn request_switch(&mut self) {
         self.switch_requested = true;
     }
+
+    /// Ask the event loop to list the server's live jobs and, if the operator
+    /// picks one, attach to it. The current job is left running on the server,
+    /// not stopped: attaching only changes what this client views.
+    pub fn request_jobs(&mut self) {
+        self.jobs_requested = true;
+    }
+
+    /// Ask the event loop to stop the current job and return to the blank
+    /// start screen, with no job viewed.
+    pub fn request_reset(&mut self) {
+        self.reset_requested = true;
+    }
 }
 
 #[cfg(test)]
@@ -752,6 +773,17 @@ mod tests {
         assert!(!app.switch_requested);
         app.request_switch();
         assert!(app.switch_requested);
+    }
+
+    #[test]
+    fn request_jobs_and_reset_set_flags_for_the_event_loop_to_observe() {
+        let mut app = app();
+        assert!(!app.jobs_requested);
+        assert!(!app.reset_requested);
+        app.request_jobs();
+        app.request_reset();
+        assert!(app.jobs_requested);
+        assert!(app.reset_requested);
     }
 
     #[test]
