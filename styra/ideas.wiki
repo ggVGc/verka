@@ -1,3 +1,6 @@
+- When loading a new session, even if the initial message contains the rendered backlog, the user should still be shown the prior log entries the way they were:
+  - And old entries should have some indication that they were loaded and not part of this actual session.
+- When a session is loaded, it should not create a new session until any input is given by the user.
 - Some indication on if agent output is finished or not, for this turn.
 - Preview sessions on right side of selection screen:
   - Render lines in the same way as in the main log view, but without the arrows and body contents. Only single lines.
