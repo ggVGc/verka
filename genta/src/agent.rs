@@ -159,9 +159,20 @@ pub fn codex_appserver(layout: &SandboxLayout) -> Profile {
 /// prompt from stdin and streams `thread`/`turn`/`item` events, verified
 /// against codex-cli 0.145.
 pub fn codex(layout: &SandboxLayout) -> Profile {
+    codex_exec(layout, "codex", "-")
+}
+
+/// Build a complete single-turn Codex profile with a host-selected executable
+/// and prompt argument.
+///
+/// Hosts normally use [`codex`], which reads the prompt from stdin. A batch
+/// orchestrator may instead stage its full prompt elsewhere and pass a short
+/// instruction here, while retaining Genta's command flags, credentials,
+/// environment, network policy, and wire-protocol identity as one profile.
+pub fn codex_exec(layout: &SandboxLayout, executable: &str, prompt: &str) -> Profile {
     Profile {
         name: "codex-exec".into(),
-        command: codex_exec_command("codex", &layout.workspace.to_string_lossy(), "-"),
+        command: codex_exec_command(executable, &layout.workspace.to_string_lossy(), prompt),
         protocol: Protocol::CodexJsonl,
         // HOME lives under /tmp, the writable tmpfs Driva always provides, so
         // codex has a disposable, always-present home without depending on
@@ -327,6 +338,28 @@ mod tests {
                 && mount.writable
         }));
         assert_eq!(profile.environment.get("HOME"), Some(&"/tmp/agent-home".to_string()));
+    }
+
+    #[test]
+    fn codex_exec_profile_accepts_host_selected_executable_and_prompt() {
+        let layout = SandboxLayout {
+            workspace: "/tmp/orka/workspace".into(),
+        };
+        let profile = codex_exec(&layout, "/opt/codex", "read the staged prompt");
+
+        assert_eq!(profile.command[0], "/opt/codex");
+        assert_eq!(profile.command.last().unwrap(), "read the staged prompt");
+        assert!(profile.command.iter().any(|argument| {
+            argument == "projects.\"/tmp/orka/workspace\".trust_level=\"trusted\""
+        }));
+        assert_eq!(profile.protocol, Protocol::CodexJsonl);
+        assert_eq!(profile.environment["HOME"], "/tmp/agent-home");
+        assert_eq!(
+            profile.mounts[0].destination,
+            PathBuf::from("/tmp/agent-home/.codex/auth.json")
+        );
+        assert!(profile.network);
+        assert!(profile.single_turn);
     }
 
     #[test]
