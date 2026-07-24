@@ -81,6 +81,7 @@ pub fn render(frame: &mut Frame, app: &App) {
         View::Log => render_log(frame, app, chunks[0]),
         View::Transcript => render_transcript_view(frame, app, chunks[0]),
         View::Driva => render_driva(frame, app, chunks[0]),
+        View::Preview => render_fullscreen_preview(frame, app, chunks[0]),
     }
     render_input(frame, app, chunks[1]);
     render_footer(frame, app, chunks[2]);
@@ -339,7 +340,30 @@ fn render_preview(frame: &mut Frame, app: &App, area: Rect) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::DarkGray))
         .title(Span::styled(" preview ", Style::default().fg(Color::Gray)));
+    render_preview_content(frame, app, area, block);
+}
 
+/// The `P` shortcut's full-screen view of the selected entry: the same
+/// uncapped content as the side panel, but replacing the whole main region
+/// (and so carrying the standard title bar rather than the panel's compact
+/// " preview " label).
+fn render_fullscreen_preview(frame: &mut Frame, app: &App, area: Rect) {
+    let border_style = if app.focus == Focus::List {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(border_style)
+        .title(title_line(&app.profile_name, &app.status, Some("preview")));
+    render_preview_content(frame, app, area, block);
+}
+
+/// Shared body for the side-panel and full-screen preview: the selected
+/// entry's uncapped summary, detail, and (for a `FileChanged` entry) current
+/// file content, inside whichever `block` the caller wants framing it.
+fn render_preview_content(frame: &mut Frame, app: &App, area: Rect, block: Block<'static>) {
     let Some(entry) = app.selected_entry() else {
         let empty = Paragraph::new(Line::from(Span::styled(
             "  no entry selected",
@@ -702,7 +726,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     let hints = match (app.focus, app.view) {
         (Focus::Input, _) => "Enter send · Alt+Enter newline · Esc back to list",
         (Focus::List, View::Events) => {
-            "j/k move · space fold · C collapse all · m minor · p preview · t transcript · r raw · l log · d driva · i message · s stop · V switch · q quit"
+            "j/k move · space fold · C collapse all · m minor · p preview · P full-screen · t transcript · r raw · l log · d driva · i message · s stop · V switch · q quit"
         }
         (Focus::List, View::Raw) => {
             "j/k scroll · g/G top/bottom · r events · l log · t transcript · d driva · i message · s stop · V switch · q quit"
@@ -715,6 +739,9 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
         }
         (Focus::List, View::Driva) => {
             "d events · r raw · l log · t transcript · i message · s stop · V switch · q quit"
+        }
+        (Focus::List, View::Preview) => {
+            "j/k next/prev entry · g/G top/bottom · P events · i message · s stop · V switch · q quit"
         }
     };
     let footer = Paragraph::new(Line::from(Span::styled(
@@ -1080,6 +1107,29 @@ mod tests {
         let shown = rendered(&app);
         assert!(shown.contains("preview"));
         assert!(shown.contains("24 passed"));
+    }
+
+    #[test]
+    fn fullscreen_preview_replaces_the_whole_main_region() {
+        let mut app = App::new("codex", "s1");
+        app.push_event(AgentEvent::CommandCompleted {
+            command: "cargo test".into(),
+            status: "completed".into(),
+            exit_code: Some(0),
+            output: "24 passed".into(),
+        });
+        assert!(!rendered(&app).contains("24 passed"));
+
+        app.toggle_fullscreen_preview();
+        let shown = rendered(&app);
+        // The list itself (its tag column, e.g. "command") is gone, replaced
+        // entirely by the preview; the standard title bar survives.
+        assert!(shown.contains("styra"));
+        assert!(shown.contains("preview"));
+        assert!(shown.contains("24 passed"));
+
+        app.toggle_fullscreen_preview();
+        assert!(rendered(&app).contains("command"));
     }
 
     #[test]

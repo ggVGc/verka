@@ -425,6 +425,7 @@ fn handle_list_key(app: &mut App, live: &Live, key: KeyEvent, pending_fold: &mut
         KeyCode::Char('l') => return app.toggle_log(),
         KeyCode::Char('t') => return app.toggle_transcript(),
         KeyCode::Char('d') => return app.toggle_driva(),
+        KeyCode::Char('P') => return app.toggle_fullscreen_preview(),
         KeyCode::Char('s') => {
             if let Live::Running { session, .. } = live {
                 session.stop();
@@ -473,6 +474,14 @@ fn handle_list_key(app: &mut App, live: &Live, key: KeyEvent, pending_fold: &mut
         },
         // A short, static summary; nothing to scroll.
         View::Driva => {}
+        // Browsing between entries updates which one's content is shown.
+        View::Preview => match key.code {
+            KeyCode::Char('j') | KeyCode::Down => app.select_next(),
+            KeyCode::Char('k') | KeyCode::Up => app.select_prev(),
+            KeyCode::Char('g') => app.select_first(),
+            KeyCode::Char('G') => app.select_last(),
+            _ => {}
+        },
     }
 }
 

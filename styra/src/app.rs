@@ -19,7 +19,8 @@ pub enum Focus {
 }
 
 /// What the main region shows: the decoded event list, the raw wire stream,
-/// the diagnostic log, the rendered transcript, or the session's Driva policy.
+/// the diagnostic log, the rendered transcript, the session's Driva policy,
+/// or the selected entry's full-screen preview.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum View {
     Events,
@@ -27,6 +28,7 @@ pub enum View {
     Log,
     Transcript,
     Driva,
+    Preview,
 }
 
 /// The session's lifecycle as the operator sees it.
@@ -232,6 +234,16 @@ impl App {
             View::Events
         } else {
             View::Driva
+        };
+    }
+
+    /// Toggle a full-screen view of the selected entry's content on, or back
+    /// to the event list.
+    pub fn toggle_fullscreen_preview(&mut self) {
+        self.view = if self.view == View::Preview {
+            View::Events
+        } else {
+            View::Preview
         };
     }
 
@@ -801,6 +813,19 @@ mod tests {
         assert!(app.show_preview);
         app.toggle_preview();
         assert!(!app.show_preview);
+    }
+
+    #[test]
+    fn fullscreen_preview_toggles_the_view_and_is_independent_of_the_side_panel() {
+        let mut app = app();
+        assert_eq!(app.view, View::Events);
+        app.toggle_fullscreen_preview();
+        assert_eq!(app.view, View::Preview);
+        // The side-panel flag (bound to lowercase `p`) is a separate toggle;
+        // the full-screen shortcut (`P`) does not touch it.
+        assert!(!app.show_preview);
+        app.toggle_fullscreen_preview();
+        assert_eq!(app.view, View::Events);
     }
 
     #[test]
