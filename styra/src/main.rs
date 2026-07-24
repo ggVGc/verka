@@ -440,6 +440,8 @@ fn handle_list_key(app: &mut App, live: &Live, key: KeyEvent, pending_fold: &mut
         View::Events => match key.code {
             KeyCode::Char('j') | KeyCode::Down => app.select_next(),
             KeyCode::Char('k') | KeyCode::Up => app.select_prev(),
+            KeyCode::Char('J') => app.select_next_line(),
+            KeyCode::Char('K') => app.select_prev_line(),
             KeyCode::Char(' ') | KeyCode::Enter => app.toggle_expand(),
             KeyCode::Char('o') => app.expand_selected(),
             KeyCode::Char('c') => app.collapse_selected(),
@@ -478,6 +480,8 @@ fn handle_list_key(app: &mut App, live: &Live, key: KeyEvent, pending_fold: &mut
         View::Preview => match key.code {
             KeyCode::Char('j') | KeyCode::Down => app.select_next(),
             KeyCode::Char('k') | KeyCode::Up => app.select_prev(),
+            KeyCode::Char('J') => app.select_next_line(),
+            KeyCode::Char('K') => app.select_prev_line(),
             KeyCode::Char('g') => app.select_first(),
             KeyCode::Char('G') => app.select_last(),
             _ => {}

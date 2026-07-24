@@ -375,7 +375,7 @@ fn render_preview_content(frame: &mut Frame, app: &App, area: Rect, block: Block
     };
 
     let detail = detail_lines(&entry.event, None);
-    let mut lines = vec![summary_line(entry, !detail.is_empty())];
+    let mut lines = vec![summary_line(entry, entry.has_detail())];
     lines.extend(detail);
     if let AgentEvent::FileChanged { paths, .. } = &entry.event {
         lines.extend(file_content_lines(paths, app.workspace_root.as_deref()));
@@ -517,7 +517,7 @@ fn render_list(frame: &mut Frame, app: &App, area: Rect) {
 
 fn entry_item(entry: &Entry, width: usize) -> ListItem<'static> {
     let detail = detail_lines(&entry.event, Some(MAX_DETAIL_LINES));
-    let mut lines = vec![summary_line(entry, !detail.is_empty())];
+    let mut lines = vec![summary_line(entry, entry.has_detail())];
     if entry.expanded {
         lines.extend(detail);
     }
@@ -726,7 +726,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     let hints = match (app.focus, app.view) {
         (Focus::Input, _) => "Enter send · Alt+Enter newline · Esc back to list",
         (Focus::List, View::Events) => {
-            "j/k move · space fold · C collapse all · m minor · p preview · P full-screen · t transcript · r raw · l log · d driva · i message · s stop · V switch · q quit"
+            "j/k next/prev with detail · J/K next/prev line · space fold · C collapse all · m minor · p preview · P full-screen · t transcript · r raw · l log · d driva · i message · s stop · V switch · q quit"
         }
         (Focus::List, View::Raw) => {
             "j/k scroll · g/G top/bottom · r events · l log · t transcript · d driva · i message · s stop · V switch · q quit"
@@ -741,7 +741,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
             "d events · r raw · l log · t transcript · i message · s stop · V switch · q quit"
         }
         (Focus::List, View::Preview) => {
-            "j/k next/prev entry · g/G top/bottom · P events · i message · s stop · V switch · q quit"
+            "j/k next/prev with detail · J/K next/prev line · g/G top/bottom · P events · i message · s stop · V switch · q quit"
         }
     };
     let footer = Paragraph::new(Line::from(Span::styled(
@@ -998,7 +998,7 @@ mod tests {
         let mut app = App::new("codex", "s1");
         // The full hint line is longer than the 80-column test terminal, so
         // check a marker near its start rather than one that may be clipped.
-        assert!(rendered(&app).contains("j/k move"));
+        assert!(rendered(&app).contains("j/k next/prev with detail"));
         app.enter_input();
         assert!(rendered(&app).contains("Enter send"));
     }

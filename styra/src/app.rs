@@ -5,7 +5,7 @@
 //! so the whole interaction model is unit-testable. [`crate::ui`] renders it and
 //! `main` feeds it input and session updates.
 
-use crate::event::{AgentEvent, TokenUsage};
+use crate::event::{AgentEvent, DetailBlock, TokenUsage};
 use crate::session::{DrivaOptions, LogEntry, RawLine, SessionEnd};
 use std::path::PathBuf;
 
@@ -70,6 +70,33 @@ impl Status {
 pub struct Entry {
     pub event: AgentEvent,
     pub expanded: bool,
+}
+
+impl Entry {
+    /// Whether this entry has anything to show beyond its one-line summary —
+    /// the same test that decides whether the list shows a fold arrow next
+    /// to it. `crate::ui`'s detail rendering always drops the body's first
+    /// line (it invariably restates the summary — the command, the
+    /// message's first line, ...), so one line of detail alone doesn't
+    /// count; this mirrors that exactly rather than checking the raw,
+    /// undropped `AgentEvent::detail()` output.
+    pub fn has_detail(&self) -> bool {
+        detail_line_count(&self.event) > 0
+    }
+}
+
+/// Total line count across an event's detail blocks, splitting multi-line
+/// text and code the same way the list's detail rendering does, minus the
+/// one line that rendering always drops as a restatement of the summary.
+fn detail_line_count(event: &AgentEvent) -> usize {
+    let count: usize = event
+        .detail()
+        .iter()
+        .map(|block| match block {
+            DetailBlock::Text(text) | DetailBlock::Code { text, .. } => text.lines().count(),
+        })
+        .sum();
+    count.saturating_sub(1)
 }
 
 /// The complete UI state.
@@ -341,6 +368,15 @@ impl App {
         self.show_minor || !self.entries[idx].event.is_minor()
     }
 
+    /// Whether an entry is one `j`/`k` should land on: visible, and carrying
+    /// a fold arrow (something beyond its bare summary). Entries with
+    /// nothing to show beyond that arrow-less summary (e.g. a bare `turn
+    /// started` marker) are skipped so quick review only stops on entries
+    /// worth looking at; `J`/`K` still visit them one line at a time.
+    fn is_navigable(&self, idx: usize) -> bool {
+        self.is_visible(idx) && self.entries[idx].has_detail()
+    }
+
     /// The nearest visible index at or after `from`, if any.
     fn next_visible(&self, from: usize) -> Option<usize> {
         (from..self.entries.len()).find(|&i| self.is_visible(i))
@@ -349,6 +385,16 @@ impl App {
     /// The nearest visible index at or before `from`, if any.
     fn prev_visible(&self, from: usize) -> Option<usize> {
         (0..=from).rev().find(|&i| self.is_visible(i))
+    }
+
+    /// The nearest navigable index at or after `from`, if any.
+    fn next_navigable(&self, from: usize) -> Option<usize> {
+        (from..self.entries.len()).find(|&i| self.is_navigable(i))
+    }
+
+    /// The nearest navigable index at or before `from`, if any.
+    fn prev_navigable(&self, from: usize) -> Option<usize> {
+        (0..=from).rev().find(|&i| self.is_navigable(i))
     }
 
     /// Toggle the side panel that previews the selected entry's full content.
@@ -378,7 +424,30 @@ impl App {
         }
     }
 
+    /// Move to the next entry with an arrow (something beyond its bare
+    /// summary), skipping over ones with nothing else to show. See
+    /// [`Self::select_next_line`] to instead step one entry at a time.
     pub fn select_next(&mut self) {
+        if let Some(next) = self.next_navigable(self.selected + 1) {
+            self.selected = next;
+        }
+        // Re-enable follow only when the selection reaches the navigable tail.
+        self.follow = !self.entries.is_empty() && self.next_navigable(self.selected + 1).is_none();
+    }
+
+    /// Move to the previous entry with an arrow; see [`Self::select_next`].
+    pub fn select_prev(&mut self) {
+        if let Some(prev) = self.selected.checked_sub(1).and_then(|from| self.prev_navigable(from)) {
+            self.selected = prev;
+        }
+        // Moving off the tail pins the view.
+        self.follow = false;
+    }
+
+    /// Move to the next visible entry regardless of whether it has anything
+    /// beyond its summary — a finer-grained step than [`Self::select_next`],
+    /// which skips entries with no arrow.
+    pub fn select_next_line(&mut self) {
         if let Some(next) = self.next_visible(self.selected + 1) {
             self.selected = next;
         }
@@ -386,7 +455,8 @@ impl App {
         self.follow = !self.entries.is_empty() && self.next_visible(self.selected + 1).is_none();
     }
 
-    pub fn select_prev(&mut self) {
+    /// Move to the previous visible entry; see [`Self::select_next_line`].
+    pub fn select_prev_line(&mut self) {
         if let Some(prev) = self.selected.checked_sub(1).and_then(|from| self.prev_visible(from)) {
             self.selected = prev;
         }
@@ -526,21 +596,46 @@ mod tests {
     #[test]
     fn moving_up_pins_the_view_and_reaching_the_tail_resumes_follow() {
         let mut app = app();
+        // Multi-line so every entry has detail and so is reachable by the
+        // has-detail-only select_next/select_prev this test exercises.
         for _ in 0..3 {
-            app.push_event(AgentEvent::AgentMessage { text: "x".into() });
+            app.push_event(AgentEvent::AgentMessage { text: "x\nmore x".into() });
         }
         app.select_prev();
         assert!(!app.follow);
         assert_eq!(app.selected, 1);
 
         // New events no longer move the selection while pinned.
-        app.push_event(AgentEvent::AgentMessage { text: "x".into() });
+        app.push_event(AgentEvent::AgentMessage { text: "x\nmore x".into() });
         assert_eq!(app.selected, 1);
 
         // Walking back down to the tail re-enables follow.
         app.select_next();
         app.select_next();
         app.select_next();
+        assert!(app.follow);
+        assert_eq!(app.selected, app.entries.len() - 1);
+    }
+
+    #[test]
+    fn moving_up_by_line_pins_the_view_and_reaching_the_tail_resumes_follow() {
+        // Same follow/pin contract as select_next/select_prev, but for
+        // select_next_line/select_prev_line (J/K), which move one visible
+        // entry at a time regardless of whether it has detail.
+        let mut app = app();
+        for _ in 0..3 {
+            app.push_event(AgentEvent::AgentMessage { text: "x".into() });
+        }
+        app.select_prev_line();
+        assert!(!app.follow);
+        assert_eq!(app.selected, 1);
+
+        app.push_event(AgentEvent::AgentMessage { text: "x".into() });
+        assert_eq!(app.selected, 1);
+
+        app.select_next_line();
+        app.select_next_line();
+        app.select_next_line();
         assert!(app.follow);
         assert_eq!(app.selected, app.entries.len() - 1);
     }
@@ -728,29 +823,69 @@ mod tests {
     fn minor_events_are_hidden_and_skipped_by_navigation() {
         let mut app = app();
         app.push_event(AgentEvent::ThreadStarted { thread_id: "t".into() });
-        app.push_event(AgentEvent::AgentMessage { text: "a".into() });
+        // Multi-line so each entry has detail beyond its summary, and so
+        // qualifies for the has-detail navigation this test also exercises.
+        app.push_event(AgentEvent::AgentMessage { text: "a\nmore a".into() });
         app.push_event(AgentEvent::TurnStarted);
-        app.push_event(AgentEvent::AgentMessage { text: "b".into() });
+        app.push_event(AgentEvent::AgentMessage { text: "b\nmore b".into() });
         app.push_event(AgentEvent::TurnCompleted { usage: TokenUsage::default() });
 
         // Hidden by default; no toggle needed to get here.
         assert!(!app.show_minor);
 
         app.select_first();
-        assert_eq!(app.entries[app.selected].event, AgentEvent::AgentMessage { text: "a".into() });
+        assert_eq!(app.entries[app.selected].event, AgentEvent::AgentMessage { text: "a\nmore a".into() });
 
         app.select_next();
-        assert_eq!(app.entries[app.selected].event, AgentEvent::AgentMessage { text: "b".into() });
+        assert_eq!(app.entries[app.selected].event, AgentEvent::AgentMessage { text: "b\nmore b".into() });
 
         // No more visible entries after "b"; select_next is a no-op.
         app.select_next();
-        assert_eq!(app.entries[app.selected].event, AgentEvent::AgentMessage { text: "b".into() });
+        assert_eq!(app.entries[app.selected].event, AgentEvent::AgentMessage { text: "b\nmore b".into() });
 
         app.select_prev();
-        assert_eq!(app.entries[app.selected].event, AgentEvent::AgentMessage { text: "a".into() });
+        assert_eq!(app.entries[app.selected].event, AgentEvent::AgentMessage { text: "a\nmore a".into() });
 
         app.toggle_minor();
         assert!(app.show_minor);
+    }
+
+    #[test]
+    fn select_next_and_prev_skip_entries_with_no_detail_beyond_their_summary() {
+        let mut app = app();
+        // A single line of text is entirely a restatement of the summary, so
+        // this entry has no arrow and should not be a stop for j/k.
+        app.push_event(AgentEvent::AgentMessage { text: "no detail here".into() });
+        app.push_event(AgentEvent::AgentMessage { text: "has detail\nsecond line".into() });
+        app.push_event(AgentEvent::AgentMessage { text: "also no detail".into() });
+        assert!(!app.entries[0].has_detail());
+        assert!(app.entries[1].has_detail());
+        assert!(!app.entries[2].has_detail());
+
+        // `select_first` (bound to `g`) is unaffected by the has-detail
+        // restriction: it lands on the very first visible entry regardless.
+        app.select_first();
+        assert_eq!(app.selected, 0);
+
+        // The only entry with detail is index 1; select_next skips index 0's
+        // lack of detail to land there, then has nothing further to skip to.
+        app.select_next();
+        assert_eq!(app.selected, 1);
+        app.select_next();
+        assert_eq!(app.selected, 1);
+        // Equally, there is no navigable entry before it to skip back to.
+        app.select_prev();
+        assert_eq!(app.selected, 1);
+
+        // J/K ignore the has-detail restriction and move one line at a time.
+        app.select_next_line();
+        assert_eq!(app.selected, 2);
+        app.select_next_line();
+        assert_eq!(app.selected, 2, "already at the last visible entry");
+        app.select_prev_line();
+        assert_eq!(app.selected, 1);
+        app.select_prev_line();
+        assert_eq!(app.selected, 0);
     }
 
     #[test]
