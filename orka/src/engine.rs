@@ -13,7 +13,7 @@
 //! never models a graph of its own.
 
 use crate::access::{read_access_summary, AccessSummary};
-use crate::agent::{AgentProtocol, SandboxLayout};
+use crate::agent::{OutputFormat, SandboxLayout};
 use crate::attempt::{AttemptId, AttemptPhase, FsAttemptStore, SealedState};
 use crate::executor::{
     ExecutionArtifacts, ExecutionReport, ExecutionSpec, IsolatedExecutor, MountSpec,
@@ -33,7 +33,7 @@ use std::path::PathBuf;
 #[derive(Clone, Debug)]
 pub struct ExecutionPolicy {
     pub command: Vec<String>,
-    pub protocol: AgentProtocol,
+    pub protocol: OutputFormat,
     /// Where the attempt worktree appears inside the environment.
     pub workspace_destination: PathBuf,
     /// Where the exchange directory (prompt in, outcome out) appears.
@@ -49,7 +49,7 @@ impl ExecutionPolicy {
         let layout = SandboxLayout::default();
         Self {
             command,
-            protocol: AgentProtocol::Plain,
+            protocol: OutputFormat::Plain,
             workspace_destination: layout.workspace,
             io_destination: layout.exchange,
             extra_mounts: Vec::new(),
@@ -487,8 +487,12 @@ impl Engine<'_> {
             // Compatibility with attempts created before access journals.
             return Ok(());
         };
-        self.linka
-            .record_observed_context(input, &workspace.path, result, &accesses.distinct_paths())?;
+        self.linka.record_observed_context(
+            input,
+            &workspace.path,
+            result,
+            &accesses.distinct_paths(),
+        )?;
         Ok(())
     }
 
@@ -506,8 +510,8 @@ impl Engine<'_> {
             .map(|request| request.protocol)
             .unwrap_or_default();
         let path = match protocol {
-            AgentProtocol::Plain => self.attempts.transcript_path(attempt),
-            AgentProtocol::CodexJsonl => self.attempts.raw_events_path(attempt),
+            OutputFormat::Plain => self.attempts.transcript_path(attempt),
+            OutputFormat::Agent(_) => self.attempts.raw_events_path(attempt),
         };
         Ok((path, protocol.output_media_type()))
     }
@@ -576,8 +580,7 @@ impl Engine<'_> {
                     .attach_agent_output(&node, &id, &agent_output, media_type)?;
                 let file_changes = self.attempts.file_changes_path(&id);
                 if file_changes.is_file() {
-                    self.linka
-                        .attach_file_changes(&node, &id, &file_changes)?;
+                    self.linka.attach_file_changes(&node, &id, &file_changes)?;
                 }
             }
             let report = match snapshot.phase() {

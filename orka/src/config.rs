@@ -4,7 +4,7 @@
 //! workspace, and outcome protocol. Driva receives a fully resolved execution
 //! request and contributes no templates or agent-specific behavior.
 
-use crate::agent::{self, AgentInvocation, AgentProtocol, SandboxLayout};
+use crate::agent::{self, AgentInvocation, OutputFormat, SandboxLayout};
 use crate::driva_exec::DrivaExecutor;
 use crate::engine::ExecutionPolicy;
 use crate::executor::MountSpec;
@@ -108,7 +108,7 @@ pub struct MountConfig {
 
 struct ResolvedAgent {
     command: Vec<String>,
-    protocol: AgentProtocol,
+    protocol: OutputFormat,
     layout: SandboxLayout,
     mounts: Vec<MountSpec>,
     environment: BTreeMap<String, String>,
@@ -212,7 +212,7 @@ impl Config {
                 }
                 Ok(AgentInvocation {
                     command: self.agent.command.clone(),
-                    protocol: AgentProtocol::Plain,
+                    protocol: OutputFormat::Plain,
                     mounts: Vec::new(),
                     environment: BTreeMap::new(),
                     network: false,
@@ -266,7 +266,7 @@ mod tests {
         .unwrap();
         let policy = config.policy().unwrap();
         assert_eq!(policy.command, vec!["agent", "--go"]);
-        assert_eq!(policy.protocol, AgentProtocol::Plain);
+        assert_eq!(policy.protocol, OutputFormat::Plain);
         assert_eq!(
             policy.workspace_destination,
             PathBuf::from("/tmp/orka/workspace")
@@ -293,7 +293,10 @@ mod tests {
         .unwrap();
         let policy = config.policy().unwrap();
         assert_eq!(policy.command.last().unwrap(), agent::AGENT_PROMPT);
-        assert_eq!(policy.protocol, AgentProtocol::CodexJsonl);
+        assert_eq!(
+            policy.protocol,
+            OutputFormat::Agent(genta::event::Protocol::CodexJsonl)
+        );
         assert!(policy.command.iter().any(|argument| argument == "--json"));
         assert_eq!(
             policy.workspace_destination,

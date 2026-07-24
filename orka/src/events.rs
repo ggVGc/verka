@@ -3,7 +3,7 @@
 //! Provider wire formats stop here. The rest of Orka consumes a small stable
 //! event vocabulary and Driva remains an uninterpreted process transport.
 
-use crate::agent::AgentProtocol;
+use crate::agent::OutputFormat;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs::OpenOptions;
@@ -247,22 +247,21 @@ fn closing_fence(line: &str, marker: char, width: usize) -> bool {
 }
 
 /// Render a work log from a raw agent-output fact, selecting the decoder by the
-/// [`AgentProtocol`] that produced it. This is the versioned dispatch point: a
-/// new agent wire format is a new `AgentProtocol` variant plus a match arm here,
-/// and the exhaustive match makes the compiler demand a decoder for it. An
-/// attempt always decodes through its own recorded protocol, so adding decoders
-/// never disturbs how older attempts read back.
+/// [`OutputFormat`] that produced it. This is the versioned dispatch point: a
+/// Genta owns the structured protocol registry and its exhaustive decoder
+/// dispatch. An attempt always decodes through its own recorded protocol, so
+/// adding decoders never disturbs how older attempts read back.
 ///
 /// `file_changes` supplies checkpoint annotations for decoders that carry
 /// file-change events; decoders that do not (e.g. a plain transcript) ignore it.
 pub fn work_log_from_raw(
-    protocol: AgentProtocol,
+    protocol: OutputFormat,
     output: &[u8],
     file_changes: Option<&[u8]>,
 ) -> Result<Vec<WorkLogBlock>> {
     match protocol {
-        AgentProtocol::Plain => Ok(transcript_blocks(&String::from_utf8_lossy(output))),
-        AgentProtocol::CodexJsonl => work_log_from_codex_raw(output, file_changes),
+        OutputFormat::Plain => Ok(transcript_blocks(&String::from_utf8_lossy(output))),
+        OutputFormat::Agent(protocol) => work_log_from_agent_raw(protocol, output, file_changes),
     }
 }
 
@@ -278,7 +277,15 @@ pub fn work_log_from_codex_raw(
     raw: &[u8],
     file_changes: Option<&[u8]>,
 ) -> Result<Vec<WorkLogBlock>> {
-    let events = decode_codex_events(raw, file_changes)?;
+    work_log_from_agent_raw(genta::event::Protocol::CodexJsonl, raw, file_changes)
+}
+
+fn work_log_from_agent_raw(
+    protocol: genta::event::Protocol,
+    raw: &[u8],
+    file_changes: Option<&[u8]>,
+) -> Result<Vec<WorkLogBlock>> {
+    let events = decode_agent_events(protocol, raw, file_changes)?;
     Ok(events.iter().flat_map(event_blocks).collect())
 }
 
@@ -286,7 +293,11 @@ pub fn work_log_from_codex_raw(
 /// checkpoint commits from the file-change journal in event order. This is the
 /// single decode shared by every downstream view; its output is never written
 /// to disk.
-fn decode_codex_events(raw: &[u8], file_changes: Option<&[u8]>) -> Result<Vec<AgentEvent>> {
+fn decode_agent_events(
+    protocol: genta::event::Protocol,
+    raw: &[u8],
+    file_changes: Option<&[u8]>,
+) -> Result<Vec<AgentEvent>> {
     let mut checkpoints = match file_changes {
         Some(bytes) => crate::file_changes::read_checkpoints_bytes(bytes)?,
         None => Vec::new(),
@@ -298,7 +309,7 @@ fn decode_codex_events(raw: &[u8], file_changes: Option<&[u8]>) -> Result<Vec<Ag
             continue;
         }
         let line = String::from_utf8_lossy(line);
-        let mut event = decode_codex_line(line.trim_end());
+        let mut event = genta::event::decode_line(protocol, line.trim_end());
         if let AgentEvent::FileChanged {
             id,
             checkpoint,
@@ -629,7 +640,7 @@ mod tests {
     fn the_protocol_selects_the_decoder() {
         // Plain output is its own transcript; the dispatcher wraps it without
         // interpreting it as an event stream.
-        let plain = work_log_from_raw(AgentProtocol::Plain, b"just some stdout\n", None).unwrap();
+        let plain = work_log_from_raw(OutputFormat::Plain, b"just some stdout\n", None).unwrap();
         assert!(matches!(
             plain.as_slice(),
             [WorkLogBlock::Transcript { .. }]
@@ -638,7 +649,7 @@ mod tests {
         // The same bytes routed through the Codex decoder would instead be
         // parsed as jsonl — here a real Codex line decodes to a message.
         let codex = work_log_from_raw(
-            AgentProtocol::CodexJsonl,
+            OutputFormat::Agent(genta::event::Protocol::CodexJsonl),
             br#"{"type":"item.completed","item":{"id":"m1","type":"agent_message","text":"hi"}}"#,
             None,
         )
@@ -655,8 +666,7 @@ mod tests {
         let checkpoints =
             "{\"schema\":1,\"sequence\":1,\"event_id\":\"f1\",\"paths\":[\"src/lib.rs\"],\"commit\":\"abc123\"}\n";
 
-        let blocks =
-            work_log_from_codex_raw(raw.as_bytes(), Some(checkpoints.as_bytes())).unwrap();
+        let blocks = work_log_from_codex_raw(raw.as_bytes(), Some(checkpoints.as_bytes())).unwrap();
         assert!(matches!(
             blocks.as_slice(),
             [WorkLogBlock::FilesChanged { checkpoint: Some(commit), .. }] if commit == "abc123"
@@ -667,7 +677,10 @@ mod tests {
         let bare = work_log_from_codex_raw(raw.as_bytes(), None).unwrap();
         assert!(matches!(
             bare.as_slice(),
-            [WorkLogBlock::FilesChanged { checkpoint: None, .. }]
+            [WorkLogBlock::FilesChanged {
+                checkpoint: None,
+                ..
+            }]
         ));
     }
 }

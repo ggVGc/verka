@@ -7,7 +7,7 @@
 //! diagnostics, and the returned report carries harness-observed evidence.
 
 use crate::access::{read_access_summary, write_access_summary, AccessRecorder};
-use crate::agent::AgentProtocol;
+use crate::agent::OutputFormat;
 use crate::executor::{ExecutionArtifacts, ExecutionReport, ExecutionSpec, IsolatedExecutor};
 use crate::file_changes::FileChangeRecorder;
 use anyhow::{Context, Result};
@@ -84,17 +84,17 @@ impl IsolatedExecutor for DrivaExecutor {
         // those interpretations are produced on demand from what is captured
         // here.
         let stdout = match spec.protocol {
-            AgentProtocol::Plain => {
+            OutputFormat::Plain => {
                 std::fs::write(&artifacts.transcript, b"").with_context(|| {
                     format!("creating transcript {}", artifacts.transcript.display())
                 })?;
                 append_handle(&artifacts.transcript)?
             }
-            AgentProtocol::CodexJsonl => {
+            OutputFormat::Agent(_) => {
                 let raw = artifacts
                     .raw_events
                     .as_ref()
-                    .context("Codex JSONL execution has no raw event path")?;
+                    .context("structured agent execution has no raw event path")?;
                 std::fs::write(raw, b"")
                     .with_context(|| format!("creating event journal {}", raw.display()))?;
                 append_handle(raw)?
@@ -106,7 +106,7 @@ impl IsolatedExecutor for DrivaExecutor {
             stderr: append_handle(&artifacts.diagnostics)?,
         };
 
-        let file_change_recorder = if spec.protocol == AgentProtocol::CodexJsonl {
+        let file_change_recorder = if spec.protocol.records_file_changes() {
             let workspace = spec
                 .mounts
                 .iter()
@@ -256,7 +256,7 @@ mod tests {
     fn spec(dir: &Path) -> ExecutionSpec {
         ExecutionSpec {
             command: vec!["agent".into(), "--work".into()],
-            protocol: AgentProtocol::Plain,
+            protocol: OutputFormat::Plain,
             working_directory: "/tmp/orka/workspace".into(),
             mounts: vec![
                 MountSpec {
@@ -278,15 +278,15 @@ mod tests {
         }
     }
 
-    fn artifacts(dir: &Path, protocol: AgentProtocol) -> ExecutionArtifacts {
+    fn artifacts(dir: &Path, protocol: OutputFormat) -> ExecutionArtifacts {
         ExecutionArtifacts {
             transcript: dir.join("transcript.log"),
             diagnostics: dir.join("diagnostics.log"),
-            raw_events: (protocol == AgentProtocol::CodexJsonl)
+            raw_events: (protocol == OutputFormat::Agent(genta::event::Protocol::CodexJsonl))
                 .then(|| dir.join("events.raw.jsonl")),
-            file_changes: (protocol == AgentProtocol::CodexJsonl)
+            file_changes: (protocol == OutputFormat::Agent(genta::event::Protocol::CodexJsonl))
                 .then(|| dir.join("file-changes.v1.jsonl")),
-            file_change_ref: (protocol == AgentProtocol::CodexJsonl)
+            file_change_ref: (protocol == OutputFormat::Agent(genta::event::Protocol::CodexJsonl))
                 .then(|| "refs/orka/file-changes/test".into()),
             accesses: dir.join("accesses.v1.jsonl"),
         }
@@ -322,7 +322,7 @@ mod tests {
             stdout: "to stdout",
         }));
 
-        let artifacts = artifacts(&dir, AgentProtocol::Plain);
+        let artifacts = artifacts(&dir, OutputFormat::Plain);
         let report = executor.run(&spec(&dir), &artifacts).unwrap();
         assert_eq!(report.exit_code, 3);
         assert_eq!(report.backend, "stub");
@@ -375,8 +375,11 @@ mod tests {
             stdout: r#"{"type":"item.completed","item":{"id":"m1","type":"agent_message","text":"Finished cleanly"}}"#,
         }));
         let mut spec = spec(&dir);
-        spec.protocol = AgentProtocol::CodexJsonl;
-        let artifacts = artifacts(&dir, AgentProtocol::CodexJsonl);
+        spec.protocol = OutputFormat::Agent(genta::event::Protocol::CodexJsonl);
+        let artifacts = artifacts(
+            &dir,
+            OutputFormat::Agent(genta::event::Protocol::CodexJsonl),
+        );
 
         executor.run(&spec, &artifacts).unwrap();
 
@@ -408,7 +411,7 @@ mod tests {
             stdout: "unused",
         }));
         // `ws` and `ctx` were never created: validation must refuse the grant.
-        let result = executor.run(&spec(&dir), &artifacts(&dir, AgentProtocol::Plain));
+        let result = executor.run(&spec(&dir), &artifacts(&dir, OutputFormat::Plain));
         assert!(result.is_err());
         assert!(seen.lock().unwrap().is_empty(), "backend never ran");
         std::fs::remove_dir_all(&dir).unwrap();

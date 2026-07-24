@@ -23,7 +23,7 @@
 //!
 //! The phase of an attempt is derived from which files exist, never stored.
 
-use crate::agent::AgentProtocol;
+use crate::agent::OutputFormat;
 use crate::executor::{ExecutionArtifacts, ExecutionReport, ExecutionSpec};
 use crate::input::AttemptInput;
 use crate::workspace::PreparedWorkspace;
@@ -207,15 +207,17 @@ impl FsAttemptStore {
     pub fn execution_artifacts(
         &self,
         id: &AttemptId,
-        protocol: AgentProtocol,
+        protocol: OutputFormat,
     ) -> ExecutionArtifacts {
         ExecutionArtifacts {
             transcript: self.transcript_path(id),
             diagnostics: self.diagnostics_path(id),
-            raw_events: (protocol == AgentProtocol::CodexJsonl).then(|| self.raw_events_path(id)),
-            file_changes: (protocol == AgentProtocol::CodexJsonl)
+            raw_events: protocol.is_agent().then(|| self.raw_events_path(id)),
+            file_changes: protocol
+                .records_file_changes()
                 .then(|| self.file_changes_path(id)),
-            file_change_ref: (protocol == AgentProtocol::CodexJsonl)
+            file_change_ref: protocol
+                .records_file_changes()
                 .then(|| format!("refs/orka/file-changes/{}", id.0)),
             accesses: self.accesses_path(id),
         }
@@ -436,7 +438,7 @@ mod tests {
     fn spec() -> ExecutionSpec {
         ExecutionSpec {
             command: vec!["agent".into()],
-            protocol: AgentProtocol::Plain,
+            protocol: OutputFormat::Plain,
             working_directory: "/tmp/orka/workspace".into(),
             mounts: vec![MountSpec {
                 source: "/tmp/ws".into(),

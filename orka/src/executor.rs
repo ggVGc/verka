@@ -6,7 +6,7 @@
 //! Every type crossing it is serde-serializable because the execution request
 //! and its harness-observed report are persisted verbatim in attempt records.
 
-use crate::agent::AgentProtocol;
+use crate::agent::OutputFormat;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -28,7 +28,7 @@ pub struct MountSpec {
 pub struct ExecutionSpec {
     pub command: Vec<String>,
     #[serde(default)]
-    pub protocol: AgentProtocol,
+    pub protocol: OutputFormat,
     /// Working directory inside the isolated environment.
     pub working_directory: PathBuf,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

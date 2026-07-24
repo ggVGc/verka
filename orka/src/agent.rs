@@ -6,51 +6,59 @@
 
 use crate::executor::MountSpec;
 use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
+use genta::event::Protocol;
+use serde::{de::Error as _, Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 pub const AGENT_PROMPT: &str =
     "Read and follow the instructions in the file named by the ORKA_PROMPT environment variable.";
 
-/// Machine-readable output protocol produced by an agent command.
+/// The shape of output retained for an agent command.
 ///
-/// This belongs to Orka because Driva transports process streams without
-/// interpreting which program produced them.
+/// Plain commands produce a transcript. Structured coding agents name the
+/// Genta-owned wire protocol that decodes their verbatim event stream.
 ///
 /// The protocol is also the identity of the decoder that reads an attempt's raw
-/// agent-output fact back into a work log. It is a versioned registry: a new
-/// agent wire format (or a new version of an existing one) is added as a new
-/// variant here, its media type below, and a match arm in
-/// [`crate::events::work_log_from_raw`]. Because dispatch is an exhaustive
-/// match, the compiler then requires every reader to handle it, so a decoder is
-/// never silently missing — and old attempts keep decoding through their own
-/// recorded variant.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum AgentProtocol {
+/// agent-output fact back into a work log. Genta owns the versioned structured
+/// protocol registry; Orka adds only its plain-output case and durable media
+/// types. Old attempts therefore keep decoding through their recorded protocol.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OutputFormat {
     #[default]
     Plain,
-    CodexJsonl,
+    Agent(Protocol),
 }
 
-/// Media type stamped on the durable agent-output fact for [`AgentProtocol::Plain`].
+/// Media type stamped on the durable agent-output fact for [`OutputFormat::Plain`].
 pub const PLAIN_OUTPUT_MEDIA_TYPE: &str = "text/plain; charset=utf-8";
 
 /// Media type stamped on the durable agent-output fact for
-/// [`AgentProtocol::CodexJsonl`]. Vendor-specific and version-bearing so the
+/// [`OutputFormat::Agent`] with [`Protocol::CodexJsonl`]. Vendor-specific and version-bearing so the
 /// stored fact names exactly the decoder that reads it; a future revision of the
 /// Codex stream gets a new type (e.g. `…codex.v2+ndjson`) and a new variant.
 pub const CODEX_JSONL_OUTPUT_MEDIA_TYPE: &str = "application/vnd.orka.codex.v1+ndjson";
 
-impl AgentProtocol {
+impl OutputFormat {
+    pub fn is_agent(self) -> bool {
+        matches!(self, OutputFormat::Agent(_))
+    }
+
+    pub fn records_file_changes(self) -> bool {
+        matches!(self, OutputFormat::Agent(Protocol::CodexJsonl))
+    }
+
     /// The media type stamped on this protocol's durable agent-output fact, so
     /// the stored blob is self-describing: a reader selects the decoder from
     /// this alone, without the attempt's request record.
     pub fn output_media_type(self) -> &'static str {
         match self {
-            AgentProtocol::Plain => PLAIN_OUTPUT_MEDIA_TYPE,
-            AgentProtocol::CodexJsonl => CODEX_JSONL_OUTPUT_MEDIA_TYPE,
+            OutputFormat::Plain => PLAIN_OUTPUT_MEDIA_TYPE,
+            OutputFormat::Agent(Protocol::CodexJsonl) => CODEX_JSONL_OUTPUT_MEDIA_TYPE,
+            OutputFormat::Agent(Protocol::CodexAppServer) => {
+                "application/vnd.orka.codex-app-server.v1+ndjson"
+            }
+            OutputFormat::Agent(Protocol::ClaudeJsonl) => "application/vnd.orka.claude.v1+ndjson",
         }
     }
 
@@ -59,10 +67,40 @@ impl AgentProtocol {
     /// unknown decoder — surfaced as an error rather than mis-decoded.
     pub fn from_output_media_type(media_type: &str) -> Option<Self> {
         match media_type {
-            PLAIN_OUTPUT_MEDIA_TYPE => Some(AgentProtocol::Plain),
-            CODEX_JSONL_OUTPUT_MEDIA_TYPE => Some(AgentProtocol::CodexJsonl),
+            PLAIN_OUTPUT_MEDIA_TYPE => Some(OutputFormat::Plain),
+            CODEX_JSONL_OUTPUT_MEDIA_TYPE => Some(OutputFormat::Agent(Protocol::CodexJsonl)),
+            "application/vnd.orka.codex-app-server.v1+ndjson" => {
+                Some(OutputFormat::Agent(Protocol::CodexAppServer))
+            }
+            "application/vnd.orka.claude.v1+ndjson" => {
+                Some(OutputFormat::Agent(Protocol::ClaudeJsonl))
+            }
             _ => None,
         }
+    }
+}
+
+// Preserve the original string representation in durable attempt records:
+// "plain" and "codex-jsonl". Genta's protocol names extend that representation
+// directly instead of introducing a nested Orka-specific enum shape.
+impl Serialize for OutputFormat {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            OutputFormat::Plain => serializer.serialize_str("plain"),
+            OutputFormat::Agent(protocol) => protocol.serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for OutputFormat {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = String::deserialize(deserializer)?;
+        if value == "plain" {
+            return Ok(OutputFormat::Plain);
+        }
+        let protocol =
+            serde_json::from_value(serde_json::Value::String(value)).map_err(D::Error::custom)?;
+        Ok(OutputFormat::Agent(protocol))
     }
 }
 
@@ -92,7 +130,7 @@ impl Default for SandboxLayout {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgentInvocation {
     pub command: Vec<String>,
-    pub protocol: AgentProtocol,
+    pub protocol: OutputFormat,
     pub mounts: Vec<MountSpec>,
     pub environment: BTreeMap<String, String>,
     pub network: bool,
@@ -112,7 +150,7 @@ pub fn codex(executable: &Path, layout: &SandboxLayout) -> Result<AgentInvocatio
             workspace,
             AGENT_PROMPT,
         ),
-        protocol: AgentProtocol::CodexJsonl,
+        protocol: OutputFormat::Agent(Protocol::CodexJsonl),
         mounts: vec![MountSpec {
             source: "~/.codex/auth.json".into(),
             destination: "/root/.codex/auth.json".into(),
@@ -138,23 +176,42 @@ mod tests {
     /// guards the round-trip the durable render path depends on.
     #[test]
     fn output_media_types_round_trip_to_their_decoder() {
-        for protocol in [AgentProtocol::Plain, AgentProtocol::CodexJsonl] {
+        for protocol in [
+            OutputFormat::Plain,
+            OutputFormat::Agent(Protocol::CodexJsonl),
+            OutputFormat::Agent(Protocol::CodexAppServer),
+            OutputFormat::Agent(Protocol::ClaudeJsonl),
+        ] {
             assert_eq!(
-                AgentProtocol::from_output_media_type(protocol.output_media_type()),
+                OutputFormat::from_output_media_type(protocol.output_media_type()),
                 Some(protocol),
                 "{protocol:?} media type must select its own decoder"
             );
         }
         assert_ne!(
-            AgentProtocol::Plain.output_media_type(),
-            AgentProtocol::CodexJsonl.output_media_type(),
+            OutputFormat::Plain.output_media_type(),
+            OutputFormat::Agent(Protocol::CodexJsonl).output_media_type(),
             "each decoder must be distinguishable by its stored media type"
         );
         // An output written by a newer or unknown decoder is refused, never
         // mis-decoded as a format this build happens to recognise.
         assert_eq!(
-            AgentProtocol::from_output_media_type("application/vnd.orka.future.v9+ndjson"),
+            OutputFormat::from_output_media_type("application/vnd.orka.future.v9+ndjson"),
             None
+        );
+    }
+
+    #[test]
+    fn output_formats_keep_their_flat_durable_names() {
+        let codex = OutputFormat::Agent(Protocol::CodexJsonl);
+        assert_eq!(serde_json::to_string(&codex).unwrap(), r#""codex-jsonl""#);
+        assert_eq!(
+            serde_json::from_str::<OutputFormat>(r#""codex-jsonl""#).unwrap(),
+            codex
+        );
+        assert_eq!(
+            serde_json::from_str::<OutputFormat>(r#""plain""#).unwrap(),
+            OutputFormat::Plain
         );
     }
 
@@ -166,7 +223,10 @@ mod tests {
         assert_eq!(layout.workspace, Path::new("/tmp/orka/workspace"));
         assert_eq!(layout.exchange, Path::new("/tmp/orka/exchange"));
         assert_eq!(invocation.command[0], "codex");
-        assert_eq!(invocation.protocol, AgentProtocol::CodexJsonl);
+        assert_eq!(
+            invocation.protocol,
+            OutputFormat::Agent(Protocol::CodexJsonl)
+        );
         assert!(invocation
             .command
             .iter()
