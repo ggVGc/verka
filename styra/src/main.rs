@@ -541,6 +541,9 @@ fn handle_input_key(app: &mut App, cli: &Cli, layout: &SandboxLayout, live: &mut
             }
         }
         KeyCode::Backspace => app.input_backspace(),
+        KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.input_delete_word()
+        }
         KeyCode::Char(ch) => app.input_char(ch),
         _ => {}
     }

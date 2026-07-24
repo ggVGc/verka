@@ -544,6 +544,20 @@ impl App {
         self.input.pop();
     }
 
+    /// Delete the word immediately before the end of the buffer (`Ctrl-W`),
+    /// readline-style: trailing whitespace first, then non-whitespace back
+    /// to the previous word boundary (or the start of the buffer).
+    pub fn input_delete_word(&mut self) {
+        let trimmed = self.input.trim_end_matches(char::is_whitespace).len();
+        self.input.truncate(trimmed);
+        let word_start = self
+            .input
+            .rfind(char::is_whitespace)
+            .map(|idx| idx + 1)
+            .unwrap_or(0);
+        self.input.truncate(word_start);
+    }
+
     pub fn input_newline(&mut self) {
         self.input.push('\n');
     }
@@ -979,5 +993,33 @@ mod tests {
         assert_eq!(app.take_message(), Some("hi".into()));
         assert!(app.input.is_empty());
         assert_eq!(app.take_message(), None);
+    }
+
+    #[test]
+    fn input_delete_word_removes_the_trailing_word_readline_style() {
+        let mut app = app();
+        app.set_input("fix the flaky test".into());
+        app.input_delete_word();
+        assert_eq!(app.input, "fix the flaky ");
+        app.input_delete_word();
+        assert_eq!(app.input, "fix the ");
+
+        // Trailing whitespace with nothing after it is consumed first, along
+        // with the word before it, in one call — not two.
+        app.set_input("one two   ".into());
+        app.input_delete_word();
+        assert_eq!(app.input, "one ");
+
+        // Deleting past the first word empties the buffer rather than
+        // panicking or leaving a dangling boundary.
+        app.input_delete_word();
+        assert_eq!(app.input, "");
+        app.input_delete_word();
+        assert_eq!(app.input, "");
+
+        // Spans a newline like any other whitespace.
+        app.set_input("hello\nworld".into());
+        app.input_delete_word();
+        assert_eq!(app.input, "hello\n");
     }
 }

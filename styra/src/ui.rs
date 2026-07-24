@@ -724,7 +724,7 @@ fn input_text(app: &App) -> Vec<Line<'static>> {
 
 fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     let hints = match (app.focus, app.view) {
-        (Focus::Input, _) => "Enter send · Alt+Enter newline · Esc back to list",
+        (Focus::Input, _) => "Enter send · Alt+Enter newline · Ctrl+W delete word · Esc back to list",
         (Focus::List, View::Events) => {
             "j/k next/prev with detail · J/K next/prev line · space fold · C collapse all · m minor · p preview · P full-screen · t transcript · r raw · l log · d driva · i message · s stop · V switch · q quit"
         }
