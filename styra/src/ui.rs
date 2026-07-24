@@ -27,13 +27,13 @@ const DETAIL_INDENT: &str = "    ";
 /// background and flip the whole selected row to a glaring full-white fill.
 const DETAIL_BG: Color = Color::DarkGray;
 
-/// Color coding for the status dot, so running vs. waiting for input reads at
+/// Color coding for the status dot, so running vs. idle for input reads at
 /// a glance instead of requiring the operator to read the label text.
 fn status_color(status: &Status) -> Color {
     match status {
         Status::Pending => Color::Blue,
         Status::Running => Color::Green,
-        Status::Waiting => Color::Yellow,
+        Status::Idle => Color::Yellow,
         Status::Stopped => Color::DarkGray,
         Status::Ended { error: Some(_), .. } => Color::Red,
         Status::Ended { .. } => Color::DarkGray,
@@ -824,13 +824,13 @@ mod tests {
     }
 
     #[test]
-    fn header_shows_a_dot_indicating_running_vs_waiting() {
+    fn header_shows_a_dot_indicating_running_vs_idle() {
         let mut app = App::new("codex", "s1");
         assert!(rendered(&app).contains('●'));
         assert_eq!(status_color(&app.status), Color::Green);
 
         app.push_event(AgentEvent::TurnCompleted { usage: TokenUsage::default() });
-        assert!(rendered(&app).contains("waiting"));
+        assert!(rendered(&app).contains("idle"));
         assert_eq!(status_color(&app.status), Color::Yellow);
     }
 

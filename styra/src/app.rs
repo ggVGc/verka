@@ -38,7 +38,7 @@ pub enum Status {
     /// The agent is working.
     Running,
     /// A turn completed; the agent is idle, awaiting input.
-    Waiting,
+    Idle,
     /// The operator stopped the session; the process may still be winding down.
     Stopped,
     /// The agent process ended.
@@ -50,7 +50,7 @@ impl Status {
         match self {
             Status::Pending => "not started".into(),
             Status::Running => "running".into(),
-            Status::Waiting => "waiting".into(),
+            Status::Idle => "idle".into(),
             Status::Stopped => "stopped".into(),
             Status::Ended { error: Some(_), .. } => "failed".into(),
             Status::Ended { exit_code: Some(code), .. } => format!("ended ({code})"),
@@ -59,7 +59,7 @@ impl Status {
     }
 
     pub fn is_active(&self) -> bool {
-        matches!(self, Status::Pending | Status::Running | Status::Waiting)
+        matches!(self, Status::Pending | Status::Running | Status::Idle)
     }
 }
 
@@ -290,7 +290,7 @@ impl App {
                     self.latest_usage = Some(usage.clone());
                 }
                 if self.status.is_active() {
-                    self.status = Status::Waiting;
+                    self.status = Status::Idle;
                 }
             }
             AgentEvent::UsageUpdated { usage } => {
@@ -557,7 +557,7 @@ mod tests {
         app.push_event(AgentEvent::TurnCompleted {
             usage: TokenUsage { input_tokens: 7, ..Default::default() },
         });
-        assert_eq!(app.status, Status::Waiting);
+        assert_eq!(app.status, Status::Idle);
         assert_eq!(app.latest_usage.as_ref().unwrap().input_tokens, 7);
 
         app.push_event(AgentEvent::UserMessage { text: "more".into() });
@@ -569,8 +569,8 @@ mod tests {
         // The app-server protocol reports a token-usage snapshot after every
         // step within a turn (each tool call, each model round), not just the
         // last one. Only a real `TurnCompleted` should flip the status to
-        // waiting; `UsageUpdated` must not, or the indicator falsely reads
-        // idle while the agent is still actively working.
+        // idle; `UsageUpdated` must not, or the indicator falsely reads idle
+        // while the agent is still actively working.
         let mut app = app();
         app.push_event(AgentEvent::CommandStarted { command: "cargo test".into() });
         assert_eq!(app.status, Status::Running);
@@ -591,7 +591,7 @@ mod tests {
         // The app-server's real end-of-turn signal carries no usage of its
         // own; the last reported usage must survive it, not reset to zero.
         app.push_event(AgentEvent::TurnCompleted { usage: TokenUsage::default() });
-        assert_eq!(app.status, Status::Waiting);
+        assert_eq!(app.status, Status::Idle);
         assert_eq!(app.latest_usage.as_ref().unwrap().input_tokens, 20);
     }
 
