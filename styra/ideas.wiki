@@ -1,3 +1,13 @@
+- styra should be headless:
+  - Current TUI is just an UI
+  - Can also make a plugin for nvim
+- Markdown rendering, so tables etc show nicer
+- Workflow:
+  - Set up an initial prompt
+  - Execute a task list against it
+  - Each task starts with the initial context and then the task, in a new session
+  - This can maybe later be tied into linka
+  - Part of the Driva behaviour should be orka, and this is probably part of it
 - When loading a new session, even if the initial message contains the rendered backlog, the user should still be shown the prior log entries the way they were:
   - And old entries should have some indication that they were loaded and not part of this actual session.
 - When a session is loaded, it should not create a new session until any input is given by the user.
