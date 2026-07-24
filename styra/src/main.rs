@@ -18,7 +18,7 @@ mod ui;
 
 use app::{App, Focus, Status, View};
 use styra_server::api::{CreateSession, SessionInfo};
-use styra_server::{Client, TrackSummary, TrackUpdate, LogEntry};
+use styra_server::{Client, LogEntry, TrackSummary, TrackUpdate};
 
 /// Run an interactive, isolated agent session in a terminal interface.
 #[derive(Parser)]
@@ -361,11 +361,50 @@ fn run_picker(
 /// server's live tracks rather than the stored-session store.
 fn run_tracks_picker(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    client: &Client,
     tracks: &[TrackSummary],
 ) -> Result<Option<TrackSummary>> {
     let mut selected = 0usize;
+    let mut preview_id = String::new();
+    let mut preview_cursor = 0u64;
+    let mut preview_updates = Vec::new();
     loop {
-        terminal.draw(|frame| ui::render_tracks_picker(frame, tracks, selected))?;
+        let selected_track = &tracks[selected];
+        if preview_id != selected_track.id {
+            preview_id.clone_from(&selected_track.id);
+            preview_cursor = 0;
+            preview_updates.clear();
+        }
+
+        match client.updates(&preview_id, preview_cursor) {
+            Ok(batch) => {
+                preview_cursor = batch.next;
+                preview_updates.extend(batch.updates.into_iter().filter_map(|sequenced| {
+                    match sequenced.update {
+                        // Raw lines duplicate decoded events and make the
+                        // compact preview noisy. Everything human-facing is
+                        // useful here: activity, diagnostics, and track end.
+                        TrackUpdate::Raw(_) => None,
+                        update => Some(update),
+                    }
+                }));
+            }
+            Err(error) => {
+                let message = format!("could not load current log: {error:#}");
+                if !preview_updates
+                    .last()
+                    .is_some_and(
+                        |update| matches!(update, TrackUpdate::Log(entry) if entry.message == message),
+                    )
+                {
+                    preview_updates.push(TrackUpdate::Log(LogEntry::error(message)));
+                }
+            }
+        }
+
+        terminal.draw(|frame| {
+            ui::render_tracks_picker(frame, tracks, selected, &preview_updates)
+        })?;
 
         if !event::poll(Duration::from_millis(100))? {
             continue;
@@ -491,7 +530,7 @@ fn run(
                 app.push_log(LogEntry::warn("no live tracks on the server"));
                 continue;
             }
-            if let Some(track) = run_tracks_picker(terminal, &tracks)? {
+            if let Some(track) = run_tracks_picker(terminal, client, &tracks)? {
                 return Ok(RunOutcome::Attach(track));
             }
             // Cancelled: the next iteration redraws the normal session view.

@@ -7,7 +7,7 @@
 use styra_server::agent::SandboxLayout;
 use crate::app::{App, Entry, Focus, Status, View};
 use styra_server::event::{DetailBlock, AgentEvent};
-use styra_server::{TrackSummary, SessionSummary};
+use styra_server::{SessionSummary, TrackSummary, TrackUpdate};
 use styra_server::{Direction as WireDirection, LogLevel};
 use styra_server::{Mount, MountAccess};
 use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
@@ -124,13 +124,24 @@ pub fn render_picker(frame: &mut Frame, sessions: &[SessionSummary], selected: u
     frame.render_stateful_widget(list, area, &mut state);
 }
 
-/// Render the current-tracks picker: every track the server is running, newest
-/// first, with `selected` highlighted. Like [`render_picker`], it stands apart
-/// from [`App`] — it overlays whatever session is loaded, so it renders purely
-/// from the passed track list.
-pub fn render_tracks_picker(frame: &mut Frame, tracks: &[TrackSummary], selected: usize) {
+/// Render the current-tracks picker: tracks on the left and the selected
+/// track's live diagnostic/stderr log on the right.
+///
+/// Like [`render_picker`], it stands apart from [`App`] because it overlays
+/// whichever session is currently loaded. The picker loop owns and refreshes
+/// `updates`, while this function remains a pure renderer.
+pub fn render_tracks_picker(
+    frame: &mut Frame,
+    tracks: &[TrackSummary],
+    selected: usize,
+    updates: &[TrackUpdate],
+) {
     let area = frame.area();
-    let block = Block::default()
+    let panes = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(42), Constraint::Percentage(58)])
+        .split(area);
+    let tracks_block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
         .title(" styra · current tracks · Enter attach · q cancel ");
@@ -140,18 +151,82 @@ pub fn render_tracks_picker(frame: &mut Frame, tracks: &[TrackSummary], selected
             "  no live tracks on the server",
             Style::default().fg(Color::Gray),
         )))
-        .block(block);
-        frame.render_widget(empty, area);
+        .block(tracks_block);
+        frame.render_widget(empty, panes[0]);
+        render_track_log_preview(frame, None, updates, panes[1]);
         return;
     }
 
     let items: Vec<ListItem> = tracks.iter().map(track_item).collect();
     let list = List::new(items)
-        .block(block)
+        .block(tracks_block)
         .highlight_style(Style::default().bg(SELECTION_BG).add_modifier(Modifier::BOLD));
     let mut state = ListState::default();
-    state.select(Some(selected.min(tracks.len() - 1)));
-    frame.render_stateful_widget(list, area, &mut state);
+    let selected = selected.min(tracks.len() - 1);
+    state.select(Some(selected));
+    frame.render_stateful_widget(list, panes[0], &mut state);
+    render_track_log_preview(frame, tracks.get(selected), updates, panes[1]);
+}
+
+fn render_track_log_preview(
+    frame: &mut Frame,
+    track: Option<&TrackSummary>,
+    updates: &[TrackUpdate],
+    area: Rect,
+) {
+    let title = track
+        .map(|track| format!(" current log · {} ", track.id))
+        .unwrap_or_else(|| " current log ".into());
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::DarkGray))
+        .title(title);
+
+    if updates.is_empty() {
+        let empty = Paragraph::new(Line::from(Span::styled(
+            "  no log entries yet",
+            Style::default().fg(Color::Gray),
+        )))
+        .block(block);
+        frame.render_widget(empty, area);
+        return;
+    }
+
+    // The preview follows the tail, combining decoded activity with Styra's
+    // diagnostic/stderr log. Raw wire lines are filtered by the picker loop
+    // because they duplicate decoded events in this compact view.
+    let viewport = area.height.saturating_sub(2) as usize;
+    let start = updates.len().saturating_sub(viewport);
+    let lines: Vec<Line<'static>> = updates[start..]
+        .iter()
+        .map(track_preview_line)
+        .collect();
+    frame.render_widget(Paragraph::new(lines).block(block), area);
+}
+
+fn track_preview_line(update: &TrackUpdate) -> Line<'static> {
+    match update {
+        TrackUpdate::Event(event) => {
+            let tag = event.tag();
+            Line::from(vec![
+                Span::styled(
+                    format!("{tag:<8} "),
+                    Style::default().fg(tag_color(tag)).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(event.summary(), Style::default().fg(Color::White)),
+            ])
+        }
+        TrackUpdate::Log(entry) => log_line(entry),
+        TrackUpdate::Ended(end) => {
+            let (message, color) = match (&end.error, end.exit_code) {
+                (Some(error), _) => (format!("failed: {error}"), Color::Red),
+                (None, Some(code)) => (format!("ended with exit code {code}"), Color::DarkGray),
+                (None, None) => ("ended".into(), Color::DarkGray),
+            };
+            Line::from(Span::styled(message, Style::default().fg(color)))
+        }
+        TrackUpdate::Raw(_) => Line::default(),
+    }
 }
 
 fn track_item(track: &TrackSummary) -> ListItem<'static> {
@@ -1479,10 +1554,14 @@ mod tests {
         }
     }
 
-    fn rendered_tracks_picker(tracks: &[TrackSummary], selected: usize) -> String {
+    fn rendered_tracks_picker(
+        tracks: &[TrackSummary],
+        selected: usize,
+        updates: &[TrackUpdate],
+    ) -> String {
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
         terminal
-            .draw(|frame| render_tracks_picker(frame, tracks, selected))
+            .draw(|frame| render_tracks_picker(frame, tracks, selected, updates))
             .unwrap();
         terminal
             .backend()
@@ -1500,8 +1579,9 @@ mod tests {
             track_summary("s-1", "codex", true),
             track_summary("s-2", "claude", false),
         ];
-        let screen = rendered_tracks_picker(&tracks, 0);
+        let screen = rendered_tracks_picker(&tracks, 0, &[]);
         assert!(screen.contains("current tracks"));
+        assert!(screen.contains("current log"));
         assert!(screen.contains("codex"));
         assert!(screen.contains("live"));
         assert!(screen.contains("s-1"));
@@ -1512,8 +1592,31 @@ mod tests {
 
     #[test]
     fn tracks_picker_shows_a_placeholder_when_there_are_no_live_tracks() {
-        let screen = rendered_tracks_picker(&[], 0);
+        let screen = rendered_tracks_picker(&[], 0, &[]);
         assert!(screen.contains("no live tracks"));
+    }
+
+    #[test]
+    fn tracks_picker_previews_the_selected_tracks_log() {
+        let tracks = vec![
+            track_summary("s-1", "codex", true),
+            track_summary("s-2", "claude", true),
+        ];
+        let updates = vec![
+            TrackUpdate::Event(AgentEvent::CommandStarted {
+                command: "cargo test".into(),
+            }),
+            TrackUpdate::Log(styra_server::LogEntry::warn("waiting for response")),
+            TrackUpdate::Event(AgentEvent::AgentMessage {
+                text: "Tests pass.".into(),
+            }),
+        ];
+
+        let screen = rendered_tracks_picker(&tracks, 1, &updates);
+        assert!(screen.contains("current log · s-2"));
+        assert!(screen.contains("cargo test"));
+        assert!(screen.contains("waiting for response"));
+        assert!(screen.contains("Tests pass."));
     }
 
     #[test]

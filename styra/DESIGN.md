@@ -408,6 +408,8 @@ current focus is shown in the status line and by which region draws the cursor.
 | `t`             | Toggle the rendered transcript view (`j`/`k`/`g`/`G` scroll from the start) |
 | `i`             | Enter input focus                                           |
 | `s`             | Stop the session (keeps the journal)                        |
+| `A`             | Show current jobs with a live preview of the selected job   |
+| `S`             | Stop the session and return to the blank start screen       |
 | `V`             | Switch to a different stored session (see *Session switching*) |
 | `q`             | Quit (prompts if the session is still running)              |
 
@@ -454,6 +456,15 @@ alternatives.
 Cancelling out of the picker (`Esc`/`q`) leaves the current session running
 untouched. Picking one when there is nothing stored yet logs a message in the
 diagnostic log view rather than doing nothing silently.
+
+### Current jobs
+
+`A` opens the server's current-jobs picker. The job list stays on the left,
+while the right pane follows the selected job's live log: decoded agent
+activity, Styra diagnostics and stderr, and the final process outcome. Moving
+the selection with `j`/`k` immediately loads that job's history and continues
+polling for new entries. `Enter` attaches to the selected job; `Esc`/`q`
+returns without affecting any running process.
 
 ### Starting and switching send nothing on their own
 
