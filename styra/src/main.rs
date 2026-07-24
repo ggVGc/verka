@@ -1,5 +1,5 @@
-//! Styra's terminal entry point: CLI, terminal lifecycle, and the event loop
-//! that wires the session threads to the application state and renderer.
+//! Styra's terminal client: CLI, terminal lifecycle, and the event loop that
+//! drives the application through Styra's JSON Unix-socket API.
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -11,19 +11,21 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use std::io::{Stdout, Write};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
-use styra::agent::{MountSpec, Profile, SandboxLayout, SessionMeta};
+use styra::api::{CreateSession, SessionInfo};
 use styra::app::{App, Focus, Status, View};
-use styra::journal::Journal;
-use styra::session::{DrivaOptions, LogEntry, Session, SessionSpec, SessionUpdate};
+use styra::client::Client;
+use styra::session::{LogEntry, SessionUpdate};
 use styra::ui;
 
 /// Run an interactive, isolated agent session in a terminal interface.
 #[derive(Parser)]
 #[command(name = "styra", about, version)]
 struct Cli {
+    /// Styra server Unix socket (default: $XDG_CONFIG_HOME/styra/styra.sock).
+    #[arg(long)]
+    socket: Option<PathBuf>,
     /// Agent profile to launch a live session with. Not used with `--view`:
     /// a viewed session carries its own recorded profile and protocol.
     #[arg(long, default_value = "codex")]
@@ -36,7 +38,7 @@ struct Cli {
     network: bool,
     /// Open a captured journal read-only instead of launching an agent: with
     /// a path, that session directly; bare (no path), a picker to browse and
-    /// choose one from those stored under .styra.
+    /// choose one from the server's store.
     #[arg(long, num_args = 0..=1, value_name = "SESSION")]
     view: Option<Option<PathBuf>>,
     /// Optional first message, sent to seed the opening turn.
@@ -46,7 +48,17 @@ struct Cli {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let layout = SandboxLayout::default();
+    let socket = match &cli.socket {
+        Some(path) => path.clone(),
+        None => styra::paths::default_socket()?,
+    };
+    let client = Client::new(&socket);
+    client.health().with_context(|| {
+        format!(
+            "Styra server is unavailable at {}; start `styra-server` in this project",
+            socket.display()
+        )
+    })?;
 
     // Bare `--view` (no path) needs an interactive terminal to browse
     // sessions in, so it is opened early only in that case; the other paths
@@ -57,19 +69,16 @@ fn main() -> Result<()> {
     let view_target: Option<PathBuf> = match &cli.view {
         Some(Some(path)) => Some(path.clone()),
         Some(None) => {
-            let sessions = styra::journal::list_sessions(&store_root()?)?;
+            let sessions = client.list_sessions()?;
             if sessions.is_empty() {
-                println!(
-                    "No sessions found under {}",
-                    styra::journal::sessions_dir(&store_root()?).display()
-                );
+                println!("No sessions found by the Styra server");
                 return Ok(());
             }
             let mut term = setup_terminal()?;
             match run_picker(&mut term, &sessions) {
-                Ok(Some(path)) => {
+                Ok(Some(id)) => {
                     terminal = Some(term);
-                    Some(path)
+                    Some(PathBuf::from(id))
                 }
                 Ok(None) => {
                     restore_terminal(&mut term)?;
@@ -91,11 +100,13 @@ fn main() -> Result<()> {
     let mut live: Live;
 
     if let Some(view) = &view_target {
-        let meta = read_session_meta_or_error(view)?;
-        let events = styra::journal::replay(view, meta.protocol)
-            .with_context(|| format!("opening journal {}", view.display()))?;
-        app = App::new(meta.profile, view.display().to_string());
-        for event in events {
+        let id = session_id_from_target(view)?;
+        let stored = client.stored_session(&id)?;
+        app = App::new(
+            stored.summary.profile.clone().unwrap_or_else(|| "unknown".into()),
+            stored.summary.id,
+        );
+        for event in stored.events {
             // Skip carried-but-viewless traffic (e.g. app-server control
             // lines), matching what a live session shows; it stays available
             // in the raw view below.
@@ -103,9 +114,7 @@ fn main() -> Result<()> {
                 app.push_event(event);
             }
         }
-        for line in styra::journal::replay_raw(view)
-            .with_context(|| format!("opening journal {}", view.display()))?
-        {
+        for line in stored.raw {
             app.push_raw(line);
         }
         // A replayed session has no live agent to end; mark it stopped.
@@ -118,9 +127,9 @@ fn main() -> Result<()> {
             // A trailing prompt is input the operator already gave (as a CLI
             // argument), so it is fine to launch immediately.
             Some(seed) => {
-                let (new_app, spawned, receiver) = launch_live_session(&cli, &layout, Some(seed))?;
+                let (new_app, info) = launch_live_session(&client, &cli, Some(seed))?;
                 app = new_app;
-                live = Live::Running { session: Box::new(spawned), updates: receiver };
+                live = Live::Running { session_id: info.id, cursor: 0 };
             }
             // No seed: nothing has been said to an agent yet, so nothing is
             // launched yet either. The event loop spawns the session the
@@ -142,19 +151,19 @@ fn main() -> Result<()> {
     // and loops back into run() pending a fresh launch, all inside the same
     // terminal.
     let result = loop {
-        let outcome = match run(&mut terminal, &mut app, &cli, &layout, &mut live) {
+        let outcome = match run(&mut terminal, &mut app, &client, &cli, &mut live) {
             Ok(outcome) => outcome,
             Err(error) => break Err(error),
         };
         match outcome {
             RunOutcome::Quit => break Ok(()),
-            RunOutcome::Switch(seed_path) => {
-                // Stopped and joined before the next session spawns; both
-                // write under .styra and there is no reason to overlap them.
-                if let Live::Running { session, .. } = std::mem::replace(&mut live, Live::Pending) {
-                    drop(session);
+            RunOutcome::Switch(seed_id) => {
+                if let Live::Running { session_id, .. } =
+                    std::mem::replace(&mut live, Live::Pending)
+                {
+                    client.stop_session(&session_id).ok();
                 }
-                match render_switch_seed(&seed_path) {
+                match client.transcript(&seed_id) {
                     Ok(transcript) => {
                         app = App::pending(cli.profile.clone());
                         app.set_input(transcript);
@@ -170,98 +179,19 @@ fn main() -> Result<()> {
     };
 
     restore_terminal(&mut terminal)?;
-    // Dropping the session here (after the terminal is restored) closes stdin
-    // and joins the worker threads.
-    if let Live::Running { session, .. } = live {
-        drop(session);
+    if let Live::Running { session_id, .. } = live {
+        client.stop_session(&session_id).ok();
     }
     result
 }
 
-/// `.styra` under the current directory: the store `--view`, the picker, and
-/// live sessions all read and write sessions under.
-fn store_root() -> Result<PathBuf> {
-    Ok(std::env::current_dir().context("determining the current directory")?.join(".styra"))
-}
-
-/// Read a stored session's recorded provenance, erroring plainly rather than
-/// guessing a protocol: a session predating the `session.json` sidecar (or
-/// missing it) cannot be decoded.
-fn read_session_meta_or_error(path: &Path) -> Result<SessionMeta> {
-    styra::journal::read_session_meta(path)
-        .with_context(|| format!("reading session metadata for {}", path.display()))?
-        .with_context(|| {
-            format!(
-                "session {} has no recorded agent metadata (session.json); \
-                 it predates provenance tracking and cannot be replayed",
-                path.display()
-            )
-        })
-}
-
-/// What a freshly spawned live session hands back, before it is wired into
-/// an `App` and the event loop's `Live` state.
-struct Spawned {
-    session: Session,
-    updates: Receiver<SessionUpdate>,
-    profile_name: String,
-    session_id: String,
-    workspace: PathBuf,
-    journal_path: PathBuf,
-    driva_options: DrivaOptions,
-}
-
-/// Create a session's journal, spawn the sandboxed agent process through
-/// Driva on `cli.profile`, and — if `seed` is given — send it as the
-/// opening message. This is the point at which the agent actually starts
-/// running, so callers only reach it once the operator has provided some
-/// input: a CLI trailing prompt, or a message typed into the box.
-fn spawn_session(cli: &Cli, layout: &SandboxLayout, seed: Option<&str>) -> Result<Spawned> {
-    let profile = Profile::builtin(&cli.profile, layout)?;
+fn create_session(client: &Client, cli: &Cli, seed: Option<&str>) -> Result<SessionInfo> {
     let workspace = resolve_workspace(cli.workspace.as_deref())?;
-    let root = store_root()?;
-    let (journal, session_id) = Journal::create_in_store(&root, &profile)?;
-    let journal_path = journal.path().to_path_buf();
-    let diagnostics = journal_path.parent().unwrap_or(&root).join("diagnostics.log");
-
-    let mut profile = profile;
-    profile.network = profile.network || cli.network;
-    let profile_name = profile.name.clone();
-
-    let spec = SessionSpec {
-        profile,
-        working_directory: layout.workspace.clone(),
-        workspace: MountSpec {
-            source: workspace.clone(),
-            destination: layout.workspace.clone(),
-            writable: true,
-        },
-        // No extra temporary mounts: the profile's HOME lives under the
-        // /tmp tmpfs Driva always provides.
-        temporary_mounts: Vec::new(),
-    };
-    let isolation_backend = "bwrap";
-    let driva_options = DrivaOptions::capture(&spec, isolation_backend);
-    let backend = Box::new(driva::BwrapIsolation {
-        executable: isolation_backend.into(),
-        rootfs: Some(PathBuf::from("/")),
-    });
-
-    let (session, updates) =
-        Session::spawn(spec, backend, journal, session_id.clone(), diagnostics)?;
-
-    if let Some(seed) = seed.map(str::trim).filter(|seed| !seed.is_empty()) {
-        session.send(seed)?;
-    }
-
-    Ok(Spawned {
-        session,
-        updates,
-        profile_name,
-        session_id,
+    client.create_session(&CreateSession {
+        profile: cli.profile.clone(),
         workspace,
-        journal_path,
-        driva_options,
+        network: cli.network,
+        message: seed.map(str::to_owned),
     })
 }
 
@@ -269,28 +199,24 @@ fn spawn_session(cli: &Cli, layout: &SandboxLayout, seed: Option<&str>) -> Resul
 /// prompt on first launch, the only case where the agent starts before the
 /// event loop takes over.
 fn launch_live_session(
+    client: &Client,
     cli: &Cli,
-    layout: &SandboxLayout,
     seed: Option<&str>,
-) -> Result<(App, Session, Receiver<SessionUpdate>)> {
-    let spawned = spawn_session(cli, layout, seed)?;
-    let mut app = App::new(spawned.profile_name, spawned.session_id);
-    app.set_workspace_root(spawned.workspace);
-    app.set_driva_options(spawned.driva_options);
-    app.push_log(LogEntry::info(format!("journal: {}", spawned.journal_path.display())));
-    Ok((app, spawned.session, spawned.updates))
+) -> Result<(App, SessionInfo)> {
+    let info = create_session(client, cli, seed)?;
+    let mut app = App::new(info.profile.clone(), info.id.clone());
+    app.set_workspace_root(info.workspace.clone());
+    app.set_driva_options(info.driva.clone());
+    app.push_log(LogEntry::info(format!("journal: {}", info.journal_path.display())));
+    Ok((app, info))
 }
 
-/// Render the picked stored session's journal to a plain-text transcript, to
-/// prefill the message box with. Nothing is sent and no process is launched
-/// here: switching stops the outgoing session and starts fresh, but the new
-/// agent only starts once the operator submits (or edits, or replaces) this
-/// transcript themselves. See `DESIGN.md`'s *Session switching* for why a
-/// rendered transcript rather than a native protocol resume.
-fn render_switch_seed(seed_path: &Path) -> Result<String> {
-    let meta = read_session_meta_or_error(seed_path)?;
-    styra::journal::render_transcript(seed_path, meta.protocol)
-        .with_context(|| format!("rendering a transcript for {}", seed_path.display()))
+fn session_id_from_target(target: &Path) -> Result<String> {
+    target
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(str::to_owned)
+        .with_context(|| format!("invalid session target {}", target.display()))
 }
 
 /// The session picker loop: j/k or arrows to move, Enter to choose a
@@ -298,7 +224,7 @@ fn render_switch_seed(seed_path: &Path) -> Result<String> {
 fn run_picker(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     sessions: &[styra::journal::SessionSummary],
-) -> Result<Option<PathBuf>> {
+) -> Result<Option<String>> {
     let mut selected = 0usize;
     loop {
         terminal.draw(|frame| ui::render_picker(frame, sessions, selected))?;
@@ -318,7 +244,7 @@ fn run_picker(
                 selected = (selected + 1).min(sessions.len() - 1);
             }
             KeyCode::Char('k') | KeyCode::Up => selected = selected.saturating_sub(1),
-            KeyCode::Enter => return Ok(Some(sessions[selected].path.clone())),
+            KeyCode::Enter => return Ok(Some(sessions[selected].id.clone())),
             _ => {}
         }
     }
@@ -329,7 +255,7 @@ enum RunOutcome {
     /// The operator quit.
     Quit,
     /// The operator picked a stored session to switch to.
-    Switch(PathBuf),
+    Switch(String),
 }
 
 /// The live-agent side of the interactive loop: no process yet (awaiting the
@@ -339,10 +265,9 @@ enum Live {
     /// Nothing has been launched; the event loop spawns the session itself
     /// the moment the operator submits a message from `Focus::Input`.
     Pending,
-    /// A spawned agent process and the channel its threads report through.
-    /// Boxed: `Pending` and `Viewing` carry nothing, so leaving `Session`
-    /// unboxed would size every `Live` to its largest variant.
-    Running { session: Box<Session>, updates: Receiver<SessionUpdate> },
+    /// A server-owned agent process, addressed by id. `cursor` makes polling
+    /// incremental and preserves the server's update order.
+    Running { session_id: String, cursor: u64 },
     /// A replayed journal (`--view`); there is no live agent to launch.
     Viewing,
 }
@@ -354,21 +279,38 @@ enum Live {
 fn run(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     app: &mut App,
+    client: &Client,
     cli: &Cli,
-    layout: &SandboxLayout,
     live: &mut Live,
 ) -> Result<RunOutcome> {
     let mut pending_fold = false;
     loop {
-        if let Live::Running { updates, .. } = live {
-            while let Ok(update) = updates.try_recv() {
-                match update {
+        let mut disconnected = false;
+        if let Live::Running { session_id, cursor } = live {
+            match client.updates(session_id, *cursor) {
+                Ok(batch) => {
+                    *cursor = batch.next;
+                    for sequenced in batch.updates {
+                        match sequenced.update {
                     SessionUpdate::Event(event) => app.push_event(event),
                     SessionUpdate::Raw(line) => app.push_raw(line),
                     SessionUpdate::Log(entry) => app.push_log(entry),
                     SessionUpdate::Ended(end) => app.on_ended(end),
+                        }
+                    }
+                }
+                Err(error) => {
+                    app.push_log(LogEntry::error(format!("update poll failed: {error:#}")));
+                    app.on_ended(styra::session::SessionEnd {
+                        exit_code: None,
+                        error: Some(error.to_string()),
+                    });
+                    disconnected = true;
                 }
             }
+        }
+        if disconnected {
+            *live = Live::Viewing;
         }
 
         terminal.draw(|frame| ui::render(frame, app))?;
@@ -384,8 +326,8 @@ fn run(
         }
 
         match app.focus {
-            Focus::List => handle_list_key(app, live, key, &mut pending_fold),
-            Focus::Input => handle_input_key(app, cli, layout, live, key),
+            Focus::List => handle_list_key(app, client, live, key, &mut pending_fold),
+            Focus::Input => handle_input_key(app, client, cli, live, key),
         }
 
         if app.should_quit {
@@ -393,20 +335,26 @@ fn run(
         }
 
         if std::mem::take(&mut app.switch_requested) {
-            let sessions = styra::journal::list_sessions(&store_root()?)?;
+            let sessions = client.list_sessions()?;
             if sessions.is_empty() {
                 app.push_log(LogEntry::warn("no stored sessions to switch to"));
                 continue;
             }
-            if let Some(path) = run_picker(terminal, &sessions)? {
-                return Ok(RunOutcome::Switch(path));
+            if let Some(id) = run_picker(terminal, &sessions)? {
+                return Ok(RunOutcome::Switch(id));
             }
             // Cancelled: the next iteration redraws the normal session view.
         }
     }
 }
 
-fn handle_list_key(app: &mut App, live: &Live, key: KeyEvent, pending_fold: &mut bool) {
+fn handle_list_key(
+    app: &mut App,
+    client: &Client,
+    live: &Live,
+    key: KeyEvent,
+    pending_fold: &mut bool,
+) {
     // Vim-style fold chord: `z` then `R` (expand all) or `M` (collapse all).
     if std::mem::take(pending_fold) {
         match key.code {
@@ -429,8 +377,8 @@ fn handle_list_key(app: &mut App, live: &Live, key: KeyEvent, pending_fold: &mut
         KeyCode::Char('d') => return app.toggle_driva(),
         KeyCode::Char('P') => return app.toggle_fullscreen_preview(),
         KeyCode::Char('s') => {
-            if let Live::Running { session, .. } = live {
-                session.stop();
+            if let Live::Running { session_id, .. } = live {
+                client.stop_session(session_id).ok();
                 app.push_log(LogEntry::info("stop requested; closing agent input"));
             }
             return;
@@ -491,7 +439,7 @@ fn handle_list_key(app: &mut App, live: &Live, key: KeyEvent, pending_fold: &mut
     }
 }
 
-fn handle_input_key(app: &mut App, cli: &Cli, layout: &SandboxLayout, live: &mut Live, key: KeyEvent) {
+fn handle_input_key(app: &mut App, client: &Client, cli: &Cli, live: &mut Live, key: KeyEvent) {
     match key.code {
         KeyCode::Esc => app.enter_list(),
         KeyCode::Tab => app.toggle_focus(),
@@ -501,8 +449,8 @@ fn handle_input_key(app: &mut App, cli: &Cli, layout: &SandboxLayout, live: &mut
                 match live {
                     // The sent message returns as a UserMessage event, so it is
                     // not pushed here; send failures surface in the log view.
-                    Live::Running { session, .. } if app.can_send() => {
-                        if let Err(error) = session.send(&message) {
+                    Live::Running { session_id, .. } if app.can_send() => {
+                        if let Err(error) = client.send_message(session_id, &message) {
                             app.push_log(LogEntry::error(format!("send failed: {error:#}")));
                         }
                     }
@@ -515,20 +463,20 @@ fn handle_input_key(app: &mut App, cli: &Cli, layout: &SandboxLayout, live: &mut
                     // The operator's first message: this is what actually
                     // starts the agent. Nothing was launched or sent before
                     // this point.
-                    Live::Pending => match spawn_session(cli, layout, Some(&message)) {
-                        Ok(spawned) => {
-                            app.profile_name = spawned.profile_name;
-                            app.session_id = spawned.session_id;
-                            app.set_workspace_root(spawned.workspace);
-                            app.set_driva_options(spawned.driva_options);
+                    Live::Pending => match create_session(client, cli, Some(&message)) {
+                        Ok(info) => {
+                            app.profile_name = info.profile;
+                            app.session_id = info.id.clone();
+                            app.set_workspace_root(info.workspace);
+                            app.set_driva_options(info.driva);
                             app.push_log(LogEntry::info(format!(
                                 "journal: {}",
-                                spawned.journal_path.display()
+                                info.journal_path.display()
                             )));
                             app.status = Status::Running;
                             *live = Live::Running {
-                                session: Box::new(spawned.session),
-                                updates: spawned.updates,
+                                session_id: info.id,
+                                cursor: 0,
                             };
                         }
                         Err(error) => {

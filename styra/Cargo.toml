@@ -8,6 +8,10 @@ description = "An interactive, isolated agent session runner with a terminal int
 name = "styra"
 path = "src/main.rs"
 
+[[bin]]
+name = "styra-server"
+path = "src/bin/styra-server.rs"
+
 [lib]
 name = "styra"
 path = "src/lib.rs"

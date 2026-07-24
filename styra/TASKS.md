@@ -26,3 +26,6 @@ Each is committed on its own. Check off as completed.
 - [x] **8. Event loop (`main.rs`).** CLI arguments, terminal setup/teardown,
   input handling per focus, and wiring the session threads to the app and
   renderer. `--view` replay path.
+- [x] **9. Server-client split.** Versioned JSON API over a local Unix socket,
+  server-owned live sessions and journal replay, cursor-based updates, reusable
+  Rust client, and migration of the TUI and headless example.

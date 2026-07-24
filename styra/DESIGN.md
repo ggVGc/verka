@@ -50,14 +50,45 @@ switching* — has since landed. Forking (keeping both branches) and native,
 protocol-level resume remain later phases, described under the same sections'
 future-ideas notes.
 
+## Server-client architecture
+
+Styra is split at a versioned, local JSON boundary:
+
+```text
+styra TUI ──Unix socket──> styra-server ──> Genta protocol ──> agent
+other tools ─────────────>       │
+                                 ├──> Driva isolation
+                                 └──> XDG journal store
+```
+
+`styra-server` owns all mutable and durable session state: process launch,
+agent stdin/stdout, Genta protocol state, journals, update ordering, and
+stored-session replay. Each socket connection carries one newline-terminated
+JSON request and response. Live updates have monotonically increasing sequence
+numbers; clients poll with an `after` cursor, which supports reconnects and
+multiple independent observers without coupling them to Rust channels.
+
+The TUI is an ordinary socket client. It owns presentation and input state, but
+never constructs a `Session`, opens a journal, decodes provider traffic, or
+calls Driva. The headless example uses the same client. Public wire types live
+in `api.rs`, the reusable Rust client in `client.rs`, and server dispatch in
+`server.rs`.
+
+The store defaults to `$XDG_CONFIG_HOME/styra` (falling back to
+`$HOME/.config/styra`), and the socket defaults to `styra.sock` inside it with
+mode `0600`. This is deliberately a local API: it has no TCP listener or
+remote-access configuration.
+
 ## Ownership and boundaries
 
 - **Driva** owns isolation: mount policy, networking policy, backend selection,
   and connecting the isolated process to the standard streams Styra provides. It
   never interprets the bytes on those streams.
-- **Styra** owns the agent profile (command, wire protocol, how a user message
+- **Styra server** owns the agent profile (command, wire protocol, how a user message
   is encoded as an input line), the decoding of provider wire events into
-  Styra's event vocabulary, the raw journal, and the whole terminal interface.
+  Styra's event vocabulary, the raw journal, and live session lifecycle.
+- **Styra clients** own presentation and operator interaction. They consume
+  only the versioned JSON API and never receive process or journal handles.
 
 The boundary mirrors Orka's: the provider wire format stops inside Styra. The
 rest of the application — the list, the renderer, session state — consumes only
@@ -265,8 +296,9 @@ not a reshaping of what already exists. Deferred alongside native resume;
 worth it if the rendered transcript's token cost becomes the actual pain
 point in practice.
 
-Journals live under a per-session directory in a Styra store (`.styra/` in the
-workbench, separately owned from `.orka/` and `.linka/`), named by a session id.
+Journals live under a per-session directory in the Styra store
+(`$XDG_CONFIG_HOME/styra` by default, separately owned from `.orka/` and
+`.linka/`), named by a session id.
 
 Alongside `journal.jsonl`, one `session.json` is written once at session
 creation: genta's `SessionMeta` (the profile name and wire protocol that

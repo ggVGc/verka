@@ -16,6 +16,7 @@ use crate::event::{decode_line, AgentEvent};
 use crate::journal::Journal;
 use anyhow::{Context, Result};
 use driva::{ExecutionIo, ExecutionRequest, Isolation, Mount, MountAccess};
+use serde::{Deserialize, Serialize};
 use std::ffi::OsString;
 use std::fs::File;
 use std::io::{BufRead, BufReader, PipeWriter, Write};
@@ -41,7 +42,7 @@ pub struct SessionSpec {
 /// enforced around it. Captured once at spawn time from the same
 /// [`ExecutionRequest`] Driva itself executes, so it can never drift from
 /// what is actually running.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DrivaOptions {
     pub isolation_backend: String,
     pub command: Vec<String>,
@@ -65,6 +66,8 @@ impl DrivaOptions {
 }
 
 /// An update delivered from the session threads to the UI.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "data", rename_all = "snake_case")]
 pub enum SessionUpdate {
     /// A decoded agent event or an operator message, in occurrence order.
     Event(AgentEvent),
@@ -77,7 +80,8 @@ pub enum SessionUpdate {
 }
 
 /// Severity of a [`LogEntry`], used to colour the log view.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum LogLevel {
     Info,
     Warn,
@@ -85,7 +89,7 @@ pub enum LogLevel {
 }
 
 /// One line in the log view: a Styra-internal note or a line of agent stderr.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LogEntry {
     pub level: LogLevel,
     pub message: String,
@@ -104,7 +108,8 @@ impl LogEntry {
 }
 
 /// Which way a wire line travelled.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Direction {
     /// A line Styra wrote to the agent's stdin.
     ToAgent,
@@ -113,13 +118,14 @@ pub enum Direction {
 }
 
 /// One verbatim line of the agent interaction, undecoded.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RawLine {
     pub direction: Direction,
     pub text: String,
 }
 
 /// How a session finished.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionEnd {
     pub exit_code: Option<i32>,
     pub error: Option<String>,

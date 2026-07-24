@@ -108,7 +108,7 @@ impl Journal {
 const JOURNAL_FILE: &str = "journal.jsonl";
 const SESSION_META_FILE: &str = "session.json";
 
-/// The sessions directory within a Styra store root (default store: `.styra`).
+/// The sessions directory within a Styra store root.
 pub fn sessions_dir(store_root: &Path) -> PathBuf {
     store_root.join("sessions")
 }
@@ -121,7 +121,7 @@ fn write_session_meta(directory: &Path, meta: &SessionMeta) -> Result<()> {
 
 /// A stored session, enough to display and select it from a list — see
 /// [`list_sessions`].
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionSummary {
     /// The session's directory name, and the id `--view` expects.
     pub id: String,

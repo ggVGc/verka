@@ -11,7 +11,11 @@ pub use genta::appserver;
 pub use genta::event;
 pub use genta::render;
 
+pub mod api;
 pub mod app;
+pub mod client;
 pub mod journal;
+pub mod paths;
+pub mod server;
 pub mod session;
 pub mod ui;
