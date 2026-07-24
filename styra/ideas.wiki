@@ -1,3 +1,9 @@
+- Need some way of injecting dev environments:
+  - Could currently rely on driva templates
+  - Until better idea...
+  - Could rely more on nix?
+  - I wish to avoid making driva recreate dev tooling setup
+  - Should rather be a way to expose the existing dev tooling in the isolated env, that the user already has set up.
 - styra should be headless:
   - Current TUI is just an UI
   - Can also make a plugin for nvim
@@ -58,7 +64,8 @@
 - For file change/read/write messages in logs, store a hash of the file just after that message:
   - That way we can say in the preview window if we're viewing the same content that was originally written or not.
 - Experimental workflow:
-  - Git commit after any agent response that makes an edit
+  - Git commit after any agent response that makes an edit:
+    - Maybe rely on inotify?
   - Forking a session also branches the repo
   - Allows resetting both session and branch to some previous state and continue from there
   - Easier to launch multiple agents from the same starting point, seeing what results they come up with
