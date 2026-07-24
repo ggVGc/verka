@@ -79,9 +79,11 @@ impl Entry {
     /// line (it invariably restates the summary — the command, the
     /// message's first line, ...), so one line of detail alone doesn't
     /// count; this mirrors that exactly rather than checking the raw,
-    /// undropped `AgentEvent::detail()` output.
+    /// undropped `AgentEvent::detail()` output. A summary truncated with an
+    /// ellipsis also counts, even with no extra detail lines, since its full
+    /// text is only reachable by expanding.
     pub fn has_detail(&self) -> bool {
-        detail_line_count(&self.event) > 0
+        detail_line_count(&self.event) > 0 || self.event.summary().ends_with('…')
     }
 }
 

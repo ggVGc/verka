@@ -725,7 +725,10 @@ fn detail_lines(event: &AgentEvent, cap: Option<usize>) -> Vec<Line<'static>> {
     // The detail body's first line is invariably a restatement of what the
     // summary line above it already shows (the command, the message's first
     // line, ...); drop it so expanding an entry doesn't just echo itself.
-    if !lines.is_empty() {
+    // Exception: when there's only that one line and the summary was
+    // truncated with an ellipsis, it's the only place the full untruncated
+    // text lives, so keep it instead of dropping the entry's only content.
+    if !lines.is_empty() && (lines.len() > 1 || !event.summary().ends_with('…')) {
         lines.remove(0);
     }
     if let Some(cap) = cap {
@@ -1026,6 +1029,22 @@ mod tests {
         assert!(screen.contains("hello world"));
         assert!(!screen.contains('▸'));
         assert!(!screen.contains('▾'));
+    }
+
+    #[test]
+    fn a_truncated_single_line_summary_has_a_fold_marker_and_expands_to_the_full_text() {
+        let mut app = App::new("codex", "s1");
+        app.push_event(AgentEvent::AgentMessage { text: "x".repeat(500) });
+        let collapsed = rendered(&app);
+        assert!(collapsed.contains('…'));
+        assert!(collapsed.contains('▸'));
+        let collapsed_xs = collapsed.chars().filter(|&c| c == 'x').count();
+
+        app.toggle_expand();
+        let expanded = rendered(&app);
+        assert!(expanded.contains('▾'));
+        let expanded_xs = expanded.chars().filter(|&c| c == 'x').count();
+        assert!(expanded_xs > collapsed_xs);
     }
 
     #[test]
