@@ -1,15 +1,15 @@
 //! Coordination between Linka verification nodes and Git-only Nota reviews.
 //!
 //! Nota sees only a repository, an exact subject commit, and a review branch.
-//! Linka sees only a candidate, an ordinary verification node, and opaque
-//! producer evidence. Orka owns the immutable binding and frozen snapshot that
-//! let those independent records form one recoverable workflow.
+//! Linka sees a candidate, a verification with an accepted/rejected outcome,
+//! and opaque producer evidence. Orka owns the immutable binding and frozen
+//! snapshot that let those independent records form one recoverable workflow.
 
 use anyhow::{bail, Context, Result};
 use linka::ops::{self, NewNode, SubmissionError};
 use linka::{
-    Author, CandidateId, CandidateRecord, CandidateStore, GitVcs, NodeId, Outcome,
-    ProducerEvidence, ResultSubmission, Store, SubmissionConflict, WorkSnapshot,
+    Author, CandidateId, CandidateRecord, CandidateStore, GitVcs, NodeId, ProducerEvidence, Store,
+    SubmissionConflict, VerificationOutcome, VerificationSubmission, WorkSnapshot,
 };
 use nota::{GitProvider, Review, StartedReview};
 use serde::{Deserialize, Serialize};
@@ -32,23 +32,6 @@ pub struct ReviewRecord {
 pub struct Started {
     pub record: ReviewRecord,
     pub review: StartedReview,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ReviewVerdict {
-    Approved,
-    ChangesRequested,
-    Commented,
-}
-
-impl ReviewVerdict {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Approved => "approved",
-            Self::ChangesRequested => "changes_requested",
-            Self::Commented => "commented",
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -199,7 +182,7 @@ impl<'a> Reviews<'a> {
     pub fn finish(
         &self,
         verification: &NodeId,
-        verdict: ReviewVerdict,
+        outcome: VerificationOutcome,
         summary: Option<&str>,
         author: Author,
     ) -> Result<FinishOutcome> {
@@ -210,8 +193,11 @@ impl<'a> Reviews<'a> {
             .map(|entry| entry.commit.as_str())
             .unwrap_or(&review.marker)
             .to_string();
-        if let Some((result, _)) = self.linka.read_result(verification.as_str())? {
-            if matching_result(&result.producer, &record, verdict, &head) {
+        if let Some((result, notes)) = self.linka.read_result(verification.as_str())? {
+            if result.outcome == linka::ResultOutcome::Verification(outcome)
+                && matching_result(&result.producer, &record, outcome, &head)
+            {
+                self.apply_candidate_decision(&record, outcome, result.author, Some(&notes))?;
                 return Ok(FinishOutcome::AlreadySubmitted);
             }
             bail!("verification `{verification}` already has a different result");
@@ -219,30 +205,32 @@ impl<'a> Reviews<'a> {
         let notes = summary
             .filter(|value| !value.trim().is_empty())
             .map(str::to_string)
-            .unwrap_or_else(|| render_summary(&review, verdict, &head));
-        let producer = review_evidence(&record, &review, verdict, &head);
+            .unwrap_or_else(|| render_summary(&review, outcome, &head));
+        let producer = review_evidence(&record, &review, outcome, &head);
         let vcs = GitVcs::for_store(self.linka);
-        match ops::submit_result(
+        match ops::submit_verification(
             self.linka,
             &vcs,
-            ResultSubmission {
-                snapshot: record.snapshot,
-                outcome: Outcome::Done,
-                output: None,
-                notes,
+            VerificationSubmission {
+                snapshot: record.snapshot.clone(),
+                outcome,
+                notes: notes.clone(),
                 author,
                 producer: Some(producer),
             },
         ) {
-            Ok(()) => Ok(FinishOutcome::Submitted),
+            Ok(()) => {
+                self.apply_candidate_decision(&record, outcome, author, Some(&notes))?;
+                Ok(FinishOutcome::Submitted)
+            }
             Err(SubmissionError::Conflict(conflicts)) => Ok(FinishOutcome::Conflict(conflicts)),
             Err(SubmissionError::Evaluation(error)) => Err(error),
         }
     }
 
     /// Stop a review without discarding its durable binding or Nota branch.
-    /// The failed graph-only result makes abandonment visible to Linka while
-    /// producer evidence distinguishes it from an attempted review verdict.
+    /// A rejected review result makes abandonment visible to Linka while
+    /// producer evidence distinguishes it from a candidate rejection.
     pub fn abandon(
         &self,
         verification: &NodeId,
@@ -252,7 +240,9 @@ impl<'a> Reviews<'a> {
         let record = self.load(verification)?;
         self.validate_binding(&record)?;
         if let Some((result, _)) = self.linka.read_result(verification.as_str())? {
-            if matching_abandonment(&result.producer, &record) {
+            if result.outcome == linka::ResultOutcome::Verification(VerificationOutcome::Rejected)
+                && matching_abandonment(&result.producer, &record)
+            {
                 return Ok(AbandonOutcome::AlreadyAbandoned);
             }
             bail!("verification `{verification}` already has a different result");
@@ -262,13 +252,12 @@ impl<'a> Reviews<'a> {
             .map(str::to_string)
             .unwrap_or_else(|| "Review abandoned.".into());
         let vcs = GitVcs::for_store(self.linka);
-        match ops::submit_result(
+        match ops::submit_verification(
             self.linka,
             &vcs,
-            ResultSubmission {
+            VerificationSubmission {
                 snapshot: record.snapshot.clone(),
-                outcome: Outcome::Failed,
-                output: None,
+                outcome: VerificationOutcome::Rejected,
                 notes,
                 author,
                 producer: Some(abandonment_evidence(&record)),
@@ -284,6 +273,32 @@ impl<'a> Reviews<'a> {
         let provider = GitProvider::new(self.linka.project_root());
         let review = nota::start_review(&provider, &record.subject, Some(&record.branch))?;
         Ok(Started { record, review })
+    }
+
+    fn apply_candidate_decision(
+        &self,
+        record: &ReviewRecord,
+        outcome: VerificationOutcome,
+        author: Author,
+        notes: Option<&str>,
+    ) -> Result<()> {
+        let notes = notes.unwrap_or_default().to_string();
+        let candidates = CandidateStore::new(self.linka);
+        let vcs = GitVcs::for_store(self.linka);
+        match outcome {
+            VerificationOutcome::Accepted => {
+                candidates.accept(&vcs, &record.candidate, &record.verification, author, notes)?;
+            }
+            VerificationOutcome::Rejected => {
+                let notes = if notes.trim().is_empty() {
+                    "Review rejected the candidate.".into()
+                } else {
+                    notes
+                };
+                candidates.reject(&vcs, &record.candidate, &record.verification, author, notes)?;
+            }
+        }
+        Ok(())
     }
 
     fn validate_binding(&self, record: &ReviewRecord) -> Result<()> {
@@ -419,9 +434,9 @@ fn require_candidate_snapshot(candidate: &CandidateRecord, snapshot: &WorkSnapsh
     Ok(())
 }
 
-fn render_summary(review: &Review, verdict: ReviewVerdict, head: &str) -> String {
+fn render_summary(review: &Review, outcome: VerificationOutcome, head: &str) -> String {
     let mut lines = vec![
-        format!("Review verdict: {}", verdict.as_str()),
+        format!("Review outcome: {}", outcome.as_str()),
         format!("Nota branch: {}", review.branch),
         format!("Nota head: {head}"),
         format!("Entries: {}", review.entries.len()),
@@ -436,7 +451,7 @@ fn render_summary(review: &Review, verdict: ReviewVerdict, head: &str) -> String
 fn review_evidence(
     record: &ReviewRecord,
     review: &Review,
-    verdict: ReviewVerdict,
+    outcome: VerificationOutcome,
     head: &str,
 ) -> ProducerEvidence {
     ProducerEvidence {
@@ -447,7 +462,7 @@ fn review_evidence(
             "branch": review.branch,
             "marker": review.marker,
             "head": head,
-            "verdict": verdict.as_str(),
+            "outcome": outcome.as_str(),
         }),
     }
 }
@@ -467,7 +482,7 @@ fn abandonment_evidence(record: &ReviewRecord) -> ProducerEvidence {
 fn matching_result(
     producer: &Option<ProducerEvidence>,
     record: &ReviewRecord,
-    verdict: ReviewVerdict,
+    outcome: VerificationOutcome,
     head: &str,
 ) -> bool {
     let Some(producer) = producer else {
@@ -478,7 +493,7 @@ fn matching_result(
             == Some(record.verification.as_str())
         && producer.data.get("branch").and_then(|v| v.as_str()) == Some(record.branch.as_str())
         && producer.data.get("head").and_then(|v| v.as_str()) == Some(head)
-        && producer.data.get("verdict").and_then(|v| v.as_str()) == Some(verdict.as_str())
+        && producer.data.get("outcome").and_then(|v| v.as_str()) == Some(outcome.as_str())
 }
 
 fn matching_abandonment(producer: &Option<ProducerEvidence>, record: &ReviewRecord) -> bool {

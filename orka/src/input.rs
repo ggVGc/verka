@@ -106,7 +106,7 @@ mod tests {
                 metadata: "rm".into(),
                 notes: Some("rn".into()),
             }),
-            outcome: Some(linka::Outcome::Done),
+            outcome: Some(linka::ResultOutcome::Work(linka::Outcome::Done)),
             output: Some(ArtifactRef {
                 scheme: "git-commit".into(),
                 repository: "r".into(),

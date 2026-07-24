@@ -3,8 +3,8 @@
 mod common;
 
 use common::*;
-use linka::{Author, CandidateStore, NewCandidate};
-use orka::review::{AbandonOutcome, FinishOutcome, ReviewVerdict, Reviews};
+use linka::{Author, CandidateStore, NewCandidate, VerificationOutcome};
+use orka::review::{AbandonOutcome, FinishOutcome, Reviews};
 use orka::review_worktree::{GitReviewWorktrees, ReviewCleanupOutcome};
 use std::process::Command;
 
@@ -73,7 +73,7 @@ fn nota_review_completes_a_linka_verification_without_nota_knowing_linka() {
         reviews
             .finish(
                 &started.record.verification,
-                ReviewVerdict::Approved,
+                VerificationOutcome::Accepted,
                 None,
                 Author::Human,
             )
@@ -84,15 +84,27 @@ fn nota_review_completes_a_linka_verification_without_nota_knowing_linka() {
         .read_result(started.record.verification.as_str())
         .unwrap()
         .unwrap();
-    assert_eq!(result.outcome, linka::Outcome::Done);
+    assert_eq!(
+        result.outcome,
+        linka::ResultOutcome::Verification(VerificationOutcome::Accepted)
+    );
     assert!(result.output.is_none());
-    assert!(notes.contains("Review verdict: approved"));
+    assert!(notes.contains("Review outcome: accepted"));
     let producer = result.producer.unwrap();
     assert_eq!(producer.namespace, "orka.nota");
     assert_eq!(producer.data["candidate"], candidate.id.0);
     assert_eq!(producer.data["head"], note.commit);
+    assert_eq!(producer.data["outcome"], "accepted");
 
     let vcs = linka::GitVcs::for_store(&store);
+    assert_eq!(
+        CandidateStore::new(&store)
+            .load(&candidate.id)
+            .unwrap()
+            .integration(&vcs)
+            .unwrap(),
+        linka::IntegrationStatus::Published
+    );
     assert!(
         linka::ops::node_state(&store, &vcs, started.record.verification.as_str())
             .unwrap()
@@ -102,12 +114,107 @@ fn nota_review_completes_a_linka_verification_without_nota_knowing_linka() {
         reviews
             .finish(
                 &started.record.verification,
-                ReviewVerdict::Approved,
+                VerificationOutcome::Accepted,
                 None,
                 Author::Human,
             )
             .unwrap(),
         FinishOutcome::AlreadySubmitted
+    );
+}
+
+#[test]
+fn rejected_review_rejects_the_exact_candidate_and_reopens_its_source() {
+    let (_temp, root) = workbench();
+    let candidate = candidate(&root);
+    let store = store_at(&root);
+    let reviews = Reviews::new(&store, root.join(".orka"));
+    let started = reviews.start(&candidate.id, Author::Human).unwrap();
+
+    assert_eq!(
+        reviews
+            .finish(
+                &started.record.verification,
+                VerificationOutcome::Rejected,
+                Some("The implementation misses the edge case."),
+                Author::Human,
+            )
+            .unwrap(),
+        FinishOutcome::Submitted
+    );
+
+    let vcs = linka::GitVcs::for_store(&store);
+    let candidate = CandidateStore::new(&store).load(&candidate.id).unwrap();
+    assert_eq!(
+        candidate.integration(&vcs).unwrap(),
+        linka::IntegrationStatus::Rejected
+    );
+    assert!(
+        linka::ops::node_state(&store, &vcs, candidate.node.as_str())
+            .unwrap()
+            .is_ready()
+    );
+}
+
+#[test]
+fn finishing_recovers_a_verification_recorded_before_its_candidate_decision() {
+    let (_temp, root) = workbench();
+    let candidate = candidate(&root);
+    let store = store_at(&root);
+    let reviews = Reviews::new(&store, root.join(".orka"));
+    let started = reviews.start(&candidate.id, Author::Human).unwrap();
+    let review = nota::load_review_ref(&root.join("project"), &started.record.branch).unwrap();
+    let producer = linka::ProducerEvidence {
+        namespace: "orka.nota".into(),
+        data: serde_json::json!({
+            "candidate": candidate.id.0,
+            "verification": started.record.verification.as_str(),
+            "branch": review.branch,
+            "marker": review.marker,
+            "head": review.marker,
+            "outcome": "accepted",
+        }),
+    };
+    let vcs = linka::GitVcs::for_store(&store);
+    linka::ops::submit_verification(
+        &store,
+        &vcs,
+        linka::VerificationSubmission {
+            snapshot: started.record.snapshot.clone(),
+            outcome: VerificationOutcome::Accepted,
+            notes: "Review outcome: accepted".into(),
+            author: Author::Human,
+            producer: Some(producer),
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        CandidateStore::new(&store)
+            .load(&candidate.id)
+            .unwrap()
+            .integration(&vcs)
+            .unwrap(),
+        linka::IntegrationStatus::Pending
+    );
+
+    assert_eq!(
+        reviews
+            .finish(
+                &started.record.verification,
+                VerificationOutcome::Accepted,
+                None,
+                Author::Human,
+            )
+            .unwrap(),
+        FinishOutcome::AlreadySubmitted
+    );
+    assert_ne!(
+        CandidateStore::new(&store)
+            .load(&candidate.id)
+            .unwrap()
+            .integration(&vcs)
+            .unwrap(),
+        linka::IntegrationStatus::Pending
     );
 }
 
@@ -139,7 +246,7 @@ fn finishing_a_review_rejects_an_invalid_git_suggestion() {
     let error = reviews
         .finish(
             &started.record.verification,
-            ReviewVerdict::ChangesRequested,
+            VerificationOutcome::Rejected,
             None,
             Author::Human,
         )
@@ -341,12 +448,23 @@ fn active_reviews_can_be_listed_and_abandoned_without_removing_nota_evidence() {
         .read_result(started.record.verification.as_str())
         .unwrap()
         .unwrap();
-    assert_eq!(result.outcome, linka::Outcome::Failed);
+    assert_eq!(
+        result.outcome,
+        linka::ResultOutcome::Verification(VerificationOutcome::Rejected)
+    );
     assert_eq!(notes, "review is no longer needed");
     let producer = result.producer.unwrap();
     assert_eq!(producer.namespace, "orka.nota");
     assert_eq!(producer.data["status"], "abandoned");
     assert_eq!(producer.data["candidate"], candidate.id.0);
+    assert_eq!(
+        CandidateStore::new(&store)
+            .load(&candidate.id)
+            .unwrap()
+            .integration(&linka::GitVcs::for_store(&store))
+            .unwrap(),
+        linka::IntegrationStatus::Pending
+    );
     assert!(nota::load_review_ref(&root.join("project"), &started.record.branch).is_ok());
 
     assert_eq!(
@@ -423,6 +541,45 @@ fn cli_lists_active_reviews_and_accepts_stop_as_an_abandon_alias() {
 }
 
 #[test]
+fn cli_finish_applies_an_accepted_review_to_the_candidate() {
+    let (_temp, root) = workbench();
+    let candidate = candidate(&root);
+    let store = store_at(&root);
+    let reviews = Reviews::new(&store, root.join(".orka"));
+    let started = reviews.start(&candidate.id, Author::Human).unwrap();
+
+    let finished = Command::new(env!("CARGO_BIN_EXE_orka"))
+        .args([
+            "--workbench",
+            root.to_str().unwrap(),
+            "review",
+            "finish",
+            started.record.verification.as_str(),
+            "--outcome",
+            "accepted",
+            "--summary",
+            "Reviewed through the CLI.",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        finished.status.success(),
+        "{}",
+        String::from_utf8_lossy(&finished.stderr)
+    );
+    assert!(String::from_utf8_lossy(&finished.stdout).contains("completed"));
+
+    assert_ne!(
+        CandidateStore::new(&store)
+            .load(&candidate.id)
+            .unwrap()
+            .integration(&linka::GitVcs::for_store(&store))
+            .unwrap(),
+        linka::IntegrationStatus::Pending
+    );
+}
+
+#[test]
 fn a_source_change_during_review_is_a_submission_conflict() {
     let (_temp, root) = workbench();
     let candidate = candidate(&root);
@@ -431,9 +588,6 @@ fn a_source_change_during_review_is_a_submission_conflict() {
     let started = reviews.start(&candidate.id, Author::Human).unwrap();
 
     let vcs = linka::GitVcs::for_store(&store);
-    CandidateStore::new(&store)
-        .reject(&vcs, &candidate.id, Author::Human, "requires rework".into())
-        .unwrap();
     linka::ops::edit(
         &store,
         &vcs,
@@ -445,7 +599,7 @@ fn a_source_change_during_review_is_a_submission_conflict() {
     let outcome = reviews
         .finish(
             &started.record.verification,
-            ReviewVerdict::Commented,
+            VerificationOutcome::Accepted,
             None,
             Author::Human,
         )

@@ -77,8 +77,10 @@ orka attempts            list recorded attempts
 orka show ATTEMPT        one attempt's durable record
 orka candidates          list project candidates with their source nodes
 orka candidate CANDIDATE show a candidate and its patch
-orka accept CANDIDATE    record exact acceptance in Linka
-orka reject CANDIDATE    reject it and make its source retryable
+orka accept CANDIDATE VERIFICATION
+                         recover an accepted review decision
+orka reject CANDIDATE VERIFICATION
+                         recover a rejected review decision
 orka publish CANDIDATE   recoverably fast-forward the recorded target
 orka audit               verify evidence for every Orka-produced output
 orka review list         list active reviews
@@ -91,8 +93,8 @@ orka review worktree NODE [--print-path]
 orka review worktrees    inspect managed review worktrees
 orka review cleanup NODE remove its managed worktree when clean
 orka review show NODE    show the binding and Git-native review entries
-orka review finish NODE --verdict VERDICT
-                         submit review evidence to the verification node
+orka review finish NODE --outcome accepted|rejected
+                         submit and apply the review outcome
 orka review abandon NODE [--notes NOTES]
                          stop a review (also available as `review stop`)
 orka recover             classify and finish unfinished attempts
@@ -139,13 +141,15 @@ machine work—until that exact candidate is decided and published:
 ```text
 orka candidates
 orka candidate CANDIDATE
-orka accept CANDIDATE --notes "reviewed"
+orka review start CANDIDATE
+orka review finish VERIFICATION --outcome accepted
 orka publish CANDIDATE
 ```
 
 The candidate list connects Linka's candidate id to its source node, branch,
-target, and opaque Orka attempt identity. Linka owns the decision and derives
-publication from Git history; Orka only supplies an attempt-oriented UI and
+target, and opaque Orka attempt identity. Linka validates the exact verification
+authorizing the decision and derives publication from Git history; Orka supplies
+the attempt-oriented UI and coordinates Nota evidence with that verification.
 patch view. The patch base comes from the attempt input attached durably to the
 Linka node, with local `.orka/` state used only as a compatibility fallback.
 Acceptance pins the exact artifact and previous target commit.
@@ -176,9 +180,9 @@ offers the same path-only output for editor integrations.
 
 `orka review worktrees` reports clean and dirty managed trees. `orka review
 cleanup` removes only a clean, correctly registered tree and preserves the
-Nota branch. `orka review finish` records the chosen verdict and Git evidence
-as the verification result; it does not implicitly accept, reject, or publish
-the candidate. `orka review list` shows unfinished bindings, including starts
-interrupted before branch creation. `orka review abandon` (or `review stop`)
-records a failed verification with abandonment evidence and preserves the Nota
-branch for inspection.
+Nota branch. `orka review finish` records an `accepted` or `rejected` result
+with its Git evidence and applies that exact verification as the candidate
+decision. Publication remains explicit. `orka review list` shows unfinished
+bindings, including starts interrupted before branch creation. `orka review
+abandon` (or `review stop`) records rejected abandonment evidence without
+deciding the candidate and preserves the Nota branch for inspection.

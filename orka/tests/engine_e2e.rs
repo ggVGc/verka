@@ -7,7 +7,7 @@
 mod common;
 
 use common::*;
-use linka::Store;
+use linka::{Author, Store, VerificationOutcome, VerificationSubmission};
 use orka::access::write_access_summary;
 use orka::attempt::{AttemptId, AttemptPhase, FsAttemptStore, SealedState};
 use orka::candidate::Candidates;
@@ -215,8 +215,36 @@ fn a_full_attempt_lands_a_version_checked_result_from_an_isolated_worktree() {
 
     // Acceptance is durable and separate from publication. Publication then
     // refuses to trample a dirty human checkout.
+    let verification: linka::NodeId = linka::ops::add_verification(
+        &store,
+        &vcs,
+        &listed[0].id,
+        linka::ops::NewNode {
+            description: "Review the generated greeting".into(),
+            author: Author::Human,
+            assignee: Some(Author::Human),
+            depends_on: vec![],
+            derived_from: vec![],
+        },
+    )
+    .unwrap()
+    .parse()
+    .unwrap();
+    let snapshot = linka::ops::snapshot_work(&store, &vcs, verification.as_str(), &[]).unwrap();
+    linka::ops::submit_verification(
+        &store,
+        &vcs,
+        VerificationSubmission {
+            snapshot,
+            outcome: VerificationOutcome::Accepted,
+            notes: "looks good".into(),
+            author: Author::Human,
+            producer: None,
+        },
+    )
+    .unwrap();
     let accepted = candidates
-        .accept(&listed[0].id.0, "looks good".into())
+        .accept(&listed[0].id.0, &verification, "looks good".into())
         .unwrap();
     assert_eq!(accepted.integration, linka::IntegrationStatus::Accepted);
     let error = candidates.publish(&listed[0].id.0).unwrap_err();
@@ -375,8 +403,14 @@ fn the_agents_own_commits_are_folded_into_one_output_on_the_input() {
     };
     // Both files land in one output commit, parented directly on the frozen
     // input — the agent's two commits are folded away, not chained.
-    assert_eq!(git(&project, &["show", &format!("{output}:first.txt")]), "one");
-    assert_eq!(git(&project, &["show", &format!("{output}:second.txt")]), "two");
+    assert_eq!(
+        git(&project, &["show", &format!("{output}:first.txt")]),
+        "one"
+    );
+    assert_eq!(
+        git(&project, &["show", &format!("{output}:second.txt")]),
+        "two"
+    );
     assert_eq!(git(&project, &["rev-parse", &format!("{output}^")]), input);
     assert_eq!(report.cleanup, CleanupOutcome::Removed);
 }

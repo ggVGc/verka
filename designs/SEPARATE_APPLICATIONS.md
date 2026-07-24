@@ -55,8 +55,9 @@ does not interpret Linka identities or depend on another application here.
 4. Linka does not interpret Orka attempts or Nota review records.
 5. Driva does not receive Linka node IDs or interpret Orka policy; it receives
    only the concrete command and capability grant chosen by its caller.
-6. Nota verdicts are evidence, not candidate acceptance or publication policy;
-   those remain explicit Linka operations exposed by Orka.
+6. Linka verification outcomes are accepted or rejected review conclusions.
+   Orka derives them from Nota evidence and applies the exact verification as
+   the candidate decision; publication remains explicit.
 7. Orka Web depends on Orka's public records and services and Linka's public
    graph API. It owns no orchestration state of its own.
 
@@ -72,9 +73,9 @@ every frozen input before recording anything.
 For a coordinated review, Orka creates a Linka verification node and freezes
 its input, records the binding under `.orka/reviews/`, and asks Nota to start a
 branch at the candidate's exact Git artifact. Reviewers add notes and staged
-suggestions through Nota. Orka later reads that Git evidence and submits a
-version-checked result for the verification node. A review verdict does not by
-itself accept, reject, or publish the candidate.
+suggestions through Nota. Orka later reads that Git evidence, submits a
+version-checked accepted/rejected result for the verification node, and applies
+it as the exact candidate decision. Publication remains separate and explicit.
 
 ## Persistence ownership
 

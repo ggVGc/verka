@@ -22,9 +22,9 @@ use linka::{
     ops, title_of, Author, Blocker, BlockerReason, CandidateStore, GitVcs, NodeId, ResultMeta,
     StalenessReason, Store, Vcs,
 };
+use orka::agent::OutputFormat;
 use orka::attempt::{AttemptId, AttemptPhase, FsAttemptStore, SealedState};
 use orka::candidate::Candidates;
-use orka::agent::AgentProtocol;
 use orka::events::work_log_from_raw;
 use orka::linka_work::LinkaWork;
 use orka::review::Reviews;
@@ -263,8 +263,10 @@ fn state_json(app: &App) -> Result<Value> {
                 // A successful attempt is evidence, not necessarily a complete
                 // node: candidate output still has to be integrated.
                 "outcome": match r.outcome {
-                    linka::Outcome::Done => "succeeded",
-                    linka::Outcome::Failed => "failed",
+                    linka::ResultOutcome::Work(linka::Outcome::Done) => "succeeded",
+                    linka::ResultOutcome::Work(linka::Outcome::Failed) => "failed",
+                    linka::ResultOutcome::Verification(linka::VerificationOutcome::Accepted) => "accepted",
+                    linka::ResultOutcome::Verification(linka::VerificationOutcome::Rejected) => "rejected",
                 },
                 "output_commit": ops::output_commit(&r),
                 // Producer evidence is namespaced application data (e.g. an
@@ -417,8 +419,8 @@ fn transcript_json(app: &App, raw_id: &str) -> Result<Value> {
     let blocks = match snapshot.request.as_ref().map(|request| request.protocol) {
         Some(protocol) => {
             let output = match protocol {
-                AgentProtocol::Plain => store.transcript_path(&id),
-                AgentProtocol::CodexJsonl => store.raw_events_path(&id),
+                OutputFormat::Plain => store.transcript_path(&id),
+                OutputFormat::Agent(_) => store.raw_events_path(&id),
             };
             if output.is_file() {
                 let file_changes = std::fs::read(store.file_changes_path(&id)).ok();
@@ -459,7 +461,7 @@ fn work_log_from_linka(
     let protocol = attachment
         .media_type
         .as_deref()
-        .and_then(AgentProtocol::from_output_media_type)
+        .and_then(OutputFormat::from_output_media_type)
         .with_context(|| {
             format!(
                 "attempt `{id}` agent output has media type {:?}, which this build has no decoder for",
@@ -619,6 +621,7 @@ fn format_blocker(blocker: &Blocker) -> String {
         BlockerReason::Missing => "missing",
         BlockerReason::Open => "not complete (open)",
         BlockerReason::Failed => "not complete (failed)",
+        BlockerReason::Rejected => "review rejected",
         BlockerReason::AwaitingIntegration => "awaiting candidate integration",
         BlockerReason::Stale => "not complete (stale)",
     };

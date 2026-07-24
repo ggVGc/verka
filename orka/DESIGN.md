@@ -149,7 +149,7 @@ acceptance protocol because Linka recorded no result for it.
 
 ## Candidate verification
 
-`orka review start <candidate>` creates one active ordinary Linka verification
+`orka review start <candidate>` creates one active Linka verification
 node per candidate, freezes its `WorkSnapshot`, and starts a Nota branch at the
 candidate's exact Git artifact. Repeating the command while that review is
 active resumes the existing binding. Orka records the immutable binding under
@@ -160,15 +160,16 @@ new verification for the same candidate.
 
 Reviewers use Nota directly for notes and ordinary Git commits for suggested
 edits. `orka review finish` loads and validates that Git evidence by branch and
-submits a graph-only verification result against the frozen Linka snapshot with
-`orka.nota` producer evidence.
+submits an `accepted` or `rejected` verification result against the frozen
+Linka snapshot with `orka.nota` producer evidence, then applies that exact
+result as the candidate decision. Retrying after interruption completes either
+missing half of this two-commit operation.
 `orka review list` derives active reviews from bindings whose verification has
-no result. `orka review abandon` submits a graph-only failed result with
-explicit abandonment evidence and leaves both the binding and Nota branch
-intact; a later start for the candidate creates a new verification.
-The verdict is evidence, not acceptance policy: accepting, rejecting, and
-publishing the candidate remain explicit operations. If graph inputs moved
-during review, Linka rejects submission and the Nota branch remains intact.
+no result. `orka review abandon` submits a rejected verification result with
+explicit abandonment evidence, leaves the candidate pending, and preserves both
+the binding and Nota branch; a later start creates a new verification.
+Publication remains an explicit operation. If graph inputs moved during review,
+Linka rejects submission and the Nota branch remains intact.
 
 Orka manages an optional canonical checkout for each review below
 `.orka/review-worktrees/<verification>/`. Entering a review creates or reuses
@@ -183,7 +184,7 @@ Every agent-attempt result carries `linka::ProducerEvidence` in the stable
 `orka` namespace: the attempt id, executor-observed backend, start/finish
 timestamps, exit code, and access-tracking completeness. Coordinated review
 results use `orka.nota` with the candidate, verification, and branch plus
-either the marker, review head, and verdict or an explicit abandoned status.
+either the marker, review head, and outcome or an explicit abandoned status.
 For a successful agent outcome, Orka additionally stores the exact attempt
 input, prompt, execution request, transcript, harness evidence, and declared
 outcome as opaque Linka node attachments before submitting the result. Mutable
@@ -203,7 +204,7 @@ recorded as incomplete rather than presented as an empty complete read set.
 - A generic, backend-neutral graph interface. Orka orchestrates Linka.
 - Implementing review comments or suggested edits (Nota owns their Git
   representation).
-- Treating a review verdict as authorization to accept or publish.
+- Publishing a reviewed candidate without an explicit publication operation.
 
 ## Configuration
 

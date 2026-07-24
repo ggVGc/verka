@@ -10,7 +10,7 @@ use orka::config::{Config, CONFIG_FILE};
 use orka::engine::{Engine, RunProgress, RunReport};
 use orka::events::follow_codex_events;
 use orka::linka_work::LinkaWork;
-use orka::review::{AbandonOutcome, FinishOutcome, ReviewVerdict, Reviews};
+use orka::review::{AbandonOutcome, FinishOutcome, Reviews};
 use orka::review_worktree::{GitReviewWorktrees, ReviewCleanupOutcome};
 use orka::workspace::GitWorkspaces;
 use std::io::IsTerminal;
@@ -53,15 +53,19 @@ enum Command {
     Candidates,
     /// Show a Linka candidate (candidate id or producing attempt id).
     Candidate { candidate: String },
-    /// Accept an exact Linka candidate for its recorded target branch.
+    /// Apply an accepted verification to an exact Linka candidate.
     Accept {
         candidate: String,
+        /// Verification node whose current outcome is accepted.
+        verification: String,
         #[arg(long, default_value = "")]
         notes: String,
     },
-    /// Reject a Linka candidate and make its source node retryable.
+    /// Apply a rejected verification and make the source node retryable.
     Reject {
         candidate: String,
+        /// Verification node whose current outcome is rejected.
+        verification: String,
         #[arg(long)]
         notes: String,
     },
@@ -113,11 +117,11 @@ enum ReviewCommand {
     Cleanup { verification: String },
     /// Show the binding and Git-native review entries.
     Show { verification: String },
-    /// Submit the Nota review as the verification node's graph-only result.
+    /// Submit and apply the Nota review's accepted/rejected outcome.
     Finish {
         verification: String,
         #[arg(long, value_enum)]
-        verdict: VerdictArg,
+        outcome: ReviewOutcomeArg,
         #[arg(long)]
         summary: Option<String>,
         #[arg(long, value_enum, default_value = "human")]
@@ -135,18 +139,16 @@ enum ReviewCommand {
 }
 
 #[derive(Clone, Copy, ValueEnum)]
-enum VerdictArg {
-    Approved,
-    ChangesRequested,
-    Commented,
+enum ReviewOutcomeArg {
+    Accepted,
+    Rejected,
 }
 
-impl From<VerdictArg> for ReviewVerdict {
-    fn from(value: VerdictArg) -> Self {
+impl From<ReviewOutcomeArg> for linka::VerificationOutcome {
+    fn from(value: ReviewOutcomeArg) -> Self {
         match value {
-            VerdictArg::Approved => Self::Approved,
-            VerdictArg::ChangesRequested => Self::ChangesRequested,
-            VerdictArg::Commented => Self::Commented,
+            ReviewOutcomeArg::Accepted => Self::Accepted,
+            ReviewOutcomeArg::Rejected => Self::Rejected,
         }
     }
 }
@@ -365,16 +367,28 @@ fn run(cli: Cli) -> Result<()> {
                 println!("\n{patch}");
             }
         }
-        Command::Accept { candidate, notes } => {
+        Command::Accept {
+            candidate,
+            verification,
+            notes,
+        } => {
             let store = workbench.linka_store()?;
             let attempts = workbench.attempts();
-            let accepted = Candidates::new(&store, &attempts).accept(&candidate, notes)?;
+            let verification = parse_node(verification)?;
+            let accepted =
+                Candidates::new(&store, &attempts).accept(&candidate, &verification, notes)?;
             println!("accepted {} for {}", accepted.id, accepted.target);
         }
-        Command::Reject { candidate, notes } => {
+        Command::Reject {
+            candidate,
+            verification,
+            notes,
+        } => {
             let store = workbench.linka_store()?;
             let attempts = workbench.attempts();
-            let rejected = Candidates::new(&store, &attempts).reject(&candidate, notes)?;
+            let verification = parse_node(verification)?;
+            let rejected =
+                Candidates::new(&store, &attempts).reject(&candidate, &verification, notes)?;
             println!("rejected {}", rejected.id);
         }
         Command::Publish { candidate } => {
@@ -507,14 +521,14 @@ fn run(cli: Cli) -> Result<()> {
                 }
                 ReviewCommand::Finish {
                     verification,
-                    verdict,
+                    outcome,
                     summary,
                     author,
                 } => {
                     let verification = parse_node(verification)?;
                     match reviews.finish(
                         &verification,
-                        verdict.into(),
+                        outcome.into(),
                         summary.as_deref(),
                         author,
                     )? {
@@ -603,8 +617,8 @@ fn print_run(report: &RunReport) {
     println!("sealed  {}", seal_line(&report.sealed));
     if let Some(candidate) = &report.candidate {
         println!(
-            "candidate {}  (view: `orka candidate {}`; accept: `orka accept {}`; publish: `orka publish {}`)",
-            candidate, candidate, candidate, candidate
+            "candidate {}  (view: `orka candidate {}`; review: `orka review start {}`)",
+            candidate, candidate, candidate
         );
     }
     if report.backend_failed {

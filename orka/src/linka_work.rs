@@ -14,7 +14,7 @@ use crate::access::AccessSummary;
 use crate::attempt::{AttemptId, AttemptRecord};
 use crate::executor::ExecutionReport;
 use crate::input::{AttemptInput, DependencyContext};
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use linka::ops::{self, SubmissionError};
 use linka::{
     ArtifactStore, Author, BranchStore, CandidateId, CandidateStore, ConsumedNode,
@@ -306,8 +306,13 @@ impl<'a> LinkaWork<'a> {
         {
             return Ok(None);
         }
+        let linka::ResultOutcome::Work(outcome) = result.outcome else {
+            bail!(
+                "Orka attempt `{attempt_id}` produced a verification result for ordinary node `{node}`"
+            );
+        };
         Ok(Some(RecordedResult {
-            outcome: result.outcome,
+            outcome,
             output_commit: result.output.map(|artifact| artifact.id),
             version: self.store.result_version(node.as_str())?,
         }))
@@ -496,7 +501,6 @@ fn classify(result: std::result::Result<Option<String>, SubmissionError>) -> Res
         Err(SubmissionError::Evaluation(error)) => Err(error),
     }
 }
-
 
 /// Namespaced producer evidence identifying the Orka attempt that produced a
 /// result. Only the harness-observed execution facts are recorded; the
