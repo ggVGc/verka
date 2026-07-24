@@ -350,6 +350,7 @@ impl App {
             | AgentEvent::CommandStarted { .. }
             | AgentEvent::ToolStarted { .. }
             | AgentEvent::AgentMessage { .. }
+            | AgentEvent::Thinking { .. }
             | AgentEvent::PlanUpdated { .. } => {
                 if self.status.is_active() {
                     self.status = Status::Running;

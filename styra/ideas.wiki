@@ -2,6 +2,11 @@
   - Current TUI is just an UI
   - Can also make a plugin for nvim
 - Markdown rendering, so tables etc show nicer
+- File edits view:
+  - Shows a timestamped list of files that were edited/created/removed
+  - Could initially rely on parsing out file edit events from agent log
+  - Preferably shares the inotify functionality from orka to get an actual list:
+    - But that only covers files inside the workspace...
 - Workflow:
   - Set up an initial prompt
   - Execute a task list against it

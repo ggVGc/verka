@@ -46,7 +46,10 @@ fn render_event(out: &mut String, event: &AgentEvent) {
     match event {
         // Prose bodies are worth reading in full; everything else reads best
         // as its one-line summary.
-        AgentEvent::AgentMessage { .. } | AgentEvent::PlanUpdated { .. } | AgentEvent::UserMessage { .. } => {
+        AgentEvent::AgentMessage { .. }
+        | AgentEvent::PlanUpdated { .. }
+        | AgentEvent::UserMessage { .. }
+        | AgentEvent::Thinking { .. } => {
             out.push_str(&format!("{:>8} ", event.tag()));
             let mut first = true;
             for block in event.detail() {

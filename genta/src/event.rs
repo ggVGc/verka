@@ -97,6 +97,11 @@ pub enum AgentEvent {
     AgentMessage {
         text: String,
     },
+    /// Claude's extended-thinking prose, surfaced only when a message carries
+    /// no visible text alongside it — see [`AgentEvent::is_minor`].
+    Thinking {
+        text: String,
+    },
     Error {
         message: String,
     },
@@ -131,6 +136,7 @@ impl AgentEvent {
             AgentEvent::ToolStarted { .. } | AgentEvent::ToolCompleted { .. } => "tool",
             AgentEvent::PlanUpdated { .. } => "plan",
             AgentEvent::AgentMessage { .. } => "agent",
+            AgentEvent::Thinking { .. } => "thinking",
             AgentEvent::Error { .. } => "error",
             AgentEvent::Unknown { .. } => "unknown",
             AgentEvent::Malformed { .. } => "malformed",
@@ -138,8 +144,11 @@ impl AgentEvent {
     }
 
     /// True for high-frequency lifecycle/bookkeeping events — thread and turn
-    /// markers, token usage — that carry little signal turn over turn. The UI
-    /// hides these by default so the list reads as the agent's actual work.
+    /// markers, token usage, Claude's rate-limit snapshots, Claude's other
+    /// `system:*` bookkeeping lines (e.g. `system:thinking_tokens`,
+    /// `system:compact_boundary`), and thinking-only prose — that carry little
+    /// signal turn over turn. The UI hides these by default so the list reads
+    /// as the agent's actual work.
     pub fn is_minor(&self) -> bool {
         matches!(
             self,
@@ -147,7 +156,9 @@ impl AgentEvent {
                 | AgentEvent::TurnStarted
                 | AgentEvent::TurnCompleted { .. }
                 | AgentEvent::UsageUpdated { .. }
-        )
+                | AgentEvent::Thinking { .. }
+        ) || matches!(self, AgentEvent::Unknown { wire_type }
+            if wire_type == "rate_limit_event" || wire_type.starts_with("system:"))
     }
 
     /// A single collapsed-line summary. Never contains newlines.
@@ -176,7 +187,9 @@ impl AgentEvent {
             }
             AgentEvent::ToolStarted { name, .. } => name.clone(),
             AgentEvent::ToolCompleted { name, status } => format!("{name} ({status})"),
-            AgentEvent::PlanUpdated { text } | AgentEvent::AgentMessage { text } => first_line(text),
+            AgentEvent::PlanUpdated { text }
+            | AgentEvent::AgentMessage { text }
+            | AgentEvent::Thinking { text } => first_line(text),
             AgentEvent::Error { message } => first_line(message),
             AgentEvent::Unknown { wire_type } => wire_type.clone(),
             AgentEvent::Malformed { error } => first_line(error),
@@ -239,9 +252,9 @@ impl AgentEvent {
             AgentEvent::ToolCompleted { name, status } => {
                 vec![DetailBlock::Text(format!("{name}: {status}"))]
             }
-            AgentEvent::PlanUpdated { text } | AgentEvent::AgentMessage { text } => {
-                markdown_blocks(text)
-            }
+            AgentEvent::PlanUpdated { text }
+            | AgentEvent::AgentMessage { text }
+            | AgentEvent::Thinking { text } => markdown_blocks(text),
             AgentEvent::Error { message } => vec![DetailBlock::Text(message.clone())],
             AgentEvent::Unknown { wire_type } => {
                 vec![DetailBlock::Text(format!("unrecognised event: {wire_type}"))]
@@ -532,9 +545,14 @@ fn decode_claude_assistant(message: &Value) -> AgentEvent {
                     _ => {}
                 }
             }
-            if let Some(text) = text.or(thinking) {
+            if let Some(text) = text {
                 return AgentEvent::AgentMessage {
                     text: clean_terminal_text(text),
+                };
+            }
+            if let Some(thinking) = thinking {
+                return AgentEvent::Thinking {
+                    text: clean_terminal_text(thinking),
                 };
             }
         }
@@ -932,13 +950,22 @@ mod tests {
             ),
             AgentEvent::ThreadStarted { thread_id: "s-9".into() }
         );
-        assert_eq!(
-            decode_line(
-                Protocol::ClaudeJsonl,
-                r#"{"type":"system","subtype":"compact_boundary"}"#,
-            ),
-            AgentEvent::Unknown { wire_type: "system:compact_boundary".into() }
+        let event = decode_line(
+            Protocol::ClaudeJsonl,
+            r#"{"type":"system","subtype":"compact_boundary"}"#,
         );
+        assert_eq!(event, AgentEvent::Unknown { wire_type: "system:compact_boundary".into() });
+        assert!(event.is_minor());
+    }
+
+    #[test]
+    fn claude_system_thinking_tokens_is_minor() {
+        let event = decode_line(
+            Protocol::ClaudeJsonl,
+            r#"{"type":"system","subtype":"thinking_tokens"}"#,
+        );
+        assert_eq!(event, AgentEvent::Unknown { wire_type: "system:thinking_tokens".into() });
+        assert!(event.is_minor());
     }
 
     #[test]
@@ -970,12 +997,23 @@ mod tests {
     }
 
     #[test]
-    fn claude_thinking_only_message_falls_back_to_an_agent_message() {
+    fn claude_thinking_only_message_falls_back_to_a_minor_thinking_event() {
         let event = decode_line(
             Protocol::ClaudeJsonl,
             r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"weigh the options"}]}}"#,
         );
-        assert_eq!(event, AgentEvent::AgentMessage { text: "weigh the options".into() });
+        assert_eq!(event, AgentEvent::Thinking { text: "weigh the options".into() });
+        assert!(event.is_minor());
+    }
+
+    #[test]
+    fn claude_rate_limit_event_is_minor() {
+        let event = decode_line(
+            Protocol::ClaudeJsonl,
+            r#"{"type":"rate_limit_event","rate_limit":{"status":"ok"}}"#,
+        );
+        assert_eq!(event, AgentEvent::Unknown { wire_type: "rate_limit_event".into() });
+        assert!(event.is_minor());
     }
 
     #[test]

@@ -138,9 +138,11 @@ pub fn event_blocks(event: &AgentEvent) -> Vec<WorkLogBlock> {
         AgentEvent::PlanUpdated { text, .. } => WorkLogBlock::Plan {
             content: markdown_blocks(text),
         },
-        AgentEvent::AgentMessage { text, .. } => WorkLogBlock::AgentMessage {
-            content: markdown_blocks(text),
-        },
+        AgentEvent::AgentMessage { text, .. } | AgentEvent::Thinking { text, .. } => {
+            WorkLogBlock::AgentMessage {
+                content: markdown_blocks(text),
+            }
+        }
         AgentEvent::TurnCompleted { usage } | AgentEvent::UsageUpdated { usage } => {
             WorkLogBlock::Usage {
                 usage: usage.clone(),
