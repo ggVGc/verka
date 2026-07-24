@@ -5,8 +5,9 @@ use crate::api::{
     CreateSession, Health, Request, Response, SequencedUpdate, SessionInfo, StoredSession,
     Transcript, Updates, WireRequest, WireResponse, API_VERSION,
 };
-use crate::journal::{self, Journal, SessionSummary};
-use crate::session::{DrivaOptions, Session, SessionSpec};
+use crate::journal::{self, Journal};
+use crate::session::{Session, SessionSpec};
+use crate::types::{DrivaOptions, SessionSummary};
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
@@ -116,7 +117,7 @@ impl ServerState {
             .name(format!("styra-updates-{id}"))
             .spawn(move || {
                 while let Ok(update) = receiver.recv() {
-                    if matches!(update, crate::session::SessionUpdate::Ended(_)) {
+                    if matches!(update, crate::types::SessionUpdate::Ended(_)) {
                         accepting_messages.store(false, Ordering::Release);
                     }
                     let mut history = updates.lock().expect("session update lock poisoned");

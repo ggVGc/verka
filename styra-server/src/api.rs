@@ -1,8 +1,7 @@
 //! Stable JSON contract shared by the Styra Unix-socket server and its clients.
 
 use crate::event::AgentEvent;
-use crate::journal::SessionSummary;
-use crate::session::{DrivaOptions, RawLine, SessionUpdate};
+use crate::types::{DrivaOptions, RawLine, SessionSummary, SessionUpdate};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -109,7 +108,7 @@ pub enum WireResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::{LogEntry, SessionUpdate};
+    use crate::types::{LogEntry, SessionUpdate};
 
     #[test]
     fn update_stream_has_an_explicit_cursor_and_tagged_payload() {

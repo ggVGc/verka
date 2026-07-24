@@ -4,7 +4,7 @@ use crate::api::{
     CreateSession, Health, Request, Response, SendMessage, SessionInfo, StoredSession, Updates,
     WireRequest, WireResponse, API_VERSION,
 };
-use crate::journal::SessionSummary;
+use crate::types::SessionSummary;
 use anyhow::{bail, Context, Result};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;

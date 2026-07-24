@@ -5,8 +5,8 @@
 //! so the whole interaction model is unit-testable. [`crate::ui`] renders it and
 //! `main` feeds it input and session updates.
 
-use crate::event::{AgentEvent, DetailBlock, TokenUsage};
-use crate::session::{DrivaOptions, LogEntry, RawLine, SessionEnd};
+use styra_server::event::{AgentEvent, DetailBlock, TokenUsage};
+use styra_server::{DrivaOptions, LogEntry, RawLine, SessionEnd};
 use std::path::PathBuf;
 
 /// Which region receives keys, like vim's normal/insert split.
@@ -756,7 +756,7 @@ mod tests {
 
     #[test]
     fn raw_view_toggles_and_scrolls_from_the_tail() {
-        use crate::session::{Direction, RawLine};
+        use styra_server::{Direction, RawLine};
         let mut app = app();
         assert_eq!(app.view, View::Events);
         app.toggle_raw();
@@ -784,7 +784,7 @@ mod tests {
 
     #[test]
     fn log_view_toggles_independently_and_scrolls() {
-        use crate::session::LogEntry;
+        use styra_server::LogEntry;
         let mut app = app();
         app.toggle_raw();
         assert_eq!(app.view, View::Raw);
@@ -929,8 +929,8 @@ mod tests {
 
     #[test]
     fn driva_options_are_unset_until_the_host_records_them_and_the_view_toggles() {
-        use crate::session::DrivaOptions;
-        use driva::{Mount, MountAccess};
+        use styra_server::DrivaOptions;
+        use styra_server::{Mount, MountAccess};
 
         let mut app = app();
         assert_eq!(app.driva_options, None);

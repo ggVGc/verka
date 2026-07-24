@@ -15,7 +15,7 @@
 
 use crate::agent::{Profile, SessionMeta};
 use crate::event::{decode_line, Protocol, AgentEvent};
-use crate::session::{Direction, RawLine};
+use crate::types::{Direction, RawLine, SessionSummary};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
@@ -117,24 +117,6 @@ fn write_session_meta(directory: &Path, meta: &SessionMeta) -> Result<()> {
     let path = directory.join(SESSION_META_FILE);
     let json = serde_json::to_string_pretty(meta).context("serializing session metadata")?;
     std::fs::write(&path, json).with_context(|| format!("writing {}", path.display()))
-}
-
-/// A stored session, enough to display and select it from a list — see
-/// [`list_sessions`].
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SessionSummary {
-    /// The session's directory name, and the id `--view` expects.
-    pub id: String,
-    /// Its directory, ready to pass straight to `--view`.
-    pub path: PathBuf,
-    /// The agent that produced it, if recorded (see [`read_session_meta`]);
-    /// `None` for a session that predates provenance tracking.
-    pub profile: Option<String>,
-    /// Roughly how long ago it was created, e.g. "3h ago".
-    pub age: String,
-    /// The millisecond timestamp embedded in `id`, used to sort newest
-    /// first; `None` for an id that doesn't match the expected shape.
-    pub created_at_ms: Option<u64>,
 }
 
 /// List every session stored under `store_root`, newest first. An absent

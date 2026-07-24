@@ -488,26 +488,48 @@ they are not interleaved into the event list.
 
 ## Crate layout
 
-A standalone binary crate, sibling to `orka/` and `driva/`:
+The server-client split is also a crate split: two standalone crates, siblings
+to `orka/` and `driva/`, linked by a plain path dependency (no workspace).
 
 ```text
-styra/
-  Cargo.toml
-  DESIGN.md
-  README.md
+styra-server/            # the server application + its client interface library
+  Cargo.toml             # [lib] styra_server  +  [[bin]] styra-server
   src/
-    main.rs      # CLI entry, terminal setup/teardown, event loop wiring
-    app.rs       # application state: list, selection, focus, session status
-    session.rs   # Driva launch, pipe plumbing, execution + reader threads
-    agent.rs     # agent profiles: command, protocol, message encoding, mounts
-    event.rs     # wire decode -> Styra events; summary + detail rendering
-    journal.rs   # raw event/input capture and replay
-    ui.rs        # widget layout: list, message box, status line
+    lib.rs               # curated interface; server modules are pub for the binary
+    main.rs              # server binary: socket bind, store setup, serve loop
+    api.rs               # versioned JSON wire types (interface)
+    client.rs            # blocking Rust client over the socket (interface)
+    types.rs             # data vocabulary that crosses the wire (interface)
+    paths.rs             # default socket/store locations (interface + server)
+    server.rs            # socket dispatch and the server-owned session manager
+    session.rs           # Driva launch, pipe plumbing, execution + reader threads
+    journal.rs           # raw event/input capture and replay
+
+styra/                   # the terminal client application
+  Cargo.toml             # [[bin]] styra; depends on styra-server (path)
+  src/
+    main.rs              # CLI entry, terminal setup/teardown, event loop wiring
+    app.rs               # application state: list, selection, focus, session status
+    ui.rs                # widget layout: list, message box, status line
 ```
 
-Dependencies: `driva` (path), a terminal UI library (`ratatui` with a
-`crossterm` backend), `serde` / `serde_json`, and `anyhow` — matching the
-suite's existing choices.
+The agent knowledge (`agent`), event decoding (`event`), app-server handshake
+(`appserver`), and rendering (`render`) live in the `genta` library; the server
+crate re-exports them, and the client crate reaches the event vocabulary,
+`render`, and `agent::SandboxLayout` through `styra-server`'s interface rather
+than depending on `genta` or `driva` directly.
+
+The `styra-server` library deliberately exposes only what a client needs to
+speak the API — `api`, `Client`, the `types` vocabulary, `paths`, and the
+re-exported event/render surface. Its session-runner modules (`server`,
+`session`, `journal`) are `pub` because the `styra-server` binary drives them,
+but they are not part of the interface the client depends on. A headless client
+example lives under `styra-server/examples/`.
+
+Dependencies: `styra-server` depends on `driva` and `genta` (path),
+`serde` / `serde_json`, `clap`, and `anyhow`; `styra` depends on
+`styra-server` (path), `ratatui` with a `crossterm` backend, `clap`, and
+`anyhow` — matching the suite's existing choices.
 
 ## Command-line surface
 

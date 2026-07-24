@@ -5,7 +5,7 @@
 //! rather than hand-written approximations. If codex changes its output, these
 //! fail and the recorded protocol version needs a new decoder.
 
-use styra::event::{decode_line, Protocol, AgentEvent};
+use styra_server::event::{decode_line, Protocol, AgentEvent};
 
 /// A real `codex exec --json` run that executed a shell command and answered.
 const EXEC_COMMAND: &str = include_str!("fixtures/codex_exec_command.jsonl");

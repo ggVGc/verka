@@ -4,12 +4,12 @@
 //! inline when expanded), the message box, and a one-line status/help footer.
 //! Rendering is a pure function of `App`; all state lives in [`crate::app`].
 
-use crate::agent::SandboxLayout;
+use styra_server::agent::SandboxLayout;
 use crate::app::{App, Entry, Focus, Status, View};
-use crate::event::{DetailBlock, AgentEvent};
-use crate::journal::SessionSummary;
-use crate::session::{Direction as WireDirection, LogLevel};
-use driva::{Mount, MountAccess};
+use styra_server::event::{DetailBlock, AgentEvent};
+use styra_server::SessionSummary;
+use styra_server::{Direction as WireDirection, LogLevel};
+use styra_server::{Mount, MountAccess};
 use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -165,7 +165,7 @@ fn render_log(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(paragraph, area);
 }
 
-fn log_line(entry: &crate::session::LogEntry) -> Line<'static> {
+fn log_line(entry: &styra_server::LogEntry) -> Line<'static> {
     let (label, color) = match entry.level {
         LogLevel::Info => ("info ", Color::Gray),
         LogLevel::Warn => ("warn ", Color::Yellow),
@@ -210,7 +210,7 @@ fn render_transcript_view(frame: &mut Frame, app: &App, area: Rect) {
     }
 
     let events: Vec<AgentEvent> = app.entries.iter().map(|entry| entry.event.clone()).collect();
-    let text = crate::render::render_events(&events, false, app.show_minor);
+    let text = styra_server::render::render_events(&events, false, app.show_minor);
     let lines: Vec<Line<'static>> = text
         .lines()
         .map(|line| Line::from(Span::styled(line.to_owned(), Style::default().fg(Color::White))))
@@ -253,7 +253,7 @@ fn render_raw(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(paragraph, area);
 }
 
-fn raw_line(line: &crate::session::RawLine) -> Line<'static> {
+fn raw_line(line: &styra_server::RawLine) -> Line<'static> {
     let (marker, color) = match line.direction {
         WireDirection::ToAgent => ("» ", Color::Cyan),
         WireDirection::FromAgent => ("« ", Color::Green),
@@ -780,7 +780,7 @@ fn tag_color(tag: &str) -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::{AgentEvent, TokenUsage};
+    use styra_server::event::{AgentEvent, TokenUsage};
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
     use ratatui::Terminal;
@@ -1057,7 +1057,7 @@ mod tests {
 
     #[test]
     fn raw_view_shows_wire_lines_with_direction_markers() {
-        use crate::session::{Direction, RawLine};
+        use styra_server::{Direction, RawLine};
         let mut app = App::new("codex", "s1");
         app.push_raw(RawLine {
             direction: Direction::ToAgent,
@@ -1077,8 +1077,8 @@ mod tests {
 
     #[test]
     fn driva_view_shows_the_launch_policy_or_a_placeholder_before_launch() {
-        use crate::session::DrivaOptions;
-        use driva::{Mount, MountAccess};
+        use styra_server::DrivaOptions;
+        use styra_server::{Mount, MountAccess};
 
         let mut app = App::new("codex", "s1");
         app.toggle_driva();
@@ -1278,7 +1278,7 @@ mod tests {
 
     #[test]
     fn log_view_shows_entries_with_levels() {
-        use crate::session::LogEntry;
+        use styra_server::LogEntry;
         let mut app = App::new("codex", "s1");
         app.push_log(LogEntry::info("launching codex"));
         app.push_log(LogEntry::error("could not run the agent: bwrap missing"));

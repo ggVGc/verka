@@ -8,10 +8,9 @@
 
 use std::time::{Duration, Instant};
 
-use styra::api::CreateSession;
-use styra::client::Client;
-use styra::event::AgentEvent;
-use styra::session::SessionUpdate;
+use styra_server::api::CreateSession;
+use styra_server::event::AgentEvent;
+use styra_server::{Client, SessionUpdate};
 
 fn main() -> anyhow::Result<()> {
     let prompt = {
@@ -22,7 +21,7 @@ fn main() -> anyhow::Result<()> {
             joined
         }
     };
-    let socket = styra::paths::default_socket()?;
+    let socket = styra_server::paths::default_socket()?;
     let client = Client::new(socket);
     client.health()?;
     let session = client.create_session(&CreateSession {

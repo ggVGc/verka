@@ -13,11 +13,12 @@ use std::io::{Stdout, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use styra::api::{CreateSession, SessionInfo};
-use styra::app::{App, Focus, Status, View};
-use styra::client::Client;
-use styra::session::{LogEntry, SessionUpdate};
-use styra::ui;
+mod app;
+mod ui;
+
+use app::{App, Focus, Status, View};
+use styra_server::api::{CreateSession, SessionInfo};
+use styra_server::{Client, LogEntry, SessionUpdate};
 
 /// Run an interactive, isolated agent session in a terminal interface.
 #[derive(Parser)]
@@ -50,7 +51,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let socket = match &cli.socket {
         Some(path) => path.clone(),
-        None => styra::paths::default_socket()?,
+        None => styra_server::paths::default_socket()?,
     };
     let client = Client::new(&socket);
     client.health().with_context(|| {
@@ -110,7 +111,7 @@ fn main() -> Result<()> {
             // Skip carried-but-viewless traffic (e.g. app-server control
             // lines), matching what a live session shows; it stays available
             // in the raw view below.
-            if !matches!(event, styra::event::AgentEvent::Unknown { .. }) {
+            if !matches!(event, styra_server::event::AgentEvent::Unknown { .. }) {
                 app.push_event(event);
             }
         }
@@ -118,7 +119,7 @@ fn main() -> Result<()> {
             app.push_raw(line);
         }
         // A replayed session has no live agent to end; mark it stopped.
-        app.on_ended(styra::session::SessionEnd { exit_code: None, error: None });
+        app.on_ended(styra_server::SessionEnd { exit_code: None, error: None });
         live = Live::Viewing;
     } else {
         let prompt = cli.prompt.join(" ");
@@ -223,7 +224,7 @@ fn session_id_from_target(target: &Path) -> Result<String> {
 /// session, Esc or q to back out without picking one.
 fn run_picker(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
-    sessions: &[styra::journal::SessionSummary],
+    sessions: &[styra_server::SessionSummary],
 ) -> Result<Option<String>> {
     let mut selected = 0usize;
     loop {
@@ -301,7 +302,7 @@ fn run(
                 }
                 Err(error) => {
                     app.push_log(LogEntry::error(format!("update poll failed: {error:#}")));
-                    app.on_ended(styra::session::SessionEnd {
+                    app.on_ended(styra_server::SessionEnd {
                         exit_code: None,
                         error: Some(error.to_string()),
                     });

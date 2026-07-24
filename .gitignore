@@ -5,4 +5,5 @@ target/
 
 # styra runtime session store and stray temp files
 styra/.styra/
+styra-server/.styra/
 *.tmp.*

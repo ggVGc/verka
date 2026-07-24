@@ -638,9 +638,18 @@ dependencies = [
  "anyhow",
  "clap",
  "crossterm",
+ "ratatui",
+ "styra-server",
+]
+
+[[package]]
+name = "styra-server"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
  "driva",
  "genta",
- "ratatui",
  "serde",
  "serde_json",
 ]

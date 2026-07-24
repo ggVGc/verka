@@ -3,7 +3,7 @@ use clap::Parser;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use styra::server::{serve, ServerState};
+use styra_server::server::{serve, ServerState};
 
 #[derive(Parser)]
 #[command(
@@ -24,11 +24,11 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let (store, private_store) = match cli.store {
         Some(path) => (path, false),
-        None => (styra::paths::default_store()?, true),
+        None => (styra_server::paths::default_store()?, true),
     };
     let (socket, private_socket_directory) = match cli.socket {
         Some(path) => (path, false),
-        None => (styra::paths::default_socket()?, true),
+        None => (styra_server::paths::default_socket()?, true),
     };
     if private_store {
         ensure_private_directory(&store)?;

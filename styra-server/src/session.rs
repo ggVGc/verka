@@ -14,9 +14,9 @@
 use crate::agent::{MountSpec, Profile};
 use crate::event::{decode_line, AgentEvent};
 use crate::journal::Journal;
+use crate::types::{Direction, DrivaOptions, LogEntry, RawLine, SessionEnd, SessionUpdate};
 use anyhow::{Context, Result};
 use driva::{ExecutionIo, ExecutionRequest, Isolation, Mount, MountAccess};
-use serde::{Deserialize, Serialize};
 use std::ffi::OsString;
 use std::fs::File;
 use std::io::{BufRead, BufReader, PipeWriter, Write};
@@ -37,22 +37,11 @@ pub struct SessionSpec {
     pub temporary_mounts: Vec<PathBuf>,
 }
 
-/// A human-facing summary of the Driva policy a session was launched with:
-/// the isolation backend, the command it runs, and the mount/network policy
-/// enforced around it. Captured once at spawn time from the same
-/// [`ExecutionRequest`] Driva itself executes, so it can never drift from
-/// what is actually running.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DrivaOptions {
-    pub isolation_backend: String,
-    pub command: Vec<String>,
-    pub working_directory: PathBuf,
-    pub network: bool,
-    pub mounts: Vec<Mount>,
-}
-
+/// Capture the Driva policy a [`SessionSpec`] would launch under, without
+/// running it. This fills the [`DrivaOptions`] the server reports for a live
+/// session, taken from the same [`ExecutionRequest`] Driva executes, so it can
+/// never drift from what is actually running.
 impl DrivaOptions {
-    /// Capture the policy a `spec` would launch under, without running it.
     pub fn capture(spec: &SessionSpec, isolation_backend: impl Into<String>) -> Self {
         let request = build_request(spec);
         Self {
@@ -63,72 +52,6 @@ impl DrivaOptions {
             mounts: request.mounts,
         }
     }
-}
-
-/// An update delivered from the session threads to the UI.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", content = "data", rename_all = "snake_case")]
-pub enum SessionUpdate {
-    /// A decoded agent event or an operator message, in occurrence order.
-    Event(AgentEvent),
-    /// One verbatim wire line, for the raw-interaction view.
-    Raw(RawLine),
-    /// A diagnostic message for the log view.
-    Log(LogEntry),
-    /// The agent process ended; no further events will arrive.
-    Ended(SessionEnd),
-}
-
-/// Severity of a [`LogEntry`], used to colour the log view.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LogLevel {
-    Info,
-    Warn,
-    Error,
-}
-
-/// One line in the log view: a Styra-internal note or a line of agent stderr.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LogEntry {
-    pub level: LogLevel,
-    pub message: String,
-}
-
-impl LogEntry {
-    pub fn info(message: impl Into<String>) -> Self {
-        Self { level: LogLevel::Info, message: message.into() }
-    }
-    pub fn warn(message: impl Into<String>) -> Self {
-        Self { level: LogLevel::Warn, message: message.into() }
-    }
-    pub fn error(message: impl Into<String>) -> Self {
-        Self { level: LogLevel::Error, message: message.into() }
-    }
-}
-
-/// Which way a wire line travelled.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Direction {
-    /// A line Styra wrote to the agent's stdin.
-    ToAgent,
-    /// A line received on the agent's stdout.
-    FromAgent,
-}
-
-/// One verbatim line of the agent interaction, undecoded.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RawLine {
-    pub direction: Direction,
-    pub text: String,
-}
-
-/// How a session finished.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SessionEnd {
-    pub exit_code: Option<i32>,
-    pub error: Option<String>,
 }
 
 /// A running session. Dropping it closes the agent's stdin, which ends most
