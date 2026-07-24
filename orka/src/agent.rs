@@ -4,6 +4,7 @@
 //! narrowly scoped capabilities it needs. Driva remains only the isolation
 //! executor; its user-facing template registry is deliberately not involved.
 
+use anyhow::Result;
 use genta::event::Protocol;
 use serde::{de::Error as _, Deserialize, Deserializer, Serialize, Serializer};
 use std::path::{Path, PathBuf};
@@ -125,11 +126,21 @@ impl Default for SandboxLayout {
 /// Resolve Orka's batch Codex session through Genta's complete agent profile.
 /// Orka contributes its workspace and staged-prompt instruction; Genta owns all
 /// Codex-specific command, protocol, credential, environment, and network data.
-pub fn codex(executable: &Path, layout: &SandboxLayout) -> genta::agent::Profile {
+///
+/// A bare `codex` (the configuration default) is located on Orka's own `PATH`
+/// rather than left for the sandbox to resolve: the isolation backend supplies a
+/// fixed system `PATH`, so an agent installed under the operator's home would
+/// otherwise fail inside the sandbox with an opaque `execvp` error.
+pub fn codex(executable: &Path, layout: &SandboxLayout) -> Result<genta::agent::Profile> {
     let agent_layout = genta::agent::SandboxLayout {
         workspace: layout.workspace.clone(),
     };
-    genta::agent::codex_exec(&agent_layout, &executable.to_string_lossy(), AGENT_PROMPT)
+    let executable = genta::agent::resolve_executable(executable)?;
+    Ok(genta::agent::codex_exec(
+        &agent_layout,
+        &executable,
+        AGENT_PROMPT,
+    ))
 }
 
 #[cfg(test)]
@@ -184,14 +195,28 @@ mod tests {
         );
     }
 
+    /// A stub codex install, so profile construction resolves against a known
+    /// path instead of whatever the machine running the tests has on its `PATH`.
+    fn stub_codex() -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let directory =
+            std::env::temp_dir().join(format!("orka-agent-bin-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("codex");
+        std::fs::write(&path, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
     #[test]
     fn codex_profile_uses_the_orka_layout_and_trusts_only_its_workspace() {
         let layout = SandboxLayout::default();
-        let invocation = codex(Path::new("codex"), &layout);
+        let executable = stub_codex();
+        let invocation = codex(&executable, &layout).unwrap();
 
         assert_eq!(layout.workspace, Path::new("/tmp/orka/workspace"));
         assert_eq!(layout.exchange, Path::new("/tmp/orka/exchange"));
-        assert_eq!(invocation.command[0], "codex");
+        assert_eq!(Path::new(&invocation.command[0]), executable);
         assert_eq!(invocation.protocol, Protocol::CodexJsonl);
         assert!(invocation
             .command
@@ -217,7 +242,8 @@ mod tests {
         }
 
         let layout = SandboxLayout::default();
-        let invocation = codex(Path::new("codex"), &layout);
+        let executable = stub_codex();
+        let invocation = codex(&executable, &layout).unwrap();
         let mut mounts = vec![
             Mount::Bind {
                 source: "/host/attempt".into(),

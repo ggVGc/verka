@@ -222,7 +222,7 @@ impl Config {
                     .executable
                     .as_deref()
                     .unwrap_or_else(|| Path::new("codex"));
-                Ok(Invocation::Agent(agent::codex(executable, layout)))
+                Ok(Invocation::Agent(agent::codex(executable, layout)?))
             }
             (None, false) => {
                 if self.agent.executable.is_some() {

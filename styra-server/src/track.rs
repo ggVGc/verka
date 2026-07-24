@@ -450,7 +450,8 @@ mod tests {
     fn workspace_spec(dir: &std::path::Path) -> TrackSpec {
         // A profile with no credential mounts so request validation only needs
         // the workspace directory to exist.
-        let mut profile = crate::agent::codex(&SandboxLayout::default());
+        let mut profile =
+            crate::agent::codex(&SandboxLayout::default(), std::path::Path::new("codex"));
         profile.mounts.clear();
         profile.network = false;
         profile.message_format = MessageFormat::CodexSubmission;

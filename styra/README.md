@@ -88,6 +88,13 @@ Built-in profiles:
   mode; each submitted message starts a new turn in the same session.
   `claude:<model>` (e.g. `claude:opus`) pins a model.
 
+Each profile's agent binary is located on the server's own `PATH` when the
+session is created, and the session launches that resolved path: the sandbox
+gets a fixed system `PATH`, so a bare name installed under your home (Claude
+Code's `~/.local/bin`) would not resolve inside it. An agent that is not
+installed fails the `create_session` request with a clear error instead of
+dying inside the sandbox.
+
 Two focuses, like vim modes: list focus navigates and folds the event list,
 input focus types into the message box. `i` or `Tab` enters input focus; `Esc`
 or `Tab` returns to list focus.
