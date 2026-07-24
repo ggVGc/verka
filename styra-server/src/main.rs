@@ -1,7 +1,6 @@
 use anyhow::Result;
 use clap::Parser;
 use std::path::PathBuf;
-use std::time::Duration;
 use styra_server::ServerConfig;
 
 #[derive(Parser)]
@@ -17,10 +16,6 @@ struct Cli {
     /// Unix socket path (default: $XDG_RUNTIME_DIR/styra/styra.sock).
     #[arg(long)]
     socket: Option<PathBuf>,
-    /// Exit after this many seconds with no live jobs and no client activity
-    /// (0 keeps the server running until it is killed).
-    #[arg(long, default_value_t = styra_server::daemon::DEFAULT_IDLE_TIMEOUT_SECS)]
-    idle_timeout: u64,
 }
 
 fn main() -> Result<()> {
@@ -35,6 +30,5 @@ fn main() -> Result<()> {
     styra_server::run(ServerConfig {
         store: cli.store,
         socket: cli.socket,
-        idle_timeout: Duration::from_secs(cli.idle_timeout),
     })
 }

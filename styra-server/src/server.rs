@@ -13,9 +13,8 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
 
 const MAX_REQUEST_BYTES: usize = 8 * 1024 * 1024;
 
@@ -26,23 +25,14 @@ pub struct ServerState {
 
 struct ServerInner {
     store_root: PathBuf,
+    /// The socket the server is bound to, removed on an explicit shutdown so
+    /// the next client sees no stale socket to trip over.
+    socket: PathBuf,
     layout: SandboxLayout,
     jobs: Mutex<HashMap<String, Arc<ManagedJob>>>,
-    /// Jobs whose agent process is still running. Idle shutdown keys off this:
-    /// the server stays up while any job is live, independent of whether a
-    /// client is attached, so a detached agent turn is never killed.
-    live_jobs: AtomicUsize,
-    /// When the server last saw a job change or a client request. Combined
-    /// with a zero `live_jobs`, staleness past the idle timeout ends the
-    /// process.
-    last_active: Mutex<Instant>,
-}
-
-impl ServerInner {
-    /// Record that the server just did something worth staying alive for.
-    fn touch(&self) {
-        *self.last_active.lock().expect("activity lock poisoned") = Instant::now();
-    }
+    /// Set by a [`Request::Shutdown`]; the connection thread checks it after
+    /// acknowledging and then exits the process.
+    shutdown: AtomicBool,
 }
 
 struct ManagedJob {
@@ -91,14 +81,14 @@ impl ManagedJob {
 }
 
 impl ServerState {
-    pub fn new(store_root: PathBuf) -> Self {
+    pub fn new(store_root: PathBuf, socket: PathBuf) -> Self {
         Self {
             inner: Arc::new(ServerInner {
                 store_root,
+                socket,
                 layout: SandboxLayout::default(),
                 jobs: Mutex::new(HashMap::new()),
-                live_jobs: AtomicUsize::new(0),
-                last_active: Mutex::new(Instant::now()),
+                shutdown: AtomicBool::new(false),
             }),
         }
     }
@@ -107,43 +97,14 @@ impl ServerState {
         &self.inner.store_root
     }
 
-    /// Record that the server just did something worth staying alive for.
-    fn touch(&self) {
-        self.inner.touch();
-    }
-
-    /// Start a background thread that ends the process once it has had no live
-    /// jobs and no client activity for `timeout`, removing `socket` on the way
-    /// out. A zero `timeout` disables idle shutdown (the server runs until
-    /// killed). Mirrors the idle timeout that lets a bloop/sbt server retire
-    /// itself when nothing is using it.
-    pub fn spawn_idle_monitor(&self, socket: PathBuf, timeout: Duration) {
-        if timeout.is_zero() {
-            return;
+    /// If a client asked the server to shut down, remove the socket and exit.
+    /// Called by a connection thread only after its acknowledgement has been
+    /// flushed, so the requester learns the daemon is going down.
+    fn shutdown_if_requested(&self) {
+        if self.inner.shutdown.load(Ordering::Acquire) {
+            std::fs::remove_file(&self.inner.socket).ok();
+            std::process::exit(0);
         }
-        let inner = Arc::clone(&self.inner);
-        // Check several times per timeout so shutdown lands promptly, but never
-        // busy-spin on a long timeout.
-        let interval = (timeout / 4).clamp(Duration::from_millis(200), Duration::from_secs(30));
-        std::thread::Builder::new()
-            .name("styra-idle-monitor".into())
-            .spawn(move || loop {
-                std::thread::sleep(interval);
-                if inner.live_jobs.load(Ordering::Acquire) != 0 {
-                    continue;
-                }
-                let idle = inner
-                    .last_active
-                    .lock()
-                    .expect("activity lock poisoned")
-                    .elapsed();
-                if idle >= timeout {
-                    eprintln!("styra-server: no live jobs and idle for {timeout:?}; shutting down");
-                    std::fs::remove_file(&socket).ok();
-                    std::process::exit(0);
-                }
-            })
-            .expect("spawning the idle monitor");
     }
 
     fn create_session(&self, request: CreateSession) -> Result<SessionInfo> {
@@ -190,17 +151,12 @@ impl ServerState {
             workspace: workspace.clone(),
             driva: driva.clone(),
         });
-        let collector_inner = Arc::clone(&self.inner);
         std::thread::Builder::new()
             .name(format!("styra-updates-{id}"))
             .spawn(move || {
                 while let Ok(update) = receiver.recv() {
                     if matches!(update, crate::types::JobUpdate::Ended(_)) {
                         accepting_messages.store(false, Ordering::Release);
-                        // The agent process is gone: drop the live-job count
-                        // and mark the moment so the idle clock starts here.
-                        collector_inner.live_jobs.fetch_sub(1, Ordering::AcqRel);
-                        collector_inner.touch();
                     }
                     let mut history = updates.lock().expect("job update lock poisoned");
                     let sequence = history.len() as u64 + 1;
@@ -213,8 +169,6 @@ impl ServerState {
             .lock()
             .expect("server job lock poisoned")
             .insert(id.clone(), Arc::clone(&managed));
-        self.inner.live_jobs.fetch_add(1, Ordering::AcqRel);
-        self.touch();
 
         if let Some(message) = request
             .message
@@ -260,9 +214,6 @@ impl ServerState {
     }
 
     fn handle(&self, request: Request) -> Result<Response> {
-        // Any request is activity: keep the server alive while a client is
-        // using it, even when it is only browsing stored sessions.
-        self.touch();
         match request {
             Request::Health => Ok(Response::Health(Health {
                 service: "styra".into(),
@@ -324,6 +275,12 @@ impl ServerState {
                 let text = journal::render_transcript(&summary.path, meta.protocol)?;
                 Ok(Response::Transcript(Transcript { text }))
             }
+            // Flag the shutdown; the connection thread acts on it once this
+            // acknowledgement has gone back over the wire.
+            Request::Shutdown => {
+                self.inner.shutdown.store(true, Ordering::Release);
+                Ok(Response::Accepted)
+            }
         }
     }
 }
@@ -356,7 +313,10 @@ fn serve_connection(mut stream: UnixStream, state: &ServerState) -> Result<()> {
     stream
         .write_all(b"\n")
         .context("writing the Styra response")?;
-    stream.flush().context("flushing the Styra response")
+    stream.flush().context("flushing the Styra response")?;
+    // The ack is on its way to the client; only now is it safe to exit.
+    state.shutdown_if_requested();
+    Ok(())
 }
 
 fn read_request(stream: &UnixStream) -> Result<Request> {
@@ -402,7 +362,7 @@ mod tests {
         std::fs::remove_file(&socket).ok();
         let listener = UnixListener::bind(&socket).unwrap();
         let store = socket.with_extension("store");
-        let state = ServerState::new(store.clone());
+        let state = ServerState::new(store.clone(), socket.clone());
         let server = std::thread::spawn(move || {
             let (stream, _) = listener.accept().unwrap();
             serve_connection(stream, &state).unwrap();
@@ -422,7 +382,7 @@ mod tests {
         let store =
             std::env::temp_dir().join(format!("styra-server-id-test-{}", std::process::id()));
         std::fs::remove_dir_all(&store).ok();
-        let state = ServerState::new(store.clone());
+        let state = ServerState::new(store.clone(), store.with_extension("sock"));
         let error = state.stored_summary("../../etc").unwrap_err();
         assert!(error.to_string().contains("was not found"));
         std::fs::remove_dir_all(store).ok();

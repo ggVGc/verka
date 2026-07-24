@@ -27,6 +27,14 @@ struct Cli {
     /// Styra server Unix socket (default: $XDG_RUNTIME_DIR/styra/styra.sock).
     #[arg(long)]
     socket: Option<PathBuf>,
+    /// Start the Styra daemon in the background and exit, without opening the
+    /// interface. A no-op if one is already listening on the socket.
+    #[arg(short = 'd', long = "daemon", conflicts_with = "stop")]
+    daemon: bool,
+    /// Stop the Styra daemon listening on the socket (if any) and exit. Any
+    /// live jobs it owns are ended with it.
+    #[arg(long)]
+    stop: bool,
     /// Agent profile to launch a live session with. Not used with `--view`:
     /// a viewed session carries its own recorded profile and protocol.
     #[arg(long, default_value = "codex")]
@@ -60,9 +68,18 @@ fn main() -> Result<()> {
         Some(path) => path.clone(),
         None => styra_server::paths::default_socket()?,
     };
+
+    // Daemon lifecycle commands run without opening the interface at all.
+    if cli.stop {
+        return stop_daemon(&socket);
+    }
+    if cli.daemon {
+        return start_daemon(&socket);
+    }
+
     // Connect-or-spawn: use the running server if one answers, otherwise start
-    // a detached `styra-server` daemon bound to this socket and wait for it.
-    // The daemon outlives this client, so live sessions survive detach/quit.
+    // a detached daemon bound to this socket and wait for it. The daemon
+    // outlives this client, so live sessions survive detach/quit.
     let client = styra_server::ensure_server(&socket).with_context(|| {
         format!("Styra server is unavailable at {}", socket.display())
     })?;
@@ -225,6 +242,35 @@ fn main() -> Result<()> {
         client.stop_session(&session_id).ok();
     }
     result
+}
+
+/// `--daemon`: bring up the background daemon and return. Reuses the ordinary
+/// connect-or-spawn path, so it is idempotent — if one is already listening,
+/// it is left as-is rather than started twice.
+fn start_daemon(socket: &Path) -> Result<()> {
+    if Client::new(socket).health().is_ok() {
+        println!("styra daemon already running on {}", socket.display());
+        return Ok(());
+    }
+    styra_server::ensure_server(socket)
+        .with_context(|| format!("starting the Styra daemon on {}", socket.display()))?;
+    println!("started styra daemon on {}", socket.display());
+    Ok(())
+}
+
+/// `--stop`: ask the daemon on `socket` to shut down. Reports plainly when
+/// none is listening rather than treating it as an error.
+fn stop_daemon(socket: &Path) -> Result<()> {
+    let client = Client::new(socket);
+    if client.health().is_err() {
+        println!("no styra daemon running on {}", socket.display());
+        return Ok(());
+    }
+    client
+        .shutdown()
+        .with_context(|| format!("stopping the Styra daemon on {}", socket.display()))?;
+    println!("stopped styra daemon on {}", socket.display());
+    Ok(())
 }
 
 fn create_session(client: &Client, cli: &Cli, seed: Option<&str>) -> Result<SessionInfo> {

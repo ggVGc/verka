@@ -97,6 +97,16 @@ impl Client {
         }
     }
 
+    /// Ask the server to shut down. It acknowledges before exiting, so a
+    /// successful return means the daemon received the request and is on its
+    /// way out (any live jobs it owns go with it).
+    pub fn shutdown(&self) -> Result<()> {
+        match self.request(Request::Shutdown)? {
+            Response::Accepted => Ok(()),
+            other => unexpected("accepted", other),
+        }
+    }
+
     fn request(&self, request: Request) -> Result<Response> {
         let mut stream = UnixStream::connect(&self.socket)
             .with_context(|| format!("connecting to Styra socket {}", self.socket.display()))?;

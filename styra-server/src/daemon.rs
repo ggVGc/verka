@@ -9,7 +9,6 @@ use anyhow::{bail, Context, Result};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 /// Sentinel env var: when set, a host binary runs as the Styra server instead
 /// of its normal entry point, reading the rest of its configuration from the
@@ -20,34 +19,16 @@ pub const SERVE_SOCKET_ENV: &str = "STYRA_SERVE_SOCKET";
 /// Store directory for the serve-from-env path (optional; defaults to the
 /// private per-user store).
 pub const SERVE_STORE_ENV: &str = "STYRA_SERVE_STORE";
-/// Idle-timeout seconds for the serve-from-env path (optional; defaults to
-/// [`DEFAULT_IDLE_TIMEOUT_SECS`]).
-pub const SERVE_IDLE_TIMEOUT_ENV: &str = "STYRA_SERVE_IDLE_TIMEOUT";
-
-/// Default seconds to wait, with no live jobs and no client activity, before a
-/// self-spawned daemon retires itself.
-pub const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 300;
 
 /// What a server needs to come up. `None` fields fall back to the private
-/// per-user defaults from [`crate::paths`].
+/// per-user defaults from [`crate::paths`]. The server runs until it is asked
+/// to stop ([`crate::api::Request::Shutdown`]) or killed.
+#[derive(Default)]
 pub struct ServerConfig {
     /// Store containing durable sessions.
     pub store: Option<PathBuf>,
     /// Unix socket to listen on.
     pub socket: Option<PathBuf>,
-    /// Exit after this long with no live jobs and no client activity; zero
-    /// keeps the server running until it is killed.
-    pub idle_timeout: Duration,
-}
-
-impl Default for ServerConfig {
-    fn default() -> Self {
-        Self {
-            store: None,
-            socket: None,
-            idle_timeout: Duration::from_secs(DEFAULT_IDLE_TIMEOUT_SECS),
-        }
-    }
 }
 
 /// If [`SERVE_ENV`] is set, run as the Styra server (configured from the
@@ -64,10 +45,6 @@ pub fn serve_if_requested() -> Option<Result<()>> {
 
 /// Build a [`ServerConfig`] from the `STYRA_SERVE_*` environment.
 fn config_from_serve_env() -> ServerConfig {
-    let idle_timeout = std::env::var(SERVE_IDLE_TIMEOUT_ENV)
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(DEFAULT_IDLE_TIMEOUT_SECS);
     ServerConfig {
         store: std::env::var_os(SERVE_STORE_ENV)
             .filter(|value| !value.is_empty())
@@ -75,12 +52,11 @@ fn config_from_serve_env() -> ServerConfig {
         socket: std::env::var_os(SERVE_SOCKET_ENV)
             .filter(|value| !value.is_empty())
             .map(PathBuf::from),
-        idle_timeout: Duration::from_secs(idle_timeout),
     }
 }
 
-/// Bring up a server on `config.socket` and serve until it is stopped or retires
-/// itself for being idle.
+/// Bring up a server on `config.socket` and serve until it is asked to shut
+/// down or killed.
 pub fn run(config: ServerConfig) -> Result<()> {
     let (store, private_store) = match config.store {
         Some(path) => (path, false),
@@ -100,8 +76,7 @@ pub fn run(config: ServerConfig) -> Result<()> {
         socket.display(),
         store.display()
     );
-    let state = ServerState::new(store);
-    state.spawn_idle_monitor(socket, config.idle_timeout);
+    let state = ServerState::new(store, socket);
     serve(listener, state)
 }
 

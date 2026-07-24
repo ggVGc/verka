@@ -75,6 +75,10 @@ pub enum Request {
     ListStoredSessions,
     StoredSession { id: String },
     Transcript { id: String },
+    /// Ask the server to remove its socket and exit. Any live jobs it owns die
+    /// with it, so this is the deliberate counterpart to the daemon outliving
+    /// its clients.
+    Shutdown,
 }
 
 /// Versioned request envelope. Flattening keeps `operation` at the top level.

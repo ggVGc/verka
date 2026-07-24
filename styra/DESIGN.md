@@ -559,6 +559,8 @@ styra [OPTIONS] [-- PROMPT]
   --workspace <DIR>    Host directory mounted writable as the agent workspace
   --network            Permit agent networking (profiles may default this on)
   --view <SESSION>     Open a captured journal read-only instead of launching
+  -d, --daemon         Start the background daemon and exit (no interface)
+  --stop               Stop the daemon on the socket and exit
 ```
 
 The `styra` TUI is a client of `styra-server`, but it need not be started
@@ -567,7 +569,14 @@ TUI spawns one as a detached daemon by re-exec'ing its own executable with a
 serve sentinel in the environment (`styra_server::spawn`). Because `styra`
 links the `styra_server` crate, that re-exec'd copy *is* the server — there is
 no second binary to locate or install — and it outlives the client so live
-jobs survive detach and quit. An optional trailing `PROMPT` seeds the first turn so a
+jobs survive detach and quit.
+
+The daemon runs until it is stopped or killed; it does not retire itself when
+idle. `-d`/`--daemon` brings it up in the background without opening the
+interface (idempotent — a no-op if one is already listening), and `--stop`
+asks the daemon on the socket to remove the socket and exit, ending any live
+jobs it owns with it. Both are pure lifecycle commands: they act and exit
+without touching the terminal. An optional trailing `PROMPT` seeds the first turn so a
 session can start with one message already sent, launching the job immediately;
 without it, the application opens in input focus with an empty box and launches
 nothing until the operator submits a message (see *Starting and switching send
