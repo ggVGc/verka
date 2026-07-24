@@ -416,11 +416,13 @@ fn handle_list_key(app: &mut App, live: &Live, key: KeyEvent, pending_fold: &mut
         }
         return;
     }
-    // Keys common to both views.
+    // Keys common to both views. `i`/`Tab` are excluded while the
+    // full-screen preview is up: it renders with no input box at all, so
+    // switching focus into one would leave keystrokes going nowhere visible.
     match key.code {
         KeyCode::Char('q') => return app.request_quit(),
-        KeyCode::Char('i') => return app.enter_input(),
-        KeyCode::Tab => return app.toggle_focus(),
+        KeyCode::Char('i') if app.view != View::Preview => return app.enter_input(),
+        KeyCode::Tab if app.view != View::Preview => return app.toggle_focus(),
         KeyCode::Char('r') => return app.toggle_raw(),
         KeyCode::Char('l') => return app.toggle_log(),
         KeyCode::Char('t') => return app.toggle_transcript(),

@@ -65,6 +65,14 @@ fn title_line(profile: &str, status: &Status, suffix: Option<&str>) -> Line<'sta
 }
 
 pub fn render(frame: &mut Frame, app: &App) {
+    // The full-screen preview replaces everything — no input box, no footer,
+    // no border — so the whole terminal is nothing but the selected entry's
+    // text, cleanly selectable and copyable.
+    if app.view == View::Preview {
+        render_fullscreen_preview(frame, app, frame.area());
+        return;
+    }
+
     let input_height = input_area_height(app);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -81,7 +89,7 @@ pub fn render(frame: &mut Frame, app: &App) {
         View::Log => render_log(frame, app, chunks[0]),
         View::Transcript => render_transcript_view(frame, app, chunks[0]),
         View::Driva => render_driva(frame, app, chunks[0]),
-        View::Preview => render_fullscreen_preview(frame, app, chunks[0]),
+        View::Preview => unreachable!("handled above"),
     }
     render_input(frame, app, chunks[1]);
     render_footer(frame, app, chunks[2]);
@@ -340,38 +348,28 @@ fn render_preview(frame: &mut Frame, app: &App, area: Rect) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::DarkGray))
         .title(Span::styled(" preview ", Style::default().fg(Color::Gray)));
-    render_preview_content(frame, app, area, block);
+    let paragraph = Paragraph::new(preview_lines(app)).block(block).wrap(Wrap { trim: false });
+    frame.render_widget(paragraph, area);
 }
 
 /// The `P` shortcut's full-screen view of the selected entry: the same
-/// uncapped content as the side panel, but replacing the whole main region
-/// (and so carrying the standard title bar rather than the panel's compact
-/// " preview " label).
+/// uncapped content as the side panel, but with no border, title, or other
+/// chrome at all — just the text, filling the whole terminal, so it can be
+/// selected and copied cleanly.
 fn render_fullscreen_preview(frame: &mut Frame, app: &App, area: Rect) {
-    let border_style = if app.focus == Focus::List {
-        Style::default().fg(Color::Cyan)
-    } else {
-        Style::default().fg(Color::DarkGray)
-    };
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(border_style)
-        .title(title_line(&app.profile_name, &app.status, Some("preview")));
-    render_preview_content(frame, app, area, block);
+    let paragraph = Paragraph::new(preview_lines(app)).wrap(Wrap { trim: false });
+    frame.render_widget(paragraph, area);
 }
 
 /// Shared body for the side-panel and full-screen preview: the selected
 /// entry's uncapped summary, detail, and (for a `FileChanged` entry) current
-/// file content, inside whichever `block` the caller wants framing it.
-fn render_preview_content(frame: &mut Frame, app: &App, area: Rect, block: Block<'static>) {
+/// file content.
+fn preview_lines(app: &App) -> Vec<Line<'static>> {
     let Some(entry) = app.selected_entry() else {
-        let empty = Paragraph::new(Line::from(Span::styled(
+        return vec![Line::from(Span::styled(
             "  no entry selected",
             Style::default().fg(Color::Gray),
-        )))
-        .block(block);
-        frame.render_widget(empty, area);
-        return;
+        ))];
     };
 
     let detail = detail_lines(&entry.event, None);
@@ -380,8 +378,7 @@ fn render_preview_content(frame: &mut Frame, app: &App, area: Rect, block: Block
     if let AgentEvent::FileChanged { paths, .. } = &entry.event {
         lines.extend(file_content_lines(paths, app.workspace_root.as_deref()));
     }
-    let paragraph = Paragraph::new(lines).block(block).wrap(Wrap { trim: false });
-    frame.render_widget(paragraph, area);
+    lines
 }
 
 /// Read back the current content of files a `FileChanged` event touched, so
@@ -1122,14 +1119,33 @@ mod tests {
 
         app.toggle_fullscreen_preview();
         let shown = rendered(&app);
-        // The list itself (its tag column, e.g. "command") is gone, replaced
-        // entirely by the preview; the standard title bar survives.
-        assert!(shown.contains("styra"));
-        assert!(shown.contains("preview"));
+        // No chrome at all: no title bar, no message box, no footer hints —
+        // just the entry's text, so it can be selected and copied cleanly.
         assert!(shown.contains("24 passed"));
+        assert!(!shown.contains("styra"));
+        assert!(!shown.contains("message"));
+        assert!(!shown.contains("quit"));
 
         app.toggle_fullscreen_preview();
-        assert!(rendered(&app).contains("command"));
+        let restored = rendered(&app);
+        assert!(restored.contains("styra"));
+        assert!(restored.contains("command"));
+    }
+
+    #[test]
+    fn fullscreen_preview_has_no_border_or_title() {
+        let mut app = App::new("codex", "s1");
+        app.push_event(AgentEvent::AgentMessage { text: "hello".into() });
+        app.toggle_fullscreen_preview();
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        terminal.draw(|frame| render(frame, &app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let screen: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
+
+        for border_char in ['┌', '┐', '└', '┘', '─', '│'] {
+            assert!(!screen.contains(border_char), "found border character {border_char:?}");
+        }
     }
 
     #[test]
