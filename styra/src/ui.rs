@@ -32,8 +32,8 @@ const DETAIL_BG: Color = Color::DarkGray;
 fn status_color(status: &Status) -> Color {
     match status {
         Status::Pending => Color::Blue,
-        Status::Running => Color::Green,
-        Status::Idle => Color::Yellow,
+        Status::Running => Color::Yellow,
+        Status::Idle => Color::Green,
         Status::Stopped => Color::DarkGray,
         Status::Ended { error: Some(_), .. } => Color::Red,
         Status::Ended { .. } => Color::DarkGray,
@@ -41,16 +41,23 @@ fn status_color(status: &Status) -> Color {
 }
 
 /// Build a block title of the form " styra · profile · ● status[ · suffix] ".
+///
+/// The plain-text spans are explicitly colored rather than left unstyled:
+/// an unstyled span only patches over whatever the block's border already
+/// painted underneath it, so when the border dims to `DarkGray` for an
+/// unfocused panel, unstyled title text would dim right along with it and
+/// become hard to read.
 fn title_line(profile: &str, status: &Status, suffix: Option<&str>) -> Line<'static> {
     let color = status_color(status);
+    let text_style = Style::default().fg(Color::Gray);
     let mut spans = vec![
-        Span::raw(format!(" styra · {profile} · ")),
+        Span::styled(format!(" styra · {profile} · "), text_style),
         Span::styled("● ", Style::default().fg(color)),
         Span::styled(status.label(), Style::default().fg(color).add_modifier(Modifier::BOLD)),
     ];
     spans.push(match suffix {
-        Some(suffix) => Span::raw(format!(" · {suffix} ")),
-        None => Span::raw(" "),
+        Some(suffix) => Span::styled(format!(" · {suffix} "), text_style),
+        None => Span::styled(" ", text_style),
     });
     Line::from(spans)
 }
@@ -768,6 +775,39 @@ mod tests {
     }
 
     #[test]
+    fn header_text_stays_legible_when_the_panel_is_unfocused() {
+        // An unstyled span only patches over whatever the block's border
+        // already painted underneath it, so title text left unstyled would
+        // inherit the border's `DarkGray` the moment the panel loses focus.
+        let mut app = App::new("codex", "s1");
+        app.toggle_focus();
+        assert_eq!(app.focus, Focus::Input);
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        terminal.draw(|frame| render(frame, &app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+
+        let title_row = (0..buffer.area.height)
+            .find(|&y| {
+                let row: String =
+                    (0..buffer.area.width).map(|x| buffer.cell((x, y)).unwrap().symbol()).collect();
+                row.contains("styra")
+            })
+            .expect("no row contains the title");
+        let row_text: String = (0..buffer.area.width)
+            .map(|x| buffer.cell((x, title_row)).unwrap().symbol())
+            .collect();
+        let title_start = row_text.find("styra").unwrap() as u16;
+
+        let cell = buffer.cell((title_start, title_row)).unwrap();
+        assert_ne!(
+            cell.style().fg,
+            Some(Color::DarkGray),
+            "title text must not inherit the dimmed unfocused border color"
+        );
+    }
+
+    #[test]
     fn expanded_and_selected_content_uses_a_gray_backdrop_not_white() {
         let mut app = App::new("codex", "s1");
         app.push_event(AgentEvent::AgentMessage { text: "hello\nworld".into() });
@@ -827,11 +867,11 @@ mod tests {
     fn header_shows_a_dot_indicating_running_vs_idle() {
         let mut app = App::new("codex", "s1");
         assert!(rendered(&app).contains('●'));
-        assert_eq!(status_color(&app.status), Color::Green);
+        assert_eq!(status_color(&app.status), Color::Yellow);
 
         app.push_event(AgentEvent::TurnCompleted { usage: TokenUsage::default() });
         assert!(rendered(&app).contains("idle"));
-        assert_eq!(status_color(&app.status), Color::Yellow);
+        assert_eq!(status_color(&app.status), Color::Green);
     }
 
     #[test]
