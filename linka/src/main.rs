@@ -138,7 +138,7 @@ enum Cmd {
         author: Author,
     },
 
-    /// Record an accepted or rejected review result for a verification node.
+    /// Record an accepted, rejected, or abandoned result for a verification node.
     Verify {
         id: NodeId,
         #[arg(long, value_enum)]
@@ -939,6 +939,7 @@ fn state_summary(state: &NodeState) -> String {
         match state.outcome {
             linka::RecordedOutcome::Accepted => return "review accepted".into(),
             linka::RecordedOutcome::Rejected => return "review rejected".into(),
+            linka::RecordedOutcome::Abandoned => return "review abandoned".into(),
             _ => {}
         }
     }
@@ -978,6 +979,7 @@ fn format_blocker(blocker: &Blocker) -> String {
         BlockerReason::Open => "not complete (open)",
         BlockerReason::Failed => "not complete (failed)",
         BlockerReason::Rejected => "review rejected",
+        BlockerReason::Abandoned => "review abandoned",
         BlockerReason::Stale => "not complete (stale)",
         BlockerReason::AwaitingIntegration => "awaiting candidate integration",
     };

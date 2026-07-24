@@ -80,5 +80,5 @@ Example workflow, some rough edges:
   - A new verification node is created referencing the result output node and the initial statement, but not the implementation work node.
   - orka runs an agent on the verification node, which should look at the produced implementation and assert if it fulfils the initial goal or not.
   - If not, it leaves a review in the verification node and submits the verification outcome `rejected`
-  - Orka applies that exact rejected verification to the candidate
+  - Linka atomically rejects the candidate with that exact verification
   - 'orka run' then produces

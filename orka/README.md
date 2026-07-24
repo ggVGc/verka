@@ -180,9 +180,9 @@ offers the same path-only output for editor integrations.
 
 `orka review worktrees` reports clean and dirty managed trees. `orka review
 cleanup` removes only a clean, correctly registered tree and preserves the
-Nota branch. `orka review finish` records an `accepted` or `rejected` result
-with its Git evidence and applies that exact verification as the candidate
-decision. Publication remains explicit. `orka review list` shows unfinished
+Nota branch. `orka review finish` submits an `accepted` or `rejected` result
+with its Git evidence; Linka atomically records that exact verification as the
+candidate decision. Publication remains explicit. `orka review list` shows unfinished
 bindings, including starts interrupted before branch creation. `orka review
-abandon` (or `review stop`) records rejected abandonment evidence without
+abandon` (or `review stop`) records an `abandoned` verification outcome without
 deciding the candidate and preserves the Nota branch for inspection.

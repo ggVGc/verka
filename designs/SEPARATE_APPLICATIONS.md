@@ -55,9 +55,9 @@ does not interpret Linka identities or depend on another application here.
 4. Linka does not interpret Orka attempts or Nota review records.
 5. Driva does not receive Linka node IDs or interpret Orka policy; it receives
    only the concrete command and capability grant chosen by its caller.
-6. Linka verification outcomes are accepted or rejected review conclusions.
-   Orka derives them from Nota evidence and applies the exact verification as
-   the candidate decision; publication remains explicit.
+6. Linka verification outcomes are `accepted`, `rejected`, or `abandoned`.
+   Accepted/rejected submission atomically records the exact candidate decision;
+   abandonment closes only the verification, and publication remains explicit.
 7. Orka Web depends on Orka's public records and services and Linka's public
    graph API. It owns no orchestration state of its own.
 

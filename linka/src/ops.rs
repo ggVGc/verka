@@ -37,7 +37,7 @@ use anyhow::{bail, Context, Result};
 use std::time::{SystemTime, UNIX_EPOCH};
 use ulid::Ulid;
 
-use crate::candidate::{CandidateRecord, CandidateStore};
+use crate::candidate::{CandidateRecord, CandidateState, CandidateStore};
 use crate::model::{
     ArtifactRef, Author, Blocker, BlockerReason, CandidateId, ConsumedNode, ContextPin, Currency,
     DefinitionVersion, DepKind, IntegrationStatus, NewNodeAttachment, NodeAttachment, NodeId,
@@ -244,7 +244,9 @@ pub fn complete(
     require_consistent_project_head(store, vcs)?;
     let (meta, description) = store.read_node(id)?;
     if meta.verifies.is_some() {
-        bail!("verification node `{id}` requires an accepted or rejected review result");
+        bail!(
+            "verification node `{id}` requires an accepted, rejected, or abandoned review result"
+        );
     }
     // The only uncommitted project changes allowed are the outputs we are about
     // to commit — completion is where output provenance is asserted.
@@ -368,7 +370,9 @@ pub fn fail(store: &Store, vcs: &dyn Vcs, id: &str, notes: &str, author: Author)
     let mutation = store.mutation_lock(vcs)?;
     let (meta, _) = store.read_node(id)?;
     if meta.verifies.is_some() {
-        bail!("verification node `{id}` requires an accepted or rejected review result");
+        bail!(
+            "verification node `{id}` requires an accepted, rejected, or abandoned review result"
+        );
     }
     let consumed = pin_deps(store, &meta)?;
     let result = ResultMeta {
@@ -598,6 +602,9 @@ fn node_state_inner(
                     ResultOutcome::Verification(VerificationOutcome::Rejected) => {
                         RecordedOutcome::Rejected
                     }
+                    ResultOutcome::Verification(VerificationOutcome::Abandoned) => {
+                        RecordedOutcome::Abandoned
+                    }
                 };
                 let candidate = candidate_for_result(store, id, result)?;
                 (
@@ -627,7 +634,10 @@ fn node_state_inner(
             }
             let dependency_state = node_state_inner(store, vcs, dependency, revision, visiting)?;
             if !dependency_state.is_complete()
-                || dependency_state.outcome == RecordedOutcome::Rejected
+                || matches!(
+                    dependency_state.outcome,
+                    RecordedOutcome::Rejected | RecordedOutcome::Abandoned
+                )
             {
                 let reason = if dependency_state.currency == Currency::Stale {
                     BlockerReason::Stale
@@ -636,6 +646,7 @@ fn node_state_inner(
                         RecordedOutcome::Open => BlockerReason::Open,
                         RecordedOutcome::Failed => BlockerReason::Failed,
                         RecordedOutcome::Rejected => BlockerReason::Rejected,
+                        RecordedOutcome::Abandoned => BlockerReason::Abandoned,
                         RecordedOutcome::Succeeded => BlockerReason::AwaitingIntegration,
                         RecordedOutcome::Accepted => unreachable!(),
                     }
@@ -770,7 +781,9 @@ pub fn current_status(store: &Store, vcs: &dyn Vcs, id: &str) -> Result<Status> 
         RecordedOutcome::Failed => Status::Failed,
         RecordedOutcome::Succeeded if state.is_complete() => Status::Done,
         RecordedOutcome::Succeeded => Status::Open,
-        RecordedOutcome::Accepted | RecordedOutcome::Rejected => Status::Done,
+        RecordedOutcome::Accepted | RecordedOutcome::Rejected | RecordedOutcome::Abandoned => {
+            Status::Done
+        }
     })
 }
 
@@ -898,7 +911,7 @@ pub fn submit_result(
     )
 }
 
-/// Submit the accepted/rejected conclusion for a verification node.
+/// Submit the accepted, rejected, or abandoned conclusion for a verification node.
 pub fn submit_verification(
     store: &Store,
     vcs: &dyn Vcs,
@@ -955,7 +968,7 @@ fn submit_result_locked(
         }
         (true, ResultOutcome::Work(_)) => {
             return Err(SubmissionError::Evaluation(anyhow::anyhow!(
-                "verification node `{id}` requires an accepted or rejected review result"
+                "verification node `{id}` requires an accepted, rejected, or abandoned review result"
             )))
         }
     }
@@ -1037,7 +1050,31 @@ fn submit_result_locked(
         output: submission.output,
         producer: submission.producer,
     };
+    let candidate_decision = match result.outcome {
+        ResultOutcome::Verification(
+            VerificationOutcome::Accepted | VerificationOutcome::Rejected,
+        ) => {
+            let candidate = meta
+                .verifies
+                .as_ref()
+                .expect("verification outcome was validated against node kind");
+            Some(CandidateStore::new(store).prepare_verification_decision(
+                vcs,
+                candidate,
+                &snapshot.node,
+                &result,
+                submission.author,
+                submission.notes.clone(),
+            )?)
+        }
+        ResultOutcome::Verification(VerificationOutcome::Abandoned) | ResultOutcome::Work(_) => {
+            None
+        }
+    };
     store.write_result(id, &result, &submission.notes)?;
+    if let Some(candidate) = &candidate_decision {
+        CandidateStore::new(store).write_prepared_decision(candidate)?;
+    }
     mutation.commit(vcs, &format!("linka: result {id}"))?;
     Ok(())
 }
@@ -1077,7 +1114,7 @@ pub fn capture_submission(
     let id = snapshot.node.as_str().to_string();
     if store.read_node(&id)?.0.verifies.is_some() {
         return Err(SubmissionError::Evaluation(anyhow::anyhow!(
-            "verification node `{id}` requires an accepted or rejected review result"
+            "verification node `{id}` requires an accepted, rejected, or abandoned review result"
         )));
     }
     let output_paths: Vec<String> = outputs.iter().map(ToString::to_string).collect();
@@ -1156,7 +1193,7 @@ pub fn capture_execution_submission(
     let id = snapshot.node.as_str().to_string();
     if store.read_node(&id)?.0.verifies.is_some() {
         return Err(SubmissionError::Evaluation(anyhow::anyhow!(
-            "verification node `{id}` requires an accepted or rejected review result"
+            "verification node `{id}` requires an accepted, rejected, or abandoned review result"
         )));
     }
     let origin = snapshot.project.revision.clone();
@@ -1298,6 +1335,7 @@ pub fn unsettled(store: &Store, vcs: &dyn Vcs, id: &str) -> Result<Vec<String>> 
                     RecordedOutcome::Succeeded => unreachable!(),
                     RecordedOutcome::Accepted => "accepted but stale",
                     RecordedOutcome::Rejected => "rejected but stale",
+                    RecordedOutcome::Abandoned => "abandoned but stale",
                 };
                 reasons.push(format!("{node}: not done ({outcome})"));
             }
@@ -1340,7 +1378,14 @@ pub fn check(store: &Store) -> Result<Vec<String>> {
         match store.read_result(&id) {
             Err(e) => problems.push(format!("{id}: unreadable result ({e:#})")),
             Ok(Some((result, _))) => {
-                validate_result_semantics(&id, &meta, &result, repository.as_deref(), &mut problems)
+                validate_result_semantics(
+                    &id,
+                    &meta,
+                    &result,
+                    repository.as_deref(),
+                    &mut problems,
+                );
+                validate_verification_decision(store, &id, &meta, &result, &mut problems);
             }
             Ok(None) => {}
         }
@@ -1476,6 +1521,52 @@ fn validate_result_semantics(
     }
 }
 
+fn validate_verification_decision(
+    store: &Store,
+    id: &str,
+    meta: &NodeMeta,
+    result: &ResultMeta,
+    problems: &mut Vec<String>,
+) {
+    let Some(candidate_id) = &meta.verifies else {
+        return;
+    };
+    let Ok(candidate) = CandidateStore::new(store).load(candidate_id) else {
+        return;
+    };
+    let decided_by_this = match &candidate.state {
+        CandidateState::Accepted { verification, .. }
+        | CandidateState::Rejected { verification, .. } => verification
+            .as_ref()
+            .is_some_and(|verification| verification.as_str() == id),
+        CandidateState::Pending => false,
+    };
+    let matches = match result.outcome {
+        ResultOutcome::Verification(VerificationOutcome::Accepted) => matches!(
+            &candidate.state,
+            CandidateState::Accepted {
+                verification: Some(verification),
+                ..
+            } if verification.as_str() == id
+        ),
+        ResultOutcome::Verification(VerificationOutcome::Rejected) => matches!(
+            &candidate.state,
+            CandidateState::Rejected {
+                verification: Some(verification),
+                ..
+            } if verification.as_str() == id
+        ),
+        ResultOutcome::Verification(VerificationOutcome::Abandoned) => !decided_by_this,
+        ResultOutcome::Work(_) => true,
+    };
+    if !matches {
+        problems.push(format!(
+            "{id}: verification outcome {} disagrees with candidate `{candidate_id}` decision",
+            result.outcome.as_str()
+        ));
+    }
+}
+
 fn result_satisfies_dependency(outcome: ResultOutcome) -> bool {
     matches!(
         outcome,
@@ -1553,6 +1644,8 @@ pub fn migration_plan(store: &Store) -> Result<Vec<String>> {
             }
             if meta.verifies.is_some() && matches!(result.outcome, ResultOutcome::Work(_)) {
                 changes.push(format!("{id}: convert legacy review outcome"));
+            } else if result.schema < RESULT_SCHEMA && is_legacy_abandonment(&result) {
+                changes.push(format!("{id}: distinguish abandoned review outcome"));
             }
             if repository.is_some()
                 && result
@@ -1607,6 +1700,8 @@ pub fn migrate(store: &Store, vcs: &dyn Vcs) -> Result<Vec<String>> {
                         format!("cannot migrate legacy verification result for `{id}`")
                     })?,
                 );
+            } else if result.schema < RESULT_SCHEMA && is_legacy_abandonment(&result) {
+                result.outcome = ResultOutcome::Verification(VerificationOutcome::Abandoned);
             }
             result.schema = RESULT_SCHEMA;
             if result.definition == old_versions[id] {
@@ -1632,7 +1727,41 @@ pub fn migrate(store: &Store, vcs: &dyn Vcs) -> Result<Vec<String>> {
                     output.repository = repository.clone();
                 }
             }
+            let candidate_decision = match (&meta.verifies, result.outcome) {
+                (
+                    Some(candidate_id),
+                    ResultOutcome::Verification(
+                        VerificationOutcome::Accepted | VerificationOutcome::Rejected,
+                    ),
+                ) if matches!(
+                    CandidateStore::new(store).load(candidate_id)?.state,
+                    CandidateState::Pending
+                ) =>
+                {
+                    let verification: NodeId = id.parse().map_err(anyhow::Error::msg)?;
+                    let decision_notes = if result.outcome
+                        == ResultOutcome::Verification(VerificationOutcome::Rejected)
+                        && notes.trim().is_empty()
+                    {
+                        "Legacy verification rejected the candidate.".into()
+                    } else {
+                        notes.clone()
+                    };
+                    Some(CandidateStore::new(store).prepare_verification_decision(
+                        vcs,
+                        candidate_id,
+                        &verification,
+                        &result,
+                        result.author,
+                        decision_notes,
+                    )?)
+                }
+                _ => None,
+            };
             store.write_result(id, &result, &notes)?;
+            if let Some(candidate) = &candidate_decision {
+                CandidateStore::new(store).write_prepared_decision(candidate)?;
+            }
         }
         let mut observations = store.read_context_observations(id)?;
         for observation in &mut observations {
@@ -1654,10 +1783,20 @@ fn legacy_verification_outcome(result: &ResultMeta) -> Option<VerificationOutcom
         Some("approved" | "accepted") => Some(VerificationOutcome::Accepted),
         Some("changes_requested" | "rejected") => Some(VerificationOutcome::Rejected),
         _ if producer.data.get("status").and_then(|value| value.as_str()) == Some("abandoned") => {
-            Some(VerificationOutcome::Rejected)
+            Some(VerificationOutcome::Abandoned)
         }
         _ => None,
     }
+}
+
+fn is_legacy_abandonment(result: &ResultMeta) -> bool {
+    result.outcome == ResultOutcome::Verification(VerificationOutcome::Rejected)
+        && result
+            .producer
+            .as_ref()
+            .and_then(|producer| producer.data.get("status"))
+            .and_then(|value| value.as_str())
+            == Some("abandoned")
 }
 
 /// Report each `depends_on` cycle once, as an explicit `a -> b -> a` path.
@@ -3158,6 +3297,36 @@ mod tests {
         let migrated = store.read_result(&id).unwrap().unwrap().0;
         assert_eq!(migrated.schema, RESULT_SCHEMA);
         assert_eq!(migrated.output.unwrap().repository, root);
+    }
+
+    #[test]
+    fn legacy_review_evidence_distinguishes_rejection_from_abandonment() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs::default();
+        let id = add(&store, &fake, new_node("review evidence", vec![])).unwrap();
+        complete(&store, &fake, &id, &[], &[], None, "", Author::Human).unwrap();
+        let mut result = store.read_result(&id).unwrap().unwrap().0;
+
+        result.producer = Some(ProducerEvidence {
+            namespace: "orka.nota".into(),
+            data: serde_json::json!({"verdict": "changes_requested"}),
+        });
+        assert_eq!(
+            legacy_verification_outcome(&result),
+            Some(VerificationOutcome::Rejected)
+        );
+
+        result.producer = Some(ProducerEvidence {
+            namespace: "orka.nota".into(),
+            data: serde_json::json!({"status": "abandoned"}),
+        });
+        assert_eq!(
+            legacy_verification_outcome(&result),
+            Some(VerificationOutcome::Abandoned)
+        );
+        result.schema = RESULT_SCHEMA - 1;
+        result.outcome = ResultOutcome::Verification(VerificationOutcome::Rejected);
+        assert!(is_legacy_abandonment(&result));
     }
 
     #[test]

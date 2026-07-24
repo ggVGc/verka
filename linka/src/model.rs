@@ -12,7 +12,7 @@ use std::fmt;
 use std::str::FromStr;
 
 pub const DEFINITION_SCHEMA: u32 = 3;
-pub const RESULT_SCHEMA: u32 = 3;
+pub const RESULT_SCHEMA: u32 = 4;
 pub const SNAPSHOT_SCHEMA: u32 = 2;
 pub const OBSERVATION_SCHEMA: u32 = 2;
 pub const ATTACHMENT_SCHEMA: u32 = 1;
@@ -317,12 +317,14 @@ impl Outcome {
 pub enum VerificationOutcome {
     Accepted,
     Rejected,
+    Abandoned,
 }
 impl VerificationOutcome {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Accepted => "accepted",
             Self::Rejected => "rejected",
+            Self::Abandoned => "abandoned",
         }
     }
 }
@@ -373,9 +375,10 @@ impl<'de> Deserialize<'de> for ResultOutcome {
             "failed" => Ok(Self::Work(Outcome::Failed)),
             "accepted" => Ok(Self::Verification(VerificationOutcome::Accepted)),
             "rejected" => Ok(Self::Verification(VerificationOutcome::Rejected)),
+            "abandoned" => Ok(Self::Verification(VerificationOutcome::Abandoned)),
             _ => Err(serde::de::Error::unknown_variant(
                 &value,
-                &["done", "failed", "accepted", "rejected"],
+                &["done", "failed", "accepted", "rejected", "abandoned"],
             )),
         }
     }
@@ -429,6 +432,7 @@ pub enum RecordedOutcome {
     Failed,
     Accepted,
     Rejected,
+    Abandoned,
 }
 
 /// Whether recorded evidence still covers the current graph and project facts.
@@ -461,6 +465,7 @@ pub enum BlockerReason {
     Open,
     Failed,
     Rejected,
+    Abandoned,
     Stale,
     AwaitingIntegration,
 }
@@ -562,7 +567,9 @@ impl NodeState {
     pub fn is_complete(&self) -> bool {
         self.currency == Currency::Current
             && match self.outcome {
-                RecordedOutcome::Accepted | RecordedOutcome::Rejected => true,
+                RecordedOutcome::Accepted
+                | RecordedOutcome::Rejected
+                | RecordedOutcome::Abandoned => true,
                 RecordedOutcome::Succeeded => matches!(
                     self.integration,
                     IntegrationStatus::NotRequired | IntegrationStatus::Published
@@ -607,6 +614,7 @@ pub fn status(current: &DefinitionVersion, result: Option<&ResultMeta>) -> Statu
                     ResultOutcome::Work(Outcome::Done)
                         | ResultOutcome::Verification(VerificationOutcome::Accepted)
                         | ResultOutcome::Verification(VerificationOutcome::Rejected)
+                        | ResultOutcome::Verification(VerificationOutcome::Abandoned)
                 ) =>
         {
             Status::Done

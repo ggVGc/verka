@@ -16,7 +16,7 @@ Graph state is derived, never stored as one `status` value. It has four
 independent dimensions:
 
 - **Recorded outcome** is `open`, `succeeded`, or `failed` for ordinary work,
-  and `open`, `accepted`, or `rejected` for verification.
+  and `open`, `accepted`, `rejected`, or `abandoned` for verification.
 - **Currency** is `current` or `stale` against the exact definition, inputs,
   context, and artifact the result recorded.
 - **Integration** is `not-required`, `pending`, `accepted`, `published`, or
@@ -47,17 +47,19 @@ namespaces; an executor such as Orka remains a one-way client.
 A verification is a review node with the typed fact `verifies`, which names the
 exact candidate under review. Its `derived_from` lineage must include that
 candidate's source node, so its result pins the exact source result and artifact.
-Unlike ordinary work, a verification cannot be completed or failed: its result
-is either `accepted` or `rejected`. Both conclusions finish that review, while a
-rejected verification does not satisfy a downstream `depends_on` edge.
+Unlike ordinary work, a verification cannot be completed or failed. Its result
+is `accepted`, `rejected`, or `abandoned`. All three are terminal for that
+verification, while only `accepted` satisfies a downstream `depends_on` edge.
+`Rejected` means the review rejected the candidate; `abandoned` means no
+candidate decision was reached.
 
-Candidate decisions are authorized by an exact, current verification result.
-Accepting a candidate requires an `accepted` verification; rejecting it requires
-a `rejected` verification. Linka checks that the verification names the
-candidate and pinned that candidate's exact result and artifact. Several
-verification nodes may refer to the same candidate, but the candidate decision
-records which one authorized it. Review tooling may attach opaque producer
-evidence, while Linka owns and interprets the review conclusion itself.
+Submitting `accepted` or `rejected` atomically records the matching candidate
+decision in the same Linka commit. Linka checks that the verification names the
+candidate and pinned that candidate's exact result and artifact. An `abandoned`
+result records no candidate decision. Several verification nodes may refer to
+the same candidate, but a decided candidate records the exact verification that
+decided it. Review tooling may attach opaque producer evidence, while Linka
+owns and interprets the review conclusion itself.
 
 Applications may also associate opaque attachments with a node under a
 namespaced key. Linka commits the exact bytes and basic content metadata but
@@ -76,8 +78,8 @@ Linka mutation.
 | succeeded | current | pending or accepted | complete | awaiting-integration |
 | succeeded | current | rejected | complete | ready |
 | succeeded | stale | any | complete | ready |
-| accepted or rejected | current | not-required | complete | complete |
-| accepted or rejected | stale | not-required | complete | ready |
+| accepted, rejected, or abandoned | current | not-required | complete | complete |
+| accepted, rejected, or abandoned | stale | not-required | complete | ready |
 | any | any | any | incomplete | blocked |
 | unreadable | unknown | unknown | unknown | error |
 
@@ -150,7 +152,7 @@ Orka consumes a narrow graph interface for reading ready work, freezing
 versioned input, submitting version-checked work and verification results, and
 registering candidate outputs. Nota may use an optional adapter to fill
 verification descriptions and evidence; Linka interprets only the
-accepted/rejected conclusion, never Nota's own schema.
+accepted/rejected/abandoned conclusion, never Nota's own schema.
 
 Long-running workers must call `snapshot_work` before starting and
 `submit_result` when finished. Submission compares the frozen definition,

@@ -1,9 +1,10 @@
 //! Coordination between Linka verification nodes and Git-only Nota reviews.
 //!
 //! Nota sees only a repository, an exact subject commit, and a review branch.
-//! Linka sees a candidate, a verification with an accepted/rejected outcome,
-//! and opaque producer evidence. Orka owns the immutable binding and frozen
-//! snapshot that let those independent records form one recoverable workflow.
+//! Linka sees a candidate, a verification with an
+//! accepted/rejected/abandoned outcome, and opaque producer evidence. Orka owns
+//! the immutable binding and frozen snapshot that let those independent
+//! records form one recoverable workflow.
 
 use anyhow::{bail, Context, Result};
 use linka::ops::{self, NewNode, SubmissionError};
@@ -186,6 +187,9 @@ impl<'a> Reviews<'a> {
         summary: Option<&str>,
         author: Author,
     ) -> Result<FinishOutcome> {
+        if outcome == VerificationOutcome::Abandoned {
+            bail!("use review abandonment rather than finishing with an abandoned outcome");
+        }
         let (record, review) = self.review(verification)?;
         let head = review
             .entries
@@ -219,18 +223,15 @@ impl<'a> Reviews<'a> {
                 producer: Some(producer),
             },
         ) {
-            Ok(()) => {
-                self.apply_candidate_decision(&record, outcome, author, Some(&notes))?;
-                Ok(FinishOutcome::Submitted)
-            }
+            Ok(()) => Ok(FinishOutcome::Submitted),
             Err(SubmissionError::Conflict(conflicts)) => Ok(FinishOutcome::Conflict(conflicts)),
             Err(SubmissionError::Evaluation(error)) => Err(error),
         }
     }
 
     /// Stop a review without discarding its durable binding or Nota branch.
-    /// A rejected review result makes abandonment visible to Linka while
-    /// producer evidence distinguishes it from a candidate rejection.
+    /// An abandoned result closes the verification without deciding its
+    /// candidate and preserves the durable binding and Nota branch.
     pub fn abandon(
         &self,
         verification: &NodeId,
@@ -240,7 +241,7 @@ impl<'a> Reviews<'a> {
         let record = self.load(verification)?;
         self.validate_binding(&record)?;
         if let Some((result, _)) = self.linka.read_result(verification.as_str())? {
-            if result.outcome == linka::ResultOutcome::Verification(VerificationOutcome::Rejected)
+            if result.outcome == linka::ResultOutcome::Verification(VerificationOutcome::Abandoned)
                 && matching_abandonment(&result.producer, &record)
             {
                 return Ok(AbandonOutcome::AlreadyAbandoned);
@@ -257,7 +258,7 @@ impl<'a> Reviews<'a> {
             &vcs,
             VerificationSubmission {
                 snapshot: record.snapshot.clone(),
-                outcome: VerificationOutcome::Rejected,
+                outcome: VerificationOutcome::Abandoned,
                 notes,
                 author,
                 producer: Some(abandonment_evidence(&record)),
@@ -296,6 +297,9 @@ impl<'a> Reviews<'a> {
                     notes
                 };
                 candidates.reject(&vcs, &record.candidate, &record.verification, author, notes)?;
+            }
+            VerificationOutcome::Abandoned => {
+                bail!("an abandoned verification cannot decide a candidate")
             }
         }
         Ok(())

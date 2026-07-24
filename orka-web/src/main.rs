@@ -267,6 +267,7 @@ fn state_json(app: &App) -> Result<Value> {
                     linka::ResultOutcome::Work(linka::Outcome::Failed) => "failed",
                     linka::ResultOutcome::Verification(linka::VerificationOutcome::Accepted) => "accepted",
                     linka::ResultOutcome::Verification(linka::VerificationOutcome::Rejected) => "rejected",
+                    linka::ResultOutcome::Verification(linka::VerificationOutcome::Abandoned) => "abandoned",
                 },
                 "output_commit": ops::output_commit(&r),
                 // Producer evidence is namespaced application data (e.g. an
@@ -622,6 +623,7 @@ fn format_blocker(blocker: &Blocker) -> String {
         BlockerReason::Open => "not complete (open)",
         BlockerReason::Failed => "not complete (failed)",
         BlockerReason::Rejected => "review rejected",
+        BlockerReason::Abandoned => "review abandoned",
         BlockerReason::AwaitingIntegration => "awaiting candidate integration",
         BlockerReason::Stale => "not complete (stale)",
     };

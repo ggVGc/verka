@@ -157,7 +157,7 @@ fn rejected_review_rejects_the_exact_candidate_and_reopens_its_source() {
 }
 
 #[test]
-fn finishing_recovers_a_verification_recorded_before_its_candidate_decision() {
+fn verification_submission_atomically_decides_the_candidate() {
     let (_temp, root) = workbench();
     let candidate = candidate(&root);
     let store = store_at(&root);
@@ -188,7 +188,7 @@ fn finishing_recovers_a_verification_recorded_before_its_candidate_decision() {
         },
     )
     .unwrap();
-    assert_eq!(
+    assert_ne!(
         CandidateStore::new(&store)
             .load(&candidate.id)
             .unwrap()
@@ -450,7 +450,7 @@ fn active_reviews_can_be_listed_and_abandoned_without_removing_nota_evidence() {
         .unwrap();
     assert_eq!(
         result.outcome,
-        linka::ResultOutcome::Verification(VerificationOutcome::Rejected)
+        linka::ResultOutcome::Verification(VerificationOutcome::Abandoned)
     );
     assert_eq!(notes, "review is no longer needed");
     let producer = result.producer.unwrap();

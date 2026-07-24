@@ -3,6 +3,65 @@ use crate::Vcs;
 use anyhow::{bail, Context, Result};
 
 impl CandidateStore<'_> {
+    pub(crate) fn prepare_verification_decision(
+        &self,
+        vcs: &dyn Vcs,
+        id: &CandidateId,
+        verification: &crate::NodeId,
+        result: &crate::ResultMeta,
+        author: Author,
+        notes: String,
+    ) -> Result<CandidateRecord> {
+        let outcome = match result.outcome {
+            crate::ResultOutcome::Verification(outcome @ crate::VerificationOutcome::Accepted)
+            | crate::ResultOutcome::Verification(outcome @ crate::VerificationOutcome::Rejected) => {
+                outcome
+            }
+            crate::ResultOutcome::Verification(crate::VerificationOutcome::Abandoned) => {
+                bail!("an abandoned verification cannot decide candidate `{id}`")
+            }
+            crate::ResultOutcome::Work(_) => {
+                bail!("a work result cannot decide candidate `{id}`")
+            }
+        };
+        if outcome == crate::VerificationOutcome::Rejected && notes.trim().is_empty() {
+            bail!("rejected verification requires notes");
+        }
+        let mut candidate = self.load(id)?;
+        if !matches!(candidate.state, CandidateState::Pending) {
+            bail!("candidate `{id}` already has a decision");
+        }
+        self.require_current(vcs, &candidate, IntegrationStatus::Pending)?;
+        require_exact_candidate_pin(&candidate, verification, result, outcome)?;
+        candidate.state = match outcome {
+            crate::VerificationOutcome::Accepted => {
+                let target_ref = branch_ref(&candidate.target);
+                let target_previous = vcs.ref_commit(&target_ref)?.with_context(|| {
+                    format!("target branch `{}` does not exist", candidate.target)
+                })?;
+                CandidateState::Accepted {
+                    decided_at_ms: now_millis(),
+                    author,
+                    notes,
+                    verification: Some(verification.clone()),
+                    target_previous,
+                }
+            }
+            crate::VerificationOutcome::Rejected => CandidateState::Rejected {
+                decided_at_ms: now_millis(),
+                author,
+                notes,
+                verification: Some(verification.clone()),
+            },
+            crate::VerificationOutcome::Abandoned => unreachable!(),
+        };
+        Ok(candidate)
+    }
+
+    pub(crate) fn write_prepared_decision(&self, candidate: &CandidateRecord) -> Result<()> {
+        storage::write_toml(&self.record_path(&candidate.id), candidate)
+    }
+
     pub fn register(&self, vcs: &dyn Vcs, new: NewCandidate) -> Result<CandidateRecord> {
         validate_external(new.external.as_ref())?;
         validate_branch_name(&new.branch)?;
@@ -241,27 +300,44 @@ impl CandidateStore<'_> {
                 expected.as_str()
             );
         }
-        let source_pin = result
-            .consumed
-            .iter()
-            .find(|pin| pin.id == candidate.node)
-            .with_context(|| {
-                format!(
-                    "verification `{verification}` does not pin candidate source `{}`",
-                    candidate.node
-                )
-            })?;
-        if source_pin.result.as_ref() != Some(&candidate.result)
-            || source_pin.output.as_ref() != Some(&candidate.artifact)
-        {
-            bail!("verification `{verification}` did not review the exact candidate artifact");
-        }
+        require_exact_candidate_pin(candidate, verification, &result, expected)?;
         let state = crate::ops::node_state(self.store, vcs, verification.as_str())?;
         if state.currency != crate::Currency::Current {
             bail!("verification `{verification}` is stale");
         }
         Ok(())
     }
+}
+
+fn require_exact_candidate_pin(
+    candidate: &CandidateRecord,
+    verification: &crate::NodeId,
+    result: &crate::ResultMeta,
+    expected: crate::VerificationOutcome,
+) -> Result<()> {
+    if result.outcome != crate::ResultOutcome::Verification(expected) {
+        bail!(
+            "verification `{verification}` is {}, not {}",
+            result.outcome.as_str(),
+            expected.as_str()
+        );
+    }
+    let source_pin = result
+        .consumed
+        .iter()
+        .find(|pin| pin.id == candidate.node)
+        .with_context(|| {
+            format!(
+                "verification `{verification}` does not pin candidate source `{}`",
+                candidate.node
+            )
+        })?;
+    if source_pin.result.as_ref() != Some(&candidate.result)
+        || source_pin.output.as_ref() != Some(&candidate.artifact)
+    {
+        bail!("verification `{verification}` did not review the exact candidate artifact");
+    }
+    Ok(())
 }
 
 fn validate_branch_name(branch: &str) -> Result<()> {

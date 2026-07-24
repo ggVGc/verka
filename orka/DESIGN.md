@@ -161,13 +161,12 @@ new verification for the same candidate.
 Reviewers use Nota directly for notes and ordinary Git commits for suggested
 edits. `orka review finish` loads and validates that Git evidence by branch and
 submits an `accepted` or `rejected` verification result against the frozen
-Linka snapshot with `orka.nota` producer evidence, then applies that exact
-result as the candidate decision. Retrying after interruption completes either
-missing half of this two-commit operation.
+Linka snapshot with `orka.nota` producer evidence. Linka records that result and
+the exact matching candidate decision atomically.
 `orka review list` derives active reviews from bindings whose verification has
-no result. `orka review abandon` submits a rejected verification result with
-explicit abandonment evidence, leaves the candidate pending, and preserves both
-the binding and Nota branch; a later start creates a new verification.
+no result. `orka review abandon` submits an `abandoned` verification result,
+leaves the candidate pending, and preserves both the binding and Nota branch; a
+later start creates a new verification.
 Publication remains an explicit operation. If graph inputs moved during review,
 Linka rejects submission and the Nota branch remains intact.
 
