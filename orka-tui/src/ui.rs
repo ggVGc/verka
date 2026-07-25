@@ -108,7 +108,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(format!(
-                " {}  ·  a actions  Enter inspect  ←/→ views  r refresh  ? help  q quit",
+                " {}  ·  a actions  l live output  Enter inspect  ←/→ views  r refresh  ? help  q quit",
                 app.status
             )),
         ]))
@@ -152,6 +152,37 @@ fn draw_overlay(frame: &mut Frame, overlay: &Overlay) {
                             .title(format!(" {title} · Esc close · j/k scroll ")),
                     )
                     .scroll((*scroll, 0))
+                    .wrap(Wrap { trim: false }),
+                area,
+            );
+        }
+        Overlay::Live {
+            attempt,
+            body,
+            scroll,
+        } => {
+            let viewport_height = area.height.saturating_sub(2) as usize;
+            let viewport_width = area.width.saturating_sub(2) as usize;
+            let tail = wrapped_line_count(body, viewport_width)
+                .saturating_sub(viewport_height)
+                .min(u16::MAX as usize) as u16;
+            let offset = scroll.unwrap_or(tail);
+            frame.render_widget(
+                Paragraph::new(body.as_str())
+                    .block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .border_style(Style::default().fg(Color::Green))
+                            .title(format!(
+                                " Live output · {attempt} · {} · Esc close · End follow ",
+                                if scroll.is_none() {
+                                    "FOLLOWING"
+                                } else {
+                                    "PAUSED"
+                                }
+                            )),
+                    )
+                    .scroll((offset, 0))
                     .wrap(Wrap { trim: false }),
                 area,
             );
@@ -237,6 +268,7 @@ fn draw_overlay(frame: &mut Frame, overlay: &Overlay) {
                        j k / ↑ ↓     select item\n\
                        g / G         first / last item\n\
                        Enter         inspect selected item\n\
+                       l             follow active/selected attempt output\n\
                        r             reload all state\n\n\
                      Actions\n\
                        a             context-sensitive action palette\n\
@@ -246,6 +278,7 @@ fn draw_overlay(frame: &mut Frame, overlay: &Overlay) {
                      Text views\n\
                        j k / ↑ ↓     scroll\n\
                        PgUp/PgDn     scroll by page\n\
+                       End / G       resume following live output\n\
                        Esc / q       close overlay\n\n\
                      Errors from refresh appear in the Errors view. Action errors open in a red dialog and remain in the status line.",
                 )
@@ -274,4 +307,25 @@ fn centered(area: Rect, percent_x: u16, percent_y: u16) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(vertical[1])[1]
+}
+
+fn wrapped_line_count(body: &str, width: usize) -> usize {
+    if width == 0 {
+        return body.lines().count().max(1);
+    }
+    body.lines()
+        .map(|line| Line::from(line).width().max(1).div_ceil(width))
+        .sum::<usize>()
+        .max(1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn live_tail_accounts_for_wrapped_output() {
+        assert_eq!(wrapped_line_count("123456\nx", 3), 3);
+        assert_eq!(wrapped_line_count("", 80), 1);
+    }
 }

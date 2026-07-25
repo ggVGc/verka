@@ -17,7 +17,11 @@ cargo run --manifest-path orka-tui/Cargo.toml -- --workbench /path/to/workbench
 ```
 
 Use `←`/`→` or `1`–`7` to change views, `j`/`k` to select, `Enter` to inspect,
-and `a` for the context-sensitive action menu. Press `?` for the full key map.
+and `a` for the context-sensitive action menu. Press `l` while an attempt is
+running to open its live work log, or use **Follow live attempt output** on a
+selected attempt. The live view follows new output automatically; scrolling up
+pauses it and `End` resumes following. Press `?` for the full key map.
+
 Long-running attempts and recovery run on a worker thread; lifecycle progress
 is shown in the status line. Refresh/load errors are retained in the Errors
 view and action errors open as visible dialogs.

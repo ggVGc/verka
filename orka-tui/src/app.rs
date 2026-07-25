@@ -67,6 +67,7 @@ pub enum Action {
     Recover,
     InitConfig,
     ViewAttempt,
+    ViewLiveAttempt,
     ViewTranscript,
     ViewDiagnostics,
     ViewRawEvents,
@@ -95,6 +96,7 @@ impl Action {
             Self::Recover => "Recover unfinished attempts",
             Self::InitConfig => "Create default orka.toml",
             Self::ViewAttempt => "Show durable attempt record",
+            Self::ViewLiveAttempt => "Follow live attempt output",
             Self::ViewTranscript => "View rendered work log / transcript",
             Self::ViewDiagnostics => "View diagnostics",
             Self::ViewRawEvents => "View raw agent events",
@@ -142,6 +144,11 @@ pub enum Overlay {
         body: String,
         scroll: u16,
     },
+    Live {
+        attempt: AttemptId,
+        body: String,
+        scroll: Option<u16>,
+    },
     Confirm {
         action: Action,
         target: String,
@@ -150,7 +157,10 @@ pub enum Overlay {
 }
 
 enum WorkerEvent {
-    Progress(String),
+    Progress {
+        message: String,
+        attempt: Option<AttemptId>,
+    },
     Done(std::result::Result<String, String>),
 }
 
@@ -163,6 +173,7 @@ pub struct App {
     pub status: String,
     pub busy: bool,
     pub should_quit: bool,
+    active_attempt: Option<AttemptId>,
     worker: Option<Receiver<WorkerEvent>>,
 }
 
@@ -178,6 +189,7 @@ impl App {
             status: String::new(),
             busy: false,
             should_quit: false,
+            active_attempt: None,
             worker: None,
         };
         app.refresh();
@@ -419,6 +431,7 @@ impl App {
             KeyCode::Char('?') => self.overlay = Some(Overlay::Help),
             KeyCode::Char('r') => self.refresh(),
             KeyCode::Char('a') => self.open_actions(),
+            KeyCode::Char('l') => self.open_live_attempt(),
             KeyCode::Enter => {
                 if let Some(row) = self.selected_row() {
                     self.overlay = Some(Overlay::Text {
@@ -462,6 +475,40 @@ impl App {
                 KeyCode::PageDown => *scroll = scroll.saturating_add(20),
                 KeyCode::PageUp => *scroll = scroll.saturating_sub(20),
                 KeyCode::Home | KeyCode::Char('g') => *scroll = 0,
+                _ => {}
+            },
+            Overlay::Live { body, scroll, .. } => match key.code {
+                KeyCode::Esc | KeyCode::Char('q') => return,
+                KeyCode::Down | KeyCode::Char('j') => {
+                    if let Some(offset) = scroll {
+                        *offset = offset.saturating_add(1);
+                    }
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    let offset = scroll.get_or_insert_with(|| {
+                        body.lines()
+                            .count()
+                            .saturating_sub(20)
+                            .min(u16::MAX as usize) as u16
+                    });
+                    *offset = offset.saturating_sub(1);
+                }
+                KeyCode::PageDown => {
+                    if let Some(offset) = scroll {
+                        *offset = offset.saturating_add(20);
+                    }
+                }
+                KeyCode::PageUp => {
+                    let offset = scroll.get_or_insert_with(|| {
+                        body.lines()
+                            .count()
+                            .saturating_sub(20)
+                            .min(u16::MAX as usize) as u16
+                    });
+                    *offset = offset.saturating_sub(20);
+                }
+                KeyCode::Home | KeyCode::Char('g') => *scroll = Some(0),
+                KeyCode::End | KeyCode::Char('G') => *scroll = None,
                 _ => {}
             },
             Overlay::Actions { actions, selected } => match key.code {
@@ -545,6 +592,7 @@ impl App {
         let mut actions = match self.view {
             View::Ready => vec![Action::RunSelected, Action::RunNext],
             View::Attempts => vec![
+                Action::ViewLiveAttempt,
                 Action::ViewAttempt,
                 Action::ViewTranscript,
                 Action::ViewDiagnostics,
@@ -590,6 +638,7 @@ impl App {
             .map(|row| row.id.clone())
             .unwrap_or_default();
         match action {
+            Action::ViewLiveAttempt => self.show_live_attempt(&target),
             Action::ViewAttempt => self.show_attempt(&target),
             Action::ViewTranscript => self.show_attempt_file(&target, AttemptFile::Transcript),
             Action::ViewDiagnostics => self.show_attempt_file(&target, AttemptFile::Diagnostics),
@@ -712,30 +761,102 @@ impl App {
     }
 
     pub fn poll_worker(&mut self) {
-        let Some(rx) = self.worker.take() else { return };
-        let mut done = None;
-        while let Ok(event) = rx.try_recv() {
-            match event {
-                WorkerEvent::Progress(message) => self.status = message,
-                WorkerEvent::Done(result) => done = Some(result),
+        if let Some(rx) = self.worker.take() {
+            let mut done = None;
+            while let Ok(event) = rx.try_recv() {
+                match event {
+                    WorkerEvent::Progress { message, attempt } => {
+                        self.status = message;
+                        if attempt.is_some() {
+                            self.active_attempt = attempt;
+                        }
+                    }
+                    WorkerEvent::Done(result) => done = Some(result),
+                }
+            }
+            if let Some(result) = done {
+                let showing_live = matches!(self.overlay, Some(Overlay::Live { .. }));
+                self.busy = false;
+                self.refresh();
+                match result {
+                    Ok(message) => {
+                        self.status = message.clone();
+                        if !showing_live {
+                            self.overlay = Some(Overlay::Text {
+                                title: "Action completed".into(),
+                                body: message,
+                                scroll: 0,
+                            });
+                        }
+                    }
+                    Err(error) => self.error_overlay("Action failed", error),
+                }
+            } else {
+                self.worker = Some(rx);
             }
         }
-        if let Some(result) = done {
-            self.busy = false;
-            self.refresh();
-            match result {
-                Ok(message) => {
-                    self.status = message.clone();
-                    self.overlay = Some(Overlay::Text {
-                        title: "Action completed".into(),
-                        body: message,
-                        scroll: 0,
-                    });
-                }
-                Err(error) => self.error_overlay("Action failed", error),
-            }
+        self.refresh_live_attempt();
+    }
+
+    fn open_live_attempt(&mut self) {
+        let selected = || {
+            (self.view == View::Attempts)
+                .then(|| self.selected_row().map(|row| AttemptId(row.id.clone())))
+                .flatten()
+        };
+        let attempt = if self.busy {
+            self.active_attempt.clone().or_else(selected)
         } else {
-            self.worker = Some(rx);
+            selected().or_else(|| self.active_attempt.clone())
+        };
+        match attempt {
+            Some(attempt) => self.show_live_attempt(&attempt.0),
+            None => {
+                self.status =
+                    "No active attempt; select an attempt or start one before opening live output"
+                        .into()
+            }
+        }
+    }
+
+    fn show_live_attempt(&mut self, id: &str) {
+        let attempt = AttemptId(id.into());
+        let body = self.live_attempt_body(&attempt);
+        self.overlay = Some(Overlay::Live {
+            attempt,
+            body,
+            scroll: None,
+        });
+    }
+
+    fn refresh_live_attempt(&mut self) {
+        let attempt = match &self.overlay {
+            Some(Overlay::Live { attempt, .. }) => attempt.clone(),
+            _ => return,
+        };
+        let body = self.live_attempt_body(&attempt);
+        if let Some(Overlay::Live { body: current, .. }) = &mut self.overlay {
+            *current = body;
+        }
+    }
+
+    fn live_attempt_body(&self, id: &AttemptId) -> String {
+        let attempts = FsAttemptStore::new(self.root.join(".orka"));
+        match render_work_log(&attempts, id) {
+            Ok(body) if !body.trim().is_empty() => body,
+            Ok(_) => "(waiting for agent output…)".into(),
+            Err(error) => match attempts.load(id) {
+                Ok(snapshot) if snapshot.request.is_none() => format!(
+                    "{id}: {:?}\n\nWaiting for the execution request and output journal…",
+                    snapshot.phase()
+                ),
+                Ok(snapshot) => format!(
+                    "{id}: {:?}\n\nWaiting for agent output…\n{}",
+                    snapshot.phase(),
+                    error
+                ),
+                Err(_) => format!("Waiting for attempt {id} to be created…"),
+            },
         }
     }
 
@@ -947,7 +1068,10 @@ fn execute_action(
                 policy: config.policy()?,
             };
             let mut progress = |event: &RunProgress| {
-                let _ = tx.send(WorkerEvent::Progress(progress_text(event)));
+                let _ = tx.send(WorkerEvent::Progress {
+                    message: progress_text(event),
+                    attempt: progress_attempt(event).cloned(),
+                });
             };
             let report = if action == Action::RunSelected {
                 Some(engine.run_node_with_progress(&parse_node(target)?, &mut progress)?)
@@ -1127,6 +1251,7 @@ fn execute_action(
             }
         }
         Action::ViewAttempt
+        | Action::ViewLiveAttempt
         | Action::ViewTranscript
         | Action::ViewDiagnostics
         | Action::ViewRawEvents
@@ -1147,6 +1272,17 @@ fn progress_text(progress: &RunProgress) -> String {
             format!("{attempt}: agent exited with {exit_code}")
         }
         RunProgress::Sealed { attempt, state } => format!("{attempt}: {}", seal_text(state)),
+    }
+}
+
+fn progress_attempt(progress: &RunProgress) -> Option<&AttemptId> {
+    match progress {
+        RunProgress::Selected { .. } => None,
+        RunProgress::AttemptCreated { attempt }
+        | RunProgress::WorkspacePrepared { attempt }
+        | RunProgress::ExecutionStarted { attempt, .. }
+        | RunProgress::ExecutionFinished { attempt, .. }
+        | RunProgress::Sealed { attempt, .. } => Some(attempt),
     }
 }
 
@@ -1270,5 +1406,19 @@ mod tests {
     fn author_input_is_explicit() {
         assert_eq!(parse_author(" HUMAN ").unwrap(), Author::Human);
         assert!(parse_author("robot").is_err());
+    }
+
+    #[test]
+    fn attempt_progress_exposes_the_live_attempt_id() {
+        let attempt = AttemptId("attempt-live".into());
+        let progress = RunProgress::AttemptCreated {
+            attempt: attempt.clone(),
+        };
+        assert_eq!(progress_attempt(&progress), Some(&attempt));
+
+        let selected = RunProgress::Selected {
+            node: "node-live".parse().unwrap(),
+        };
+        assert_eq!(progress_attempt(&selected), None);
     }
 }
