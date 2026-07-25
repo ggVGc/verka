@@ -482,6 +482,7 @@ fn sandbox_git_admission_failure_prevents_agent_start_and_all_submission() {
 fn replacing_git_with_a_clean_standalone_repository_is_an_integrity_failure() {
     let (_temp, root) = workbench();
     let project = root.join("project");
+    let input_commit = git(&project, &["rev-parse", "HEAD"]);
     let node = add_node(&root, "Attempt repository replacement", vec![]);
     let (store, workspaces, attempts) = parts(&root);
     let executor = FakeExecutor {
@@ -517,17 +518,13 @@ fn replacing_git_with_a_clean_standalone_repository_is_an_integrity_failure() {
         store.read_result(&node).unwrap().is_none(),
         "agent declaration must not create a Linka result"
     );
-    assert!(
+    assert_eq!(
         git(
             &project,
-            &[
-                "branch",
-                "--list",
-                &format!("orka/attempts/{}", report.attempt)
-            ]
-        )
-        .is_empty(),
-        "corrupt workspace must not create a project candidate branch"
+            &["rev-parse", &format!("orka/attempts/{}", report.attempt)]
+        ),
+        input_commit,
+        "the linked-worktree branch must retain only its frozen input"
     );
     assert!(
         store
@@ -546,14 +543,8 @@ fn repository_corruption_overrides_a_declared_failure() {
     let executor = FakeExecutor {
         exit_code: 2,
         on_run: Some(Box::new(|spec: &ExecutionSpec| {
-            let identity = spec
-                .mounts
-                .iter()
-                .find(|mount| mount.source.ends_with("orka-identity"))
-                .expect("identity mount")
-                .source
-                .clone();
-            std::fs::write(identity, "replaced\n")?;
+            let ws = mount(spec, "/tmp/orka/workspace");
+            git(ws, &["config", "core.hooksPath", "/tmp/agent-hooks"]);
             std::fs::write(
                 mount(spec, "/tmp/orka/exchange").join("outcome.toml"),
                 "outcome = \"failed\"\nnotes = \"agent failure\"\n",

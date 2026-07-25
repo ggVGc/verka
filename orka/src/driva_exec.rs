@@ -575,6 +575,7 @@ mod tests {
             branch: "orka/attempts/test".into(),
             input_commit,
             identity: "probe-test".into(),
+            audit: Default::default(),
         };
 
         executor
@@ -666,6 +667,7 @@ mod tests {
             branch: "orka/attempts/test".into(),
             input_commit,
             identity: "linked-test".into(),
+            audit: Default::default(),
         };
         let spec = ExecutionSpec {
             command: vec!["unused".into()],
@@ -692,7 +694,7 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn real_bwrap_probe_accepts_orkas_private_git_mounts() {
+    fn real_bwrap_probe_accepts_an_audited_shared_git_mount() {
         let usable = Command::new("bwrap")
             .args(["--ro-bind", "/", "/", "--", "true"])
             .status()
@@ -706,7 +708,7 @@ mod tests {
         let dir = std::env::current_dir()
             .unwrap()
             .join("target")
-            .join(format!("orka-private-probe-test-{}", ulid::Ulid::new()));
+            .join(format!("orka-shared-probe-test-{}", ulid::Ulid::new()));
         let project = dir.join("project");
         std::fs::create_dir_all(&project).unwrap();
         init_workspace_repository(&project);
@@ -723,7 +725,7 @@ mod tests {
         .trim()
         .to_string();
         let manager = GitWorkspaces::new(&project, dir.join(".orka/worktrees"));
-        let workspace = manager.prepare("private-probe", &input_commit).unwrap();
+        let workspace = manager.prepare("shared-probe", &input_commit).unwrap();
         let mut spec = ExecutionSpec {
             command: vec!["unused".into()],
             protocol: OutputFormat::Plain,
@@ -739,16 +741,6 @@ mod tests {
                     destination: workspace.git_dir.clone(),
                     writable: true,
                 },
-                MountSpec {
-                    source: workspace.path.join(".git"),
-                    destination: "/tmp/orka/workspace/.git".into(),
-                    writable: false,
-                },
-                MountSpec {
-                    source: workspace.git_dir.join("orka-identity"),
-                    destination: workspace.git_dir.join("orka-identity"),
-                    writable: false,
-                },
             ],
             environment: BTreeMap::new(),
             network: false,
@@ -757,10 +749,10 @@ mod tests {
 
         executor
             .validate_workspace_access(&spec, &workspace)
-            .expect("private Git metadata should be writable through the exact sandbox grant");
+            .expect("shared Git metadata should be writable through the exact sandbox grant");
         manager
             .validate(&workspace)
-            .expect("the admission probe must preserve repository identity");
+            .expect("the admission probe must preserve the shared repository audit");
 
         spec.command = vec![
             "sh".into(),
@@ -775,7 +767,7 @@ mod tests {
         assert_eq!(report.exit_code, 0);
         let validated = manager
             .validate(&workspace)
-            .expect("sandboxed commit must preserve private repository identity");
+            .expect("sandboxed commit must preserve the shared repository audit");
         assert_ne!(validated.head, workspace.input_commit);
         assert!(manager.is_clean(&workspace).unwrap());
         std::fs::remove_dir_all(&dir).unwrap();

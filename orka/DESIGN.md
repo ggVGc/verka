@@ -87,7 +87,7 @@ Linka, not a backend-neutral port.
 2. Ask Linka to validate and snapshot the node, and gather the prompt prose, as
    one durable `AttemptInput` (Linka's `WorkSnapshot` plus the description and
    related-work prose). Record it before any side effect.
-3. Prepare an isolated private repository at `snapshot.project.revision`.
+3. Prepare an audited linked worktree at `snapshot.project.revision`.
 4. Choose the exact mounts, network policy, agent command, and context. Attest
    repository identity on the host and run an Orka-owned Git writability probe
    through the exact Driva grant before starting the agent.
@@ -128,24 +128,27 @@ phase is derived from which files exist. Recovery classifies each attempt by its
 files and finishes the idempotent remainder:
 
 Attempt and workspace schemas are strict. Orka supports only the current
-private-repository format and deliberately provides no migration or fallback
-for earlier linked-worktree layouts.
+audited linked-worktree format and deliberately provides no migration or
+fallback for earlier private-repository layouts.
 
 - Never invent an outcome without exit evidence: a changed pre-evidence
   attempt seals interrupted. An entirely unchanged executor failure is rolled
-  back, including its empty attempt record and private repository.
+  back, including its empty attempt record and linked worktree.
 - Re-attest, then resubmit executed-but-unsealed attempts against the persisted
   snapshot; Linka's version check makes re-submission safe and non-duplicating.
 - Never discard a dirty, structurally invalid, or committed-but-unpromoted
   workspace.
 
-Validated project outputs are imported onto
-`orka/attempts/<attempt-id>` branches. Those branches survive private workspace
-cleanup and remain available for inspection, recovery, or later review. The only
-automatic rollback is a pre-evidence executor error whose repository and branch
-still exactly match the frozen input; there is no work to preserve in that
-case. Any broader deletion requires an explicit pruning operation with a
-visible retention policy.
+Each agent receives a normal linked worktree on an
+`orka/attempts/<attempt-id>` branch and writable access to the shared Git
+database. Orka records protected refs, configuration, hooks, alternates,
+worktree registrations, and object format outside Git before execution.
+Postflight settlement requires that audit to match, repository connectivity to
+hold, the worktree to be clean, and HEAD to descend from the frozen input.
+Only the attempt branch, its file-change checkpoint ref, and Orka's promotion
+marker may change. Any other mutation seals an integrity failure and retains
+the worktree. Attempt branches survive worktree cleanup for inspection,
+recovery, or later review.
 
 ## Candidate integration
 

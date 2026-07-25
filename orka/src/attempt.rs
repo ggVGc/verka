@@ -456,6 +456,7 @@ mod tests {
             branch: "orka/attempts/attempt-x".into(),
             input_commit: "c0ffee".into(),
             identity: "workspace-x".into(),
+            audit: Default::default(),
         }
     }
 

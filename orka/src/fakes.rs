@@ -105,6 +105,7 @@ impl WorkspaceManager for FakeWorkspaces {
             branch: format!("orka/attempts/{attempt}"),
             input_commit: input_commit.to_string(),
             identity: format!("fake-{attempt}"),
+            audit: Default::default(),
         }
     }
 
