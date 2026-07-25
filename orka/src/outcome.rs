@@ -18,12 +18,14 @@
 //!
 //! Interpreting the declaration is Orka's own concern: [`decide`] combines it
 //! with the harness-observed exit code into an Orka [`AgentOutcome`], per the
-//! failure matrix. A declaration is honored whatever the exit status (a nonzero
-//! exit rides along as reportable backend trouble); no declaration plus exit
-//! zero is a contract violation; no declaration plus a nonzero exit is an
-//! interrupted attempt. The declaration is what the agent *claims* it did;
-//! whether it completes the node is still Linka's version-checked call, made
-//! only by trusted Orka code translating an [`AgentOutcome`] into a submission.
+//! failure matrix. A success declaration is honored only when the command exits
+//! zero; a nonzero exit makes the attempt interrupted and cannot complete the
+//! node. A declared failure remains usable failure evidence regardless of exit
+//! status. No declaration plus exit zero is a contract violation; no declaration
+//! plus a nonzero exit is an interrupted attempt. The declaration is what the
+//! agent *claims* it did; whether it completes the node is still Linka's
+//! version-checked call, made only by trusted Orka code translating an
+//! [`AgentOutcome`] into a submission.
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -94,15 +96,18 @@ pub enum Decision {
 
 pub fn decide(declared: Option<DeclaredOutcome>, exit_code: i32) -> Decision {
     match declared {
-        Some(declared) => match declared.outcome {
-            DeclaredKind::Succeeded => Decision::Submit {
+        Some(declared) => match (declared.outcome, exit_code) {
+            (DeclaredKind::Succeeded, 0) => Decision::Submit {
                 outcome: AgentOutcome::Succeeded {
                     message: declared.message,
                     notes: declared.notes,
                 },
-                backend_failed: exit_code != 0,
+                backend_failed: false,
             },
-            DeclaredKind::Failed => Decision::Submit {
+            (DeclaredKind::Succeeded, exit_code) => Decision::Interrupted {
+                reason: format!("command exited {exit_code} after declaring success"),
+            },
+            (DeclaredKind::Failed, _) => Decision::Submit {
                 outcome: AgentOutcome::Failed {
                     notes: if declared.notes.is_empty() {
                         "agent declared failure without notes".into()
@@ -171,13 +176,11 @@ mod tests {
                 backend_failed: false,
             }
         );
-        // Declared success plus nonzero exit: still submit, but report.
+        // Declared success plus nonzero exit cannot complete the node.
         assert!(matches!(
             decide(Some(succeeded), 1),
-            Decision::Submit {
-                backend_failed: true,
-                ..
-            }
+            Decision::Interrupted { reason }
+                if reason == "command exited 1 after declaring success"
         ));
         // Declared failure is failure evidence.
         assert!(matches!(

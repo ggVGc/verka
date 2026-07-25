@@ -592,7 +592,7 @@ fn a_declared_failure_is_recorded_as_evidence() {
 }
 
 #[test]
-fn a_nonzero_exit_with_a_declared_success_still_submits_and_reports() {
+fn a_nonzero_exit_with_a_declared_success_is_interrupted() {
     let (_temp, root) = workbench();
     let node = add_node(&root, "Flaky but done", vec![]);
     let (store, workspaces, attempts) = parts(&root);
@@ -614,8 +614,16 @@ fn a_nonzero_exit_with_a_declared_success_still_submits_and_reports() {
     let engine = engine!(&root, store, executor, workspaces, attempts);
     let report = engine.run_node(&node.parse().unwrap()).unwrap();
 
-    assert!(matches!(report.sealed, SealedState::Submitted { .. }));
-    assert!(report.backend_failed);
+    assert!(matches!(
+        report.sealed,
+        SealedState::Interrupted { ref reason }
+            if reason == "command exited 3 after declaring success"
+    ));
+    assert!(!report.backend_failed);
+    assert!(
+        store.read_result(&node).unwrap().is_none(),
+        "a nonzero exit must not register a successful node result"
+    );
 }
 
 #[test]
