@@ -361,6 +361,50 @@ impl FsAttemptStore {
         Ok(ids)
     }
 
+    /// Inspect every attempt directory without stopping at the first damaged
+    /// record. This catches the directory-only crash window during creation as
+    /// well as malformed or internally contradictory lifecycle records.
+    pub fn audit(&self) -> Result<Vec<String>> {
+        let mut problems = Vec::new();
+        for id in self.list()? {
+            let valid_name =
+                id.0.strip_prefix("attempt-")
+                    .is_some_and(|value| ulid::Ulid::from_string(value).is_ok());
+            if !valid_name {
+                problems.push(format!("{id}: invalid attempt directory name"));
+            }
+            let snapshot = match self.load(&id) {
+                Ok(snapshot) => snapshot,
+                Err(error) => {
+                    problems.push(format!("{id}: unreadable attempt record: {error:#}"));
+                    continue;
+                }
+            };
+            if snapshot.record.id != id {
+                problems.push(format!(
+                    "{id}: attempt record identifies itself as {}",
+                    snapshot.record.id
+                ));
+            }
+            if snapshot.prepared && snapshot.workspace.is_none() {
+                problems.push(format!(
+                    "{id}: prepared marker exists without a workspace plan"
+                ));
+            }
+            if snapshot.request.is_some() && !snapshot.prepared {
+                problems.push(format!(
+                    "{id}: execution request exists without a prepared marker"
+                ));
+            }
+            if snapshot.evidence.is_some() && snapshot.request.is_none() {
+                problems.push(format!(
+                    "{id}: exit evidence exists without an execution request"
+                ));
+            }
+        }
+        Ok(problems)
+    }
+
     /// Remove an unsealed attempt that never acquired exit evidence. This is
     /// used only after its unchanged workspace and branch have been rolled back.
     pub fn discard_without_evidence(&self, id: &AttemptId) -> Result<()> {
@@ -554,6 +598,44 @@ mod tests {
     fn listing_an_uninitialised_store_is_empty_not_an_error() {
         let (_temp, store) = store();
         assert_eq!(store.list().unwrap(), vec![]);
+    }
+
+    #[test]
+    fn audit_reports_orphaned_and_contradictory_attempt_records() {
+        let (_temp, store) = store();
+        let orphan = AttemptId::new();
+        std::fs::create_dir_all(store.attempt_dir(&orphan)).unwrap();
+
+        let mismatched = AttemptId::new();
+        store.create(&mismatched, &input()).unwrap();
+        let mut record = store.load(&mismatched).unwrap().record;
+        record.id = AttemptId::new();
+        write_toml(&store.attempt_record_path(&mismatched), &record).unwrap();
+        write_toml(
+            &store.attempt_dir(&mismatched).join("request.toml"),
+            &spec(),
+        )
+        .unwrap();
+
+        let problems = store.audit().unwrap();
+        let all = problems.join("\n");
+        assert!(
+            all.contains(&format!("{orphan}: unreadable attempt record")),
+            "{all}"
+        );
+        assert!(
+            all.contains(&format!(
+                "{mismatched}: attempt record identifies itself as {}",
+                record.id
+            )),
+            "{all}"
+        );
+        assert!(
+            all.contains(&format!(
+                "{mismatched}: execution request exists without a prepared marker"
+            )),
+            "{all}"
+        );
     }
 
     #[test]

@@ -1269,14 +1269,13 @@ fn execute_action(
         }
         Action::Audit => {
             let store = Store::open(root.join(".linka"))?;
-            let problems = LinkaWork::new(&store).audit_output_evidence()?;
+            let mut problems = LinkaWork::new(&store).audit_output_evidence()?;
+            problems.extend(FsAttemptStore::new(root.join(".orka")).audit()?);
             if problems.is_empty() {
-                Ok(ActionCompletion::normal(
-                    "All Orka-produced outputs retain complete evidence",
-                ))
+                Ok(ActionCompletion::normal("Orka state is consistent"))
             } else {
                 bail!(
-                    "{} output evidence problem(s):\n{}",
+                    "{} Orka integrity problem(s):\n{}",
                     problems.len(),
                     problems.join("\n")
                 )

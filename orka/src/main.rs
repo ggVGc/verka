@@ -598,14 +598,15 @@ fn run(cli: Cli) -> Result<()> {
         }
         Command::Audit => {
             let store = workbench.linka_store()?;
-            let problems = LinkaWork::new(&store).audit_output_evidence()?;
+            let mut problems = LinkaWork::new(&store).audit_output_evidence()?;
+            problems.extend(workbench.attempts().audit()?);
             if problems.is_empty() {
-                println!("all Orka-produced outputs retain complete evidence");
+                println!("Orka state is consistent");
             } else {
                 for problem in &problems {
                     eprintln!("{problem}");
                 }
-                bail!("{} output evidence problem(s)", problems.len());
+                bail!("{} Orka integrity problem(s)", problems.len());
             }
         }
     }
