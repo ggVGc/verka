@@ -280,7 +280,7 @@ fn draw_overlay(frame: &mut Frame, overlay: &Overlay) {
                        PgUp/PgDn     scroll by page\n\
                        End / G       resume following live output\n\
                        Esc / q       close overlay\n\n\
-                     Errors from refresh appear in the Errors view. Action errors open in a red dialog and remain in the status line.",
+                     All popup and refresh errors remain available in the Errors view for the rest of the session.",
                 )
                 .block(Block::default().borders(Borders::ALL).title(" Help · Esc close "))
                 .wrap(Wrap { trim: false }),

@@ -175,6 +175,7 @@ pub struct App {
     pub should_quit: bool,
     active_attempt: Option<AttemptId>,
     worker: Option<Receiver<WorkerEvent>>,
+    retained_errors: Vec<String>,
 }
 
 impl App {
@@ -191,6 +192,7 @@ impl App {
             should_quit: false,
             active_attempt: None,
             worker: None,
+            retained_errors: Vec::new(),
         };
         app.refresh();
         Ok(app)
@@ -393,15 +395,12 @@ impl App {
             summary: "Press a to run the evidence audit".into(),
             detail: "Checks every Orka-produced output for its durable attempt, prompt, request, agent output, harness evidence, and declared outcome.".into(),
         }];
-        self.rows[View::Errors as usize] = errors
-            .iter()
-            .enumerate()
-            .map(|(index, error)| Row {
-                id: format!("error-{index}"),
-                summary: error.lines().next().unwrap_or(error).to_string(),
-                detail: error.clone(),
-            })
-            .collect();
+        for error in errors {
+            if !self.retained_errors.contains(&error) {
+                self.retained_errors.push(error);
+            }
+        }
+        self.rebuild_error_rows();
         self.selected = old_id
             .and_then(|id| self.rows().iter().position(|row| row.id == id))
             .unwrap_or(0)
@@ -969,12 +968,32 @@ impl App {
     }
 
     fn error_overlay(&mut self, title: &str, body: String) {
+        let error = format!("{title}: {body}");
+        self.retained_errors.push(error.clone());
+        self.rebuild_error_rows();
         self.status = format!("{title}: {}", body.lines().next().unwrap_or_default());
         self.overlay = Some(Overlay::Text {
             title: format!("ERROR — {title}"),
             body,
             scroll: 0,
         });
+    }
+
+    fn rebuild_error_rows(&mut self) {
+        self.rows[View::Errors as usize] = self
+            .retained_errors
+            .iter()
+            .enumerate()
+            .map(|(index, error)| error_row(format!("error-{index}"), error))
+            .collect();
+    }
+}
+
+fn error_row(id: String, error: &str) -> Row {
+    Row {
+        id,
+        summary: error.lines().next().unwrap_or(error).to_string(),
+        detail: error.to_string(),
     }
 }
 
@@ -1386,6 +1405,22 @@ fn render_block(block: &WorkLogBlock) -> String {
 mod tests {
     use super::*;
 
+    fn empty_app() -> App {
+        App {
+            root: PathBuf::new(),
+            rows: std::array::from_fn(|_| Vec::new()),
+            view: View::Ready,
+            selected: 0,
+            overlay: None,
+            status: String::new(),
+            busy: false,
+            should_quit: false,
+            active_attempt: None,
+            worker: None,
+            retained_errors: Vec::new(),
+        }
+    }
+
     #[test]
     fn view_labels_are_stable_and_complete() {
         assert_eq!(
@@ -1420,5 +1455,29 @@ mod tests {
             node: "node-live".parse().unwrap(),
         };
         assert_eq!(progress_attempt(&selected), None);
+    }
+
+    #[test]
+    fn popup_errors_are_retained_in_the_errors_view() {
+        let mut app = empty_app();
+
+        app.error_overlay(
+            "Action failed",
+            "could not delete execution worktree\ncaused by: worktree is locked".into(),
+        );
+
+        let errors = &app.rows[View::Errors as usize];
+        assert_eq!(errors.len(), 1);
+        assert_eq!(
+            errors[0].summary,
+            "Action failed: could not delete execution worktree"
+        );
+        assert_eq!(
+            errors[0].detail,
+            "Action failed: could not delete execution worktree\ncaused by: worktree is locked"
+        );
+
+        app.rebuild_error_rows();
+        assert_eq!(app.rows[View::Errors as usize].len(), 1);
     }
 }
