@@ -117,6 +117,12 @@ pub struct RecoveryReport {
     pub node: NodeId,
     pub action: String,
     pub sealed: Option<SealedState>,
+    pub requires_attention: bool,
+}
+
+struct RecoveryCleanup {
+    action: String,
+    requires_attention: bool,
 }
 
 impl Engine<'_> {
@@ -662,12 +668,16 @@ impl Engine<'_> {
             let node = snapshot.record.input.node().clone();
             let report = match snapshot.phase() {
                 AttemptPhase::Sealed => {
-                    let action = self.recover_cleanup(snapshot.workspace.as_ref())?;
+                    let cleanup = self.recover_cleanup(snapshot.workspace.as_ref())?;
+                    let sealed = snapshot.seal.map(|seal| seal.state);
+                    let requires_attention = cleanup.requires_attention
+                        || sealed.as_ref().is_some_and(seal_requires_attention);
                     RecoveryReport {
                         attempt: id,
                         node,
-                        action,
-                        sealed: snapshot.seal.map(|s| s.state),
+                        action: cleanup.action,
+                        sealed,
+                        requires_attention,
                     }
                 }
                 AttemptPhase::Executed => {
@@ -680,11 +690,17 @@ impl Engine<'_> {
                     match self.settle(&id, &snapshot.record.input, &workspace, &evidence) {
                         Ok((sealed, _, _)) => {
                             let cleanup = self.recover_cleanup(Some(&workspace))?;
+                            let requires_attention =
+                                seal_requires_attention(&sealed) || cleanup.requires_attention;
                             RecoveryReport {
                                 attempt: id,
                                 node,
-                                action: format!("settled from recorded evidence; {cleanup}"),
+                                action: format!(
+                                    "settled from recorded evidence; {}",
+                                    cleanup.action
+                                ),
                                 sealed: Some(sealed),
+                                requires_attention,
                             }
                         }
                         Err(e) => RecoveryReport {
@@ -692,6 +708,7 @@ impl Engine<'_> {
                             node,
                             action: format!("unrecoverable without intervention: {e:#}"),
                             sealed: None,
+                            requires_attention: true,
                         },
                     }
                 }
@@ -721,6 +738,7 @@ impl Engine<'_> {
                                         workspace.path.display()
                                     ),
                                     sealed: Some(sealed.state),
+                                    requires_attention: true,
                                 });
                                 continue;
                             }
@@ -732,6 +750,7 @@ impl Engine<'_> {
                             node,
                             action: "discarded empty pre-evidence attempt".into(),
                             sealed: None,
+                            requires_attention: false,
                         }
                     } else {
                         let sealed = self.attempts.seal(
@@ -744,8 +763,9 @@ impl Engine<'_> {
                         RecoveryReport {
                             attempt: id,
                             node,
-                            action: format!("sealed as interrupted; {cleanup}"),
+                            action: format!("sealed as interrupted; {}", cleanup.action),
                             sealed: Some(sealed.state),
+                            requires_attention: true,
                         }
                     }
                 }
@@ -773,33 +793,55 @@ impl Engine<'_> {
         Ok(discarded)
     }
 
-    fn recover_cleanup(&self, workspace: Option<&PreparedWorkspace>) -> Result<String> {
+    fn recover_cleanup(&self, workspace: Option<&PreparedWorkspace>) -> Result<RecoveryCleanup> {
         Ok(match workspace {
-            None => "no workspace to clean".into(),
+            None => RecoveryCleanup {
+                action: "no workspace to clean".into(),
+                requires_attention: false,
+            },
             Some(ws) => match self.workspaces.cleanup(ws)? {
-                CleanupOutcome::Removed => "workspace removed".into(),
-                CleanupOutcome::RetainedDirty => {
-                    format!(
+                CleanupOutcome::Removed => RecoveryCleanup {
+                    action: "workspace removed".into(),
+                    requires_attention: false,
+                },
+                CleanupOutcome::RetainedDirty => RecoveryCleanup {
+                    action: format!(
                         "workspace retained (uncommitted changes): {}",
                         ws.path.display()
-                    )
-                }
-                CleanupOutcome::RetainedUnpublished => {
-                    format!(
+                    ),
+                    requires_attention: false,
+                },
+                CleanupOutcome::RetainedUnpublished => RecoveryCleanup {
+                    action: format!(
                         "workspace retained (committed work was not published): {}",
                         ws.path.display()
-                    )
-                }
-                CleanupOutcome::RetainedIntegrityFailure => {
-                    format!(
+                    ),
+                    requires_attention: false,
+                },
+                CleanupOutcome::RetainedIntegrityFailure => RecoveryCleanup {
+                    action: format!(
                         "workspace retained (repository integrity failure): {}",
                         ws.path.display()
-                    )
-                }
-                CleanupOutcome::AlreadyAbsent => "workspace already absent".into(),
+                    ),
+                    requires_attention: true,
+                },
+                CleanupOutcome::AlreadyAbsent => RecoveryCleanup {
+                    action: "workspace already absent".into(),
+                    requires_attention: false,
+                },
             },
         })
     }
+}
+
+fn seal_requires_attention(state: &SealedState) -> bool {
+    matches!(
+        state,
+        SealedState::StaleAtSubmit { .. }
+            | SealedState::Interrupted { .. }
+            | SealedState::WorkspaceIntegrityFailure { .. }
+            | SealedState::ContractViolation { .. }
+    )
 }
 
 /// The prompt handed to the agent: the frozen definition, its completed

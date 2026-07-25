@@ -5,7 +5,7 @@ use orka::{
     attempt::{AttemptId, FsAttemptStore, SealedState},
     candidate::Candidates,
     config::{Config, CONFIG_FILE},
-    engine::{Engine, RunProgress},
+    engine::{Engine, RecoveryReport, RunProgress},
     events::{work_log_from_raw, ContentBlock, WorkLogBlock},
     linka_work::LinkaWork,
     review::{AbandonOutcome, FinishOutcome, Reviews},
@@ -1150,15 +1150,7 @@ fn execute_action(
             if reports.is_empty() {
                 Ok(ActionCompletion::normal("No attempts recorded"))
             } else {
-                Ok(ActionCompletion::normal(
-                    reports
-                        .into_iter()
-                        .map(|report| {
-                            format!("{}  {}  {}", report.attempt, report.node, report.action)
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n"),
-                ))
+                Ok(recovery_completion(reports))
             }
         }
         Action::InitConfig => {
@@ -1334,6 +1326,20 @@ fn run_completion(report: orka::engine::RunReport) -> ActionCompletion {
             .unwrap_or_else(|| "-".into()),
         report.cleanup
     );
+    if requires_attention {
+        ActionCompletion::requires_attention(message)
+    } else {
+        ActionCompletion::normal(message)
+    }
+}
+
+fn recovery_completion(reports: Vec<RecoveryReport>) -> ActionCompletion {
+    let requires_attention = reports.iter().any(|report| report.requires_attention);
+    let message = reports
+        .into_iter()
+        .map(|report| format!("{}  {}  {}", report.attempt, report.node, report.action))
+        .collect::<Vec<_>>()
+        .join("\n");
     if requires_attention {
         ActionCompletion::requires_attention(message)
     } else {
@@ -1606,5 +1612,19 @@ mod tests {
         assert!(!seal_requires_attention(&SealedState::Submitted {
             output_commit: None,
         }));
+    }
+
+    #[test]
+    fn recovery_problems_require_attention() {
+        let completion = recovery_completion(vec![RecoveryReport {
+            attempt: AttemptId("attempt-recovery".into()),
+            node: "node-recovery".parse().unwrap(),
+            action: "unrecoverable without intervention".into(),
+            sealed: None,
+            requires_attention: true,
+        }]);
+
+        assert!(completion.requires_attention);
+        assert!(completion.message.contains("unrecoverable"));
     }
 }

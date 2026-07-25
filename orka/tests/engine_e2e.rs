@@ -810,6 +810,7 @@ fn recovery_settles_an_executed_attempt_and_a_second_pass_duplicates_nothing() {
         reports[0].sealed,
         Some(SealedState::Submitted { .. })
     ));
+    assert!(!reports[0].requires_attention);
     assert!(store.read_result(&node).unwrap().is_some());
     assert_eq!(attempts.load(&id).unwrap().phase(), AttemptPhase::Sealed);
 
@@ -958,6 +959,7 @@ fn recovery_cannot_settle_an_executed_attempt_after_repository_replacement() {
         reports[0].sealed,
         Some(SealedState::WorkspaceIntegrityFailure { .. })
     ));
+    assert!(reports[0].requires_attention);
     assert!(store.read_result(&node).unwrap().is_none());
     assert!(store
         .read_node_attachment(&node, "orka", &format!("{id}/agent-output"))
@@ -1012,6 +1014,7 @@ fn a_git_checkpoint_error_cannot_complete_an_otherwise_clean_attempt() {
     let Some(SealedState::WorkspaceIntegrityFailure { reason }) = &reports[0].sealed else {
         panic!("checkpoint failure must seal as workspace integrity failure");
     };
+    assert!(reports[0].requires_attention);
     assert!(reason.contains("index.lock was read-only"), "{reason}");
     assert!(store.read_result(&node).unwrap().is_none());
     assert!(store
@@ -1040,6 +1043,7 @@ fn recovery_discards_an_unchanged_pre_evidence_attempt() {
     let reports = engine.recover().unwrap();
     assert_eq!(reports[0].sealed, None);
     assert!(reports[0].action.contains("discarded empty"));
+    assert!(!reports[0].requires_attention);
     assert!(store.read_result(&node).unwrap().is_none());
     assert!(!ws.path.exists(), "the untouched workspace was cleaned");
     assert!(attempts.list().unwrap().is_empty());

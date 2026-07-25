@@ -576,8 +576,12 @@ fn run(cli: Cli) -> Result<()> {
             if reports.is_empty() {
                 println!("no attempts recorded");
             }
+            let requires_attention = reports.iter().any(|report| report.requires_attention);
             for report in reports {
                 println!("{}  {}  {}", report.attempt, report.node, report.action);
+            }
+            if requires_attention {
+                bail!("one or more attempts could not be recovered successfully");
             }
         }
         Command::Audit => {
