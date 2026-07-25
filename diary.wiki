@@ -1,4 +1,5 @@
 2026-07-25
+== 15:00 ==
 People talk about loops, in loosely defined ways.
 I think what we are doing is what we have always done, but with more automation. Software development workflows.
 Linka is a way to store, in a strict way, our expectations, goals, and implementation process, in an immutable way.
@@ -10,7 +11,16 @@ We can get metrics for specific files, or overall features, how much churn they'
 And, how much of that churn was based on testing and redesign, relative models performing bad work.
 If a human does some implementation work, we can also get metrics on the error rate/code churn of that relative agentic implementation.
 
+== 20:46 ==
 
+I think we should use LLM tools only specifically for the thing they are needed for, and any task
+which can be performed with a deterministic tool should be.
+An agent shouldn't create branches and worktrees, an LLM can be asked for the name of it.
+
+I think the idea of "Skills" is strange, since either they are snippets that we put in a session, which can be useful.
+Otherwise they should be actual commands we run in the environment, not something we tell the agent to do.
+If I want a new task created from current context, I should not "use the create new work" skill.
+I should run a command which creates the task, and gets the description from the LLM.
 
 
 2026-07-11
