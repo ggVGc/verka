@@ -1,23 +1,5 @@
-- Should be able to specify some part of some file for a change.
+- [ ] Fix .git isolation in orka project:
+  - Agents can currently do whatever to the shared git state since all of project .git is mounted rw.
+  - Possibly introduce MCP or other specific tooling to let the agent do git actions without actual access to the raw .git dir.
+- [ ] Should be able to specify some part of some file for a change.
   The node created for that work should be associated with the node which created that output.
-
-= Library policy boundary audit =
-  * [x] Make execution completion set review/publication gating atomically in the library; remove obsolete bypass operations.
-  * [x] Bind execution identity to its node and actual candidate branch, and scope completion/failure to that node.
-  * [x] Move worker eligibility and forced-dispatch policy from Orka into library execution operations.
-  * [x] Move editable-review preparation and duplicated query validation from CLI/MCP into the library.
-
-= Library policy boundary audit, round 2 =
-  * [x] Unify complete workbench initialization behind one library operation used by CLI and MCP.
-  * [x] Move execution finalization and mandatory review creation into one library workflow.
-  * [x] Move execution identity, base, branch, and worktree preparation into the library.
-  * [x] Move assignee-aware ready-node selection into library queries.
-  * [x] Move canonical review-suggestion discovery into the library rejection operation.
-
-= Review workflow hardening =
-  * [x] Make review acceptance a durable, recoverable publication transaction.
-  * [x] Expose clear derived awaiting-review, rejected, and integrated states in CLI and TUI output.
-  * [x] Define and enforce the same-node execution concurrency policy.
-  * [x] Add review-worktree inspection, cleanup, and recovery operations.
-  * [x] Consolidate review/isolation documentation and use approval-oriented terminology consistently.
-  * [x] Add real-repository end-to-end tests for acceptance and repeated rejection/rework.
