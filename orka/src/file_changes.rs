@@ -41,6 +41,7 @@ impl FileChangeRecorder {
     pub fn start(
         workspace: &Path,
         isolated_workspace: &Path,
+        ignored_isolated_paths: Vec<PathBuf>,
         raw_events: &Path,
         journal: &Path,
         reference: &str,
@@ -67,6 +68,7 @@ impl FileChangeRecorder {
             follow_and_checkpoint(
                 &workspace,
                 &isolated_workspace,
+                &ignored_isolated_paths,
                 &raw_events,
                 &journal,
                 &reference,
@@ -93,6 +95,7 @@ impl FileChangeRecorder {
 fn follow_and_checkpoint(
     workspace: &Path,
     isolated_workspace: &Path,
+    ignored_isolated_paths: &[PathBuf],
     raw_events: &Path,
     journal: &Path,
     reference: &str,
@@ -127,6 +130,7 @@ fn follow_and_checkpoint(
                     process_line(
                         workspace,
                         isolated_workspace,
+                        ignored_isolated_paths,
                         reference,
                         &index,
                         &mut parent,
@@ -144,6 +148,7 @@ fn follow_and_checkpoint(
                     process_line(
                         workspace,
                         isolated_workspace,
+                        ignored_isolated_paths,
                         reference,
                         &index,
                         &mut parent,
@@ -165,6 +170,7 @@ fn follow_and_checkpoint(
 fn process_line(
     workspace: &Path,
     isolated_workspace: &Path,
+    ignored_isolated_paths: &[PathBuf],
     reference: &str,
     index: &Path,
     parent: &mut String,
@@ -176,10 +182,17 @@ fn process_line(
         return Ok(());
     };
     *sequence += 1;
+    let event_had_paths = !paths.is_empty();
     let paths = paths
         .iter()
-        .map(|path| project_path(path, workspace, isolated_workspace))
-        .collect::<Result<Vec<_>>>();
+        .try_fold(Vec::new(), |mut project_paths, path| {
+            if let Some(path) =
+                project_path(path, workspace, isolated_workspace, ignored_isolated_paths)?
+            {
+                project_paths.push(path);
+            }
+            Ok::<_, anyhow::Error>(project_paths)
+        });
     let record = match paths {
         Ok(paths) if !paths.is_empty() => {
             match checkpoint(workspace, index, reference, parent, *sequence, &id, &paths) {
@@ -204,6 +217,14 @@ fn process_line(
                 },
             }
         }
+        Ok(paths) if event_had_paths => FileChangeCheckpoint {
+            schema: FILE_CHANGE_SCHEMA,
+            sequence: *sequence,
+            event_id: id,
+            paths,
+            commit: None,
+            error: None,
+        },
         Ok(paths) => FileChangeCheckpoint {
             schema: FILE_CHANGE_SCHEMA,
             sequence: *sequence,
@@ -227,9 +248,17 @@ fn process_line(
     Ok(())
 }
 
-fn project_path(path: &str, workspace: &Path, isolated_workspace: &Path) -> Result<String> {
+fn project_path(
+    path: &str,
+    workspace: &Path,
+    isolated_workspace: &Path,
+    ignored_isolated_paths: &[PathBuf],
+) -> Result<Option<String>> {
     let path = Path::new(path);
     let relative = if path.is_absolute() {
+        if ignored_isolated_paths.iter().any(|ignored| path == ignored) {
+            return Ok(None);
+        }
         path.strip_prefix(isolated_workspace)
             .or_else(|_| path.strip_prefix(workspace))
             .with_context(|| {
@@ -251,7 +280,7 @@ fn project_path(path: &str, workspace: &Path, isolated_workspace: &Path) -> Resu
             path.display()
         );
     }
-    Ok(relative.to_string_lossy().replace('\\', "/"))
+    Ok(Some(relative.to_string_lossy().replace('\\', "/")))
 }
 
 fn checkpoint(
@@ -374,10 +403,14 @@ mod tests {
     }
 
     fn append_event(raw: &Path, id: &str) {
+        append_event_at(raw, id, "/tmp/orka/workspace/source.rs");
+    }
+
+    fn append_event_at(raw: &Path, id: &str, path: &str) {
         let mut output = OpenOptions::new().append(true).open(raw).unwrap();
         writeln!(
             output,
-            r#"{{"type":"item.completed","item":{{"id":"{id}","type":"file_change","changes":[{{"path":"/tmp/orka/workspace/source.rs"}}]}}}}"#
+            r#"{{"type":"item.completed","item":{{"id":"{id}","type":"file_change","changes":[{{"path":"{path}"}}]}}}}"#
         )
         .unwrap();
     }
@@ -400,6 +433,7 @@ mod tests {
         let recorder = FileChangeRecorder::start(
             &repository.0,
             Path::new("/tmp/orka/workspace"),
+            Vec::new(),
             &raw,
             &journal,
             "refs/orka/file-changes/test",
@@ -442,5 +476,39 @@ mod tests {
             .lines()
             .any(|line| line == "M source.rs"));
         checked(&repository.0, &["diff", "--cached", "--quiet"]).unwrap();
+    }
+
+    #[test]
+    fn an_outcome_file_change_is_not_treated_as_a_project_checkpoint_failure() {
+        let repository = repository();
+        let raw = repository.0.join("events.raw.jsonl");
+        let journal = repository.0.join("file-changes.v1.jsonl");
+        std::fs::write(&raw, b"").unwrap();
+        let outcome = PathBuf::from("/tmp/orka/exchange/outcome.toml");
+        let recorder = FileChangeRecorder::start(
+            &repository.0,
+            Path::new("/tmp/orka/workspace"),
+            vec![outcome.clone()],
+            &raw,
+            &journal,
+            "refs/orka/file-changes/test",
+        )
+        .unwrap();
+
+        append_event_at(&raw, "outcome-change", outcome.to_str().unwrap());
+        wait_for_records(&journal, 1);
+        recorder.finish().unwrap();
+
+        assert_eq!(
+            read_checkpoints(&journal).unwrap(),
+            vec![FileChangeCheckpoint {
+                schema: FILE_CHANGE_SCHEMA,
+                sequence: 1,
+                event_id: "outcome-change".into(),
+                paths: Vec::new(),
+                commit: None,
+                error: None,
+            }]
+        );
     }
 }

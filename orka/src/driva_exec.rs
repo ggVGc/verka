@@ -16,7 +16,7 @@ use driva::{ExecutionIo, Isolation, Mount, MountAccess};
 use std::ffi::OsString;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub struct DrivaExecutor {
@@ -231,6 +231,11 @@ impl IsolatedExecutor for DrivaExecutor {
             Some(FileChangeRecorder::start(
                 &workspace.source,
                 &spec.working_directory,
+                spec.environment
+                    .get("ORKA_OUTCOME")
+                    .map(PathBuf::from)
+                    .into_iter()
+                    .collect(),
                 artifacts
                     .raw_events
                     .as_deref()
