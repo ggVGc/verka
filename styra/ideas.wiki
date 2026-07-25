@@ -69,3 +69,10 @@
   - Forking a session also branches the repo
   - Allows resetting both session and branch to some previous state and continue from there
   - Easier to launch multiple agents from the same starting point, seeing what results they come up with
+- Often I ask the agent to give suggestions of something.
+  It then often lists multiple options.
+  I then would like that to become an actual list in styra, rather than just part of the context.
+  Then I should be able to pick each of those things and choose to implement them, or continue discussion, forked from the current discussion.
+  This should preferably be implemented as linka nodes later.
+  Getting the information out may need to be implemented as parsing of the agent response.
+  Alternatively, supply instructions to the agent, or even MCP interface, to make it respond in a structured way that I can store.
