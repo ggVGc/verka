@@ -1,6 +1,6 @@
 # Linka, Driva, Orka, Nota, and Orka Web
 
-This repository contains five small applications for graph-based work,
+This repository contains several small applications for graph-based work,
 isolated command execution, orchestration, and Git-native review. They are
 separate applications with narrow, one-way dependencies rather than a single
 framework.
@@ -11,6 +11,9 @@ framework.
   TOML/Markdown files; status, readiness, and staleness are derived rather than
   stored. Linka is usable as a library or CLI and has no dependency on the
   other applications.
+- `linka-tui/` — a terminal interface over the Linka library. It presents
+  nodes, candidates, verifications, derived queues, associations, and the full
+  set of graph and candidate actions without adding UI concerns to Linka.
 - `driva/` — a standalone isolated command runner. It exposes only explicit
   host mounts, disables networking by default, and delegates execution to a
   replaceable isolation backend. Bubblewrap is the backend.
@@ -31,6 +34,9 @@ framework.
 Orka Web ----> Orka ----> Driva ----> Bubblewrap
     |           |  |
     +--> Linka <+  +-----> Nota ----> Git
+           ^
+           |
+       Linka TUI
 ```
 
 Linka, Driva, and Nota have no dependencies on one another. Orka is the only
