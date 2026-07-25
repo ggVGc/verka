@@ -11,8 +11,9 @@ use orka::linka_work::{LinkaWork, Settled};
 use orka::workspace::{GitWorkspaces, WorkspaceManager};
 use std::path::Path;
 
-/// Prepare a real execution worktree at the snapshot's input commit, so submit
-/// can capture from and validate against it exactly as the engine does.
+/// Prepare a real private execution repository at the snapshot's input commit,
+/// so submit can capture from and validate against it exactly as the engine
+/// does.
 fn worktree(root: &Path, attempt: &str, input_commit: &str) -> std::path::PathBuf {
     let workspaces = GitWorkspaces::new(root.join("project"), root.join(".orka/worktrees"));
     workspaces.prepare(attempt, input_commit).unwrap().path

@@ -127,6 +127,10 @@ An attempt is written before external side effects, one file per step, so its
 phase is derived from which files exist. Recovery classifies each attempt by its
 files and finishes the idempotent remainder:
 
+Attempt and workspace schemas are strict. Orka supports only the current
+private-repository format and deliberately provides no migration or fallback
+for earlier linked-worktree layouts.
+
 - Never invent an outcome without exit evidence: a changed pre-evidence
   attempt seals interrupted. An entirely unchanged executor failure is rolled
   back, including its empty attempt record and private repository.
@@ -138,7 +142,7 @@ files and finishes the idempotent remainder:
 Validated project outputs are imported onto
 `orka/attempts/<attempt-id>` branches. Those branches survive private workspace
 cleanup and remain available for inspection, recovery, or later review. The only
-automatic rollback is a pre-evidence executor error whose worktree and branch
+automatic rollback is a pre-evidence executor error whose repository and branch
 still exactly match the frozen input; there is no work to preserve in that
 case. Any broader deletion requires an explicit pruning operation with a
 visible retention policy.

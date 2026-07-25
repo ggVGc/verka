@@ -84,7 +84,7 @@ impl<'a> LinkaWork<'a> {
         GitVcs::for_store(self.store)
     }
 
-    /// Project-side operations run in the attempt's execution worktree; graph
+    /// Project-side operations run in the attempt's private repository; graph
     /// state still commits to the workbench repository.
     fn vcs_at(&self, workspace: &Path) -> GitVcs {
         GitVcs::for_execution(self.store, workspace.to_path_buf())
@@ -338,10 +338,11 @@ impl<'a> LinkaWork<'a> {
     }
 
     /// Submit a successful attempt against its persisted snapshot: capture the
-    /// agent's complete work from the execution worktree and record the result.
+    /// agent's complete work from the private execution repository and record
+    /// the result.
     /// The produced file set is the diff between the frozen input commit and
-    /// the committed worktree — discovered here, never declared by the agent.
-    /// The engine has already verified the worktree is clean (the agent is
+    /// the committed file tree — discovered here, never declared by the agent.
+    /// The engine has already verified the repository is clean (the agent is
     /// required to commit all its work), so this folds the agent's own commits
     /// into one output on the input. A graph conflict records nothing and is
     /// returned as [`Settled::Conflict`].

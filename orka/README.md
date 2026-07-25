@@ -10,7 +10,7 @@ attempt lifecycle.
 
 ```text
 select Linka-ready node ──► snapshot Linka work input ──► record attempt (.orka/attempts/<id>/)
-      ──► prepare worktree (orka/attempts/<id> branch at the frozen revision)
+      ──► prepare private repository (orka/attempts/<id> branch at the frozen revision)
       ──► record request ──► run agent via Driva (bwrap, deny-by-default)
       ──► capture agent events + file reads + diagnostics + exit evidence
       ──► read declared outcome ──► version-checked submit + observed context pins
@@ -113,7 +113,7 @@ a Linka result, candidate, evidence attachment, or project commit.
 The Codex profile runs `codex exec --json`. Orka keeps the provider's exact
 stdout in `events.raw.jsonl`, projects it into stable Orka events in
 `events.v1.jsonl`, derives a readable `transcript.log`, and keeps stderr in
-`diagnostics.log`. On Linux, it also watches the attempt worktree and records
+`diagnostics.log`. On Linux, it also watches the attempt file tree and records
 project file reads in `accesses.v1.jsonl`; accepted results pin those files by
 their content at the frozen input revision. During `orka run`, the CLI follows
 the raw journal and renders commands, tools, changed files, Markdown agent
@@ -124,8 +124,12 @@ stdout in `transcript.log` and stderr in `diagnostics.log`.
 Every completed `file_change` event also creates a checkpoint commit through a
 private Git index and records it in `file-changes.v1.jsonl`. The commits form a
 chain retained at `refs/orka/file-changes/<attempt-id>` without moving the
-agent worktree's HEAD or index. This preserves each reported intermediate file
+agent repository's HEAD or index. This preserves each reported intermediate file
 state without changing Linka's final declared-output capture.
+
+Attempt and workspace records are strict, versioned formats. Orka supports only
+the current private-repository layout: unsupported schemas and records without
+private Git identity are refused rather than migrated.
 
 Human-facing views are projected through Orka's provider-independent
 `WorkLogBlock` format. Markdown prose and fenced code are separate content

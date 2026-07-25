@@ -569,6 +569,7 @@ mod tests {
             stdout: "",
         }));
         let workspace = PreparedWorkspace {
+            schema: crate::workspace::WORKSPACE_SCHEMA,
             path: dir.join("ws"),
             git_dir: dir.join("ws/.git"),
             branch: "orka/attempts/test".into(),
@@ -659,6 +660,7 @@ mod tests {
         .trim()
         .into();
         let workspace = PreparedWorkspace {
+            schema: crate::workspace::WORKSPACE_SCHEMA,
             path: workspace_path.clone(),
             git_dir,
             branch: "orka/attempts/test".into(),

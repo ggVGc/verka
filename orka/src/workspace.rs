@@ -17,19 +17,21 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+pub const WORKSPACE_SCHEMA: u32 = 1;
+
 /// An isolated working tree prepared for one attempt.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PreparedWorkspace {
+    pub schema: u32,
     pub path: PathBuf,
     /// Private Git metadata for this attempt. It is mounted writable into the
     /// sandbox without granting access to the project's shared `.git`.
-    #[serde(default)]
     pub git_dir: PathBuf,
     /// The candidate branch the workspace is checked out on.
     pub branch: String,
     pub input_commit: String,
     /// Orka-minted identity stored in the private Git directory.
-    #[serde(default)]
     pub identity: String,
 }
 
@@ -59,7 +61,7 @@ pub enum CleanupOutcome {
 pub enum DiscardOutcome {
     /// The private repository was removed before anything was promoted.
     Discarded,
-    /// The worktree is dirty or its branch has commits beyond the input.
+    /// The private repository is dirty or its branch has commits beyond the input.
     RetainedChanged,
 }
 
@@ -73,9 +75,9 @@ pub trait WorkspaceManager {
     /// branch named for `attempt`. Fails if the workspace already exists.
     fn prepare(&self, attempt: &str, input_commit: &str) -> Result<PreparedWorkspace>;
 
-    /// Whether the worktree has no uncommitted changes. A coding agent is
-    /// required to commit all its work, so a dirty tree at settle time means
-    /// the agent left work uncaptured and the attempt is rejected.
+    /// Whether the private repository has no uncommitted changes. A coding
+    /// agent is required to commit all its work, so a dirty tree at settle
+    /// time means the agent left work uncaptured and the attempt is rejected.
     fn is_clean(&self, workspace: &PreparedWorkspace) -> Result<bool>;
 
     /// Verify that this is still the exact repository Orka prepared. This is
@@ -138,6 +140,7 @@ impl GitWorkspaces {
 impl WorkspaceManager for GitWorkspaces {
     fn plan(&self, attempt: &str, input_commit: &str) -> PreparedWorkspace {
         PreparedWorkspace {
+            schema: WORKSPACE_SCHEMA,
             path: self.path_for(attempt),
             git_dir: self.git_dir_for(attempt),
             branch: Self::branch_for(attempt),
@@ -154,7 +157,7 @@ impl WorkspaceManager for GitWorkspaces {
 
     fn is_clean(&self, workspace: &PreparedWorkspace) -> Result<bool> {
         self.validate(workspace)?;
-        worktree_clean(&workspace.path)
+        repository_clean(&workspace.path)
     }
 
     fn validate(&self, workspace: &PreparedWorkspace) -> Result<ValidatedWorkspace> {
@@ -218,7 +221,7 @@ impl WorkspaceManager for GitWorkspaces {
             Ok(validated) => validated,
             Err(_) => return Ok(CleanupOutcome::RetainedIntegrityFailure),
         };
-        if !worktree_clean(&workspace.path)? {
+        if !repository_clean(&workspace.path)? {
             return Ok(CleanupOutcome::RetainedDirty);
         }
         if validated.head != workspace.input_commit {
@@ -243,7 +246,7 @@ impl WorkspaceManager for GitWorkspaces {
     fn discard_unchanged(&self, workspace: &PreparedWorkspace) -> Result<DiscardOutcome> {
         if workspace.path.exists() {
             if self.validate(workspace).is_err()
-                || !worktree_clean(&workspace.path)?
+                || !repository_clean(&workspace.path)?
                 || checked(&workspace.path, &["rev-parse", "HEAD"])? != workspace.input_commit
             {
                 return Ok(DiscardOutcome::RetainedChanged);
@@ -277,7 +280,7 @@ impl WorkspaceManager for GitWorkspaces {
     }
 }
 
-// --- git worktree mechanics --------------------------------------------------
+// --- private Git repository mechanics ---------------------------------------
 
 /// Create a self-contained attempt repository. The project is input only:
 /// `--no-hardlinks` ensures even the object store is private.
@@ -386,6 +389,12 @@ fn create_workspace(project: &Path, workspace: PreparedWorkspace) -> Result<Prep
 }
 
 fn validate_workspace(workspace: &PreparedWorkspace) -> Result<ValidatedWorkspace> {
+    if workspace.schema != WORKSPACE_SCHEMA {
+        bail!(
+            "workspace uses unsupported schema {} (this build reads schema {WORKSPACE_SCHEMA})",
+            workspace.schema
+        );
+    }
     if workspace.git_dir.as_os_str().is_empty() || workspace.identity.is_empty() {
         bail!("workspace record has no private Git identity");
     }
@@ -510,8 +519,8 @@ fn validate_workspace(workspace: &PreparedWorkspace) -> Result<ValidatedWorkspac
     })
 }
 
-/// Whether a worktree has no uncommitted changes.
-fn worktree_clean(path: &Path) -> Result<bool> {
+/// Whether a private execution repository has no uncommitted changes.
+fn repository_clean(path: &Path) -> Result<bool> {
     Ok(checked(path, &["status", "--porcelain"])?.is_empty())
 }
 
@@ -646,6 +655,29 @@ mod tests {
 
         // A second preparation of the same attempt is refused.
         assert!(manager.prepare("attempt-1", &head).is_err());
+    }
+
+    #[test]
+    fn workspace_records_require_the_private_repository_schema_and_identity() {
+        let legacy = r#"
+path = "/tmp/workspace"
+branch = "orka/attempts/old"
+input_commit = "deadbeef"
+"#;
+        assert!(
+            toml::from_str::<PreparedWorkspace>(legacy).is_err(),
+            "records without private Git metadata are not migrated"
+        );
+
+        let (_temp, project, head) = project();
+        let manager = workspaces(&project);
+        let mut workspace = manager.prepare("attempt-1", &head).unwrap();
+        workspace.schema = WORKSPACE_SCHEMA + 1;
+        let error = manager.validate(&workspace).unwrap_err();
+        assert!(
+            error.to_string().contains("unsupported schema"),
+            "{error:#}"
+        );
     }
 
     #[test]

@@ -9,6 +9,7 @@ use crate::access::write_access_summary;
 use crate::executor::{ExecutionArtifacts, ExecutionReport, ExecutionSpec, IsolatedExecutor};
 use crate::workspace::{
     CleanupOutcome, DiscardOutcome, PreparedWorkspace, ValidatedWorkspace, WorkspaceManager,
+    WORKSPACE_SCHEMA,
 };
 use anyhow::{anyhow, Result};
 use std::cell::RefCell;
@@ -98,6 +99,7 @@ impl FakeWorkspaces {
 impl WorkspaceManager for FakeWorkspaces {
     fn plan(&self, attempt: &str, input_commit: &str) -> PreparedWorkspace {
         PreparedWorkspace {
+            schema: WORKSPACE_SCHEMA,
             path: self.root.join(attempt),
             git_dir: self.root.join(format!("{attempt}.git")),
             branch: format!("orka/attempts/{attempt}"),

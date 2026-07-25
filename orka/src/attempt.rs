@@ -33,7 +33,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// The current attempt-record schema.
-pub const ATTEMPT_SCHEMA: u32 = 1;
+pub const ATTEMPT_SCHEMA: u32 = 2;
 pub const SEAL_SCHEMA: u32 = 1;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -63,6 +63,7 @@ impl std::fmt::Display for AttemptId {
 /// Contents of `attempt.toml`: the durable input to this attempt — Linka's
 /// authoritative work snapshot plus the prompt prose Orka owns.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AttemptRecord {
     pub schema: u32,
     pub id: AttemptId,
@@ -449,6 +450,7 @@ mod tests {
 
     fn workspace() -> PreparedWorkspace {
         PreparedWorkspace {
+            schema: crate::workspace::WORKSPACE_SCHEMA,
             path: "/tmp/ws".into(),
             git_dir: "/tmp/ws.git".into(),
             branch: "orka/attempts/attempt-x".into(),
@@ -624,6 +626,26 @@ mod tests {
         let dir = store.root().join("attempts").join(&id.0);
         std::fs::write(dir.join("evidence.toml"), "not toml [").unwrap();
         assert!(store.load(&id).is_err());
+    }
+
+    #[test]
+    fn prior_attempt_schemas_are_rejected_without_migration() {
+        let (_temp, store) = store();
+        let id = AttemptId::new();
+        store.create(&id, &input()).unwrap();
+        let path = store.attempt_record_path(&id);
+        let current = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(
+            &path,
+            current.replacen(&format!("schema = {ATTEMPT_SCHEMA}"), "schema = 1", 1),
+        )
+        .unwrap();
+
+        let error = store.load(&id).unwrap_err();
+        assert!(
+            error.to_string().contains("unsupported schema 1"),
+            "{error:#}"
+        );
     }
 
     #[test]
