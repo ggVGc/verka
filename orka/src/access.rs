@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs::File;
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::io::{BufRead, BufReader, BufWriter, Cursor, Write};
 use std::path::{Component, Path};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -295,20 +295,26 @@ fn project_path(root: &Path, path: &Path) -> Option<String> {
 
 pub fn read_access_summary(path: &Path) -> Result<AccessSummary> {
     let input = File::open(path).with_context(|| format!("opening {}", path.display()))?;
+    read_access_summary_from(BufReader::new(input), &path.display().to_string())
+}
+
+/// Parse a journal already retained as durable evidence.
+pub fn read_access_summary_bytes(data: &[u8]) -> Result<AccessSummary> {
+    read_access_summary_from(Cursor::new(data), "attached access journal")
+}
+
+fn read_access_summary_from(input: impl BufRead, source: &str) -> Result<AccessSummary> {
     let mut summary = AccessSummary::default();
     let mut started = false;
     let mut finished = false;
-    for line in BufReader::new(input).lines() {
-        let line = line.with_context(|| format!("reading {}", path.display()))?;
-        let event: AccessEvent = serde_json::from_str(&line)
-            .with_context(|| format!("parsing access journal {}", path.display()))?;
+    for line in input.lines() {
+        let line = line.with_context(|| format!("reading {source}"))?;
+        let event: AccessEvent =
+            serde_json::from_str(&line).with_context(|| format!("parsing {source}"))?;
         match event {
             AccessEvent::TrackingStarted { schema, method } => {
                 if schema != ACCESS_SCHEMA {
-                    anyhow::bail!(
-                        "unsupported access journal schema {schema} in {}",
-                        path.display()
-                    );
+                    anyhow::bail!("unsupported access journal schema {schema} in {source}");
                 }
                 summary.method = method;
                 started = true;

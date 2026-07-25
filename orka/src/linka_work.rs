@@ -10,7 +10,7 @@
 //! All access goes through Linka's public API; Orka never reads or writes
 //! Linka's on-disk representation.
 
-use crate::access::AccessSummary;
+use crate::access::{read_access_summary_bytes, AccessSummary};
 use crate::attempt::{AttemptId, AttemptRecord};
 use crate::executor::ExecutionReport;
 use crate::input::{AttemptInput, DependencyContext};
@@ -51,13 +51,14 @@ pub struct RecordedResult {
     pub version: ResultVersion,
 }
 
-pub const OUTPUT_EVIDENCE_PARTS: [&str; 6] = [
+pub const OUTPUT_EVIDENCE_PARTS: [&str; 7] = [
     "attempt",
     "prompt",
     "request",
     "agent-output",
     "evidence",
     "outcome",
+    "accesses",
 ];
 
 pub struct AttemptEvidencePart {
@@ -226,6 +227,72 @@ impl<'a> LinkaWork<'a> {
                         "{}: missing node attachment orka/{key}",
                         candidate.id
                     ));
+                }
+            }
+            let result = self.store.read_result(candidate.node.as_str())?;
+            let tracking = result
+                .as_ref()
+                .and_then(|(result, _)| result.producer.as_ref())
+                .filter(|producer| producer.namespace == "orka")
+                .and_then(|producer| producer.data.get("context_tracking"));
+            let producer_complete = tracking
+                .and_then(|tracking| tracking.get("complete"))
+                .and_then(serde_json::Value::as_bool);
+            match producer_complete {
+                Some(false) => problems.push(format!(
+                    "{}: producer evidence records incomplete access tracking",
+                    candidate.id
+                )),
+                None => problems.push(format!(
+                    "{}: producer evidence is missing access-tracking completeness",
+                    candidate.id
+                )),
+                Some(true) => {}
+            }
+
+            let accesses_key = format!("{}/accesses", external.id);
+            if let Some((_, data)) =
+                self.store
+                    .read_node_attachment(candidate.node.as_str(), "orka", &accesses_key)?
+            {
+                match read_access_summary_bytes(&data) {
+                    Ok(summary) => {
+                        if !summary.complete {
+                            let reason = summary
+                                .reason
+                                .as_deref()
+                                .unwrap_or("no reason was recorded");
+                            problems.push(format!(
+                                "{}: attached access journal is incomplete: {reason}",
+                                candidate.id
+                            ));
+                        }
+                        if producer_complete.is_some_and(|complete| complete != summary.complete) {
+                            problems.push(format!(
+                                "{}: producer evidence and attached access journal disagree on completeness",
+                                candidate.id
+                            ));
+                        }
+                        if let Some(tracking) = tracking {
+                            let expected_method =
+                                tracking.get("method").and_then(serde_json::Value::as_str);
+                            let expected_files = tracking
+                                .get("observed_files")
+                                .and_then(serde_json::Value::as_u64);
+                            if expected_method != Some(summary.method.as_str())
+                                || expected_files != Some(summary.distinct_paths().len() as u64)
+                            {
+                                problems.push(format!(
+                                    "{}: producer evidence and attached access journal disagree on observed access data",
+                                    candidate.id
+                                ));
+                            }
+                        }
+                    }
+                    Err(error) => problems.push(format!(
+                        "{}: invalid attached access journal: {error:#}",
+                        candidate.id
+                    )),
                 }
             }
             let key = format!("{}/attempt", external.id);

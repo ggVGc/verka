@@ -270,6 +270,31 @@ fn a_full_attempt_lands_a_version_checked_result_from_an_isolated_worktree() {
 }
 
 #[test]
+fn audit_reports_incomplete_access_tracking_on_successful_output() {
+    let (_temp, root) = workbench();
+    let node = add_node(&root, "Greet\n\nCreate greeting.txt saying hello.", vec![]);
+    let (store, workspaces, attempts) = parts(&root);
+    let mut executor = conforming_agent();
+    executor.access_tracking_complete = false;
+    executor.access_tracking_reason = Some("watch queue overflowed".into());
+    let engine = engine!(&root, store, executor, workspaces, attempts);
+
+    let report = engine.run_node(&node.parse().unwrap()).unwrap();
+    assert!(run_succeeded(&report));
+
+    let problems = LinkaWork::new(&store).audit_output_evidence().unwrap();
+    let all = problems.join("\n");
+    assert!(
+        all.contains("producer evidence records incomplete access tracking"),
+        "{all}"
+    );
+    assert!(
+        all.contains("attached access journal is incomplete: watch queue overflowed"),
+        "{all}"
+    );
+}
+
+#[test]
 fn successful_work_can_be_automatically_verified_and_published() {
     let (_temp, root) = workbench();
     let project = root.join("project");

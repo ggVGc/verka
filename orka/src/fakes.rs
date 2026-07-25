@@ -26,6 +26,9 @@ pub struct FakeExecutor {
     pub workspace_access_error: Option<String>,
     /// Project-relative reads to place in the durable access journal.
     pub observed_reads: Vec<String>,
+    /// Whether the canned access journal reports complete observation.
+    pub access_tracking_complete: bool,
+    pub access_tracking_reason: Option<String>,
     pub runs: RefCell<Vec<ExecutionSpec>>,
     pub on_run: Option<Box<dyn Fn(&ExecutionSpec) -> Result<()>>>,
 }
@@ -37,6 +40,8 @@ impl Default for FakeExecutor {
             transcript: String::new(),
             workspace_access_error: None,
             observed_reads: Vec::new(),
+            access_tracking_complete: true,
+            access_tracking_reason: None,
             runs: RefCell::new(Vec::new()),
             on_run: None,
         }
@@ -62,8 +67,8 @@ impl IsolatedExecutor for FakeExecutor {
             &artifacts.accesses,
             "fake",
             &self.observed_reads,
-            true,
-            None,
+            self.access_tracking_complete,
+            self.access_tracking_reason.clone(),
         )?;
         if let Some(hook) = &self.on_run {
             hook(spec)?;
