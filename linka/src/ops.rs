@@ -1626,6 +1626,22 @@ pub fn check_artifacts(store: &Store, vcs: &dyn Vcs) -> Result<Vec<String>> {
     let mut problems = check_workbench(store, vcs)?;
     for id in store.list_ids()? {
         if let Some((result, _)) = store.read_result(&id)? {
+            if let Some(artifact) = &result.output {
+                if artifact.scheme == "git-commit" {
+                    let reference = format!("refs/linka/outputs/{id}");
+                    match vcs.ref_commit(&reference)? {
+                        None => problems.push(format!(
+                            "{id}: output retention ref is missing for artifact {}",
+                            artifact.id
+                        )),
+                        Some(retained) if retained != artifact.id => problems.push(format!(
+                            "{id}: output retention ref points to {retained}, expected {}",
+                            artifact.id
+                        )),
+                        Some(_) => {}
+                    }
+                }
+            }
             for artifact in result
                 .output
                 .iter()
@@ -3085,6 +3101,54 @@ mod tests {
         let all = problems.join("\n");
         assert!(all.contains("store has uncommitted changes"), "{all}");
         assert!(all.contains("result.toml"), "{all}");
+    }
+
+    #[test]
+    fn check_artifacts_requires_the_exact_output_retention_ref() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs {
+            next_id: "output-commit".into(),
+            root: Some("0123456789abcdef0123456789abcdef01234567".into()),
+            ..Default::default()
+        };
+        pair(&store, &fake, None, false).unwrap();
+        let id = add(&store, &fake, new_node("a", vec![])).unwrap();
+        let snapshot = snapshot_work(&store, &fake, &id, &[]).unwrap();
+        capture_submission(
+            &store,
+            &fake,
+            snapshot,
+            &[path("out.txt")],
+            None,
+            Outcome::Done,
+            String::new(),
+            Author::Machine,
+            None,
+        )
+        .unwrap();
+
+        assert!(check_artifacts(&store, &fake).unwrap().is_empty());
+
+        let reference = format!("refs/linka/outputs/{id}");
+        fake.refs.borrow_mut().remove(&reference);
+        let problems = check_artifacts(&store, &fake).unwrap();
+        assert!(
+            problems
+                .iter()
+                .any(|problem| problem.contains("output retention ref is missing")),
+            "{problems:?}"
+        );
+
+        fake.refs
+            .borrow_mut()
+            .insert(reference, "different-commit".into());
+        let problems = check_artifacts(&store, &fake).unwrap();
+        assert!(
+            problems
+                .iter()
+                .any(|problem| problem.contains("points to different-commit")),
+            "{problems:?}"
+        );
     }
 
     #[test]

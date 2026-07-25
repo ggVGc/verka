@@ -152,8 +152,11 @@ impl ArtifactStore for FakeVcs {
         Ok(Some(self.next_id.clone()))
     }
 
-    fn retain_output(&self, _node: &str, commit: &str) -> Result<()> {
+    fn retain_output(&self, node: &str, commit: &str) -> Result<()> {
         self.commits.borrow_mut().insert(commit.to_string());
+        self.refs
+            .borrow_mut()
+            .insert(format!("refs/linka/outputs/{node}"), commit.to_string());
         Ok(())
     }
 
