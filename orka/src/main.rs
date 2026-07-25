@@ -537,7 +537,7 @@ fn run(cli: Cli) -> Result<()> {
                             println!("completed {verification} (already submitted)")
                         }
                         FinishOutcome::Conflict(conflicts) => {
-                            println!("stale {verification}: {conflicts:?}")
+                            bail!("stale {verification}: {conflicts:?}")
                         }
                     }
                 }
@@ -553,7 +553,7 @@ fn run(cli: Cli) -> Result<()> {
                             println!("abandoned {verification} (already submitted)")
                         }
                         AbandonOutcome::Conflict(conflicts) => {
-                            println!("stale {verification}: {conflicts:?}")
+                            bail!("stale {verification}: {conflicts:?}")
                         }
                     }
                 }

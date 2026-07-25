@@ -613,4 +613,32 @@ fn a_source_change_during_review_is_a_submission_conflict() {
         .read_result(started.record.verification.as_str())
         .unwrap()
         .is_none());
+
+    let cli = Command::new(env!("CARGO_BIN_EXE_orka"))
+        .args([
+            "--workbench",
+            root.to_str().unwrap(),
+            "review",
+            "finish",
+            started.record.verification.as_str(),
+            "--outcome",
+            "accepted",
+        ])
+        .output()
+        .unwrap();
+    assert!(!cli.status.success());
+    assert!(String::from_utf8_lossy(&cli.stderr).contains("stale"));
+
+    let abandon = Command::new(env!("CARGO_BIN_EXE_orka"))
+        .args([
+            "--workbench",
+            root.to_str().unwrap(),
+            "review",
+            "abandon",
+            started.record.verification.as_str(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!abandon.status.success());
+    assert!(String::from_utf8_lossy(&abandon.stderr).contains("stale"));
 }

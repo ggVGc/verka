@@ -1253,15 +1253,7 @@ fn execute_action(
                 summary,
                 author,
             )?;
-            Ok(ActionCompletion::normal(match result {
-                FinishOutcome::Submitted => format!("Completed {verification}"),
-                FinishOutcome::AlreadySubmitted => {
-                    format!("Completed {verification} (already submitted)")
-                }
-                FinishOutcome::Conflict(conflicts) => {
-                    format!("Stale {verification}: {conflicts:?}")
-                }
-            }))
+            Ok(finish_review_completion(&verification, result))
         }
         Action::AbandonReview => {
             let store = Store::open(root.join(".linka"))?;
@@ -1273,15 +1265,7 @@ fn execute_action(
             let author = parse_author(values.get(1).map(String::as_str).unwrap_or("human"))?;
             let result =
                 Reviews::new(&store, root.join(".orka")).abandon(&verification, notes, author)?;
-            Ok(ActionCompletion::normal(match result {
-                AbandonOutcome::Abandoned => format!("Abandoned {verification}"),
-                AbandonOutcome::AlreadyAbandoned => {
-                    format!("Abandoned {verification} (already submitted)")
-                }
-                AbandonOutcome::Conflict(conflicts) => {
-                    format!("Stale {verification}: {conflicts:?}")
-                }
-            }))
+            Ok(abandon_review_completion(&verification, result))
         }
         Action::Audit => {
             let store = Store::open(root.join(".linka"))?;
@@ -1344,6 +1328,30 @@ fn recovery_completion(reports: Vec<RecoveryReport>) -> ActionCompletion {
         ActionCompletion::requires_attention(message)
     } else {
         ActionCompletion::normal(message)
+    }
+}
+
+fn finish_review_completion(verification: &NodeId, outcome: FinishOutcome) -> ActionCompletion {
+    match outcome {
+        FinishOutcome::Submitted => ActionCompletion::normal(format!("Completed {verification}")),
+        FinishOutcome::AlreadySubmitted => {
+            ActionCompletion::normal(format!("Completed {verification} (already submitted)"))
+        }
+        FinishOutcome::Conflict(conflicts) => {
+            ActionCompletion::requires_attention(format!("Stale {verification}: {conflicts:?}"))
+        }
+    }
+}
+
+fn abandon_review_completion(verification: &NodeId, outcome: AbandonOutcome) -> ActionCompletion {
+    match outcome {
+        AbandonOutcome::Abandoned => ActionCompletion::normal(format!("Abandoned {verification}")),
+        AbandonOutcome::AlreadyAbandoned => {
+            ActionCompletion::normal(format!("Abandoned {verification} (already submitted)"))
+        }
+        AbandonOutcome::Conflict(conflicts) => {
+            ActionCompletion::requires_attention(format!("Stale {verification}: {conflicts:?}"))
+        }
     }
 }
 
@@ -1626,5 +1634,23 @@ mod tests {
 
         assert!(completion.requires_attention);
         assert!(completion.message.contains("unrecoverable"));
+    }
+
+    #[test]
+    fn stale_review_actions_require_attention() {
+        let verification: NodeId = "node-review".parse().unwrap();
+        let finish = finish_review_completion(
+            &verification,
+            FinishOutcome::Conflict(vec![linka::SubmissionConflict::DefinitionChanged]),
+        );
+        let abandon = abandon_review_completion(
+            &verification,
+            AbandonOutcome::Conflict(vec![linka::SubmissionConflict::ReadinessChanged]),
+        );
+
+        assert!(finish.requires_attention);
+        assert!(finish.message.starts_with("Stale node-review"));
+        assert!(abandon.requires_attention);
+        assert!(abandon.message.starts_with("Stale node-review"));
     }
 }
