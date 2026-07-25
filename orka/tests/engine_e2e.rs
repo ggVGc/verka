@@ -453,6 +453,129 @@ fn a_declared_success_with_uncommitted_changes_is_a_contract_violation() {
 }
 
 #[test]
+fn sandbox_git_admission_failure_prevents_agent_start_and_all_submission() {
+    let (_temp, root) = workbench();
+    let node = add_node(&root, "Agent must never start", vec![]);
+    let (store, workspaces, attempts) = parts(&root);
+    let executor = FakeExecutor {
+        workspace_access_error: Some("index.lock is read-only".into()),
+        ..Default::default()
+    };
+    let engine = engine!(&root, store, executor, workspaces, attempts);
+
+    let error = engine.run_node(&node.parse().unwrap()).unwrap_err();
+    assert!(format!("{error:#}").contains("workspace failed Orka admission"));
+    assert!(
+        executor.runs.borrow().is_empty(),
+        "agent command must not run after failed admission"
+    );
+    assert!(store.read_result(&node).unwrap().is_none());
+    let attempt = attempts.list().unwrap().into_iter().next().unwrap();
+    let snapshot = attempts.load(&attempt).unwrap();
+    assert!(matches!(
+        snapshot.seal.unwrap().state,
+        SealedState::WorkspaceIntegrityFailure { .. }
+    ));
+}
+
+#[test]
+fn replacing_git_with_a_clean_standalone_repository_is_an_integrity_failure() {
+    let (_temp, root) = workbench();
+    let project = root.join("project");
+    let node = add_node(&root, "Attempt repository replacement", vec![]);
+    let (store, workspaces, attempts) = parts(&root);
+    let executor = FakeExecutor {
+        on_run: Some(Box::new(|spec: &ExecutionSpec| {
+            let ws = mount(spec, "/tmp/orka/workspace");
+            std::fs::remove_file(ws.join(".git"))?;
+            git(ws, &["init", "-q"]);
+            git(ws, &["config", "user.name", "replacement"]);
+            git(ws, &["config", "user.email", "replacement@example.invalid"]);
+            std::fs::write(ws.join("unrelated.txt"), "not an Orka output\n")?;
+            git(ws, &["add", "-A"]);
+            git(ws, &["commit", "-q", "-m", "unrelated root"]);
+            std::fs::write(
+                mount(spec, "/tmp/orka/exchange").join("outcome.toml"),
+                "outcome = \"succeeded\"\nnotes = \"claims success\"\n",
+            )?;
+            Ok(())
+        })),
+        ..Default::default()
+    };
+    let engine = engine!(&root, store, executor, workspaces, attempts);
+
+    let report = engine.run_node(&node.parse().unwrap()).unwrap();
+    let SealedState::WorkspaceIntegrityFailure { reason } = &report.sealed else {
+        panic!(
+            "expected workspace integrity failure, got {:?}",
+            report.sealed
+        );
+    };
+    assert!(reason.contains("Git pointer"), "{reason}");
+    assert_eq!(report.cleanup, CleanupOutcome::RetainedIntegrityFailure);
+    assert!(
+        store.read_result(&node).unwrap().is_none(),
+        "agent declaration must not create a Linka result"
+    );
+    assert!(
+        git(
+            &project,
+            &[
+                "branch",
+                "--list",
+                &format!("orka/attempts/{}", report.attempt)
+            ]
+        )
+        .is_empty(),
+        "corrupt workspace must not create a project candidate branch"
+    );
+    assert!(
+        store
+            .read_node_attachment(&node, "orka", &format!("{}/agent-output", report.attempt),)
+            .unwrap()
+            .is_none(),
+        "corrupt workspace must not publish evidence attachments"
+    );
+}
+
+#[test]
+fn repository_corruption_overrides_a_declared_failure() {
+    let (_temp, root) = workbench();
+    let node = add_node(&root, "Failure cannot bless corruption", vec![]);
+    let (store, workspaces, attempts) = parts(&root);
+    let executor = FakeExecutor {
+        exit_code: 2,
+        on_run: Some(Box::new(|spec: &ExecutionSpec| {
+            let identity = spec
+                .mounts
+                .iter()
+                .find(|mount| mount.source.ends_with("orka-identity"))
+                .expect("identity mount")
+                .source
+                .clone();
+            std::fs::write(identity, "replaced\n")?;
+            std::fs::write(
+                mount(spec, "/tmp/orka/exchange").join("outcome.toml"),
+                "outcome = \"failed\"\nnotes = \"agent failure\"\n",
+            )?;
+            Ok(())
+        })),
+        ..Default::default()
+    };
+    let engine = engine!(&root, store, executor, workspaces, attempts);
+
+    let report = engine.run_node(&node.parse().unwrap()).unwrap();
+    assert!(matches!(
+        report.sealed,
+        SealedState::WorkspaceIntegrityFailure { .. }
+    ));
+    assert!(
+        store.read_result(&node).unwrap().is_none(),
+        "infrastructure corruption must not be recorded as a node failure"
+    );
+}
+
+#[test]
 fn a_declared_failure_is_recorded_as_evidence() {
     let (_temp, root) = workbench();
     let node = add_node(&root, "Doomed", vec![]);
@@ -772,6 +895,121 @@ fn recovery_after_linka_accepted_but_before_seal_recognizes_its_own_result() {
                 .iter()
                 .any(|pin| pin.path.as_str() == "input.txt" && pin.observed)
     }));
+}
+
+#[test]
+fn recovery_cannot_settle_an_executed_attempt_after_repository_replacement() {
+    let (_temp, root) = workbench();
+    let node = add_node(&root, "Corrupt before recovery", vec![]);
+    let (store, workspaces, attempts) = parts(&root);
+    let executor = FakeExecutor::default();
+    let engine = engine!(&root, store, executor, workspaces, attempts);
+
+    let id = AttemptId::new();
+    let input = LinkaWork::new(&store)
+        .prepare_input(&node.parse().unwrap())
+        .unwrap();
+    attempts.create(&id, &input).unwrap();
+    let ws = workspaces_prepare(&root, &id, input.input_commit());
+    attempts.plan_workspace(&id, &ws).unwrap();
+    attempts.mark_prepared(&id).unwrap();
+    let io = attempts.io_dir(&id).unwrap();
+    stage_recorded_execution(&attempts, &id, &io);
+    std::fs::write(
+        io.join("outcome.toml"),
+        "outcome = \"succeeded\"\nnotes = \"must not recover\"\n",
+    )
+    .unwrap();
+    std::fs::write(attempts.transcript_path(&id), "corrupt recovery\n").unwrap();
+    attempts
+        .record_evidence(
+            &id,
+            &ExecutionReport {
+                backend: "fake".into(),
+                exit_code: 0,
+                started_at_ms: 1,
+                finished_at_ms: 2,
+            },
+        )
+        .unwrap();
+    write_access_summary(&attempts.accesses_path(&id), "test", &[], true, None).unwrap();
+
+    std::fs::remove_file(ws.path.join(".git")).unwrap();
+    git(&ws.path, &["init", "-q"]);
+    git(&ws.path, &["config", "user.name", "replacement"]);
+    git(
+        &ws.path,
+        &["config", "user.email", "replacement@example.invalid"],
+    );
+    std::fs::write(ws.path.join("replacement.txt"), "unrelated\n").unwrap();
+    git(&ws.path, &["add", "-A"]);
+    git(&ws.path, &["commit", "-q", "-m", "replacement"]);
+
+    let reports = engine.recover().unwrap();
+    assert!(matches!(
+        reports[0].sealed,
+        Some(SealedState::WorkspaceIntegrityFailure { .. })
+    ));
+    assert!(store.read_result(&node).unwrap().is_none());
+    assert!(store
+        .read_node_attachment(&node, "orka", &format!("{id}/agent-output"))
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn a_git_checkpoint_error_cannot_complete_an_otherwise_clean_attempt() {
+    let (_temp, root) = workbench();
+    let node = add_node(&root, "Checkpoint failure", vec![]);
+    let (store, workspaces, attempts) = parts(&root);
+    let executor = FakeExecutor::default();
+    let engine = engine!(&root, store, executor, workspaces, attempts);
+
+    let id = AttemptId::new();
+    let input = LinkaWork::new(&store)
+        .prepare_input(&node.parse().unwrap())
+        .unwrap();
+    attempts.create(&id, &input).unwrap();
+    let ws = workspaces_prepare(&root, &id, input.input_commit());
+    attempts.plan_workspace(&id, &ws).unwrap();
+    attempts.mark_prepared(&id).unwrap();
+    let io = attempts.io_dir(&id).unwrap();
+    stage_recorded_execution(&attempts, &id, &io);
+    std::fs::write(
+        io.join("outcome.toml"),
+        "outcome = \"succeeded\"\nnotes = \"must not submit\"\n",
+    )
+    .unwrap();
+    std::fs::write(attempts.transcript_path(&id), "checkpoint failure\n").unwrap();
+    std::fs::write(
+        attempts.file_changes_path(&id),
+        "{\"schema\":1,\"sequence\":1,\"event_id\":\"change-1\",\
+         \"paths\":[\"out.txt\"],\"error\":\"index.lock was read-only\"}\n",
+    )
+    .unwrap();
+    attempts
+        .record_evidence(
+            &id,
+            &ExecutionReport {
+                backend: "fake".into(),
+                exit_code: 0,
+                started_at_ms: 1,
+                finished_at_ms: 2,
+            },
+        )
+        .unwrap();
+    write_access_summary(&attempts.accesses_path(&id), "test", &[], true, None).unwrap();
+
+    let reports = engine.recover().unwrap();
+    let Some(SealedState::WorkspaceIntegrityFailure { reason }) = &reports[0].sealed else {
+        panic!("checkpoint failure must seal as workspace integrity failure");
+    };
+    assert!(reason.contains("index.lock was read-only"), "{reason}");
+    assert!(store.read_result(&node).unwrap().is_none());
+    assert!(store
+        .read_node_attachment(&node, "orka", &format!("{id}/agent-output"))
+        .unwrap()
+        .is_none());
 }
 
 #[test]

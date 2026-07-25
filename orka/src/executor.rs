@@ -7,6 +7,7 @@
 //! and its harness-observed report are persisted verbatim in attempt records.
 
 use crate::agent::OutputFormat;
+use crate::workspace::PreparedWorkspace;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -85,6 +86,18 @@ pub struct ExecutionReport {
 
 /// Running a command with a concrete filesystem and network capability grant.
 pub trait IsolatedExecutor {
+    /// Prove that Git can perform the writes required for a commit through the
+    /// exact isolation grant that will be used for the agent. Production
+    /// executors run an Orka-owned probe; test doubles may rely on the host
+    /// workspace manager's structural validation.
+    fn validate_workspace_access(
+        &self,
+        _spec: &ExecutionSpec,
+        _workspace: &PreparedWorkspace,
+    ) -> Result<()> {
+        Ok(())
+    }
+
     /// Run the command to completion, streaming output to durable attempt
     /// artifacts. Driva only transports these streams; this adapter applies
     /// the Orka-selected agent protocol.

@@ -1199,8 +1199,45 @@ pub fn capture_execution_submission(
     }
     let output_commit = vcs.capture_worktree(&origin, &commit_message)?;
 
+    submit_captured_execution(
+        store,
+        vcs,
+        snapshot,
+        output_commit.as_deref(),
+        notes,
+        author,
+        producer,
+    )?;
+    Ok(output_commit)
+}
+
+/// Submit an execution output that an orchestrator has already captured and
+/// promoted into `vcs`. This split lets isolated runners keep attempt Git
+/// metadata private and import no object or ref into the project until their
+/// own postflight integrity checks have passed.
+pub fn submit_captured_execution(
+    store: &Store,
+    vcs: &dyn Vcs,
+    snapshot: WorkSnapshot,
+    output_commit: Option<&str>,
+    notes: String,
+    author: Author,
+    producer: Option<ProducerEvidence>,
+) -> std::result::Result<(), SubmissionError> {
+    let id = snapshot.node.as_str().to_string();
+    if store.read_node(&id)?.0.verifies.is_some() {
+        return Err(SubmissionError::Evaluation(anyhow::anyhow!(
+            "verification node `{id}` requires an accepted, rejected, or abandoned review result"
+        )));
+    }
+    if let Some(commit) = output_commit {
+        if !vcs.commit_exists(commit)? {
+            return Err(SubmissionError::Evaluation(anyhow::anyhow!(
+                "promoted execution output `{commit}` is missing from the project repository"
+            )));
+        }
+    }
     let output = output_commit
-        .as_deref()
         .map(|commit| git_artifact(store, commit))
         .transpose()?;
     submit_result(
@@ -1215,11 +1252,10 @@ pub fn capture_execution_submission(
             producer,
         },
     )?;
-    // Accepted: keep the output reachable independently of the worktree.
-    if let Some(commit) = &output_commit {
+    if let Some(commit) = output_commit {
         vcs.retain_output(&id, commit)?;
     }
-    Ok(output_commit)
+    Ok(())
 }
 
 /// The node whose work produced `commit`, if any — the inverse of the output

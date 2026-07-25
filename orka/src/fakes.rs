@@ -7,7 +7,9 @@
 
 use crate::access::write_access_summary;
 use crate::executor::{ExecutionArtifacts, ExecutionReport, ExecutionSpec, IsolatedExecutor};
-use crate::workspace::{CleanupOutcome, DiscardOutcome, PreparedWorkspace, WorkspaceManager};
+use crate::workspace::{
+    CleanupOutcome, DiscardOutcome, PreparedWorkspace, ValidatedWorkspace, WorkspaceManager,
+};
 use anyhow::{anyhow, Result};
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -19,6 +21,8 @@ use std::path::PathBuf;
 pub struct FakeExecutor {
     pub exit_code: i32,
     pub transcript: String,
+    /// Optional Orka-owned admission failure returned before `run`.
+    pub workspace_access_error: Option<String>,
     /// Project-relative reads to place in the durable access journal.
     pub observed_reads: Vec<String>,
     pub runs: RefCell<Vec<ExecutionSpec>>,
@@ -30,6 +34,7 @@ impl Default for FakeExecutor {
         Self {
             exit_code: 0,
             transcript: String::new(),
+            workspace_access_error: None,
             observed_reads: Vec::new(),
             runs: RefCell::new(Vec::new()),
             on_run: None,
@@ -38,6 +43,17 @@ impl Default for FakeExecutor {
 }
 
 impl IsolatedExecutor for FakeExecutor {
+    fn validate_workspace_access(
+        &self,
+        _spec: &ExecutionSpec,
+        _workspace: &PreparedWorkspace,
+    ) -> Result<()> {
+        match &self.workspace_access_error {
+            Some(message) => Err(anyhow!(message.clone())),
+            None => Ok(()),
+        }
+    }
+
     fn run(&self, spec: &ExecutionSpec, artifacts: &ExecutionArtifacts) -> Result<ExecutionReport> {
         std::fs::write(&artifacts.transcript, &self.transcript)?;
         std::fs::write(&artifacts.diagnostics, b"")?;
@@ -83,8 +99,10 @@ impl WorkspaceManager for FakeWorkspaces {
     fn plan(&self, attempt: &str, input_commit: &str) -> PreparedWorkspace {
         PreparedWorkspace {
             path: self.root.join(attempt),
+            git_dir: self.root.join(format!("{attempt}.git")),
             branch: format!("orka/attempts/{attempt}"),
             input_commit: input_commit.to_string(),
+            identity: format!("fake-{attempt}"),
         }
     }
 
@@ -107,6 +125,18 @@ impl WorkspaceManager for FakeWorkspaces {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
         Ok(!self.dirty.contains(&attempt))
+    }
+
+    fn validate(&self, workspace: &PreparedWorkspace) -> Result<ValidatedWorkspace> {
+        Ok(ValidatedWorkspace {
+            workspace: workspace.clone(),
+            head: workspace.input_commit.clone(),
+            tree: String::new(),
+        })
+    }
+
+    fn promote(&self, _workspace: &ValidatedWorkspace, _commit: &str) -> Result<()> {
+        Ok(())
     }
 
     fn cleanup(&self, workspace: &PreparedWorkspace) -> Result<CleanupOutcome> {

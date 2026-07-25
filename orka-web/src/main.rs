@@ -563,6 +563,7 @@ fn sealed_state_label(state: &SealedState) -> &'static str {
         SealedState::StaleAtSubmit { .. } => "stale_at_submit",
         SealedState::FailureRecorded => "failure_recorded",
         SealedState::Interrupted { .. } => "interrupted",
+        SealedState::WorkspaceIntegrityFailure { .. } => "workspace_integrity_failure",
         SealedState::ContractViolation { .. } => "contract_violation",
     }
 }
@@ -571,9 +572,9 @@ fn sealed_state_detail(state: &SealedState) -> Option<Value> {
     match state {
         SealedState::Submitted { output_commit } => output_commit.clone().map(Value::String),
         SealedState::StaleAtSubmit { conflicts } => Some(json!(conflicts)),
-        SealedState::Interrupted { reason } | SealedState::ContractViolation { reason } => {
-            Some(Value::String(reason.clone()))
-        }
+        SealedState::Interrupted { reason }
+        | SealedState::WorkspaceIntegrityFailure { reason }
+        | SealedState::ContractViolation { reason } => Some(Value::String(reason.clone())),
         SealedState::FailureRecorded => None,
     }
 }

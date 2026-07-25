@@ -18,6 +18,7 @@ use crate::attempt::{AttemptId, AttemptPhase, FsAttemptStore, SealedState};
 use crate::executor::{
     ExecutionArtifacts, ExecutionReport, ExecutionSpec, IsolatedExecutor, MountSpec,
 };
+use crate::file_changes::read_checkpoints;
 use crate::input::AttemptInput;
 use crate::linka_work::{self, AttemptEvidencePart, LinkaWork, Settled};
 use crate::outcome::{self, AgentOutcome, Decision, OUTCOME_FILE, PROMPT_FILE};
@@ -34,7 +35,7 @@ use std::path::PathBuf;
 pub struct ExecutionPolicy {
     pub command: Vec<String>,
     pub protocol: OutputFormat,
-    /// Where the attempt worktree appears inside the environment.
+    /// Where the attempt file tree appears inside the environment.
     pub workspace_destination: PathBuf,
     /// Where the exchange directory (prompt in, outcome out) appears.
     pub io_destination: PathBuf,
@@ -176,6 +177,34 @@ impl Engine<'_> {
         std::fs::write(io_dir.join(PROMPT_FILE), build_prompt(&input, &self.policy))
             .context("writing the attempt prompt")?;
         let spec = self.execution_spec(id, &workspace, &io_dir);
+        // Admission is entirely Orka-owned. First attest the host repository,
+        // then prove through the exact sandbox grant that its index, object
+        // store, and private refs are writable. An agent is never launched
+        // when Git cannot satisfy the contract.
+        if let Err(error) = self
+            .workspaces
+            .validate(&workspace)
+            .and_then(|_| {
+                if self.workspaces.is_clean(&workspace)? {
+                    Ok(())
+                } else {
+                    bail!("freshly prepared workspace is not clean")
+                }
+            })
+            .and_then(|_| self.executor.validate_workspace_access(&spec, &workspace))
+        {
+            let state = SealedState::WorkspaceIntegrityFailure {
+                reason: format!("workspace admission failed: {error:#}"),
+            };
+            self.attempts.seal(&attempt, state.clone())?;
+            progress(&RunProgress::Sealed {
+                attempt: attempt.clone(),
+                state,
+            });
+            return Err(error.context(format!(
+                "refusing to start {attempt}: workspace failed Orka admission"
+            )));
+        }
         self.attempts.record_request(&attempt, &spec)?;
 
         // 5. Execute and capture evidence.
@@ -189,6 +218,21 @@ impl Engine<'_> {
         let report = match self.executor.run(&spec, &artifacts) {
             Ok(report) => report,
             Err(error) => {
+                if let Err(integrity) = self.workspaces.validate(&workspace) {
+                    let state = SealedState::WorkspaceIntegrityFailure {
+                        reason: format!(
+                            "execution failed and workspace postflight failed: {integrity:#}"
+                        ),
+                    };
+                    self.attempts.seal(&attempt, state.clone())?;
+                    progress(&RunProgress::Sealed {
+                        attempt: attempt.clone(),
+                        state,
+                    });
+                    return Err(error.context(format!(
+                        "attempt {attempt} damaged its execution repository: {integrity:#}"
+                    )));
+                }
                 // No exit evidence exists, so this attempt can never be
                 // submitted. If nothing changed, roll the allocation back
                 // completely instead of accumulating empty attempt records
@@ -285,6 +329,26 @@ impl Engine<'_> {
                 destination: self.policy.workspace_destination.clone(),
                 writable: true,
             },
+            // Private Git metadata is the only repository state writable by
+            // the agent. It is deliberately not the project's shared `.git`.
+            MountSpec {
+                source: workspace.git_dir.clone(),
+                destination: workspace.git_dir.clone(),
+                writable: true,
+            },
+            // Overlay the mutable workspace bind with immutable repository
+            // identity anchors. This prevents deleting `.git` and replacing
+            // the attempt with an unrelated `git init`.
+            MountSpec {
+                source: workspace.path.join(".git"),
+                destination: self.policy.workspace_destination.join(".git"),
+                writable: false,
+            },
+            MountSpec {
+                source: workspace.git_dir.join("orka-identity"),
+                destination: workspace.git_dir.join("orka-identity"),
+                writable: false,
+            },
             MountSpec {
                 source: io_dir.to_path_buf(),
                 destination: self.policy.io_destination.clone(),
@@ -334,6 +398,32 @@ impl Engine<'_> {
         report: &ExecutionReport,
     ) -> Result<(SealedState, bool, Option<linka::CandidateId>)> {
         let access_summary = read_access_summary(&self.attempts.accesses_path(attempt))?;
+        let validated = match self.workspaces.validate(workspace) {
+            Ok(validated) => validated,
+            Err(error) => {
+                // Repository identity outranks every agent declaration,
+                // including a declared failure. No Linka attachment, result,
+                // candidate, or project commit is allowed from this attempt.
+                let sealed = SealedState::WorkspaceIntegrityFailure {
+                    reason: format!("workspace postflight failed: {error:#}"),
+                };
+                self.attempts.seal(attempt, sealed.clone())?;
+                return Ok((sealed, false, None));
+            }
+        };
+        let checkpoint_journal = self.attempts.file_changes_path(attempt);
+        if checkpoint_journal.is_file() {
+            if let Some(error) = read_checkpoints(&checkpoint_journal)?
+                .into_iter()
+                .find_map(|checkpoint| checkpoint.error)
+            {
+                let sealed = SealedState::WorkspaceIntegrityFailure {
+                    reason: format!("Git checkpoint integrity failed: {error}"),
+                };
+                self.attempts.seal(attempt, sealed.clone())?;
+                return Ok((sealed, false, None));
+            }
+        }
         let declared = outcome::read_declared(&self.attempts.io_dir(attempt)?)?;
         let mut decision = outcome::decide(declared, report.exit_code);
         // The agent is required to commit all its work: a declared success
@@ -353,18 +443,14 @@ impl Engine<'_> {
                 };
             }
         }
-        if matches!(
+        let successful_declaration = matches!(
             &decision,
             Decision::Submit {
                 outcome: AgentOutcome::Succeeded { .. },
                 ..
             }
-        ) {
-            // A successful output is never submitted until its full audit
-            // evidence is already committed to Linka. Recovery retries the
-            // same immutable batch after any crash.
-            self.attach_output_evidence(input.node(), attempt)?;
-        } else {
+        );
+        if !successful_declaration {
             let (path, media_type) = self.agent_output_source(attempt)?;
             self.linka
                 .attach_agent_output(input.node(), attempt, &path, media_type)?;
@@ -427,7 +513,14 @@ impl Engine<'_> {
                             );
                         }
                         let (settled, candidate) = self.linka.submit_candidate_success(
-                            input, workspace, attempt, message, notes, producer,
+                            input,
+                            &validated,
+                            self.workspaces,
+                            attempt,
+                            message,
+                            notes,
+                            producer,
+                            &mut || self.attach_output_evidence(input.node(), attempt),
                         )?;
                         (settled, true, candidate)
                     }
@@ -609,6 +702,30 @@ impl Engine<'_> {
                 | AttemptPhase::WorkspacePlanned
                 | AttemptPhase::Prepared
                 | AttemptPhase::Requested => {
+                    if let Some(workspace) = snapshot.workspace.as_ref() {
+                        if workspace.path.exists() {
+                            if let Err(error) = self.workspaces.validate(workspace) {
+                                let sealed = self.attempts.seal(
+                                    &id,
+                                    SealedState::WorkspaceIntegrityFailure {
+                                        reason: format!(
+                                            "recovery workspace validation failed: {error:#}"
+                                        ),
+                                    },
+                                )?;
+                                reports.push(RecoveryReport {
+                                    attempt: id,
+                                    node,
+                                    action: format!(
+                                        "sealed as workspace integrity failure; retained {}",
+                                        workspace.path.display()
+                                    ),
+                                    sealed: Some(sealed.state),
+                                });
+                                continue;
+                            }
+                        }
+                    }
                     if self.discard_unchanged_attempt(&id, snapshot.workspace.as_ref())? {
                         RecoveryReport {
                             attempt: id,
@@ -664,6 +781,18 @@ impl Engine<'_> {
                 CleanupOutcome::RetainedDirty => {
                     format!(
                         "workspace retained (uncommitted changes): {}",
+                        ws.path.display()
+                    )
+                }
+                CleanupOutcome::RetainedUnpublished => {
+                    format!(
+                        "workspace retained (committed work was not published): {}",
+                        ws.path.display()
+                    )
+                }
+                CleanupOutcome::RetainedIntegrityFailure => {
+                    format!(
+                        "workspace retained (repository integrity failure): {}",
                         ws.path.display()
                     )
                 }

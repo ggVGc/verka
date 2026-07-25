@@ -1,13 +1,12 @@
-//! Per-attempt execution workspaces: linked git worktrees on candidate
-//! branches.
+//! Per-attempt execution workspaces with private Git repositories.
 //!
 //! Orka owns workspace *policy* — where trees live, how branches are named,
 //! when they may be removed — and the git mechanics that implement it. Each
-//! attempt gets a fresh worktree anchored to its frozen input commit, so the
+//! attempt gets a fresh repository anchored to its frozen input commit, so the
 //! user's checkout, branch, index, and uncommitted changes are never touched,
-//! and concurrent attempts share no writable state. The candidate branch (and
-//! the output ref Linka retains on completion) outlives worktree cleanup, so
-//! recorded output commits stay reachable.
+//! and concurrent attempts share no writable Git state. Only after Orka
+//! validates the final repository does it import the output and candidate
+//! branch into the project.
 //!
 //! Substituting a different workspace mechanism is genuinely useful (a plain
 //! copy, an overlay, a remote checkout), so this stays a narrow Orka-owned
@@ -22,9 +21,26 @@ use std::process::Command;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PreparedWorkspace {
     pub path: PathBuf,
+    /// Private Git metadata for this attempt. It is mounted writable into the
+    /// sandbox without granting access to the project's shared `.git`.
+    #[serde(default)]
+    pub git_dir: PathBuf,
     /// The candidate branch the workspace is checked out on.
     pub branch: String,
     pub input_commit: String,
+    /// Orka-minted identity stored in the private Git directory.
+    #[serde(default)]
+    pub identity: String,
+}
+
+/// A workspace whose repository identity has been independently attested by
+/// Orka. Submission APIs require this type so a merely clean directory cannot
+/// be mistaken for the attempt repository.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ValidatedWorkspace {
+    pub workspace: PreparedWorkspace,
+    pub head: String,
+    pub tree: String,
 }
 
 /// What cleanup observed. A dirty workspace is retained, never discarded.
@@ -33,13 +49,15 @@ pub struct PreparedWorkspace {
 pub enum CleanupOutcome {
     Removed,
     RetainedDirty,
+    RetainedUnpublished,
+    RetainedIntegrityFailure,
     AlreadyAbsent,
 }
 
 /// Whether an unexecuted workspace could be rolled back without losing work.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DiscardOutcome {
-    /// The worktree and its candidate branch were both removed.
+    /// The private repository was removed before anything was promoted.
     Discarded,
     /// The worktree is dirty or its branch has commits beyond the input.
     RetainedChanged,
@@ -51,8 +69,8 @@ pub trait WorkspaceManager {
     /// can be durably recorded before anything is created.
     fn plan(&self, attempt: &str, input_commit: &str) -> PreparedWorkspace;
 
-    /// Create a fresh working tree at `input_commit` on a candidate branch
-    /// named for `attempt`. Fails if the workspace already exists.
+    /// Create a fresh private repository at `input_commit` on a candidate
+    /// branch named for `attempt`. Fails if the workspace already exists.
     fn prepare(&self, attempt: &str, input_commit: &str) -> Result<PreparedWorkspace>;
 
     /// Whether the worktree has no uncommitted changes. A coding agent is
@@ -60,28 +78,47 @@ pub trait WorkspaceManager {
     /// the agent left work uncaptured and the attempt is rejected.
     fn is_clean(&self, workspace: &PreparedWorkspace) -> Result<bool>;
 
+    /// Verify that this is still the exact repository Orka prepared. This is
+    /// structural validation, independent of anything the agent declared.
+    fn validate(&self, workspace: &PreparedWorkspace) -> Result<ValidatedWorkspace>;
+
+    /// Import a validated output into the project repository and advance only
+    /// this attempt's candidate branch. No project object or ref is written
+    /// before postflight validation succeeds.
+    fn promote(&self, workspace: &ValidatedWorkspace, commit: &str) -> Result<()>;
+
     /// Remove a workspace whose attempt is sealed. Refuses to discard
     /// uncommitted changes, reporting `RetainedDirty` instead.
     fn cleanup(&self, workspace: &PreparedWorkspace) -> Result<CleanupOutcome>;
 
     /// Roll back an attempt that produced no exit evidence. Removes both the
-    /// worktree and candidate branch only when they still exactly match the
-    /// frozen input; otherwise retains them for inspection.
+    /// workspace and private repository only when they still exactly match
+    /// the frozen input; otherwise retains them for inspection.
     fn discard_unchanged(&self, workspace: &PreparedWorkspace) -> Result<DiscardOutcome>;
 }
 
 pub struct GitWorkspaces {
-    /// The project repository worktrees are linked to.
+    /// The project repository used as immutable preparation input and as the
+    /// destination for validated output promotion.
     project: PathBuf,
-    /// Where attempt worktrees are created (e.g. `<workbench>/.orka/worktrees`).
+    /// Where attempt file trees are created (e.g. `<workbench>/.orka/worktrees`).
     root: PathBuf,
+    /// Private per-attempt Git repositories, kept outside the writable file
+    /// tree so `.git` can be mounted read-only over the workspace bind.
+    git_root: PathBuf,
 }
 
 impl GitWorkspaces {
     pub fn new(project: impl Into<PathBuf>, root: impl Into<PathBuf>) -> Self {
+        let root = root.into();
+        let git_root = root
+            .parent()
+            .map(|parent| parent.join("gitdirs"))
+            .unwrap_or_else(|| PathBuf::from("gitdirs"));
         Self {
             project: project.into(),
-            root: root.into(),
+            root,
+            git_root,
         }
     }
 
@@ -92,68 +129,135 @@ impl GitWorkspaces {
     pub fn path_for(&self, attempt: &str) -> PathBuf {
         self.root.join(attempt)
     }
+
+    pub fn git_dir_for(&self, attempt: &str) -> PathBuf {
+        self.git_root.join(attempt)
+    }
 }
 
 impl WorkspaceManager for GitWorkspaces {
     fn plan(&self, attempt: &str, input_commit: &str) -> PreparedWorkspace {
         PreparedWorkspace {
             path: self.path_for(attempt),
+            git_dir: self.git_dir_for(attempt),
             branch: Self::branch_for(attempt),
             input_commit: input_commit.to_string(),
+            identity: format!("orka-workspace-{attempt}"),
         }
     }
 
     fn prepare(&self, attempt: &str, input_commit: &str) -> Result<PreparedWorkspace> {
-        let branch = Self::branch_for(attempt);
-        let path = self.path_for(attempt);
-        // `create_worktree` refuses an existing path, refuses an existing
-        // branch at a different commit, and reuses a branch already at the
-        // input commit — exactly the recovery semantics we want when a crash
-        // left the branch but not the tree.
-        create_worktree(&self.project, path, &branch, input_commit)
+        let planned = self.plan(attempt, input_commit);
+        create_workspace(&self.project, planned)
             .with_context(|| format!("preparing workspace for {attempt}"))
     }
 
     fn is_clean(&self, workspace: &PreparedWorkspace) -> Result<bool> {
+        self.validate(workspace)?;
         worktree_clean(&workspace.path)
+    }
+
+    fn validate(&self, workspace: &PreparedWorkspace) -> Result<ValidatedWorkspace> {
+        validate_workspace(workspace)
+    }
+
+    fn promote(&self, workspace: &ValidatedWorkspace, commit: &str) -> Result<()> {
+        if workspace.head != commit {
+            bail!(
+                "refusing to promote commit {commit}: validated workspace HEAD is {}",
+                workspace.head
+            );
+        }
+        let private_ref = format!("refs/heads/{}", workspace.workspace.branch);
+        if checked(&workspace.workspace.path, &["rev-parse", &private_ref])? != commit {
+            bail!(
+                "refusing to promote commit {commit}: private attempt branch moved after validation"
+            );
+        }
+
+        // Refuse a conflicting candidate before importing even unreachable
+        // objects. A recovery retry that observes the same commit is
+        // idempotent.
+        let branch_ref = format!("refs/heads/{}", workspace.workspace.branch);
+        match resolve_ref_optional(&self.project, &branch_ref)? {
+            Some(existing) if existing == commit => Ok(()),
+            Some(existing) => bail!(
+                "candidate branch `{}` already exists at {existing}, refusing to replace it with {commit}",
+                workspace.workspace.branch
+            ),
+            None => {
+                // Fetch objects without naming a destination ref, then advance
+                // the candidate with compare-and-swap semantics.
+                let git_dir = workspace.workspace.git_dir.to_string_lossy().into_owned();
+                checked(
+                    &self.project,
+                    &[
+                        "fetch",
+                        "--no-write-fetch-head",
+                        "--no-tags",
+                        &git_dir,
+                        &private_ref,
+                    ],
+                )?;
+                let zero = zero_oid(&self.project)?;
+                checked(&self.project, &["update-ref", &branch_ref, commit, &zero])?;
+                Ok(())
+            }
+        }
     }
 
     fn cleanup(&self, workspace: &PreparedWorkspace) -> Result<CleanupOutcome> {
         if !workspace.path.exists() {
-            // The tree is gone (crash, manual removal): drop its stale
-            // registration so the path can be reused.
-            let _ = Command::new("git")
-                .arg("-C")
-                .arg(&self.project)
-                .args(["worktree", "prune"])
-                .status();
-            return Ok(CleanupOutcome::AlreadyAbsent);
+            return Ok(if workspace.git_dir.exists() {
+                CleanupOutcome::RetainedIntegrityFailure
+            } else {
+                CleanupOutcome::AlreadyAbsent
+            });
         }
+        let validated = match self.validate(workspace) {
+            Ok(validated) => validated,
+            Err(_) => return Ok(CleanupOutcome::RetainedIntegrityFailure),
+        };
         if !worktree_clean(&workspace.path)? {
             return Ok(CleanupOutcome::RetainedDirty);
         }
-        // Remove only the checked-out worktree. The candidate branch is
-        // durable attempt evidence for accepted, failed, and stale attempts;
-        // ordinary cleanup never deletes it. Branch removal belongs to a
-        // future explicit pruning policy coordinated with attempt retention.
-        remove_worktree(&self.project, &workspace.path)?;
+        if validated.head != workspace.input_commit {
+            let branch_ref = format!("refs/heads/{}", workspace.branch);
+            if resolve_ref_optional(&self.project, &branch_ref)?.as_deref()
+                != Some(validated.head.as_str())
+            {
+                return Ok(CleanupOutcome::RetainedUnpublished);
+            }
+        }
+        std::fs::remove_dir_all(&workspace.path)
+            .with_context(|| format!("removing workspace {}", workspace.path.display()))?;
+        std::fs::remove_dir_all(&workspace.git_dir).with_context(|| {
+            format!(
+                "removing private Git directory {}",
+                workspace.git_dir.display()
+            )
+        })?;
         Ok(CleanupOutcome::Removed)
     }
 
     fn discard_unchanged(&self, workspace: &PreparedWorkspace) -> Result<DiscardOutcome> {
         if workspace.path.exists() {
-            if !worktree_clean(&workspace.path)?
+            if self.validate(workspace).is_err()
+                || !worktree_clean(&workspace.path)?
                 || checked(&workspace.path, &["rev-parse", "HEAD"])? != workspace.input_commit
             {
                 return Ok(DiscardOutcome::RetainedChanged);
             }
-            remove_worktree(&self.project, &workspace.path)?;
-        } else {
-            let _ = Command::new("git")
-                .arg("-C")
-                .arg(&self.project)
-                .args(["worktree", "prune"])
-                .status();
+            std::fs::remove_dir_all(&workspace.path)
+                .with_context(|| format!("removing workspace {}", workspace.path.display()))?;
+            if workspace.git_dir.exists() {
+                std::fs::remove_dir_all(&workspace.git_dir).with_context(|| {
+                    format!(
+                        "removing private Git directory {}",
+                        workspace.git_dir.display()
+                    )
+                })?;
+            }
         }
 
         let branch_ref = format!("refs/heads/{}", workspace.branch);
@@ -175,57 +279,240 @@ impl WorkspaceManager for GitWorkspaces {
 
 // --- git worktree mechanics --------------------------------------------------
 
-/// Create a linked worktree at `path` on a candidate `branch` anchored to
-/// `rev`. Reuses `branch` when it already sits at the same commit (crash
-/// recovery); refuses it when it has moved, so an attempt never silently
-/// re-anchors.
-fn create_worktree(
-    project: &Path,
-    path: PathBuf,
-    branch: &str,
-    rev: &str,
-) -> Result<PreparedWorkspace> {
+/// Create a self-contained attempt repository. The project is input only:
+/// `--no-hardlinks` ensures even the object store is private.
+fn create_workspace(project: &Path, workspace: PreparedWorkspace) -> Result<PreparedWorkspace> {
     let input_commit = checked(
         project,
-        &["rev-parse", "--verify", &format!("{rev}^{{commit}}")],
+        &[
+            "rev-parse",
+            "--verify",
+            &format!("{}^{{commit}}", workspace.input_commit),
+        ],
     )?;
-    if path.exists() {
-        bail!("execution worktree path already exists: {}", path.display());
+    if workspace.path.exists() {
+        bail!(
+            "execution workspace path already exists: {}",
+            workspace.path.display()
+        );
     }
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("creating worktree directory {}", parent.display()))?;
-    }
-    let path_arg = path.to_string_lossy().into_owned();
-    checked(project, &["check-ref-format", "--branch", branch])?;
-    let branch_ref = format!("refs/heads/{branch}");
-    if let Ok(existing) = checked(project, &["rev-parse", "--verify", &branch_ref]) {
-        if existing != input_commit {
-            bail!("candidate branch `{branch}` exists at {existing}, expected {input_commit}");
+    if workspace.git_dir.exists() {
+        // A crash may remove the file tree after leaving the private
+        // repository behind. Recreate only when its immutable identity,
+        // branch, and HEAD still exactly match the frozen input.
+        let identity = std::fs::read_to_string(workspace.git_dir.join("orka-identity"))
+            .context("reading retained private workspace identity")?;
+        let git_dir_arg = workspace.git_dir.to_string_lossy().into_owned();
+        let retained_head = checked_git_dir(&git_dir_arg, &["rev-parse", "HEAD"])?;
+        let retained_branch = checked_git_dir(&git_dir_arg, &["symbolic-ref", "--quiet", "HEAD"])?;
+        if identity.trim() != workspace.identity
+            || retained_head != input_commit
+            || retained_branch != format!("refs/heads/{}", workspace.branch)
+        {
+            bail!(
+                "retained private Git directory does not match unchanged attempt {}",
+                workspace.identity
+            );
         }
-        checked(project, &["worktree", "add", &path_arg, branch])?;
-    } else {
-        checked(
-            project,
-            &["worktree", "add", "-b", branch, &path_arg, &input_commit],
-        )?;
+        std::fs::remove_dir_all(&workspace.git_dir).with_context(|| {
+            format!(
+                "removing unchanged retained Git directory {}",
+                workspace.git_dir.display()
+            )
+        })?;
     }
-    Ok(PreparedWorkspace {
-        path,
-        branch: branch.to_string(),
-        input_commit,
+    if let Some(parent) = workspace.path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating workspace directory {}", parent.display()))?;
+    }
+    if let Some(parent) = workspace.git_dir.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating Git directory root {}", parent.display()))?;
+    }
+    checked(
+        project,
+        &["check-ref-format", "--branch", &workspace.branch],
+    )?;
+
+    let project_arg = project.to_string_lossy().into_owned();
+    let path_arg = workspace.path.to_string_lossy().into_owned();
+    let git_dir_arg = workspace.git_dir.to_string_lossy().into_owned();
+    let out = Command::new("git")
+        .args([
+            "clone",
+            "--quiet",
+            "--no-checkout",
+            "--no-hardlinks",
+            "--separate-git-dir",
+            &git_dir_arg,
+            &project_arg,
+            &path_arg,
+        ])
+        .output()
+        .context("running private workspace clone")?;
+    if !out.status.success() {
+        bail!(
+            "private workspace clone failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    checked(
+        &workspace.path,
+        &[
+            "checkout",
+            "--quiet",
+            "-b",
+            &workspace.branch,
+            &input_commit,
+        ],
+    )?;
+    checked(&workspace.path, &["config", "user.name", "Orka Agent"])?;
+    checked(
+        &workspace.path,
+        &["config", "user.email", "orka-agent@localhost"],
+    )?;
+    std::fs::write(
+        workspace.git_dir.join("orka-identity"),
+        format!("{}\n", workspace.identity),
+    )
+    .with_context(|| {
+        format!(
+            "writing workspace identity {}",
+            workspace.git_dir.join("orka-identity").display()
+        )
+    })?;
+    validate_workspace(&workspace)?;
+    Ok(workspace)
+}
+
+fn validate_workspace(workspace: &PreparedWorkspace) -> Result<ValidatedWorkspace> {
+    if workspace.git_dir.as_os_str().is_empty() || workspace.identity.is_empty() {
+        bail!("workspace record has no private Git identity");
+    }
+    let pointer_path = workspace.path.join(".git");
+    let pointer_metadata = std::fs::symlink_metadata(&pointer_path)
+        .with_context(|| format!("inspecting Git pointer {}", pointer_path.display()))?;
+    if !pointer_metadata.file_type().is_file() || pointer_metadata.file_type().is_symlink() {
+        bail!(
+            "workspace Git pointer {} is not the regular file Orka prepared",
+            pointer_path.display()
+        );
+    }
+    let pointer = std::fs::read_to_string(&pointer_path)
+        .with_context(|| format!("reading Git pointer {}", pointer_path.display()))?;
+    let pointer_target = pointer
+        .trim()
+        .strip_prefix("gitdir:")
+        .map(str::trim)
+        .filter(|target| !target.is_empty())
+        .context("workspace Git pointer has invalid contents")?;
+    let expected_path = workspace
+        .path
+        .canonicalize()
+        .with_context(|| format!("canonicalising workspace {}", workspace.path.display()))?;
+    let top = PathBuf::from(checked(&workspace.path, &["rev-parse", "--show-toplevel"])?)
+        .canonicalize()
+        .context("canonicalising reported Git worktree root")?;
+    if top != expected_path {
+        bail!(
+            "workspace repository root changed: expected {}, observed {}",
+            expected_path.display(),
+            top.display()
+        );
+    }
+
+    let expected_git_dir = workspace.git_dir.canonicalize().with_context(|| {
+        format!(
+            "canonicalising private Git directory {}",
+            workspace.git_dir.display()
+        )
+    })?;
+    let observed_pointer = PathBuf::from(pointer_target)
+        .canonicalize()
+        .context("canonicalising workspace Git pointer target")?;
+    if observed_pointer != expected_git_dir {
+        bail!(
+            "workspace Git pointer changed: expected {}, observed {}",
+            expected_git_dir.display(),
+            observed_pointer.display()
+        );
+    }
+    for (label, argument) in [
+        ("Git directory", "--absolute-git-dir"),
+        ("Git common directory", "--git-common-dir"),
+    ] {
+        let observed = PathBuf::from(checked(&workspace.path, &["rev-parse", argument])?)
+            .canonicalize()
+            .with_context(|| format!("canonicalising reported {label}"))?;
+        if observed != expected_git_dir {
+            bail!(
+                "workspace {label} changed: expected {}, observed {}",
+                expected_git_dir.display(),
+                observed.display()
+            );
+        }
+    }
+
+    let identity = std::fs::read_to_string(workspace.git_dir.join("orka-identity"))
+        .context("reading private workspace identity")?;
+    if identity.trim() != workspace.identity {
+        bail!("private workspace identity changed");
+    }
+    let branch_ref = format!("refs/heads/{}", workspace.branch);
+    for lock in [
+        workspace.git_dir.join("index.lock"),
+        workspace.git_dir.join("HEAD.lock"),
+        workspace
+            .git_dir
+            .join(format!("refs/heads/{}.lock", workspace.branch)),
+    ] {
+        if lock.exists() {
+            bail!("workspace has a lingering Git lock: {}", lock.display());
+        }
+    }
+    if checked(&workspace.path, &["symbolic-ref", "--quiet", "HEAD"])? != branch_ref {
+        bail!("workspace is not on its expected attempt branch `{branch_ref}`");
+    }
+    let head = checked(&workspace.path, &["rev-parse", "HEAD"])?;
+    if checked(&workspace.path, &["rev-parse", &branch_ref])? != head {
+        bail!("workspace HEAD and attempt branch disagree");
+    }
+    checked(
+        &workspace.path,
+        &[
+            "rev-parse",
+            "--verify",
+            &format!("{}^{{commit}}", workspace.input_commit),
+        ],
+    )
+    .context("frozen input commit is missing from private workspace")?;
+    let ancestor = Command::new("git")
+        .arg("-C")
+        .arg(&workspace.path)
+        .args([
+            "merge-base",
+            "--is-ancestor",
+            &workspace.input_commit,
+            &head,
+        ])
+        .status()
+        .context("checking private workspace ancestry")?;
+    if !ancestor.success() {
+        bail!("workspace HEAD no longer descends from the frozen input commit");
+    }
+    checked(&workspace.path, &["fsck", "--connectivity-only", &head])
+        .context("private workspace object graph is corrupt")?;
+    let tree = checked(&workspace.path, &["rev-parse", &format!("{head}^{{tree}}")])?;
+    Ok(ValidatedWorkspace {
+        workspace: workspace.clone(),
+        head,
+        tree,
     })
 }
 
 /// Whether a worktree has no uncommitted changes.
 fn worktree_clean(path: &Path) -> Result<bool> {
     Ok(checked(path, &["status", "--porcelain"])?.is_empty())
-}
-
-fn remove_worktree(project: &Path, path: &Path) -> Result<()> {
-    let path_arg = path.to_string_lossy().into_owned();
-    checked(project, &["worktree", "remove", &path_arg])?;
-    Ok(())
 }
 
 fn resolve_ref_optional(project: &Path, reference: &str) -> Result<Option<String>> {
@@ -249,6 +536,15 @@ fn resolve_ref_optional(project: &Path, reference: &str) -> Result<Option<String
     )
 }
 
+fn zero_oid(project: &Path) -> Result<String> {
+    let format = checked(project, &["rev-parse", "--show-object-format"])?;
+    match format.as_str() {
+        "sha1" => Ok("0".repeat(40)),
+        "sha256" => Ok("0".repeat(64)),
+        other => bail!("unsupported Git object format `{other}`"),
+    }
+}
+
 /// Run a git command, returning trimmed stdout or an error carrying stderr.
 fn checked(base: &Path, args: &[&str]) -> Result<String> {
     let out = Command::new("git")
@@ -260,6 +556,22 @@ fn checked(base: &Path, args: &[&str]) -> Result<String> {
     if !out.status.success() {
         bail!(
             "`git {}` failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+fn checked_git_dir(git_dir: &str, args: &[&str]) -> Result<String> {
+    let out = Command::new("git")
+        .args(["--git-dir", git_dir])
+        .args(args)
+        .output()
+        .with_context(|| format!("failed to run private `git {}`", args.join(" ")))?;
+    if !out.status.success() {
+        bail!(
+            "private `git {}` failed: {}",
             args.join(" "),
             String::from_utf8_lossy(&out.stderr).trim()
         );
@@ -347,6 +659,8 @@ mod tests {
         git(&ws.path, &["add", "out.txt"]);
         git(&ws.path, &["commit", "-q", "-m", "output"]);
         let output = git(&ws.path, &["rev-parse", "HEAD"]);
+        let validated = manager.validate(&ws).unwrap();
+        manager.promote(&validated, &output).unwrap();
 
         assert_eq!(manager.cleanup(&ws).unwrap(), CleanupOutcome::Removed);
         assert!(!ws.path.exists());
@@ -386,6 +700,23 @@ mod tests {
             std::fs::read_to_string(ws.path.join("scratch.txt")).unwrap(),
             "unsaved\n"
         );
+    }
+
+    #[test]
+    fn cleanup_never_discards_committed_but_unpromoted_work() {
+        let (_temp, project, head) = project();
+        let manager = workspaces(&project);
+        let ws = manager.prepare("attempt-1", &head).unwrap();
+        std::fs::write(ws.path.join("committed.txt"), "valuable\n").unwrap();
+        git(&ws.path, &["add", "-A"]);
+        git(&ws.path, &["commit", "-q", "-m", "private work"]);
+
+        assert_eq!(
+            manager.cleanup(&ws).unwrap(),
+            CleanupOutcome::RetainedUnpublished
+        );
+        assert!(ws.path.join("committed.txt").is_file());
+        assert!(ws.git_dir.is_dir());
     }
 
     #[test]
@@ -432,7 +763,10 @@ mod tests {
 
         // Simulate a crash that lost the tree but kept the branch.
         std::fs::remove_dir_all(&ws.path).unwrap();
-        assert_eq!(manager.cleanup(&ws).unwrap(), CleanupOutcome::AlreadyAbsent);
+        assert_eq!(
+            manager.cleanup(&ws).unwrap(),
+            CleanupOutcome::RetainedIntegrityFailure
+        );
 
         // Re-preparation reuses the branch because it still sits at the
         // frozen input commit.
@@ -440,16 +774,11 @@ mod tests {
         assert_eq!(again.input_commit, head);
         assert_eq!(git(&again.path, &["rev-parse", "HEAD"]), head);
 
-        // But a branch that moved away from the frozen input is refused —
-        // the attempt's identity must not silently re-anchor.
+        // But a private branch that moved away from the frozen input is
+        // refused — the attempt's identity must not silently re-anchor.
         std::fs::write(again.path.join("file.txt"), "moved\n").unwrap();
         git(&again.path, &["commit", "-q", "-am", "moved"]);
-        manager.cleanup(&again).unwrap();
-        let _ = Command::new("git")
-            .arg("-C")
-            .arg(&project)
-            .args(["worktree", "prune"])
-            .status();
+        std::fs::remove_dir_all(&again.path).unwrap();
         assert!(manager.prepare("attempt-1", &head).is_err());
     }
 }

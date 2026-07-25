@@ -345,32 +345,62 @@ impl<'a> LinkaWork<'a> {
     /// required to commit all its work), so this folds the agent's own commits
     /// into one output on the input. A graph conflict records nothing and is
     /// returned as [`Settled::Conflict`].
+    #[allow(clippy::too_many_arguments)]
     pub fn submit_candidate_success(
         &self,
         input: &AttemptInput,
-        workspace: &crate::workspace::PreparedWorkspace,
+        workspace: &crate::workspace::ValidatedWorkspace,
+        workspaces: &dyn crate::workspace::WorkspaceManager,
         attempt: &AttemptId,
         message: Option<String>,
         notes: String,
         producer: ProducerEvidence,
+        before_submit: &mut dyn FnMut() -> Result<()>,
     ) -> Result<(Settled, Option<CandidateId>)> {
-        let vcs = self.vcs_at(&workspace.path);
-        let settled = classify(ops::capture_execution_submission(
-            self.store,
-            &vcs,
-            input.snapshot.clone(),
-            message,
-            notes,
-            Author::Machine,
-            Some(producer.clone()),
-        ))?;
+        let private_vcs = self.vcs_at(&workspace.workspace.path);
+        let title = message.unwrap_or_else(|| linka::title_of(&input.description).to_string());
+        let mut commit_message = format!("{title}\n\nLinka-Node: {}", input.node());
+        if !input.input_commit().is_empty() {
+            commit_message.push_str(&format!("\nLinka-Input: {}", input.input_commit()));
+        }
+        let output_commit = private_vcs.capture_worktree(input.input_commit(), &commit_message)?;
+
+        if let Some(output) = &output_commit {
+            // Capture advances the private branch. Re-attest that exact state
+            // before importing any object or ref into the project repository.
+            let captured = workspaces.validate(&workspace.workspace)?;
+            if captured.head != *output {
+                bail!(
+                    "captured output {output} does not match revalidated private HEAD {}",
+                    captured.head
+                );
+            }
+            workspaces.promote(&captured, output)?;
+        }
+
+        // Evidence publication is intentionally after capture and promotion:
+        // a Git failure must leave neither a node result nor Linka attachment.
+        before_submit()?;
+        let project_vcs = self.vcs();
+        let settled = classify(
+            ops::submit_captured_execution(
+                self.store,
+                &project_vcs,
+                input.snapshot.clone(),
+                output_commit.as_deref(),
+                notes,
+                Author::Machine,
+                Some(producer.clone()),
+            )
+            .map(|_| output_commit.clone()),
+        )?;
         match settled {
             Settled::Accepted {
                 output_commit: Some(output_commit),
                 ..
             } => {
                 let candidate =
-                    self.register_candidate(input, workspace, attempt, &output_commit)?;
+                    self.register_candidate(input, &workspace.workspace, attempt, &output_commit)?;
                 Ok((
                     Settled::Accepted {
                         output_commit: Some(output_commit),

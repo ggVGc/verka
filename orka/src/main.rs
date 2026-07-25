@@ -717,6 +717,9 @@ fn seal_line(state: &SealedState) -> String {
         }
         SealedState::FailureRecorded => "failure recorded".into(),
         SealedState::Interrupted { reason } => format!("interrupted: {reason}"),
+        SealedState::WorkspaceIntegrityFailure { reason } => {
+            format!("workspace integrity failure: {reason}")
+        }
         SealedState::ContractViolation { reason } => format!("contract violation: {reason}"),
     }
 }

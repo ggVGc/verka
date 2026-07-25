@@ -98,6 +98,10 @@ pub enum SealedState {
     FailureRecorded,
     /// Execution ended without a usable outcome; nothing was recorded.
     Interrupted { reason: String },
+    /// Orka could no longer prove that the execution repository was the exact
+    /// workspace it prepared. This is infrastructure failure: no node result
+    /// or project output may be recorded from the attempt.
+    WorkspaceIntegrityFailure { reason: String },
     /// The command exited zero but declared no outcome.
     ContractViolation { reason: String },
 }
@@ -446,8 +450,10 @@ mod tests {
     fn workspace() -> PreparedWorkspace {
         PreparedWorkspace {
             path: "/tmp/ws".into(),
+            git_dir: "/tmp/ws.git".into(),
             branch: "orka/attempts/attempt-x".into(),
             input_commit: "c0ffee".into(),
+            identity: "workspace-x".into(),
         }
     }
 
