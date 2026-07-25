@@ -1,3 +1,6 @@
+- Orka (and Styra?):
+  - Should be able to constrain execution of a task as planning,
+    so that it is run with no write access to the workspace. It should only produce an output result which is the plan/spec.
 - New tool: Session runner?
   Run a session with an agent in JSON format.
   Similar to what happens when work is done on a node with orka, but interactive. Possibly start of attempt viewer.
