@@ -28,6 +28,7 @@ fn main() -> anyhow::Result<()> {
         profile: "codex".into(),
         workspace: std::env::current_dir()?.canonicalize()?,
         network: false,
+        templates: Vec::new(),
         message: Some(prompt),
     })?;
     println!("session {}", session.id);

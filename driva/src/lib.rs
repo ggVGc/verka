@@ -196,6 +196,53 @@ pub(crate) fn expand_home(path: &Path, label: &str) -> Result<PathBuf> {
     }
 }
 
+/// Mount PATH additions at their canonical host locations so tools that find
+/// adjacent state through the executable path keep working inside isolation,
+/// and prepend them to the isolated `PATH`.
+pub fn path_mounts(
+    directories: &[PathBuf],
+    mounts: &mut Vec<Mount>,
+    environment: &mut BTreeMap<OsString, OsString>,
+) -> Result<()> {
+    if directories.is_empty() {
+        return Ok(());
+    }
+
+    let mut path = OsString::new();
+    for (index, directory) in directories.iter().enumerate() {
+        let expanded = expand_home(directory, "PATH directory")?;
+        let source = expanded
+            .canonicalize()
+            .with_context(|| format!("invalid PATH directory {}", directory.display()))?;
+        if !source.is_dir() {
+            bail!("PATH addition is not a directory: {}", directory.display());
+        }
+        let destination = source.clone();
+        if index > 0 {
+            path.push(":");
+        }
+        path.push(&destination);
+        mounts.push(Mount::Bind {
+            source,
+            destination,
+            access: MountAccess::ReadOnly,
+        });
+    }
+
+    let key = OsString::from("PATH");
+    if let Some(configured) = environment.get(&key) {
+        if !configured.is_empty() {
+            path.push(":");
+            path.push(configured);
+        }
+    } else {
+        path.push(":");
+        path.push(DEFAULT_PATH);
+    }
+    environment.insert(key, path);
+    Ok(())
+}
+
 pub fn effective_policy(request: &ExecutionRequest) -> EffectivePolicy {
     EffectivePolicy {
         working_directory: request.working_directory.clone(),

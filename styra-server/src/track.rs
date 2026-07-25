@@ -19,6 +19,7 @@ use crate::journal::Journal;
 use crate::types::{Direction, DrivaOptions, LogEntry, RawLine, TrackEnd, TrackUpdate};
 use anyhow::{Context, Result};
 use driva::{ExecutionIo, ExecutionRequest, Isolation, Mount, MountAccess};
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fs::File;
 use std::io::{BufRead, BufReader, PipeWriter, Write};
@@ -37,6 +38,41 @@ pub struct TrackSpec {
     pub workspace: MountSpec,
     /// Empty writable filesystems discarded after the run (e.g. `/root`).
     pub temporary_mounts: Vec<PathBuf>,
+    /// Named Driva template(s) the operator selected, merged and resolved
+    /// against the host filesystem, layered additively on top of the
+    /// profile's own mounts, environment, and network policy.
+    pub template: Option<ResolvedTemplate>,
+}
+
+/// A Driva [`driva::TemplateConfig`] resolved against the host filesystem:
+/// its mounts (including PATH additions) and environment translated to the
+/// same vocabulary [`build_request`] uses for a profile, so the two overlay
+/// with a plain extend/OR rather than a second round of policy resolution.
+pub struct ResolvedTemplate {
+    pub mounts: Vec<Mount>,
+    pub environment: BTreeMap<OsString, OsString>,
+    pub network: bool,
+}
+
+impl ResolvedTemplate {
+    pub fn resolve(template: driva::TemplateConfig) -> Result<Self> {
+        let mut mounts: Vec<Mount> = template
+            .mounts
+            .into_iter()
+            .map(driva::MountConfig::resolve)
+            .collect::<Result<_>>()?;
+        let mut environment: BTreeMap<OsString, OsString> = template
+            .environment
+            .into_iter()
+            .map(|(key, value)| (OsString::from(key), OsString::from(value)))
+            .collect();
+        driva::path_mounts(&template.paths, &mut mounts, &mut environment)?;
+        Ok(Self {
+            mounts,
+            environment,
+            network: template.network.unwrap_or(false),
+        })
+    }
 }
 
 /// Capture the Driva policy a [`TrackSpec`] would launch under, without
@@ -381,17 +417,29 @@ fn build_request(spec: &TrackSpec) -> ExecutionRequest {
             },
         });
     }
+    let mut environment: BTreeMap<OsString, OsString> = spec
+        .profile
+        .environment
+        .iter()
+        .map(|(k, v)| (OsString::from(k), OsString::from(v)))
+        .collect();
+    let mut network = spec.profile.network;
+    if let Some(template) = &spec.template {
+        mounts.extend(template.mounts.iter().cloned());
+        environment.extend(
+            template
+                .environment
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone())),
+        );
+        network = network || template.network;
+    }
     ExecutionRequest {
         command: spec.profile.command.iter().map(OsString::from).collect(),
         working_directory: spec.working_directory.clone(),
         mounts,
-        environment: spec
-            .profile
-            .environment
-            .iter()
-            .map(|(k, v)| (OsString::from(k), OsString::from(v)))
-            .collect(),
-        network: spec.profile.network,
+        environment,
+        network,
         interactive: false,
         new_session: true,
     }
@@ -467,6 +515,7 @@ mod tests {
                 writable: true,
             },
             temporary_mounts: Vec::new(),
+            template: None,
         }
     }
 

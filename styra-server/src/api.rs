@@ -19,6 +19,11 @@ pub struct CreateSession {
     pub workspace: PathBuf,
     #[serde(default)]
     pub network: bool,
+    /// Named Driva execution templates (see `driva templates`), applied as an
+    /// additive overlay on top of the profile's own mounts, environment, and
+    /// network policy. Later names in the list take precedence on conflict.
+    #[serde(default)]
+    pub templates: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
 }

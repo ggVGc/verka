@@ -45,6 +45,11 @@ struct Cli {
     /// Permit agent networking (profiles may default this on).
     #[arg(long)]
     network: bool,
+    /// Apply a Driva execution template on top of the profile (see `driva
+    /// templates`); may be repeated to layer several, e.g. a toolchain
+    /// template like `rust` alongside the agent profile.
+    #[arg(long = "template", value_name = "NAME")]
+    template: Vec<String>,
     /// Open a captured journal read-only instead of launching an agent: with
     /// a path, that session directly; bare (no path), a picker to browse and
     /// choose one from the server's store.
@@ -279,6 +284,7 @@ fn create_session(client: &Client, cli: &Cli, seed: Option<&str>) -> Result<Sess
         profile: cli.profile.clone(),
         workspace,
         network: cli.network,
+        templates: cli.template.clone(),
         message: seed.map(str::to_owned),
     })
 }

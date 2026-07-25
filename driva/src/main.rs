@@ -284,7 +284,7 @@ fn real_main() -> Result<()> {
         .map(|value| value.paths.clone())
         .unwrap_or_default();
     paths.extend(policy.paths.iter().cloned());
-    add_path_directories(&paths, &mut mounts, &mut environment)?;
+    driva::path_mounts(&paths, &mut mounts, &mut environment)?;
     if let Some(default_workspace) = default_workspace {
         if !mounts.iter().any(|mount| mount.destination() == workdir) {
             mounts.push(default_workspace);
@@ -493,62 +493,6 @@ fn parse_mount(spec: &str, access: MountAccess, workdir: &Path) -> Result<Mount>
         destination,
         access,
     })
-}
-
-/// Mount PATH additions at their canonical host locations so tools that find
-/// adjacent state through the executable path keep working inside isolation.
-fn add_path_directories(
-    directories: &[PathBuf],
-    mounts: &mut Vec<Mount>,
-    environment: &mut BTreeMap<OsString, OsString>,
-) -> Result<()> {
-    if directories.is_empty() {
-        return Ok(());
-    }
-
-    let mut path = OsString::new();
-    for (index, directory) in directories.iter().enumerate() {
-        let expanded = expand_home(directory)?;
-        let source = expanded
-            .canonicalize()
-            .with_context(|| format!("invalid PATH directory {}", directory.display()))?;
-        if !source.is_dir() {
-            bail!("PATH addition is not a directory: {}", directory.display());
-        }
-        let destination = source.clone();
-        if index > 0 {
-            path.push(":");
-        }
-        path.push(&destination);
-        mounts.push(Mount::Bind {
-            source,
-            destination,
-            access: MountAccess::ReadOnly,
-        });
-    }
-
-    let key = OsString::from("PATH");
-    if let Some(configured) = environment.get(&key) {
-        if !configured.is_empty() {
-            path.push(":");
-            path.push(configured);
-        }
-    } else {
-        path.push(":");
-        path.push(driva::DEFAULT_PATH);
-    }
-    environment.insert(key, path);
-    Ok(())
-}
-
-fn expand_home(path: &Path) -> Result<PathBuf> {
-    if path == Path::new("~") || path.starts_with("~/") {
-        let home =
-            std::env::var_os("HOME").context("HOME is not set; cannot expand PATH directory")?;
-        Ok(PathBuf::from(home).join(path.strip_prefix("~").expect("prefix checked")))
-    } else {
-        Ok(path.to_path_buf())
-    }
 }
 
 fn print_dry_run(name: &str, command: Command, request: &ExecutionRequest) {

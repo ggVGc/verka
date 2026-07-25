@@ -6,7 +6,7 @@ use crate::api::{
     Transcript, Updates, WireRequest, WireResponse, API_VERSION,
 };
 use crate::journal::{self, Journal};
-use crate::track::{Track, TrackSpec};
+use crate::track::{ResolvedTemplate, Track, TrackSpec};
 use crate::types::{DrivaOptions, TrackSummary, SessionSummary};
 use anyhow::{Context, Result};
 use std::collections::HashMap;
@@ -116,6 +116,7 @@ impl ServerState {
         })?;
         let mut profile = Profile::builtin(&request.profile, &self.inner.layout)?;
         profile.network = profile.network || request.network;
+        let template = resolve_templates(&workspace, &request.templates)?;
         let (journal, id) = Journal::create_in_store(&self.inner.store_root, &profile)?;
         let journal_path = journal.path().to_path_buf();
         let diagnostics = journal_path
@@ -131,6 +132,7 @@ impl ServerState {
                 writable: true,
             },
             temporary_mounts: Vec::new(),
+            template,
         };
         let single_turn = spec.profile.single_turn;
         let driva = DrivaOptions::capture(&spec, "bwrap");
@@ -283,6 +285,36 @@ impl ServerState {
             }
         }
     }
+}
+
+/// Resolve and merge the named Driva templates against a `driva.toml` in the
+/// operator's workspace, if any (falling back to Driva's built-ins), in the
+/// order given: later names take precedence on conflicting settings, mirroring
+/// `driva run --template` layering.
+fn resolve_templates(workspace: &Path, names: &[String]) -> Result<Option<ResolvedTemplate>> {
+    if names.is_empty() {
+        return Ok(None);
+    }
+    let driva_config = {
+        let candidate = workspace.join("driva.toml");
+        if candidate.exists() {
+            driva::Config::load(&candidate)?
+        } else {
+            driva::Config::default()
+        }
+    };
+    let mut merged: Option<driva::TemplateConfig> = None;
+    for name in names {
+        let later = driva_config
+            .template(name)
+            .with_context(|| format!("unknown driva template {name:?}"))?;
+        match &mut merged {
+            Some(current) => current.overlay(later),
+            None => merged = Some(later),
+        }
+    }
+    ResolvedTemplate::resolve(merged.expect("non-empty names produces a merged template"))
+        .map(Some)
 }
 
 /// Serve socket connections until the listener fails or the process exits.
