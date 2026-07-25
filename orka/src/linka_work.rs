@@ -84,7 +84,7 @@ impl<'a> LinkaWork<'a> {
         GitVcs::for_store(self.store)
     }
 
-    /// Project-side operations run in the attempt's private repository; graph
+    /// Project-side operations run in the attempt's audited worktree; graph
     /// state still commits to the workbench repository.
     fn vcs_at(&self, workspace: &Path) -> GitVcs {
         GitVcs::for_execution(self.store, workspace.to_path_buf())

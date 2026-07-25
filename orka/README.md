@@ -10,7 +10,7 @@ attempt lifecycle.
 
 ```text
 select Linka-ready node ──► snapshot Linka work input ──► record attempt (.orka/attempts/<id>/)
-      ──► prepare private repository (orka/attempts/<id> branch at the frozen revision)
+      ──► prepare audited worktree (orka/attempts/<id> branch at the frozen revision)
       ──► record request ──► run agent via Driva (bwrap, deny-by-default)
       ──► capture agent events + file reads + diagnostics + exit evidence
       ──► read declared outcome ──► version-checked submit + observed context pins
@@ -122,14 +122,14 @@ in agent-produced text are removed before rendering. Literal `[agent].command` p
 stdout in `transcript.log` and stderr in `diagnostics.log`.
 
 Every completed `file_change` event also creates a checkpoint commit through a
-private Git index and records it in `file-changes.v1.jsonl`. The commits form a
+temporary Git index and records it in `file-changes.v1.jsonl`. The commits form a
 chain retained at `refs/orka/file-changes/<attempt-id>` without moving the
 agent repository's HEAD or index. This preserves each reported intermediate file
 state without changing Linka's final declared-output capture.
 
 Attempt and workspace records are strict, versioned formats. Orka supports only
-the current private-repository layout: unsupported schemas and records without
-private Git identity are refused rather than migrated.
+the current audited-worktree layout: unsupported schemas and records without
+the shared-repository audit are refused rather than migrated.
 
 Human-facing views are projected through Orka's provider-independent
 `WorkLogBlock` format. Markdown prose and fenced code are separate content
@@ -163,14 +163,16 @@ Acceptance pins the exact artifact and previous target commit.
 Publication refuses dirty or concurrently moved targets and is safe to retry
 after a crash.
 
-After validation, project output is imported onto the
-`orka/attempts/<attempt-id>` candidate branch. Cleanup removes the private
-repository only when its committed output is reachable from that project
-branch, or when it is unchanged. Dirty, structurally invalid, and
-committed-but-unpromoted workspaces are retained. One narrow case is rolled
-back completely: when the executor returns no exit evidence and the private
-repository still exactly matches its frozen input, Orka removes the empty
-workspace and attempt record.
+Agents work in ordinary linked worktrees on
+`orka/attempts/<attempt-id>` branches. Orka audits the shared Git repository
+before and after execution: protected refs, configuration, hooks, alternates,
+worktree registrations, object format, connectivity, ancestry, and worktree
+cleanliness must remain valid. Only attempt-owned refs may change. An
+unexpected shared-Git mutation fails the attempt and retains its worktree.
+Cleanup removes a successfully promoted linked worktree while preserving its
+candidate branch. One narrow case is rolled back completely: when the executor
+returns no exit evidence and the worktree still exactly matches its frozen
+input, Orka removes the empty worktree, branch, and attempt record.
 
 ## Candidate reviews
 

@@ -1,12 +1,10 @@
-//! Per-attempt execution workspaces with private Git repositories.
+//! Per-attempt execution workspaces backed by ordinary Git worktrees.
 //!
 //! Orka owns workspace *policy* — where trees live, how branches are named,
-//! when they may be removed — and the git mechanics that implement it. Each
-//! attempt gets a fresh repository anchored to its frozen input commit, so the
-//! user's checkout, branch, index, and uncommitted changes are never touched,
-//! and concurrent attempts share no writable Git state. Only after Orka
-//! validates the final repository does it import the output and candidate
-//! branch into the project.
+//! when they may be removed — and the Git mechanics that implement it. Agents
+//! use Git normally in a linked worktree. The common repository is shared, so
+//! Orka records its protected state before execution and refuses settlement if
+//! anything except the attempt-owned refs changed.
 //!
 //! Substituting a different workspace mechanism is genuinely useful (a plain
 //! copy, an overlay, a remote checkout), so this stays a narrow Orka-owned
@@ -14,25 +12,43 @@
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
-pub const WORKSPACE_SCHEMA: u32 = 1;
+pub const WORKSPACE_SCHEMA: u32 = 2;
 
-/// An isolated working tree prepared for one attempt.
+/// Protected shared-repository state captured after worktree preparation.
+///
+/// This record is persisted with the attempt, outside the repository it
+/// attests. Object files are deliberately not compared byte-for-byte: normal
+/// commits, packing, and maintenance change them. Ref reachability plus fsck
+/// provide the semantic object-store check.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RepositoryAudit {
+    pub refs: BTreeMap<String, String>,
+    pub protected_files: BTreeMap<String, String>,
+    pub worktrees: String,
+    pub object_format: String,
+}
+
+/// An ordinary linked worktree prepared for one attempt.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PreparedWorkspace {
     pub schema: u32,
     pub path: PathBuf,
-    /// Private Git metadata for this attempt. It is mounted writable into the
-    /// sandbox without granting access to the project's shared `.git`.
+    /// The project's shared common Git directory. It is mounted writable so
+    /// the agent can use Git normally, then audited before settlement.
     pub git_dir: PathBuf,
     /// The candidate branch the workspace is checked out on.
     pub branch: String,
     pub input_commit: String,
-    /// Orka-minted identity stored in the private Git directory.
+    /// Orka-minted attempt identity used to scope temporary refs.
     pub identity: String,
+    pub audit: RepositoryAudit,
 }
 
 /// A workspace whose repository identity has been independently attested by
@@ -59,9 +75,9 @@ pub enum CleanupOutcome {
 /// Whether an unexecuted workspace could be rolled back without losing work.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DiscardOutcome {
-    /// The private repository was removed before anything was promoted.
+    /// The linked worktree was removed before anything was promoted.
     Discarded,
-    /// The private repository is dirty or its branch has commits beyond the input.
+    /// The worktree is dirty or its branch has commits beyond the input.
     RetainedChanged,
 }
 
@@ -71,22 +87,20 @@ pub trait WorkspaceManager {
     /// can be durably recorded before anything is created.
     fn plan(&self, attempt: &str, input_commit: &str) -> PreparedWorkspace;
 
-    /// Create a fresh private repository at `input_commit` on a candidate
-    /// branch named for `attempt`. Fails if the workspace already exists.
+    /// Create a linked worktree at `input_commit` on a candidate branch named
+    /// for `attempt`. Fails if the workspace already exists.
     fn prepare(&self, attempt: &str, input_commit: &str) -> Result<PreparedWorkspace>;
 
-    /// Whether the private repository has no uncommitted changes. A coding
+    /// Whether the worktree has no uncommitted changes. A coding
     /// agent is required to commit all its work, so a dirty tree at settle
     /// time means the agent left work uncaptured and the attempt is rejected.
     fn is_clean(&self, workspace: &PreparedWorkspace) -> Result<bool>;
 
-    /// Verify that this is still the exact repository Orka prepared. This is
-    /// structural validation, independent of anything the agent declared.
+    /// Verify the worktree and audit all protected shared-repository state.
     fn validate(&self, workspace: &PreparedWorkspace) -> Result<ValidatedWorkspace>;
 
-    /// Import a validated output into the project repository and advance only
-    /// this attempt's candidate branch. No project object or ref is written
-    /// before postflight validation succeeds.
+    /// Mark a validated attempt branch as promoted. The commit already lives
+    /// in the shared repository because the agent used a normal worktree.
     fn promote(&self, workspace: &ValidatedWorkspace, commit: &str) -> Result<()>;
 
     /// Remove a workspace whose attempt is sealed. Refuses to discard
@@ -94,33 +108,23 @@ pub trait WorkspaceManager {
     fn cleanup(&self, workspace: &PreparedWorkspace) -> Result<CleanupOutcome>;
 
     /// Roll back an attempt that produced no exit evidence. Removes both the
-    /// workspace and private repository only when they still exactly match
-    /// the frozen input; otherwise retains them for inspection.
+    /// worktree only when it still exactly matches the frozen input; otherwise
+    /// retains it for inspection.
     fn discard_unchanged(&self, workspace: &PreparedWorkspace) -> Result<DiscardOutcome>;
 }
 
 pub struct GitWorkspaces {
-    /// The project repository used as immutable preparation input and as the
-    /// destination for validated output promotion.
+    /// The project repository that owns all attempt worktrees.
     project: PathBuf,
     /// Where attempt file trees are created (e.g. `<workbench>/.orka/worktrees`).
     root: PathBuf,
-    /// Private per-attempt Git repositories, kept outside the writable file
-    /// tree so `.git` can be mounted read-only over the workspace bind.
-    git_root: PathBuf,
 }
 
 impl GitWorkspaces {
     pub fn new(project: impl Into<PathBuf>, root: impl Into<PathBuf>) -> Self {
-        let root = root.into();
-        let git_root = root
-            .parent()
-            .map(|parent| parent.join("gitdirs"))
-            .unwrap_or_else(|| PathBuf::from("gitdirs"));
         Self {
             project: project.into(),
-            root,
-            git_root,
+            root: root.into(),
         }
     }
 
@@ -131,21 +135,24 @@ impl GitWorkspaces {
     pub fn path_for(&self, attempt: &str) -> PathBuf {
         self.root.join(attempt)
     }
-
-    pub fn git_dir_for(&self, attempt: &str) -> PathBuf {
-        self.git_root.join(attempt)
-    }
 }
 
 impl WorkspaceManager for GitWorkspaces {
     fn plan(&self, attempt: &str, input_commit: &str) -> PreparedWorkspace {
+        let git_dir = common_git_dir(&self.project).unwrap_or_default();
         PreparedWorkspace {
             schema: WORKSPACE_SCHEMA,
             path: self.path_for(attempt),
-            git_dir: self.git_dir_for(attempt),
+            git_dir,
             branch: Self::branch_for(attempt),
             input_commit: input_commit.to_string(),
             identity: format!("orka-workspace-{attempt}"),
+            audit: RepositoryAudit {
+                refs: BTreeMap::new(),
+                protected_files: BTreeMap::new(),
+                worktrees: String::new(),
+                object_format: String::new(),
+            },
         }
     }
 
@@ -171,39 +178,19 @@ impl WorkspaceManager for GitWorkspaces {
                 workspace.head
             );
         }
-        let private_ref = format!("refs/heads/{}", workspace.workspace.branch);
-        if checked(&workspace.workspace.path, &["rev-parse", &private_ref])? != commit {
-            bail!(
-                "refusing to promote commit {commit}: private attempt branch moved after validation"
-            );
+        let attempt_ref = format!("refs/heads/{}", workspace.workspace.branch);
+        if checked(&workspace.workspace.path, &["rev-parse", &attempt_ref])? != commit {
+            bail!("refusing to promote commit {commit}: attempt branch moved after validation");
         }
-
-        // Refuse a conflicting candidate before importing even unreachable
-        // objects. A recovery retry that observes the same commit is
-        // idempotent.
-        let branch_ref = format!("refs/heads/{}", workspace.workspace.branch);
-        match resolve_ref_optional(&self.project, &branch_ref)? {
+        let marker = promoted_ref(&workspace.workspace);
+        match resolve_ref_optional(&self.project, &marker)? {
             Some(existing) if existing == commit => Ok(()),
             Some(existing) => bail!(
-                "candidate branch `{}` already exists at {existing}, refusing to replace it with {commit}",
-                workspace.workspace.branch
+                "promotion marker `{marker}` already exists at {existing}, refusing to replace it with {commit}"
             ),
             None => {
-                // Fetch objects without naming a destination ref, then advance
-                // the candidate with compare-and-swap semantics.
-                let git_dir = workspace.workspace.git_dir.to_string_lossy().into_owned();
-                checked(
-                    &self.project,
-                    &[
-                        "fetch",
-                        "--no-write-fetch-head",
-                        "--no-tags",
-                        &git_dir,
-                        &private_ref,
-                    ],
-                )?;
                 let zero = zero_oid(&self.project)?;
-                checked(&self.project, &["update-ref", &branch_ref, commit, &zero])?;
+                checked(&self.project, &["update-ref", &marker, commit, &zero])?;
                 Ok(())
             }
         }
@@ -211,11 +198,19 @@ impl WorkspaceManager for GitWorkspaces {
 
     fn cleanup(&self, workspace: &PreparedWorkspace) -> Result<CleanupOutcome> {
         if !workspace.path.exists() {
-            return Ok(if workspace.git_dir.exists() {
-                CleanupOutcome::RetainedIntegrityFailure
-            } else {
-                CleanupOutcome::AlreadyAbsent
-            });
+            return Ok(
+                if resolve_ref_optional(&self.project, &promoted_ref(workspace))?.is_some()
+                    || resolve_ref_optional(
+                        &self.project,
+                        &format!("refs/heads/{}", workspace.branch),
+                    )?
+                    .is_none()
+                {
+                    CleanupOutcome::AlreadyAbsent
+                } else {
+                    CleanupOutcome::RetainedIntegrityFailure
+                },
+            );
         }
         let validated = match self.validate(workspace) {
             Ok(validated) => validated,
@@ -224,22 +219,13 @@ impl WorkspaceManager for GitWorkspaces {
         if !repository_clean(&workspace.path)? {
             return Ok(CleanupOutcome::RetainedDirty);
         }
-        if validated.head != workspace.input_commit {
-            let branch_ref = format!("refs/heads/{}", workspace.branch);
-            if resolve_ref_optional(&self.project, &branch_ref)?.as_deref()
+        if validated.head != workspace.input_commit
+            && resolve_ref_optional(&self.project, &promoted_ref(workspace))?.as_deref()
                 != Some(validated.head.as_str())
-            {
-                return Ok(CleanupOutcome::RetainedUnpublished);
-            }
+        {
+            return Ok(CleanupOutcome::RetainedUnpublished);
         }
-        std::fs::remove_dir_all(&workspace.path)
-            .with_context(|| format!("removing workspace {}", workspace.path.display()))?;
-        std::fs::remove_dir_all(&workspace.git_dir).with_context(|| {
-            format!(
-                "removing private Git directory {}",
-                workspace.git_dir.display()
-            )
-        })?;
+        remove_worktree(&self.project, &workspace.path)?;
         Ok(CleanupOutcome::Removed)
     }
 
@@ -251,16 +237,7 @@ impl WorkspaceManager for GitWorkspaces {
             {
                 return Ok(DiscardOutcome::RetainedChanged);
             }
-            std::fs::remove_dir_all(&workspace.path)
-                .with_context(|| format!("removing workspace {}", workspace.path.display()))?;
-            if workspace.git_dir.exists() {
-                std::fs::remove_dir_all(&workspace.git_dir).with_context(|| {
-                    format!(
-                        "removing private Git directory {}",
-                        workspace.git_dir.display()
-                    )
-                })?;
-            }
+            remove_worktree(&self.project, &workspace.path)?;
         }
 
         let branch_ref = format!("refs/heads/{}", workspace.branch);
@@ -280,11 +257,9 @@ impl WorkspaceManager for GitWorkspaces {
     }
 }
 
-// --- private Git repository mechanics ---------------------------------------
+// --- audited linked-worktree mechanics --------------------------------------
 
-/// Create a self-contained attempt repository. The project is input only:
-/// `--no-hardlinks` ensures even the object store is private.
-fn create_workspace(project: &Path, workspace: PreparedWorkspace) -> Result<PreparedWorkspace> {
+fn create_workspace(project: &Path, mut workspace: PreparedWorkspace) -> Result<PreparedWorkspace> {
     let input_commit = checked(
         project,
         &[
@@ -299,91 +274,49 @@ fn create_workspace(project: &Path, workspace: PreparedWorkspace) -> Result<Prep
             workspace.path.display()
         );
     }
-    if workspace.git_dir.exists() {
-        // A crash may remove the file tree after leaving the private
-        // repository behind. Recreate only when its immutable identity,
-        // branch, and HEAD still exactly match the frozen input.
-        let identity = std::fs::read_to_string(workspace.git_dir.join("orka-identity"))
-            .context("reading retained private workspace identity")?;
-        let git_dir_arg = workspace.git_dir.to_string_lossy().into_owned();
-        let retained_head = checked_git_dir(&git_dir_arg, &["rev-parse", "HEAD"])?;
-        let retained_branch = checked_git_dir(&git_dir_arg, &["symbolic-ref", "--quiet", "HEAD"])?;
-        if identity.trim() != workspace.identity
-            || retained_head != input_commit
-            || retained_branch != format!("refs/heads/{}", workspace.branch)
-        {
-            bail!(
-                "retained private Git directory does not match unchanged attempt {}",
-                workspace.identity
-            );
-        }
-        std::fs::remove_dir_all(&workspace.git_dir).with_context(|| {
-            format!(
-                "removing unchanged retained Git directory {}",
-                workspace.git_dir.display()
-            )
-        })?;
-    }
     if let Some(parent) = workspace.path.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("creating workspace directory {}", parent.display()))?;
-    }
-    if let Some(parent) = workspace.git_dir.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("creating Git directory root {}", parent.display()))?;
     }
     checked(
         project,
         &["check-ref-format", "--branch", &workspace.branch],
     )?;
 
-    let project_arg = project.to_string_lossy().into_owned();
     let path_arg = workspace.path.to_string_lossy().into_owned();
-    let git_dir_arg = workspace.git_dir.to_string_lossy().into_owned();
-    let out = Command::new("git")
-        .args([
-            "clone",
-            "--quiet",
-            "--no-checkout",
-            "--no-hardlinks",
-            "--separate-git-dir",
-            &git_dir_arg,
-            &project_arg,
-            &path_arg,
-        ])
-        .output()
-        .context("running private workspace clone")?;
-    if !out.status.success() {
-        bail!(
-            "private workspace clone failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
+    let branch_ref = format!("refs/heads/{}", workspace.branch);
+    match resolve_ref_optional(project, &branch_ref)? {
+        Some(existing) if existing != input_commit => bail!(
+            "retained attempt branch `{}` moved from frozen input {} to {existing}",
+            workspace.branch,
+            input_commit
+        ),
+        Some(_) => {
+            checked(project, &["worktree", "prune"])?;
+            checked(
+                project,
+                &["worktree", "add", "--quiet", &path_arg, &workspace.branch],
+            )?;
+        }
+        None => {
+            checked(
+                project,
+                &[
+                    "worktree",
+                    "add",
+                    "--quiet",
+                    "-b",
+                    &workspace.branch,
+                    &path_arg,
+                    &input_commit,
+                ],
+            )?;
+        }
     }
-    checked(
-        &workspace.path,
-        &[
-            "checkout",
-            "--quiet",
-            "-b",
-            &workspace.branch,
-            &input_commit,
-        ],
-    )?;
-    checked(&workspace.path, &["config", "user.name", "Orka Agent"])?;
-    checked(
-        &workspace.path,
-        &["config", "user.email", "orka-agent@localhost"],
-    )?;
-    std::fs::write(
-        workspace.git_dir.join("orka-identity"),
-        format!("{}\n", workspace.identity),
-    )
-    .with_context(|| {
-        format!(
-            "writing workspace identity {}",
-            workspace.git_dir.join("orka-identity").display()
-        )
-    })?;
+    workspace.git_dir = common_git_dir(project)?;
+    checked(project, &["fsck", "--connectivity-only"])
+        .context("shared repository failed preflight connectivity check")?;
+    workspace.audit = capture_audit(&workspace)?;
     validate_workspace(&workspace)?;
     Ok(workspace)
 }
@@ -396,7 +329,7 @@ fn validate_workspace(workspace: &PreparedWorkspace) -> Result<ValidatedWorkspac
         );
     }
     if workspace.git_dir.as_os_str().is_empty() || workspace.identity.is_empty() {
-        bail!("workspace record has no private Git identity");
+        bail!("workspace record has no shared Git audit identity");
     }
     let pointer_path = workspace.path.join(".git");
     let pointer_metadata = std::fs::symlink_metadata(&pointer_path)
@@ -430,47 +363,43 @@ fn validate_workspace(workspace: &PreparedWorkspace) -> Result<ValidatedWorkspac
         );
     }
 
-    let expected_git_dir = workspace.git_dir.canonicalize().with_context(|| {
+    let expected_common_dir = workspace.git_dir.canonicalize().with_context(|| {
         format!(
-            "canonicalising private Git directory {}",
+            "canonicalising shared Git directory {}",
             workspace.git_dir.display()
         )
     })?;
     let observed_pointer = PathBuf::from(pointer_target)
         .canonicalize()
         .context("canonicalising workspace Git pointer target")?;
-    if observed_pointer != expected_git_dir {
+    if !observed_pointer.starts_with(expected_common_dir.join("worktrees")) {
         bail!(
-            "workspace Git pointer changed: expected {}, observed {}",
-            expected_git_dir.display(),
+            "workspace Git pointer escaped shared repository {}: observed {}",
+            expected_common_dir.display(),
             observed_pointer.display()
         );
     }
-    for (label, argument) in [
-        ("Git directory", "--absolute-git-dir"),
-        ("Git common directory", "--git-common-dir"),
-    ] {
-        let observed = PathBuf::from(checked(&workspace.path, &["rev-parse", argument])?)
-            .canonicalize()
-            .with_context(|| format!("canonicalising reported {label}"))?;
-        if observed != expected_git_dir {
-            bail!(
-                "workspace {label} changed: expected {}, observed {}",
-                expected_git_dir.display(),
-                observed.display()
-            );
-        }
+    let observed_git_dir = PathBuf::from(checked(
+        &workspace.path,
+        &["rev-parse", "--absolute-git-dir"],
+    )?)
+    .canonicalize()
+    .context("canonicalising reported Git directory")?;
+    if observed_git_dir != observed_pointer {
+        bail!("workspace Git pointer and reported Git directory disagree");
     }
-
-    let identity = std::fs::read_to_string(workspace.git_dir.join("orka-identity"))
-        .context("reading private workspace identity")?;
-    if identity.trim() != workspace.identity {
-        bail!("private workspace identity changed");
+    let observed_common = common_git_dir(&workspace.path)?;
+    if observed_common != expected_common_dir {
+        bail!(
+            "workspace common Git directory changed: expected {}, observed {}",
+            expected_common_dir.display(),
+            observed_common.display()
+        );
     }
     let branch_ref = format!("refs/heads/{}", workspace.branch);
     for lock in [
-        workspace.git_dir.join("index.lock"),
-        workspace.git_dir.join("HEAD.lock"),
+        observed_git_dir.join("index.lock"),
+        observed_git_dir.join("HEAD.lock"),
         workspace
             .git_dir
             .join(format!("refs/heads/{}.lock", workspace.branch)),
@@ -494,7 +423,7 @@ fn validate_workspace(workspace: &PreparedWorkspace) -> Result<ValidatedWorkspac
             &format!("{}^{{commit}}", workspace.input_commit),
         ],
     )
-    .context("frozen input commit is missing from private workspace")?;
+    .context("frozen input commit is missing from shared repository")?;
     let ancestor = Command::new("git")
         .arg("-C")
         .arg(&workspace.path)
@@ -505,12 +434,13 @@ fn validate_workspace(workspace: &PreparedWorkspace) -> Result<ValidatedWorkspac
             &head,
         ])
         .status()
-        .context("checking private workspace ancestry")?;
+        .context("checking workspace ancestry")?;
     if !ancestor.success() {
         bail!("workspace HEAD no longer descends from the frozen input commit");
     }
-    checked(&workspace.path, &["fsck", "--connectivity-only", &head])
-        .context("private workspace object graph is corrupt")?;
+    checked(&workspace.path, &["fsck", "--connectivity-only"])
+        .context("shared repository object graph is corrupt")?;
+    verify_audit(workspace)?;
     let tree = checked(&workspace.path, &["rev-parse", &format!("{head}^{{tree}}")])?;
     Ok(ValidatedWorkspace {
         workspace: workspace.clone(),
@@ -519,7 +449,7 @@ fn validate_workspace(workspace: &PreparedWorkspace) -> Result<ValidatedWorkspac
     })
 }
 
-/// Whether a private execution repository has no uncommitted changes.
+/// Whether an execution worktree has no uncommitted changes.
 fn repository_clean(path: &Path) -> Result<bool> {
     Ok(checked(path, &["status", "--porcelain"])?.is_empty())
 }
@@ -572,20 +502,278 @@ fn checked(base: &Path, args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-fn checked_git_dir(git_dir: &str, args: &[&str]) -> Result<String> {
-    let out = Command::new("git")
-        .args(["--git-dir", git_dir])
-        .args(args)
-        .output()
-        .with_context(|| format!("failed to run private `git {}`", args.join(" ")))?;
-    if !out.status.success() {
-        bail!(
-            "private `git {}` failed: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
+fn common_git_dir(base: &Path) -> Result<PathBuf> {
+    let reported = PathBuf::from(checked(base, &["rev-parse", "--git-common-dir"])?);
+    let path = if reported.is_absolute() {
+        reported
+    } else {
+        base.join(reported)
+    };
+    path.canonicalize()
+        .context("canonicalising shared Git directory")
+}
+
+fn promoted_ref(workspace: &PreparedWorkspace) -> String {
+    format!("refs/orka/promoted/{}", workspace.identity)
+}
+
+fn checkpoint_ref(workspace: &PreparedWorkspace) -> String {
+    let attempt = workspace
+        .branch
+        .strip_prefix("orka/attempts/")
+        .unwrap_or(&workspace.identity);
+    format!("refs/orka/file-changes/{attempt}")
+}
+
+fn allowed_refs(workspace: &PreparedWorkspace) -> [String; 3] {
+    [
+        format!("refs/heads/{}", workspace.branch),
+        checkpoint_ref(workspace),
+        promoted_ref(workspace),
+    ]
+}
+
+fn capture_audit(workspace: &PreparedWorkspace) -> Result<RepositoryAudit> {
+    Ok(RepositoryAudit {
+        refs: refs(&workspace.path)?,
+        protected_files: protected_files(workspace)?,
+        worktrees: normalized_worktrees(&workspace.path, &workspace.path)?,
+        object_format: checked(&workspace.path, &["rev-parse", "--show-object-format"])?,
+    })
+}
+
+fn verify_audit(workspace: &PreparedWorkspace) -> Result<()> {
+    let current = capture_audit(workspace)?;
+    let allowed = allowed_refs(workspace);
+    let head = checked(&workspace.path, &["rev-parse", "HEAD"])?;
+    let protected = |refs: &BTreeMap<String, String>, baseline: bool| {
+        refs.iter()
+            .filter(|(name, value)| {
+                if allowed.contains(name) {
+                    return false;
+                }
+                // Linka may retain the already validated output between
+                // promotion and cleanup, or before crash recovery. Existing
+                // Linka refs remain protected; only a newly created pin to
+                // this exact attempt HEAD is an approved host-side transition.
+                let approved_linka_pin = !baseline
+                    && name.starts_with("refs/linka/outputs/")
+                    && !workspace.audit.refs.contains_key(*name)
+                    && value.split('\t').next() == Some(head.as_str());
+                !approved_linka_pin
+            })
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect::<BTreeMap<_, _>>()
+    };
+    if protected(&current.refs, false) != protected(&workspace.audit.refs, true) {
+        bail!("protected shared Git refs changed during attempt");
     }
-    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    if current.protected_files != workspace.audit.protected_files {
+        bail!("protected shared Git configuration, hooks, or alternates changed during attempt");
+    }
+    if current.worktrees != workspace.audit.worktrees {
+        bail!("shared Git worktree registrations changed during attempt");
+    }
+    if current.object_format != workspace.audit.object_format {
+        bail!("shared Git object format changed during attempt");
+    }
+    Ok(())
+}
+
+fn refs(base: &Path) -> Result<BTreeMap<String, String>> {
+    let output = checked(
+        base,
+        &[
+            "for-each-ref",
+            "--format=%(refname)%09%(objectname)%09%(symref)",
+        ],
+    )?;
+    Ok(output
+        .lines()
+        .filter_map(|line| {
+            line.split_once('\t')
+                .map(|(name, value)| (name.into(), value.into()))
+        })
+        .collect())
+}
+
+fn normalized_worktrees(base: &Path, attempt_path: &Path) -> Result<String> {
+    let attempt = attempt_path
+        .canonicalize()
+        .with_context(|| format!("canonicalising attempt worktree {}", attempt_path.display()))?;
+    let raw = checked(base, &["worktree", "list", "--porcelain"])?;
+    let mut current_is_attempt = false;
+    let mut normalized = Vec::new();
+    for line in raw.lines() {
+        if let Some(path) = line.strip_prefix("worktree ") {
+            current_is_attempt = PathBuf::from(path)
+                .canonicalize()
+                .map(|path| path == attempt)
+                .unwrap_or(false);
+        }
+        if current_is_attempt && line.starts_with("HEAD ") {
+            normalized.push("HEAD <attempt>".to_string());
+        } else {
+            normalized.push(line.to_string());
+        }
+    }
+    Ok(normalized.join("\n"))
+}
+
+fn protected_files(workspace: &PreparedWorkspace) -> Result<BTreeMap<String, String>> {
+    let git_dir = &workspace.git_dir;
+    let mut files = BTreeMap::new();
+    for relative in [
+        "HEAD",
+        "index",
+        "config",
+        "config.worktree",
+        "hooks",
+        "info/alternates",
+        "info/attributes",
+        "info/exclude",
+        "objects/info/alternates",
+        "shallow",
+        "MERGE_HEAD",
+        "MERGE_MSG",
+        "CHERRY_PICK_HEAD",
+        "REVERT_HEAD",
+        "BISECT_LOG",
+        "rebase-apply",
+        "rebase-merge",
+        "sequencer",
+        "logs/HEAD",
+    ] {
+        fingerprint_path(git_dir, Path::new(relative), &mut files)?;
+    }
+    fingerprint_other_worktrees(workspace, &mut files)?;
+    fingerprint_protected_branch_logs(workspace, &mut files)?;
+    Ok(files)
+}
+
+fn fingerprint_other_worktrees(
+    workspace: &PreparedWorkspace,
+    files: &mut BTreeMap<String, String>,
+) -> Result<()> {
+    let attempt_git_dir = PathBuf::from(checked(
+        &workspace.path,
+        &["rev-parse", "--absolute-git-dir"],
+    )?)
+    .canonicalize()
+    .context("canonicalising attempt Git directory for audit")?;
+    let root = workspace.git_dir.join("worktrees");
+    let entries = match std::fs::read_dir(&root) {
+        Ok(entries) => entries.collect::<std::io::Result<Vec<_>>>()?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error).context("reading shared worktree metadata"),
+    };
+    for entry in entries {
+        if entry.path().canonicalize().ok().as_ref() == Some(&attempt_git_dir) {
+            continue;
+        }
+        fingerprint_path(
+            &workspace.git_dir,
+            &Path::new("worktrees").join(entry.file_name()),
+            files,
+        )?;
+    }
+    Ok(())
+}
+
+fn fingerprint_protected_branch_logs(
+    workspace: &PreparedWorkspace,
+    files: &mut BTreeMap<String, String>,
+) -> Result<()> {
+    let root = Path::new("logs/refs/heads");
+    let excluded = root.join(&workspace.branch);
+    fingerprint_tree_except(&workspace.git_dir, root, &excluded, files)
+}
+
+fn fingerprint_tree_except(
+    root: &Path,
+    relative: &Path,
+    excluded: &Path,
+    files: &mut BTreeMap<String, String>,
+) -> Result<()> {
+    if relative == excluded {
+        return Ok(());
+    }
+    let path = root.join(relative);
+    let metadata = match std::fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error).with_context(|| format!("inspecting {}", path.display())),
+    };
+    if !metadata.is_dir() {
+        return fingerprint_path(root, relative, files);
+    }
+    let mut entries = std::fs::read_dir(&path)
+        .with_context(|| format!("reading {}", path.display()))?
+        .collect::<std::io::Result<Vec<_>>>()?;
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        fingerprint_tree_except(root, &relative.join(entry.file_name()), excluded, files)?;
+    }
+    Ok(())
+}
+
+fn fingerprint_path(
+    root: &Path,
+    relative: &Path,
+    files: &mut BTreeMap<String, String>,
+) -> Result<()> {
+    let path = root.join(relative);
+    let metadata = match std::fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error).with_context(|| format!("inspecting {}", path.display())),
+    };
+    if metadata.is_dir() {
+        let mut entries = std::fs::read_dir(&path)
+            .with_context(|| format!("reading {}", path.display()))?
+            .collect::<std::io::Result<Vec<_>>>()?;
+        entries.sort_by_key(|entry| entry.file_name());
+        for entry in entries {
+            fingerprint_path(root, &relative.join(entry.file_name()), files)?;
+        }
+        return Ok(());
+    }
+    let bytes = if metadata.file_type().is_symlink() {
+        std::fs::read_link(&path)?
+            .to_string_lossy()
+            .as_bytes()
+            .to_vec()
+    } else {
+        std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?
+    };
+    files.insert(relative.to_string_lossy().into_owned(), hash_bytes(&bytes)?);
+    Ok(())
+}
+
+fn hash_bytes(bytes: &[u8]) -> Result<String> {
+    let mut child = Command::new("git")
+        .args(["hash-object", "--stdin"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .context("starting Git content hash")?;
+    child
+        .stdin
+        .take()
+        .context("opening Git hash stdin")?
+        .write_all(bytes)?;
+    let output = child
+        .wait_with_output()
+        .context("waiting for Git content hash")?;
+    if !output.status.success() {
+        bail!("Git content hash failed");
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().into())
+}
+
+fn remove_worktree(project: &Path, path: &Path) -> Result<()> {
+    let path = path.to_string_lossy().into_owned();
+    checked(project, &["worktree", "remove", &path]).map(|_| ())
 }
 
 #[cfg(test)]
@@ -658,7 +846,7 @@ mod tests {
     }
 
     #[test]
-    fn workspace_records_require_the_private_repository_schema_and_identity() {
+    fn workspace_records_require_the_shared_repository_audit_schema() {
         let legacy = r#"
 path = "/tmp/workspace"
 branch = "orka/attempts/old"
@@ -666,7 +854,7 @@ input_commit = "deadbeef"
 "#;
         assert!(
             toml::from_str::<PreparedWorkspace>(legacy).is_err(),
-            "records without private Git metadata are not migrated"
+            "records without a shared Git audit are not migrated"
         );
 
         let (_temp, project, head) = project();
@@ -718,6 +906,56 @@ input_commit = "deadbeef"
         git(&ws.path, &["add", "-A"]);
         git(&ws.path, &["commit", "-q", "-m", "output"]);
         assert!(manager.is_clean(&ws).unwrap());
+    }
+
+    #[test]
+    fn validation_allows_only_attempt_owned_ref_changes() {
+        let (_temp, project, head) = project();
+        let manager = workspaces(&project);
+        let ws = manager.prepare("attempt-1", &head).unwrap();
+
+        std::fs::write(ws.path.join("out.txt"), "output\n").unwrap();
+        git(&ws.path, &["add", "-A"]);
+        git(&ws.path, &["commit", "-q", "-m", "expected output"]);
+        git(
+            &project,
+            &["update-ref", "refs/orka/file-changes/attempt-1", &head],
+        );
+        manager
+            .validate(&ws)
+            .expect("attempt and checkpoint refs are expected");
+
+        git(&project, &["branch", "unexpected", &head]);
+        let error = manager.validate(&ws).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("protected shared Git refs changed"),
+            "{error:#}"
+        );
+        assert_eq!(
+            manager.cleanup(&ws).unwrap(),
+            CleanupOutcome::RetainedIntegrityFailure
+        );
+    }
+
+    #[test]
+    fn validation_detects_shared_git_configuration_changes() {
+        let (_temp, project, head) = project();
+        let manager = workspaces(&project);
+        let ws = manager.prepare("attempt-1", &head).unwrap();
+
+        git(
+            &project,
+            &["config", "core.hooksPath", "/tmp/untrusted-hooks"],
+        );
+        let error = manager.validate(&ws).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("configuration, hooks, or alternates changed"),
+            "{error:#}"
+        );
     }
 
     #[test]

@@ -321,8 +321,9 @@ impl Engine<'_> {
         })
     }
 
-    /// The concrete capability grant for one attempt: the worktree and the
-    /// exchange directory writable, chosen context read-only, nothing else.
+    /// The concrete capability grant for one attempt: its linked worktree,
+    /// the owning repository's shared Git database, and the exchange directory
+    /// writable. Repository mutations are audited before settlement.
     fn execution_spec(
         &self,
         node: &NodeId,
@@ -335,25 +336,13 @@ impl Engine<'_> {
                 destination: self.policy.workspace_destination.clone(),
                 writable: true,
             },
-            // Private Git metadata is the only repository state writable by
-            // the agent. It is deliberately not the project's shared `.git`.
+            // A normal linked worktree needs its common Git database for
+            // objects, refs, worktree metadata, and locks. Orka snapshots the
+            // protected parts before execution and audits them afterwards.
             MountSpec {
                 source: workspace.git_dir.clone(),
                 destination: workspace.git_dir.clone(),
                 writable: true,
-            },
-            // Overlay the mutable workspace bind with immutable repository
-            // identity anchors. This prevents deleting `.git` and replacing
-            // the attempt with an unrelated `git init`.
-            MountSpec {
-                source: workspace.path.join(".git"),
-                destination: self.policy.workspace_destination.join(".git"),
-                writable: false,
-            },
-            MountSpec {
-                source: workspace.git_dir.join("orka-identity"),
-                destination: workspace.git_dir.join("orka-identity"),
-                writable: false,
             },
             MountSpec {
                 source: io_dir.to_path_buf(),
@@ -372,6 +361,10 @@ impl Engine<'_> {
                 .into_owned()
         };
         environment.insert("ORKA_NODE".into(), node.to_string());
+        environment.insert("GIT_AUTHOR_NAME".into(), "Orka Agent".into());
+        environment.insert("GIT_AUTHOR_EMAIL".into(), "orka-agent@localhost".into());
+        environment.insert("GIT_COMMITTER_NAME".into(), "Orka Agent".into());
+        environment.insert("GIT_COMMITTER_EMAIL".into(), "orka-agent@localhost".into());
         environment.insert(
             "ORKA_WORKSPACE".into(),
             self.policy
