@@ -36,10 +36,13 @@ comment as work.
 
 ## Review representation
 
-A review conventionally uses `nota/<review-id>` as its branch name. Starting a
-review creates the branch without checking it out and adds one empty marker
-commit whose parent is the resolved subject commit. The marker records the
-review id and subject in Git trailers.
+A review conventionally uses `nota/<review-id>` as its branch name. Callers may
+supply the name; the default generates `nota/review-<ulid>`. An integration
+normally passes its own identity instead — Orka uses `nota/<verification-id>` —
+which Nota records and checks but never interprets. Starting a review creates
+the branch without checking it out and adds one empty marker commit whose parent
+is the resolved subject commit. The marker records the review id and subject in
+Git trailers.
 
 Every later first-parent commit is one review entry:
 

@@ -38,7 +38,7 @@ Create the default configuration beside them with:
 orka init
 ```
 
-The generated `orka.toml` selects Orka's non-interactive Codex profile and an
+The generated `orka.toml` selects Genta's non-interactive Codex profile and an
 explicit Driva isolation backend:
 
 ```toml
@@ -51,8 +51,9 @@ rootfs = "/"
 tmpfs = ["/root"]
 ```
 
-Orka owns the Codex command line, workspace trust, credential grant,
-environment, and prompt/outcome protocol. It sends the resulting concrete
+Genta supplies the Codex command line, mounts, environment, and output
+protocol; Orka owns which profile to select, workspace trust, the credential
+grant, and the prompt/outcome protocol. It sends the resulting concrete
 execution request to Driva, which supplies only request validation and the
 Bubblewrap isolation mechanism. The default uses the host's `codex` executable
 through a read-only host rootfs with private `/root` and `/tmp` state.
@@ -100,11 +101,14 @@ orka recover             classify and finish unfinished attempts
 ```
 
 The agent command executes inside the isolated environment with the attempt
-worktree mounted writable at `/tmp/orka/workspace` and an exchange directory
-at `/tmp/orka/exchange` (`$ORKA_PROMPT` in, `$ORKA_OUTCOME` out). These are
-Orka's stable internal execution paths; the host worktree remains unique to
-the attempt. The agent declares its outcome by writing `outcome.toml`; see
-`src/outcome.rs` for the contract.
+file tree mounted writable at `/tmp/orka/workspace`, private per-attempt Git
+metadata, and an exchange directory at `/tmp/orka/exchange` (`$ORKA_PROMPT`
+in, `$ORKA_OUTCOME` out). The project repository's shared `.git` is never
+writable in the sandbox. Before launch, Orka runs its own Git writability probe
+through the exact sandbox grant. After execution, Orka validates repository
+identity, ancestry, and connectivity before interpreting `outcome.toml`.
+Failure of either gate records a workspace-integrity failure and cannot create
+a Linka result, candidate, evidence attachment, or project commit.
 
 The Codex profile runs `codex exec --json`. Orka keeps the provider's exact
 stdout in `events.raw.jsonl`, projects it into stable Orka events in
@@ -155,13 +159,14 @@ Acceptance pins the exact artifact and previous target commit.
 Publication refuses dirty or concurrently moved targets and is safe to retry
 after a crash.
 
-Worktree cleanup retains the `orka/attempts/<attempt-id>` candidate branch for
-every sealed attempt, including stale submissions and recorded failures. This
-keeps attempted work available for later inspection or recovery. One narrow
-case is rolled back completely: when the executor returns no exit evidence and
-the workspace and branch still exactly match their frozen input, Orka removes
-the empty worktree, candidate branch, and attempt record. Changed work is never
-discarded implicitly.
+After validation, project output is imported onto the
+`orka/attempts/<attempt-id>` candidate branch. Cleanup removes the private
+repository only when its committed output is reachable from that project
+branch, or when it is unchanged. Dirty, structurally invalid, and
+committed-but-unpromoted workspaces are retained. One narrow case is rolled
+back completely: when the executor returns no exit evidence and the private
+repository still exactly matches its frozen input, Orka removes the empty
+workspace and attempt record.
 
 ## Candidate reviews
 

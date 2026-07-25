@@ -4,17 +4,23 @@ Status: accepted and implemented.
 
 ## Decision
 
-The repository is a suite of five independently usable applications:
+The repository is a suite of six independently usable applications:
 
 ```text
- +----------+       +------+       +-------+
- | Orka Web +------>| Orka +------>| Driva |------>Bubblewrap
- +----+-----+       +--+---+       +-------+
+ +----------+       +------+        +-------+
+ | Orka Web |-----> | Orka |------->| Driva |-----> Bubblewrap
+ +----+-----+       +--+---+        +-------+
       |                |  |
-      v                |  v
-   +-------+<----------+ +------+
-   | Linka |             | Nota |-----> Git
-   +-------+             +------+
+      |                |  |         +-------+
+      |                |  +-------->| Genta |
+      |                |            +-------+
+      |                |
+      |                |            +-------+
+      |                +----------->| Nota  |-----> Git
+      v                |            +-------+
+   +-------+<----------+
+   | Linka |
+   +-------+
 ```
 
 **Linka** owns the node graph: definitions, dependency and lineage edges,
@@ -24,6 +30,13 @@ readiness, blockers, provenance, and staleness.
 **Driva** owns one isolated command execution: explicit mounts, network policy,
 process I/O, exit status, and cleanup through a replaceable isolation backend.
 It has no knowledge of agents, tasks, graphs, attempts, or reviews.
+
+**Genta** owns coding-agent knowledge: launch profiles carrying command lines,
+mounts, and environment; the wire protocols agents speak and their decoding
+into a stable event vocabulary; the `codex app-server` handshake; and transcript
+rendering. It is transport-agnostic — it never spawns a process or owns a pipe —
+and has no knowledge of graphs, attempts, or reviews. Orka and Styra are both
+hosts.
 
 **Orka** owns multi-attempt orchestration: selecting Linka work, freezing its
 inputs, creating durable attempts, constructing a Driva execution request,
@@ -44,21 +57,25 @@ does not interpret Linka identities or depend on another application here.
 
 ## Dependency rules
 
-1. Linka, Driva, and Nota are standalone and depend on none of the other
+1. Linka, Driva, Genta, and Nota are standalone and depend on none of the other
    applications.
 2. Orka depends on Linka's public library API and value types directly (it
    orchestrates Linka specifically, with no backend-neutral graph interface),
-   on Driva through a narrow Orka-owned executor interface, and on Nota's
-   Git-native review API.
+   on Driva through a narrow Orka-owned executor interface, on Genta for agent
+   launch profiles and wire-protocol decoding, and on Nota's Git-native review
+   API.
 3. Nota depends on none of the other applications. Integrations resolve their
    domain-specific identifiers before passing an exact Git revision to Nota.
 4. Linka does not interpret Orka attempts or Nota review records.
 5. Driva does not receive Linka node IDs or interpret Orka policy; it receives
    only the concrete command and capability grant chosen by its caller.
-6. Linka verification outcomes are `accepted`, `rejected`, or `abandoned`.
+6. Genta describes agents but runs nothing. It never spawns a process, and it
+   receives no Linka, Orka, or Nota identity; a host resolves a profile and
+   feeds captured output lines back to Genta's decoders.
+7. Linka verification outcomes are `accepted`, `rejected`, or `abandoned`.
    Accepted/rejected submission atomically records the exact candidate decision;
    abandonment closes only the verification, and publication remains explicit.
-7. Orka Web depends on Orka's public records and services and Linka's public
+8. Orka Web depends on Orka's public records and services and Linka's public
    graph API. It owns no orchestration state of its own.
 
 ## Information flow

@@ -3,9 +3,10 @@
 ## Purpose
 
 Orka orchestrates isolated agent attempts for work in a Linka store. It uses
-Linka to discover, freeze, and record work, and Driva to execute agent commands
-in isolation. Orka owns coordination and durable attempts; it does not implement
-container execution or human review.
+Linka to discover, freeze, and record work, Genta to describe the agent and
+decode its output, and Driva to execute agent commands in isolation. Orka owns
+coordination and durable attempts; it does not implement container execution,
+agent-specific knowledge, or human review.
 
 Orka is specifically a Linka orchestrator. It depends on Linka's public library
 API and value types directly — it does not maintain a backend-neutral graph port
@@ -29,6 +30,11 @@ never depends on Orka.
   generic node attachments also retain opaque Orka evidence for produced
   outputs without adding Orka semantics to Linka.
 - `.linka/` and `.orka/` are separately owned stores in the workbench.
+- Genta owns agent-specific knowledge: launch profiles (command line, mounts,
+  environment), wire protocols and their decoding into a stable event
+  vocabulary, and transcript rendering. Genta never spawns a process, so Orka
+  resolves a Genta profile and pairs it with a Driva execution request. Genta
+  knows nothing of Linka, attempts, or candidates, and is shared with Styra.
 - Nota depends only on Git. Orka resolves Linka candidates to Git artifacts and
   owns the binding between a Nota branch and a Linka verification node.
 
@@ -67,7 +73,8 @@ trait WorkspaceManager {
 }
 ```
 
-Production adapters use Driva and git worktrees; tests substitute fakes for both
+Production adapters use Driva and private per-attempt Git repositories; tests
+substitute fakes for both
 (the Linka store is always real). Everything else — selection, snapshotting, and
 submission — goes through `linka_work::LinkaWork`, a concrete integration with
 Linka, not a backend-neutral port.
@@ -80,20 +87,23 @@ Linka, not a backend-neutral port.
 2. Ask Linka to validate and snapshot the node, and gather the prompt prose, as
    one durable `AttemptInput` (Linka's `WorkSnapshot` plus the description and
    related-work prose). Record it before any side effect.
-3. Prepare an isolated worktree at `snapshot.project.revision`.
-4. Choose the exact mounts, network policy, agent command, and context, then
-   record the Driva execution request before starting the command.
+3. Prepare an isolated private repository at `snapshot.project.revision`.
+4. Choose the exact mounts, network policy, agent command, and context. Attest
+   repository identity on the host and run an Orka-owned Git writability probe
+   through the exact Driva grant before starting the agent.
 5. Capture raw agent events, separate diagnostics, a readable transcript,
    harness-observed project file reads, and exit evidence. Provider event
    decoding and filesystem observation remain in Orka; Driva transports
    uninterpreted streams.
-6. Interpret the agent's declared outcome (Orka's `AgentOutcome`), then submit
-   through Linka against the exact persisted snapshot, attaching the executor
-   report as `orka`-namespaced producer evidence. The agent must commit all its
-   work: a declared success that leaves the worktree dirty captures nothing and
-   is rejected as a contract violation. The captured output is the diff between
-   the frozen input commit and the committed worktree; no output paths are
-   declared.
+6. Re-attest repository identity, ancestry, and object connectivity. An
+   integrity failure overrides every agent declaration and permits no Linka or
+   project mutation. Only then interpret the agent's declared outcome (Orka's
+   `AgentOutcome`) and submit through Linka against the exact persisted
+   snapshot, attaching the executor report as `orka`-namespaced producer
+   evidence. The agent must commit all its work: a declared success that leaves
+   the repository dirty captures nothing and is rejected as a contract
+   violation. The captured output is the diff between the frozen input commit
+   and the committed file tree; no output paths are declared.
 7. After an accepted result, record content pins for observed reads against
    that exact result version. Recovery repeats this idempotently if a crash
    occurs between result acceptance and attempt sealing.
@@ -119,17 +129,15 @@ files and finishes the idempotent remainder:
 
 - Never invent an outcome without exit evidence: a changed pre-evidence
   attempt seals interrupted. An entirely unchanged executor failure is rolled
-  back, including its empty attempt record and candidate branch.
-- Resubmit executed-but-unsealed attempts against the persisted snapshot;
-  Linka's version check makes re-submission safe and non-duplicating.
-- Never discard a dirty workspace; clean only sealed attempts or attempts that
-  cannot have a result.
+  back, including its empty attempt record and private repository.
+- Re-attest, then resubmit executed-but-unsealed attempts against the persisted
+  snapshot; Linka's version check makes re-submission safe and non-duplicating.
+- Never discard a dirty, structurally invalid, or committed-but-unpromoted
+  workspace.
 
-Ordinary cleanup of a sealed attempt does not remove its candidate branch.
-Orka deliberately retains `orka/attempts/<attempt-id>` branches for accepted,
-failed, stale, and otherwise sealed attempts so their candidate state remains
-available for inspection, recovery, or later review. These branches are part
-of the attempt's evidence and are not garbage-collection candidates. The only
+Validated project outputs are imported onto
+`orka/attempts/<attempt-id>` branches. Those branches survive private workspace
+cleanup and remain available for inspection, recovery, or later review. The only
 automatic rollback is a pre-evidence executor error whose worktree and branch
 still exactly match the frozen input; there is no work to preserve in that
 case. Any broader deletion requires an explicit pruning operation with a
