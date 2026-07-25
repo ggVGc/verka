@@ -1,3 +1,18 @@
+2026-07-25
+People talk about loops, in loosely defined ways.
+I think what we are doing is what we have always done, but with more automation. Software development workflows.
+Linka is a way to store, in a strict way, our expectations, goals, and implementation process, in an immutable way.
+That way we can enter ideas and designs, end goals, and trigger workflows to implement them, and importantly,
+analyze if some implementation actually reached a goal.
+
+Another point. Linka may offer some way of tracking ROI of agentic development, and guidance on token spend optimization.
+We can get metrics for specific files, or overall features, how much churn they've been through.
+And, how much of that churn was based on testing and redesign, relative models performing bad work.
+If a human does some implementation work, we can also get metrics on the error rate/code churn of that relative agentic implementation.
+
+
+
+
 2026-07-11
 Things have gone a bit crazy.
 The core functionality should be a work tracking graph, similar to beads but with much more
