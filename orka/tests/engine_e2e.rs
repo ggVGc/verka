@@ -270,6 +270,52 @@ fn a_full_attempt_lands_a_version_checked_result_from_an_isolated_worktree() {
 }
 
 #[test]
+fn successful_work_can_be_automatically_verified_and_published() {
+    let (_temp, root) = workbench();
+    let project = root.join("project");
+    let node = add_node(&root, "Greet\n\nCreate greeting.txt saying hello.", vec![]);
+    let (store, workspaces, attempts) = parts(&root);
+    let executor = conforming_agent();
+    let engine = engine!(&root, store, executor, workspaces, attempts);
+    let node_id: linka::NodeId = node.parse().unwrap();
+
+    let report = engine.run_node(&node_id).unwrap();
+    assert!(run_succeeded(&report));
+    let candidate = report.candidate.expect("successful work candidate");
+
+    let (verification, published) = Candidates::new(&store)
+        .auto_accept_and_publish(&candidate.0)
+        .unwrap();
+
+    assert_eq!(published.integration, linka::IntegrationStatus::Published);
+    assert_eq!(git(&project, &["rev-parse", "HEAD"]), published.head_commit);
+    let (result, notes) = store
+        .read_result(verification.as_str())
+        .unwrap()
+        .expect("automatic verification result");
+    assert_eq!(
+        result.outcome,
+        linka::ResultOutcome::Verification(VerificationOutcome::Accepted)
+    );
+    assert_eq!(result.author, Author::Machine);
+    assert!(notes.contains("orka run --auto-accept"));
+    let (meta, _) = store.read_node(verification.as_str()).unwrap();
+    assert_eq!(meta.verifies.as_ref(), Some(&candidate));
+    assert_eq!(meta.assignee, Some(Author::Machine));
+    assert!(
+        linka::ops::node_state(&store, &linka::GitVcs::for_store(&store), &node_id)
+            .unwrap()
+            .is_complete()
+    );
+}
+
+fn run_succeeded(report: &orka::engine::RunReport) -> bool {
+    matches!(report.sealed, SealedState::Submitted { .. })
+        && !report.backend_failed
+        && report.cleanup != CleanupOutcome::RetainedIntegrityFailure
+}
+
+#[test]
 fn observed_workspace_reads_are_pinned_to_the_exact_accepted_result() {
     let (_temp, root) = workbench();
     let project = root.join("project");

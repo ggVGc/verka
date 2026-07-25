@@ -73,6 +73,7 @@ rootfs = "/"
 orka ready               list workable nodes
 orka init                create a default orka.toml (never overwrite one)
 orka run [NODE]          run one attempt (first ready node when omitted)
+  --auto-accept          on success, accept through a review node and publish
 orka attempts            list recorded attempts
 orka show ATTEMPT        one attempt's durable record
 orka candidates          list project candidates with their source nodes
@@ -152,6 +153,13 @@ orka review start CANDIDATE
 orka review finish VERIFICATION --outcome accepted
 orka publish CANDIDATE
 ```
+
+For trusted automated workflows, `orka run [NODE] --auto-accept` creates a
+machine-assigned verification node after a successful attempt, records its
+accepted result, and publishes the candidate. It does nothing after failed or
+invalid work. If publication cannot fast-forward (for example because the
+checkout is dirty), the accepted candidate is retained and can be retried with
+`orka publish CANDIDATE`.
 
 The candidate list connects Linka's candidate id to its source node, branch,
 target, and opaque Orka attempt identity. Linka validates the exact verification

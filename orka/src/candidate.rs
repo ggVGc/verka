@@ -6,8 +6,10 @@
 
 use crate::attempt::{AttemptId, AttemptRecord};
 use anyhow::{bail, Context, Result};
+use linka::ops::{self, NewNode};
 use linka::{
     Author, CandidateId, CandidateRecord, CandidateStore, GitVcs, IntegrationStatus, Store,
+    VerificationOutcome, VerificationSubmission,
 };
 use std::path::Path;
 use std::process::Command;
@@ -127,6 +129,53 @@ impl<'a> Candidates<'a> {
         let candidate = self.get(reference)?;
         CandidateStore::new(self.store).publish(&GitVcs::for_store(self.store), &candidate.id)?;
         self.get(&candidate.id.0)
+    }
+
+    /// Record an automated accepted verification and publish its exact candidate.
+    ///
+    /// The verification result goes through Linka's normal candidate-decision
+    /// protocol; this does not bypass the review gate. Publication remains a
+    /// separate, retryable fast-forward if it cannot complete.
+    pub fn auto_accept_and_publish(&self, reference: &str) -> Result<(linka::NodeId, Candidate)> {
+        let candidate = self.get(reference)?;
+        let vcs = GitVcs::for_store(self.store);
+        let verification: linka::NodeId = ops::add_verification(
+            self.store,
+            &vcs,
+            &candidate.id,
+            NewNode {
+                description: format!(
+                    "Automatically verify candidate {}\n\nSource: {}",
+                    candidate.id, candidate.node
+                ),
+                author: Author::Machine,
+                assignee: Some(Author::Machine),
+                depends_on: vec![],
+                derived_from: vec![],
+            },
+        )?
+        .parse()
+        .map_err(anyhow::Error::msg)?;
+        let snapshot = ops::snapshot_work(self.store, &vcs, verification.as_str(), &[])?;
+        ops::submit_verification(
+            self.store,
+            &vcs,
+            VerificationSubmission {
+                snapshot,
+                outcome: VerificationOutcome::Accepted,
+                notes: "Automatically accepted by `orka run --auto-accept`.".into(),
+                author: Author::Machine,
+                producer: None,
+            },
+        )
+        .map_err(|error| match error {
+            ops::SubmissionError::Conflict(conflicts) => {
+                anyhow::anyhow!("automatic verification became stale: {conflicts:?}")
+            }
+            ops::SubmissionError::Evaluation(error) => error,
+        })?;
+        let published = self.publish(&candidate.id.0)?;
+        Ok((verification, published))
     }
 
     fn present(&self, record: CandidateRecord) -> Result<Candidate> {

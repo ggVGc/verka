@@ -42,6 +42,10 @@ enum Command {
     Run {
         /// Node id to run; omitted, the first ready machine-workable node.
         node: Option<String>,
+        /// Automatically accept the successful candidate through a verification
+        /// node and publish it.
+        #[arg(long)]
+        auto_accept: bool,
     },
     /// List ready work as the orchestrator sees it.
     Ready,
@@ -233,7 +237,7 @@ fn run(cli: Cli) -> Result<()> {
             Config::init(&path)?;
             println!("created {}", path.display());
         }
-        Command::Run { node } => {
+        Command::Run { node, auto_accept } => {
             let config = workbench.config()?;
             let store = workbench.linka_store()?;
             let executor = config.executor()?;
@@ -261,6 +265,14 @@ fn run(cli: Cli) -> Result<()> {
                             "attempt {} did not complete successfully: {reason}",
                             report.attempt
                         );
+                    }
+                    if auto_accept {
+                        if let Some(candidate) = &report.candidate {
+                            let (verification, published) =
+                                Candidates::new(&store).auto_accept_and_publish(&candidate.0)?;
+                            println!("accepted via {verification}");
+                            println!("published {} at {}", published.id, published.head_commit);
+                        }
                     }
                 }
             }

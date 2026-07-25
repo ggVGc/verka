@@ -5,6 +5,19 @@ use orka::config::{CONFIG_FILE, DEFAULT_CONFIG};
 use std::process::Command;
 
 #[test]
+fn run_documents_automatic_acceptance_and_publication() {
+    let output = Command::new(env!("CARGO_BIN_EXE_orka"))
+        .args(["run", "--help"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--auto-accept"));
+    assert!(stdout.contains("verification node and publish"));
+}
+
+#[test]
 fn init_creates_the_default_config_and_refuses_to_replace_it() {
     let (_temp, root) = workbench();
     let binary = env!("CARGO_BIN_EXE_orka");
