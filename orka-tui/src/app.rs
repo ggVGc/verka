@@ -10,7 +10,7 @@ use orka::{
     linka_work::LinkaWork,
     review::{AbandonOutcome, FinishOutcome, Reviews},
     review_worktree::{GitReviewWorktrees, ReviewCleanupOutcome},
-    workspace::GitWorkspaces,
+    workspace::{CleanupOutcome, GitWorkspaces},
 };
 use std::{
     fs,
@@ -161,7 +161,28 @@ enum WorkerEvent {
         message: String,
         attempt: Option<AttemptId>,
     },
-    Done(std::result::Result<String, String>),
+    Done(std::result::Result<ActionCompletion, String>),
+}
+
+struct ActionCompletion {
+    message: String,
+    requires_attention: bool,
+}
+
+impl ActionCompletion {
+    fn normal(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            requires_attention: false,
+        }
+    }
+
+    fn requires_attention(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            requires_attention: true,
+        }
+    }
 }
 
 pub struct App {
@@ -778,16 +799,7 @@ impl App {
                 self.busy = false;
                 self.refresh();
                 match result {
-                    Ok(message) => {
-                        self.status = message.clone();
-                        if !showing_live {
-                            self.overlay = Some(Overlay::Text {
-                                title: "Action completed".into(),
-                                body: message,
-                                scroll: 0,
-                            });
-                        }
-                    }
+                    Ok(completion) => self.finish_action(completion, showing_live),
                     Err(error) => self.error_overlay("Action failed", error),
                 }
             } else {
@@ -795,6 +807,26 @@ impl App {
             }
         }
         self.refresh_live_attempt();
+    }
+
+    fn finish_action(&mut self, completion: ActionCompletion, showing_live: bool) {
+        if completion.requires_attention {
+            self.error_overlay("Attempt requires attention", completion.message);
+        } else {
+            self.status = completion
+                .message
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .to_string();
+            if !showing_live {
+                self.overlay = Some(Overlay::Text {
+                    title: "Action completed".into(),
+                    body: completion.message,
+                    scroll: 0,
+                });
+            }
+        }
     }
 
     fn open_live_attempt(&mut self) {
@@ -1072,7 +1104,7 @@ fn execute_action(
     target: &str,
     values: &[String],
     tx: &Sender<WorkerEvent>,
-) -> Result<String> {
+) -> Result<ActionCompletion> {
     match action {
         Action::RunSelected | Action::RunNext => {
             let (store, config) = engine_parts(root)?;
@@ -1098,16 +1130,8 @@ fn execute_action(
                 engine.run_next_with_progress(&mut progress)?
             };
             match report {
-                None => Ok("Nothing is ready".into()),
-                Some(report) => Ok(format!(
-                    "Attempt {} finished for {}\nexit: {}\nsealed: {}\ncandidate: {}\ncleanup: {:?}",
-                    report.attempt,
-                    report.node,
-                    report.exit_code,
-                    seal_text(&report.sealed),
-                    report.candidate.map(|id| id.0).unwrap_or_else(|| "-".into()),
-                    report.cleanup
-                )),
+                None => Ok(ActionCompletion::normal("Nothing is ready")),
+                Some(report) => Ok(run_completion(report)),
             }
         }
         Action::Recover => {
@@ -1124,19 +1148,26 @@ fn execute_action(
             };
             let reports = engine.recover()?;
             if reports.is_empty() {
-                Ok("No attempts recorded".into())
+                Ok(ActionCompletion::normal("No attempts recorded"))
             } else {
-                Ok(reports
-                    .into_iter()
-                    .map(|report| format!("{}  {}  {}", report.attempt, report.node, report.action))
-                    .collect::<Vec<_>>()
-                    .join("\n"))
+                Ok(ActionCompletion::normal(
+                    reports
+                        .into_iter()
+                        .map(|report| {
+                            format!("{}  {}  {}", report.attempt, report.node, report.action)
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                ))
             }
         }
         Action::InitConfig => {
             let path = root.join(CONFIG_FILE);
             Config::init(&path)?;
-            Ok(format!("Created {}", path.display()))
+            Ok(ActionCompletion::normal(format!(
+                "Created {}",
+                path.display()
+            )))
         }
         Action::AcceptCandidate | Action::RejectCandidate => {
             let store = Store::open(root.join(".linka"))?;
@@ -1151,33 +1182,37 @@ fn execute_action(
                 }
                 Candidates::new(&store).reject(target, &verification, notes)?
             };
-            Ok(format!("{} is now {}", candidate.id, candidate.status()))
+            Ok(ActionCompletion::normal(format!(
+                "{} is now {}",
+                candidate.id,
+                candidate.status()
+            )))
         }
         Action::PublishCandidate => {
             let store = Store::open(root.join(".linka"))?;
             let candidate = Candidates::new(&store).publish(target)?;
-            Ok(format!(
+            Ok(ActionCompletion::normal(format!(
                 "Published {} at {}",
                 candidate.id, candidate.head_commit
-            ))
+            )))
         }
         Action::StartReview => {
             let store = Store::open(root.join(".linka"))?;
             let assignee = parse_author(values.first().map(String::as_str).unwrap_or("human"))?;
             let started = Reviews::new(&store, root.join(".orka"))
                 .start(&CandidateId(target.into()), assignee)?;
-            Ok(format!(
+            Ok(ActionCompletion::normal(format!(
                 "Started verification {}\nbranch: {}\nsubject: {}",
                 started.record.verification, started.review.branch, started.review.subject
-            ))
+            )))
         }
         Action::ResumeReview => {
             let store = Store::open(root.join(".linka"))?;
             let started = Reviews::new(&store, root.join(".orka")).resume(&parse_node(target)?)?;
-            Ok(format!(
+            Ok(ActionCompletion::normal(format!(
                 "Resumed {}\nbranch: {}\nsubject: {}",
                 started.record.verification, started.review.branch, started.review.subject
-            ))
+            )))
         }
         Action::PrepareWorktree => {
             let store = Store::open(root.join(".linka"))?;
@@ -1185,19 +1220,19 @@ fn execute_action(
             let reviews = Reviews::new(&store, root.join(".orka"));
             let started = reviews.resume(&verification)?;
             let worktree = review_worktrees(root, &store).prepare(&started.record)?;
-            Ok(format!(
+            Ok(ActionCompletion::normal(format!(
                 "Review worktree ready\nverification: {}\nbranch: {}\npath: {}",
                 worktree.verification,
                 worktree.branch,
                 worktree.path.display()
-            ))
+            )))
         }
         Action::CleanupWorktree => {
             let store = Store::open(root.join(".linka"))?;
             let verification = parse_node(target)?;
             let record = Reviews::new(&store, root.join(".orka")).load(&verification)?;
             let outcome = review_worktrees(root, &store).cleanup(&record)?;
-            Ok(match outcome {
+            Ok(ActionCompletion::normal(match outcome {
                 ReviewCleanupOutcome::Removed => format!("Removed worktree for {verification}"),
                 ReviewCleanupOutcome::RetainedDirty => {
                     format!("Retained {verification}: worktree has uncommitted changes")
@@ -1205,7 +1240,7 @@ fn execute_action(
                 ReviewCleanupOutcome::AlreadyAbsent => {
                     format!("Worktree for {verification} is absent")
                 }
-            })
+            }))
         }
         Action::FinishAccepted | Action::FinishRejected => {
             let store = Store::open(root.join(".linka"))?;
@@ -1226,7 +1261,7 @@ fn execute_action(
                 summary,
                 author,
             )?;
-            Ok(match result {
+            Ok(ActionCompletion::normal(match result {
                 FinishOutcome::Submitted => format!("Completed {verification}"),
                 FinishOutcome::AlreadySubmitted => {
                     format!("Completed {verification} (already submitted)")
@@ -1234,7 +1269,7 @@ fn execute_action(
                 FinishOutcome::Conflict(conflicts) => {
                     format!("Stale {verification}: {conflicts:?}")
                 }
-            })
+            }))
         }
         Action::AbandonReview => {
             let store = Store::open(root.join(".linka"))?;
@@ -1246,7 +1281,7 @@ fn execute_action(
             let author = parse_author(values.get(1).map(String::as_str).unwrap_or("human"))?;
             let result =
                 Reviews::new(&store, root.join(".orka")).abandon(&verification, notes, author)?;
-            Ok(match result {
+            Ok(ActionCompletion::normal(match result {
                 AbandonOutcome::Abandoned => format!("Abandoned {verification}"),
                 AbandonOutcome::AlreadyAbandoned => {
                     format!("Abandoned {verification} (already submitted)")
@@ -1254,13 +1289,15 @@ fn execute_action(
                 AbandonOutcome::Conflict(conflicts) => {
                     format!("Stale {verification}: {conflicts:?}")
                 }
-            })
+            }))
         }
         Action::Audit => {
             let store = Store::open(root.join(".linka"))?;
             let problems = LinkaWork::new(&store).audit_output_evidence()?;
             if problems.is_empty() {
-                Ok("All Orka-produced outputs retain complete evidence".into())
+                Ok(ActionCompletion::normal(
+                    "All Orka-produced outputs retain complete evidence",
+                ))
             } else {
                 bail!(
                     "{} output evidence problem(s):\n{}",
@@ -1279,6 +1316,39 @@ fn execute_action(
         | Action::ViewPatch
         | Action::ShowReview => bail!("view action was sent to worker"),
     }
+}
+
+fn run_completion(report: orka::engine::RunReport) -> ActionCompletion {
+    let requires_attention = seal_requires_attention(&report.sealed)
+        || report.backend_failed
+        || report.cleanup == CleanupOutcome::RetainedIntegrityFailure;
+    let message = format!(
+        "Attempt {} finished for {}\nexit: {}\nsealed: {}\ncandidate: {}\ncleanup: {:?}",
+        report.attempt,
+        report.node,
+        report.exit_code,
+        seal_text(&report.sealed),
+        report
+            .candidate
+            .map(|id| id.0)
+            .unwrap_or_else(|| "-".into()),
+        report.cleanup
+    );
+    if requires_attention {
+        ActionCompletion::requires_attention(message)
+    } else {
+        ActionCompletion::normal(message)
+    }
+}
+
+fn seal_requires_attention(state: &SealedState) -> bool {
+    matches!(
+        state,
+        SealedState::StaleAtSubmit { .. }
+            | SealedState::Interrupted { .. }
+            | SealedState::WorkspaceIntegrityFailure { .. }
+            | SealedState::ContractViolation { .. }
+    )
 }
 
 fn progress_text(progress: &RunProgress) -> String {
@@ -1482,5 +1552,59 @@ mod tests {
 
         app.rebuild_error_rows();
         assert_eq!(app.rows[View::Errors as usize].len(), 1);
+    }
+
+    #[test]
+    fn completion_status_uses_only_the_first_line() {
+        let mut app = empty_app();
+
+        app.finish_action(
+            ActionCompletion::normal("Attempt attempt-1 finished for node-1\nexit: 0"),
+            true,
+        );
+
+        assert_eq!(app.status, "Attempt attempt-1 finished for node-1");
+        assert!(app.overlay.is_none());
+        assert!(app.rows[View::Errors as usize].is_empty());
+    }
+
+    #[test]
+    fn completion_requiring_attention_is_visible_and_retained() {
+        let mut app = empty_app();
+        let message = "Attempt attempt-1 finished for node-1\nexit: 0\nsealed: workspace integrity failure: checkpoint escaped";
+
+        app.finish_action(ActionCompletion::requires_attention(message), true);
+
+        assert_eq!(
+            app.status,
+            "Attempt requires attention: Attempt attempt-1 finished for node-1"
+        );
+        let errors = &app.rows[View::Errors as usize];
+        assert_eq!(errors.len(), 1);
+        assert_eq!(
+            errors[0].detail,
+            format!("Attempt requires attention: {message}")
+        );
+        assert!(matches!(
+            app.overlay,
+            Some(Overlay::Text { ref title, ref body, .. })
+                if title == "ERROR — Attempt requires attention" && body == message
+        ));
+    }
+
+    #[test]
+    fn unsuccessful_seals_require_attention() {
+        assert!(seal_requires_attention(
+            &SealedState::WorkspaceIntegrityFailure {
+                reason: "checkpoint escaped".into(),
+            }
+        ));
+        assert!(seal_requires_attention(&SealedState::ContractViolation {
+            reason: "outcome missing".into(),
+        }));
+        assert!(!seal_requires_attention(&SealedState::FailureRecorded));
+        assert!(!seal_requires_attention(&SealedState::Submitted {
+            output_commit: None,
+        }));
     }
 }

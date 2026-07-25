@@ -24,5 +24,6 @@ pauses it and `End` resumes following. Press `?` for the full key map.
 
 Long-running attempts and recovery run on a worker thread; lifecycle progress
 is shown in the status line. Refresh/load and action errors are retained in the
-Errors view for the rest of the session; action errors also open as visible
-dialogs.
+Errors view for the rest of the session. Action errors and attempts sealed with
+an integrity, contract, interruption, or stale-submit problem also open as
+visible dialogs.
