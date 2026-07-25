@@ -916,7 +916,7 @@ impl App {
                 let problems = if action == Action::CheckArtifacts {
                     ops::check_artifacts(&self.store, &self.vcs)?
                 } else {
-                    ops::check(&self.store)?
+                    ops::check_workbench(&self.store, &self.vcs)?
                 };
                 let body = if problems.is_empty() {
                     "Store is consistent.".into()

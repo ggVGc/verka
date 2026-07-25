@@ -1623,7 +1623,7 @@ fn validate_artifact(
 }
 
 pub fn check_artifacts(store: &Store, vcs: &dyn Vcs) -> Result<Vec<String>> {
-    let mut problems = check(store)?;
+    let mut problems = check_workbench(store, vcs)?;
     for id in store.list_ids()? {
         if let Some((result, _)) = store.read_result(&id)? {
             for artifact in result
@@ -1636,6 +1636,17 @@ pub fn check_artifacts(store: &Store, vcs: &dyn Vcs) -> Result<Vec<String>> {
                 }
             }
         }
+    }
+    Ok(problems)
+}
+
+/// Check both the store's structure and whether its on-disk state is fully
+/// recorded in workbench history. The latter catches interrupted or partial
+/// mutations that can still leave individually valid files behind.
+pub fn check_workbench(store: &Store, vcs: &dyn Vcs) -> Result<Vec<String>> {
+    let mut problems = check(store)?;
+    if let Err(error) = vcs.require_clean_store(&store.store_name()) {
+        problems.push(format!("store has uncommitted changes: {error:#}"));
     }
     Ok(problems)
 }
@@ -3057,6 +3068,23 @@ mod tests {
             problems.iter().any(|p| p.contains("unreadable definition")),
             "{problems:?}"
         );
+    }
+
+    #[test]
+    fn check_workbench_reports_uncommitted_store_changes() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs::default();
+        add(&store, &fake, new_node("a", vec![])).unwrap();
+
+        assert!(check_workbench(&store, &fake).unwrap().is_empty());
+
+        fake.dirty_store
+            .borrow_mut()
+            .push(" M .linka/nodes/node-partial/result.toml".into());
+        let problems = check_workbench(&store, &fake).unwrap();
+        let all = problems.join("\n");
+        assert!(all.contains("store has uncommitted changes"), "{all}");
+        assert!(all.contains("result.toml"), "{all}");
     }
 
     #[test]

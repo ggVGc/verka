@@ -807,7 +807,8 @@ fn main() -> Result<()> {
                 let vcs = GitVcs::for_store(&store);
                 ops::check_artifacts(&store, &vcs)?
             } else {
-                ops::check(&store)?
+                let vcs = GitVcs::for_store(&store);
+                ops::check_workbench(&store, &vcs)?
             };
             if problems.is_empty() {
                 println!("store is consistent");
