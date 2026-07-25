@@ -1,0 +1,29 @@
+# Linka TUI
+
+`linka-tui` is an interactive terminal frontend for the `linka` library. It
+does not parse CLI output or duplicate Linka's graph rules: every query and
+mutation goes through Linka's public Rust API.
+
+Run it from a Linka workbench:
+
+```sh
+cargo run --manifest-path linka-tui/Cargo.toml -- --store /path/to/workbench/.linka
+```
+
+Create a workbench and open it in one step:
+
+```sh
+cargo run --manifest-path linka-tui/Cargo.toml -- --store ./workbench/.linka --init
+```
+
+The top tabs list all nodes, candidates, verification nodes, ready work, stale
+work, blocked work, and evaluation errors. The right-hand association pane
+links dependencies, lineage, dependents, candidates, source nodes, and
+verifications; press `Tab` and `Enter` to follow one, then `b` to return.
+
+Press `a` to open the action palette. It includes graph creation and editing,
+completion and failure, responses, verification results, candidate
+registration/decisions/publication, attachments, context observations,
+history, origin and settlement queries, integrity checks, and project pairing.
+Press `?` in the application for the complete key reference.
+

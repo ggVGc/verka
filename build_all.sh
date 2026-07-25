@@ -3,6 +3,7 @@
 set -e
 
 (cd ./linka && cargo build --release)
+(cd ./linka-tui && cargo build --release)
 (cd ./orka-web && cargo build --release)
 (cd ./driva && cargo build --release)
 (cd ./genta && cargo build --release)
