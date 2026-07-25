@@ -424,6 +424,38 @@ fn cli_enter_prepares_the_managed_tree_and_prints_its_path() {
 }
 
 #[test]
+fn audit_reports_stale_and_unregistered_managed_review_worktrees() {
+    let (_temp, root) = workbench();
+    let candidate = candidate(&root);
+    let store = store_at(&root);
+    let reviews = Reviews::new(&store, root.join(".orka"));
+    let started = reviews.start(&candidate.id, Author::Human).unwrap();
+    let worktrees =
+        GitReviewWorktrees::new(store.project_root(), root.join(".orka/review-worktrees"));
+    let prepared = worktrees.prepare(&started.record).unwrap();
+    assert!(worktrees.audit(&reviews).unwrap().is_empty());
+
+    std::fs::remove_dir_all(&prepared.path).unwrap();
+    let problems = worktrees.audit(&reviews).unwrap();
+    assert!(
+        problems
+            .iter()
+            .any(|problem| problem.contains("stale Git worktree registration")),
+        "{problems:?}"
+    );
+
+    git(&store.project_root(), &["worktree", "prune"]);
+    std::fs::create_dir_all(&prepared.path).unwrap();
+    let problems = worktrees.audit(&reviews).unwrap();
+    assert!(
+        problems
+            .iter()
+            .any(|problem| problem.contains("is not registered with Git")),
+        "{problems:?}"
+    );
+}
+
+#[test]
 fn active_reviews_can_be_listed_and_abandoned_without_removing_nota_evidence() {
     let (_temp, root) = workbench();
     let candidate = candidate(&root);

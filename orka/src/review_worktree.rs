@@ -4,7 +4,7 @@
 //! convenience and safety policy around where a reviewer checks that branch
 //! out, how an existing checkout is validated, and when it may be removed.
 
-use crate::review::ReviewRecord;
+use crate::review::{ReviewRecord, Reviews};
 use anyhow::{bail, Context, Result};
 use linka::NodeId;
 use std::path::{Path, PathBuf};
@@ -113,6 +113,84 @@ impl GitReviewWorktrees {
         }
         managed.sort_by(|a, b| a.verification.as_str().cmp(b.verification.as_str()));
         Ok(managed)
+    }
+
+    /// Compare Git's worktree registry with Orka's managed directory and
+    /// durable review bindings. No pruning or repair is performed.
+    pub fn audit(&self, reviews: &Reviews<'_>) -> Result<Vec<String>> {
+        let mut problems = Vec::new();
+        let managed_registrations = registrations(&self.project)?
+            .into_iter()
+            .filter(|registration| registration.path.starts_with(&self.root))
+            .collect::<Vec<_>>();
+
+        for registration in &managed_registrations {
+            let display = registration.path.display();
+            let Some(name) = registration.path.file_name().and_then(|name| name.to_str()) else {
+                problems.push(format!(
+                    "{display}: managed worktree has no verification id"
+                ));
+                continue;
+            };
+            let Ok(verification) = name.parse::<NodeId>() else {
+                problems.push(format!(
+                    "{display}: managed worktree has an invalid verification id"
+                ));
+                continue;
+            };
+            if registration.path != self.path_for(&verification) {
+                problems.push(format!(
+                    "{verification}: managed worktree is registered at non-canonical path {display}"
+                ));
+            }
+            if !registration.path.is_dir() {
+                problems.push(format!(
+                    "{verification}: stale Git worktree registration for missing path {display}"
+                ));
+            }
+            match reviews.load(&verification) {
+                Ok(record) => match registration.branch.as_deref() {
+                    Some(branch) if branch == record.branch => {}
+                    Some(branch) => problems.push(format!(
+                        "{verification}: managed worktree is on `{branch}`, expected `{}`",
+                        record.branch
+                    )),
+                    None => problems.push(format!(
+                        "{verification}: managed review worktree is detached, expected `{}`",
+                        record.branch
+                    )),
+                },
+                Err(error) => problems.push(format!(
+                    "{verification}: managed worktree has no readable review binding: {error:#}"
+                )),
+            }
+        }
+
+        let entries = match std::fs::read_dir(&self.root) {
+            Ok(entries) => Some(entries),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => {
+                return Err(error).with_context(|| format!("reading {}", self.root.display()))
+            }
+        };
+        if let Some(entries) = entries {
+            for entry in entries {
+                let entry = entry?;
+                let path = absolute(entry.path());
+                if managed_registrations
+                    .iter()
+                    .any(|registration| registration.path == path)
+                {
+                    continue;
+                }
+                let name = entry.file_name().to_string_lossy().into_owned();
+                problems.push(format!(
+                    "{}: entry exists in the managed review-worktree directory but is not registered with Git",
+                    self.root.join(name).display()
+                ));
+            }
+        }
+        Ok(problems)
     }
 
     /// Remove only a clean, correctly registered review worktree. The Nota

@@ -1271,9 +1271,16 @@ fn execute_action(
             let store = Store::open(root.join(".linka"))?;
             let mut problems = LinkaWork::new(&store).audit_output_evidence()?;
             problems.extend(FsAttemptStore::new(root.join(".orka")).audit()?);
-            problems.extend(Reviews::new(&store, root.join(".orka")).audit()?);
+            let reviews = Reviews::new(&store, root.join(".orka"));
+            problems.extend(reviews.audit()?);
+            problems.extend(
+                GitReviewWorktrees::new(store.project_root(), root.join(".orka/review-worktrees"))
+                    .audit(&reviews)?,
+            );
             if problems.is_empty() {
-                Ok(ActionCompletion::normal("Orka state is consistent"))
+                Ok(ActionCompletion::normal(
+                    "Orka state is consistent; all Orka-produced outputs retain complete evidence",
+                ))
             } else {
                 bail!(
                     "{} Orka integrity problem(s):\n{}",
