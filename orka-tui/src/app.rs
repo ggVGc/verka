@@ -1271,6 +1271,7 @@ fn execute_action(
             let store = Store::open(root.join(".linka"))?;
             let mut problems = LinkaWork::new(&store).audit_output_evidence()?;
             problems.extend(FsAttemptStore::new(root.join(".orka")).audit()?);
+            problems.extend(Reviews::new(&store, root.join(".orka")).audit()?);
             if problems.is_empty() {
                 Ok(ActionCompletion::normal("Orka state is consistent"))
             } else {

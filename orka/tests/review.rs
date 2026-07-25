@@ -480,6 +480,32 @@ fn active_reviews_can_be_listed_and_abandoned_without_removing_nota_evidence() {
 }
 
 #[test]
+fn audit_reports_a_verification_left_without_its_review_binding() {
+    let (_temp, root) = workbench();
+    let candidate = candidate(&root);
+    let store = store_at(&root);
+    let reviews = Reviews::new(&store, root.join(".orka"));
+    let started = reviews.start(&candidate.id, Author::Human).unwrap();
+    assert!(reviews.audit().unwrap().is_empty());
+
+    std::fs::remove_file(
+        root.join(".orka")
+            .join("reviews")
+            .join(started.record.verification.as_str())
+            .join("review.toml"),
+    )
+    .unwrap();
+
+    let problems = reviews.audit().unwrap();
+    let all = problems.join("\n");
+    assert!(all.contains("review binding record is missing"), "{all}");
+    assert!(
+        all.contains("Orka verification has no durable review binding"),
+        "{all}"
+    );
+}
+
+#[test]
 fn a_review_can_be_abandoned_when_nota_branch_creation_was_interrupted() {
     let (_temp, root) = workbench();
     let candidate = candidate(&root);

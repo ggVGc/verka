@@ -600,6 +600,7 @@ fn run(cli: Cli) -> Result<()> {
             let store = workbench.linka_store()?;
             let mut problems = LinkaWork::new(&store).audit_output_evidence()?;
             problems.extend(workbench.attempts().audit()?);
+            problems.extend(workbench.reviews(&store).audit()?);
             if problems.is_empty() {
                 println!("Orka state is consistent");
             } else {

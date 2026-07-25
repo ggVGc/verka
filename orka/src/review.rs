@@ -14,6 +14,7 @@ use linka::{
 };
 use nota::{GitProvider, Review, StartedReview};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -164,6 +165,81 @@ impl<'a> Reviews<'a> {
             }
         }
         Ok(active)
+    }
+
+    /// Check every durable review binding and find Orka-created verification
+    /// nodes left behind before their binding could be recorded.
+    pub fn audit(&self) -> Result<Vec<String>> {
+        let root = self.orka_root.join("reviews");
+        let mut problems = Vec::new();
+        let mut bound = HashSet::new();
+        let entries = match fs::read_dir(&root) {
+            Ok(entries) => Some(entries),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error).with_context(|| format!("reading {}", root.display())),
+        };
+        if let Some(entries) = entries {
+            for entry in entries {
+                let entry = entry?;
+                if !entry.file_type()?.is_dir() {
+                    problems.push(format!(
+                        "reviews/{}: unexpected non-directory entry",
+                        entry.file_name().to_string_lossy()
+                    ));
+                    continue;
+                }
+                let name = entry.file_name().to_string_lossy().into_owned();
+                let Ok(verification) = name.parse::<NodeId>() else {
+                    problems.push(format!(
+                        "reviews/{name}: invalid verification directory name"
+                    ));
+                    continue;
+                };
+                if !self.record_path(&verification).is_file() {
+                    problems.push(format!("{verification}: review binding record is missing"));
+                    continue;
+                }
+                match self.load(&verification) {
+                    Ok(record) => {
+                        bound.insert(verification.clone());
+                        if let Err(error) = self.validate_binding(&record) {
+                            problems
+                                .push(format!("{verification}: invalid review binding: {error:#}"));
+                        }
+                    }
+                    Err(error) => problems.push(format!(
+                        "{verification}: unreadable review binding: {error:#}"
+                    )),
+                }
+            }
+        }
+
+        for id in self.linka.list_ids()? {
+            let (meta, description) = match self.linka.read_node(&id) {
+                Ok(node) => node,
+                Err(_) => continue,
+            };
+            let Some(candidate_id) = meta.verifies else {
+                continue;
+            };
+            let Ok(candidate) = CandidateStore::new(self.linka).load(&candidate_id) else {
+                continue;
+            };
+            let expected = format!(
+                "Verify candidate {}\n\nSource: {}",
+                candidate.id, candidate.node
+            );
+            let verification: NodeId = id.parse().map_err(anyhow::Error::msg)?;
+            if meta.author == Author::Human
+                && description == expected
+                && !bound.contains(&verification)
+            {
+                problems.push(format!(
+                    "{verification}: Orka verification has no durable review binding"
+                ));
+            }
+        }
+        Ok(problems)
     }
 
     pub fn review(&self, verification: &NodeId) -> Result<(ReviewRecord, Review)> {
