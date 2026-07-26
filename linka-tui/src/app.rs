@@ -56,6 +56,41 @@ pub struct NodeRow {
     pub dependents: Vec<String>,
 }
 
+impl NodeRow {
+    pub fn kind(&self) -> NodeKind {
+        if self.meta.verifies.is_some() {
+            NodeKind::Verification
+        } else {
+            NodeKind::Work
+        }
+    }
+}
+
+/// What a node is for: work nodes produce their own output, verification nodes
+/// review an exact candidate of another node's work.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NodeKind {
+    Work,
+    Verification,
+}
+
+impl NodeKind {
+    /// A single-width sigil, so the list stays aligned.
+    pub fn glyph(self) -> &'static str {
+        match self {
+            Self::Work => "■",
+            Self::Verification => "◆",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Work => "work",
+            Self::Verification => "verification",
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct CandidateRow {
     pub record: CandidateRecord,

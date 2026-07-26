@@ -21,6 +21,10 @@ work, blocked work, and evaluation errors. The right-hand association pane
 links dependencies, lineage, dependents, candidates, source nodes, and
 verifications; press `Tab` and `Enter` to follow one, then `b` to return.
 
+Each node row starts with a sigil for its kind: `■` (blue) for a work node and
+`◆` (magenta) for a verification node, so mixed collections stay readable. The
+details pane spells the kind out, and `?` shows the legend.
+
 Press `A` to browse the selected node's attachments (or, in the Candidates
 collection, its source node's). The left pane lists namespace/key with size and
 media type; the right pane shows the selected payload as text, or as a hex dump

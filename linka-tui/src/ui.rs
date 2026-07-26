@@ -1,4 +1,6 @@
-use crate::app::{candidate_state_label, state_label, App, Focus, Overlay, View, ACTIONS};
+use crate::app::{
+    candidate_state_label, state_label, App, Focus, NodeKind, Overlay, View, ACTIONS,
+};
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Margin, Rect},
     style::{Color, Modifier, Style},
@@ -112,8 +114,11 @@ fn draw_items(frame: &mut Frame, app: &App, area: Rect) {
             .map(|index| {
                 let node = &app.nodes[*index];
                 let state = state_label(&node.state);
+                let kind = node.kind();
                 ListItem::new(vec![
                     Line::from(vec![
+                        Span::styled(kind.glyph(), kind_style(kind)),
+                        Span::raw(" "),
                         Span::styled(state.clone(), status_style(&state)),
                         Span::raw("  "),
                         Span::styled(&node.id, Style::default().fg(ACCENT)),
@@ -159,6 +164,10 @@ fn draw_detail(frame: &mut Frame, app: &App, area: Rect) {
     let content = if let Some(node) = app.selected_node() {
         let mut lines = vec![
             kv("id", &node.id),
+            kv(
+                "kind",
+                format!("{} {}", node.kind().glyph(), node.kind().label()),
+            ),
             kv("status", state_label(&node.state)),
             kv("author", node.meta.author.as_str()),
             kv(
@@ -370,6 +379,19 @@ fn draw_overlay(frame: &mut Frame, overlay: &Overlay) {
                 Line::raw("Enter          focus/follow an association"),
                 Line::raw("b/Backspace    go back after following"),
                 Line::raw("r              reload graph and derived state"),
+                Line::raw(""),
+                Line::styled("Node kinds", heading()),
+                Line::from(vec![
+                    Span::styled(NodeKind::Work.glyph(), kind_style(NodeKind::Work)),
+                    Span::raw("              work node: produces its own output"),
+                ]),
+                Line::from(vec![
+                    Span::styled(
+                        NodeKind::Verification.glyph(),
+                        kind_style(NodeKind::Verification),
+                    ),
+                    Span::raw("              verification node: reviews one candidate"),
+                ]),
                 Line::raw(""),
                 Line::styled("Attachments", heading()),
                 Line::raw("A              browse the selected node's attachments"),
@@ -659,6 +681,14 @@ fn heading() -> Style {
 
 fn key() -> Style {
     Style::default().fg(Color::Black).bg(Color::Gray)
+}
+
+fn kind_style(kind: NodeKind) -> Style {
+    let color = match kind {
+        NodeKind::Work => Color::Blue,
+        NodeKind::Verification => Color::Magenta,
+    };
+    Style::default().fg(color).add_modifier(Modifier::BOLD)
 }
 
 fn status_style(status: &str) -> Style {
