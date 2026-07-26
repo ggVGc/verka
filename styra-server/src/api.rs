@@ -37,6 +37,13 @@ pub struct SessionInfo {
     pub driva: DrivaOptions,
 }
 
+/// Host-side tmux endpoint for the shell owned by a live session's sandbox.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShellInfo {
+    pub tmux: PathBuf,
+    pub socket: PathBuf,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SendMessage {
     pub text: String,
@@ -80,6 +87,7 @@ pub enum Request {
     ListStoredSessions,
     StoredSession { id: String },
     Transcript { id: String },
+    Shell { id: String },
     /// Ask the server to remove its socket and exit. Any live tracks it owns die
     /// with it, so this is the deliberate counterpart to the daemon outliving
     /// its clients.
@@ -106,6 +114,7 @@ pub enum Response {
     StoredSessions(Vec<SessionSummary>),
     StoredSession(StoredSession),
     Transcript(Transcript),
+    Shell(ShellInfo),
 }
 
 /// Response envelope returned for every syntactically valid connection.

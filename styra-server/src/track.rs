@@ -42,6 +42,16 @@ pub struct TrackSpec {
     /// against the host filesystem, layered additively on top of the
     /// profile's own mounts, environment, and network policy.
     pub template: Option<ResolvedTemplate>,
+    /// Hidden launcher and control mount used to keep an interactive tmux
+    /// shell in the exact sandbox that runs the agent.
+    pub broker: Option<SandboxBroker>,
+}
+
+pub struct SandboxBroker {
+    pub executable: PathBuf,
+    pub tmux: PathBuf,
+    pub control: MountSpec,
+    pub socket: PathBuf,
 }
 
 /// A Driva [`driva::TemplateConfig`] resolved against the host filesystem:
@@ -122,6 +132,10 @@ impl Track {
         session_id: String,
         diagnostics_path: PathBuf,
     ) -> Result<(Track, Receiver<TrackUpdate>)> {
+        let broker_control = spec
+            .broker
+            .as_ref()
+            .map(|broker| broker.control.source.clone());
         let request = build_request(&spec);
         let protocol = spec.profile.protocol;
 
@@ -264,6 +278,9 @@ impl Track {
                         TrackEnd { exit_code: None, error: Some(message) }
                     }
                 };
+                if let Some(control) = broker_control {
+                    std::fs::remove_dir_all(control).ok();
+                }
                 let _ = exec_updates.send(TrackUpdate::Ended(end));
             })
             .context("starting the execution thread")?;
@@ -421,6 +438,13 @@ fn build_request(spec: &TrackSpec) -> ExecutionRequest {
             },
         });
     }
+    if let Some(broker) = &spec.broker {
+        mounts.push(Mount::Bind {
+            source: broker.control.source.clone(),
+            destination: broker.control.destination.clone(),
+            access: MountAccess::ReadWrite,
+        });
+    }
     let mut environment: BTreeMap<OsString, OsString> = spec
         .profile
         .environment
@@ -438,8 +462,36 @@ fn build_request(spec: &TrackSpec) -> ExecutionRequest {
         );
         network = network || template.network;
     }
+    let command = if let Some(broker) = &spec.broker {
+        environment.insert(
+            OsString::from(crate::broker::BROKER_ENV),
+            OsString::from("1"),
+        );
+        environment.insert(
+            OsString::from(crate::broker::AGENT_COMMAND_ENV),
+            OsString::from(
+                serde_json::to_string(&spec.profile.command)
+                    .expect("serializing a string command cannot fail"),
+            ),
+        );
+        environment.insert(
+            OsString::from(crate::broker::TMUX_ENV),
+            broker.tmux.clone().into_os_string(),
+        );
+        environment.insert(
+            OsString::from(crate::broker::TMUX_SOCKET_ENV),
+            broker.socket.clone().into_os_string(),
+        );
+        environment.insert(
+            OsString::from(crate::broker::WORKDIR_ENV),
+            spec.working_directory.clone().into_os_string(),
+        );
+        vec![broker.executable.clone().into_os_string()]
+    } else {
+        spec.profile.command.iter().map(OsString::from).collect()
+    };
     ExecutionRequest {
-        command: spec.profile.command.iter().map(OsString::from).collect(),
+        command,
         working_directory: spec.working_directory.clone(),
         mounts,
         environment,
@@ -520,6 +572,7 @@ mod tests {
             },
             temporary_mounts: Vec::new(),
             template: None,
+            broker: None,
         }
     }
 
@@ -556,6 +609,49 @@ mod tests {
             Some(&OsString::from("/tmp/agent-home"))
         );
         assert!(request.network);
+    }
+
+    #[test]
+    fn broker_wraps_the_command_without_changing_the_reported_agent_policy() {
+        let root = std::env::temp_dir().join(format!("styra-track-broker-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut spec = workspace_spec(&root);
+        let agent_command = spec.profile.command.clone();
+        spec.broker = Some(SandboxBroker {
+            executable: PathBuf::from("/usr/bin/styra-server"),
+            tmux: PathBuf::from("/usr/bin/tmux"),
+            control: MountSpec {
+                source: root.clone(),
+                destination: PathBuf::from("/tmp/styra/control"),
+                writable: true,
+            },
+            socket: PathBuf::from("/tmp/styra/control/tmux.sock"),
+        });
+
+        let displayed = DrivaOptions::capture(&spec, "bwrap");
+        let request = build_request(&spec);
+        assert_eq!(displayed.command, agent_command);
+        assert_eq!(
+            request.command,
+            vec![OsString::from("/usr/bin/styra-server")]
+        );
+        assert_eq!(
+            request
+                .environment
+                .get(&OsString::from(crate::broker::AGENT_COMMAND_ENV)),
+            Some(&OsString::from(
+                serde_json::to_string(&agent_command).unwrap()
+            ))
+        );
+        assert!(request.mounts.iter().any(|mount| matches!(
+            mount,
+            Mount::Bind {
+                destination,
+                access: MountAccess::ReadWrite,
+                ..
+            } if destination == &PathBuf::from("/tmp/styra/control")
+        )));
+        std::fs::remove_dir_all(root).ok();
     }
 
     #[test]

@@ -2,7 +2,7 @@
 //! drives the application through Styra's JSON Unix-socket API.
 
 use anyhow::{Context, Result};
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -10,7 +10,9 @@ use crossterm::terminal::{
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use std::io::{Stdout, Write};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::Duration;
 
 mod app;
@@ -25,7 +27,7 @@ use styra_server::{Client, LogEntry, TrackSummary, TrackUpdate};
 #[command(name = "styra", about, version)]
 struct Cli {
     /// Styra server Unix socket (default: $XDG_RUNTIME_DIR/styra/styra.sock).
-    #[arg(long)]
+    #[arg(long, global = true)]
     socket: Option<PathBuf>,
     /// Start the Styra daemon in the background and exit, without opening the
     /// interface. A no-op if one is already listening on the socket.
@@ -55,12 +57,27 @@ struct Cli {
     /// choose one from the server's store.
     #[arg(long, num_args = 0..=1, value_name = "SESSION")]
     view: Option<Option<PathBuf>>,
+    #[command(subcommand)]
+    command: Option<CliCommand>,
     /// Optional first message, sent to seed the opening turn.
     #[arg(trailing_var_arg = true)]
     prompt: Vec<String>,
 }
 
+#[derive(Subcommand)]
+enum CliCommand {
+    /// Attach to the persistent shell inside a live session's sandbox.
+    Shell {
+        /// Live Styra session to attach to.
+        #[arg(long)]
+        session: String,
+    },
+}
+
 fn main() -> Result<()> {
+    if let Some(result) = styra_server::broker::exit_if_requested() {
+        return result;
+    }
     // The connect-or-spawn path spawns the daemon by re-exec'ing *this* binary
     // with the serve sentinel in its environment; honour it before parsing the
     // client CLI so the re-exec'd copy becomes the server instead of a second
@@ -88,6 +105,9 @@ fn main() -> Result<()> {
     let client = styra_server::ensure_server(&socket).with_context(|| {
         format!("Styra server is unavailable at {}", socket.display())
     })?;
+    if let Some(CliCommand::Shell { session }) = &cli.command {
+        return attach_shell(&client, session);
+    }
 
     // Bare `--view` (no path) needs an interactive terminal to browse
     // sessions in, so it is opened early only in that case; the other paths
@@ -247,6 +267,23 @@ fn main() -> Result<()> {
         client.stop_session(&session_id).ok();
     }
     result
+}
+
+fn attach_shell(client: &Client, session: &str) -> Result<()> {
+    let shell = client
+        .shell(session)
+        .with_context(|| format!("opening sandbox shell for session {session}"))?;
+    let error = Command::new(&shell.tmux)
+        .arg("-S")
+        .arg(&shell.socket)
+        .args(["attach-session", "-t", "shell"])
+        .exec();
+    Err(error).with_context(|| {
+        format!(
+            "attaching to session {session} with {}",
+            shell.tmux.display()
+        )
+    })
 }
 
 /// `--daemon`: bring up the background daemon and return. Reuses the ordinary
@@ -736,4 +773,25 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result
     terminal.show_cursor().ok();
     terminal.backend_mut().flush().ok();
     Ok(())
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use super::*;
+
+    #[test]
+    fn shell_subcommand_requires_and_captures_a_session() {
+        let cli = Cli::try_parse_from(["styra", "shell", "--session", "styra-123"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(CliCommand::Shell { session }) if session == "styra-123"
+        ));
+    }
+
+    #[test]
+    fn legacy_prompt_launch_still_parses_without_a_subcommand() {
+        let cli = Cli::try_parse_from(["styra", "--profile", "codex", "hello"]).unwrap();
+        assert!(cli.command.is_none());
+        assert_eq!(cli.prompt, vec!["hello"]);
+    }
 }

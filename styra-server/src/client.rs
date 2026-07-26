@@ -1,8 +1,8 @@
 //! Blocking client for Styra's JSON protocol over a Unix domain socket.
 
 use crate::api::{
-    CreateSession, Health, Request, Response, SendMessage, SessionInfo, StoredSession, Updates,
-    WireRequest, WireResponse, API_VERSION,
+    CreateSession, Health, Request, Response, SendMessage, SessionInfo, ShellInfo, StoredSession,
+    Updates, WireRequest, WireResponse, API_VERSION,
 };
 use crate::types::{TrackSummary, SessionSummary};
 use anyhow::{bail, Context, Result};
@@ -94,6 +94,13 @@ impl Client {
         match self.request(Request::Transcript { id: id.to_owned() })? {
             Response::Transcript(value) => Ok(value.text),
             other => unexpected("transcript", other),
+        }
+    }
+
+    pub fn shell(&self, id: &str) -> Result<ShellInfo> {
+        match self.request(Request::Shell { id: id.to_owned() })? {
+            Response::Shell(value) => Ok(value),
+            other => unexpected("shell", other),
         }
     }
 

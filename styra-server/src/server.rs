@@ -2,19 +2,21 @@
 
 use crate::agent::{MountSpec, Profile, SandboxLayout};
 use crate::api::{
-    CreateSession, Health, Request, Response, SequencedUpdate, SessionInfo, StoredSession,
-    Transcript, Updates, WireRequest, WireResponse, API_VERSION,
+    CreateSession, Health, Request, Response, SequencedUpdate, SessionInfo, ShellInfo,
+    StoredSession, Transcript, Updates, WireRequest, WireResponse, API_VERSION,
 };
 use crate::journal::{self, Journal};
-use crate::track::{ResolvedTemplate, Track, TrackSpec};
-use crate::types::{DrivaOptions, TrackSummary, SessionSummary};
+use crate::track::{ResolvedTemplate, SandboxBroker, Track, TrackSpec};
+use crate::types::{DrivaOptions, SessionSummary, TrackSummary};
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 const MAX_REQUEST_BYTES: usize = 8 * 1024 * 1024;
 
@@ -45,6 +47,7 @@ struct ManagedTrack {
     profile: String,
     workspace: PathBuf,
     driva: DrivaOptions,
+    shell: ShellInfo,
 }
 
 impl ManagedTrack {
@@ -117,6 +120,12 @@ impl ServerState {
         let mut profile = Profile::builtin(&request.profile, &self.inner.layout)?;
         profile.network = profile.network || request.network;
         let template = resolve_templates(&workspace, &request.templates)?;
+        // Resolve host tooling before creating durable session state, so a
+        // missing tmux or broker executable cannot leave an empty journal.
+        let tmux = genta::agent::resolve_executable(Path::new("tmux"))
+            .context("tmux is required for Styra session shells")?;
+        let broker_executable =
+            std::env::current_exe().context("locating the Styra sandbox broker")?;
         let (journal, id) = Journal::create_in_store(&self.inner.store_root, &profile)?;
         let journal_path = journal.path().to_path_buf();
         let diagnostics = journal_path
@@ -133,15 +142,30 @@ impl ServerState {
             },
             temporary_mounts: Vec::new(),
             template,
+            broker: Some(self.prepare_broker(&id, broker_executable, tmux)?),
         };
         let single_turn = spec.profile.single_turn;
         let driva = DrivaOptions::capture(&spec, "bwrap");
         let profile_name = spec.profile.name.clone();
+        let prepared_broker = spec.broker.as_ref().expect("broker was prepared");
+        let shell = ShellInfo {
+            tmux: prepared_broker.tmux.clone(),
+            socket: prepared_broker.control.source.join("tmux.sock"),
+        };
         let backend = Box::new(driva::BwrapIsolation {
             executable: "bwrap".into(),
             rootfs: Some(PathBuf::from("/")),
         });
-        let (track, receiver) = Track::spawn(spec, backend, journal, id.clone(), diagnostics)?;
+        let (track, receiver) = match Track::spawn(spec, backend, journal, id.clone(), diagnostics)
+        {
+            Ok(spawned) => spawned,
+            Err(error) => {
+                if let Some(control) = shell.socket.parent() {
+                    std::fs::remove_dir_all(control).ok();
+                }
+                return Err(error);
+            }
+        };
         let updates = Arc::new(Mutex::new(Vec::new()));
         let accepting_messages = Arc::new(AtomicBool::new(true));
         let managed = Arc::new(ManagedTrack {
@@ -152,6 +176,7 @@ impl ServerState {
             profile: profile_name.clone(),
             workspace: workspace.clone(),
             driva: driva.clone(),
+            shell,
         });
         std::thread::Builder::new()
             .name(format!("styra-updates-{id}"))
@@ -206,6 +231,58 @@ impl ServerState {
             .get(id)
             .cloned()
             .with_context(|| format!("no live track for session {id:?}"))
+    }
+
+    fn prepare_broker(
+        &self,
+        id: &str,
+        executable: PathBuf,
+        tmux: PathBuf,
+    ) -> Result<SandboxBroker> {
+        let control_root = self
+            .inner
+            .socket
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("sandboxes");
+        let control = control_root.join(id);
+        std::fs::create_dir_all(&control)
+            .with_context(|| format!("creating sandbox control directory {}", control.display()))?;
+        std::fs::set_permissions(&control, std::fs::Permissions::from_mode(0o700)).with_context(
+            || {
+                format!(
+                    "restricting sandbox control directory {}",
+                    control.display()
+                )
+            },
+        )?;
+        Ok(SandboxBroker {
+            executable,
+            tmux,
+            control: MountSpec {
+                source: control,
+                destination: PathBuf::from("/tmp/styra/control"),
+                writable: true,
+            },
+            socket: PathBuf::from("/tmp/styra/control/tmux.sock"),
+        })
+    }
+
+    fn shell(&self, id: &str) -> Result<ShellInfo> {
+        let track = self.track(id)?;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if track.shell.socket.exists() {
+                return Ok(track.shell.clone());
+            }
+            if !track.accepting_messages.load(Ordering::Acquire) {
+                anyhow::bail!("session {id:?} has ended; its sandbox shell is no longer running");
+            }
+            if Instant::now() >= deadline {
+                anyhow::bail!("session {id:?} sandbox shell did not become ready");
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
 
     fn stored_summary(&self, id: &str) -> Result<SessionSummary> {
@@ -277,6 +354,7 @@ impl ServerState {
                 let text = journal::render_transcript(&summary.path, meta.protocol)?;
                 Ok(Response::Transcript(Transcript { text }))
             }
+            Request::Shell { id } => Ok(Response::Shell(self.shell(&id)?)),
             // Flag the shutdown; the connection thread acts on it once this
             // acknowledgement has gone back over the wire.
             Request::Shutdown => {

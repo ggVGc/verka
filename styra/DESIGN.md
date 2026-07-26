@@ -74,6 +74,14 @@ calls Driva. The headless example uses the same client. Public wire types live
 in `api.rs`, the reusable Rust client in `client.rs`, and server dispatch in
 `server.rs`.
 
+Each live track also has a persistent interactive shell. A hidden broker is
+the top-level command inside Bubblewrap: it starts a detached tmux server and
+`/bin/sh`, then launches the profile's agent with the inherited protocol
+streams unchanged. The tmux socket is created through a private per-session
+control bind mount, allowing `styra shell --session ID` to attach from the host
+without exposing a host shell inside the sandbox or mixing terminal bytes into
+the agent journal. The broker kills tmux when the agent track ends.
+
 Durable sessions default to `$XDG_STATE_HOME/styra` (falling back to
 `$HOME/.local/state/styra`). The socket is independent, ephemeral runtime state
 at `$XDG_RUNTIME_DIR/styra/styra.sock`. Default Styra directories use mode

@@ -19,6 +19,9 @@ struct Cli {
 }
 
 fn main() -> Result<()> {
+    if let Some(result) = styra_server::broker::exit_if_requested() {
+        return result;
+    }
     // A process re-exec'd by the connect-or-spawn path carries the serve
     // sentinel in its environment; honour it before touching the CLI so the
     // same binary can act as either a hand-launched server or a self-spawned

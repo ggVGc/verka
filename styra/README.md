@@ -26,6 +26,7 @@ Then start the TUI in another terminal:
 
 ```sh
 styra [OPTIONS] [-- PROMPT]
+styra shell --session <ID>
 
   --socket <PATH>      Server socket (default: $XDG_RUNTIME_DIR/styra/styra.sock)
   --profile <NAME>     Agent profile to launch (default: codex)
@@ -34,6 +35,12 @@ styra [OPTIONS] [-- PROMPT]
   --view [<SESSION>]   Open a captured journal read-only instead of launching;
                        bare, browse sessions in the server's store and pick one
 ```
+
+Every live session also owns a detached `/bin/sh` in tmux inside the same
+Bubblewrap sandbox as its agent. Attach with `styra shell --session <ID>`;
+detaching leaves the shell and its processes running, while stopping the Styra
+session ends both the agent and tmux. The agent remains on its original piped
+machine protocol, so shell traffic never enters the raw event journal.
 
 The server accepts `--store <DIR>` and `--socket <PATH>`. By default, durable
 sessions live under `$XDG_STATE_HOME/styra`, or `$HOME/.local/state/styra`
@@ -61,6 +68,7 @@ Operations:
 | `list_stored_sessions` | none | `stored_sessions` |
 | `stored_session` | session id | `stored_session` |
 | `transcript` | session id | `transcript` |
+| `shell` | live session id | `shell` (tmux executable and socket) |
 
 The update stream is cursor-based. Clients pass the last observed sequence as
 `after`; the response supplies `next`. Repeating a request with the same cursor
