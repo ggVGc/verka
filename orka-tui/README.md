@@ -22,6 +22,11 @@ running to open its live work log, or use **Follow live attempt output** on a
 selected attempt. The live view follows new output automatically; scrolling up
 pauses it and `End` resumes following. Press `?` for the full key map.
 
+Press `L` to switch the whole view over to the embedded [linka-tui](../linka-tui)
+interface for the same workbench store. Inside it, `L` (or Linka's own `q`)
+switches back to Orka. The Linka view keeps its navigation state between visits,
+and Orka's worker keeps running while it is open.
+
 Long-running attempts and recovery run on a worker thread; lifecycle progress
 is shown in the status line. Refresh/load and action errors are retained in the
 Errors view for the rest of the session. Action errors and attempts sealed with

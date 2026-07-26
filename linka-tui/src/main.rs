@@ -1,9 +1,6 @@
-mod app;
-mod ui;
-
 use anyhow::{Context, Result};
-use app::App;
 use clap::Parser;
+use linka_tui::{app::App, ui};
 use crossterm::{
     event::{self, Event},
     execute,

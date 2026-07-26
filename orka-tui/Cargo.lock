@@ -487,6 +487,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "linka-tui"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "crossterm",
+ "linka",
+ "ratatui",
+]
+
+[[package]]
 name = "linux-raw-sys"
 version = "0.4.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -580,6 +591,7 @@ dependencies = [
  "clap",
  "crossterm",
  "linka",
+ "linka-tui",
  "orka",
  "ratatui",
 ]

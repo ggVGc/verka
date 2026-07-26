@@ -27,3 +27,7 @@ registration/decisions/publication, attachments, context observations,
 history, origin and settlement queries, integrity checks, and project pairing.
 Press `?` in the application for the complete key reference.
 
+
+This crate is also a library: `linka_tui::app::App` plus `linka_tui::ui::draw_in`
+let a host application embed the interface inside an area of its own frame.
+[orka-tui](../orka-tui) does this behind its `L` shortcut.

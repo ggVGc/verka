@@ -1,6 +1,7 @@
 use anyhow::{bail, Context, Result};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use linka::{Author, CandidateId, NodeId, Store, VerificationOutcome};
+use linka_tui::app::App as LinkaApp;
 use orka::{
     attempt::{AttemptId, FsAttemptStore, SealedState},
     candidate::Candidates,
@@ -194,6 +195,10 @@ pub struct App {
     pub status: String,
     pub busy: bool,
     pub should_quit: bool,
+    /// The embedded Linka interface, kept alive across visits so that its
+    /// navigation state survives switching back and forth.
+    pub linka: Option<LinkaApp>,
+    pub linka_active: bool,
     active_attempt: Option<AttemptId>,
     worker: Option<Receiver<WorkerEvent>>,
     retained_errors: Vec<String>,
@@ -211,6 +216,8 @@ impl App {
             status: String::new(),
             busy: false,
             should_quit: false,
+            linka: None,
+            linka_active: false,
             active_attempt: None,
             worker: None,
             retained_errors: Vec::new(),
@@ -436,7 +443,55 @@ impl App {
         );
     }
 
+    /// Switch the whole view over to the embedded Linka interface, opening it
+    /// against this workbench's store on first use.
+    pub fn enter_linka(&mut self) {
+        if self.linka.is_none() {
+            match LinkaApp::open(self.root.join(".linka")) {
+                Ok(app) => self.linka = Some(app),
+                Err(error) => {
+                    self.error_overlay("Linka error", format!("{error:#}"));
+                    return;
+                }
+            }
+        }
+        if let Some(linka) = self.linka.as_mut() {
+            linka.should_quit = false;
+            linka.refresh();
+        }
+        self.linka_active = true;
+    }
+
+    /// Return from the embedded Linka interface to the Orka views.
+    pub fn leave_linka(&mut self) {
+        self.linka_active = false;
+        if let Some(linka) = self.linka.as_mut() {
+            linka.should_quit = false;
+        }
+        self.refresh();
+        self.status = "Back in Orka".into();
+    }
+
+    fn on_linka_key(&mut self, key: KeyEvent) {
+        let Some(linka) = self.linka.as_mut() else {
+            self.linka_active = false;
+            return;
+        };
+        if linka.overlay.is_none() && key.code == KeyCode::Char('L') {
+            self.leave_linka();
+            return;
+        }
+        linka.on_key(key);
+        if linka.should_quit {
+            self.leave_linka();
+        }
+    }
+
     pub fn on_key(&mut self, key: KeyEvent) {
+        if self.linka_active {
+            self.on_linka_key(key);
+            return;
+        }
         if self.overlay.is_some() {
             self.on_overlay_key(key);
             return;
@@ -452,6 +507,7 @@ impl App {
             KeyCode::Char('r') => self.refresh(),
             KeyCode::Char('a') => self.open_actions(),
             KeyCode::Char('l') => self.open_live_attempt(),
+            KeyCode::Char('L') => self.enter_linka(),
             KeyCode::Enter => {
                 if let Some(row) = self.selected_row() {
                     self.overlay = Some(Overlay::Text {
@@ -1509,10 +1565,22 @@ mod tests {
             status: String::new(),
             busy: false,
             should_quit: false,
+            linka: None,
+            linka_active: false,
             active_attempt: None,
             worker: None,
             retained_errors: Vec::new(),
         }
+    }
+
+    #[test]
+    fn an_unopenable_linka_store_does_not_switch_the_view() {
+        let mut app = empty_app();
+        app.root = PathBuf::from("/nonexistent-orka-workbench");
+        app.enter_linka();
+        assert!(!app.linka_active);
+        assert!(app.linka.is_none());
+        assert!(app.status.starts_with("Linka error"));
     }
 
     #[test]

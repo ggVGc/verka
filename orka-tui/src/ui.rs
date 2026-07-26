@@ -12,6 +12,12 @@ const ERROR: Color = Color::LightRed;
 
 pub fn draw(frame: &mut Frame, app: &App) {
     let area = frame.area();
+    if app.linka_active {
+        if let Some(linka) = &app.linka {
+            draw_linka(frame, linka, area);
+            return;
+        }
+    }
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -108,7 +114,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(format!(
-                " {}  ·  a actions  l live output  Enter inspect  ←/→ views  r refresh  ? help  q quit",
+                " {}  ·  a actions  l live output  L linka  Enter inspect  ←/→ views  r refresh  ? help  q quit",
                 app.status
             )),
         ]))
@@ -119,6 +125,27 @@ pub fn draw(frame: &mut Frame, app: &App) {
     if let Some(overlay) = &app.overlay {
         draw_overlay(frame, overlay);
     }
+}
+
+fn draw_linka(frame: &mut Frame, linka: &linka_tui::app::App, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(8), Constraint::Length(1)])
+        .split(area);
+    linka_tui::ui::draw_in(frame, linka, chunks[0]);
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                " LINKA ",
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(ACCENT)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" embedded in Orka  ·  L or q returns to Orka"),
+        ])),
+        chunks[1],
+    );
 }
 
 fn draw_overlay(frame: &mut Frame, overlay: &Overlay) {
@@ -270,6 +297,9 @@ fn draw_overlay(frame: &mut Frame, overlay: &Overlay) {
                        Enter         inspect selected item\n\
                        l             follow active/selected attempt output\n\
                        r             reload all state\n\n\
+                     Linka\n\
+                       L             switch to the embedded Linka TUI\n\
+                       L / q         (while in Linka) switch back to Orka\n\n\
                      Actions\n\
                        a             context-sensitive action palette\n\
                        Tab           next form field\n\

@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2021"
 description = "Terminal user interface for Linka"
 
+[lib]
+name = "linka_tui"
+path = "src/lib.rs"
+
 [[bin]]
 name = "linka-tui"
 path = "src/main.rs"

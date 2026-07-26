@@ -15,6 +15,12 @@ const MUTED: Color = Color::DarkGray;
 const ERROR: Color = Color::LightRed;
 
 pub fn draw(frame: &mut Frame, app: &App) {
+    draw_in(frame, app, frame.area());
+}
+
+/// Draw the Linka interface inside `area` instead of the whole frame, so that
+/// a host application (such as orka-tui) can embed it alongside its own chrome.
+pub fn draw_in(frame: &mut Frame, app: &App, area: Rect) {
     let root = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -22,7 +28,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
             Constraint::Min(8),
             Constraint::Length(2),
         ])
-        .split(frame.area());
+        .split(area);
 
     draw_tabs(frame, app, root[0]);
     draw_body(frame, app, root[1]);
