@@ -1,3 +1,5 @@
+- Some way to fork out from current context, run a new track, and summarize the outcome of that track into the initial one:
+  - Essentially a manual sub-agent + compaction
 - Need some way of injecting dev environments:
   - Could currently rely on driva templates
   - Until better idea...

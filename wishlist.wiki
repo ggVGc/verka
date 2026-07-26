@@ -1,3 +1,7 @@
+- Some system for storing LLM-generated description of the current state of the codebase, with file references and whatever other relevant info:
+  - Meant to be loaded into contexts so new sessions can get started quicker without reading everything
+  - Should be tagged with content hashes and at which commit they were generated at
+  - Should have some automated way of rebuilding info when it becomes stale (based on commit hash, content hashes)
 - Orka (and Styra?):
   - Should be able to constrain execution of a task as planning,
     so that it is run with no write access to the workspace. It should only produce an output result which is the plan/spec.
