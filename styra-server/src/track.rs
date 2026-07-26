@@ -66,6 +66,10 @@ impl ResolvedTemplate {
             .into_iter()
             .map(|(key, value)| (OsString::from(key), OsString::from(value)))
             .collect();
+        // Template mounts land at their host paths, so a `~` in a template's
+        // environment names the *host* home, not the profile's sandbox `HOME`
+        // (which Styra pins to a disposable /tmp directory).
+        driva::expand_environment_home(&mut environment)?;
         driva::path_mounts(&template.paths, &mut mounts, &mut environment)?;
         Ok(Self {
             mounts,
@@ -517,6 +521,41 @@ mod tests {
             temporary_mounts: Vec::new(),
             template: None,
         }
+    }
+
+    /// A template names host state with `~` (the rust template's `RUSTUP_HOME`,
+    /// say). Profiles pin `HOME` to a disposable sandbox directory, so the
+    /// marker must resolve against the host home the template's mounts use, and
+    /// the overlay must not lose the profile's own environment.
+    #[test]
+    fn a_template_overlays_the_profile_with_host_expanded_environment() {
+        let dir = PathBuf::from("/tmp/styra/workspace");
+        let mut spec = workspace_spec(&dir);
+        let template = driva::TemplateConfig {
+            environment: BTreeMap::from([
+                ("TOOL_HOME".to_string(), "~/.tool".to_string()),
+                ("LITERAL".to_string(), "verbatim".to_string()),
+            ]),
+            network: Some(true),
+            ..Default::default()
+        };
+        spec.template = Some(ResolvedTemplate::resolve(template).unwrap());
+        let request = build_request(&spec);
+        let home = std::env::var("HOME").unwrap();
+
+        assert_eq!(
+            request.environment.get(&OsString::from("TOOL_HOME")),
+            Some(&OsString::from(format!("{home}/.tool")))
+        );
+        assert_eq!(
+            request.environment.get(&OsString::from("LITERAL")),
+            Some(&OsString::from("verbatim"))
+        );
+        assert_eq!(
+            request.environment.get(&OsString::from("HOME")),
+            Some(&OsString::from("/tmp/agent-home"))
+        );
+        assert!(request.network);
     }
 
     #[test]

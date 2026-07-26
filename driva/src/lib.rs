@@ -196,6 +196,26 @@ pub(crate) fn expand_home(path: &Path, label: &str) -> Result<PathBuf> {
     }
 }
 
+/// Expand a leading `~` in configured environment values against the host's
+/// home directory.
+///
+/// A template's mounts land at their host paths, so a template that points a
+/// tool at its host state (`RUSTUP_HOME = "~/.rustup"`) must name that same
+/// host path. Writing it literally would tie the template to one operator's
+/// home; leaving it as `~` would make the value depend on `HOME` *inside* the
+/// sandbox, which a host is free to pin elsewhere. Values without a leading
+/// `~` are untouched.
+pub fn expand_environment_home(environment: &mut BTreeMap<OsString, OsString>) -> Result<()> {
+    for (key, value) in environment.iter_mut() {
+        let path = Path::new(value.as_os_str());
+        if path == Path::new("~") || path.starts_with("~/") {
+            let label = format!("environment value {}", key.to_string_lossy());
+            *value = expand_home(path, &label)?.into_os_string();
+        }
+    }
+    Ok(())
+}
+
 /// Mount PATH additions at their canonical host locations so tools that find
 /// adjacent state through the executable path keep working inside isolation,
 /// and prepend them to the isolated `PATH`.

@@ -263,12 +263,13 @@ fn real_main() -> Result<()> {
     };
     environment.extend(config.environment);
     if let Some(template) = &template {
-        environment.extend(
-            template
-                .environment
-                .iter()
-                .map(|(key, value)| (OsString::from(key), OsString::from(value))),
-        );
+        let mut template_environment: BTreeMap<OsString, OsString> = template
+            .environment
+            .iter()
+            .map(|(key, value)| (OsString::from(key), OsString::from(value)))
+            .collect();
+        driva::expand_environment_home(&mut template_environment)?;
+        environment.extend(template_environment);
         if let Some(home) = std::env::var_os("HOME") {
             environment.entry(OsString::from("HOME")).or_insert(home);
         }

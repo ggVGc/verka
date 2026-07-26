@@ -1,6 +1,14 @@
 description = "Rust/Cargo"
 path = ["~/.rustup", "~/.cargo/bin"]
 
+# The binaries on PATH are rustup shims: without these they look for their
+# toolchain under the sandbox's HOME and fail with "rustup could not choose a
+# version of cargo to run". `~` expands to the host home, where the PATH
+# additions and the mount below place this state.
+[environment]
+RUSTUP_HOME = "~/.rustup"
+CARGO_HOME = "~/.cargo"
+
 [[mount]]
 source = "~/.cargo"
 access = "read"

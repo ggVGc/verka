@@ -673,6 +673,36 @@ fn no_write_makes_every_host_mount_read_only() {
     assert!(output.contains("mount: temporary -> /temporary (read-write)"));
 }
 
+/// A template's mounts land at their host paths, so a template pointing a tool
+/// at host state names it with `~` and expects the host home — not whatever
+/// `HOME` the sandbox is given.
+#[test]
+fn template_environment_expands_a_leading_home_marker() {
+    let directory = TestDirectory::new("template-environment-home");
+    directory.write_config(
+        r#"
+        [template.tool]
+        [template.tool.environment]
+        TOOL_HOME = "~/.tool"
+        LITERAL = "not/~/a/prefix"
+        "#,
+    );
+    let output = stdout(directory.run(&[
+        "run",
+        "--dry-run",
+        "--template",
+        "tool",
+        "--env",
+        "HOME=/tmp/agent-home",
+        "--",
+        "true",
+    ]));
+    let home = std::env::var("HOME").unwrap();
+
+    assert!(output.contains(&format!("\"TOOL_HOME\" \"{home}/.tool\"")));
+    assert!(output.contains("\"LITERAL\" \"not/~/a/prefix\""));
+}
+
 #[test]
 fn rejects_an_unknown_backend() {
     let directory = TestDirectory::new("wrong-backend");
