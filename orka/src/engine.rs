@@ -123,6 +123,7 @@ pub struct RecoveryReport {
 struct RecoveryCleanup {
     action: String,
     requires_attention: bool,
+    workspace_gone: bool,
 }
 
 impl Engine<'_> {
@@ -310,6 +311,15 @@ impl Engine<'_> {
             state: sealed.clone(),
         });
         let cleanup = self.workspaces.cleanup(&workspace)?;
+        if matches!(
+            &sealed,
+            SealedState::Submitted { .. } | SealedState::FailureRecorded
+        ) && matches!(
+            &cleanup,
+            CleanupOutcome::Removed | CleanupOutcome::AlreadyAbsent
+        ) {
+            self.attempts.discard_registered(&attempt)?;
+        }
         Ok(RunReport {
             attempt,
             node: id.clone(),
@@ -442,28 +452,6 @@ impl Engine<'_> {
                 };
             }
         }
-        let successful_declaration = matches!(
-            &decision,
-            Decision::Submit {
-                outcome: AgentOutcome::Succeeded { .. },
-                ..
-            }
-        );
-        if !successful_declaration {
-            let (path, media_type) = self.agent_output_source(attempt)?;
-            self.linka
-                .attach_agent_output(input.node(), attempt, &path, media_type)?;
-            let file_changes = self.attempts.file_changes_path(attempt);
-            if file_changes.is_file() {
-                self.linka
-                    .attach_file_changes(input.node(), attempt, &file_changes)?;
-            }
-            self.linka.attach_accesses(
-                input.node(),
-                attempt,
-                &self.attempts.accesses_path(attempt),
-            )?;
-        }
         match decision {
             Decision::Submit {
                 outcome,
@@ -501,6 +489,7 @@ impl Engine<'_> {
                     report,
                     Some(&access_summary),
                 );
+                let evidence = self.output_evidence(attempt)?;
                 let (settled, succeeded, candidate) = match outcome {
                     AgentOutcome::Succeeded { message, notes } => {
                         if !workspace.path.exists() {
@@ -519,14 +508,19 @@ impl Engine<'_> {
                             message,
                             notes,
                             producer,
-                            &mut || self.attach_output_evidence(input.node(), attempt),
+                            evidence,
                         )?;
                         (settled, true, candidate)
                     }
                     AgentOutcome::Failed { notes } => {
-                        let settled =
-                            self.linka
-                                .submit_failure(input, &workspace.path, notes, producer)?;
+                        let settled = self.linka.submit_failure_with_evidence(
+                            input,
+                            &workspace.path,
+                            attempt,
+                            notes,
+                            producer,
+                            evidence,
+                        )?;
                         (settled, false, None)
                     }
                 };
@@ -602,7 +596,7 @@ impl Engine<'_> {
         Ok((path, protocol.output_media_type()))
     }
 
-    fn attach_output_evidence(&self, node: &NodeId, attempt: &AttemptId) -> Result<()> {
+    fn output_evidence(&self, attempt: &AttemptId) -> Result<Vec<AttemptEvidencePart>> {
         let io = self.attempts.io_dir(attempt)?;
         let mut files = vec![
             (
@@ -624,6 +618,11 @@ impl Engine<'_> {
                 let (path, media_type) = self.agent_output_source(attempt)?;
                 ("agent-output", media_type, path)
             },
+            (
+                "diagnostics",
+                "text/plain; charset=utf-8",
+                self.attempts.diagnostics_path(attempt),
+            ),
             (
                 "evidence",
                 "application/toml",
@@ -649,8 +648,7 @@ impl Engine<'_> {
                     .with_context(|| format!("reading output evidence {}", path.display()))?,
             });
         }
-        self.linka.attach_output_evidence(node, attempt, parts)?;
-        Ok(())
+        Ok(parts)
     }
 
     /// Classify every recorded attempt and finish what can be finished.
@@ -663,6 +661,16 @@ impl Engine<'_> {
                 AttemptPhase::Sealed => {
                     let cleanup = self.recover_cleanup(snapshot.workspace.as_ref())?;
                     let sealed = snapshot.seal.map(|seal| seal.state);
+                    if cleanup.workspace_gone
+                        && sealed.as_ref().is_some_and(|state| {
+                            matches!(
+                                state,
+                                SealedState::Submitted { .. } | SealedState::FailureRecorded
+                            )
+                        })
+                    {
+                        self.attempts.discard_registered(&id)?;
+                    }
                     let requires_attention = cleanup.requires_attention
                         || sealed.as_ref().is_some_and(seal_requires_attention);
                     RecoveryReport {
@@ -683,6 +691,14 @@ impl Engine<'_> {
                     match self.settle(&id, &snapshot.record.input, &workspace, &evidence) {
                         Ok((sealed, _, _)) => {
                             let cleanup = self.recover_cleanup(Some(&workspace))?;
+                            if cleanup.workspace_gone
+                                && matches!(
+                                    &sealed,
+                                    SealedState::Submitted { .. } | SealedState::FailureRecorded
+                                )
+                            {
+                                self.attempts.discard_registered(&id)?;
+                            }
                             let requires_attention =
                                 seal_requires_attention(&sealed) || cleanup.requires_attention;
                             RecoveryReport {
@@ -791,11 +807,13 @@ impl Engine<'_> {
             None => RecoveryCleanup {
                 action: "no workspace to clean".into(),
                 requires_attention: false,
+                workspace_gone: true,
             },
             Some(ws) => match self.workspaces.cleanup(ws)? {
                 CleanupOutcome::Removed => RecoveryCleanup {
                     action: "workspace removed".into(),
                     requires_attention: false,
+                    workspace_gone: true,
                 },
                 CleanupOutcome::RetainedDirty => RecoveryCleanup {
                     action: format!(
@@ -803,6 +821,7 @@ impl Engine<'_> {
                         ws.path.display()
                     ),
                     requires_attention: false,
+                    workspace_gone: false,
                 },
                 CleanupOutcome::RetainedUnpublished => RecoveryCleanup {
                     action: format!(
@@ -810,6 +829,7 @@ impl Engine<'_> {
                         ws.path.display()
                     ),
                     requires_attention: false,
+                    workspace_gone: false,
                 },
                 CleanupOutcome::RetainedIntegrityFailure => RecoveryCleanup {
                     action: format!(
@@ -817,10 +837,12 @@ impl Engine<'_> {
                         ws.path.display()
                     ),
                     requires_attention: true,
+                    workspace_gone: false,
                 },
                 CleanupOutcome::AlreadyAbsent => RecoveryCleanup {
                     action: "workspace already absent".into(),
                     requires_attention: false,
+                    workspace_gone: true,
                 },
             },
         })

@@ -282,6 +282,7 @@ pub fn complete(
             author,
             producer: None,
         },
+        Vec::new(),
         mutation,
     );
     if let Err(error) = submitted {
@@ -503,6 +504,23 @@ pub fn record_node_attachments(
         bail!("unknown node `{id}`");
     }
 
+    let (attachments, pending) = prepare_node_attachments(store, id, new)?;
+    write_node_attachments(store, id, &pending)?;
+    if pending.is_empty() {
+        return Ok(attachments);
+    }
+    mutation.commit(
+        vcs,
+        &format!("linka: attach {} item(s) to {id}", pending.len()),
+    )?;
+    Ok(attachments)
+}
+
+fn prepare_node_attachments(
+    store: &Store,
+    id: &str,
+    new: Vec<NewNodeAttachment>,
+) -> Result<(Vec<NodeAttachment>, Vec<(NodeAttachment, Vec<u8>)>)> {
     let mut identities = std::collections::HashSet::new();
     let mut attachments = Vec::with_capacity(new.len());
     let mut pending = Vec::new();
@@ -534,18 +552,18 @@ pub fn record_node_attachments(
         pending.push((attachment.clone(), new.data));
         attachments.push(attachment);
     }
+    Ok((attachments, pending))
+}
 
-    if pending.is_empty() {
-        return Ok(attachments);
-    }
-    for (attachment, data) in &pending {
+fn write_node_attachments(
+    store: &Store,
+    id: &str,
+    pending: &[(NodeAttachment, Vec<u8>)],
+) -> Result<()> {
+    for (attachment, data) in pending {
         store.write_node_attachment(id, attachment, data)?;
     }
-    mutation.commit(
-        vcs,
-        &format!("linka: attach {} item(s) to {id}", pending.len()),
-    )?;
-    Ok(attachments)
+    Ok(())
 }
 
 /// Derive all graph state through one fallible evaluation.
@@ -878,6 +896,18 @@ pub fn submit_result(
     vcs: &dyn Vcs,
     submission: ResultSubmission,
 ) -> std::result::Result<(), SubmissionError> {
+    submit_result_with_attachments(store, vcs, submission, Vec::new())
+}
+
+/// Submit a result and immutable node attachments in the same Linka store
+/// commit. The attachment batch is validated before any result is written;
+/// snapshot conflicts record neither the result nor the attachments.
+pub fn submit_result_with_attachments(
+    store: &Store,
+    vcs: &dyn Vcs,
+    submission: ResultSubmission,
+    attachments: Vec<NewNodeAttachment>,
+) -> std::result::Result<(), SubmissionError> {
     let mutation = store.mutation_lock(vcs)?;
     submit_result_locked(
         store,
@@ -890,6 +920,7 @@ pub fn submit_result(
             author: submission.author,
             producer: submission.producer,
         },
+        attachments,
         mutation,
     )
 }
@@ -912,6 +943,7 @@ pub fn submit_verification(
             author: submission.author,
             producer: submission.producer,
         },
+        Vec::new(),
         mutation,
     )
 }
@@ -929,6 +961,7 @@ fn submit_result_locked(
     store: &Store,
     vcs: &dyn Vcs,
     submission: RecordedSubmission,
+    attachments: Vec<NewNodeAttachment>,
     mutation: MutationLock,
 ) -> std::result::Result<(), SubmissionError> {
     let snapshot = &submission.snapshot;
@@ -1060,6 +1093,8 @@ fn submit_result_locked(
             None
         }
     };
+    let (_, pending_attachments) = prepare_node_attachments(store, id, attachments)?;
+    write_node_attachments(store, id, &pending_attachments)?;
     store.write_result(id, &result, &submission.notes)?;
     if let Some(candidate) = &candidate_decision {
         CandidateStore::new(store).write_prepared_decision(candidate)?;
@@ -1224,6 +1259,31 @@ pub fn submit_captured_execution(
     author: Author,
     producer: Option<ProducerEvidence>,
 ) -> std::result::Result<(), SubmissionError> {
+    submit_captured_execution_with_attachments(
+        store,
+        vcs,
+        snapshot,
+        output_commit,
+        notes,
+        author,
+        producer,
+        Vec::new(),
+    )
+}
+
+/// Submit an already captured execution and its producer evidence attachments
+/// in one Linka store commit.
+#[allow(clippy::too_many_arguments)]
+pub fn submit_captured_execution_with_attachments(
+    store: &Store,
+    vcs: &dyn Vcs,
+    snapshot: WorkSnapshot,
+    output_commit: Option<&str>,
+    notes: String,
+    author: Author,
+    producer: Option<ProducerEvidence>,
+    attachments: Vec<NewNodeAttachment>,
+) -> std::result::Result<(), SubmissionError> {
     let id = snapshot.node.as_str().to_string();
     if store.read_node(&id)?.0.verifies.is_some() {
         return Err(SubmissionError::Evaluation(anyhow::anyhow!(
@@ -1240,7 +1300,7 @@ pub fn submit_captured_execution(
     let output = output_commit
         .map(|commit| git_artifact(store, commit))
         .transpose()?;
-    submit_result(
+    submit_result_with_attachments(
         store,
         vcs,
         ResultSubmission {
@@ -1251,6 +1311,7 @@ pub fn submit_captured_execution(
             author,
             producer,
         },
+        attachments,
     )?;
     if let Some(commit) = output_commit {
         vcs.retain_output(&id, commit)?;
@@ -2239,6 +2300,77 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("different content"));
+    }
+
+    #[test]
+    fn result_and_attachment_batch_share_one_store_commit() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs::default();
+        let id = add(&store, &fake, new_node("a", vec![])).unwrap();
+        let snapshot = snapshot_work(&store, &fake, &id, &[]).unwrap();
+        let commits = *fake.store_commits.borrow();
+
+        submit_result_with_attachments(
+            &store,
+            &fake,
+            ResultSubmission {
+                snapshot,
+                outcome: Outcome::Done,
+                output: None,
+                notes: "finished".into(),
+                author: Author::Machine,
+                producer: None,
+            },
+            vec![NewNodeAttachment {
+                namespace: "orka".into(),
+                key: "attempt-1/evidence".into(),
+                media_type: Some("application/toml".into()),
+                data: b"exit_code = 0\n".to_vec(),
+            }],
+        )
+        .unwrap();
+
+        assert_eq!(*fake.store_commits.borrow(), commits + 1);
+        assert!(store.read_result(&id).unwrap().is_some());
+        assert!(store
+            .read_node_attachment(&id, "orka", "attempt-1/evidence")
+            .unwrap()
+            .is_some());
+    }
+
+    #[test]
+    fn conflicting_result_records_no_attachment_batch() {
+        let (_t, store) = temp_store();
+        let fake = FakeVcs::default();
+        let id = add(&store, &fake, new_node("a", vec![])).unwrap();
+        let snapshot = snapshot_work(&store, &fake, &id, &[]).unwrap();
+        edit(&store, &fake, &id, "moved".into()).unwrap();
+
+        let result = submit_result_with_attachments(
+            &store,
+            &fake,
+            ResultSubmission {
+                snapshot,
+                outcome: Outcome::Done,
+                output: None,
+                notes: "stale".into(),
+                author: Author::Machine,
+                producer: None,
+            },
+            vec![NewNodeAttachment {
+                namespace: "orka".into(),
+                key: "attempt-1/evidence".into(),
+                media_type: None,
+                data: b"must not persist".to_vec(),
+            }],
+        );
+
+        assert!(matches!(result, Err(SubmissionError::Conflict(_))));
+        assert!(store.read_result(&id).unwrap().is_none());
+        assert!(store
+            .read_node_attachment(&id, "orka", "attempt-1/evidence")
+            .unwrap()
+            .is_none());
     }
 
     #[test]

@@ -18,7 +18,7 @@ use anyhow::{bail, Context, Result};
 use linka::ops::{self, SubmissionError};
 use linka::{
     ArtifactStore, Author, BranchStore, CandidateId, CandidateStore, ConsumedNode,
-    ExternalIdentity, GitVcs, NewCandidate, NewNodeAttachment, NodeAttachment, NodeId, Outcome,
+    ExternalIdentity, GitVcs, NewCandidate, NewNodeAttachment, NodeId, Outcome,
     ProducerEvidence, ProjectPath, ResultVersion, Store, SubmissionConflict,
 };
 use std::path::{Path, PathBuf};
@@ -51,11 +51,12 @@ pub struct RecordedResult {
     pub version: ResultVersion,
 }
 
-pub const OUTPUT_EVIDENCE_PARTS: [&str; 7] = [
+pub const OUTPUT_EVIDENCE_PARTS: [&str; 8] = [
     "attempt",
     "prompt",
     "request",
     "agent-output",
+    "diagnostics",
     "evidence",
     "outcome",
     "accesses",
@@ -91,97 +92,14 @@ impl<'a> LinkaWork<'a> {
         GitVcs::for_execution(self.store, workspace.to_path_buf())
     }
 
-    /// Commit an attempt's agent-output fact as opaque, node-associated Linka
-    /// data: the raw event journal (`events.raw.jsonl`) for an event-stream
-    /// agent, or the raw stdout transcript for a plain one. Only the fact is
-    /// stored; the readable work log is rendered on demand downstream, never at
-    /// rest. The stable key makes normal execution and recovery retries
-    /// idempotent.
-    pub fn attach_agent_output(
-        &self,
-        node: &NodeId,
-        attempt: &AttemptId,
-        path: &Path,
-        media_type: &str,
-    ) -> Result<NodeAttachment> {
-        let data =
-            std::fs::read(path).with_context(|| format!("reading agent output for {attempt}"))?;
-        ops::record_node_attachment(
-            self.store,
-            &self.vcs(),
-            node.as_str(),
-            NewNodeAttachment {
-                namespace: "orka".into(),
-                key: format!("{attempt}/agent-output"),
-                media_type: Some(media_type.into()),
-                data,
-            },
-        )
-        .with_context(|| format!("attaching agent output for {attempt} to node `{node}`"))
-    }
-
-    /// Preserve the file-change checkpoint journal as opaque attempt evidence.
-    /// The `(event → commit)` mappings are created live during execution and are
-    /// not reconstructible from anything else, so they are a fundamental fact;
-    /// on-demand rendering folds them back into the work log as checkpoint
-    /// annotations.
-    pub fn attach_file_changes(
-        &self,
-        node: &NodeId,
-        attempt: &AttemptId,
-        file_changes: &Path,
-    ) -> Result<NodeAttachment> {
-        let data = std::fs::read(file_changes)
-            .with_context(|| format!("reading file-change journal for {attempt}"))?;
-        ops::record_node_attachment(
-            self.store,
-            &self.vcs(),
-            node.as_str(),
-            NewNodeAttachment {
-                namespace: "orka".into(),
-                key: format!("{attempt}/file-changes"),
-                media_type: Some("application/x-ndjson".into()),
-                data,
-            },
-        )
-        .with_context(|| format!("attaching file-change journal for {attempt} to node `{node}`"))
-    }
-
-    /// Preserve the raw access journal as opaque attempt evidence. The
-    /// context pins derived from it are Linka-native; this attachment keeps
-    /// the completeness status and original observations inspectable.
-    pub fn attach_accesses(
-        &self,
-        node: &NodeId,
-        attempt: &AttemptId,
-        accesses: &Path,
-    ) -> Result<NodeAttachment> {
-        let data = std::fs::read(accesses)
-            .with_context(|| format!("reading access journal for {attempt}"))?;
-        ops::record_node_attachment(
-            self.store,
-            &self.vcs(),
-            node.as_str(),
-            NewNodeAttachment {
-                namespace: "orka".into(),
-                key: format!("{attempt}/accesses"),
-                media_type: Some("application/x-ndjson".into()),
-                data,
-            },
-        )
-        .with_context(|| format!("attaching access journal for {attempt} to node `{node}`"))
-    }
-
-    /// Commit the complete, inspectable evidence needed to understand an
-    /// attempt that can produce a project output. Linka treats every part as
-    /// opaque node data; the Orka namespace supplies their meaning.
-    pub fn attach_output_evidence(
-        &self,
-        node: &NodeId,
+    /// Convert complete attempt evidence into opaque Linka attachments. The
+    /// submission methods pass this batch into Linka's result transaction so
+    /// the result and evidence become durable in one store commit.
+    fn evidence_attachments(
         attempt: &AttemptId,
         parts: Vec<AttemptEvidencePart>,
-    ) -> Result<Vec<NodeAttachment>> {
-        let attachments = parts
+    ) -> Vec<NewNodeAttachment> {
+        parts
             .into_iter()
             .map(|part| NewNodeAttachment {
                 namespace: "orka".into(),
@@ -189,9 +107,7 @@ impl<'a> LinkaWork<'a> {
                 media_type: Some(part.media_type.into()),
                 data: part.data,
             })
-            .collect();
-        ops::record_node_attachments(self.store, &self.vcs(), node.as_str(), attachments)
-            .with_context(|| format!("attaching output evidence for {attempt} to node `{node}`"))
+            .collect()
     }
 
     /// Verify that every Orka-produced project candidate retains both its Git
@@ -423,7 +339,7 @@ impl<'a> LinkaWork<'a> {
         message: Option<String>,
         notes: String,
         producer: ProducerEvidence,
-        before_submit: &mut dyn FnMut() -> Result<()>,
+        evidence: Vec<AttemptEvidencePart>,
     ) -> Result<(Settled, Option<CandidateId>)> {
         let private_vcs = self.vcs_at(&workspace.workspace.path);
         let title = message.unwrap_or_else(|| linka::title_of(&input.description).to_string());
@@ -446,12 +362,9 @@ impl<'a> LinkaWork<'a> {
             workspaces.promote(&captured, output)?;
         }
 
-        // Evidence publication is intentionally after capture and promotion:
-        // a Git failure must leave neither a node result nor Linka attachment.
-        before_submit()?;
         let project_vcs = self.vcs();
         let settled = classify(
-            ops::submit_captured_execution(
+            ops::submit_captured_execution_with_attachments(
                 self.store,
                 &project_vcs,
                 input.snapshot.clone(),
@@ -459,6 +372,7 @@ impl<'a> LinkaWork<'a> {
                 notes,
                 Author::Machine,
                 Some(producer.clone()),
+                Self::evidence_attachments(attempt, evidence),
             )
             .map(|_| output_commit.clone()),
         )?;
@@ -561,6 +475,36 @@ impl<'a> LinkaWork<'a> {
             Author::Machine,
             Some(producer),
         ))
+    }
+
+    /// Record a failed orchestrated attempt and its complete evidence in the
+    /// same Linka result transaction.
+    pub fn submit_failure_with_evidence(
+        &self,
+        input: &AttemptInput,
+        workspace: &Path,
+        attempt: &AttemptId,
+        notes: String,
+        producer: ProducerEvidence,
+        evidence: Vec<AttemptEvidencePart>,
+    ) -> Result<Settled> {
+        let vcs = self.vcs_at(workspace);
+        classify(
+            ops::submit_result_with_attachments(
+                self.store,
+                &vcs,
+                linka::ResultSubmission {
+                    snapshot: input.snapshot.clone(),
+                    outcome: Outcome::Failed,
+                    output: None,
+                    notes,
+                    author: Author::Machine,
+                    producer: Some(producer),
+                },
+                Self::evidence_attachments(attempt, evidence),
+            )
+            .map(|()| None),
+        )
     }
 
     /// Attach observed project reads to one exact accepted result. The Linka

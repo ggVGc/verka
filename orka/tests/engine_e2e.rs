@@ -9,7 +9,7 @@ mod common;
 use common::*;
 use linka::{Author, Store, VerificationOutcome, VerificationSubmission};
 use orka::access::write_access_summary;
-use orka::attempt::{AttemptId, AttemptPhase, FsAttemptStore, SealedState};
+use orka::attempt::{AttemptId, FsAttemptStore, SealedState};
 use orka::candidate::Candidates;
 use orka::engine::{Engine, ExecutionPolicy, RunProgress};
 use orka::executor::{ExecutionReport, ExecutionSpec};
@@ -160,15 +160,9 @@ fn a_full_attempt_lands_a_version_checked_result_from_an_isolated_worktree() {
         "user's half-done work\n"
     );
 
-    // The attempt record durably stores Linka's exact snapshot.
-    let snapshot = attempts.load(&report.attempt).unwrap();
-    assert_eq!(snapshot.phase(), AttemptPhase::Sealed);
-    assert_eq!(snapshot.record.input.input_commit(), user_head);
-    assert_eq!(snapshot.record.input.snapshot.node.as_str(), node);
-    assert_eq!(
-        std::fs::read_to_string(attempts.transcript_path(&report.attempt)).unwrap(),
-        "agent transcript\n"
-    );
+    // Accepted evidence lives in Linka; local attempt state is recovery-only
+    // and disappears with the clean workspace.
+    assert!(!attempts.contains(&report.attempt));
     let (attachment, attached_output) = store
         .read_node_attachment(&node, "orka", &format!("{}/agent-output", report.attempt))
         .unwrap()
@@ -192,9 +186,8 @@ fn a_full_attempt_lands_a_version_checked_result_from_an_isolated_worktree() {
         .unwrap()
         .is_empty());
 
-    // Output inspection and candidate operations no longer depend on local
-    // Orka state once the successful evidence set has been committed.
-    std::fs::remove_dir_all(attempts.root()).unwrap();
+    // Output inspection and candidate operations do not depend on local Orka
+    // state once the result and evidence set have been committed.
     assert!(LinkaWork::new(&store)
         .audit_output_evidence()
         .unwrap()
@@ -651,6 +644,13 @@ fn a_declared_failure_is_recorded_as_evidence() {
     let vcs = linka::GitVcs::for_store(&store);
     let state = linka::ops::node_state(&store, &vcs, &node).unwrap();
     assert_eq!(state.outcome, linka::RecordedOutcome::Failed);
+    assert!(!attempts.contains(&report.attempt));
+    for part in orka::linka_work::OUTPUT_EVIDENCE_PARTS {
+        assert!(store
+            .read_node_attachment(&node, "orka", &format!("{}/{part}", report.attempt))
+            .unwrap()
+            .is_some());
+    }
 }
 
 #[test]
@@ -803,14 +803,10 @@ fn an_attempt_against_a_graph_that_moved_mid_run_seals_stale() {
     };
     assert!(!conflicts.is_empty());
     assert!(store.read_result(&node).unwrap().is_none());
-    assert_eq!(
-        store
-            .read_node_attachment(&node, "orka", &format!("{}/agent-output", report.attempt))
-            .unwrap()
-            .unwrap()
-            .1,
-        b"stale transcript\n"
-    );
+    assert!(store
+        .read_node_attachment(&node, "orka", &format!("{}/agent-output", report.attempt))
+        .unwrap()
+        .is_none());
 
     // Linka records no candidate for a result it rejected. The attempt and
     // retained branch remain Orka evidence for inspection/recovery.
@@ -874,12 +870,12 @@ fn recovery_settles_an_executed_attempt_and_a_second_pass_duplicates_nothing() {
     ));
     assert!(!reports[0].requires_attention);
     assert!(store.read_result(&node).unwrap().is_some());
-    assert_eq!(attempts.load(&id).unwrap().phase(), AttemptPhase::Sealed);
+    assert!(!attempts.contains(&id));
 
     // A second recovery pass performs no duplicate mutation.
     let (result_before, _) = store.read_result(&node).unwrap().unwrap();
     let again = engine.recover().unwrap();
-    assert_eq!(again.len(), 1);
+    assert!(again.is_empty());
     let (result_after, _) = store.read_result(&node).unwrap().unwrap();
     assert_eq!(
         result_before.at, result_after.at,
@@ -1126,6 +1122,7 @@ fn workspaces_prepare(
 
 fn stage_recorded_execution(attempts: &FsAttemptStore, id: &AttemptId, io: &Path) {
     std::fs::write(io.join("prompt.md"), "# Historical prompt\n").unwrap();
+    std::fs::write(attempts.diagnostics_path(id), "").unwrap();
     attempts
         .record_request(
             id,

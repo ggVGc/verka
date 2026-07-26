@@ -5,7 +5,7 @@
 Orka orchestrates isolated agent attempts for work in a Linka store. It uses
 Linka to discover, freeze, and record work, Genta to describe the agent and
 decode its output, and Driva to execute agent commands in isolation. Orka owns
-coordination and durable attempts; it does not implement container execution,
+coordination and transient recovery attempts; it does not implement container execution,
 agent-specific knowledge, or human review.
 
 Orka is specifically a Linka orchestrator. It depends on Linka's public library
@@ -19,8 +19,8 @@ never depends on Orka.
 - Linka owns graph definitions, readiness, staleness, work snapshots, result
   validation, candidates, accept/reject decisions, Git-derived publication,
   graph mutations, and project/output provenance.
-- Orka owns agent selection policy, execution policy, prompts, durable
-  attempts, transcripts, outcome interpretation, candidate presentation,
+- Orka owns agent selection policy, execution policy, prompts, local
+  pre-registration recovery state, outcome interpretation, candidate presentation,
   attempt recovery, workspace cleanup, and coordination of Git-native Nota
   reviews with Linka verification nodes.
 - Orka calls Linka's public operations but never reads or mutates Linka's
@@ -29,7 +29,9 @@ never depends on Orka.
   it never interprets attempts, agents, executors, or recovery state. Linka's
   generic node attachments also retain opaque Orka evidence for produced
   outputs without adding Orka semantics to Linka.
-- `.linka/` and `.orka/` are separately owned stores in the workbench.
+- `.linka/` is authoritative tracked state. `.orka/` is ignored local
+  coordination and crash-recovery state, removed after Linka accepts a result
+  and the workspace is safely cleaned.
 - Genta owns agent-specific knowledge: launch profiles (command line, mounts,
   environment), wire protocols and their decoding into a stable event
   vocabulary, and transcript rendering. Genta never spawns a process, so Orka
@@ -110,7 +112,9 @@ Linka, not a backend-neutral port.
 8. For a successful project output, idempotently register a Linka candidate
    using the Orka attempt as opaque external identity.
 9. Seal accepted success, accepted failure, or a submission conflict
-   (stale-at-submit). Operational failures stay unsealed and recoverable.
+   (stale-at-submit). After safe workspace cleanup, discard accepted local
+   attempt state because its evidence is now in Linka. Conflicts and operational
+   failures retain the state needed for recovery or inspection.
 
 ## Agent authority
 
@@ -123,9 +127,10 @@ mutation; agent-written TOML is never deserialized into a Linka submission.
 
 ## Durability and recovery
 
-An attempt is written before external side effects, one file per step, so its
-phase is derived from which files exist. Recovery classifies each attempt by its
-files and finishes the idempotent remainder:
+Before registration, an attempt is written before external side effects, one
+file per step, so its phase is derived from which files exist. Recovery
+classifies each remaining attempt by its files and finishes the idempotent
+remainder. `.orka/` is not tracked or treated as permanent evidence:
 
 Attempt and workspace schemas are strict. Orka supports only the current
 audited linked-worktree format and deliberately provides no migration or
@@ -199,11 +204,12 @@ Every agent-attempt result carries `linka::ProducerEvidence` in the stable
 timestamps, exit code, and access-tracking completeness. Coordinated review
 results use `orka.nota` with the candidate, verification, and branch plus
 either the marker, review head, and outcome or an explicit abandoned status.
-For a successful agent outcome, Orka additionally stores the exact attempt
-input, prompt, execution request, transcript, harness evidence, and declared
-outcome as opaque Linka node attachments before submitting the result. Mutable
-filesystem paths and recovery state stay in `.orka/`. Linka preserves this
-evidence verbatim and never interprets it.
+For every accepted agent outcome, Orka additionally stores the exact attempt
+input, prompt, execution request, raw agent output, diagnostics, harness
+evidence, declared outcome, access journal, and optional file-change journal as
+opaque Linka node attachments in the same store commit as the result. Linka
+preserves this evidence verbatim and never interprets it. Mutable workspace
+state remains local only until cleanup.
 
 On Linux, Orka watches the attempt's unique host-side worktree with inotify
 during execution and writes `accesses.v1.jsonl`. Reads are project-relative,

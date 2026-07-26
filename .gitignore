@@ -2,6 +2,7 @@
 *.out
 target/
 .claude/
+.orka/
 
 # styra runtime session store and stray temp files
 styra/.styra/

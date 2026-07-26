@@ -17,17 +17,16 @@ select Linka-ready node ──► snapshot Linka work input ──► record att
       ──► Linka candidate ──► seal ──► clean up
 ```
 
-The attempt durably stores Linka's exact `WorkSnapshot`. Before submitting a
-successful outcome, Orka atomically attaches the attempt input, exact prompt,
-execution request, transcript, harness evidence, and raw declared outcome to
-the source node through Linka's generic opaque attachment API. The evidence
-needed to understand a produced output therefore travels with the Linka Git
-repository even if local `.orka/` state is later unavailable. Success or
-failure is submitted against the snapshot through Linka's version-checked
-`capture_submission`. Every step is recorded before its side effect, so `orka
-recover` can classify any crash from the files present and finish the
-idempotent remainder. Stale work — a graph that moved between snapshot and
-submit — is refused and sealed as such, never silently completed.
+Until registration, the attempt stores Linka's exact `WorkSnapshot` as local
+recovery state. When Linka accepts success or failure, Orka records the result
+and its complete evidence attachment batch in the same Linka store commit. The
+evidence needed to understand finished work therefore travels with the Linka
+Git repository. After safe workspace cleanup, Orka removes the registered
+attempt directory; `.orka/` is ignored, ephemeral coordination state rather
+than an archive. Every pre-registration step is recorded before its side
+effect, so `orka recover` can classify a crash and finish the idempotent
+remainder. Stale work — a graph that moved between snapshot and submit — is
+refused and retains local recovery state, never silently completed.
 
 ## Use
 
@@ -178,9 +177,11 @@ worktree registrations, object format, connectivity, ancestry, and worktree
 cleanliness must remain valid. Only attempt-owned refs may change. An
 unexpected shared-Git mutation fails the attempt and retains its worktree.
 Cleanup removes a successfully promoted linked worktree while preserving its
-candidate branch. One narrow case is rolled back completely: when the executor
-returns no exit evidence and the worktree still exactly matches its frozen
-input, Orka removes the empty worktree, branch, and attempt record.
+candidate branch, then removes the local attempt record once Linka holds the
+accepted result and evidence. One narrow pre-registration case is also rolled
+back completely: when the executor returns no exit evidence and the worktree
+still exactly matches its frozen input, Orka removes the empty worktree, branch,
+and attempt record.
 
 ## Candidate reviews
 

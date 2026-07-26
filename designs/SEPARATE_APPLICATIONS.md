@@ -39,10 +39,10 @@ and has no knowledge of graphs, attempts, or reviews. Orka and Styra are both
 hosts.
 
 **Orka** owns multi-attempt orchestration: selecting Linka work, freezing its
-inputs, creating durable attempts, constructing a Driva execution request,
+inputs, creating local crash-recovery attempts, constructing a Driva execution request,
 handling its outcome, and version-safely reporting results to Linka. It does
 not own isolation mechanics or Nota's review-entry representation. It also
-owns the durable binding and workflow that coordinate Linka candidates and
+owns the local binding and workflow that coordinate Linka candidates and
 verification nodes with Nota review branches.
 
 **Orka Web** is Orka's local presentation layer. It combines Orka's ready
@@ -100,9 +100,11 @@ Each application writes only through storage it owns or an explicit adapter:
 
 - Linka owns its graph store (default `.linka/`).
 - Driva owns ephemeral isolation runtime data until command cleanup completes.
-- Orka owns durable orchestration attempts, review bindings, and audit evidence
-  under `.orka/`; evidence needed to inspect a produced output is also copied
-  durably through Linka's generic, opaque node-attachment interface.
+- Orka uses ignored `.orka/` state only for live coordination and crash
+  recovery. When work is accepted, its result and complete Orka evidence batch
+  are committed together through Linka's generic opaque attachment interface,
+  after which clean local attempt state is removed. Active review bindings and
+  unsafe retained worktrees remain local only while needed.
 - Nota stores its review marker and entries as commits on a Git branch; note
   bodies also appear as files under `.nota/notes/` on that branch.
 

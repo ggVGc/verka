@@ -417,6 +417,24 @@ impl FsAttemptStore {
             .with_context(|| format!("discarding pre-evidence attempt `{id}`"))
     }
 
+    /// Remove local recovery state after Linka has durably accepted the work
+    /// conclusion and the attempt workspace is safely gone. Accepted evidence
+    /// lives in Linka attachments; `.orka` is not an archive.
+    pub fn discard_registered(&self, id: &AttemptId) -> Result<()> {
+        let snapshot = self.load(id)?;
+        let registered = snapshot.seal.as_ref().is_some_and(|seal| {
+            matches!(
+                seal.state,
+                SealedState::Submitted { .. } | SealedState::FailureRecorded
+            )
+        });
+        if !registered {
+            bail!("refusing to discard unregistered attempt `{id}`");
+        }
+        std::fs::remove_dir_all(self.attempt_dir(id))
+            .with_context(|| format!("discarding registered attempt `{id}`"))
+    }
+
     fn require(&self, id: &AttemptId) -> Result<()> {
         if !self.attempt_dir(id).join("attempt.toml").is_file() {
             bail!("unknown attempt `{id}`");
@@ -665,6 +683,36 @@ mod tests {
         store.record_evidence(&executed, &report()).unwrap();
         assert!(store.discard_without_evidence(&executed).is_err());
         assert!(store.load(&executed).is_ok());
+    }
+
+    #[test]
+    fn only_linka_registered_attempts_can_be_discarded_after_completion() {
+        let (_temp, store) = store();
+        let accepted = AttemptId::new();
+        store.create(&accepted, &input()).unwrap();
+        store
+            .seal(
+                &accepted,
+                SealedState::Submitted {
+                    output_commit: None,
+                },
+            )
+            .unwrap();
+        store.discard_registered(&accepted).unwrap();
+        assert!(!store.contains(&accepted));
+
+        let stale = AttemptId::new();
+        store.create(&stale, &input()).unwrap();
+        store
+            .seal(
+                &stale,
+                SealedState::StaleAtSubmit {
+                    conflicts: Vec::new(),
+                },
+            )
+            .unwrap();
+        assert!(store.discard_registered(&stale).is_err());
+        assert!(store.contains(&stale));
     }
 
     #[test]
