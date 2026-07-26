@@ -175,6 +175,17 @@ pub struct Form {
     pub error: Option<String>,
 }
 
+/// The attachments of one node, with the payload of the selected one rendered
+/// for reading. Payloads are read on selection so the browser always shows the
+/// bytes Linka currently stores.
+pub struct AttachmentBrowser {
+    pub node: String,
+    pub items: Vec<linka::NodeAttachment>,
+    pub selected: usize,
+    pub body: String,
+    pub scroll: u16,
+}
+
 pub enum Overlay {
     Actions {
         selected: usize,
@@ -185,6 +196,7 @@ pub enum Overlay {
         body: String,
         scroll: u16,
     },
+    Attachments(AttachmentBrowser),
     Help,
 }
 
@@ -415,6 +427,7 @@ impl App {
                 self.overlay = Some(Overlay::Actions { selected: 0 })
             }
             KeyCode::Char('r') => self.refresh(),
+            KeyCode::Char('A') => self.open_attachments(),
             KeyCode::Char('b') | KeyCode::Backspace => self.go_back(),
             KeyCode::Tab => {
                 if !self.associations().is_empty() {
@@ -464,6 +477,33 @@ impl App {
                 KeyCode::Down | KeyCode::Char('j') => *scroll = scroll.saturating_add(1),
                 KeyCode::PageUp => *scroll = scroll.saturating_sub(10),
                 KeyCode::PageDown => *scroll = scroll.saturating_add(10),
+                _ => {}
+            },
+            Overlay::Attachments(browser) => match key.code {
+                KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('A') => return,
+                KeyCode::Up | KeyCode::Char('k') => {
+                    let next = browser.selected.saturating_sub(1);
+                    if next != browser.selected {
+                        browser.selected = next;
+                        browser.scroll = 0;
+                        browser.body = self.attachment_body(&browser.node, &browser.items[next]);
+                    }
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    let next = (browser.selected + 1).min(browser.items.len().saturating_sub(1));
+                    if next != browser.selected {
+                        browser.selected = next;
+                        browser.scroll = 0;
+                        browser.body = self.attachment_body(&browser.node, &browser.items[next]);
+                    }
+                }
+                KeyCode::Char('K') | KeyCode::PageUp => {
+                    browser.scroll = browser.scroll.saturating_sub(10)
+                }
+                KeyCode::Char('J') | KeyCode::PageDown => {
+                    browser.scroll = browser.scroll.saturating_add(10)
+                }
+                KeyCode::Home | KeyCode::Char('g') => browser.scroll = 0,
                 _ => {}
             },
             Overlay::Actions { selected } => match key.code {
@@ -969,6 +1009,65 @@ impl App {
         Ok(message)
     }
 
+    /// Open the attachment browser for the selected node, or for the source
+    /// node of the selected candidate.
+    fn open_attachments(&mut self) {
+        let node_id = self
+            .selected_node()
+            .map(|node| node.id.clone())
+            .or_else(|| {
+                self.selected_candidate()
+                    .map(|candidate| candidate.record.node.to_string())
+            });
+        let Some(node_id) = node_id else {
+            self.status = "No node selected".into();
+            return;
+        };
+        let items = self
+            .nodes
+            .iter()
+            .find(|node| node.id == node_id)
+            .map(|node| node.attachments.clone())
+            .unwrap_or_default();
+        if items.is_empty() {
+            self.status = format!("{node_id} has no attachments");
+            return;
+        }
+        let body = self.attachment_body(&node_id, &items[0]);
+        self.overlay = Some(Overlay::Attachments(AttachmentBrowser {
+            node: node_id,
+            items,
+            selected: 0,
+            body,
+            scroll: 0,
+        }));
+    }
+
+    /// Render one attachment for reading: its metadata, then the payload as
+    /// text when it is valid UTF-8 and as a hex dump when it is not.
+    fn attachment_body(&self, node: &str, item: &linka::NodeAttachment) -> String {
+        let mut body = format!(
+            "namespace   {}\nkey         {}\nsize        {} bytes\nmedia type  {}\ncontent     {}\n\n",
+            item.namespace,
+            item.key,
+            item.size,
+            item.media_type.as_deref().unwrap_or("—"),
+            item.content
+        );
+        match self
+            .store
+            .read_node_attachment(node, &item.namespace, &item.key)
+        {
+            Ok(Some((_, data))) => match String::from_utf8(data) {
+                Ok(text) => body.push_str(&text),
+                Err(error) => body.push_str(&hex_dump(error.as_bytes())),
+            },
+            Ok(None) => body.push_str("Attachment is no longer present in the store."),
+            Err(error) => body.push_str(&format!("Cannot read payload: {error:#}")),
+        }
+        body
+    }
+
     fn change_view(&mut self, delta: isize) {
         let index = View::ALL
             .iter()
@@ -1120,6 +1219,33 @@ fn field(label: &'static str, value: &str, hint: &'static str) -> Field {
     }
 }
 
+/// Sixteen bytes per line: offset, hex, then printable ASCII. Long payloads are
+/// truncated so the browser stays responsive on large binary attachments.
+fn hex_dump(data: &[u8]) -> String {
+    const LIMIT: usize = 8 * 1024;
+    let shown = data.len().min(LIMIT);
+    let mut text = format!("Binary payload · {} bytes\n\n", data.len());
+    for (index, chunk) in data[..shown].chunks(16).enumerate() {
+        let hex = chunk
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let ascii = chunk
+            .iter()
+            .map(|byte| match byte {
+                0x20..=0x7e => *byte as char,
+                _ => '.',
+            })
+            .collect::<String>();
+        text.push_str(&format!("{:08x}  {hex:<47}  {ascii}\n", index * 16));
+    }
+    if shown < data.len() {
+        text.push_str(&format!("\n… {} more byte(s)\n", data.len() - shown));
+    }
+    text
+}
+
 fn csv(value: &str) -> Vec<String> {
     value
         .split(',')
@@ -1181,6 +1307,27 @@ mod tests {
     #[test]
     fn csv_ignores_empty_values_and_whitespace() {
         assert_eq!(csv(" a, ,b "), vec!["a", "b"]);
+    }
+
+    #[test]
+    fn hex_dump_lays_out_sixteen_bytes_per_line() {
+        let dump = hex_dump(b"hi\0there, attachment!");
+        let mut lines = dump.lines().skip(2);
+        assert_eq!(
+            lines.next().unwrap(),
+            "00000000  68 69 00 74 68 65 72 65 2c 20 61 74 74 61 63 68  hi.there, attach"
+        );
+        assert_eq!(
+            lines.next().unwrap(),
+            "00000010  6d 65 6e 74 21                                   ment!"
+        );
+    }
+
+    #[test]
+    fn hex_dump_reports_truncated_bytes() {
+        let dump = hex_dump(&vec![0u8; 8 * 1024 + 3]);
+        assert!(dump.contains("Binary payload · 8195 bytes"));
+        assert!(dump.contains("… 3 more byte(s)"));
     }
 
     #[test]

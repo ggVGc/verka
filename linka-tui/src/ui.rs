@@ -200,7 +200,10 @@ fn draw_detail(frame: &mut Frame, app: &App, area: Rect) {
         }
         if !node.attachments.is_empty() {
             lines.push(Line::raw(""));
-            lines.push(Line::styled("Attachments", heading()));
+            lines.push(Line::from(vec![
+                Span::styled("Attachments", heading()),
+                Span::styled("  (A to browse)", Style::default().fg(MUTED)),
+            ]));
             for item in &node.attachments {
                 lines.push(Line::raw(format!(
                     "  {}/{} · {} bytes{}",
@@ -357,7 +360,7 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
 fn draw_overlay(frame: &mut Frame, overlay: &Overlay) {
     match overlay {
         Overlay::Help => {
-            let area = centered(72, 70, frame.area());
+            let area = centered(72, 84, frame.area());
             frame.render_widget(Clear, area);
             let help = Text::from(vec![
                 Line::styled("Navigation", heading()),
@@ -367,6 +370,13 @@ fn draw_overlay(frame: &mut Frame, overlay: &Overlay) {
                 Line::raw("Enter          focus/follow an association"),
                 Line::raw("b/Backspace    go back after following"),
                 Line::raw("r              reload graph and derived state"),
+                Line::raw(""),
+                Line::styled("Attachments", heading()),
+                Line::raw("A              browse the selected node's attachments"),
+                Line::raw("j/k            select an attachment"),
+                Line::raw("J/K or PgUp/Dn scroll the payload"),
+                Line::raw("Esc            close the browser"),
+                Line::raw("Text payloads are shown as text, others as a hex dump."),
                 Line::raw(""),
                 Line::styled("Actions", heading()),
                 Line::raw("a or :         open every Linka action"),
@@ -500,6 +510,57 @@ fn draw_overlay(frame: &mut Frame, overlay: &Overlay) {
                 );
             }
         }
+        Overlay::Attachments(browser) => {
+            let area = centered(86, 84, frame.area());
+            frame.render_widget(Clear, area);
+            let columns =
+                Layout::horizontal([Constraint::Length(34), Constraint::Min(20)]).split(area);
+            let items = browser
+                .items
+                .iter()
+                .map(|item| {
+                    ListItem::new(vec![
+                        Line::styled(
+                            format!("{}/{}", item.namespace, item.key),
+                            Style::default().fg(ACCENT),
+                        ),
+                        Line::styled(
+                            format!(
+                                "  {} B · {}",
+                                item.size,
+                                item.media_type.as_deref().unwrap_or("—")
+                            ),
+                            Style::default().fg(MUTED),
+                        ),
+                    ])
+                })
+                .collect::<Vec<_>>();
+            let mut state = ListState::default().with_selected(Some(browser.selected));
+            frame.render_stateful_widget(
+                List::new(items)
+                    .block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .border_style(Style::default().fg(ACCENT))
+                            .title(format!(" Attachments · {} ", browser.node)),
+                    )
+                    .highlight_symbol("▸ ")
+                    .highlight_style(
+                        Style::default()
+                            .bg(Color::Rgb(35, 45, 55))
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                columns[0],
+                &mut state,
+            );
+            draw_scrollable_text(
+                frame,
+                columns[1],
+                " j/k select · J/K scroll · Esc to close ",
+                &browser.body,
+                browser.scroll,
+            );
+        }
         Overlay::Text {
             title,
             body,
@@ -507,34 +568,50 @@ fn draw_overlay(frame: &mut Frame, overlay: &Overlay) {
         } => {
             let area = centered(80, 82, frame.area());
             frame.render_widget(Clear, area);
-            let line_count = body.lines().count() as u16;
-            let viewport = area.height.saturating_sub(2);
-            let max_scroll = line_count.saturating_sub(viewport);
-            let scroll = (*scroll).min(max_scroll);
-            frame.render_widget(
-                Paragraph::new(body.as_str())
-                    .block(
-                        Block::default()
-                            .borders(Borders::ALL)
-                            .border_style(Style::default().fg(ACCENT))
-                            .title(format!(" {title} · Esc to close ")),
-                    )
-                    .scroll((scroll, 0))
-                    .wrap(Wrap { trim: false }),
+            draw_scrollable_text(
+                frame,
                 area,
+                &format!(" {title} · Esc to close "),
+                body,
+                *scroll,
             );
-            if line_count > viewport {
-                let mut state = ScrollbarState::new(line_count as usize).position(scroll as usize);
-                frame.render_stateful_widget(
-                    Scrollbar::new(ScrollbarOrientation::VerticalRight),
-                    area.inner(Margin {
-                        horizontal: 0,
-                        vertical: 1,
-                    }),
-                    &mut state,
-                );
-            }
         }
+    }
+}
+
+/// A bordered, wrapped, scrollable body with a scrollbar once it overflows.
+/// `scroll` is clamped to the wrapped height so the end is always reachable and
+/// never scrolls past it.
+fn draw_scrollable_text(frame: &mut Frame, area: Rect, title: &str, body: &str, scroll: u16) {
+    let width = area.width.saturating_sub(2).max(1) as usize;
+    let line_count = body
+        .lines()
+        .map(|line| line.chars().count().div_ceil(width).max(1) as u16)
+        .sum::<u16>();
+    let viewport = area.height.saturating_sub(2);
+    let scroll = scroll.min(line_count.saturating_sub(viewport));
+    frame.render_widget(
+        Paragraph::new(body)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(ACCENT))
+                    .title(title.to_string()),
+            )
+            .scroll((scroll, 0))
+            .wrap(Wrap { trim: false }),
+        area,
+    );
+    if line_count > viewport {
+        let mut state = ScrollbarState::new(line_count as usize).position(scroll as usize);
+        frame.render_stateful_widget(
+            Scrollbar::new(ScrollbarOrientation::VerticalRight),
+            area.inner(Margin {
+                horizontal: 0,
+                vertical: 1,
+            }),
+            &mut state,
+        );
     }
 }
 
