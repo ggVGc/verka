@@ -1,6 +1,6 @@
 //! Styra's Unix-socket server and server-owned interaction manager.
 
-use crate::agent::{MountSpec, Profile, SandboxLayout};
+use crate::agent::{MountSpec, SandboxLayout, Selection};
 use crate::api::{
     CreateSession, CreateWorkspace, Health, Request, Response, SequencedUpdate, SessionInfo,
     ShellInfo, StoredSession, Transcript, Updates, WireRequest, WireResponse, API_VERSION,
@@ -41,11 +41,10 @@ struct ManagedInteraction {
     interaction: Interaction,
     updates: Arc<Mutex<Vec<SequencedUpdate>>>,
     accepting_messages: Arc<AtomicBool>,
-    single_turn: bool,
     /// Captured at spawn so the interaction can be listed and reattached to without
-    /// re-deriving them: the profile name, host workspace, and launch policy.
+    /// re-deriving them: the agent selection, host workspace, and launch policy.
     workspace_id: String,
-    profile: String,
+    selection: Selection,
     workspace: PathBuf,
     driva: DrivaOptions,
     shell: ShellInfo,
@@ -56,7 +55,7 @@ impl ManagedInteraction {
         InteractionSummary {
             id: self.interaction.session_id().to_owned(),
             workspace_id: self.workspace_id.clone(),
-            profile: self.profile.clone(),
+            selection: self.selection.clone(),
             workspace: self.workspace.clone(),
             driva: self.driva.clone(),
             accepting: self.accepting_messages.load(Ordering::Acquire),
@@ -73,9 +72,6 @@ impl ManagedInteraction {
             );
         }
         self.interaction.send(text)?;
-        if self.single_turn {
-            self.accepting_messages.store(false, Ordering::Release);
-        }
         Ok(())
     }
 
@@ -116,7 +112,8 @@ impl ServerState {
         let owning_workspace =
             crate::workspace::get(&self.inner.store_root, &request.workspace_id)?;
         let workspace = owning_workspace.host_path;
-        let mut profile = Profile::builtin(&request.profile, &self.inner.layout)?;
+        let selection = request.selection;
+        let mut profile = crate::agent::resolve_profile(&selection, &self.inner.layout)?;
         profile.network = profile.network || request.network;
         let template = resolve_templates(&workspace, &request.templates)?;
         // Resolve host tooling before creating durable session state, so a
@@ -144,9 +141,7 @@ impl ServerState {
             template,
             broker: Some(self.prepare_broker(&id, broker_executable, tmux)?),
         };
-        let single_turn = spec.profile.single_turn;
         let driva = DrivaOptions::capture(&spec, "bwrap");
-        let profile_name = spec.profile.name.clone();
         let prepared_broker = spec.broker.as_ref().expect("broker was prepared");
         let shell = ShellInfo {
             tmux: prepared_broker.tmux.clone(),
@@ -172,9 +167,8 @@ impl ServerState {
             interaction,
             updates: Arc::clone(&updates),
             accepting_messages: Arc::clone(&accepting_messages),
-            single_turn,
             workspace_id: request.workspace_id.clone(),
-            profile: profile_name.clone(),
+            selection: selection.clone(),
             workspace: workspace.clone(),
             driva: driva.clone(),
             shell,
@@ -218,7 +212,7 @@ impl ServerState {
         Ok(SessionInfo {
             id,
             workspace_id: request.workspace_id,
-            profile: profile_name,
+            selection,
             workspace,
             journal_path,
             driva,

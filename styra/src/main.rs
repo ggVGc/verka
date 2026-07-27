@@ -19,7 +19,7 @@ mod app;
 mod ui;
 
 use app::{App, Focus, Status, View};
-use styra_server::agent::Selection;
+use styra_server::agent::{Provider, Selection};
 use styra_server::api::{CreateSession, CreateWorkspace, SessionInfo};
 use styra_server::{
     Client, InteractionSummary, InteractionUpdate, LogEntry, SessionSummary, WorkspaceSummary,
@@ -40,24 +40,14 @@ struct Cli {
     /// live interactions it owns are ended with it.
     #[arg(long)]
     stop: bool,
-    /// Agent profile to launch a live session with, as
-    /// `provider[:model][/effort]` (`codex`, `claude:claude-opus-5`,
-    /// `codex:gpt-5.6-sol/xhigh`). A profile always pins a model and an effort;
-    /// omitting either takes that agent's declared default rather than leaving it
-    /// to the agent's own configuration. Seeds the interface's launch picker,
-    /// which can change all three before the first message. Not used with
-    /// `--view`: a viewed session carries its own recorded profile and protocol.
-    #[arg(long, default_value = "codex")]
-    profile: String,
     /// Host directory mounted writable as the agent workspace (default: cwd).
     #[arg(long)]
     workspace: Option<PathBuf>,
-    /// Permit agent networking (profiles may default this on).
+    /// Permit agent networking (providers may default this on).
     #[arg(long)]
     network: bool,
-    /// Apply a Driva execution template on top of the profile (see `driva
-    /// templates`); may be repeated to layer several, e.g. a toolchain
-    /// template like `rust` alongside the agent profile.
+    /// Apply a Driva execution template to the agent sandbox (see `driva
+    /// templates`); may be repeated to layer several, e.g. a `rust` toolchain.
     #[arg(long = "template", value_name = "NAME")]
     template: Vec<String>,
     /// Open a captured journal read-only instead of launching an agent: with
@@ -160,7 +150,7 @@ fn main() -> Result<()> {
     if let Some(view) = &view_target {
         let id = session_id_from_target(view)?;
         let stored = client.stored_session(&id)?;
-        app = App::new(stored.summary.profile, stored.summary.id);
+        app = App::new(stored.summary.selection, stored.summary.id);
         app.workspace_id = Some(stored.summary.workspace_id);
         for event in stored.events {
             // Skip carried-but-viewless traffic (e.g. app-server control
@@ -180,11 +170,7 @@ fn main() -> Result<()> {
         });
         live = Live::Viewing;
     } else {
-        // `--profile` is the operator's opening launch choice; parsing it here
-        // rejects an unknown agent, model syntax, or effort level before the
-        // terminal is taken over, rather than at the first message.
-        let selection = Selection::parse(&cli.profile)
-            .with_context(|| format!("invalid --profile {:?}", cli.profile))?;
+        let selection = Selection::new(Provider::Codex);
         let prompt = cli.prompt.join(" ");
         let seed = (!prompt.trim().is_empty()).then_some(prompt.as_str());
         match seed {
@@ -354,10 +340,8 @@ fn stop_daemon(socket: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Ask the server for a session on `selection`. The selection's canonical name
-/// is the wire profile (`provider[:model][/effort]`), so the server resolves the
-/// same agent, model, and effort the operator picked, and records that name in
-/// the session's journal.
+/// Ask the server for a session with the provider, model, and effort selected
+/// by the operator. The launch profile is resolved internally by the server.
 fn workspace_for_host(client: &Client, host_path: &Path) -> Result<WorkspaceSummary> {
     let canonical = host_path.canonicalize()?;
     if let Some(workspace) = client
@@ -391,7 +375,7 @@ fn create_session(
 ) -> Result<SessionInfo> {
     client.create_session(&CreateSession {
         workspace_id: workspace_id.to_owned(),
-        profile: selection.name(),
+        selection: selection.clone(),
         network: cli.network,
         templates: cli.template.clone(),
         message: seed.map(str::to_owned),
@@ -409,7 +393,7 @@ fn launch_live_session(
     seed: Option<&str>,
 ) -> Result<(App, SessionInfo)> {
     let info = create_session(client, cli, workspace_id, selection, seed)?;
-    let mut app = App::new(info.profile.clone(), info.id.clone());
+    let mut app = App::new(info.selection.clone(), info.id.clone());
     app.workspace_id = Some(info.workspace_id.clone());
     app.set_workspace_root(info.workspace.clone());
     app.set_driva_options(info.driva.clone());
@@ -427,7 +411,7 @@ fn attach_live_interaction(
     client: &Client,
     interaction: InteractionSummary,
 ) -> Result<(App, Live)> {
-    let mut app = App::new(interaction.profile.clone(), interaction.id.clone());
+    let mut app = App::new(interaction.selection.clone(), interaction.id.clone());
     app.workspace_id = Some(interaction.workspace_id.clone());
     app.set_workspace_root(interaction.workspace.clone());
     app.set_driva_options(interaction.driva.clone());
@@ -454,7 +438,7 @@ fn open_session(client: &Client, session_id: &str) -> Result<(App, Live)> {
         return attach_live_interaction(client, interaction);
     }
     let stored = client.stored_session(session_id)?;
-    let mut app = App::new(stored.summary.profile, stored.summary.id);
+    let mut app = App::new(stored.summary.selection, stored.summary.id);
     app.workspace_id = Some(stored.summary.workspace_id);
     for event in stored.events {
         if !matches!(event, styra_server::event::AgentEvent::Unknown { .. }) {
@@ -922,7 +906,7 @@ fn handle_input_key(
                         match create_session(client, cli, workspace_id, &selection, Some(&message))
                         {
                             Ok(info) => {
-                                app.profile_name = info.profile;
+                                app.selection = info.selection;
                                 app.workspace_id = Some(info.workspace_id);
                                 app.session_id = info.id.clone();
                                 app.set_workspace_root(info.workspace);
@@ -1002,8 +986,13 @@ mod cli_tests {
 
     #[test]
     fn trailing_prompt_launch_parses_without_a_subcommand() {
-        let cli = Cli::try_parse_from(["styra", "--profile", "codex", "hello"]).unwrap();
+        let cli = Cli::try_parse_from(["styra", "hello"]).unwrap();
         assert!(cli.command.is_none());
         assert_eq!(cli.prompt, vec!["hello"]);
+    }
+
+    #[test]
+    fn profile_is_not_a_command_line_option() {
+        assert!(Cli::try_parse_from(["styra", "--profile", "codex"]).is_err());
     }
 }

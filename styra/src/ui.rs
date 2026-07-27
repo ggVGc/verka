@@ -11,7 +11,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::Frame;
 use std::path::{Path, PathBuf};
-use styra_server::agent::{Provider, SandboxLayout};
+use styra_server::agent::{SandboxLayout, PROVIDERS};
 use styra_server::event::{AgentEvent, DetailBlock};
 use styra_server::{Direction as WireDirection, LogLevel};
 use styra_server::{InteractionSummary, InteractionUpdate, SessionSummary, WorkspaceSummary};
@@ -278,13 +278,13 @@ pub fn render_interactions_picker(
 }
 
 /// Render the launch picker: agent, model, and reasoning effort side by side,
-/// with the resulting profile name spelled out along the bottom border so the
+/// with the resulting selection spelled out along the bottom border so the
 /// operator sees exactly what an `Enter` records.
 fn render_launcher(frame: &mut Frame, launcher: &Launcher, area: Rect) {
     let provider = launcher.provider();
     let selection = launcher.selection();
     let hint = " j/k choose · Tab/h/l column · Enter apply · q cancel ";
-    // The composed profile name and the key hints go on the outer frame rather
+    // The composed selection and the key hints go on the outer frame rather
     // than on a column, where a narrow terminal would clip them.
     let frame_block = Block::default()
         .borders(Borders::ALL)
@@ -314,7 +314,7 @@ fn render_launcher(frame: &mut Frame, launcher: &Launcher, area: Rect) {
         ])
         .split(inner);
 
-    let providers: Vec<String> = Provider::ALL
+    let providers: Vec<String> = PROVIDERS
         .iter()
         .map(|provider| provider.as_str().to_owned())
         .collect();
@@ -472,7 +472,7 @@ fn interaction_item(interaction: &InteractionSummary) -> ListItem<'static> {
     };
     ListItem::new(Line::from(vec![
         Span::styled(
-            format!("{:<14} ", interaction.profile),
+            format!("{:<14} ", interaction.selection.provider.as_str()),
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
@@ -490,10 +490,10 @@ fn interaction_item(interaction: &InteractionSummary) -> ListItem<'static> {
 }
 
 fn session_item(session: &SessionSummary) -> ListItem<'static> {
-    let profile = session.profile.clone();
+    let provider = session.selection.provider.as_str();
     ListItem::new(Line::from(vec![
         Span::styled(
-            format!("{profile:<14} "),
+            format!("{provider:<14} "),
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
@@ -1245,6 +1245,7 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
     use ratatui::Terminal;
+    use styra_server::agent::Provider;
     use styra_server::event::{AgentEvent, TokenUsage};
 
     fn rendered(app: &App) -> String {
@@ -1283,7 +1284,10 @@ mod tests {
 
     #[test]
     fn header_shows_profile_and_status() {
-        let app = App::new("codex", "s1");
+        let app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
         let screen = rendered(&app);
         assert!(screen.contains("styra"));
         assert!(screen.contains("codex"));
@@ -1295,7 +1299,10 @@ mod tests {
         // An unstyled span only patches over whatever the block's border
         // already painted underneath it, so title text left unstyled would
         // inherit the border's `DarkGray` the moment the panel loses focus.
-        let mut app = App::new("codex", "s1");
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
         app.toggle_focus();
         assert_eq!(app.focus, Focus::Input);
 
@@ -1314,7 +1321,10 @@ mod tests {
 
     #[test]
     fn expanded_and_selected_content_uses_a_gray_backdrop_not_white() {
-        let mut app = App::new("codex", "s1");
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
         app.push_event(AgentEvent::AgentMessage {
             text: "hello\nworld".into(),
         });
@@ -1337,7 +1347,10 @@ mod tests {
 
     #[test]
     fn an_expanded_selected_entrys_detail_body_is_never_bold() {
-        let mut app = App::new("codex", "s1");
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
         app.push_event(AgentEvent::AgentMessage {
             text: "hello\nworld".into(),
         });
@@ -1371,7 +1384,10 @@ mod tests {
 
     #[test]
     fn only_the_selected_entrys_expanded_content_gets_a_gray_backdrop() {
-        let mut app = App::new("codex", "s1");
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
         app.push_event(AgentEvent::AgentMessage {
             text: "one\ntwo".into(),
         });
@@ -1409,7 +1425,10 @@ mod tests {
 
     #[test]
     fn header_shows_a_dot_indicating_running_vs_idle() {
-        let mut app = App::new("codex", "s1");
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
         assert!(rendered(&app).contains('●'));
         assert_eq!(status_color(&app.status), Color::Yellow);
 
@@ -1422,7 +1441,10 @@ mod tests {
 
     #[test]
     fn a_collapsed_entry_with_more_to_show_has_a_fold_marker() {
-        let mut app = App::new("codex", "s1");
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
         app.push_event(AgentEvent::AgentMessage {
             text: "hello world\nmore detail".into(),
         });
@@ -1434,7 +1456,10 @@ mod tests {
 
     #[test]
     fn an_entry_with_nothing_beyond_its_summary_has_no_fold_marker() {
-        let mut app = App::new("codex", "s1");
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
         // A single-line agent message: its detail body is identical to the
         // summary already shown, so there is nothing left to expand into.
         app.push_event(AgentEvent::AgentMessage {
@@ -1448,7 +1473,10 @@ mod tests {
 
     #[test]
     fn a_truncated_single_line_summary_has_a_fold_marker_and_expands_to_the_full_text() {
-        let mut app = App::new("codex", "s1");
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
         app.push_event(AgentEvent::AgentMessage {
             text: "x".repeat(500),
         });
@@ -1466,7 +1494,10 @@ mod tests {
 
     #[test]
     fn an_expanded_command_shows_detail_lines() {
-        let mut app = App::new("codex", "s1");
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
         app.push_event(AgentEvent::CommandCompleted {
             command: "cargo test".into(),
             status: "completed".into(),
@@ -1481,7 +1512,10 @@ mod tests {
 
     #[test]
     fn expanding_does_not_repeat_the_summary_as_the_first_detail_line() {
-        let mut app = App::new("codex", "s1");
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
         app.push_event(AgentEvent::CommandCompleted {
             command: "cargo test".into(),
             status: "completed".into(),
@@ -1498,7 +1532,10 @@ mod tests {
 
     #[test]
     fn usage_is_shown_once_recorded() {
-        let mut app = App::new("codex", "s1");
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
         app.push_event(AgentEvent::TurnCompleted {
             usage: TokenUsage {
                 input_tokens: 12,
@@ -1512,7 +1549,10 @@ mod tests {
 
     #[test]
     fn minor_events_are_omitted_from_the_list_when_hidden() {
-        let mut app = App::new("codex", "s1");
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
         app.push_event(AgentEvent::ThreadStarted {
             thread_id: "t-1".into(),
             model: None,
@@ -1530,7 +1570,10 @@ mod tests {
 
     #[test]
     fn footer_hints_depend_on_focus() {
-        let mut app = App::new("codex", "s1");
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
         // The full hint line is longer than the 80-column test terminal, so
         // check a marker near its start rather than one that may be clipped.
         assert!(rendered(&app).contains("j/k next/prev with detail"));
@@ -1543,7 +1586,10 @@ mod tests {
         // Same bug as the header/preview titles: an unstyled title patches
         // onto the border paint underneath it, so it dimmed to `DarkGray`
         // whenever the message box lost focus.
-        let app = App::new("codex", "s1");
+        let app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
         assert_eq!(app.focus, Focus::List);
 
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
@@ -1557,14 +1603,20 @@ mod tests {
 
     #[test]
     fn footer_advertises_the_collapse_all_shortcut() {
-        let app = App::new("codex", "s1");
+        let app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
         assert!(rendered(&app).contains("collapse all"));
     }
 
     #[test]
     fn raw_view_shows_wire_lines_with_direction_markers() {
         use styra_server::{Direction, RawLine};
-        let mut app = App::new("codex", "s1");
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
         app.push_raw(RawLine {
             direction: Direction::ToAgent,
             text: r#"{"op":"user_input"}"#.into(),
@@ -1584,7 +1636,10 @@ mod tests {
     #[test]
     fn long_raw_lines_wrap_instead_of_being_clipped() {
         use styra_server::{Direction, RawLine};
-        let mut app = App::new("codex", "s1");
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
         app.push_raw(RawLine {
             direction: Direction::FromAgent,
             text: format!(
@@ -1609,7 +1664,10 @@ mod tests {
         use styra_server::DrivaOptions;
         use styra_server::{Mount, MountAccess};
 
-        let mut app = App::new("codex", "s1");
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
         app.toggle_driva();
         let placeholder = rendered(&app);
         assert!(placeholder.contains("no live session"));
@@ -1636,7 +1694,10 @@ mod tests {
 
     #[test]
     fn long_summary_lines_wrap_instead_of_being_clipped() {
-        let mut app = App::new("codex", "s1");
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
         // Long enough that a single 80-column row (minus borders) could not
         // hold it; a fixed-width row concatenation of the test buffer would
         // otherwise cut this down to a handful of repetitions.
@@ -1652,7 +1713,10 @@ mod tests {
 
     #[test]
     fn preview_panel_shows_full_content_of_the_selected_entry_when_toggled() {
-        let mut app = App::new("codex", "s1");
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
         app.push_event(AgentEvent::CommandCompleted {
             command: "cargo test".into(),
             status: "completed".into(),
@@ -1671,7 +1735,10 @@ mod tests {
 
     #[test]
     fn fullscreen_preview_replaces_the_whole_main_region() {
-        let mut app = App::new("codex", "s1");
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
         app.push_event(AgentEvent::CommandCompleted {
             command: "cargo test".into(),
             status: "completed".into(),
@@ -1697,7 +1764,10 @@ mod tests {
 
     #[test]
     fn fullscreen_preview_has_no_border_or_title() {
-        let mut app = App::new("codex", "s1");
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
         app.push_event(AgentEvent::AgentMessage {
             text: "hello".into(),
         });
@@ -1723,7 +1793,10 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("notes.txt"), "line one\nline two").unwrap();
 
-        let mut app = App::new("codex", "s1");
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
         app.set_workspace_root(dir.clone());
         app.push_event(AgentEvent::FileChanged {
             id: "f1".into(),
@@ -1750,7 +1823,10 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("notes.txt"), "line one\nline two").unwrap();
 
-        let mut app = App::new("codex", "s1");
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
         app.set_workspace_root(dir.clone());
         // A FileChanged entry exercises both the ordinary detail body and the
         // file-content lines, the two sources of preview text.
@@ -1787,7 +1863,10 @@ mod tests {
         // The preview panel's border is unconditionally `DarkGray` (it has no
         // separate focus state), so its unstyled title used to inherit that
         // same dim color from the border paint underneath it.
-        let mut app = App::new("codex", "s1");
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
         app.push_event(AgentEvent::AgentMessage {
             text: "hello".into(),
         });
@@ -1804,7 +1883,10 @@ mod tests {
 
     #[test]
     fn preview_notes_an_unknown_workspace_instead_of_failing_to_read_a_file() {
-        let mut app = App::new("codex", "s1");
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
         app.push_event(AgentEvent::FileChanged {
             id: "f1".into(),
             paths: vec!["notes.txt".into()],
@@ -1818,7 +1900,10 @@ mod tests {
     #[test]
     fn log_view_shows_entries_with_levels() {
         use styra_server::LogEntry;
-        let mut app = App::new("codex", "s1");
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
         app.push_log(LogEntry::info("launching codex"));
         app.push_log(LogEntry::error("could not run the agent: bwrap missing"));
         app.toggle_log();
@@ -1831,7 +1916,10 @@ mod tests {
 
     #[test]
     fn transcript_view_renders_the_current_session() {
-        let mut app = App::new("codex", "s1");
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
         app.push_event(AgentEvent::UserMessage {
             text: "implement retry backoff".into(),
         });
@@ -1847,7 +1935,10 @@ mod tests {
 
     #[test]
     fn transcript_view_follows_the_minor_toggle_and_rerenders_when_flipped() {
-        let mut app = App::new("codex", "s1");
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
         app.push_event(AgentEvent::ThreadStarted {
             thread_id: "t-1".into(),
             model: None,
@@ -1869,7 +1960,10 @@ mod tests {
 
     #[test]
     fn transcript_view_shows_a_placeholder_before_anything_happens() {
-        let mut app = App::new("codex", "s1");
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
         app.toggle_transcript();
         assert!(rendered(&app).contains("nothing to render yet"));
     }
@@ -1879,7 +1973,10 @@ mod tests {
     /// model nobody typed.
     #[test]
     fn the_status_line_names_the_model_and_effort_in_use() {
-        let mut app = App::new("codex", "s-1");
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s-1",
+        );
         assert!(rendered(&app).contains("styra · codex · gpt-5.6-sol · high"));
 
         app.push_event(AgentEvent::ThreadStarted {
@@ -1915,7 +2012,10 @@ mod tests {
     /// but dimmed: it is what was asked for, not yet what is known to run.
     #[test]
     fn a_requested_model_is_shown_dimmed_until_the_agent_reports_one() {
-        let mut app = App::new("claude:opus/max", "s-1");
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("claude:opus/max").unwrap(),
+            "s-1",
+        );
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
         terminal.draw(|frame| render(frame, &app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
@@ -1956,7 +2056,10 @@ mod tests {
 
         // A launched session shows the plain waiting message instead: its agent
         // and model are settled, so there is nothing to offer choosing.
-        let app = App::new("claude:opus/max", "s-1");
+        let app = App::new(
+            styra_server::agent::Selection::parse("claude:opus/max").unwrap(),
+            "s-1",
+        );
         let screen = rendered(&app);
         assert!(screen.contains("waiting for the agent"), "{screen}");
         assert!(!screen.contains("press L to choose"), "{screen}");
@@ -1997,7 +2100,7 @@ mod tests {
     }
 
     /// A model the catalog does not list — one the operator named with
-    /// `--profile` — is still shown, as a final row the picker carries.
+    /// stored state is still shown, as a final row the picker carries.
     #[test]
     fn the_launcher_shows_a_carried_model_alongside_the_catalog() {
         let mut app = App::pending(
@@ -2016,7 +2119,7 @@ mod tests {
     }
 
     /// Every model the picker offers for Claude Code is a full id, so the
-    /// composed profile names the exact model rather than a moving alias.
+    /// composed selection names the exact model rather than a moving alias.
     #[test]
     fn the_claude_column_offers_full_model_ids() {
         let mut app = App::pending(styra_server::agent::Selection::parse("claude").unwrap());
@@ -2035,7 +2138,7 @@ mod tests {
             id: id.into(),
             workspace_id: "w-1".into(),
             path: std::path::PathBuf::from(id),
-            profile: profile.into(),
+            selection: styra_server::agent::Selection::parse(profile).unwrap(),
             age: age.into(),
             created_at_ms: None,
         }
@@ -2111,7 +2214,7 @@ mod tests {
         InteractionSummary {
             id: id.into(),
             workspace_id: "w-1".into(),
-            profile: profile.into(),
+            selection: styra_server::agent::Selection::parse(profile).unwrap(),
             workspace: std::path::PathBuf::from("/home/op/project"),
             driva: styra_server::DrivaOptions {
                 isolation_backend: "bwrap".into(),

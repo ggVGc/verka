@@ -30,7 +30,7 @@ fn main() -> anyhow::Result<()> {
     })?;
     let session = client.create_session(&CreateSession {
         workspace_id: workspace.id,
-        profile: "codex".into(),
+        selection: styra_server::agent::Selection::new(styra_server::agent::Provider::Codex),
         network: false,
         templates: Vec::new(),
         message: Some(prompt),

@@ -349,27 +349,17 @@ impl Interaction {
                 .to_owned(),
         }));
         let mut guard = self.stdin.lock().expect("interaction stdin lock poisoned");
-        {
-            let writer = guard
-                .as_mut()
-                .context("the interaction input is closed; the agent has stopped")?;
-            writer.write_all(&bytes).context("writing to agent stdin")?;
-            writer.flush().context("flushing agent stdin")?;
-        }
+        let writer = guard
+            .as_mut()
+            .context("the interaction input is closed; the agent has stopped")?;
+        writer.write_all(&bytes).context("writing to agent stdin")?;
+        writer.flush().context("flushing agent stdin")?;
         let _ = self
             .updates
             .send(InteractionUpdate::Log(LogEntry::info(format!(
                 "sent {} bytes to the agent",
                 bytes.len()
             ))));
-        if self.profile.single_turn {
-            // A one-shot exec agent reads the prompt to end-of-input; close
-            // stdin so the turn starts.
-            guard.take();
-            let _ = self.updates.send(InteractionUpdate::Log(LogEntry::info(
-                "closed input (single-turn profile); the agent is running the turn",
-            )));
-        }
         Ok(())
     }
 
@@ -528,7 +518,7 @@ mod tests {
     use std::time::{Duration, SystemTime};
 
     /// A backend that speaks a tiny protocol: for each submission line it reads
-    /// on stdin, it writes back one codex agent_message echoing the text, then
+    /// on stdin, it writes back one Claude assistant message echoing the text, then
     /// exits on stdin EOF. This exercises the full bidirectional path without a
     /// real agent, the way Orka tests its executor with a stub.
     struct EchoBackend;
@@ -544,13 +534,13 @@ mod tests {
                     continue;
                 }
                 let submission: serde_json::Value = serde_json::from_str(&line)?;
-                let text = submission["op"]["items"][0]["text"]
+                let text = submission["message"]["content"]
                     .as_str()
                     .unwrap_or("")
                     .to_owned();
                 let event = serde_json::json!({
-                    "type": "item.completed",
-                    "item": { "type": "agent_message", "text": format!("echo: {text}") },
+                    "type": "assistant",
+                    "message": { "role": "assistant", "content": format!("echo: {text}") },
                 });
                 writeln!(io.stdout, "{event}")?;
                 io.stdout.flush()?;
@@ -571,18 +561,15 @@ mod tests {
     fn workspace_spec(dir: &std::path::Path) -> InteractionSpec {
         // A profile with no credential mounts so request validation only needs
         // the workspace directory to exist.
-        let mut profile = crate::agent::codex(
+        let mut profile = crate::agent::claude(
             &SandboxLayout::default(),
-            std::path::Path::new("codex"),
-            crate::agent::Provider::CodexExec.default_model(),
-            crate::agent::Provider::CodexExec.default_effort(),
+            std::path::Path::new("claude"),
+            crate::agent::Provider::Claude.default_model(),
+            crate::agent::Provider::Claude.default_effort(),
         );
         profile.mounts.clear();
         profile.network = false;
-        profile.message_format = MessageFormat::CodexSubmission;
-        // Keep input open across the turn so the test's explicit stop() is what
-        // signals end-of-input (exercises the multi-turn-capable path).
-        profile.single_turn = false;
+        profile.message_format = MessageFormat::ClaudeStreamJson;
         InteractionSpec {
             profile,
             working_directory: dir.to_path_buf(),
@@ -632,9 +619,8 @@ mod tests {
         assert!(request.network);
     }
 
-    /// A client picks an agent, model, and effort by sending one profile name;
-    /// what the sandbox actually runs — and what the Driva view reports — must
-    /// carry all three, or the picked model silently is not the one that runs.
+    /// A client selection must reach the internal profile's command unchanged;
+    /// otherwise the picked model is not the one the sandbox runs.
     #[test]
     fn a_profile_name_carrying_a_model_and_effort_reaches_the_launched_command() {
         let root =
@@ -771,7 +757,7 @@ mod tests {
         drop(interaction);
 
         // The journal captured both the operator turn and the agent reply.
-        let replayed = crate::journal::replay(&dir, Protocol::CodexJsonl).unwrap();
+        let replayed = crate::journal::replay(&dir, Protocol::ClaudeJsonl).unwrap();
         assert_eq!(
             replayed,
             vec![

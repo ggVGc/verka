@@ -151,22 +151,16 @@ A profile is the only agent-specific knowledge in Styra. It defines:
   `AgentProtocol`, selecting both the encoder for outgoing messages and the
   decoder for incoming events;
 - `mounts`, `environment`, `network` — the Driva policy the agent needs;
-- `message_format` — how an operator message becomes one input line;
-- `single_turn` — whether the agent reads one prompt to end-of-input and then
-  runs to completion, so the session closes stdin after the first message.
+- `message_format` — how an operator message becomes one input line.
 
-### A profile name is a launch selection
+### A selection resolves to an internal profile
 
-A profile is named `provider:model/effort` — `codex:gpt-5.6-sol/high`,
-`claude:claude-opus-5/xhigh` — and that string is genta's `Selection`. All three
-parts are always present: a profile may not leave the model or effort to whatever
-the agent happens to be configured for, because that configuration is invisible
-both to Styra and to anyone reading the journal afterwards — a session recorded as
-plain `codex` says nothing about what ran. Each provider therefore *declares* its
-defaults (`Provider::default_model`, `Provider::default_effort`), and the shorter
-`provider[:model][/effort]` forms are accepted at the boundary and filled in from
-them, so `--profile claude` still works and resolves to a profile named
-`claude:claude-opus-5/high`.
+Styra's user-facing launch concept is genta's structured `Selection`: provider,
+model, and effort. All three parts are always present. A selection may not leave
+the model or effort to whatever the agent happens to be configured for, because
+that configuration is invisible both to Styra and to anyone reading the journal
+afterwards. Each provider therefore declares defaults
+(`Provider::default_model`, `Provider::default_effort`).
 
 The defaults are declared rather than derived from the front of the catalog, so
 reordering the catalog cannot silently move every unpinned launch to another
@@ -181,12 +175,12 @@ Both parts reach each agent its own way — codex as `-c model=…` and
 and `--effort` — and the effort ladders differ at the ends (codex has `minimal`,
 Claude Code has `max`), so each provider publishes the levels it accepts.
 
-The grammar round-trips: a resolved profile is named after the selection that
-produced it, so the journal's `SessionMeta` records the model and effort that
-actually ran and re-parsing that name reproduces the launch. Model ids are
-free-form strings, not an enum — the authoritative catalog belongs to the agent,
-and an id it does not know fails there rather than being second-guessed here.
-Genta only *suggests* a per-provider list for a picker to offer.
+The server resolves the structured selection to an internal Genta profile. Its
+canonical name is persisted in `SessionMeta`, so the model and effort that ran
+can be reconstructed during replay. Model ids are free-form strings, not an enum
+— the authoritative catalog belongs to the agent, and an id it does not know
+fails there rather than being second-guessed here. Genta only suggests a
+per-provider list for a picker to offer.
 
 Nothing below this boundary can be partial either: Genta's profile builders take
 a model and an effort outright, so no host can construct a profile that leaves
@@ -194,21 +188,15 @@ them to the agent. Orka, which has no operator to ask, pins them from its own
 configuration (`agent.model` / `agent.effort`, defaulting to the same declared
 values) — an attempt's recorded argv has to say what produced the work.
 
-The first profile targets the same provider Orka uses. Its wire event schema is
-the `thread.started` / `turn.started` / `turn.completed` / `item.{started,
-updated,completed}` family Orka already decodes, so the decoders stay aligned.
 The protocol is versioned: a new wire format, or a new revision of an existing
 one, is a new `protocol` variant plus a decoder arm, and the match is
 exhaustive, so a missing decoder is a compile error rather than a silent
 mis-decode. This is the same discipline as Orka's decoder registry.
 
-### Interactive vs. single-turn, and the two codex profiles
+### Interactive agent protocols
 
 The session and pipe machinery is genuinely bidirectional and multi-turn: it
 holds the agent's stdin open and writes each operator message as it is sent.
-Whether a session is *actually* multi-turn is a property of the agent's
-protocol, carried by the profile's `single_turn` flag. Both codex profiles were
-verified live against codex-cli 0.145.
 
 The default `codex` profile is multi-turn over the experimental **`app-server`
 JSON-RPC protocol** on stdio. This is a stateful wire contract, not a plain
@@ -240,12 +228,6 @@ inner sandbox: approvals never stall a turn, and real isolation stays Driva's.
 Any server-to-client request that does appear is surfaced in the log view
 rather than silently dropped.
 
-The `codex-exec` profile remains the one-shot alternative: `codex exec --json -`
-reads the prompt from stdin, streams the `thread.`/`turn.`/`item.` events, and
-exits — `single_turn`, so Styra closes stdin after the first message and the
-session is one turn. Its simpler stream is also the format Orka's attempts
-capture, which keeps the two applications' decoders aligned.
-
 ## Event vocabulary
 
 Styra decodes provider wire events into a small, stable set that the UI
@@ -253,8 +235,7 @@ consumes. It is intentionally the same shape as Orka's `AgentEvent`:
 
 - `ThreadStarted { thread_id, model, effort }` — the model and reasoning
   effort are the agent's own report of what the session resolved to, absent
-  where it does not name them (Claude Code reports a model but no effort; the
-  one-shot `codex exec` stream reports neither)
+  where it does not name them (Claude Code reports a model but no effort)
 - `TurnStarted` / `TurnCompleted { usage }`
 - `CommandStarted { command }` / `CommandCompleted { command, status,
   exit_code, output }`
@@ -298,7 +279,7 @@ This is what makes the wishlist's session properties fall out cheaply:
   without a live agent.
 - **Resume / fork / switch model.** A new session is seeded by feeding a prior
   journal's context to a freshly launched agent — possibly a different
-  profile, hence a different model — while preserving the original journal.
+  selection, hence a different provider or model — while preserving the original journal.
   Fork is resume that keeps both branches. These reuse the launch and decode
   paths and add no new persistence concept, so they stay cheap. The first cut
   (`F`) explicitly renders the old journal to a text transcript and prepares it
@@ -370,9 +351,9 @@ Alongside `journal.jsonl`, one `session.json` is written once at session
 creation: the owning Workspace plus genta's `SessionMeta` (the profile name and
 wire protocol that launched the Session). The journal itself is agent-agnostic
 — it stores whatever raw line arrived — so without this sidecar there is no
-record of which agent a stored Session came from. `--view` reads `session.json` and
-decodes with the protocol it names; there is no `--profile` fallback, since an
-operator-supplied guess could silently mis-decode a mismatched Session.
+record of which agent a stored Session came from. `--view` reads `session.json`
+and decodes with the protocol it names rather than guessing from current launch
+defaults.
 Workspace ownership and `session.json` are required; incomplete or flat Session
 directories are invalid store entries.
 
@@ -414,10 +395,8 @@ The application is a single full-screen view with three regions:
   (`ThreadStarted`), and that report is what the line shows; until it arrives —
   and for a value the agent never reports, such as Claude Code's effort — the
   line falls back to what the launch asked for and dims it, so what *is* running
-  reads differently from what was *requested*. With neither, it says `default
-  model`: the agent is on its own configuration and has not said which. A stored
-  session's recorded profile is read apart textually rather than resolved, so a
-  journal naming an agent this build does not know still shows what it says.
+  reads differently from what was *requested*. A stored session's selection is
+  reconstructed from its metadata without resolving or launching a profile.
 
 ### The raw view
 
@@ -557,26 +536,24 @@ over), it launches immediately, exactly as it always has.
 Because nothing is launched until the first message, the blank start screen is
 also where *what to launch* is chosen. `L` (or `Ctrl+L`, since that screen opens
 in input focus) opens a modal picker with three columns — agent, model, effort —
-and applying it records a `Selection` on the `App`; the profile name shown in the
-status line updates with it, so the screen always names what an `Enter` would
+and applying it records a `Selection` on the `App`; the status line updates with
+it, so the screen always names what an `Enter` would
 start. Nothing is launched or sent by picking: the operator's own message still
 does that, as everywhere else.
 
-Every row of every column is a concrete choice out of the agent's own catalogs
-(*A profile name is a launch selection*). There is no row standing for "whatever
+Every row of every column is a concrete choice out of the agent's own catalogs.
+There is no row standing for "whatever
 the agent is configured for", because no selection can express that: the picker
 opens on the model and effort its current selection names, and both are always
-named. Changing the agent resets both to that provider's declared defaults — the
-same launch `--profile <agent>` would produce — since neither the catalogs nor the
-effort ladders correspond across providers.
+named. Changing the agent resets both to that provider's declared defaults,
+since neither the catalogs nor the effort ladders correspond across providers.
 
 The model catalog is a fixed list per agent, not a free-text field: for Claude
 Code it is every id Anthropic lists as `Active` in its model-status table, as
 full ids rather than the moving `opus`/`sonnet` aliases, so a journal records the
-exact model a session ran on. A model outside that list is still launchable —
-`--profile claude:<id>` — and the picker, when opened on one, carries it as a
-final row so confirming cannot silently swap it for a catalogued model; it can
-carry such an id, never author one.
+exact model a session ran on. A model outside that list can survive in stored
+state, and the picker carries it as a final row so confirming cannot silently
+swap it for a catalogued model; it can carry such an id, never author one.
 
 The picker is reachable only in `Status::Pending`. A live or replayed session's
 agent, model, and effort are settled facts about a process that already ran;
@@ -584,9 +561,6 @@ changing them is a property of the *next* session, reached by resetting (`S`)
 first — which carries the stopped Interaction's selection over, so the usual
 next step is the same agent again and a deliberate change is one keypress away.
 Opening another Session (`V`) adopts that Session's recorded launch selection.
-The process-wide `--profile` is only the
-opening choice, parsed before the terminal is taken over so an unknown agent or
-effort level is a plain error rather than a failure at the first message.
 
 ## Concurrency model
 
@@ -677,11 +651,8 @@ Dependencies: `styra-server` depends on `driva` and `genta` (path),
 styra [OPTIONS] [-- PROMPT]
 
   --socket <PATH>      styra-server socket (default: $XDG_RUNTIME_DIR/styra/styra.sock)
-  --profile <NAME>     Agent to launch, as provider:model/effort; a shorter
-                       provider[:model][/effort] takes that agent's declared
-                       defaults (default: codex); seeds the start screen's picker
   --workspace <DIR>    Host directory mounted writable as the agent workspace
-  --network            Permit agent networking (profiles may default this on)
+  --network            Permit agent networking (providers may default this on)
   --view <SESSION>     Open a captured journal read-only instead of launching
   -d, --daemon         Start the background daemon and exit (no interface)
   --stop               Stop the daemon on the socket and exit
@@ -705,8 +676,7 @@ session can start with one message already sent, launching the interaction immed
 without it, the application opens in input focus with an empty box and launches
 nothing until the operator submits a message (see *Starting and seeding send
 nothing on their own*). `--view` opens the view/replay path over a stored
-journal; it decodes with the session's own recorded profile and protocol, so
-`--profile` is not read in this mode.
+journal; it decodes with the session's own recorded profile and protocol.
 
 ## Relationship to Orka and the wishlist
 

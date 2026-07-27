@@ -43,7 +43,8 @@ impl Default for SandboxLayout {
 /// Which coding agent a session launches, and thus which command line and wire
 /// protocol it gets. The model and reasoning effort are chosen separately (see
 /// [`Selection`]); a provider is only the agent itself.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum Provider {
     /// Multi-turn codex over the `app-server` JSON-RPC protocol.
     Codex,
@@ -175,7 +176,8 @@ impl Provider {
 /// [`Provider::efforts`] narrows it to what a given agent accepts. Passed to
 /// codex as its `model_reasoning_effort` config override and to Claude Code as
 /// `--effort`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Effort {
     Minimal,
     Low,
@@ -234,7 +236,7 @@ impl Effort {
 /// model and effort ran, and re-parsing it reproduces the launch. Parsing accepts
 /// the shorter `provider[:model][/effort]` forms and fills in the defaults, so
 /// `--profile claude` still works and names itself fully afterwards.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Selection {
     pub provider: Provider,
     pub model: String,

@@ -43,7 +43,6 @@
   - Render lines in the same way as in the main log view, but without the arrows and body contents. Only single lines.
 - Clear options for driva invocation
 - Fix claude profile
-- Maybe get rid of other profiles like codex-exec? Not sure what their purpose is.
 - Some way of listing models and selecting between them on-the-fly:
   - This will affect caching, I suppose?
 - Tag sessions

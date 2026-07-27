@@ -152,13 +152,14 @@ fn list_sessions_at(dir: &Path, workspace_id: &str) -> Result<Vec<SessionSummary
         }
         let path = entry.path();
         let id = entry.file_name().to_string_lossy().into_owned();
-        let profile = read_session_meta(&path)?.profile;
+        let selection = crate::agent::Selection::parse(&read_session_meta(&path)?.profile)
+            .with_context(|| format!("reading agent selection from {}", path.display()))?;
         let created_at_ms = session_created_at_ms(&id);
         sessions.push(SessionSummary {
             id,
             workspace_id: workspace_id.to_owned(),
             path,
-            profile,
+            selection,
             age: humanize_age(now, created_at_ms),
             created_at_ms,
         });
@@ -404,7 +405,7 @@ mod tests {
             environment: Default::default(),
             network: false,
             message_format: crate::agent::MessageFormat::PlainLine,
-            single_turn: true,
+            single_turn: false,
         }
     }
 
@@ -427,7 +428,10 @@ mod tests {
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].id, id);
         assert_eq!(sessions[0].workspace_id, workspace.id);
-        assert_eq!(sessions[0].profile, "codex");
+        assert_eq!(
+            sessions[0].selection,
+            crate::agent::Selection::new(crate::agent::Provider::Codex)
+        );
         assert_eq!(
             crate::workspace::get(&root, &workspace.id)
                 .unwrap()
@@ -455,7 +459,7 @@ mod tests {
             id: format!("{created_at_ms:?}"),
             workspace_id: "w-1".into(),
             path: PathBuf::new(),
-            profile: "codex".into(),
+            selection: crate::agent::Selection::new(crate::agent::Provider::Codex),
             age: String::new(),
             created_at_ms,
         };

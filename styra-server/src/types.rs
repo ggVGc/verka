@@ -8,6 +8,7 @@
 //! [`crate::server`]. Keeping them here lets a client depend on the interface
 //! without pulling in the interaction runner.
 
+use crate::agent::Selection;
 use crate::event::AgentEvent;
 use driva::Mount;
 use serde::{Deserialize, Serialize};
@@ -133,15 +134,14 @@ pub struct InteractionSummary {
     pub id: String,
     /// The Workspace containing the Session served by this Interaction.
     pub workspace_id: String,
-    /// The agent profile the interaction is running.
-    pub profile: String,
+    /// The provider, model, and effort the interaction is running.
+    pub selection: Selection,
     /// The host directory bound as the agent's workspace, so a reattaching
     /// client can resolve changed-file previews.
     pub workspace: PathBuf,
     /// The Driva policy the interaction was launched under, for the driva view.
     pub driva: DrivaOptions,
-    /// Whether the interaction still takes messages: its agent process is alive and,
-    /// for a single-turn profile, it has not spent its one turn yet.
+    /// Whether the interaction's agent process is alive and still takes messages.
     pub accepting: bool,
 }
 
@@ -155,8 +155,8 @@ pub struct SessionSummary {
     pub workspace_id: String,
     /// Its directory, ready to pass straight to `--view`.
     pub path: PathBuf,
-    /// The agent that produced it.
-    pub profile: String,
+    /// The provider, model, and effort that produced it.
+    pub selection: Selection,
     /// Roughly how long ago it was created, e.g. "3h ago".
     pub age: String,
     /// The millisecond timestamp embedded in `id`, used to sort newest

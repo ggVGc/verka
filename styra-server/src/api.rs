@@ -1,5 +1,6 @@
 //! Stable JSON contract shared by the Styra Unix-socket server and its clients.
 
+use crate::agent::Selection;
 use crate::event::AgentEvent;
 use crate::types::{
     DrivaOptions, InteractionSummary, InteractionUpdate, RawLine, SessionSummary, WorkspaceSummary,
@@ -7,7 +8,7 @@ use crate::types::{
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-pub const API_VERSION: &str = "v2";
+pub const API_VERSION: &str = "v3";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Health {
@@ -25,7 +26,7 @@ pub struct CreateWorkspace {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CreateSession {
     pub workspace_id: String,
-    pub profile: String,
+    pub selection: Selection,
     #[serde(default)]
     pub network: bool,
     /// Named Driva execution templates (see `driva templates`), applied as an
@@ -41,7 +42,7 @@ pub struct CreateSession {
 pub struct SessionInfo {
     pub id: String,
     pub workspace_id: String,
-    pub profile: String,
+    pub selection: Selection,
     pub workspace: PathBuf,
     pub journal_path: PathBuf,
     pub driva: DrivaOptions,
@@ -191,10 +192,37 @@ mod tests {
             },
         };
         let json = serde_json::to_value(&request).unwrap();
-        assert_eq!(json["api_version"], "v2");
+        assert_eq!(json["api_version"], "v3");
         assert_eq!(json["operation"], "updates");
         assert_eq!(json["data"]["id"], "s-1");
         assert_eq!(json["data"]["after"], 8);
+        assert_eq!(
+            serde_json::from_value::<WireRequest>(json).unwrap(),
+            request
+        );
+    }
+
+    #[test]
+    fn session_creation_carries_a_structured_agent_selection() {
+        let request = WireRequest {
+            api_version: API_VERSION.into(),
+            request: Request::CreateSession(CreateSession {
+                workspace_id: "w-1".into(),
+                selection: crate::agent::Selection {
+                    provider: crate::agent::Provider::Claude,
+                    model: "claude-opus-5".into(),
+                    effort: crate::agent::Effort::XHigh,
+                },
+                network: false,
+                templates: Vec::new(),
+                message: None,
+            }),
+        };
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["data"]["selection"]["provider"], "claude");
+        assert_eq!(json["data"]["selection"]["model"], "claude-opus-5");
+        assert_eq!(json["data"]["selection"]["effort"], "xhigh");
+        assert!(json["data"].get("profile").is_none());
         assert_eq!(
             serde_json::from_value::<WireRequest>(json).unwrap(),
             request
