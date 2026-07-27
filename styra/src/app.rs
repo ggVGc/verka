@@ -68,7 +68,7 @@ impl Status {
     }
 
     pub fn is_active(&self) -> bool {
-        matches!(self, Status::Pending | Status::Running | Status::Idle)
+        matches!(self, Status::Pending | Status::Running | Status::Idle | Status::Stopped)
     }
 }
 

@@ -806,7 +806,7 @@ fn handle_launcher_key(app: &mut App, key: KeyEvent, preferences_path: &Path) {
 fn handle_list_key(
     app: &mut App,
     client: &Client,
-    live: &Live,
+    live: &mut Live,
     key: KeyEvent,
     pending_fold: &mut bool,
 ) {
@@ -824,6 +824,7 @@ fn handle_list_key(
     // switching focus into one would leave keystrokes going nowhere visible.
     match key.code {
         KeyCode::Char('q') => return app.request_quit(),
+        KeyCode::Esc => return pause_interaction(app, client, live),
         KeyCode::Char('i') if app.view != View::Preview => return app.enter_input(),
         KeyCode::Tab if app.view != View::Preview => return app.toggle_focus(),
         KeyCode::Char('r') => return app.toggle_raw(),
@@ -909,7 +910,7 @@ fn handle_input_key(
     key: KeyEvent,
 ) {
     match key.code {
-        KeyCode::Esc => app.enter_list(),
+        KeyCode::Esc => pause_interaction(app, client, live),
         KeyCode::Tab => app.toggle_focus(),
         KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => app.input_newline(),
         KeyCode::Enter => {
@@ -975,6 +976,25 @@ fn handle_input_key(
         KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => app.open_launcher(),
         KeyCode::Char(ch) => app.input_char(ch),
         _ => {}
+    }
+}
+
+fn pause_interaction(app: &mut App, client: &Client, live: &mut Live) {
+    // Esc in the main interaction is an interrupt, like the agent clients'
+    // own escape key. Close this agent's input stream but keep the TUI ready
+    // to launch a fresh interaction on the next message.
+    if let Live::Running { session_id, .. } = live {
+        if let Err(error) = client.stop_interaction(session_id) {
+            app.push_log(LogEntry::error(format!("pause failed: {error:#}")));
+        } else {
+            app.status = Status::Stopped;
+            app.push_log(LogEntry::info(
+                "interaction paused; send a new message to start again",
+            ));
+            *live = Live::Pending;
+        }
+    } else {
+        app.enter_list();
     }
 }
 
