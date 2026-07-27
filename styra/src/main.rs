@@ -867,6 +867,8 @@ fn handle_list_key(
     }
     match app.view {
         View::Events => match key.code {
+            KeyCode::PageDown if app.show_preview => app.preview_page_down(),
+            KeyCode::PageUp if app.show_preview => app.preview_page_up(),
             KeyCode::Char('j') | KeyCode::Down => app.select_next(),
             KeyCode::Char('k') | KeyCode::Up => app.select_prev(),
             KeyCode::Char('J') => app.select_next_line(),
@@ -907,6 +909,8 @@ fn handle_list_key(
         View::Driva => {}
         // Browsing between entries updates which one's content is shown.
         View::Preview => match key.code {
+            KeyCode::PageDown => app.preview_page_down(),
+            KeyCode::PageUp => app.preview_page_up(),
             KeyCode::Char('j') | KeyCode::Down => app.select_next(),
             KeyCode::Char('k') | KeyCode::Up => app.select_prev(),
             KeyCode::Char('J') => app.select_next_line(),

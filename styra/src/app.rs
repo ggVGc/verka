@@ -336,6 +336,10 @@ pub struct App {
     /// When true, a side panel shows the full expanded content of the
     /// selected entry, independent of whether it is folded in the list.
     pub show_preview: bool,
+    /// Lines scrolled down from the top of the selected entry's preview.
+    /// Rendering clamps this to the last page because wrapping depends on the
+    /// terminal width.
+    pub preview_scroll: u16,
     /// What the next session launches with: agent, model, reasoning effort.
     /// This is the operator's standing choice, edited through [`Launcher`] while
     /// nothing is running. The terminal client persists a confirmed choice.
@@ -402,6 +406,7 @@ impl App {
             follow: true,
             show_minor: false,
             show_preview: false,
+            preview_scroll: 0,
             selection,
             launcher: None,
             reported_model: None,
@@ -669,6 +674,7 @@ impl App {
                 entry.event = event;
                 if self.follow {
                     self.selected = self.entries.len() - 1;
+                    self.preview_scroll = 0;
                 }
                 return;
             }
@@ -722,6 +728,7 @@ impl App {
         });
         if self.follow {
             self.selected = self.entries.len() - 1;
+            self.preview_scroll = 0;
         }
     }
 
@@ -741,12 +748,13 @@ impl App {
     }
 
     /// Whether an entry is one `j`/`k` should land on: visible, and carrying
-    /// a fold arrow (something beyond its bare summary). Entries with
-    /// nothing to show beyond that arrow-less summary (e.g. a bare `turn
-    /// started` marker) are skipped so quick review only stops on entries
-    /// worth looking at; `J`/`K` still visit them one line at a time.
+    /// content worth previewing. Usually that means a fold arrow, but file
+    /// events are always navigable because their preview includes the current
+    /// file contents even when their event detail is only one line.
     fn is_navigable(&self, idx: usize) -> bool {
-        self.is_visible(idx) && self.entries[idx].has_detail()
+        self.is_visible(idx)
+            && (self.entries[idx].has_detail()
+                || matches!(self.entries[idx].event, AgentEvent::FileChanged { .. }))
     }
 
     /// The nearest visible index at or after `from`, if any.
@@ -774,6 +782,14 @@ impl App {
         self.show_preview = !self.show_preview;
     }
 
+    pub fn preview_page_down(&mut self) {
+        self.preview_scroll = self.preview_scroll.saturating_add(10);
+    }
+
+    pub fn preview_page_up(&mut self) {
+        self.preview_scroll = self.preview_scroll.saturating_sub(10);
+    }
+
     /// Record the host directory backing the agent's workspace, so the
     /// preview panel can resolve a changed file's path to its current
     /// content on disk.
@@ -795,6 +811,7 @@ impl App {
                 .or_else(|| self.next_visible(self.selected))
             {
                 self.selected = idx;
+                self.preview_scroll = 0;
             }
         }
     }
@@ -805,6 +822,7 @@ impl App {
     pub fn select_next(&mut self) {
         if let Some(next) = self.next_navigable(self.selected + 1) {
             self.selected = next;
+            self.preview_scroll = 0;
         }
         // Re-enable follow only when the selection reaches the navigable tail.
         self.follow = !self.entries.is_empty() && self.next_navigable(self.selected + 1).is_none();
@@ -818,6 +836,7 @@ impl App {
             .and_then(|from| self.prev_navigable(from))
         {
             self.selected = prev;
+            self.preview_scroll = 0;
         }
         // Moving off the tail pins the view.
         self.follow = false;
@@ -829,6 +848,7 @@ impl App {
     pub fn select_next_line(&mut self) {
         if let Some(next) = self.next_visible(self.selected + 1) {
             self.selected = next;
+            self.preview_scroll = 0;
         }
         // Re-enable follow only when the selection reaches the visible tail.
         self.follow = !self.entries.is_empty() && self.next_visible(self.selected + 1).is_none();
@@ -842,6 +862,7 @@ impl App {
             .and_then(|from| self.prev_visible(from))
         {
             self.selected = prev;
+            self.preview_scroll = 0;
         }
         // Moving off the tail pins the view.
         self.follow = false;
@@ -850,6 +871,7 @@ impl App {
     pub fn select_first(&mut self) {
         if let Some(first) = self.next_visible(0) {
             self.selected = first;
+            self.preview_scroll = 0;
         }
         self.follow = !self.entries.is_empty() && self.next_visible(self.selected + 1).is_none();
     }
@@ -860,6 +882,7 @@ impl App {
         }
         if let Some(last) = self.prev_visible(self.entries.len() - 1) {
             self.selected = last;
+            self.preview_scroll = 0;
         }
         self.follow = true;
     }
@@ -1764,6 +1787,48 @@ mod tests {
         assert_eq!(app.selected, 1);
         app.select_prev_line();
         assert_eq!(app.selected, 0);
+    }
+
+    #[test]
+    fn file_events_are_navigable_even_without_fold_detail() {
+        let mut app = app();
+        app.push_event(AgentEvent::AgentMessage {
+            text: "plain summary".into(),
+        });
+        app.push_event(AgentEvent::FileChanged {
+            id: String::new(),
+            paths: vec!["notes.txt".into()],
+            checkpoint: None,
+            checkpoint_error: None,
+        });
+        app.push_event(AgentEvent::AgentMessage {
+            text: "another plain summary".into(),
+        });
+        assert!(!app.entries[1].has_detail());
+
+        app.select_first();
+        app.select_next();
+        assert_eq!(app.selected, 1);
+        app.select_next();
+        assert_eq!(app.selected, 1);
+    }
+
+    #[test]
+    fn preview_scroll_resets_when_selection_changes() {
+        let mut app = app();
+        app.push_event(AgentEvent::AgentMessage {
+            text: "first\nbody".into(),
+        });
+        app.push_event(AgentEvent::AgentMessage {
+            text: "second\nbody".into(),
+        });
+        app.select_first();
+        app.preview_page_down();
+        assert_eq!(app.preview_scroll, 10);
+
+        app.select_next();
+        assert_eq!(app.selected, 1);
+        assert_eq!(app.preview_scroll, 0);
     }
 
     #[test]

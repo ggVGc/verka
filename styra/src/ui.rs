@@ -116,7 +116,12 @@ pub fn render(frame: &mut Frame, app: &App) {
         return;
     }
 
-    let input_height = input_area_height(app, frame.area().width.saturating_sub(2));
+    let input_active = app.focus == Focus::Input;
+    let input_height = if input_active {
+        input_area_height(app, frame.area().width.saturating_sub(2))
+    } else {
+        0
+    };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -134,7 +139,9 @@ pub fn render(frame: &mut Frame, app: &App) {
         View::Driva => render_driva(frame, app, chunks[0]),
         View::Preview => unreachable!("handled above"),
     }
-    render_input(frame, app, chunks[1]);
+    if input_active {
+        render_input(frame, app, chunks[1]);
+    }
     render_footer(frame, app, chunks[2]);
 }
 
@@ -762,9 +769,17 @@ fn render_preview(frame: &mut Frame, app: &App, area: Rect) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::DarkGray))
         .title(Span::styled(" preview ", Style::default().fg(Color::Gray)));
-    let paragraph = Paragraph::new(preview_lines(app))
+    let lines = preview_lines(app);
+    let scroll = preview_scroll(
+        &lines,
+        area.width.saturating_sub(2),
+        area.height.saturating_sub(2),
+        app.preview_scroll,
+    );
+    let paragraph = Paragraph::new(lines)
         .block(block)
-        .wrap(Wrap { trim: false });
+        .wrap(Wrap { trim: false })
+        .scroll((scroll, 0));
     frame.render_widget(paragraph, area);
 }
 
@@ -773,8 +788,22 @@ fn render_preview(frame: &mut Frame, app: &App, area: Rect) {
 /// chrome at all — just the text, filling the whole terminal, so it can be
 /// selected and copied cleanly.
 fn render_fullscreen_preview(frame: &mut Frame, app: &App, area: Rect) {
-    let paragraph = Paragraph::new(preview_lines(app)).wrap(Wrap { trim: false });
+    let lines = preview_lines(app);
+    let scroll = preview_scroll(&lines, area.width, area.height, app.preview_scroll);
+    let paragraph = Paragraph::new(lines)
+        .wrap(Wrap { trim: false })
+        .scroll((scroll, 0));
     frame.render_widget(paragraph, area);
+}
+
+fn preview_scroll(lines: &[Line<'_>], width: u16, height: u16, requested: u16) -> u16 {
+    let width = usize::from(width.max(1));
+    let rendered_lines: usize = lines
+        .iter()
+        .map(|line| line.width().max(1).div_ceil(width))
+        .sum();
+    let max_scroll = rendered_lines.saturating_sub(usize::from(height)) as u16;
+    requested.min(max_scroll)
 }
 
 /// Shared body for the side-panel and full-screen preview: the selected
@@ -1275,7 +1304,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     let hints = match (app.focus, app.view) {
         (Focus::Input, _) => "Enter send · ↑/↓ history · Alt+Enter newline · Ctrl+W delete word · Esc back to list",
         (Focus::List, View::Events) => {
-            "j/k next/prev with detail · J/K next/prev line · space fold · C collapse all · m minor · p preview · P full-screen · t transcript · r raw · l log · d driva · i message · s stop · F resume · A interactions · S reset · V Workspaces · q quit"
+            "j/k next/prev with detail/files · C collapse all · J/K next/prev line · PgUp/PgDn preview scroll · space fold · m minor · p preview · P full-screen · t transcript · r raw · l log · d driva · i message · s stop · F resume · A interactions · S reset · V Workspaces · q quit"
         }
         (Focus::List, View::Raw) => {
             "j/k scroll · g/G top/bottom · r events · l log · t transcript · d driva · i message · s stop · F resume · A interactions · S reset · V Workspaces · q quit"
@@ -1290,7 +1319,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
             "d events · r raw · l log · t transcript · i message · s stop · F resume · A interactions · S reset · V Workspaces · q quit"
         }
         (Focus::List, View::Preview) => {
-            "j/k next/prev with detail · J/K next/prev line · g/G top/bottom · P events · i message · s stop · F resume · A interactions · S reset · V Workspaces · q quit"
+            "j/k next/prev previewable · J/K next/prev line · PgUp/PgDn scroll · g/G first/last entry · P events · i message · s stop · F resume · A interactions · S reset · V Workspaces · q quit"
         }
     };
     let footer = Paragraph::new(Line::from(Span::styled(
@@ -1655,23 +1684,16 @@ mod tests {
     }
 
     #[test]
-    fn message_box_title_stays_legible_when_unfocused() {
-        // Same bug as the header/preview titles: an unstyled title patches
-        // onto the border paint underneath it, so it dimmed to `DarkGray`
-        // whenever the message box lost focus.
-        let app = App::new(
+    fn message_box_is_only_shown_while_input_is_active() {
+        let mut app = App::new(
             styra_server::agent::Selection::parse("codex").unwrap(),
             "s1",
         );
         assert_eq!(app.focus, Focus::List);
+        assert!(!rendered(&app).contains("type a message, Enter to send"));
 
-        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
-        terminal.draw(|frame| render(frame, &app)).unwrap();
-        let buffer = terminal.backend().buffer().clone();
-
-        let (x, y) = find_column(&buffer, "message");
-        let cell = buffer.cell((x, y)).unwrap();
-        assert_ne!(cell.style().fg, Some(Color::DarkGray));
+        app.enter_input();
+        assert!(rendered(&app).contains("type a message, Enter to send"));
     }
 
     #[test]
