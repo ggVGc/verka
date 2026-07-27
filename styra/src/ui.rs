@@ -1072,6 +1072,11 @@ fn summary_line(entry: &Entry, has_detail: bool) -> Line<'static> {
         (true, false) => "▸",
     };
     let tag = entry.event.tag();
+    let summary_style = if tag == "command" {
+        Style::default().fg(tag_color(tag))
+    } else {
+        Style::default().fg(Color::White)
+    };
     Line::from(vec![
         Span::raw(format!("{marker} ")),
         Span::styled(
@@ -1080,7 +1085,7 @@ fn summary_line(entry: &Entry, has_detail: bool) -> Line<'static> {
                 .fg(tag_color(tag))
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(entry.event.summary(), Style::default().fg(Color::White)),
+        Span::styled(entry.event.summary(), summary_style),
     ])
 }
 
@@ -1239,7 +1244,7 @@ fn tag_color(tag: &str) -> Color {
     match tag {
         "agent" => Color::Green,
         "user" => Color::Cyan,
-        "command" => Color::Yellow,
+        "command" => Color::Rgb(184, 124, 0),
         "tool" => Color::Magenta,
         "plan" | "files" => Color::Blue,
         "error" | "malformed" => Color::Red,
