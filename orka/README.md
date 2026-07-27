@@ -56,9 +56,19 @@ rootfs = "/"
 tmpfs = ["/root"]
 ```
 
+Add `model` and `effort` under `[agent]` to pin something other than the declared
+defaults:
+
+```toml
+[agent]
+kind = "codex"
+model = "gpt-5.6-terra"
+effort = "medium"
+```
+
 Genta supplies the Codex command line, mounts, environment, and output
-protocol; Orka owns which profile to select, workspace trust, the credential
-grant, and the prompt/outcome protocol. It sends the resulting concrete
+protocol; Orka owns which profile to select, the model and effort it runs on,
+workspace trust, the credential grant, and the prompt/outcome protocol. It sends the resulting concrete
 execution request to Driva, which supplies only request validation and the
 Bubblewrap isolation mechanism. The default uses the host's `codex` executable
 through a read-only host rootfs with private `/root` and `/tmp` state.
@@ -118,7 +128,13 @@ identity, ancestry, and connectivity before interpreting `outcome.toml`.
 Failure of either gate records a workspace-integrity failure and cannot create
 a Linka result, candidate, evidence attachment, or project commit.
 
-The Codex profile runs `codex exec --json`. Orka keeps the provider's exact
+The Codex profile runs `codex exec --json` with the model and reasoning effort
+pinned on the command line — `agent.model` and `agent.effort` in the
+configuration, or the provider's declared defaults (`gpt-5.6-sol`, `high`) when
+they are omitted. An attempt is durable evidence, so its recorded argv states
+which model produced the work rather than leaving it to whatever codex happens to
+be configured for; two attempts are then comparable, and re-running one
+reproduces it. Orka keeps the provider's exact
 stdout in `events.raw.jsonl`, projects it into stable Orka events in
 `events.v1.jsonl`, derives a readable `transcript.log`, and keeps stderr in
 `diagnostics.log`. On Linux, it also watches the attempt file tree and records

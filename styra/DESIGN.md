@@ -157,17 +157,29 @@ A profile is the only agent-specific knowledge in Styra. It defines:
 
 ### A profile name is a launch selection
 
-A profile is named `provider[:model][/effort]` — `codex`, `claude:claude-opus-5`,
-`codex:gpt-5.6-sol/xhigh` — and that string is genta's `Selection`, parsed into
-the provider it launches plus two optional overrides. A bare provider sends no
-override at all: the agent runs on whatever model and reasoning effort it is
-itself configured for, which is deliberately *not* modelled as a level Styra
-could name, since Styra does not know what that configuration is. The overrides
-reach each agent its own way — codex as `-c model=…` and
-`-c model_reasoning_effort=…` on the process it launches, Claude Code as
-`--model` and `--effort` — and the effort ladders differ at the ends (codex has
-`minimal`, Claude Code has `max`), so each provider publishes the levels it
-accepts.
+A profile is named `provider:model/effort` — `codex:gpt-5.6-sol/high`,
+`claude:claude-opus-5/xhigh` — and that string is genta's `Selection`. All three
+parts are always present: a profile may not leave the model or effort to whatever
+the agent happens to be configured for, because that configuration is invisible
+both to Styra and to anyone reading the journal afterwards — a session recorded as
+plain `codex` says nothing about what ran. Each provider therefore *declares* its
+defaults (`Provider::default_model`, `Provider::default_effort`), and the shorter
+`provider[:model][/effort]` forms are accepted at the boundary and filled in from
+them, so `--profile claude` still works and resolves to a profile named
+`claude:claude-opus-5/high`.
+
+The defaults are declared rather than derived from the front of the catalog, so
+reordering the catalog cannot silently move every unpinned launch to another
+model. Claude Code's differs from its catalog's lead deliberately: the catalog
+starts at `claude-fable-5`, priced above the Opus tier, so an operator who named
+no model gets `claude-opus-5`. The effort default is `high` for both agents — the
+level each documents as its own — so naming no level thinks neither harder nor
+less hard than the agent would alone.
+
+Both parts reach each agent its own way — codex as `-c model=…` and
+`-c model_reasoning_effort=…` on the process it launches, Claude Code as `--model`
+and `--effort` — and the effort ladders differ at the ends (codex has `minimal`,
+Claude Code has `max`), so each provider publishes the levels it accepts.
 
 The grammar round-trips: a resolved profile is named after the selection that
 produced it, so the journal's `SessionMeta` records the model and effort that
@@ -175,6 +187,12 @@ actually ran and re-parsing that name reproduces the launch. Model ids are
 free-form strings, not an enum — the authoritative catalog belongs to the agent,
 and an id it does not know fails there rather than being second-guessed here.
 Genta only *suggests* a per-provider list for a picker to offer.
+
+Nothing below this boundary can be partial either: Genta's profile builders take
+a model and an effort outright, so no host can construct a profile that leaves
+them to the agent. Orka, which has no operator to ask, pins them from its own
+configuration (`agent.model` / `agent.effort`, defaulting to the same declared
+values) — an attempt's recorded argv has to say what produced the work.
 
 The first profile targets the same provider Orka uses. Its wire event schema is
 the `thread.started` / `turn.started` / `turn.completed` / `item.{started,
@@ -394,8 +412,7 @@ The application is a single full-screen view with three regions:
   exits. Token usage from the latest `TurnCompleted` is shown.
 
   The model and effort are named in every view, because the agent's name alone
-  does not say them: a bare provider pins neither, and what runs can differ from
-  what was asked for. Each agent states what it resolved as it starts a session
+  does not say them, and what runs can differ from what was asked for. Each agent states what it resolved as it starts a session
   (`ThreadStarted`), and that report is what the line shows; until it arrives —
   and for a value the agent never reports, such as Claude Code's effort — the
   line falls back to what the launch asked for and dims it, so what *is* running
@@ -547,11 +564,13 @@ status line updates with it, so the screen always names what an `Enter` would
 start. Nothing is launched or sent by picking: the operator's own message still
 does that, as everywhere else.
 
-Each of the model and effort columns leads with an "agent default" row, which is
-the absence of an override rather than a guess at the agent's configuration, and
-the other rows are the agent's own catalog and nothing else (*A profile name is a
-launch selection*). Changing the agent resets both to that default, since neither
-the catalogs nor the effort ladders correspond across providers.
+Every row of every column is a concrete choice out of the agent's own catalogs
+(*A profile name is a launch selection*). There is no row standing for "whatever
+the agent is configured for", because no selection can express that: the picker
+opens on the model and effort its current selection names, and both are always
+named. Changing the agent resets both to that provider's declared defaults — the
+same launch `--profile <agent>` would produce — since neither the catalogs nor the
+effort ladders correspond across providers.
 
 The model catalog is a fixed list per agent, not a free-text field: for Claude
 Code it is every id Anthropic lists as `Active` in its model-status table, as
@@ -660,8 +679,9 @@ Dependencies: `styra-server` depends on `driva` and `genta` (path),
 styra [OPTIONS] [-- PROMPT]
 
   --socket <PATH>      styra-server socket (default: $XDG_RUNTIME_DIR/styra/styra.sock)
-  --profile <NAME>     Agent to launch, as provider[:model][/effort]
-                       (default: codex); seeds the start screen's picker
+  --profile <NAME>     Agent to launch, as provider:model/effort; a shorter
+                       provider[:model][/effort] takes that agent's declared
+                       defaults (default: codex); seeds the start screen's picker
   --workspace <DIR>    Host directory mounted writable as the agent workspace
   --network            Permit agent networking (profiles may default this on)
   --view <SESSION>     Open a captured journal read-only instead of launching

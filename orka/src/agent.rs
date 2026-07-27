@@ -5,6 +5,7 @@
 //! executor; its user-facing template registry is deliberately not involved.
 
 use anyhow::Result;
+use genta::agent::Effort;
 use genta::event::Protocol;
 use serde::{de::Error as _, Deserialize, Deserializer, Serialize, Serializer};
 use std::path::{Path, PathBuf};
@@ -124,26 +125,37 @@ impl Default for SandboxLayout {
 }
 
 /// Resolve Orka's batch Codex session through Genta's complete agent profile.
-/// Orka contributes its workspace and staged-prompt instruction; Genta owns all
-/// Codex-specific command, protocol, credential, environment, and network data.
+/// Orka contributes its workspace, staged-prompt instruction, and the model and
+/// reasoning effort the attempt runs on; Genta owns all Codex-specific command,
+/// protocol, credential, environment, and network data.
+///
+/// `model` and `effort` are pinned rather than left to codex's own
+/// configuration. An attempt is durable evidence: the argv it records has to say
+/// which model produced the work, or a later reader cannot tell whether two
+/// attempts are comparable, and re-running one cannot reproduce it. There is no
+/// operator present to pick per run, so the configuration decides — see
+/// `config::AgentConfig`.
 ///
 /// A bare `codex` (the configuration default) is located on Orka's own `PATH`
 /// rather than left for the sandbox to resolve: the isolation backend supplies a
 /// fixed system `PATH`, so an agent installed under the operator's home would
 /// otherwise fail inside the sandbox with an opaque `execvp` error.
-pub fn codex(executable: &Path, layout: &SandboxLayout) -> Result<genta::agent::Profile> {
+pub fn codex(
+    executable: &Path,
+    layout: &SandboxLayout,
+    model: &str,
+    effort: Effort,
+) -> Result<genta::agent::Profile> {
     let agent_layout = genta::agent::SandboxLayout {
         workspace: layout.workspace.clone(),
     };
     let executable = genta::agent::resolve_executable(executable)?;
-    // Model and reasoning effort are left to codex's own configuration: an Orka
-    // attempt has no operator present to pick them per run.
     Ok(genta::agent::codex_exec(
         &agent_layout,
         &executable,
         AGENT_PROMPT,
-        None,
-        None,
+        model,
+        effort,
     ))
 }
 
@@ -216,7 +228,7 @@ mod tests {
     fn codex_profile_uses_the_orka_layout_and_trusts_only_its_workspace() {
         let layout = SandboxLayout::default();
         let executable = stub_codex();
-        let invocation = codex(&executable, &layout).unwrap();
+        let invocation = codex(&executable, &layout, "gpt-5.6-sol", Effort::High).unwrap();
 
         assert_eq!(layout.workspace, Path::new("/tmp/orka/workspace"));
         assert_eq!(layout.exchange, Path::new("/tmp/orka/exchange"));
@@ -230,6 +242,16 @@ mod tests {
             argument == "projects.\"/tmp/orka/workspace\".trust_level=\"trusted\""
         }));
         assert_eq!(invocation.command.last().unwrap(), AGENT_PROMPT);
+        // The attempt's own argv states the model and effort it ran, so the
+        // recorded evidence says what produced the work.
+        assert!(invocation
+            .command
+            .iter()
+            .any(|argument| argument == r#"model="gpt-5.6-sol""#));
+        assert!(invocation
+            .command
+            .iter()
+            .any(|argument| argument == r#"model_reasoning_effort="high""#));
         assert!(invocation.network);
         assert!(invocation
             .mounts
@@ -247,7 +269,7 @@ mod tests {
 
         let layout = SandboxLayout::default();
         let executable = stub_codex();
-        let invocation = codex(&executable, &layout).unwrap();
+        let invocation = codex(&executable, &layout, "gpt-5.6-sol", Effort::High).unwrap();
         let mut mounts = vec![
             Mount::Bind {
                 source: "/host/attempt".into(),

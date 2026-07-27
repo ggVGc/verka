@@ -574,8 +574,8 @@ mod tests {
         let mut profile = crate::agent::codex(
             &SandboxLayout::default(),
             std::path::Path::new("codex"),
-            None,
-            None,
+            crate::agent::Provider::CodexExec.default_model(),
+            crate::agent::Provider::CodexExec.default_effort(),
         );
         profile.mounts.clear();
         profile.network = false;

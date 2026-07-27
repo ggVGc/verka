@@ -9,6 +9,7 @@ use crate::driva_exec::DrivaExecutor;
 use crate::engine::ExecutionPolicy;
 use crate::executor::MountSpec;
 use anyhow::{bail, Context, Result};
+use genta::agent::{Effort, Provider};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::fs::OpenOptions;
@@ -16,14 +17,29 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 pub const CONFIG_FILE: &str = "orka.toml";
-pub const DEFAULT_CONFIG: &str = r#"# Genta describes the Codex process; Orka launches it through Driva.
-[agent]
-kind = "codex"
-
-[isolation]
-backend = "bwrap"
-rootfs = "/"
-"#;
+/// The `orka.toml` written by `orka init`.
+///
+/// The model and effort are written out rather than left implicit: an attempt's
+/// evidence should say which model produced it, and a project that names its own
+/// model does not silently move to a different one when Genta's declared default
+/// changes. The generated values *are* those defaults, so a fresh project starts
+/// where Genta points.
+pub fn default_config() -> String {
+    let provider = Provider::CodexExec;
+    format!(
+        "# Genta describes the Codex process; Orka launches it through Driva.\n\
+         [agent]\n\
+         kind = \"codex\"\n\
+         model = \"{}\"\n\
+         effort = \"{}\"\n\
+         \n\
+         [isolation]\n\
+         backend = \"bwrap\"\n\
+         rootfs = \"/\"\n",
+        provider.default_model(),
+        provider.default_effort().as_str(),
+    )
+}
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -53,6 +69,16 @@ pub struct AgentConfig {
     /// Override the executable selected by the profile.
     #[serde(default)]
     pub executable: Option<PathBuf>,
+    /// The model attempts run on. Omitted, the profile's provider supplies its
+    /// declared default — an attempt is always pinned to a named model, never to
+    /// whatever the agent happens to be configured for, so its recorded argv says
+    /// what produced the work.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// The reasoning effort attempts run at (`minimal`, `low`, `medium`, `high`,
+    /// `xhigh`), defaulting the same way as `model`.
+    #[serde(default)]
+    pub effort: Option<String>,
     /// A fully literal command, for agents without an Orka profile.
     #[serde(default)]
     pub command: Vec<String>,
@@ -145,7 +171,7 @@ impl Config {
             .create_new(true)
             .open(path)
             .with_context(|| format!("creating {} (refusing to overwrite it)", path.display()))?;
-        file.write_all(DEFAULT_CONFIG.as_bytes())
+        file.write_all(default_config().as_bytes())
             .with_context(|| format!("writing {}", path.display()))
     }
 
@@ -222,11 +248,40 @@ impl Config {
                     .executable
                     .as_deref()
                     .unwrap_or_else(|| Path::new("codex"));
-                Ok(Invocation::Agent(agent::codex(executable, layout)?))
+                // Genta's `codex-exec` provider declares both defaults; the
+                // configuration only overrides them.
+                let provider = Provider::CodexExec;
+                let model = self
+                    .agent
+                    .model
+                    .as_deref()
+                    .unwrap_or_else(|| provider.default_model());
+                let effort = match &self.agent.effort {
+                    Some(effort) => Effort::parse(effort)?,
+                    None => provider.default_effort(),
+                };
+                if !provider.efforts().contains(&effort) {
+                    bail!(
+                        "agent.effort {:?} is not accepted by codex; known levels: {}",
+                        effort.as_str(),
+                        provider
+                            .efforts()
+                            .iter()
+                            .map(|effort| effort.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
+                }
+                Ok(Invocation::Agent(agent::codex(
+                    executable, layout, model, effort,
+                )?))
             }
             (None, false) => {
                 if self.agent.executable.is_some() {
                     bail!("agent.executable requires agent.kind");
+                }
+                if self.agent.model.is_some() || self.agent.effort.is_some() {
+                    bail!("agent.model and agent.effort require agent.kind");
                 }
                 Ok(Invocation::Plain(self.agent.command.clone()))
             }
@@ -326,6 +381,73 @@ mod tests {
         ));
     }
 
+    /// An attempt is durable evidence, so the model and effort it ran on are
+    /// always pinned in its argv — from the configuration when it names them, and
+    /// from the provider's declared defaults when it does not.
+    #[test]
+    fn the_codex_profile_always_pins_a_model_and_an_effort() {
+        let base = "[isolation]\nbackend = \"bwrap\"\nrootfs = \"/\"\n";
+
+        let defaulted: Config =
+            toml::from_str(&format!("[agent]\nkind = \"codex\"\n{base}")).unwrap();
+        let command = defaulted.policy().unwrap().command;
+        assert!(command
+            .iter()
+            .any(|argument| argument
+                == &format!("model={:?}", Provider::CodexExec.default_model())));
+        assert!(command
+            .iter()
+            .any(|argument| argument == r#"model_reasoning_effort="high""#));
+
+        let pinned: Config = toml::from_str(&format!(
+            "[agent]\nkind = \"codex\"\nmodel = \"gpt-5.6-luna\"\neffort = \"minimal\"\n{base}"
+        ))
+        .unwrap();
+        let command = pinned.policy().unwrap().command;
+        assert!(command
+            .iter()
+            .any(|argument| argument == r#"model="gpt-5.6-luna""#));
+        assert!(command
+            .iter()
+            .any(|argument| argument == r#"model_reasoning_effort="minimal""#));
+    }
+
+    #[test]
+    fn an_unusable_effort_or_a_profileless_model_is_rejected() {
+        let base = "[isolation]\nbackend = \"bwrap\"\nrootfs = \"/\"\n";
+
+        // Not a level at all.
+        let unknown: Config =
+            toml::from_str(&format!("[agent]\nkind = \"codex\"\neffort = \"turbo\"\n{base}"))
+                .unwrap();
+        assert!(unknown
+            .policy()
+            .unwrap_err()
+            .to_string()
+            .contains("unknown reasoning effort"));
+
+        // A level Genta names but codex does not accept.
+        let unaccepted: Config =
+            toml::from_str(&format!("[agent]\nkind = \"codex\"\neffort = \"max\"\n{base}"))
+                .unwrap();
+        assert!(unaccepted
+            .policy()
+            .unwrap_err()
+            .to_string()
+            .contains("not accepted by codex"));
+
+        // A literal command has no profile to pin a model on.
+        let literal: Config = toml::from_str(&format!(
+            "[agent]\ncommand = [\"agent\"]\nmodel = \"gpt-5.6-sol\"\n{base}"
+        ))
+        .unwrap();
+        assert!(literal
+            .policy()
+            .unwrap_err()
+            .to_string()
+            .contains("require agent.kind"));
+    }
+
     #[test]
     fn rejects_driva_templates_and_ambiguous_agent_configuration() {
         let unsupported = toml::from_str::<Config>("[agent]\ntemplate = \"codex-exec\"\n");
@@ -361,9 +483,9 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(CONFIG_FILE);
         Config::init(&path).unwrap();
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), DEFAULT_CONFIG);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), default_config());
         assert!(Config::init(&path).is_err());
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), DEFAULT_CONFIG);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), default_config());
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

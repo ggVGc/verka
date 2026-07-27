@@ -1,7 +1,7 @@
 mod common;
 
 use common::{git, workbench, TempDir};
-use orka::config::{CONFIG_FILE, DEFAULT_CONFIG};
+use orka::config::{default_config, CONFIG_FILE};
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -54,7 +54,7 @@ fn init_creates_the_default_config_and_refuses_to_replace_it() {
     );
     assert_eq!(
         std::fs::read_to_string(root.join(CONFIG_FILE)).unwrap(),
-        DEFAULT_CONFIG
+        default_config()
     );
 
     std::fs::write(root.join(CONFIG_FILE), "keep me\n").unwrap();
@@ -114,7 +114,7 @@ fn init_attaches_an_existing_git_repository() {
     assert!(root.join(".linka/pairing.toml").is_file());
     assert_eq!(
         std::fs::read_to_string(root.join(CONFIG_FILE)).unwrap(),
-        DEFAULT_CONFIG
+        default_config()
     );
 }
 

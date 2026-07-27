@@ -71,8 +71,9 @@ fn title_line(label: &LaunchLabel, status: &Status, suffix: Option<&str>) -> Lin
         format!(" styra · {} · ", label.agent),
         text_style,
     )];
-    // No model named anywhere: the agent is on its own configured default and
-    // has not said which, so the display says exactly that rather than guessing.
+    // No model named anywhere — only reachable for a stored session whose
+    // recorded profile named none (see `App::launch_label`), since a launch now
+    // always pins one.
     let model = label
         .model
         .clone()
@@ -318,23 +319,21 @@ fn render_launcher(frame: &mut Frame, launcher: &Launcher, area: Rect) {
         .iter()
         .map(|provider| provider.as_str().to_owned())
         .collect();
-    // "agent default" is not a level Styra could name: no override is sent and
-    // the agent uses its own configuration, so it reads as such rather than as
-    // a guess at what that configuration is.
-    let mut models = vec![AGENT_DEFAULT.to_owned()];
-    models.extend(provider.models().iter().map(|model| (*model).to_owned()));
+    let mut models: Vec<String> = provider
+        .models()
+        .iter()
+        .map(|model| (*model).to_owned())
+        .collect();
     // A model the catalog doesn't list, carried from the profile the picker was
     // opened on, is shown last so it stays selectable — see `Launcher`.
     if let Some(carried) = &launcher.carried_model {
         models.push(carried.clone());
     }
-    let mut efforts = vec![AGENT_DEFAULT.to_owned()];
-    efforts.extend(
-        provider
-            .efforts()
-            .iter()
-            .map(|effort| effort.as_str().to_owned()),
-    );
+    let efforts: Vec<String> = provider
+        .efforts()
+        .iter()
+        .map(|effort| effort.as_str().to_owned())
+        .collect();
 
     render_launcher_column(
         frame,
@@ -361,9 +360,6 @@ fn render_launcher(frame: &mut Frame, launcher: &Launcher, area: Rect) {
         launcher.column == LaunchColumn::Effort,
     );
 }
-
-/// The label for the row that sends no override at all.
-const AGENT_DEFAULT: &str = "agent default";
 
 fn render_launcher_column(
     frame: &mut Frame,
@@ -1884,8 +1880,9 @@ mod tests {
     /// model nobody typed.
     #[test]
     fn the_status_line_names_the_model_and_effort_in_use() {
+        // A stored session whose recorded profile named no model — the only case
+        // left now that a launch always pins one: said plainly, not guessed.
         let mut app = App::new("codex", "s-1");
-        // Nothing pinned and nothing reported yet: said plainly, not guessed.
         assert!(
             rendered(&app).contains("styra · codex · default model"),
             "{}",
@@ -1983,7 +1980,7 @@ mod tests {
         launcher.next_column();
         launcher.next();
         launcher.next_column();
-        launcher.next();
+        launcher.prev();
 
         let screen = rendered(&app);
         assert!(screen.contains("styra · launch"), "{screen}");
@@ -1993,14 +1990,14 @@ mod tests {
                 "missing the {column} column: {screen}"
             );
         }
-        // Both defaults are offered as their own rows, distinct from any level
-        // Styra could name.
-        assert!(screen.contains(AGENT_DEFAULT), "{screen}");
+        // Every row is a concrete choice out of the agent's own catalogs: no
+        // free-text row to type an id into, and no row standing for "whatever the
+        // agent is configured for".
         assert!(screen.contains("gpt-5.6-sol"), "{screen}");
-        // The picker offers the agent's catalog and nothing else — there is no
-        // free-text row to type an id into.
+        assert!(screen.contains("minimal"), "{screen}");
         assert!(!screen.contains("custom"), "{screen}");
-        assert!(screen.contains("codex:gpt-5.6-sol/minimal"), "{screen}");
+        assert!(!screen.contains("default"), "{screen}");
+        assert!(screen.contains("codex:gpt-5.6-terra/medium"), "{screen}");
         assert!(screen.contains("Enter apply"), "{screen}");
         // Nothing of the session view shows through a modal picker.
         assert!(!screen.contains("message"), "{screen}");

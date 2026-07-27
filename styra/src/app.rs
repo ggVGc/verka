@@ -126,8 +126,9 @@ fn split_profile_name(profile: &str) -> (String, Option<String>, Option<String>)
 /// names them.
 ///
 /// `model` and `effort` are what the agent *reported* once it started, falling
-/// back to what the launch asked for; `None` means neither happened — the agent
-/// is on its own configured default and has not said what that is (yet).
+/// back to what the launch asked for. Both are `None` only for a session whose
+/// recorded profile does not parse as a selection — an older store, or an agent
+/// this build does not know — since every selection pins both.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LaunchLabel {
     pub agent: String,
@@ -151,24 +152,42 @@ pub enum LaunchColumn {
     Effort,
 }
 
+/// The row a column opens on for a newly chosen agent: the provider's own
+/// declared default (see [`Provider::default_model`]), so switching agents lands
+/// on the same model and effort `--profile <agent>` would have launched.
+fn default_model_row(provider: Provider) -> usize {
+    provider
+        .models()
+        .iter()
+        .position(|model| *model == provider.default_model())
+        .unwrap_or(0)
+}
+
+fn default_effort_row(provider: Provider) -> usize {
+    provider
+        .efforts()
+        .iter()
+        .position(|effort| *effort == provider.default_effort())
+        .unwrap_or(0)
+}
+
 /// The launch picker: the agent, model, and reasoning effort the *next* session
 /// will start with.
 ///
 /// It edits a pending choice, not a running session — confirming it only records
 /// the selection, and the operator's own first message still starts the agent.
-/// Each of the model and effort columns leads with an "agent default" row,
-/// distinct from every level Styra could name: neither override is sent, and the
-/// agent uses whatever it is configured for. The remaining rows are the
-/// provider's own catalogs ([`Provider::models`], [`Provider::efforts`]); the
-/// picker offers those and nothing else.
+/// Every row is a concrete choice out of the provider's own catalogs
+/// ([`Provider::models`], [`Provider::efforts`]), and a [`Selection`] always pins
+/// both, so there is nothing for a row meaning "whatever the agent is configured
+/// for" to express. A newly chosen agent opens on the model and effort
+/// `--profile <agent>` would have launched — that provider's declared defaults.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Launcher {
     pub column: LaunchColumn,
     pub provider: usize,
-    /// 0 is the agent's default, then [`Provider::models`], then `carried_model`
-    /// if there is one.
+    /// An index into [`Provider::models`], then `carried_model` if there is one.
     pub model: usize,
-    /// 0 is the agent's default, then [`Provider::efforts`].
+    /// An index into [`Provider::efforts`].
     pub effort: usize,
     /// A model the picker does not offer but the session was nonetheless
     /// launched with — `--profile claude:some-other-id`. Shown as a final row so
@@ -178,29 +197,28 @@ pub struct Launcher {
 }
 
 impl Launcher {
-    /// Open the picker on `selection`, so it starts from what is already
-    /// chosen rather than from the first row. A model the provider's catalog
-    /// does not list is carried as its own final row rather than dropped, so
-    /// confirming the picker cannot silently downgrade a `--profile` the
-    /// operator asked for.
+    /// Open the picker on `selection` — it always names a model and an effort, so
+    /// there is always a row to open on. A model the provider's catalog does not
+    /// list is carried as its own final row rather than dropped, so confirming
+    /// the picker cannot silently downgrade a `--profile` the operator asked for.
     pub fn from_selection(selection: &Selection) -> Self {
         let provider = Provider::ALL
             .iter()
             .position(|candidate| *candidate == selection.provider)
             .unwrap_or(0);
         let models = selection.provider.models();
-        let (model, carried_model) = match &selection.model {
-            None => (0, None),
-            Some(model) => match models.iter().position(|candidate| candidate == model) {
-                Some(index) => (index + 1, None),
-                None => (models.len() + 1, Some(model.clone())),
-            },
+        let (model, carried_model) = match models
+            .iter()
+            .position(|candidate| *candidate == selection.model)
+        {
+            Some(index) => (index, None),
+            None => (models.len(), Some(selection.model.clone())),
         };
-        let efforts = selection.provider.efforts();
         let effort = selection
-            .effort
-            .and_then(|effort| efforts.iter().position(|candidate| *candidate == effort))
-            .map(|index| index + 1)
+            .provider
+            .efforts()
+            .iter()
+            .position(|candidate| *candidate == selection.effort)
             .unwrap_or(0);
         Self {
             column: LaunchColumn::Provider,
@@ -215,20 +233,24 @@ impl Launcher {
         Provider::ALL[self.provider.min(Provider::ALL.len() - 1)]
     }
 
-    /// What the picker currently describes.
+    /// What the picker currently describes. Every row is a concrete choice, so
+    /// this is always a fully pinned selection; the clamps cover a row index that
+    /// somehow outran its column rather than any "unset" state.
     pub fn selection(&self) -> Selection {
         let provider = self.provider();
         let models = provider.models();
-        let model = match self.model {
-            0 => None,
-            row if row <= models.len() => Some(models[row - 1].to_owned()),
-            _ => self.carried_model.clone(),
+        let model = match models.get(self.model) {
+            Some(model) => (*model).to_owned(),
+            None => self
+                .carried_model
+                .clone()
+                .unwrap_or_else(|| provider.default_model().to_owned()),
         };
         let efforts = provider.efforts();
-        let effort = match self.effort {
-            0 => None,
-            row => efforts.get(row - 1).copied(),
-        };
+        let effort = efforts
+            .get(self.effort)
+            .copied()
+            .unwrap_or_else(|| provider.default_effort());
         Selection {
             provider,
             model,
@@ -236,10 +258,10 @@ impl Launcher {
         }
     }
 
-    /// The model column's rows: the agent default, the provider's catalog, and
-    /// a carried model if the picker was opened on one.
+    /// The model column's rows: the provider's catalog, plus a carried model if
+    /// the picker was opened on one.
     pub fn model_rows(&self) -> usize {
-        self.provider().models().len() + 1 + usize::from(self.carried_model.is_some())
+        self.provider().models().len() + usize::from(self.carried_model.is_some())
     }
 
     /// How many rows the focused column has.
@@ -247,7 +269,7 @@ impl Launcher {
         match self.column {
             LaunchColumn::Provider => Provider::ALL.len(),
             LaunchColumn::Model => self.model_rows(),
-            LaunchColumn::Effort => self.provider().efforts().len() + 1,
+            LaunchColumn::Effort => self.provider().efforts().len(),
         }
     }
 
@@ -273,14 +295,14 @@ impl Launcher {
     }
 
     fn after_move(&mut self) {
-        // A model or effort chosen for the previous provider means nothing to
-        // the new one — the ladders and catalogs differ — so both fall back to
-        // the agent's default rather than to whatever sits at the same index.
-        // That includes a carried model, which belonged to the agent the picker
-        // was opened on.
+        // A model or effort chosen for the previous provider means nothing to the
+        // new one — the ladders and catalogs differ — so both reset to that
+        // agent's own opening rows rather than to whatever sits at the same
+        // index. That includes a carried model, which belonged to the agent the
+        // picker was opened on.
         if self.column == LaunchColumn::Provider {
-            self.model = 0;
-            self.effort = 0;
+            self.model = default_model_row(self.provider());
+            self.effort = default_effort_row(self.provider());
             self.carried_model = None;
         }
     }
@@ -327,8 +349,8 @@ pub struct App {
     /// The open launch picker, while the operator is choosing.
     pub launcher: Option<Launcher>,
     /// The model and reasoning effort the agent itself reported when it started
-    /// the session, which is what is actually running — a bare provider pins
-    /// neither, so this is the only place the truth comes from. `None` until the
+    /// the session, which is what is actually running — a launch pins a model,
+    /// but only the agent can confirm what it resolved to. `None` until the
     /// agent's session-start line arrives (and for agents that report neither).
     pub reported_model: Option<(String, Option<String>)>,
     /// Durable Workspace containing the current Session, when known.
@@ -469,11 +491,12 @@ impl App {
     ///
     /// The agent's own report wins where it made one, since that is what is
     /// actually running; otherwise the profile the session was launched with
-    /// answers for it, which for a bare provider names no model at all. The
-    /// profile name is read apart here rather than through
-    /// [`Selection::parse`] so a stored session whose recorded profile this
-    /// build cannot resolve still shows verbatim what it says, instead of
-    /// falling back to a default that never ran.
+    /// answers for it, and that profile always names a model. The profile name is
+    /// read apart here textually rather than through [`Selection::parse`], so a
+    /// stored session whose recorded profile this build cannot resolve — an older
+    /// journal that recorded a bare `codex`, an agent this build does not know —
+    /// still shows verbatim what it says instead of a default that never ran.
+    /// That is the only case where the label names no model.
     pub fn launch_label(&self) -> LaunchLabel {
         let (agent, requested_model, requested_effort) = split_profile_name(&self.profile_name);
         match &self.reported_model {
@@ -1162,25 +1185,28 @@ mod tests {
         launcher.next();
         assert_eq!(launcher.provider(), Provider::Claude);
 
-        // Model column: the first row is the agent's own default, so the first
-        // suggestion is one step in.
+        // Model column: every row is a model, and it opens on the agent's declared
+        // default, so one step lands on the entry after that.
         launcher.next_column();
+        assert_eq!(launcher.selection().model, Provider::Claude.default_model());
         launcher.next();
-        let model = Provider::Claude.models()[0];
-        assert_eq!(launcher.selection().model.as_deref(), Some(model));
+        let model = Provider::Claude.models()[default_model_row(Provider::Claude) + 1].to_owned();
+        assert_eq!(launcher.selection().model, model);
 
-        // Effort column, likewise.
+        // Effort column, likewise — the ladder itself, no extra row.
         launcher.next_column();
         assert_eq!(launcher.column, LaunchColumn::Effort);
-        launcher.next();
         let effort = Provider::Claude.efforts()[0];
-        assert_eq!(launcher.selection().effort, Some(effort));
+        while launcher.selection().effort != effort {
+            launcher.prev();
+        }
+        assert_eq!(launcher.selection().effort, effort);
 
         app.confirm_launcher();
         assert!(app.launcher.is_none());
         assert_eq!(app.selection.provider, Provider::Claude);
-        assert_eq!(app.selection.model.as_deref(), Some(model));
-        assert_eq!(app.selection.effort, Some(effort));
+        assert_eq!(app.selection.model, model);
+        assert_eq!(app.selection.effort, effort);
         // The status line names what an Enter would start...
         assert_eq!(app.profile_name, app.selection.name());
         // ...but nothing was launched or sent by the picking itself.
@@ -1219,27 +1245,63 @@ mod tests {
         );
         assert_eq!(
             launcher.model,
-            Provider::Claude.models().len() + 1,
+            Provider::Claude.models().len(),
             "carried last, after the catalog"
         );
-        assert_eq!(launcher.selection(), selection);
+        assert_eq!(launcher.selection().model, selection.model);
 
-        // Confirming keeps it rather than falling back to a catalogued model.
+        // Confirming keeps the model rather than falling back to a catalogued
+        // one — but it does pin an effort, since the picker has no row for
+        // leaving that to the agent. The launch asked for none, so it lands on
+        // the opening row.
         app.confirm_launcher();
-        assert_eq!(app.selection, selection);
+        assert_eq!(app.selection.model, selection.model);
+        assert_eq!(app.selection.effort, Effort::High);
 
-        // Walking up into the catalog and back down reaches it again: it is an
-        // ordinary row, just not one the picker could have written.
+        // Walking up into the catalog and back down reaches the carried model
+        // again: it is an ordinary row, just not one the picker could write.
         app.open_launcher();
         let launcher = app.launcher.as_mut().unwrap();
         launcher.next_column();
         launcher.prev();
         assert_eq!(
-            launcher.selection().model.as_deref(),
-            Some(*Provider::Claude.models().last().unwrap())
+            launcher.selection().model,
+            *Provider::Claude.models().last().unwrap()
         );
         launcher.next();
-        assert_eq!(launcher.selection(), selection);
+        assert_eq!(launcher.selection().model, selection.model);
+    }
+
+    /// With no row standing for "whatever the agent is configured for", every
+    /// row of every column is a concrete choice — so whatever the picker is
+    /// opened on, confirming it pins both a model and an effort.
+    #[test]
+    fn the_picker_always_pins_a_model_and_an_effort() {
+        for provider in Provider::ALL {
+            let mut launcher = Launcher::from_selection(&Selection::new(provider));
+            // A selection always pins both, and the picker opens on the rows
+            // naming them.
+            let opened = launcher.selection();
+            assert_eq!(opened.model, provider.default_model());
+            assert_eq!(opened.effort, provider.default_effort());
+
+            // And no reachable row in either column yields an absent value.
+            for column in [LaunchColumn::Model, LaunchColumn::Effort] {
+                launcher.column = column;
+                for _ in 0..provider.models().len() + provider.efforts().len() {
+                    let selection = launcher.selection();
+                    assert!(
+                        provider.models().contains(&selection.model.as_str()),
+                        "{provider:?} {column:?} reached a model outside the catalog"
+                    );
+                    assert!(
+                        provider.efforts().contains(&selection.effort),
+                        "{provider:?} {column:?} reached an effort outside the ladder"
+                    );
+                    launcher.next();
+                }
+            }
+        }
     }
 
     /// Switching agents drops the carried model with everything else: it named a
@@ -1252,13 +1314,14 @@ mod tests {
 
         launcher.prev(); // in the provider column, back towards codex
         assert_eq!(launcher.carried_model, None);
-        assert_eq!(launcher.selection().model, None);
-        // And the column is back to just the agent default plus the catalog.
-        launcher.next_column();
+        // The new agent's own declared default stands in for it.
         assert_eq!(
-            launcher.model_rows(),
-            launcher.provider().models().len() + 1
+            launcher.selection().model,
+            launcher.provider().default_model()
         );
+        // And the column is back to just that agent's catalog.
+        launcher.next_column();
+        assert_eq!(launcher.model_rows(), launcher.provider().models().len());
     }
 
     /// The two agents' model catalogs and effort ladders are unrelated, so a
@@ -1272,8 +1335,10 @@ mod tests {
         launcher.prev(); // in the provider column, back towards codex
         let selection = launcher.selection();
         assert_ne!(selection.provider, Provider::Claude);
-        assert_eq!(selection.model, None);
-        assert_eq!(selection.effort, None);
+        // Neither the model nor the effort carries across by index: each falls
+        // back to the new agent's own declared default.
+        assert_eq!(selection.model, selection.provider.default_model());
+        assert_eq!(selection.effort, selection.provider.default_effort());
         // And `max` is not offered at all under codex, so it cannot be reached
         // by walking the column either.
         assert!(!launcher.provider().efforts().contains(&Effort::Max));
@@ -1322,8 +1387,8 @@ mod tests {
         );
         assert!(!label.effort_reported);
 
-        // A bare provider pins no model, so there is nothing to name until the
-        // agent says what it resolved.
+        // An older journal that recorded a bare provider name pinned no model, so
+        // there is nothing to name until the agent says what it resolved.
         let app = App::new("codex", "s-2");
         let label = app.launch_label();
         assert_eq!(label.agent, "codex");

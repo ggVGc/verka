@@ -41,11 +41,12 @@ struct Cli {
     #[arg(long)]
     stop: bool,
     /// Agent profile to launch a live session with, as
-    /// `provider[:model][/effort]` (`codex`, `claude:opus`,
-    /// `codex:gpt-5.6-sol/xhigh`); a bare provider leaves the agent on its own
-    /// configured model and effort. Seeds the interface's launch picker, which
-    /// can change all three before the first message. Not used with `--view`:
-    /// a viewed session carries its own recorded profile and protocol.
+    /// `provider[:model][/effort]` (`codex`, `claude:claude-opus-5`,
+    /// `codex:gpt-5.6-sol/xhigh`). A profile always pins a model and an effort;
+    /// omitting either takes that agent's declared default rather than leaving it
+    /// to the agent's own configuration. Seeds the interface's launch picker,
+    /// which can change all three before the first message. Not used with
+    /// `--view`: a viewed session carries its own recorded profile and protocol.
     #[arg(long, default_value = "codex")]
     profile: String,
     /// Host directory mounted writable as the agent workspace (default: cwd).

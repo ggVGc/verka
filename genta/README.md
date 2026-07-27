@@ -9,10 +9,12 @@ graph, no orchestration, no isolation mechanism, and no process.
 - **Launch profiles** (`agent`) — the command line, mounts, environment, and
   sandbox layout for an agent, including Codex (`exec`, `app-server`) and
   Claude Code. A profile is a description, not an invocation. A `Selection`
-  names one as `provider[:model][/effort]` (`codex`, `claude:claude-opus-5`,
-  `codex:gpt-5.6-sol/xhigh`), translating a model and reasoning effort into
-  whichever flags or config overrides that agent takes; omitting either leaves
-  the agent on its own configuration.
+  names one as `provider:model/effort` (`codex:gpt-5.6-sol/high`,
+  `claude:claude-opus-5/xhigh`), translating the model and reasoning effort into
+  whichever flags or config overrides that agent takes. A selection always pins
+  both: the shorter `provider[:model][/effort]` forms parse, but fill in that
+  provider's declared defaults rather than standing for "unset", so a name always
+  states what it launches.
 - **Wire protocols** (`event`) — decoding each agent's output into one stable
   event vocabulary, so hosts do not carry per-agent parsing.
 - **The `codex app-server` handshake** (`appserver`) — the stateful exchange
