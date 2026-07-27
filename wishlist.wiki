@@ -1,3 +1,16 @@
+- I would like the main workflow to be through a text editor (vim):
+  - For example, a new test:
+    - The file I work in should be a description of the validation I am implementing. High-level, maybe using some kindo of structured language.
+    - An output test implementation is produced from this description
+    - Goes through the verification and publishing flow, all tracked by linka
+    - If later it turns out the test is incorrect, or needs additions, I edit the description, output becomes stale, re-run, re-verify etc.
+  - The key is, I would like to do the work of going between description files and outputs inside vim
+  - Linka already stoes most things as files
+  - Moving between things should work something like an LSP.
+    Possibly actual LSP protocol could be used, but initially there should be a native solution in order to explore the idea without constraints.
+- Orka should have some way of defining and executing workflows:
+  - For example: Run a node, when completed, create a new node with followup action X etc.
+  - Nodes need to somehow be associated with workflows when run is started. "Run with workflow"
 - Some system for storing LLM-generated description of the current state of the codebase, with file references and whatever other relevant info:
   - Meant to be loaded into contexts so new sessions can get started quicker without reading everything
   - Should be tagged with content hashes and at which commit they were generated at
