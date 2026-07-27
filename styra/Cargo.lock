@@ -639,6 +639,7 @@ dependencies = [
  "clap",
  "crossterm",
  "ratatui",
+ "serde_json",
  "styra-server",
 ]
 

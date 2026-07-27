@@ -16,10 +16,11 @@ use std::process::Command;
 use std::time::Duration;
 
 mod app;
+mod preferences;
 mod ui;
 
 use app::{App, Focus, Status, View};
-use styra_server::agent::{Provider, Selection};
+use styra_server::agent::Selection;
 use styra_server::api::{CreateSession, CreateWorkspace, ResumeSession, SessionInfo};
 use styra_server::{
     Client, InteractionSummary, InteractionUpdate, LogEntry, SessionSummary, WorkspaceSummary,
@@ -107,6 +108,7 @@ fn main() -> Result<()> {
     }
     let host_path = resolve_workspace(cli.workspace.as_deref())?;
     let mut active_workspace = workspace_for_host(&client, &host_path)?;
+    let preferences_path = preferences::default_path()?;
 
     // Bare `--view` (no path) needs an interactive terminal to browse
     // sessions in, so it is opened early only in that case; the other paths
@@ -170,7 +172,7 @@ fn main() -> Result<()> {
         });
         live = Live::Viewing;
     } else {
-        let selection = Selection::new(Provider::Codex);
+        let selection = preferences::load_or_default(&preferences_path)?;
         let prompt = cli.prompt.join(" ");
         let seed = (!prompt.trim().is_empty()).then_some(prompt.as_str());
         match seed {
@@ -217,6 +219,7 @@ fn main() -> Result<()> {
             &cli,
             &active_workspace.id,
             &mut live,
+            &preferences_path,
         ) {
             Ok(outcome) => outcome,
             Err(error) => break Err(error),
@@ -239,7 +242,7 @@ fn main() -> Result<()> {
                         ))),
                     },
                     None => {
-                        let selection = app.selection.clone();
+                        let selection = preferences::load_or_default(&preferences_path)?;
                         app = App::pending(selection);
                         app.workspace_id = Some(active_workspace.id.clone());
                         live = Live::Pending;
@@ -290,11 +293,9 @@ fn main() -> Result<()> {
                 {
                     client.stop_interaction(&session_id).ok();
                 }
-                // The blank start screen is where a launch is chosen, so it
-                // opens on whatever the stopped interaction ran with — the usual next
-                // step is the same agent again, or a deliberate change to
-                // another one.
-                let selection = app.selection.clone();
+                // A reset returns to the standing launch default, independent
+                // of the selection recorded by the Session just left.
+                let selection = preferences::load_or_default(&preferences_path)?;
                 app = App::pending(selection);
                 app.workspace_id = Some(active_workspace.id.clone());
             }
@@ -651,6 +652,7 @@ fn run(
     cli: &Cli,
     workspace_id: &str,
     live: &mut Live,
+    preferences_path: &Path,
 ) -> Result<RunOutcome> {
     let mut pending_fold = false;
     loop {
@@ -692,7 +694,7 @@ fn run(
         // The launch picker is modal: while it is open it owns every key, so
         // neither focus's bindings can fire behind it.
         if app.launcher.is_some() {
-            handle_launcher_key(app, key);
+            handle_launcher_key(app, key, preferences_path);
             continue;
         }
 
@@ -768,9 +770,10 @@ fn apply_update(app: &mut App, update: InteractionUpdate) {
 }
 
 /// Keys for the launch picker: `j`/`k` within a column, `Tab`/`h`/`l` between
-/// them, `Enter` to apply the choice (it never launches — the operator's first
-/// message still does that), `Esc`/`q` to leave it as it was.
-fn handle_launcher_key(app: &mut App, key: KeyEvent) {
+/// them, `Enter` to save and apply the standing default (it never launches —
+/// the operator's first message still does that), `Esc`/`q` to leave it as it
+/// was.
+fn handle_launcher_key(app: &mut App, key: KeyEvent, preferences_path: &Path) {
     let Some(launcher) = app.launcher.as_mut() else {
         return;
     };
@@ -779,7 +782,14 @@ fn handle_launcher_key(app: &mut App, key: KeyEvent) {
         KeyCode::Char('k') | KeyCode::Up => launcher.prev(),
         KeyCode::Char('l') | KeyCode::Right | KeyCode::Tab => launcher.next_column(),
         KeyCode::Char('h') | KeyCode::Left | KeyCode::BackTab => launcher.prev_column(),
-        KeyCode::Enter => app.confirm_launcher(),
+        KeyCode::Enter => {
+            app.confirm_launcher();
+            if let Err(error) = preferences::save(preferences_path, &app.selection) {
+                app.push_log(LogEntry::error(format!(
+                    "could not save launch defaults: {error:#}"
+                )));
+            }
+        }
         KeyCode::Esc | KeyCode::Char('q') => app.cancel_launcher(),
         _ => {}
     }
@@ -1008,5 +1018,28 @@ mod cli_tests {
     #[test]
     fn profile_is_not_a_command_line_option() {
         assert!(Cli::try_parse_from(["styra", "--profile", "codex"]).is_err());
+    }
+
+    #[test]
+    fn confirming_the_launcher_saves_the_selection_for_the_next_start() {
+        let root = std::env::temp_dir().join(format!(
+            "styra-launch-default-handler-{}",
+            std::process::id()
+        ));
+        std::fs::remove_dir_all(&root).ok();
+        let path = root.join("defaults.json");
+        let selection =
+            Selection::parse("claude:claude-sonnet-5/max").expect("valid test selection");
+        let mut app = App::pending(selection.clone());
+        app.open_launcher();
+
+        handle_launcher_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            &path,
+        );
+
+        assert_eq!(preferences::load_or_default(&path).unwrap(), selection);
+        std::fs::remove_dir_all(root).ok();
     }
 }

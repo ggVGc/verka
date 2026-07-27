@@ -279,11 +279,11 @@ pub fn render_interactions_picker(
 
 /// Render the launch picker: agent, model, and reasoning effort side by side,
 /// with the resulting selection spelled out along the bottom border so the
-/// operator sees exactly what an `Enter` records.
+/// operator sees exactly what an `Enter` saves as the standing default.
 fn render_launcher(frame: &mut Frame, launcher: &Launcher, area: Rect) {
     let provider = launcher.provider();
     let selection = launcher.selection();
-    let hint = " j/k choose · Tab/h/l column · Enter apply · q cancel ";
+    let hint = " j/k choose · Tab/h/l column · Enter save default · q cancel ";
     // The composed selection and the key hints go on the outer frame rather
     // than on a column, where a narrow terminal would clip them.
     let frame_block = Block::default()
@@ -896,7 +896,7 @@ fn render_list(frame: &mut Frame, app: &App, area: Rect) {
                     ),
                 ]),
                 Line::from(Span::styled(
-                    "  press L to choose the agent, model, and effort — or i to write the first message",
+                    "  press L to choose the default agent, model, and effort — or i to write the first message",
                     Style::default().fg(Color::Gray),
                 )),
             ]
@@ -1173,8 +1173,8 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     // is launched, its agent and model are settled and `L` is inert.
     if app.can_configure_launch() {
         let hints = match app.focus {
-            Focus::Input => "Enter send (starts the agent) · Ctrl+L choose agent/model/effort · Alt+Enter newline · Esc back to list",
-            Focus::List => "L choose agent/model/effort · i message · A interactions · V Workspaces · q quit",
+            Focus::Input => "Enter send (starts the agent) · Ctrl+L choose default agent/model/effort · Alt+Enter newline · Esc back to list",
+            Focus::List => "L choose default agent/model/effort · i message · A interactions · V Workspaces · q quit",
         };
         let footer = Paragraph::new(Line::from(Span::styled(
             format!(" {hints}"),
@@ -2090,9 +2090,9 @@ mod tests {
         assert!(screen.contains("gpt-5.6-sol"), "{screen}");
         assert!(screen.contains("minimal"), "{screen}");
         assert!(!screen.contains("custom"), "{screen}");
-        assert!(!screen.contains("default"), "{screen}");
+        assert!(!screen.contains("│ default"), "{screen}");
         assert!(screen.contains("codex:gpt-5.6-terra/medium"), "{screen}");
-        assert!(screen.contains("Enter apply"), "{screen}");
+        assert!(screen.contains("Enter save default"), "{screen}");
         // Nothing of the session view shows through a modal picker.
         assert!(!screen.contains("message"), "{screen}");
     }

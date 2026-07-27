@@ -326,7 +326,7 @@ pub struct App {
     pub show_preview: bool,
     /// What the next session launches with: agent, model, reasoning effort.
     /// This is the operator's standing choice, edited through [`Launcher`] while
-    /// nothing is running and carried across resets and switches.
+    /// nothing is running. The terminal client persists a confirmed choice.
     pub selection: Selection,
     /// The open launch picker, while the operator is choosing.
     pub launcher: Option<Launcher>,
@@ -1316,10 +1316,10 @@ mod tests {
         assert!(app.launcher.is_none());
     }
 
-    /// A live or replayed session carries its selection, so resetting away
-    /// from one offers the same agent again rather than the process-wide default.
+    /// A live or replayed Session carries the exact selection it was created
+    /// with, independently of the client's saved default for new Sessions.
     #[test]
-    fn a_sessions_recorded_selection_seeds_the_next_launch() {
+    fn a_session_keeps_its_recorded_selection() {
         let app = App::new(
             styra_server::agent::Selection::parse("claude:opus/xhigh").unwrap(),
             "session-1",

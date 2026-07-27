@@ -116,19 +116,22 @@ The launch picker selects a provider, model, and effort. Providers:
 
 Every selection pins a model and an effort. Codex accepts `minimal` through
 `xhigh` as its `model_reasoning_effort`; Claude Code accepts `low` through `max`
-as `--effort`. New sessions begin on Codex's declared defaults, and switching
-providers selects that provider's defaults. The selection is recorded with the
-session, so stored state always says which provider, model, and effort ran.
+as `--effort`. Until an operator saves another choice, new sessions begin on
+Codex's declared defaults. Switching providers in the picker initially selects
+that provider's defaults. The selection is recorded with the session, so stored
+state always says which provider, model, and effort ran.
 
 The TUI's start screen — no session launched yet, whether at startup or after a
 reset with `S` — picks all three interactively: `L` (or `Ctrl+L` from the message
 box) opens a picker with an agent, model, and effort column, each listing that
 agent's own catalog — for Claude Code the full ids Anthropic lists as active, so a
 session records the exact model it ran on. Every row is a concrete choice, and
-switching agents lands on that agent's declared default. Applying the choice only
-records it; the first message still starts the agent. A model outside the
-current catalog can be retained from stored state, and the picker carries it as
-a final row rather than dropping it.
+switching agents lands on that agent's declared default. Applying the choice
+saves it in `$XDG_CONFIG_HOME/styra/defaults.json` (or
+`$HOME/.config/styra/defaults.json`) and uses it for this and future Styra
+starts, until another choice is saved. The first message still starts the
+agent. A model outside the current catalog can be retained from stored state,
+and the picker carries it as a final row rather than dropping it.
 
 Once a session runs, its status line (every view's top border) names the model
 and effort in use: each agent reports what it resolved as it starts a session, so
