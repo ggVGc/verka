@@ -704,6 +704,30 @@ impl App {
                 }
                 return;
             }
+            // Claude's Edit/Write/MultiEdit tool calls surface as `FileChanged`
+            // at start, not `ToolStarted` (see `claude_tool_started`), so their
+            // matching `ToolCompleted` never finds a started row above and
+            // would otherwise fall through to a new, id-only line. A clean
+            // result just confirms what the `FileChanged` row already showed,
+            // so it is dropped rather than appended a second time; a failed
+            // one replaces the row with a visible error, since the diff shown
+            // there may not have actually landed.
+            if let Some(entry) = self.entries.iter_mut().rev().find(|entry| {
+                matches!(&entry.event, AgentEvent::FileChanged { id: changed, .. } if changed == id)
+            }) {
+                if status == "error" {
+                    if let AgentEvent::FileChanged { paths, .. } = &entry.event {
+                        entry.event = AgentEvent::Error {
+                            message: format!("{}: {output}", paths.join(", ")),
+                        };
+                    }
+                }
+                if self.follow {
+                    self.selected = self.entries.len() - 1;
+                    self.preview_scroll = 0;
+                }
+                return;
+            }
         }
         match &event {
             AgentEvent::TurnCompleted { usage } => {
@@ -1262,6 +1286,57 @@ mod tests {
                 name: "Bash".into(),
                 status: "completed".into(),
                 output: "ok".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn a_clean_edit_completion_is_dropped_since_the_file_changed_row_already_shows_it() {
+        // Edit/Write/MultiEdit surface as `FileChanged` at start, not
+        // `ToolStarted`, so their `ToolCompleted` used to find no match and
+        // fall through to a second, id-only line. A clean result adds
+        // nothing the `FileChanged` row didn't already show.
+        let mut app = app();
+        app.push_event(AgentEvent::FileChanged {
+            id: "toolu_2".into(),
+            paths: vec!["src/lib.rs".into()],
+            diff: Some("@@ edit @@\n-old\n+new".into()),
+            checkpoint: None,
+            checkpoint_error: None,
+        });
+        app.push_event(AgentEvent::ToolCompleted {
+            id: "toolu_2".into(),
+            name: "toolu_2".into(),
+            status: "completed".into(),
+            output: String::new(),
+        });
+
+        assert_eq!(app.entries.len(), 1);
+        assert!(matches!(app.entries[0].event, AgentEvent::FileChanged { .. }));
+    }
+
+    #[test]
+    fn a_failed_edit_completion_replaces_the_file_changed_row_with_a_visible_error() {
+        let mut app = app();
+        app.push_event(AgentEvent::FileChanged {
+            id: "toolu_3".into(),
+            paths: vec!["src/lib.rs".into()],
+            diff: Some("@@ edit @@\n-old\n+new".into()),
+            checkpoint: None,
+            checkpoint_error: None,
+        });
+        app.push_event(AgentEvent::ToolCompleted {
+            id: "toolu_3".into(),
+            name: "toolu_3".into(),
+            status: "error".into(),
+            output: "old_string not found".into(),
+        });
+
+        assert_eq!(app.entries.len(), 1);
+        assert_eq!(
+            app.entries[0].event,
+            AgentEvent::Error {
+                message: "src/lib.rs: old_string not found".into(),
             }
         );
     }
