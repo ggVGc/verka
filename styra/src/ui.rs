@@ -16,6 +16,7 @@ use styra_server::event::{AgentEvent, DetailBlock};
 use styra_server::{Direction as WireDirection, LogLevel};
 use styra_server::{InteractionSummary, InteractionUpdate, SessionSummary, WorkspaceSummary};
 use styra_server::{Mount, MountAccess};
+use unicode_width::UnicodeWidthChar;
 
 /// Cap on detail lines shown for one expanded entry, so a single noisy command
 /// cannot bury the rest of the session.
@@ -115,7 +116,7 @@ pub fn render(frame: &mut Frame, app: &App) {
         return;
     }
 
-    let input_height = input_area_height(app);
+    let input_height = input_area_height(app, frame.area().width.saturating_sub(2));
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -1161,42 +1162,98 @@ fn render_input(frame: &mut Frame, app: &App, area: Rect) {
         .border_style(border_style)
         .title(Span::styled(title, Style::default().fg(Color::Gray)));
     let inner = block.inner(area);
-    let paragraph = Paragraph::new(input_text(app)).block(block);
+    let display = input_display(app, inner.width);
+    let visible_rows = inner.height;
+    let scroll = (display.lines.len() as u16).saturating_sub(visible_rows);
+    let paragraph = Paragraph::new(display.lines)
+        .block(block)
+        .scroll((scroll, 0));
     frame.render_widget(paragraph, area);
 
     if focused {
-        let (col, row) = cursor_offset(&app.input, app.queued_message_count() as u16);
         frame.set_cursor_position(Position {
-            x: inner.x + col,
-            y: inner.y + row,
+            x: inner.x + display.cursor_col,
+            y: inner.y + display.cursor_row.saturating_sub(scroll),
         });
     }
 }
 
-fn input_text(app: &App) -> Vec<Line<'static>> {
-    let mut lines = app
-        .queued_messages()
-        .map(|message| {
-            Line::from(Span::styled(
-                format!("queued: {message}"),
-                Style::default().fg(Color::DarkGray),
-            ))
-        })
-        .collect::<Vec<_>>();
+struct InputDisplay {
+    lines: Vec<Line<'static>>,
+    cursor_col: u16,
+    cursor_row: u16,
+}
+
+fn input_display(app: &App, width: u16) -> InputDisplay {
+    let width = usize::from(width.max(1));
+    let mut lines = Vec::new();
+    for message in app.queued_messages() {
+        lines.extend(wrapped_input_lines(
+            &format!("queued: {message}"),
+            width,
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
+    let preceding_rows = lines.len();
+
     if app.input.is_empty() {
         lines.push(Line::from(Span::styled(
             "type a message, Enter to send",
             Style::default().fg(Color::Gray),
         )));
-    } else {
-        lines.extend(app.input.split('\n').map(|line| {
-            Line::from(Span::styled(
-                line.to_owned(),
-                Style::default().fg(Color::White),
-            ))
-        }));
+        return InputDisplay {
+            lines,
+            cursor_col: 0,
+            cursor_row: preceding_rows as u16,
+        };
+    }
+
+    let mut input_lines = wrapped_input_lines(&app.input, width, Style::default().fg(Color::White));
+    let mut cursor_col = input_lines
+        .last()
+        .map(|line| line.width())
+        .unwrap_or_default();
+    // At the right edge, a terminal cursor advances to the next visual row.
+    // Represent that row explicitly so the cursor never lands on the border.
+    if cursor_col == width {
+        input_lines.push(Line::default());
+        cursor_col = 0;
+    }
+    let cursor_row = preceding_rows + input_lines.len().saturating_sub(1);
+    lines.extend(input_lines);
+
+    InputDisplay {
+        lines,
+        cursor_col: cursor_col as u16,
+        cursor_row: cursor_row as u16,
+    }
+}
+
+fn wrapped_input_lines(text: &str, width: usize, style: Style) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    for logical_line in text.split('\n') {
+        let mut current = String::new();
+        let mut current_width = 0;
+        for ch in logical_line.chars() {
+            let ch_width = ch.width().unwrap_or(0);
+            if current_width > 0 && current_width + ch_width > width {
+                lines.push(Line::from(Span::styled(current, style)));
+                current = String::new();
+                current_width = 0;
+            }
+            current.push(ch);
+            current_width += ch_width;
+        }
+        lines.push(Line::from(Span::styled(current, style)));
     }
     lines
+}
+
+/// Input box height grows with wrapped content to a useful maximum; beyond
+/// that, rendering scrolls to keep the cursor and newest text visible.
+fn input_area_height(app: &App, width: u16) -> u16 {
+    let lines = input_display(app, width).lines.len().max(1);
+    (lines as u16 + 2).clamp(3, 8)
 }
 
 fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
@@ -1241,19 +1298,6 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
         Style::default().fg(Color::Gray),
     )));
     frame.render_widget(footer, area);
-}
-
-/// Input box height: borders plus the number of message lines, within bounds.
-fn input_area_height(app: &App) -> u16 {
-    let lines = app.queued_message_count() + app.input.split('\n').count().max(1);
-    (lines as u16 + 2).clamp(3, 8)
-}
-
-/// Column and row of the cursor at the end of the message buffer.
-fn cursor_offset(input: &str, preceding_rows: u16) -> (u16, u16) {
-    let row = preceding_rows + input.matches('\n').count() as u16;
-    let last = input.rsplit('\n').next().unwrap_or("");
-    (last.chars().count() as u16, row)
 }
 
 fn tag_color(tag: &str) -> Color {
@@ -1628,6 +1672,47 @@ mod tests {
         let (x, y) = find_column(&buffer, "message");
         let cell = buffer.cell((x, y)).unwrap();
         assert_ne!(cell.style().fg, Some(Color::DarkGray));
+    }
+
+    #[test]
+    fn input_wraps_at_the_panel_width_and_keeps_the_cursor_on_screen() {
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
+        app.enter_input();
+        app.set_input("abcdefghijk".into());
+
+        let display = input_display(&app, 5);
+        assert_eq!(display.lines.len(), 3);
+        assert_eq!(display.cursor_col, 1);
+        assert_eq!(display.cursor_row, 2);
+
+        app.set_input("abcde".into());
+        let display = input_display(&app, 5);
+        assert_eq!(display.lines.len(), 2);
+        assert_eq!(display.cursor_col, 0);
+        assert_eq!(display.cursor_row, 1);
+    }
+
+    #[test]
+    fn long_input_scrolls_to_keep_the_newest_text_visible() {
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
+        app.enter_input();
+        app.set_input(format!("{}TAIL", "x".repeat(200)));
+
+        let mut terminal = Terminal::new(TestBackend::new(20, 12)).unwrap();
+        terminal.draw(|frame| render(frame, &app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let rendered = buffer
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(rendered.contains("TAIL"), "{rendered}");
     }
 
     #[test]
