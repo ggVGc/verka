@@ -59,17 +59,16 @@ git -C "$target_dir" init -q -b main
 git -C "$target_dir" config user.name "Orka Workflow Test"
 git -C "$target_dir" config user.email "orka-test@example.invalid"
 
-mkdir "$target_dir/project"
-git -C "$target_dir/project" init -q -b main
-git -C "$target_dir/project" config user.name "Orka Workflow Test"
-git -C "$target_dir/project" config user.email "orka-test@example.invalid"
-git -C "$target_dir/project" commit -q --allow-empty -m "project root"
-
 (
     cd "$target_dir"
-    "$linka_bin" init --name orka-workflow-test
-    "$orka_bin" init
+    GIT_AUTHOR_NAME="Orka Workflow Test" \
+        GIT_AUTHOR_EMAIL="orka-test@example.invalid" \
+        GIT_COMMITTER_NAME="Orka Workflow Test" \
+        GIT_COMMITTER_EMAIL="orka-test@example.invalid" \
+        "$orka_bin" init --create-project
 )
+git -C "$target_dir/project" config user.name "Orka Workflow Test"
+git -C "$target_dir/project" config user.email "orka-test@example.invalid"
 
 echo "==> Creating one machine work node"
 node_id="$(

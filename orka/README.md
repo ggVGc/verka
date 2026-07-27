@@ -30,15 +30,21 @@ refused and retains local recovery state, never silently completed.
 
 ## Use
 
-Run from a Linka workbench (the directory holding `.linka/` and `project/`).
-Create the default configuration beside them with:
+Create a workbench attached to an existing Git repository with:
 
 ```text
-orka init
+orka init /path/to/git-repository
 ```
 
-The generated `orka.toml` selects Genta's non-interactive Codex profile and an
-explicit Driva isolation backend:
+Or ask Orka to create a new repository in the workbench's `project/`
+directory:
+
+```text
+orka init --create-project
+```
+
+Both forms initialize the Linka store and generate an `orka.toml` selecting
+Genta's non-interactive Codex profile and an explicit Driva isolation backend:
 
 ```toml
 [agent]
@@ -70,7 +76,9 @@ rootfs = "/"
 
 ```text
 orka ready               list workable nodes
-orka init                create a default orka.toml (never overwrite one)
+orka init GIT_DIR        initialize a workbench attached to an existing Git repo
+orka init --create-project
+                         initialize one with a new project/ Git repository
 orka run [NODE]          run one attempt (first ready node when omitted)
   --auto-accept          on success, accept through a review node and publish
 orka attempts            list recorded attempts

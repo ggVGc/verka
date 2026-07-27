@@ -14,7 +14,7 @@ use orka::review::{AbandonOutcome, FinishOutcome, Reviews};
 use orka::review_worktree::{GitReviewWorktrees, ReviewCleanupOutcome};
 use orka::workspace::{CleanupOutcome, GitWorkspaces};
 use std::io::IsTerminal;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -26,8 +26,8 @@ use std::sync::{
     about = "Orchestrate isolated agent attempts for work in a Linka store: snapshot a ready node, run an agent, submit a version-checked result"
 )]
 struct Cli {
-    /// Workbench root (holds .linka/, project/, orka.toml). Defaults to the
-    /// nearest ancestor of the current directory containing .linka/.
+    /// Workbench root (holds .linka/, project/, orka.toml). Init defaults to
+    /// the current directory; other commands find the nearest .linka ancestor.
     #[arg(long, global = true)]
     workbench: Option<PathBuf>,
     #[command(subcommand)]
@@ -36,8 +36,15 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Create a default orka.toml using Orka's Codex profile.
-    Init,
+    /// Initialize an Orka workbench attached to a Git repository.
+    Init {
+        /// Existing Git repository to attach as the project.
+        #[arg(required_unless_present = "create_project")]
+        git_dir: Option<PathBuf>,
+        /// Create a new Git repository at <workbench>/project.
+        #[arg(long, conflicts_with = "git_dir")]
+        create_project: bool,
+    },
     /// Run one attempt: the given node, or the first ready one.
     Run {
         /// Node id to run; omitted, the first ready machine-workable node.
@@ -230,13 +237,18 @@ fn parse_node(arg: String) -> Result<NodeId> {
 }
 
 fn run(cli: Cli) -> Result<()> {
-    let workbench = Workbench::locate(cli.workbench)?;
-    match cli.command {
-        Command::Init => {
-            let path = workbench.root.join(CONFIG_FILE);
-            Config::init(&path)?;
-            println!("created {}", path.display());
-        }
+    let Cli { workbench, command } = cli;
+    let command = match command {
+        Command::Init {
+            git_dir,
+            create_project,
+        } => return init(workbench, git_dir, create_project),
+        command => command,
+    };
+
+    let workbench = Workbench::locate(workbench)?;
+    match command {
+        Command::Init { .. } => unreachable!("init was handled before locating a workbench"),
         Command::Run { node, auto_accept } => {
             let config = workbench.config()?;
             let store = workbench.linka_store()?;
@@ -690,6 +702,104 @@ impl LiveEventView {
             let _ = thread.join();
         }
     }
+}
+
+fn init(workbench: Option<PathBuf>, git_dir: Option<PathBuf>, create_project: bool) -> Result<()> {
+    let root = match workbench {
+        Some(path) => path,
+        None => std::env::current_dir().context("locating the new workbench")?,
+    };
+    std::fs::create_dir_all(&root)
+        .with_context(|| format!("creating workbench {}", root.display()))?;
+
+    let config_path = root.join(CONFIG_FILE);
+    if config_path.exists() {
+        bail!(
+            "creating {} (refusing to overwrite it)",
+            config_path.display()
+        );
+    }
+    if root.join(".linka").exists() {
+        bail!(
+            "cannot initialize {}: .linka already exists",
+            root.display()
+        );
+    }
+
+    if create_project {
+        let initialized = linka::ops::init_workbench(root.join(".linka"), None)?;
+        print_initialized_workbench(&initialized);
+    } else {
+        let git_dir = git_dir.expect("clap requires a Git directory or --create-project");
+        attach_project(&root, &git_dir)?;
+        let initialized = linka::ops::init_workbench(root.join(".linka"), None)?;
+        print_initialized_workbench(&initialized);
+    }
+
+    Config::init(&config_path)?;
+    println!("created {}", config_path.display());
+    Ok(())
+}
+
+fn attach_project(workbench: &Path, git_dir: &Path) -> Result<()> {
+    let git_dir = git_dir
+        .canonicalize()
+        .with_context(|| format!("locating Git directory {}", git_dir.display()))?;
+    if !git_dir.is_dir() {
+        bail!("Git directory {} is not a directory", git_dir.display());
+    }
+    if !git_dir.join(".git").exists() {
+        bail!("{} is not a Git repository", git_dir.display());
+    }
+    if linka::git::root_commit(&git_dir)?.is_none() {
+        bail!(
+            "Git repository {} has no commits and cannot be attached",
+            git_dir.display()
+        );
+    }
+
+    let project = workbench.join(linka::store::PROJECT_DIR);
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&git_dir, &project).with_context(|| {
+        format!(
+            "attaching Git repository {} at {}",
+            git_dir.display(),
+            project.display()
+        )
+    })?;
+    #[cfg(not(unix))]
+    std::os::windows::fs::symlink_dir(&git_dir, &project).with_context(|| {
+        format!(
+            "attaching Git repository {} at {}",
+            git_dir.display(),
+            project.display()
+        )
+    })?;
+    Ok(())
+}
+
+fn print_initialized_workbench(initialized: &linka::ops::InitializedWorkbench) {
+    let store = &initialized.store;
+    if initialized.created_workbench_repo {
+        println!(
+            "initialized workbench repository at {}",
+            store.workbench_root().display()
+        );
+    }
+    if initialized.created_project_repo {
+        println!(
+            "initialized project repository at {}",
+            store.project_root().display()
+        );
+    }
+    if initialized.created_project_root {
+        println!("created empty root commit in the project repository");
+    }
+    println!(
+        "initialized Linka store {} attached to {}",
+        store.root().display(),
+        store.project_root().display()
+    );
 }
 
 impl Drop for LiveEventView {
