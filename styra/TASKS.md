@@ -49,7 +49,7 @@ Workspace
 - [x] **12. Workspace API.** Bump the wire API version and add create, list, and
   inspect operations for Workspaces plus Workspace-scoped Session creation and
   listing. Key live Interactions by their Session IDs.
-- [ ] **13. Workspace-aware TUI.** Make `V` choose a Workspace, browse the
+- [x] **13. Workspace-aware TUI.** Make `V` choose a Workspace, browse the
   Workspace's Sessions separately, and attach to a live Interaction when the
   selected Session has one. Switching views must not stop unrelated
   Interactions.

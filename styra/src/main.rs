@@ -115,7 +115,7 @@ fn main() -> Result<()> {
         return attach_shell(&client, session);
     }
     let host_path = resolve_workspace(cli.workspace.as_deref())?;
-    let active_workspace = workspace_for_host(&client, &host_path)?;
+    let mut active_workspace = workspace_for_host(&client, &host_path)?;
 
     // Bare `--view` (no path) needs an interactive terminal to browse
     // sessions in, so it is opened early only in that case; the other paths
@@ -167,6 +167,7 @@ fn main() -> Result<()> {
                 .unwrap_or_else(|| "unknown".into()),
             stored.summary.id,
         );
+        app.workspace_id = stored.summary.workspace_id;
         for event in stored.events {
             // Skip carried-but-viewless traffic (e.g. app-server control
             // lines), matching what a live session shows; it stays available
@@ -215,6 +216,7 @@ fn main() -> Result<()> {
             // the launch picker holds by then.
             None => {
                 app = App::pending(selection);
+                app.workspace_id = Some(active_workspace.id.clone());
                 live = Live::Pending;
             }
         }
@@ -225,10 +227,8 @@ fn main() -> Result<()> {
         None => setup_terminal()?,
     };
 
-    // Runs until the operator quits; a session switch stops the outgoing
-    // session, prefills the message box with the picked session's transcript,
-    // and loops back into run() pending a fresh launch, all inside the same
-    // terminal.
+    // Runs until the operator quits. Workspace and Session selection only
+    // changes what this client views; server-owned Interactions continue.
     let result = loop {
         let outcome = match run(
             &mut terminal,
@@ -243,26 +243,26 @@ fn main() -> Result<()> {
         };
         match outcome {
             RunOutcome::Quit => break Ok(()),
-            RunOutcome::Switch(seed_id) => {
-                if let Live::Running { session_id, .. } =
-                    std::mem::replace(&mut live, Live::Pending)
-                {
-                    client.stop_interaction(&session_id).ok();
-                }
-                match client.transcript(&seed_id) {
-                    Ok(transcript) => {
-                        // Switching changes what you are talking *about*, not
-                        // what you are talking *to*: the standing launch choice
-                        // carries over, and the picker can still change it
-                        // before the seeded message is sent.
+            RunOutcome::OpenWorkspace {
+                workspace,
+                session_id,
+            } => {
+                active_workspace = workspace;
+                match session_id {
+                    Some(session_id) => match open_session(&client, &session_id) {
+                        Ok((new_app, new_live)) => {
+                            app = new_app;
+                            live = new_live;
+                        }
+                        Err(error) => app.push_log(LogEntry::error(format!(
+                            "could not open Session {session_id}: {error:#}"
+                        ))),
+                    },
+                    None => {
                         let selection = app.selection.clone();
                         app = App::pending(selection);
-                        app.set_input(transcript);
-                    }
-                    Err(error) => {
-                        app.push_log(LogEntry::error(format!(
-                            "could not switch session: {error:#}"
-                        )));
+                        app.workspace_id = Some(active_workspace.id.clone());
+                        live = Live::Pending;
                     }
                 }
             }
@@ -295,6 +295,7 @@ fn main() -> Result<()> {
                 // another one.
                 let selection = app.selection.clone();
                 app = App::pending(selection);
+                app.workspace_id = Some(active_workspace.id.clone());
             }
         }
     };
@@ -408,6 +409,7 @@ fn launch_live_session(
 ) -> Result<(App, SessionInfo)> {
     let info = create_session(client, cli, workspace_id, selection, seed)?;
     let mut app = App::new(info.profile.clone(), info.id.clone());
+    app.workspace_id = Some(info.workspace_id.clone());
     app.set_workspace_root(info.workspace.clone());
     app.set_driva_options(info.driva.clone());
     app.push_log(LogEntry::info(format!(
@@ -425,6 +427,7 @@ fn attach_live_interaction(
     interaction: InteractionSummary,
 ) -> Result<(App, Live)> {
     let mut app = App::new(interaction.profile.clone(), interaction.id.clone());
+    app.workspace_id = Some(interaction.workspace_id.clone());
     app.set_workspace_root(interaction.workspace.clone());
     app.set_driva_options(interaction.driva.clone());
     let batch = client.updates(&interaction.id, 0)?;
@@ -439,6 +442,39 @@ fn attach_live_interaction(
             cursor,
         },
     ))
+}
+
+fn open_session(client: &Client, session_id: &str) -> Result<(App, Live)> {
+    if let Some(interaction) = client
+        .list_interactions()?
+        .into_iter()
+        .find(|interaction| interaction.id == session_id)
+    {
+        return attach_live_interaction(client, interaction);
+    }
+    let stored = client.stored_session(session_id)?;
+    let mut app = App::new(
+        stored
+            .summary
+            .profile
+            .clone()
+            .unwrap_or_else(|| "unknown".into()),
+        stored.summary.id,
+    );
+    app.workspace_id = stored.summary.workspace_id;
+    for event in stored.events {
+        if !matches!(event, styra_server::event::AgentEvent::Unknown { .. }) {
+            app.push_event(event);
+        }
+    }
+    for line in stored.raw {
+        app.push_raw(line);
+    }
+    app.on_ended(styra_server::InteractionEnd {
+        exit_code: None,
+        error: None,
+    });
+    Ok((app, Live::Viewing))
 }
 
 fn session_id_from_target(target: &Path) -> Result<String> {
@@ -475,6 +511,34 @@ fn run_picker(
             }
             KeyCode::Char('k') | KeyCode::Up => selected = selected.saturating_sub(1),
             KeyCode::Enter => return Ok(Some(sessions[selected].id.clone())),
+            _ => {}
+        }
+    }
+}
+
+fn run_workspace_picker(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    workspaces: &[WorkspaceSummary],
+) -> Result<Option<WorkspaceSummary>> {
+    let mut selected = 0usize;
+    loop {
+        terminal.draw(|frame| ui::render_workspace_picker(frame, workspaces, selected))?;
+        if !event::poll(Duration::from_millis(100))? {
+            continue;
+        }
+        let Event::Key(key) = event::read()? else {
+            continue;
+        };
+        if key.kind != KeyEventKind::Press {
+            continue;
+        }
+        match key.code {
+            KeyCode::Char('q') | KeyCode::Esc => return Ok(None),
+            KeyCode::Char('j') | KeyCode::Down => {
+                selected = (selected + 1).min(workspaces.len() - 1);
+            }
+            KeyCode::Char('k') | KeyCode::Up => selected = selected.saturating_sub(1),
+            KeyCode::Enter => return Ok(Some(workspaces[selected].clone())),
             _ => {}
         }
     }
@@ -555,8 +619,11 @@ fn run_interactions_picker(
 enum RunOutcome {
     /// The operator quit.
     Quit,
-    /// The operator picked a stored session to switch to.
-    Switch(String),
+    /// The operator chose a Workspace and optionally one of its Sessions.
+    OpenWorkspace {
+        workspace: WorkspaceSummary,
+        session_id: Option<String>,
+    },
     /// The operator picked a live interaction to attach this client to. The outgoing
     /// interaction is left running on the server, not stopped.
     Attach(InteractionSummary),
@@ -644,16 +711,29 @@ fn run(
             return Ok(RunOutcome::Quit);
         }
 
-        if std::mem::take(&mut app.switch_requested) {
-            let sessions = all_sessions(client)?;
-            if sessions.is_empty() {
-                app.push_log(LogEntry::warn("no stored sessions to switch to"));
+        if std::mem::take(&mut app.workspace_requested) {
+            let workspaces = client.list_workspaces()?;
+            if workspaces.is_empty() {
+                app.push_log(LogEntry::warn("no Workspaces to open"));
                 continue;
             }
-            if let Some(id) = run_picker(terminal, &sessions)? {
-                return Ok(RunOutcome::Switch(id));
+            let Some(workspace) = run_workspace_picker(terminal, &workspaces)? else {
+                continue;
+            };
+            let sessions = client.list_sessions(&workspace.id)?;
+            if sessions.is_empty() {
+                return Ok(RunOutcome::OpenWorkspace {
+                    workspace,
+                    session_id: None,
+                });
             }
-            // Cancelled: the next iteration redraws the normal session view.
+            if let Some(id) = run_picker(terminal, &sessions)? {
+                return Ok(RunOutcome::OpenWorkspace {
+                    workspace,
+                    session_id: Some(id),
+                });
+            }
+            // Cancelling the Session picker leaves the current view untouched.
         }
 
         if std::mem::take(&mut app.interactions_requested) {
@@ -741,7 +821,7 @@ fn handle_list_key(
         // Only before a launch: a running session's agent and model are settled
         // facts about a process that is already up. `S` first, then `L`.
         KeyCode::Char('L') => return app.open_launcher(),
-        KeyCode::Char('V') => return app.request_switch(),
+        KeyCode::Char('V') => return app.request_workspace(),
         KeyCode::Char('A') => return app.request_interactions(),
         KeyCode::Char('S') => return app.request_reset(),
         _ => {}
@@ -843,6 +923,7 @@ fn handle_input_key(
                         ) {
                             Ok(info) => {
                                 app.profile_name = info.profile;
+                                app.workspace_id = Some(info.workspace_id);
                                 app.session_id = info.id.clone();
                                 app.set_workspace_root(info.workspace);
                                 app.set_driva_options(info.driva);

@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use styra_server::agent::{Provider, SandboxLayout};
 use styra_server::event::{AgentEvent, DetailBlock};
 use styra_server::{Direction as WireDirection, LogLevel};
-use styra_server::{InteractionSummary, InteractionUpdate, SessionSummary};
+use styra_server::{InteractionSummary, InteractionUpdate, SessionSummary, WorkspaceSummary};
 use styra_server::{Mount, MountAccess};
 
 /// Cap on detail lines shown for one expanded entry, so a single noisy command
@@ -165,6 +165,66 @@ pub fn render_picker(frame: &mut Frame, sessions: &[SessionSummary], selected: u
     );
     let mut state = ListState::default();
     state.select(Some(selected.min(sessions.len() - 1)));
+    frame.render_stateful_widget(list, area, &mut state);
+}
+
+/// Render the top-level Workspace picker. Entering a Workspace leads to its
+/// separate Session picker.
+pub fn render_workspace_picker(
+    frame: &mut Frame,
+    workspaces: &[WorkspaceSummary],
+    selected: usize,
+) {
+    let area = frame.area();
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .title(" styra · choose a Workspace · Enter open · q cancel ");
+    if workspaces.is_empty() {
+        let empty = Paragraph::new(Line::from(Span::styled(
+            "  no Workspaces found",
+            Style::default().fg(Color::Gray),
+        )))
+        .block(block);
+        frame.render_widget(empty, area);
+        return;
+    }
+    let items: Vec<ListItem> = workspaces
+        .iter()
+        .map(|workspace| {
+            let name = workspace.name.clone().unwrap_or_else(|| {
+                workspace
+                    .host_path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("workspace")
+                    .to_owned()
+            });
+            ListItem::new(Line::from(vec![
+                Span::styled(
+                    format!("{name:<20} "),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("{:>3} sessions  {:<10} ", workspace.session_count, workspace.age),
+                    Style::default().fg(Color::Gray),
+                ),
+                Span::styled(
+                    workspace.host_path.display().to_string(),
+                    Style::default().fg(Color::White),
+                ),
+            ]))
+        })
+        .collect();
+    let list = List::new(items).block(block).highlight_style(
+        Style::default()
+            .bg(SELECTION_BG)
+            .add_modifier(Modifier::BOLD),
+    );
+    let mut state = ListState::default();
+    state.select(Some(selected.min(workspaces.len() - 1)));
     frame.render_stateful_widget(list, area, &mut state);
 }
 
@@ -422,6 +482,10 @@ fn interaction_item(interaction: &InteractionSummary) -> ListItem<'static> {
         Span::styled(
             format!("{label:<6} "),
             Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("{} · ", interaction.workspace_id),
+            Style::default().fg(Color::Gray),
         ),
         Span::styled(interaction.id.clone(), Style::default().fg(Color::White)),
     ]))
@@ -1114,7 +1178,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     if app.can_configure_launch() {
         let hints = match app.focus {
             Focus::Input => "Enter send (starts the agent) · Ctrl+L choose agent/model/effort · Alt+Enter newline · Esc back to list",
-            Focus::List => "L choose agent/model/effort · i message · A interactions · V switch · q quit",
+            Focus::List => "L choose agent/model/effort · i message · A interactions · V Workspaces · q quit",
         };
         let footer = Paragraph::new(Line::from(Span::styled(
             format!(" {hints}"),
@@ -1127,22 +1191,22 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     let hints = match (app.focus, app.view) {
         (Focus::Input, _) => "Enter send · Alt+Enter newline · Ctrl+W delete word · Esc back to list",
         (Focus::List, View::Events) => {
-            "j/k next/prev with detail · J/K next/prev line · space fold · C collapse all · m minor · p preview · P full-screen · t transcript · r raw · l log · d driva · i message · s stop · A interactions · S reset · V switch · q quit"
+            "j/k next/prev with detail · J/K next/prev line · space fold · C collapse all · m minor · p preview · P full-screen · t transcript · r raw · l log · d driva · i message · s stop · A interactions · S reset · V Workspaces · q quit"
         }
         (Focus::List, View::Raw) => {
-            "j/k scroll · g/G top/bottom · r events · l log · t transcript · d driva · i message · s stop · A interactions · S reset · V switch · q quit"
+            "j/k scroll · g/G top/bottom · r events · l log · t transcript · d driva · i message · s stop · A interactions · S reset · V Workspaces · q quit"
         }
         (Focus::List, View::Log) => {
-            "j/k scroll · g/G top/bottom · l events · r raw · t transcript · d driva · i message · s stop · A interactions · S reset · V switch · q quit"
+            "j/k scroll · g/G top/bottom · l events · r raw · t transcript · d driva · i message · s stop · A interactions · S reset · V Workspaces · q quit"
         }
         (Focus::List, View::Transcript) => {
-            "j/k scroll · g/G top/bottom · t events · r raw · l log · d driva · i message · s stop · A interactions · S reset · V switch · q quit"
+            "j/k scroll · g/G top/bottom · t events · r raw · l log · d driva · i message · s stop · A interactions · S reset · V Workspaces · q quit"
         }
         (Focus::List, View::Driva) => {
-            "d events · r raw · l log · t transcript · i message · s stop · A interactions · S reset · V switch · q quit"
+            "d events · r raw · l log · t transcript · i message · s stop · A interactions · S reset · V Workspaces · q quit"
         }
         (Focus::List, View::Preview) => {
-            "j/k next/prev with detail · J/K next/prev line · g/G top/bottom · P events · i message · s stop · A interactions · S reset · V switch · q quit"
+            "j/k next/prev with detail · J/K next/prev line · g/G top/bottom · P events · i message · s stop · A interactions · S reset · V Workspaces · q quit"
         }
     };
     let footer = Paragraph::new(Line::from(Span::styled(
@@ -2019,6 +2083,35 @@ mod tests {
     fn picker_shows_a_placeholder_when_there_are_no_sessions() {
         let screen = rendered_picker(&[], 0);
         assert!(screen.contains("no sessions found"));
+    }
+
+    #[test]
+    fn workspace_picker_lists_workspaces_before_sessions() {
+        let workspaces = vec![WorkspaceSummary {
+            id: "w-1".into(),
+            name: Some("retry work".into()),
+            host_path: PathBuf::from("/home/op/retry"),
+            path: PathBuf::from("/state/workspaces/w-1"),
+            session_count: 3,
+            age: "2h ago".into(),
+            created_at_ms: 1,
+        }];
+        let mut terminal = Terminal::new(TestBackend::new(100, 12)).unwrap();
+        terminal
+            .draw(|frame| render_workspace_picker(frame, &workspaces, 0))
+            .unwrap();
+        let screen = terminal
+            .backend()
+            .buffer()
+            .clone()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(screen.contains("choose a Workspace"), "{screen}");
+        assert!(screen.contains("retry work"), "{screen}");
+        assert!(screen.contains("3 sessions"), "{screen}");
+        assert!(screen.contains("/home/op/retry"), "{screen}");
     }
 
     fn interaction_summary(id: &str, profile: &str, accepting: bool) -> InteractionSummary {

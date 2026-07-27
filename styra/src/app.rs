@@ -331,6 +331,8 @@ pub struct App {
     /// neither, so this is the only place the truth comes from. `None` until the
     /// agent's session-start line arrives (and for agents that report neither).
     pub reported_model: Option<(String, Option<String>)>,
+    /// Durable Workspace containing the current Session, when known.
+    pub workspace_id: Option<String>,
     pub session_id: String,
     /// The host directory backing the agent's sandboxed workspace, when
     /// known (a live session; a replayed journal has no live workspace).
@@ -355,9 +357,8 @@ pub struct App {
     pub transcript_scroll: u16,
     /// Set when the operator asks to quit; the event loop observes it.
     pub should_quit: bool,
-    /// Set when the operator asks to switch to a different stored session;
-    /// the event loop observes it and opens the session picker.
-    pub switch_requested: bool,
+    /// Set when the operator asks to choose a Workspace.
+    pub workspace_requested: bool,
     /// Set when the operator asks to list the server's live interactions; the event
     /// loop observes it and opens the interactions picker to attach to one.
     pub interactions_requested: bool,
@@ -392,6 +393,7 @@ impl App {
             selection,
             launcher: None,
             reported_model: None,
+            workspace_id: None,
             session_id: session_id.into(),
             workspace_root: None,
             driva_options: None,
@@ -402,7 +404,7 @@ impl App {
             log_scroll_back: 0,
             transcript_scroll: 0,
             should_quit: false,
-            switch_requested: false,
+            workspace_requested: false,
             interactions_requested: false,
             reset_requested: false,
         }
@@ -921,11 +923,9 @@ impl App {
         self.should_quit = true;
     }
 
-    /// Ask the event loop to open the session picker and, if the operator
-    /// picks one, switch to it: stop this session, launch a fresh one seeded
-    /// with the picked session's rendered transcript.
-    pub fn request_switch(&mut self) {
-        self.switch_requested = true;
+    /// Ask the event loop to choose a Workspace and then one of its Sessions.
+    pub fn request_workspace(&mut self) {
+        self.workspace_requested = true;
     }
 
     /// Ask the event loop to list the server's live interactions and, if the operator
@@ -1386,11 +1386,11 @@ mod tests {
     }
 
     #[test]
-    fn request_switch_sets_a_flag_for_the_event_loop_to_observe() {
+    fn request_workspace_sets_a_flag_for_the_event_loop_to_observe() {
         let mut app = app();
-        assert!(!app.switch_requested);
-        app.request_switch();
-        assert!(app.switch_requested);
+        assert!(!app.workspace_requested);
+        app.request_workspace();
+        assert!(app.workspace_requested);
     }
 
     #[test]
