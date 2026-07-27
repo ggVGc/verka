@@ -252,27 +252,6 @@ fn main() -> Result<()> {
                     }
                 }
             }
-            RunOutcome::Resume(id) => {
-                match client.resume_session(&ResumeSession {
-                    id: id.clone(),
-                    network: cli.network,
-                    templates: cli.template.clone(),
-                }) {
-                    Ok(info) => {
-                        app.set_workspace_root(info.workspace);
-                        app.set_driva_options(info.driva);
-                        app.status = Status::Running;
-                        app.push_log(LogEntry::info("resumed with provider-native context"));
-                        live = Live::Running {
-                            session_id: info.id,
-                            cursor: info.updates_after,
-                        };
-                    }
-                    Err(error) => app.push_log(LogEntry::error(format!(
-                        "could not resume Session {id}: {error:#}"
-                    ))),
-                }
-            }
             // Attach to another live interaction. The outgoing one is left running on
             // the server (interactions outlive a client); we just stop viewing it.
             RunOutcome::Attach(interaction) => {
@@ -613,8 +592,6 @@ enum RunOutcome {
         workspace: WorkspaceSummary,
         session_id: Option<String>,
     },
-    /// Resume a stopped Session through its provider's native mechanism.
-    Resume(String),
     /// The operator picked a live interaction to attach this client to. The outgoing
     /// interaction is left running on the server, not stopped.
     Attach(InteractionSummary),
@@ -633,7 +610,9 @@ enum Live {
     /// A server-owned agent process, addressed by id. `cursor` makes polling
     /// incremental and preserves the server's update order.
     Running { session_id: String, cursor: u64 },
-    /// A replayed journal (`--view`); there is no live agent to launch.
+    /// A replayed journal (`--view`, a reopened Session, or one this client
+    /// lost its connection to); no live agent is attached. Sending a message
+    /// resumes it through the provider's native mechanism.
     Viewing,
 }
 
@@ -757,14 +736,6 @@ fn run(
             // Cancelling the Session picker leaves the current view untouched.
         }
 
-        if std::mem::take(&mut app.resume_requested) {
-            if app.session_id.is_empty() {
-                app.push_log(LogEntry::warn("no Session to resume"));
-            } else {
-                return Ok(RunOutcome::Resume(app.session_id.clone()));
-            }
-        }
-
         if std::mem::take(&mut app.interactions_requested) {
             let interactions = client.list_interactions()?;
             if interactions.is_empty() {
@@ -859,7 +830,6 @@ fn handle_list_key(
         // facts about a process that is already up. `S` first, then `L`.
         KeyCode::Char('L') => return app.open_launcher(),
         KeyCode::Char('V') => return app.request_workspace(),
-        KeyCode::Char('F') => return app.request_resume(),
         KeyCode::Char('A') => return app.request_interactions(),
         KeyCode::Char('S') => return app.request_reset(),
         _ => {}
@@ -937,23 +907,24 @@ fn handle_input_key(
                 match live {
                     // The sent message returns as a UserMessage event, so it is
                     // not pushed here; send failures surface in the log view.
-                    Live::Running { session_id, .. } if app.can_send() => {
-                        if app.status == Status::Running {
-                            app.queue_message(message);
-                            app.push_log(LogEntry::info(format!(
-                                "message queued ({} waiting)",
-                                app.queued_message_count()
-                            )));
-                        } else if let Err(error) = client.send_message(session_id, &message) {
+                    Live::Running { .. } if app.status == Status::Running => {
+                        app.queue_message(message);
+                        app.push_log(LogEntry::info(format!(
+                            "message queued ({} waiting)",
+                            app.queued_message_count()
+                        )));
+                    }
+                    Live::Running { session_id, .. } if app.status == Status::Idle => {
+                        if let Err(error) = client.send_message(session_id, &message) {
                             app.push_log(LogEntry::error(format!("send failed: {error:#}")));
                         }
                     }
-                    Live::Running { .. } => app.push_log(LogEntry::warn(format!(
-                        "not sent (session {}): {message}",
-                        app.status.label()
-                    ))),
-                    Live::Viewing => {
-                        app.push_log(LogEntry::warn("not sent: viewed journal has no live agent"))
+                    // Stopped, ended, or merely viewed (reopened from the
+                    // picker, or `--view`'d from disk): resume the Session
+                    // through its provider's native mechanism, then deliver
+                    // the message to the revived agent.
+                    Live::Running { .. } | Live::Viewing => {
+                        resume_and_send(app, client, cli, live, message)
                     }
                     // The operator's first message: this is what actually
                     // starts the agent. Nothing was launched or sent before
@@ -1003,6 +974,46 @@ fn handle_input_key(
         KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => app.open_launcher(),
         KeyCode::Char(ch) => app.input_char(ch),
         _ => {}
+    }
+}
+
+/// Resume `app.session_id` through its provider's native mechanism, then
+/// deliver `message` to the freshly revived agent. Used when the operator
+/// sends a new message to a Session that is stopped, ended, or only being
+/// viewed (no live agent attached).
+fn resume_and_send(app: &mut App, client: &Client, cli: &Cli, live: &mut Live, message: String) {
+    if app.session_id.is_empty() {
+        app.push_log(LogEntry::warn("not sent: no Session to resume"));
+        return;
+    }
+    match client.resume_session(&ResumeSession {
+        id: app.session_id.clone(),
+        network: cli.network,
+        templates: cli.template.clone(),
+    }) {
+        Ok(info) => {
+            app.set_workspace_root(info.workspace);
+            app.set_driva_options(info.driva);
+            app.push_log(LogEntry::info("resumed with provider-native context"));
+            let session_id = info.id;
+            app.session_id = session_id.clone();
+            app.status = Status::Running;
+            *live = Live::Running {
+                session_id: session_id.clone(),
+                cursor: info.updates_after,
+            };
+            if let Err(error) = client.send_message(&session_id, &message) {
+                app.push_log(LogEntry::error(format!("send failed: {error:#}")));
+            }
+        }
+        Err(error) => {
+            app.push_log(LogEntry::error(format!(
+                "could not resume Session {}: {error:#}",
+                app.session_id
+            )));
+            // Don't lose what they typed; let them retry.
+            app.set_input(message);
+        }
     }
 }
 

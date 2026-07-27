@@ -1184,7 +1184,7 @@ fn render_input(frame: &mut Frame, app: &App, area: Rect) {
             format!(" message · {} queued ", app.queued_message_count())
         }
     } else {
-        " message (session ended) ".to_owned()
+        " message (resumes on send) ".to_owned()
     };
     let block = Block::default()
         .borders(Borders::ALL)
@@ -1304,22 +1304,22 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     let hints = match (app.focus, app.view) {
         (Focus::Input, _) => "Enter send · ↑/↓ history · Alt+Enter newline · Ctrl+W delete word · Esc back to list",
         (Focus::List, View::Events) => {
-            "j/k next/prev with detail/files · C collapse all · J/K next/prev line · PgUp/PgDn preview scroll · space fold · m minor · p preview · P full-screen · t transcript · r raw · l log · d driva · i message · c pause · s stop · F resume · A interactions · S reset · V Workspaces · q quit"
+            "j/k next/prev with detail/files · C collapse all · J/K next/prev line · PgUp/PgDn preview scroll · space fold · m minor · p preview · P full-screen · t transcript · r raw · l log · d driva · i message · c pause · s stop · A interactions · S reset · V Workspaces · q quit"
         }
         (Focus::List, View::Raw) => {
-            "j/k scroll · g/G top/bottom · r events · l log · t transcript · d driva · i message · c pause · s stop · F resume · A interactions · S reset · V Workspaces · q quit"
+            "j/k scroll · g/G top/bottom · r events · l log · t transcript · d driva · i message · c pause · s stop · A interactions · S reset · V Workspaces · q quit"
         }
         (Focus::List, View::Log) => {
-            "j/k scroll · g/G top/bottom · l events · r raw · t transcript · d driva · i message · c pause · s stop · F resume · A interactions · S reset · V Workspaces · q quit"
+            "j/k scroll · g/G top/bottom · l events · r raw · t transcript · d driva · i message · c pause · s stop · A interactions · S reset · V Workspaces · q quit"
         }
         (Focus::List, View::Transcript) => {
-            "j/k scroll · g/G top/bottom · t events · r raw · l log · d driva · i message · c pause · s stop · F resume · A interactions · S reset · V Workspaces · q quit"
+            "j/k scroll · g/G top/bottom · t events · r raw · l log · d driva · i message · c pause · s stop · A interactions · S reset · V Workspaces · q quit"
         }
         (Focus::List, View::Driva) => {
-            "d events · r raw · l log · t transcript · i message · c pause · s stop · F resume · A interactions · S reset · V Workspaces · q quit"
+            "d events · r raw · l log · t transcript · i message · c pause · s stop · A interactions · S reset · V Workspaces · q quit"
         }
         (Focus::List, View::Preview) => {
-            "j/k next/prev previewable · J/K next/prev line · PgUp/PgDn scroll · g/G first/last entry · P events · i message · c pause · s stop · F resume · A interactions · S reset · V Workspaces · q quit"
+            "j/k next/prev previewable · J/K next/prev line · PgUp/PgDn scroll · g/G first/last entry · P events · i message · c pause · s stop · A interactions · S reset · V Workspaces · q quit"
         }
     };
     let footer = Paragraph::new(Line::from(Span::styled(

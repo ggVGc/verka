@@ -153,9 +153,10 @@ or `Tab` returns to list focus.
 `V` first chooses a Workspace, then a Session within it. This only changes what
 the client views; it never stops an outgoing Interaction. `A` lists all live
 Interactions with their Workspace and Session identities. `s` stops the current
-Interaction while retaining its Session. `F` resumes that stopped Session with
-the provider's native conversation id: Codex uses `thread/resume`, while Claude
-Code starts with `--resume`. Styra preserves the provider's own state directory
-for this purpose. If the provider has removed its session—or an older Styra
-journal predates native-id capture—the raw journal remains viewable, but resume
-returns an error.
+Interaction while retaining its Session. Sending a new message to a stopped,
+ended, or merely-viewed Session resumes it automatically with the provider's
+native conversation id: Codex uses `thread/resume`, while Claude Code starts
+with `--resume`. Styra preserves the provider's own state directory for this
+purpose. If the provider has removed its session—or an older Styra journal
+predates native-id capture—the raw journal remains viewable, but resume
+returns an error and the message is not lost, ready to retry.

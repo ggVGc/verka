@@ -379,9 +379,6 @@ pub struct App {
     pub should_quit: bool,
     /// Set when the operator asks to choose a Workspace.
     pub workspace_requested: bool,
-    /// Set when the operator asks to resume the current stopped Session using
-    /// the provider's native conversation state.
-    pub resume_requested: bool,
     /// Set when the operator asks to list the server's live interactions; the event
     /// loop observes it and opens the interactions picker to attach to one.
     pub interactions_requested: bool,
@@ -422,7 +419,6 @@ impl App {
             transcript_scroll: 0,
             should_quit: false,
             workspace_requested: false,
-            resume_requested: false,
             interactions_requested: false,
             reset_requested: false,
         }
@@ -1054,10 +1050,6 @@ impl App {
         self.workspace_requested = true;
     }
 
-    pub fn request_resume(&mut self) {
-        self.resume_requested = true;
-    }
-
     /// Ask the event loop to list the server's live interactions and, if the operator
     /// picks one, attach to it. The current interaction is left running on the server,
     /// not stopped: attaching only changes what this client views.
@@ -1275,7 +1267,7 @@ mod tests {
     }
 
     #[test]
-    fn ending_is_terminal_and_disables_sending() {
+    fn ending_is_terminal_for_events_but_not_can_send() {
         let mut app = app();
         app.on_ended(InteractionEnd {
             exit_code: Some(0),
@@ -1288,6 +1280,8 @@ mod tests {
                 error: None
             }
         );
+        // `can_send` only flags the input box's title; the event loop still
+        // lets a new message resume an ended Session through its provider.
         assert!(!app.can_send());
         // A late event does not revive an ended session.
         app.push_event(AgentEvent::AgentMessage {
@@ -1626,14 +1620,6 @@ mod tests {
         assert!(!app.workspace_requested);
         app.request_workspace();
         assert!(app.workspace_requested);
-    }
-
-    #[test]
-    fn request_resume_sets_a_flag_for_the_event_loop_to_observe() {
-        let mut app = app();
-        assert!(!app.resume_requested);
-        app.request_resume();
-        assert!(app.resume_requested);
     }
 
     #[test]

@@ -492,10 +492,11 @@ replays the stored journal read-only. Neither step stops the Interaction the
 client was previously viewing. An empty Workspace opens a blank pending Session
 screen. `Esc`/`q` cancels without changing the current view.
 
-`F` resumes the selected stopped Session. It reopens the existing journal for
-append and starts a new Interaction using the native provider id captured when
-the Session began. A missing id or missing provider record is an error, without
-affecting read-only journal replay.
+Sending a message to a stopped, ended, or merely-viewed Session resumes it
+automatically. It reopens the existing journal for append and starts a new
+Interaction using the native provider id captured when the Session began. A
+missing id or missing provider record is an error, without affecting
+read-only journal replay; the typed message is preserved for a retry.
 
 ### Current Interactions
 
