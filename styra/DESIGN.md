@@ -301,12 +301,19 @@ keyed by the same thread/session id genta already captures via
   first turn.
 
 Styra hands the freshly spawned agent process *its own*
-thread/session id and letting its native resume machinery reconstruct context
+thread/session id and lets its native resume machinery reconstruct context
 from *its own* storage, rather than Styra reconstructing a prompt from *its*
 journal. `session.json` stores that provider identity once `ThreadStarted` is
 observed. Provider state directories are mounted writable so their native
 records survive the sandbox. Sessions without an id, and sessions whose native
 record has disappeared, remain viewable but return an error from resume.
+
+Before launching a resumed Interaction, the server seeds its cursor-based
+update history from the stored journal and records the resulting boundary.
+The client that requested resume already has that journal on screen and starts
+polling after the boundary. A later client attaches from cursor zero and
+therefore receives the historical events/raw records and then the new native
+Interaction updates without a snapshot/poll race or duplicate history.
 
 A structurally different alternative, seen in the `pi.dev` harness: rather
 than replaying raw or rendered history, generate a goal-first **recap**

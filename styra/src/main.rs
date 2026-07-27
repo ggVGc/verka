@@ -187,7 +187,7 @@ fn main() -> Result<()> {
                 app = new_app;
                 live = Live::Running {
                     session_id: info.id,
-                    cursor: 0,
+                    cursor: info.updates_after,
                 };
             }
             // No seed: nothing has been said to an agent yet, so nothing is
@@ -259,7 +259,7 @@ fn main() -> Result<()> {
                         app.push_log(LogEntry::info("resumed with provider-native context"));
                         live = Live::Running {
                             session_id: info.id,
-                            cursor: 0,
+                            cursor: info.updates_after,
                         };
                     }
                     Err(error) => app.push_log(LogEntry::error(format!(
@@ -932,7 +932,7 @@ fn handle_input_key(
                                 app.status = Status::Running;
                                 *live = Live::Running {
                                     session_id: info.id,
-                                    cursor: 0,
+                                    cursor: info.updates_after,
                                 };
                             }
                             Err(error) => {

@@ -54,6 +54,11 @@ pub struct SessionInfo {
     pub workspace: PathBuf,
     pub journal_path: PathBuf,
     pub driva: DrivaOptions,
+    /// Update cursor immediately after any journal history used to initialize
+    /// this interaction. The client which already rendered that journal starts
+    /// here; a later attachment starts at zero to receive the full history.
+    #[serde(default)]
+    pub updates_after: u64,
 }
 
 /// Host-side tmux endpoint for the shell owned by a live session's sandbox.

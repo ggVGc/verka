@@ -221,6 +221,7 @@ impl ServerState {
             workspace,
             journal_path,
             driva,
+            updates_after: 0,
         })
     }
 
@@ -258,6 +259,13 @@ impl ServerState {
             .context("tmux is required for Styra session shells")?;
         let broker_executable =
             std::env::current_exe().context("locating the Styra sandbox broker")?;
+        // Seed the live update stream before the provider starts. Clients
+        // attaching from cursor zero then receive the stored conversation and
+        // all subsequent native-resume traffic as one sequence. The client
+        // initiating this resume already displays the journal, so it starts
+        // after this explicit boundary.
+        let seeded_updates = replayed_session_updates(&summary.path, profile.protocol)?;
+        let updates_after = seeded_updates.len() as u64;
         let journal = Journal::open(&summary.path)?;
         let journal_path = journal.path().to_path_buf();
         let diagnostics = summary.path.join("diagnostics.log");
@@ -286,7 +294,7 @@ impl ServerState {
         });
         let (interaction, receiver) =
             Interaction::spawn(spec, backend, journal, request.id.clone(), diagnostics)?;
-        let updates = Arc::new(Mutex::new(Vec::new()));
+        let updates = Arc::new(Mutex::new(seeded_updates));
         let accepting_messages = Arc::new(AtomicBool::new(true));
         let managed = Arc::new(ManagedInteraction {
             interaction,
@@ -325,6 +333,7 @@ impl ServerState {
             workspace,
             journal_path,
             driva,
+            updates_after,
         })
     }
 
@@ -488,6 +497,31 @@ impl ServerState {
             }
         }
     }
+}
+
+fn replayed_session_updates(
+    path: &Path,
+    protocol: crate::event::Protocol,
+) -> Result<Vec<SequencedUpdate>> {
+    let events = journal::replay(path, protocol)?;
+    let raw = journal::replay_raw(path)?;
+    let mut updates = Vec::with_capacity(events.len() + raw.len());
+    for event in events {
+        // App-server control traffic is carried by the raw view but omitted
+        // from the live event list, matching normal Interaction behavior.
+        if !matches!(event, crate::event::AgentEvent::Unknown { .. }) {
+            push_sequenced(&mut updates, crate::types::InteractionUpdate::Event(event));
+        }
+    }
+    for line in raw {
+        push_sequenced(&mut updates, crate::types::InteractionUpdate::Raw(line));
+    }
+    Ok(updates)
+}
+
+fn push_sequenced(updates: &mut Vec<SequencedUpdate>, update: crate::types::InteractionUpdate) {
+    let sequence = updates.len() as u64 + 1;
+    updates.push(SequencedUpdate { sequence, update });
 }
 
 /// Fail before launching a sandbox when the provider has already discarded
@@ -664,12 +698,18 @@ mod tests {
         std::fs::remove_dir_all(&store).ok();
         std::fs::create_dir_all(&host).unwrap();
         let state = ServerState::new(store.clone(), store.with_extension("sock"));
-        let workspace =
-            crate::workspace::create(&store, &host, Some("legacy".into())).unwrap();
+        let workspace = crate::workspace::create(&store, &host, Some("legacy".into())).unwrap();
         let session_dir =
             crate::workspace::sessions_dir(&store, &workspace.id).join("0000000000001-1-1");
         std::fs::create_dir_all(&session_dir).unwrap();
-        std::fs::write(session_dir.join("journal.jsonl"), "").unwrap();
+        std::fs::write(
+            session_dir.join("journal.jsonl"),
+            concat!(
+                "{\"source\":\"user\",\"at_ms\":1,\"text\":\"old question\"}\n",
+                "{\"source\":\"agent\",\"at_ms\":2,\"raw\":\"{\\\"method\\\":\\\"item/completed\\\",\\\"params\\\":{\\\"item\\\":{\\\"type\\\":\\\"agentMessage\\\",\\\"id\\\":\\\"m\\\",\\\"text\\\":\\\"old answer\\\"}}}\"}\n"
+            ),
+        )
+        .unwrap();
         std::fs::write(
             session_dir.join("session.json"),
             serde_json::json!({
@@ -693,6 +733,30 @@ mod tests {
                 .unwrap(),
             Response::StoredSession(_)
         ));
+        let replayed =
+            replayed_session_updates(&session_dir, crate::event::Protocol::CodexAppServer).unwrap();
+        assert_eq!(
+            replayed
+                .iter()
+                .map(|update| update.sequence)
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3, 4]
+        );
+        assert!(matches!(
+            &replayed[0].update,
+            crate::types::InteractionUpdate::Event(
+                crate::event::AgentEvent::UserMessage { text }
+            ) if text == "old question"
+        ));
+        assert!(matches!(
+            &replayed[1].update,
+            crate::types::InteractionUpdate::Event(
+                crate::event::AgentEvent::AgentMessage { text }
+            ) if text == "old answer"
+        ));
+        assert!(replayed[2..]
+            .iter()
+            .all(|update| matches!(update.update, crate::types::InteractionUpdate::Raw(_))));
         let error = state
             .resume_session(ResumeSession {
                 id: "0000000000001-1-1".into(),
@@ -708,8 +772,7 @@ mod tests {
 
     #[test]
     fn native_session_lookup_detects_removal() {
-        let root =
-            std::env::temp_dir().join(format!("styra-native-test-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("styra-native-test-{}", std::process::id()));
         std::fs::remove_dir_all(&root).ok();
         std::fs::create_dir_all(root.join("nested")).unwrap();
         std::fs::write(root.join("nested/rollout-provider-7.jsonl"), "").unwrap();

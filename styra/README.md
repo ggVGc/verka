@@ -89,7 +89,11 @@ Operations:
 
 The update stream is cursor-based. Clients pass the last observed sequence as
 `after`; the response supplies `next`. Repeating a request with the same cursor
-is safe, and different clients can observe a session independently.
+is safe, and different clients can observe a session independently. A resumed
+Interaction seeds this stream with the Session's stored events and raw records.
+The resume response supplies the boundary cursor for the initiating client,
+which already rendered that journal; later clients attach from zero and receive
+the complete history followed by new provider output.
 
 For example, a shell tool can check the server with `socat`:
 
