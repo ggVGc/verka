@@ -816,20 +816,13 @@ fn handle_list_key(
     // focus would leave keystrokes going nowhere visible.
     match key.code {
         KeyCode::Char('q') => return app.request_quit(),
-        KeyCode::Char('c') => return pause_interaction(app, client, live),
+        KeyCode::Char('s') => return pause_interaction(app, client, live),
         KeyCode::Char('i') if app.view != View::Preview => return app.enter_input(),
         KeyCode::Char('r') => return app.toggle_raw(),
         KeyCode::Char('l') => return app.toggle_log(),
         KeyCode::Char('t') => return app.toggle_transcript(),
         KeyCode::Char('d') => return app.toggle_driva(),
         KeyCode::Char('P') => return app.toggle_fullscreen_preview(),
-        KeyCode::Char('s') => {
-            if let Live::Running { session_id, .. } = live {
-                client.stop_interaction(session_id).ok();
-                app.push_log(LogEntry::info("stop requested; closing agent input"));
-            }
-            return;
-        }
         // Only before a launch: a running session's agent and model are settled
         // facts about a process that is already up. `S` first, then `L`.
         KeyCode::Char('L') => return app.open_launcher(),
