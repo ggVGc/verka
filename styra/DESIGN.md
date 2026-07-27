@@ -157,6 +157,27 @@ A profile is the only agent-specific knowledge in Styra. It defines:
 - `single_turn` — whether the agent reads one prompt to end-of-input and then
   runs to completion, so the session closes stdin after the first message.
 
+### A profile name is a launch selection
+
+A profile is named `provider[:model][/effort]` — `codex`, `claude:claude-opus-5`,
+`codex:gpt-5.6-sol/xhigh` — and that string is genta's `Selection`, parsed into
+the provider it launches plus two optional overrides. A bare provider sends no
+override at all: the agent runs on whatever model and reasoning effort it is
+itself configured for, which is deliberately *not* modelled as a level Styra
+could name, since Styra does not know what that configuration is. The overrides
+reach each agent its own way — codex as `-c model=…` and
+`-c model_reasoning_effort=…` on the process it launches, Claude Code as
+`--model` and `--effort` — and the effort ladders differ at the ends (codex has
+`minimal`, Claude Code has `max`), so each provider publishes the levels it
+accepts.
+
+The grammar round-trips: a resolved profile is named after the selection that
+produced it, so the journal's `SessionMeta` records the model and effort that
+actually ran and re-parsing that name reproduces the launch. Model ids are
+free-form strings, not an enum — the authoritative catalog belongs to the agent,
+and an id it does not know fails there rather than being second-guessed here.
+Genta only *suggests* a per-provider list for a picker to offer.
+
 The first profile targets the same provider Orka uses. Its wire event schema is
 the `thread.started` / `turn.started` / `turn.completed` / `item.{started,
 updated,completed}` family Orka already decodes, so the decoders stay aligned.
@@ -181,7 +202,13 @@ event stream, so it has two cooperating parts:
   (`thread/started`, `turn/started`, `item/started`, `item/completed`,
   `thread/tokenUsage/updated`, errors) into the event vocabulary — shared by
   live tracks and journal replay; requests and responses decode as `Unknown`
-  control traffic;
+  control traffic, with one exception: the `thread/start` *response* is the only
+  place the app-server states the model and reasoning effort the thread resolved
+  to, so it decodes to `ThreadStarted` carrying them (recognised by the thread it
+  reports rather than by the request id it answers, which belongs to the client
+  and not to the wire format). The `thread/started` notification then repeats a
+  thread already known, naming neither, so the client suppresses it rather than
+  logging a second, less informative session entry;
 - an `AppServer` client owns the session state machine: `initialize` →
   `initialized` → `thread/start` (capturing the thread id) → one `turn/start`
   per operator message. Messages sent before the thread is ready are queued and
@@ -208,7 +235,10 @@ capture, which keeps the two applications' decoders aligned.
 Styra decodes provider wire events into a small, stable set that the UI
 consumes. It is intentionally the same shape as Orka's `AgentEvent`:
 
-- `ThreadStarted { thread_id }`
+- `ThreadStarted { thread_id, model, effort }` — the model and reasoning
+  effort are the agent's own report of what the session resolved to, absent
+  where it does not name them (Claude Code reports a model but no effort; the
+  one-shot `codex exec` stream reports neither)
 - `TurnStarted` / `TurnCompleted { usage }`
 - `CommandStarted { command }` / `CommandCompleted { command, status,
   exit_code, output }`
@@ -346,11 +376,22 @@ The application is a single full-screen view with three regions:
 - **Message box (bottom).** A single- or multi-line editor. Submitting sends the
   text to the agent (encoded by the profile) and appends a `UserMessage` entry
   to the list.
-- **Status line (top border).** Application name, active profile/model, and
-  session state: `not started` (no track launched yet, awaiting the operator's
-  first message), `running`, `idle` (turn complete, agent idle for input),
-  `stopped`, or `ended`/`failed` once the agent process exits. Token usage from
-  the latest `TurnCompleted` is shown.
+- **Status line (top border).** Application name, the agent, the model and
+  reasoning effort in use, and session state: `not started` (no track launched
+  yet, awaiting the operator's first message), `running`, `idle` (turn complete,
+  agent idle for input), `stopped`, or `ended`/`failed` once the agent process
+  exits. Token usage from the latest `TurnCompleted` is shown.
+
+  The model and effort are named in every view, because the agent's name alone
+  does not say them: a bare provider pins neither, and what runs can differ from
+  what was asked for. Each agent states what it resolved as it starts a session
+  (`ThreadStarted`), and that report is what the line shows; until it arrives —
+  and for a value the agent never reports, such as Claude Code's effort — the
+  line falls back to what the launch asked for and dims it, so what *is* running
+  reads differently from what was *requested*. With neither, it says `default
+  model`: the agent is on its own configuration and has not said which. A stored
+  session's recorded profile is read apart textually rather than resolved, so a
+  journal naming an agent this build does not know still shows what it says.
 
 ### The raw view
 
@@ -415,6 +456,7 @@ current focus is shown in the status line and by which region draws the cursor.
 | `l`             | Toggle the diagnostic log view (same scrolling as the raw view) |
 | `t`             | Toggle the rendered transcript view (`j`/`k`/`g`/`G` scroll from the start) |
 | `i`             | Enter input focus                                           |
+| `L`             | Choose the agent, model, and effort for the next session (start screen only; see *Choosing what to launch*) |
 | `s`             | Stop the session (keeps the journal)                        |
 | `A`             | Show current jobs with a live preview of the selected job   |
 | `S`             | Stop the session and return to the blank start screen       |
@@ -427,6 +469,7 @@ current focus is shown in the status line and by which region draws the cursor.
 | -------------- | ------------------------------------------------------------ |
 | `Enter`        | Send the message (configurable: `Enter` sends vs. newline)   |
 | `Alt+Enter`    | Insert a newline (when `Enter` sends)                        |
+| `Ctrl+L`       | Choose the agent, model, and effort (start screen only)       |
 | `Esc`          | Return to list focus without sending                         |
 
 Expansion is per-entry and inline: an expanded entry grows to show its detail
@@ -453,8 +496,9 @@ fresh, unlaunched `App` in input focus (`Status::Pending`, see *Starting and
 switching send nothing on their own* below): the operator reviews it, edits
 or appends to it, or clears it and writes something else, and only their own
 `Enter` starts the new session — on the same profile the process was started
-with (`cli.profile`, not the picked session's own recorded one, so switching
-changes *what you're talking about*, not *what you're talking to*) — sending
+with (the standing launch selection, not the picked session's own recorded one,
+so switching changes *what you're talking about*, not *what you're talking to*;
+see *Choosing what to launch*) — sending
 whatever is currently in the box as its opening message. The outgoing
 session's journal is untouched; only the current view moves on. See *The raw
 journal is the session* for why the seed is a rendered transcript rather than
@@ -491,6 +535,40 @@ so the operator can fix the problem and retry without retyping.
 The one exception is a trailing CLI `PROMPT`: since that is already input the
 operator gave (as a command-line argument, before the terminal even took
 over), it launches immediately, exactly as it always has.
+
+### Choosing what to launch
+
+Because nothing is launched until the first message, the blank start screen is
+also where *what to launch* is chosen. `L` (or `Ctrl+L`, since that screen opens
+in input focus) opens a modal picker with three columns — agent, model, effort —
+and applying it records a `Selection` on the `App`; the profile name shown in the
+status line updates with it, so the screen always names what an `Enter` would
+start. Nothing is launched or sent by picking: the operator's own message still
+does that, as everywhere else.
+
+Each of the model and effort columns leads with an "agent default" row, which is
+the absence of an override rather than a guess at the agent's configuration, and
+the other rows are the agent's own catalog and nothing else (*A profile name is a
+launch selection*). Changing the agent resets both to that default, since neither
+the catalogs nor the effort ladders correspond across providers.
+
+The model catalog is a fixed list per agent, not a free-text field: for Claude
+Code it is every id Anthropic lists as `Active` in its model-status table, as
+full ids rather than the moving `opus`/`sonnet` aliases, so a journal records the
+exact model a session ran on. A model outside that list is still launchable —
+`--profile claude:<id>` — and the picker, when opened on one, carries it as a
+final row so confirming cannot silently swap it for a catalogued model; it can
+carry such an id, never author one.
+
+The picker is reachable only in `Status::Pending`. A live or replayed session's
+agent, model, and effort are settled facts about a process that already ran;
+changing them is a property of the *next* session, reached by resetting (`S`)
+first — which carries the stopped track's selection over, so the usual next step
+is the same agent again and a deliberate change is one keypress away. A switch
+(`V`) carries it over for the same reason: switching changes what you are talking
+about, not what you are talking to. The process-wide `--profile` is only the
+opening choice, parsed before the terminal is taken over so an unknown agent or
+effort level is a plain error rather than a failure at the first message.
 
 ## Concurrency model
 
@@ -574,7 +652,8 @@ Dependencies: `styra-server` depends on `driva` and `genta` (path),
 styra [OPTIONS] [-- PROMPT]
 
   --socket <PATH>      styra-server socket (default: $XDG_RUNTIME_DIR/styra/styra.sock)
-  --profile <NAME>     Agent profile to launch a live session with (default: codex)
+  --profile <NAME>     Agent to launch, as provider[:model][/effort]
+                       (default: codex); seeds the start screen's picker
   --workspace <DIR>    Host directory mounted writable as the agent workspace
   --network            Permit agent networking (profiles may default this on)
   --view <SESSION>     Open a captured journal read-only instead of launching

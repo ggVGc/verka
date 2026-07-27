@@ -5,6 +5,7 @@
 //! so the whole interaction model is unit-testable. [`crate::ui`] renders it and
 //! `main` feeds it input and session updates.
 
+use styra_server::agent::{Provider, Selection};
 use styra_server::event::{AgentEvent, DetailBlock, TokenUsage};
 use styra_server::{DrivaOptions, LogEntry, RawLine, TrackEnd};
 use std::path::PathBuf;
@@ -101,6 +102,200 @@ fn detail_line_count(event: &AgentEvent) -> usize {
     count.saturating_sub(1)
 }
 
+/// Split a profile name (`provider[:model][/effort]`) into its three parts,
+/// tolerating anything that is not one — an unrecognised name is shown as the
+/// agent, unchanged.
+fn split_profile_name(profile: &str) -> (String, Option<String>, Option<String>) {
+    let (head, effort) = match profile.split_once('/') {
+        Some((head, effort)) => (head, Some(effort.to_owned())),
+        None => (profile, None),
+    };
+    match head.split_once(':') {
+        Some((agent, model)) => (agent.to_owned(), Some(model.to_owned()), effort),
+        None => (head.to_owned(), None, effort),
+    }
+}
+
+/// The agent, model, and reasoning effort a session is on, as the status line
+/// names them.
+///
+/// `model` and `effort` are what the agent *reported* once it started, falling
+/// back to what the launch asked for; `None` means neither happened — the agent
+/// is on its own configured default and has not said what that is (yet).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LaunchLabel {
+    pub agent: String,
+    pub model: Option<String>,
+    pub effort: Option<String>,
+    /// Whether `model` came from the agent itself rather than from the launch
+    /// request, so the display can distinguish what *is* running from what was
+    /// asked for.
+    pub model_reported: bool,
+    /// The same for `effort`. It can differ from `model_reported`: Claude Code
+    /// names the model it resolved but never an effort, so a Claude session's
+    /// effort is only ever what the launch asked for.
+    pub effort_reported: bool,
+}
+
+/// Which of the launch picker's three columns has the keys.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LaunchColumn {
+    Provider,
+    Model,
+    Effort,
+}
+
+/// The launch picker: the agent, model, and reasoning effort the *next* session
+/// will start with.
+///
+/// It edits a pending choice, not a running session — confirming it only records
+/// the selection, and the operator's own first message still starts the agent.
+/// Each of the model and effort columns leads with an "agent default" row,
+/// distinct from every level Styra could name: neither override is sent, and the
+/// agent uses whatever it is configured for. The remaining rows are the
+/// provider's own catalogs ([`Provider::models`], [`Provider::efforts`]); the
+/// picker offers those and nothing else.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Launcher {
+    pub column: LaunchColumn,
+    pub provider: usize,
+    /// 0 is the agent's default, then [`Provider::models`], then `carried_model`
+    /// if there is one.
+    pub model: usize,
+    /// 0 is the agent's default, then [`Provider::efforts`].
+    pub effort: usize,
+    /// A model the picker does not offer but the session was nonetheless
+    /// launched with — `--profile claude:some-other-id`. Shown as a final row so
+    /// the operator can leave it selected; the picker cannot type one, only
+    /// carry one it was opened on.
+    pub carried_model: Option<String>,
+}
+
+impl Launcher {
+    /// Open the picker on `selection`, so it starts from what is already
+    /// chosen rather than from the first row. A model the provider's catalog
+    /// does not list is carried as its own final row rather than dropped, so
+    /// confirming the picker cannot silently downgrade a `--profile` the
+    /// operator asked for.
+    pub fn from_selection(selection: &Selection) -> Self {
+        let provider = Provider::ALL
+            .iter()
+            .position(|candidate| *candidate == selection.provider)
+            .unwrap_or(0);
+        let models = selection.provider.models();
+        let (model, carried_model) = match &selection.model {
+            None => (0, None),
+            Some(model) => match models.iter().position(|candidate| candidate == model) {
+                Some(index) => (index + 1, None),
+                None => (models.len() + 1, Some(model.clone())),
+            },
+        };
+        let efforts = selection.provider.efforts();
+        let effort = selection
+            .effort
+            .and_then(|effort| efforts.iter().position(|candidate| *candidate == effort))
+            .map(|index| index + 1)
+            .unwrap_or(0);
+        Self {
+            column: LaunchColumn::Provider,
+            provider,
+            model,
+            effort,
+            carried_model,
+        }
+    }
+
+    pub fn provider(&self) -> Provider {
+        Provider::ALL[self.provider.min(Provider::ALL.len() - 1)]
+    }
+
+    /// What the picker currently describes.
+    pub fn selection(&self) -> Selection {
+        let provider = self.provider();
+        let models = provider.models();
+        let model = match self.model {
+            0 => None,
+            row if row <= models.len() => Some(models[row - 1].to_owned()),
+            _ => self.carried_model.clone(),
+        };
+        let efforts = provider.efforts();
+        let effort = match self.effort {
+            0 => None,
+            row => efforts.get(row - 1).copied(),
+        };
+        Selection {
+            provider,
+            model,
+            effort,
+        }
+    }
+
+    /// The model column's rows: the agent default, the provider's catalog, and
+    /// a carried model if the picker was opened on one.
+    pub fn model_rows(&self) -> usize {
+        self.provider().models().len() + 1 + usize::from(self.carried_model.is_some())
+    }
+
+    /// How many rows the focused column has.
+    fn rows(&self) -> usize {
+        match self.column {
+            LaunchColumn::Provider => Provider::ALL.len(),
+            LaunchColumn::Model => self.model_rows(),
+            LaunchColumn::Effort => self.provider().efforts().len() + 1,
+        }
+    }
+
+    fn row(&mut self) -> &mut usize {
+        match self.column {
+            LaunchColumn::Provider => &mut self.provider,
+            LaunchColumn::Model => &mut self.model,
+            LaunchColumn::Effort => &mut self.effort,
+        }
+    }
+
+    pub fn next(&mut self) {
+        let last = self.rows() - 1;
+        let row = self.row();
+        *row = (*row + 1).min(last);
+        self.after_move();
+    }
+
+    pub fn prev(&mut self) {
+        let row = self.row();
+        *row = row.saturating_sub(1);
+        self.after_move();
+    }
+
+    fn after_move(&mut self) {
+        // A model or effort chosen for the previous provider means nothing to
+        // the new one — the ladders and catalogs differ — so both fall back to
+        // the agent's default rather than to whatever sits at the same index.
+        // That includes a carried model, which belonged to the agent the picker
+        // was opened on.
+        if self.column == LaunchColumn::Provider {
+            self.model = 0;
+            self.effort = 0;
+            self.carried_model = None;
+        }
+    }
+
+    pub fn next_column(&mut self) {
+        self.column = match self.column {
+            LaunchColumn::Provider => LaunchColumn::Model,
+            LaunchColumn::Model => LaunchColumn::Effort,
+            LaunchColumn::Effort => LaunchColumn::Provider,
+        };
+    }
+
+    pub fn prev_column(&mut self) {
+        self.column = match self.column {
+            LaunchColumn::Provider => LaunchColumn::Effort,
+            LaunchColumn::Model => LaunchColumn::Provider,
+            LaunchColumn::Effort => LaunchColumn::Model,
+        };
+    }
+}
+
 /// The complete UI state.
 pub struct App {
     pub entries: Vec<Entry>,
@@ -118,6 +313,18 @@ pub struct App {
     /// selected entry, independent of whether it is folded in the list.
     pub show_preview: bool,
     pub profile_name: String,
+    /// What the next session launches with: agent, model, reasoning effort.
+    /// Live sessions carry their own recorded profile in `profile_name`; this
+    /// is the operator's standing choice, edited through [`Launcher`] while
+    /// nothing is running and carried across resets and switches.
+    pub selection: Selection,
+    /// The open launch picker, while the operator is choosing.
+    pub launcher: Option<Launcher>,
+    /// The model and reasoning effort the agent itself reported when it started
+    /// the session, which is what is actually running — a bare provider pins
+    /// neither, so this is the only place the truth comes from. `None` until the
+    /// agent's session-start line arrives (and for agents that report neither).
+    pub reported_model: Option<(String, Option<String>)>,
     pub session_id: String,
     /// The host directory backing the agent's sandboxed workspace, when
     /// known (a live session; a replayed journal has no live workspace).
@@ -155,6 +362,16 @@ pub struct App {
 
 impl App {
     pub fn new(profile_name: impl Into<String>, session_id: impl Into<String>) -> Self {
+        let profile_name = profile_name.into();
+        // A profile name *is* a selection (`provider[:model][/effort]`), so a
+        // session that is being viewed or attached to seeds the launch choice
+        // with what it was itself launched with: resetting away from a
+        // `claude:opus/max` track offers the same agent again. A replayed
+        // session whose recorded profile no longer parses (an older store, an
+        // unknown agent) falls back to the default agent rather than failing to
+        // open — nothing is launched from it either way.
+        let selection = Selection::parse(&profile_name)
+            .unwrap_or_else(|_| Selection::new(Provider::ALL[0]));
         Self {
             entries: Vec::new(),
             selected: 0,
@@ -165,7 +382,10 @@ impl App {
             follow: true,
             show_minor: false,
             show_preview: false,
-            profile_name: profile_name.into(),
+            profile_name,
+            selection,
+            launcher: None,
+            reported_model: None,
             session_id: session_id.into(),
             workspace_root: None,
             driva_options: None,
@@ -189,11 +409,84 @@ impl App {
     /// switch to (see `set_input` for prefilling that pick's transcript).
     /// Opens directly in input focus, since typing there is the only thing
     /// that moves the session forward.
-    pub fn pending(profile_name: impl Into<String>) -> Self {
-        let mut app = Self::new(profile_name, String::new());
+    ///
+    /// `selection` is what the session will launch with; it is also the only
+    /// state in this screen the operator can still change (see
+    /// [`App::open_launcher`]), since nothing has been launched to be stuck
+    /// with yet.
+    pub fn pending(selection: Selection) -> Self {
+        let mut app = Self::new(selection.name(), String::new());
+        app.selection = selection;
         app.status = Status::Pending;
         app.focus = Focus::Input;
         app
+    }
+
+    /// Whether the launch picker is reachable: only before anything has been
+    /// launched. A live or replayed session's agent, model, and effort are
+    /// settled facts about a process that already ran; changing them is a
+    /// property of the *next* session, reached by resetting (`S`) first.
+    pub fn can_configure_launch(&self) -> bool {
+        self.status == Status::Pending
+    }
+
+    /// Open the launch picker on the current selection, if anything can still
+    /// be chosen.
+    pub fn open_launcher(&mut self) {
+        if self.can_configure_launch() {
+            self.launcher = Some(Launcher::from_selection(&self.selection));
+        }
+    }
+
+    /// Adopt what the picker describes as the next session's launch, and close
+    /// it. Nothing is launched or sent: the operator's first message still
+    /// starts the agent.
+    pub fn confirm_launcher(&mut self) {
+        if let Some(launcher) = self.launcher.take() {
+            self.set_selection(launcher.selection());
+        }
+    }
+
+    /// Close the picker, leaving the selection as it was.
+    pub fn cancel_launcher(&mut self) {
+        self.launcher = None;
+    }
+
+    /// What the status line names: the agent, and the model and reasoning effort
+    /// in use.
+    ///
+    /// The agent's own report wins where it made one, since that is what is
+    /// actually running; otherwise the profile the session was launched with
+    /// answers for it, which for a bare provider names no model at all. The
+    /// profile name is read apart here rather than through
+    /// [`Selection::parse`] so a stored session whose recorded profile this
+    /// build cannot resolve still shows verbatim what it says, instead of
+    /// falling back to a default that never ran.
+    pub fn launch_label(&self) -> LaunchLabel {
+        let (agent, requested_model, requested_effort) = split_profile_name(&self.profile_name);
+        match &self.reported_model {
+            Some((model, effort)) => LaunchLabel {
+                agent,
+                model: Some(model.clone()),
+                effort_reported: effort.is_some(),
+                effort: effort.clone().or(requested_effort),
+                model_reported: true,
+            },
+            None => LaunchLabel {
+                agent,
+                model: requested_model,
+                effort: requested_effort,
+                model_reported: false,
+                effort_reported: false,
+            },
+        }
+    }
+
+    /// Record the launch choice, keeping the displayed profile in step with it
+    /// so the status line names what an `Enter` would actually start.
+    pub fn set_selection(&mut self, selection: Selection) {
+        self.profile_name = selection.name();
+        self.selection = selection;
     }
 
     /// Replace the message box's contents outright: used to prefill it with
@@ -344,6 +637,21 @@ impl App {
             }
             AgentEvent::UsageUpdated { usage } => {
                 self.latest_usage = Some(usage.clone());
+            }
+            // The agent naming its own model settles what is running, so it
+            // replaces the launch request in the status line. An effort the
+            // agent does not report leaves whatever was already known standing
+            // (Claude Code names a model but never an effort, so the launch's
+            // own `--effort` remains the only word on it).
+            AgentEvent::ThreadStarted {
+                model: Some(model),
+                effort,
+                ..
+            } => {
+                let known = effort
+                    .clone()
+                    .or_else(|| self.reported_model.take().and_then(|(_, effort)| effort));
+                self.reported_model = Some((model.clone(), known));
             }
             AgentEvent::UserMessage { .. }
             | AgentEvent::TurnStarted
@@ -617,6 +925,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use styra_server::agent::Effort;
 
     fn app() -> App {
         App::new("codex", "session-1")
@@ -753,7 +1062,7 @@ mod tests {
 
     #[test]
     fn pending_opens_in_input_focus_with_no_session_yet_and_allows_sending() {
-        let app = App::pending("codex");
+        let app = App::pending(Selection::new(Provider::Codex));
         assert_eq!(app.status, Status::Pending);
         assert_eq!(app.focus, Focus::Input);
         assert!(app.session_id.is_empty());
@@ -764,10 +1073,248 @@ mod tests {
 
     #[test]
     fn set_input_prefills_the_message_box_for_the_operator_to_edit_or_send() {
-        let mut app = App::pending("codex");
+        let mut app = App::pending(Selection::new(Provider::Codex));
         app.set_input("earlier session's transcript".into());
         assert_eq!(app.input, "earlier session's transcript");
         assert_eq!(app.take_message(), Some("earlier session's transcript".into()));
+    }
+
+    /// The whole point of the start screen: all three of agent, model, and
+    /// effort are still open, and picking them only records what the first
+    /// message will launch.
+    #[test]
+    fn the_launcher_records_a_provider_model_and_effort_without_launching() {
+        let mut app = App::pending(Selection::new(Provider::Codex));
+        assert!(app.can_configure_launch());
+        app.open_launcher();
+        let launcher = app.launcher.as_mut().expect("the picker is reachable");
+
+        // Provider column: move to Claude Code.
+        assert_eq!(launcher.column, LaunchColumn::Provider);
+        launcher.next();
+        launcher.next();
+        assert_eq!(launcher.provider(), Provider::Claude);
+
+        // Model column: the first row is the agent's own default, so the first
+        // suggestion is one step in.
+        launcher.next_column();
+        launcher.next();
+        let model = Provider::Claude.models()[0];
+        assert_eq!(launcher.selection().model.as_deref(), Some(model));
+
+        // Effort column, likewise.
+        launcher.next_column();
+        assert_eq!(launcher.column, LaunchColumn::Effort);
+        launcher.next();
+        let effort = Provider::Claude.efforts()[0];
+        assert_eq!(launcher.selection().effort, Some(effort));
+
+        app.confirm_launcher();
+        assert!(app.launcher.is_none());
+        assert_eq!(app.selection.provider, Provider::Claude);
+        assert_eq!(app.selection.model.as_deref(), Some(model));
+        assert_eq!(app.selection.effort, Some(effort));
+        // The status line names what an Enter would start...
+        assert_eq!(app.profile_name, app.selection.name());
+        // ...but nothing was launched or sent by the picking itself.
+        assert_eq!(app.status, Status::Pending);
+        assert!(app.session_id.is_empty());
+        assert!(app.entries.is_empty());
+    }
+
+    #[test]
+    fn the_launcher_opens_on_the_current_selection_and_cancelling_keeps_it() {
+        let selection = Selection::parse("claude:claude-sonnet-5/xhigh").unwrap();
+        let mut app = App::pending(selection.clone());
+        app.open_launcher();
+        let launcher = app.launcher.as_ref().unwrap();
+        assert_eq!(launcher.selection(), selection, "opens on what is chosen");
+
+        app.launcher.as_mut().unwrap().next();
+        app.cancel_launcher();
+        assert!(app.launcher.is_none());
+        assert_eq!(app.selection, selection, "cancelling changes nothing");
+    }
+
+    /// A model the catalog does not list can still reach the picker — via
+    /// `--profile` — and confirming must not silently swap it for something the
+    /// operator did not ask for. The picker carries it as its own row; it cannot
+    /// author one.
+    #[test]
+    fn a_model_outside_the_catalog_is_carried_as_its_own_row() {
+        let selection = Selection::parse("claude:claude-opus-4-1-20250805").unwrap();
+        let mut app = App::pending(selection.clone());
+        app.open_launcher();
+        let launcher = app.launcher.as_ref().unwrap();
+        assert_eq!(launcher.carried_model.as_deref(), Some("claude-opus-4-1-20250805"));
+        assert_eq!(
+            launcher.model,
+            Provider::Claude.models().len() + 1,
+            "carried last, after the catalog"
+        );
+        assert_eq!(launcher.selection(), selection);
+
+        // Confirming keeps it rather than falling back to a catalogued model.
+        app.confirm_launcher();
+        assert_eq!(app.selection, selection);
+
+        // Walking up into the catalog and back down reaches it again: it is an
+        // ordinary row, just not one the picker could have written.
+        app.open_launcher();
+        let launcher = app.launcher.as_mut().unwrap();
+        launcher.next_column();
+        launcher.prev();
+        assert_eq!(
+            launcher.selection().model.as_deref(),
+            Some(*Provider::Claude.models().last().unwrap())
+        );
+        launcher.next();
+        assert_eq!(launcher.selection(), selection);
+    }
+
+    /// Switching agents drops the carried model with everything else: it named a
+    /// model of the agent the picker was opened on.
+    #[test]
+    fn changing_provider_drops_a_carried_model() {
+        let mut launcher =
+            Launcher::from_selection(&Selection::parse("claude:claude-opus-4-1-20250805").unwrap());
+        assert!(launcher.carried_model.is_some());
+
+        launcher.prev(); // in the provider column, back towards codex
+        assert_eq!(launcher.carried_model, None);
+        assert_eq!(launcher.selection().model, None);
+        // And the column is back to just the agent default plus the catalog.
+        launcher.next_column();
+        assert_eq!(launcher.model_rows(), launcher.provider().models().len() + 1);
+    }
+
+    /// The two agents' model catalogs and effort ladders are unrelated, so a
+    /// choice made for one must not carry an index across to the other.
+    #[test]
+    fn changing_provider_falls_back_to_the_new_agents_defaults() {
+        let mut launcher =
+            Launcher::from_selection(&Selection::parse("claude:claude-opus-5/max").unwrap());
+        assert_eq!(launcher.selection().name(), "claude:claude-opus-5/max");
+
+        launcher.prev(); // in the provider column, back towards codex
+        let selection = launcher.selection();
+        assert_ne!(selection.provider, Provider::Claude);
+        assert_eq!(selection.model, None);
+        assert_eq!(selection.effort, None);
+        // And `max` is not offered at all under codex, so it cannot be reached
+        // by walking the column either.
+        assert!(!launcher.provider().efforts().contains(&Effort::Max));
+    }
+
+    /// Once a session is up, its agent and model are facts about a running
+    /// process; the picker is a property of the *next* one.
+    #[test]
+    fn the_launcher_is_unreachable_once_something_has_been_launched() {
+        let mut app = app();
+        assert_eq!(app.status, Status::Running);
+        assert!(!app.can_configure_launch());
+        app.open_launcher();
+        assert!(app.launcher.is_none());
+    }
+
+    /// A live or replayed session's recorded profile *is* a selection, so
+    /// resetting away from one offers the same agent again rather than the
+    /// process-wide default.
+    #[test]
+    fn a_sessions_recorded_profile_seeds_the_next_launch() {
+        let app = App::new("claude:opus/xhigh", "session-1");
+        assert_eq!(
+            app.selection,
+            Selection::parse("claude:opus/xhigh").unwrap()
+        );
+
+        // A stored session from an older or unknown agent still opens; nothing
+        // is launched from it, and the choice falls back to the default agent.
+        let app = App::new("unknown", "session-2");
+        assert_eq!(app.selection, Selection::new(Provider::ALL[0]));
+    }
+
+    /// What the status line names before the agent has spoken: the launch it was
+    /// started with, model and effort included, marked as not yet confirmed.
+    #[test]
+    fn the_launch_label_falls_back_to_the_profile_the_session_was_launched_with() {
+        let app = App::new("claude:opus/max", "s-1");
+        let label = app.launch_label();
+        assert_eq!(label.agent, "claude");
+        assert_eq!(label.model.as_deref(), Some("opus"));
+        assert_eq!(label.effort.as_deref(), Some("max"));
+        assert!(!label.model_reported, "nothing has been reported by the agent yet");
+        assert!(!label.effort_reported);
+
+        // A bare provider pins no model, so there is nothing to name until the
+        // agent says what it resolved.
+        let app = App::new("codex", "s-2");
+        let label = app.launch_label();
+        assert_eq!(label.agent, "codex");
+        assert_eq!(label.model, None);
+        assert_eq!(label.effort, None);
+
+        // A stored session whose recorded profile this build cannot resolve is
+        // shown verbatim rather than as some default that never ran.
+        assert_eq!(App::new("unknown", "s-3").launch_label().agent, "unknown");
+    }
+
+    /// The agent's own report is what is actually running, so it replaces the
+    /// launch request — including when the request named no model at all.
+    #[test]
+    fn a_reported_model_and_effort_replace_the_requested_ones() {
+        let mut app = App::new("codex", "s-1");
+        app.push_event(AgentEvent::ThreadStarted {
+            thread_id: "t-9".into(),
+            model: Some("gpt-5.6-sol".into()),
+            effort: Some("high".into()),
+        });
+        let label = app.launch_label();
+        assert_eq!(label.model.as_deref(), Some("gpt-5.6-sol"));
+        assert_eq!(label.effort.as_deref(), Some("high"));
+        assert!(label.model_reported);
+        assert!(label.effort_reported);
+
+        // A launch that asked for something else is overruled by the fact.
+        let mut app = App::new("codex:gpt-5.6-luna/low", "s-2");
+        app.push_event(AgentEvent::ThreadStarted {
+            thread_id: "t".into(),
+            model: Some("gpt-5.6-sol".into()),
+            effort: Some("xhigh".into()),
+        });
+        let label = app.launch_label();
+        assert_eq!(label.model.as_deref(), Some("gpt-5.6-sol"));
+        assert_eq!(label.effort.as_deref(), Some("xhigh"));
+    }
+
+    /// Claude Code names a model but never an effort, so the effort the session
+    /// was launched with must survive its report rather than being blanked.
+    #[test]
+    fn an_unreported_effort_keeps_the_one_the_session_was_launched_with() {
+        let mut app = App::new("claude:opus/max", "s-1");
+        app.push_event(AgentEvent::ThreadStarted {
+            thread_id: "s-1".into(),
+            model: Some("claude-opus-4-8".into()),
+            effort: None,
+        });
+        let label = app.launch_label();
+        assert_eq!(label.model.as_deref(), Some("claude-opus-4-8"));
+        assert!(label.model_reported);
+        // The effort is the launch's own word, and is not claimed as the
+        // agent's.
+        assert_eq!(label.effort.as_deref(), Some("max"));
+        assert!(!label.effort_reported);
+
+        // A thread reported with neither leaves the display as it was.
+        let mut app = App::new("codex:gpt-5.6-sol/high", "s-2");
+        app.push_event(AgentEvent::ThreadStarted {
+            thread_id: "t".into(),
+            model: None,
+            effort: None,
+        });
+        let label = app.launch_label();
+        assert_eq!(label.model.as_deref(), Some("gpt-5.6-sol"));
+        assert!(!label.model_reported);
     }
 
     #[test]
@@ -871,7 +1418,7 @@ mod tests {
     #[test]
     fn minor_events_are_hidden_and_skipped_by_navigation() {
         let mut app = app();
-        app.push_event(AgentEvent::ThreadStarted { thread_id: "t".into() });
+        app.push_event(AgentEvent::ThreadStarted { thread_id: "t".into(), model: None, effort: None });
         // Multi-line so each entry has detail beyond its summary, and so
         // qualifies for the has-detail navigation this test also exercises.
         app.push_event(AgentEvent::AgentMessage { text: "a\nmore a".into() });

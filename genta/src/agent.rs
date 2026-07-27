@@ -40,6 +40,241 @@ impl Default for SandboxLayout {
     }
 }
 
+/// Which coding agent a session launches, and thus which command line and wire
+/// protocol it gets. The model and reasoning effort are chosen separately (see
+/// [`Selection`]); a provider is only the agent itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Provider {
+    /// Multi-turn codex over the `app-server` JSON-RPC protocol.
+    Codex,
+    /// One-shot `codex exec --json`.
+    CodexExec,
+    /// Multi-turn Claude Code over bidirectional `stream-json`.
+    Claude,
+}
+
+impl Provider {
+    /// Every provider, in the order a picker should offer them.
+    pub const ALL: [Provider; 3] = [Provider::Codex, Provider::CodexExec, Provider::Claude];
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Provider::Codex => "codex",
+            Provider::CodexExec => "codex-exec",
+            Provider::Claude => "claude",
+        }
+    }
+
+    pub fn parse(name: &str) -> Result<Provider> {
+        Provider::ALL
+            .into_iter()
+            .find(|provider| provider.as_str() == name)
+            .with_context(|| {
+                format!(
+                    "unknown agent provider {name:?}; known providers: {}",
+                    Provider::ALL.map(|provider| provider.as_str()).join(", ")
+                )
+            })
+    }
+
+    /// The agent's own executable name, as located on the host's `PATH`.
+    fn executable(&self) -> &'static str {
+        match self {
+            Provider::Codex | Provider::CodexExec => "codex",
+            Provider::Claude => "claude",
+        }
+    }
+
+    /// Models worth offering in a picker, most capable first.
+    ///
+    /// Not a closed set: both agents accept any model id they know, so a
+    /// [`Selection`] still carries a free-form string. What is *installed* — and
+    /// which ids the operator's account may use — is the agent's business, not
+    /// Genta's; an unknown model fails in the agent, where the authoritative
+    /// catalog lives.
+    ///
+    /// The Claude ids are every model listed `Active` in Anthropic's model-status
+    /// table (<https://platform.claude.com/docs/en/about-claude/model-deprecations>),
+    /// read on 2026-07-27, in that table's order — tier by tier, newest first.
+    /// Two knowingly-excluded classes: `claude-opus-4-1-20250805` is
+    /// `Deprecated` there (retires 2026-08-05), and `claude-mythos-5` is
+    /// reachable only through Project Glasswing, so offering it to every
+    /// operator would suggest an agent most cannot launch. Full ids rather than
+    /// the `opus`/`sonnet` aliases, so a journal records the exact model a
+    /// session ran on even after an alias moves to a newer release.
+    pub fn models(&self) -> &'static [&'static str] {
+        match self {
+            Provider::Codex | Provider::CodexExec => {
+                &["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]
+            }
+            Provider::Claude => &[
+                "claude-fable-5",
+                "claude-opus-5",
+                "claude-opus-4-8",
+                "claude-opus-4-7",
+                "claude-opus-4-6",
+                "claude-opus-4-5-20251101",
+                "claude-sonnet-5",
+                "claude-sonnet-4-6",
+                "claude-sonnet-4-5-20250929",
+                "claude-haiku-4-5-20251001",
+            ],
+        }
+    }
+
+    /// The reasoning-effort levels this provider accepts, lowest first. The two
+    /// agents' ladders differ at the ends: codex has a `minimal` rung, Claude
+    /// Code a `max` one.
+    pub fn efforts(&self) -> &'static [Effort] {
+        match self {
+            Provider::Codex | Provider::CodexExec => &[
+                Effort::Minimal,
+                Effort::Low,
+                Effort::Medium,
+                Effort::High,
+                Effort::XHigh,
+            ],
+            Provider::Claude => &[
+                Effort::Low,
+                Effort::Medium,
+                Effort::High,
+                Effort::XHigh,
+                Effort::Max,
+            ],
+        }
+    }
+}
+
+/// How much reasoning the model is asked to spend per turn.
+///
+/// One vocabulary across providers, since the ladders coincide in the middle;
+/// [`Provider::efforts`] narrows it to what a given agent accepts. Passed to
+/// codex as its `model_reasoning_effort` config override and to Claude Code as
+/// `--effort`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Effort {
+    Minimal,
+    Low,
+    Medium,
+    High,
+    XHigh,
+    Max,
+}
+
+impl Effort {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Effort::Minimal => "minimal",
+            Effort::Low => "low",
+            Effort::Medium => "medium",
+            Effort::High => "high",
+            Effort::XHigh => "xhigh",
+            Effort::Max => "max",
+        }
+    }
+
+    pub fn parse(name: &str) -> Result<Effort> {
+        const ALL: [Effort; 6] = [
+            Effort::Minimal,
+            Effort::Low,
+            Effort::Medium,
+            Effort::High,
+            Effort::XHigh,
+            Effort::Max,
+        ];
+        ALL.into_iter()
+            .find(|effort| effort.as_str() == name)
+            .with_context(|| {
+                format!(
+                    "unknown reasoning effort {name:?}; known levels: {}",
+                    ALL.map(|effort| effort.as_str()).join(", ")
+                )
+            })
+    }
+}
+
+/// What an operator picked to launch: an agent, optionally a model, optionally
+/// a reasoning effort. An absent model or effort leaves the agent on whatever
+/// it is configured for itself, which is not the same as any level Genta could
+/// name — so it stays absent rather than being defaulted here.
+///
+/// A selection round-trips through one string, [`Selection::name`], of the form
+/// `provider[:model][/effort]` (`codex`, `claude:opus`,
+/// `codex:gpt-5.6-sol/xhigh`). That string is the profile name, so it is also
+/// what a journal records and a status line shows: a stored session says which
+/// model and effort actually ran, and re-parsing it reproduces the launch.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Selection {
+    pub provider: Provider,
+    pub model: Option<String>,
+    pub effort: Option<Effort>,
+}
+
+impl Selection {
+    /// A provider on its own defaults: no model or effort override.
+    pub fn new(provider: Provider) -> Self {
+        Self {
+            provider,
+            model: None,
+            effort: None,
+        }
+    }
+
+    /// Parse a profile name of the form `provider[:model][/effort]`.
+    pub fn parse(name: &str) -> Result<Selection> {
+        let (head, effort) = match name.split_once('/') {
+            Some((head, effort)) => (head, Some(Effort::parse(effort.trim())?)),
+            None => (name, None),
+        };
+        let (provider, model) = match head.split_once(':') {
+            Some((provider, model)) => {
+                let model = model.trim();
+                if model.is_empty() {
+                    bail!("empty model in profile {name:?}; use e.g. claude:opus");
+                }
+                (provider, Some(model.to_owned()))
+            }
+            None => (head, None),
+        };
+        Ok(Selection {
+            provider: Provider::parse(provider.trim())?,
+            model,
+            effort,
+        })
+    }
+
+    /// The canonical profile name for this selection; see [`Selection`].
+    pub fn name(&self) -> String {
+        let mut name = self.provider.as_str().to_owned();
+        if let Some(model) = &self.model {
+            name.push(':');
+            name.push_str(model);
+        }
+        if let Some(effort) = self.effort {
+            name.push('/');
+            name.push_str(effort.as_str());
+        }
+        name
+    }
+
+    /// Build the launchable profile, locating the agent on the host's `PATH`.
+    pub fn resolve(&self, layout: &SandboxLayout) -> Result<Profile> {
+        let search = std::env::var_os("PATH").unwrap_or_default();
+        self.resolve_on_path(layout, &search)
+    }
+
+    /// [`Selection::resolve`] against an explicit executable search path.
+    pub fn resolve_on_path(&self, layout: &SandboxLayout, search: &OsStr) -> Result<Profile> {
+        let executable = resolve_executable_on_path(Path::new(self.provider.executable()), search)?;
+        let model = self.model.as_deref();
+        Ok(match self.provider {
+            Provider::Codex => codex_appserver(layout, &executable, model, self.effort),
+            Provider::CodexExec => codex(layout, &executable, model, self.effort),
+            Provider::Claude => claude(layout, &executable, model, self.effort),
+        })
+    }
+}
+
 /// How an operator message becomes one line written to the agent's stdin.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MessageFormat {
@@ -75,12 +310,12 @@ impl Profile {
     /// Resolve a built-in profile by name, locating its agent binary on the
     /// host's `PATH`.
     ///
-    /// `claude` selects the Claude Code profile with its configured default
-    /// model; `claude:<model>` pins a model (`claude:opus`, `claude:sonnet`,
-    /// `claude:haiku`, or a full id such as `claude:claude-opus-4-8`).
+    /// The name is a [`Selection`]: `provider[:model][/effort]`. A bare
+    /// provider (`codex`, `codex-exec`, `claude`) leaves the agent on its own
+    /// configured model and reasoning effort; `claude:opus` pins a model, and
+    /// `codex:gpt-5.6-sol/xhigh` pins both.
     pub fn builtin(name: &str, layout: &SandboxLayout) -> Result<Profile> {
-        let search = std::env::var_os("PATH").unwrap_or_default();
-        Self::builtin_on_path(name, layout, &search)
+        Selection::parse(name)?.resolve(layout)
     }
 
     /// [`Profile::builtin`] against an explicit executable search path.
@@ -89,22 +324,7 @@ impl Profile {
     /// caller that knows where its agents live (or a test that must not depend
     /// on what happens to be installed) supplies the search path here.
     pub fn builtin_on_path(name: &str, layout: &SandboxLayout, search: &OsStr) -> Result<Profile> {
-        let resolve = |agent: &str| resolve_executable_on_path(Path::new(agent), search);
-        match name {
-            "codex" => Ok(codex_appserver(layout, &resolve("codex")?)),
-            "codex-exec" => Ok(codex(layout, &resolve("codex")?)),
-            "claude" => Ok(claude(layout, &resolve("claude")?, None)),
-            other if other.starts_with("claude:") => {
-                let model = other.trim_start_matches("claude:").trim();
-                if model.is_empty() {
-                    bail!("empty model in profile {other:?}; use e.g. claude:opus");
-                }
-                Ok(claude(layout, &resolve("claude")?, Some(model)))
-            }
-            other => bail!(
-                "unknown agent profile {other:?}; known profiles: codex, codex-exec, claude, claude:<model>"
-            ),
-        }
+        Selection::parse(name)?.resolve_on_path(layout, search)
     }
 
     /// Encode an operator message as one newline-terminated protocol input line.
@@ -200,17 +420,53 @@ fn is_executable_file(path: &Path) -> bool {
 /// stdin open across turns. Isolation matches the exec profile below; the
 /// thread itself is started with `approvalPolicy: never` and a
 /// danger-full-access inner sandbox, delegating real isolation to Driva.
-pub fn codex_appserver(layout: &SandboxLayout, executable: &Path) -> Profile {
+/// `model` and `effort` are the operator's overrides; either absent leaves codex
+/// on its own configured default. Both are `-c` config overrides, so they are
+/// passed to the `codex` process itself rather than to `app-server`, which
+/// inherits them for every thread it starts.
+pub fn codex_appserver(
+    layout: &SandboxLayout,
+    executable: &Path,
+    model: Option<&str>,
+    effort: Option<Effort>,
+) -> Profile {
+    let mut command = vec![executable.to_string_lossy().into_owned()];
+    command.extend(codex_model_overrides(model, effort));
+    command.push("app-server".into());
     Profile {
-        name: "codex".into(),
-        command: vec![
-            executable.to_string_lossy().into_owned(),
-            "app-server".into(),
-        ],
+        name: profile_name(Provider::Codex, model, effort),
+        command,
         protocol: Protocol::CodexAppServer,
         single_turn: false,
-        ..codex(layout, executable)
+        ..codex(layout, executable, model, effort)
     }
+}
+
+/// The canonical profile name for a launch, matching [`Selection::name`] so a
+/// recorded profile re-parses into the selection that produced it.
+fn profile_name(provider: Provider, model: Option<&str>, effort: Option<Effort>) -> String {
+    Selection {
+        provider,
+        model: model.map(str::to_owned),
+        effort,
+    }
+    .name()
+}
+
+/// The `-c` overrides that pin codex's model and reasoning effort, in the order
+/// they appear on the command line. Values are quoted because `-c` parses them
+/// as TOML, where a bare model id is not a valid scalar.
+fn codex_model_overrides(model: Option<&str>, effort: Option<Effort>) -> Vec<String> {
+    let mut overrides = Vec::new();
+    if let Some(model) = model {
+        overrides.push("-c".into());
+        overrides.push(format!("model={model:?}"));
+    }
+    if let Some(effort) = effort {
+        overrides.push("-c".into());
+        overrides.push(format!("model_reasoning_effort={:?}", effort.as_str()));
+    }
+    overrides
 }
 
 /// The built-in single-turn codex profile.
@@ -227,8 +483,13 @@ pub fn codex_appserver(layout: &SandboxLayout, executable: &Path) -> Profile {
 ///
 /// `executable` is the codex binary to launch, as located by
 /// [`resolve_executable`].
-pub fn codex(layout: &SandboxLayout, executable: &Path) -> Profile {
-    codex_exec(layout, executable, "-")
+pub fn codex(
+    layout: &SandboxLayout,
+    executable: &Path,
+    model: Option<&str>,
+    effort: Option<Effort>,
+) -> Profile {
+    codex_exec(layout, executable, "-", model, effort)
 }
 
 /// Build a complete single-turn Codex profile with a host-selected executable
@@ -238,13 +499,21 @@ pub fn codex(layout: &SandboxLayout, executable: &Path) -> Profile {
 /// orchestrator may instead stage its full prompt elsewhere and pass a short
 /// instruction here, while retaining Genta's command flags, credentials,
 /// environment, network policy, and wire-protocol identity as one profile.
-pub fn codex_exec(layout: &SandboxLayout, executable: &Path, prompt: &str) -> Profile {
+pub fn codex_exec(
+    layout: &SandboxLayout,
+    executable: &Path,
+    prompt: &str,
+    model: Option<&str>,
+    effort: Option<Effort>,
+) -> Profile {
     Profile {
-        name: "codex-exec".into(),
+        name: profile_name(Provider::CodexExec, model, effort),
         command: codex_exec_command(
             &executable.to_string_lossy(),
             &layout.workspace.to_string_lossy(),
             prompt,
+            model,
+            effort,
         ),
         protocol: Protocol::CodexJsonl,
         // HOME lives under /tmp, the writable tmpfs Driva always provides, so
@@ -270,19 +539,29 @@ pub fn codex_exec(layout: &SandboxLayout, executable: &Path, prompt: &str) -> Pr
 /// (`danger-full-access`) in favour of the host's outer isolation, and the
 /// prompt is the final argument (`-` reads it from stdin; hosts that stage a
 /// prompt file pass their own instruction text instead).
-pub fn codex_exec_command(executable: &str, workspace: &str, prompt: &str) -> Vec<String> {
+pub fn codex_exec_command(
+    executable: &str,
+    workspace: &str,
+    prompt: &str,
+    model: Option<&str>,
+    effort: Option<Effort>,
+) -> Vec<String> {
     let trust = format!("projects.{workspace:?}.trust_level=\"trusted\"");
-    vec![
+    let mut command = vec![
         executable.into(),
         "-c".into(),
         trust,
         "--sandbox".into(),
         "danger-full-access".into(),
+    ];
+    command.extend(codex_model_overrides(model, effort));
+    command.extend([
         "exec".into(),
         "--skip-git-repo-check".into(),
         "--json".into(),
         prompt.into(),
-    ]
+    ]);
+    command
 }
 
 /// Build a codex protocol submission line carrying the operator's text.
@@ -316,17 +595,23 @@ fn codex_submission(text: &str) -> String {
 /// stdout, staying alive until stdin closes (so, like the app-server codex
 /// profile, it spans many turns rather than running once to completion).
 /// `--verbose` is required alongside `--output-format stream-json` under
-/// `--print`. An optional `model` becomes a `--model` argument; when absent,
-/// Claude Code uses its configured default. `executable` is the Claude Code
-/// binary to launch, as located by [`resolve_executable`]: the common install
-/// puts it in `~/.local/bin`, which the sandbox's `PATH` does not contain.
+/// `--print`. An optional `model` becomes a `--model` argument and an optional
+/// `effort` an `--effort` one; when either is absent, Claude Code uses its
+/// configured default. `executable` is the Claude Code binary to launch, as
+/// located by [`resolve_executable`]: the common install puts it in
+/// `~/.local/bin`, which the sandbox's `PATH` does not contain.
 ///
 /// NOTE: the exact flags and the `stream-json` envelope in [`claude_submission`]
 /// must be confirmed against the installed `claude` version; both are isolated
 /// here so adapting to a different contract is a localized change plus, if the
 /// event schema differs, the [`Protocol::ClaudeJsonl`](crate::event::Protocol)
 /// decoder.
-pub fn claude(_layout: &SandboxLayout, executable: &Path, model: Option<&str>) -> Profile {
+pub fn claude(
+    _layout: &SandboxLayout,
+    executable: &Path,
+    model: Option<&str>,
+    effort: Option<Effort>,
+) -> Profile {
     let mut command = vec![
         executable.to_string_lossy().into_owned(),
         "--print".into(),
@@ -341,11 +626,12 @@ pub fn claude(_layout: &SandboxLayout, executable: &Path, model: Option<&str>) -
         command.push("--model".into());
         command.push(model.to_string());
     }
+    if let Some(effort) = effort {
+        command.push("--effort".into());
+        command.push(effort.as_str().into());
+    }
     Profile {
-        name: match model {
-            Some(model) => format!("claude:{model}"),
-            None => "claude".into(),
-        },
+        name: profile_name(Provider::Claude, model, effort),
         command,
         protocol: Protocol::ClaudeJsonl,
         mounts: vec![MountSpec {
@@ -528,7 +814,7 @@ mod tests {
         let layout = SandboxLayout {
             workspace: "/tmp/orka/workspace".into(),
         };
-        let profile = codex_exec(&layout, Path::new("/opt/codex"), "read the staged prompt");
+        let profile = codex_exec(&layout, Path::new("/opt/codex"), "read the staged prompt", None, None);
 
         assert_eq!(profile.command[0], "/opt/codex");
         assert_eq!(profile.command.last().unwrap(), "read the staged prompt");
@@ -579,7 +865,7 @@ mod tests {
     fn codex_submission_profile() -> Profile {
         Profile {
             message_format: MessageFormat::CodexSubmission,
-            ..codex(&SandboxLayout::default(), Path::new("codex"))
+            ..codex(&SandboxLayout::default(), Path::new("codex"), None, None)
         }
     }
 
@@ -606,6 +892,23 @@ mod tests {
         assert_eq!(profile.environment.get("HOME"), Some(&"/tmp/agent-home".to_string()));
     }
 
+    /// Claude Code's own aliases (`opus`, `sonnet`) move to whatever the latest
+    /// release is, so the catalog offers full ids instead: a journal then records
+    /// the exact model a session ran on, and re-parsing that profile reproduces
+    /// it rather than silently landing on a newer model.
+    #[test]
+    fn the_claude_catalog_offers_full_model_ids() {
+        for model in Provider::Claude.models() {
+            assert!(model.starts_with("claude-"), "{model} is not a full model id");
+        }
+        assert!(Provider::Claude.models().contains(&"claude-opus-5"));
+        // Anthropic lists this one as deprecated, and Mythos is reachable only
+        // through Project Glasswing — neither belongs in a catalog offered to
+        // every operator.
+        assert!(!Provider::Claude.models().contains(&"claude-opus-4-1-20250805"));
+        assert!(!Provider::Claude.models().contains(&"claude-mythos-5"));
+    }
+
     #[test]
     fn claude_model_is_selected_by_the_profile_suffix() {
         let profile = builtin("claude:opus", &SandboxLayout::default()).unwrap();
@@ -623,9 +926,145 @@ mod tests {
         assert!(builtin("claude:", &SandboxLayout::default()).is_err());
     }
 
+    /// A selection is the profile name: what a picker composes, what a journal
+    /// records, and what re-parses into the same launch.
+    #[test]
+    fn a_selection_round_trips_through_its_profile_name() {
+        for (name, expected) in [
+            (
+                "codex",
+                Selection {
+                    provider: Provider::Codex,
+                    model: None,
+                    effort: None,
+                },
+            ),
+            (
+                "claude:opus",
+                Selection {
+                    provider: Provider::Claude,
+                    model: Some("opus".into()),
+                    effort: None,
+                },
+            ),
+            (
+                "codex-exec/minimal",
+                Selection {
+                    provider: Provider::CodexExec,
+                    model: None,
+                    effort: Some(Effort::Minimal),
+                },
+            ),
+            (
+                "codex:gpt-5.6-sol/xhigh",
+                Selection {
+                    provider: Provider::Codex,
+                    model: Some("gpt-5.6-sol".into()),
+                    effort: Some(Effort::XHigh),
+                },
+            ),
+        ] {
+            let parsed = Selection::parse(name).unwrap();
+            assert_eq!(parsed, expected, "parsing {name:?}");
+            assert_eq!(parsed.name(), name, "round-tripping {name:?}");
+        }
+    }
+
+    #[test]
+    fn an_unknown_provider_or_effort_is_rejected_by_name() {
+        for name in ["gpt5", "codex/turbo", "claude:opus/turbo", "codex:/high"] {
+            let error = Selection::parse(name)
+                .expect_err("an unlaunchable selection must not parse")
+                .to_string();
+            assert!(
+                error.contains("unknown") || error.contains("empty model"),
+                "{name:?}: {error}"
+            );
+        }
+    }
+
+    /// The profile name a launch records must be the selection that produced
+    /// it, effort included, or a stored session cannot say what actually ran.
+    #[test]
+    fn a_resolved_profile_is_named_after_its_full_selection() {
+        let layout = SandboxLayout::default();
+        for name in ["codex", "codex:gpt-5.6-sol/high", "claude:opus/max"] {
+            let profile = builtin(name, &layout).unwrap();
+            assert_eq!(profile.name, name);
+        }
+    }
+
+    /// Codex takes both as `-c` config overrides, and they must land on the
+    /// `codex` process itself — before the subcommand, which does not accept
+    /// them.
+    #[test]
+    fn codex_model_and_effort_become_config_overrides_before_the_subcommand() {
+        let layout = SandboxLayout::default();
+        for (name, subcommand) in [
+            ("codex:gpt-5.6-terra/xhigh", "app-server"),
+            ("codex-exec:gpt-5.6-terra/xhigh", "exec"),
+        ] {
+            let command = builtin(name, &layout).unwrap().command;
+            let position = |argument: &str| {
+                command
+                    .iter()
+                    .position(|candidate| candidate == argument)
+                    .unwrap_or_else(|| panic!("{name} is missing {argument}: {command:?}"))
+            };
+            let model = position(r#"model="gpt-5.6-terra""#);
+            let effort = position(r#"model_reasoning_effort="xhigh""#);
+            assert_eq!(command[model - 1], "-c");
+            assert_eq!(command[effort - 1], "-c");
+            assert!(
+                model < position(subcommand) && effort < position(subcommand),
+                "{name}: overrides must precede {subcommand}: {command:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn claude_effort_becomes_an_effort_argument() {
+        let command = builtin("claude:opus/max", &SandboxLayout::default())
+            .unwrap()
+            .command;
+        let argument = |flag: &str| {
+            command
+                .windows(2)
+                .find(|pair| pair[0] == flag)
+                .map(|pair| pair[1].as_str())
+        };
+        assert_eq!(argument("--model"), Some("opus"));
+        assert_eq!(argument("--effort"), Some("max"));
+    }
+
+    /// Effort ladders are per-provider: only codex has `minimal`, only Claude
+    /// Code has `max`. A picker offers what the agent accepts.
+    #[test]
+    fn each_provider_offers_the_effort_levels_it_accepts() {
+        assert!(Provider::Codex.efforts().contains(&Effort::Minimal));
+        assert!(!Provider::Codex.efforts().contains(&Effort::Max));
+        assert!(Provider::Claude.efforts().contains(&Effort::Max));
+        assert!(!Provider::Claude.efforts().contains(&Effort::Minimal));
+        for provider in Provider::ALL {
+            assert!(!provider.models().is_empty());
+            // Every suggestion must be launchable as written: a `Selection`
+            // round-trips through one string, so a model id may not carry the
+            // grammar's own separators.
+            for model in provider.models() {
+                assert!(
+                    !model.contains(':') && !model.contains('/'),
+                    "{model} would not survive Selection::name"
+                );
+            }
+            for effort in provider.efforts() {
+                assert_eq!(Effort::parse(effort.as_str()).unwrap(), *effort);
+            }
+        }
+    }
+
     #[test]
     fn claude_submission_is_valid_json_carrying_the_text_and_one_line() {
-        let profile = claude(&SandboxLayout::default(), Path::new("claude"), None);
+        let profile = claude(&SandboxLayout::default(), Path::new("claude"), None, None);
         let encoded = profile.encode_message("fix the bug\nand test it");
         assert_eq!(*encoded.last().unwrap(), b'\n');
         assert_eq!(
@@ -674,7 +1113,7 @@ mod tests {
     fn plain_line_format_flattens_to_a_single_line() {
         let profile = Profile {
             message_format: MessageFormat::PlainLine,
-            ..codex(&SandboxLayout::default(), Path::new("codex"))
+            ..codex(&SandboxLayout::default(), Path::new("codex"), None, None)
         };
         let encoded = profile.encode_message("one\ntwo");
         assert_eq!(encoded, b"one two\n");

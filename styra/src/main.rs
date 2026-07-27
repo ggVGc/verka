@@ -19,6 +19,7 @@ mod app;
 mod ui;
 
 use app::{App, Focus, Status, View};
+use styra_server::agent::Selection;
 use styra_server::api::{CreateSession, SessionInfo};
 use styra_server::{Client, LogEntry, TrackSummary, TrackUpdate};
 
@@ -37,7 +38,11 @@ struct Cli {
     /// live tracks it owns are ended with it.
     #[arg(long)]
     stop: bool,
-    /// Agent profile to launch a live session with. Not used with `--view`:
+    /// Agent profile to launch a live session with, as
+    /// `provider[:model][/effort]` (`codex`, `claude:opus`,
+    /// `codex:gpt-5.6-sol/xhigh`); a bare provider leaves the agent on its own
+    /// configured model and effort. Seeds the interface's launch picker, which
+    /// can change all three before the first message. Not used with `--view`:
     /// a viewed session carries its own recorded profile and protocol.
     #[arg(long, default_value = "codex")]
     profile: String,
@@ -177,13 +182,18 @@ fn main() -> Result<()> {
         });
         live = Live::Viewing;
     } else {
+        // `--profile` is the operator's opening launch choice; parsing it here
+        // rejects an unknown agent, model syntax, or effort level before the
+        // terminal is taken over, rather than at the first message.
+        let selection = Selection::parse(&cli.profile)
+            .with_context(|| format!("invalid --profile {:?}", cli.profile))?;
         let prompt = cli.prompt.join(" ");
         let seed = (!prompt.trim().is_empty()).then_some(prompt.as_str());
         match seed {
             // A trailing prompt is input the operator already gave (as a CLI
             // argument), so it is fine to launch immediately.
             Some(seed) => {
-                let (new_app, info) = launch_live_session(&client, &cli, Some(seed))?;
+                let (new_app, info) = launch_live_session(&client, &cli, &selection, Some(seed))?;
                 app = new_app;
                 live = Live::Running {
                     session_id: info.id,
@@ -192,9 +202,10 @@ fn main() -> Result<()> {
             }
             // No seed: nothing has been said to an agent yet, so nothing is
             // launched yet either. The event loop spawns the session the
-            // moment the operator submits their first message.
+            // moment the operator submits their first message — on whatever
+            // the launch picker holds by then.
             None => {
-                app = App::pending(cli.profile.clone());
+                app = App::pending(selection);
                 live = Live::Pending;
             }
         }
@@ -224,7 +235,12 @@ fn main() -> Result<()> {
                 }
                 match client.transcript(&seed_id) {
                     Ok(transcript) => {
-                        app = App::pending(cli.profile.clone());
+                        // Switching changes what you are talking *about*, not
+                        // what you are talking *to*: the standing launch choice
+                        // carries over, and the picker can still change it
+                        // before the seeded message is sent.
+                        let selection = app.selection.clone();
+                        app = App::pending(selection);
                         app.set_input(transcript);
                     }
                     Err(error) => {
@@ -257,7 +273,12 @@ fn main() -> Result<()> {
                 {
                     client.stop_session(&session_id).ok();
                 }
-                app = App::pending(cli.profile.clone());
+                // The blank start screen is where a launch is chosen, so it
+                // opens on whatever the stopped track ran with — the usual next
+                // step is the same agent again, or a deliberate change to
+                // another one.
+                let selection = app.selection.clone();
+                app = App::pending(selection);
             }
         }
     };
@@ -315,10 +336,19 @@ fn stop_daemon(socket: &Path) -> Result<()> {
     Ok(())
 }
 
-fn create_session(client: &Client, cli: &Cli, seed: Option<&str>) -> Result<SessionInfo> {
+/// Ask the server for a session on `selection`. The selection's canonical name
+/// is the wire profile (`provider[:model][/effort]`), so the server resolves the
+/// same agent, model, and effort the operator picked, and records that name in
+/// the session's journal.
+fn create_session(
+    client: &Client,
+    cli: &Cli,
+    selection: &Selection,
+    seed: Option<&str>,
+) -> Result<SessionInfo> {
     let workspace = resolve_workspace(cli.workspace.as_deref())?;
     client.create_session(&CreateSession {
-        profile: cli.profile.clone(),
+        profile: selection.name(),
         workspace,
         network: cli.network,
         templates: cli.template.clone(),
@@ -332,9 +362,10 @@ fn create_session(client: &Client, cli: &Cli, seed: Option<&str>) -> Result<Sess
 fn launch_live_session(
     client: &Client,
     cli: &Cli,
+    selection: &Selection,
     seed: Option<&str>,
 ) -> Result<(App, SessionInfo)> {
-    let info = create_session(client, cli, seed)?;
+    let info = create_session(client, cli, selection, seed)?;
     let mut app = App::new(info.profile.clone(), info.id.clone());
     app.set_workspace_root(info.workspace.clone());
     app.set_driva_options(info.driva.clone());
@@ -546,6 +577,13 @@ fn run(
             continue;
         }
 
+        // The launch picker is modal: while it is open it owns every key, so
+        // neither focus's bindings can fire behind it.
+        if app.launcher.is_some() {
+            handle_launcher_key(app, key);
+            continue;
+        }
+
         match app.focus {
             Focus::List => handle_list_key(app, client, live, key, &mut pending_fold),
             Focus::Input => handle_input_key(app, client, cli, live, key),
@@ -596,6 +634,24 @@ fn apply_update(app: &mut App, update: TrackUpdate) {
     }
 }
 
+/// Keys for the launch picker: `j`/`k` within a column, `Tab`/`h`/`l` between
+/// them, `Enter` to apply the choice (it never launches — the operator's first
+/// message still does that), `Esc`/`q` to leave it as it was.
+fn handle_launcher_key(app: &mut App, key: KeyEvent) {
+    let Some(launcher) = app.launcher.as_mut() else {
+        return;
+    };
+    match key.code {
+        KeyCode::Char('j') | KeyCode::Down => launcher.next(),
+        KeyCode::Char('k') | KeyCode::Up => launcher.prev(),
+        KeyCode::Char('l') | KeyCode::Right | KeyCode::Tab => launcher.next_column(),
+        KeyCode::Char('h') | KeyCode::Left | KeyCode::BackTab => launcher.prev_column(),
+        KeyCode::Enter => app.confirm_launcher(),
+        KeyCode::Esc | KeyCode::Char('q') => app.cancel_launcher(),
+        _ => {}
+    }
+}
+
 fn handle_list_key(
     app: &mut App,
     client: &Client,
@@ -631,6 +687,9 @@ fn handle_list_key(
             }
             return;
         }
+        // Only before a launch: a running session's agent and model are settled
+        // facts about a process that is already up. `S` first, then `L`.
+        KeyCode::Char('L') => return app.open_launcher(),
         KeyCode::Char('V') => return app.request_switch(),
         KeyCode::Char('A') => return app.request_tracks(),
         KeyCode::Char('S') => return app.request_reset(),
@@ -714,30 +773,34 @@ fn handle_input_key(app: &mut App, client: &Client, cli: &Cli, live: &mut Live, 
                     // The operator's first message: this is what actually
                     // starts the agent. Nothing was launched or sent before
                     // this point.
-                    Live::Pending => match create_session(client, cli, Some(&message)) {
-                        Ok(info) => {
-                            app.profile_name = info.profile;
-                            app.session_id = info.id.clone();
-                            app.set_workspace_root(info.workspace);
-                            app.set_driva_options(info.driva);
-                            app.push_log(LogEntry::info(format!(
-                                "journal: {}",
-                                info.journal_path.display()
-                            )));
-                            app.status = Status::Running;
-                            *live = Live::Running {
-                                session_id: info.id,
-                                cursor: 0,
-                            };
+                    // The launch picker's standing choice is what starts here.
+                    Live::Pending => {
+                        let selection = app.selection.clone();
+                        match create_session(client, cli, &selection, Some(&message)) {
+                            Ok(info) => {
+                                app.profile_name = info.profile;
+                                app.session_id = info.id.clone();
+                                app.set_workspace_root(info.workspace);
+                                app.set_driva_options(info.driva);
+                                app.push_log(LogEntry::info(format!(
+                                    "journal: {}",
+                                    info.journal_path.display()
+                                )));
+                                app.status = Status::Running;
+                                *live = Live::Running {
+                                    session_id: info.id,
+                                    cursor: 0,
+                                };
+                            }
+                            Err(error) => {
+                                app.push_log(LogEntry::error(format!(
+                                    "could not launch the agent: {error:#}"
+                                )));
+                                // Don't lose what they typed; let them retry.
+                                app.set_input(message);
+                            }
                         }
-                        Err(error) => {
-                            app.push_log(LogEntry::error(format!(
-                                "could not launch the agent: {error:#}"
-                            )));
-                            // Don't lose what they typed; let them retry.
-                            app.set_input(message);
-                        }
-                    },
+                    }
                 }
             }
         }
@@ -745,6 +808,10 @@ fn handle_input_key(app: &mut App, client: &Client, cli: &Cli, live: &mut Live, 
         KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             app.input_delete_word()
         }
+        // The start screen opens in input focus, so the launch picker is
+        // reachable from here too rather than only after an `Esc`. A control
+        // chord because plain letters are message text.
+        KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => app.open_launcher(),
         KeyCode::Char(ch) => app.input_char(ch),
         _ => {}
     }

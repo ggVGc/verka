@@ -29,7 +29,8 @@ styra [OPTIONS] [-- PROMPT]
 styra shell --session <ID>
 
   --socket <PATH>      Server socket (default: $XDG_RUNTIME_DIR/styra/styra.sock)
-  --profile <NAME>     Agent profile to launch (default: codex)
+  --profile <NAME>     Agent to launch, as provider[:model][/effort]
+                       (default: codex); the start screen can change it
   --workspace <DIR>    Host directory mounted writable as the agent workspace
   --network            Permit agent networking (profiles may default this on)
   --view [<SESSION>]   Open a captured journal read-only instead of launching;
@@ -86,7 +87,7 @@ The server and its client interface are the `styra-server` crate (library
 wire types are in `styra_server::api`, and the blocking client used by the TUI
 is `styra_server::Client`.
 
-Built-in profiles:
+A profile name is a launch selection, `provider[:model][/effort]`. Providers:
 
 - `codex` — multi-turn session over the codex `app-server` JSON-RPC protocol;
   each submitted message starts a new turn in the same thread.
@@ -94,7 +95,32 @@ Built-in profiles:
   and the session ends when the turn completes.
 - `claude` — multi-turn session over Claude Code's bidirectional `stream-json`
   mode; each submitted message starts a new turn in the same session.
-  `claude:<model>` (e.g. `claude:opus`) pins a model.
+
+A bare provider leaves the agent on its own configured model and reasoning
+effort. `:<model>` pins a model (`claude:claude-opus-5`, `codex:gpt-5.6-sol`, or
+any other id the agent knows) and `/<effort>` a reasoning effort — codex accepts
+`minimal` through `xhigh` as its `model_reasoning_effort`, Claude Code `low`
+through `max` as `--effort`. So `codex:gpt-5.6-sol/xhigh` and
+`claude:claude-opus-5/max` are both profiles. The selection is what a session's
+journal records, so a stored session says which agent, model, and effort actually
+ran.
+
+The TUI's start screen — no session launched yet, whether at startup or after a
+reset with `S` — picks all three interactively: `L` (or `Ctrl+L` from the message
+box) opens a picker with an agent, model, and effort column. Each column offers
+the agent's own catalog plus an "agent default" row (send no override at all);
+for Claude Code the models are the full ids Anthropic lists as active, so a
+session records the exact model it ran on. Applying the choice only records it;
+the first message still starts the agent. A model outside the catalog reaches a
+session through `--profile`, and the picker carries it as a final row rather
+than dropping it.
+
+Once a session runs, its status line (every view's top border) names the model
+and effort in use: each agent reports what it resolved as it starts a session, so
+that report is what is shown — even when nothing was pinned. A value that is
+still only what the launch asked for (before the agent's report, or Claude Code's
+effort, which it never reports) is dimmed; with nothing pinned and nothing
+reported yet, the line reads `default model`.
 
 Each profile's agent binary is located on the server's own `PATH` when the
 session is created, and the session launches that resolved path: the sandbox

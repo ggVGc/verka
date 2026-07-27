@@ -46,8 +46,19 @@ pub enum AgentEvent {
     /// A message the operator sent to the agent, recorded so their own turns
     /// appear inline in the same list. Host-originated, never decoded.
     UserMessage { text: String },
+    /// A session began. Both agents report what they are actually running as
+    /// they start one, so this is also where the effective model and reasoning
+    /// effort come from — not from what the operator asked for, which may have
+    /// named neither. `model` and `effort` are `None` when the agent's start
+    /// line does not name them (Claude Code reports a model but no effort; a
+    /// codex `thread/started` notification names neither, and its
+    /// `thread/start` response names both).
     ThreadStarted {
         thread_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        effort: Option<String>,
     },
     TurnStarted,
     TurnCompleted {
@@ -165,7 +176,15 @@ impl AgentEvent {
     pub fn summary(&self) -> String {
         let line = match self {
             AgentEvent::UserMessage { text } => first_line(text),
-            AgentEvent::ThreadStarted { thread_id } => format!("session {thread_id}"),
+            AgentEvent::ThreadStarted {
+                thread_id,
+                model,
+                effort,
+            } => match (model, effort) {
+                (Some(model), Some(effort)) => format!("session {thread_id} · {model} · {effort}"),
+                (Some(model), None) => format!("session {thread_id} · {model}"),
+                _ => format!("session {thread_id}"),
+            },
             AgentEvent::TurnStarted => "turn started".into(),
             AgentEvent::TurnCompleted { usage } | AgentEvent::UsageUpdated { usage } => format!(
                 "in {} · out {} · cached {}",
@@ -201,8 +220,19 @@ impl AgentEvent {
     pub fn detail(&self) -> Vec<DetailBlock> {
         match self {
             AgentEvent::UserMessage { text } => markdown_blocks(text),
-            AgentEvent::ThreadStarted { thread_id } => {
-                vec![DetailBlock::Text(format!("thread id: {thread_id}"))]
+            AgentEvent::ThreadStarted {
+                thread_id,
+                model,
+                effort,
+            } => {
+                let mut lines = vec![format!("thread id: {thread_id}")];
+                if let Some(model) = model {
+                    lines.push(format!("model: {model}"));
+                }
+                if let Some(effort) = effort {
+                    lines.push(format!("reasoning effort: {effort}"));
+                }
+                vec![DetailBlock::Text(lines.join("\n"))]
             }
             AgentEvent::TurnStarted => Vec::new(),
             AgentEvent::TurnCompleted { usage } | AgentEvent::UsageUpdated { usage } => {
@@ -277,6 +307,12 @@ pub fn decode_line(protocol: Protocol, line: &str) -> AgentEvent {
 /// Decode one `codex app-server` line. Notifications (which carry a `method`)
 /// map to events; requests and responses are control traffic and decode to
 /// [`AgentEvent::Unknown`] so they are carried without cluttering the list.
+///
+/// The one response that is not merely control traffic is the reply to
+/// `thread/start`: it is where the app-server states the model and reasoning
+/// effort the thread actually runs on, which no notification repeats. Decoding
+/// it here rather than only in [`crate::appserver`] keeps a replayed journal
+/// showing the same thing a live session does.
 fn decode_appserver_line(line: &str) -> AgentEvent {
     let value: Value = match serde_json::from_str(line) {
         Ok(value) => value,
@@ -290,10 +326,28 @@ fn decode_appserver_line(line: &str) -> AgentEvent {
         Some(method) => {
             decode_appserver_notification(method, value.get("params").unwrap_or(&Value::Null))
         }
-        None => AgentEvent::Unknown {
-            wire_type: "response".into(),
+        None => match value.get("result").and_then(decode_thread_start_result) {
+            Some(event) => event,
+            None => AgentEvent::Unknown {
+                wire_type: "response".into(),
+            },
         },
     }
+}
+
+/// A `thread/start` result as a [`AgentEvent::ThreadStarted`], recognised by the
+/// thread it reports rather than by the request id it answers — the id belongs
+/// to the client that asked, not to the wire format, so a journal read back
+/// later does not depend on it.
+fn decode_thread_start_result(result: &Value) -> Option<AgentEvent> {
+    let thread_id = result
+        .get("thread")
+        .and_then(|thread| string(thread, "id"))?;
+    Some(AgentEvent::ThreadStarted {
+        thread_id: clean_terminal_text(thread_id),
+        model: string(result, "model").map(clean_terminal_text),
+        effort: string(result, "reasoningEffort").map(clean_terminal_text),
+    })
 }
 
 fn decode_appserver_notification(method: &str, params: &Value) -> AgentEvent {
@@ -305,6 +359,11 @@ fn decode_appserver_notification(method: &str, params: &Value) -> AgentEvent {
                     .and_then(|thread| string(thread, "id"))
                     .unwrap_or_default(),
             ),
+            // The notification announces only the thread; the model and effort
+            // arrive in the `thread/start` response (see
+            // `decode_thread_start_result`).
+            model: None,
+            effort: None,
         },
         "turn/started" => AgentEvent::TurnStarted,
         // `turn/completed` is the actual end-of-turn signal; it carries no
@@ -406,8 +465,12 @@ fn decode_codex_line(line: &str) -> AgentEvent {
 fn decode_codex_value(value: &Value) -> AgentEvent {
     let wire_type = string(value, "type").unwrap_or("unknown");
     match wire_type {
+        // A one-shot `codex exec` run states neither model nor effort on the
+        // wire; both stay as the launch asked for them.
         "thread.started" => AgentEvent::ThreadStarted {
             thread_id: clean_terminal_text(string(value, "thread_id").unwrap_or_default()),
+            model: None,
+            effort: None,
         },
         "turn.started" => AgentEvent::TurnStarted,
         "turn.completed" => AgentEvent::TurnCompleted {
@@ -506,6 +569,11 @@ fn decode_claude_value(value: &Value) -> AgentEvent {
             if subtype == "init" {
                 AgentEvent::ThreadStarted {
                     thread_id: clean_terminal_text(string(value, "session_id").unwrap_or_default()),
+                    // Claude Code's init line names the model it resolved, but
+                    // no effort level, so the launch's own remains all Styra
+                    // knows of that.
+                    model: string(value, "model").map(clean_terminal_text),
+                    effort: None,
                 }
             } else {
                 AgentEvent::Unknown {
@@ -852,7 +920,7 @@ mod tests {
     fn thread_and_turn_events_decode() {
         assert_eq!(
             decode_line(Protocol::CodexJsonl, r#"{"type":"thread.started","thread_id":"t-7"}"#),
-            AgentEvent::ThreadStarted { thread_id: "t-7".into() }
+            AgentEvent::ThreadStarted { thread_id: "t-7".into(), model: None, effort: None }
         );
         assert_eq!(
             decode_line(Protocol::CodexJsonl, r#"{"type":"turn.started"}"#),
@@ -948,7 +1016,11 @@ mod tests {
                 Protocol::ClaudeJsonl,
                 r#"{"type":"system","subtype":"init","session_id":"s-9","model":"claude-opus-4-8"}"#,
             ),
-            AgentEvent::ThreadStarted { thread_id: "s-9".into() }
+            AgentEvent::ThreadStarted {
+                thread_id: "s-9".into(),
+                model: Some("claude-opus-4-8".into()),
+                effort: None,
+            }
         );
         let event = decode_line(
             Protocol::ClaudeJsonl,
@@ -1091,7 +1163,11 @@ mod tests {
         let d = |line| decode_line(Protocol::CodexAppServer, line);
         assert_eq!(
             d(r#"{"method":"thread/started","params":{"thread":{"id":"019f8f61-b7df-7291-81fc-04ff0bfb786f"}}}"#),
-            AgentEvent::ThreadStarted { thread_id: "019f8f61-b7df-7291-81fc-04ff0bfb786f".into() }
+            AgentEvent::ThreadStarted {
+                thread_id: "019f8f61-b7df-7291-81fc-04ff0bfb786f".into(),
+                model: None,
+                effort: None,
+            }
         );
         assert_eq!(d(r#"{"method":"turn/started","params":{"threadId":"t"}}"#), AgentEvent::TurnStarted);
         assert_eq!(
@@ -1147,6 +1223,63 @@ mod tests {
         );
     }
 
+    /// What is actually running is the agent's to state, not the launch's to
+    /// assume: the `thread/start` response is where the app-server names the
+    /// model and reasoning effort it resolved, including when the operator
+    /// pinned neither.
+    #[test]
+    fn appserver_thread_start_response_reports_the_model_and_effort_in_use() {
+        assert_eq!(
+            decode_line(
+                Protocol::CodexAppServer,
+                r#"{"id":2,"result":{"thread":{"id":"t-9"},"model":"gpt-5.6-sol","modelProvider":"openai","reasoningEffort":"high","cwd":"/tmp/styra/workspace"}}"#,
+            ),
+            AgentEvent::ThreadStarted {
+                thread_id: "t-9".into(),
+                model: Some("gpt-5.6-sol".into()),
+                effort: Some("high".into()),
+            }
+        );
+        // A thread reported without them (an older app-server, or the
+        // `thread/started` notification) still decodes; the fields stay absent
+        // rather than being guessed at.
+        assert_eq!(
+            decode_line(Protocol::CodexAppServer, r#"{"id":2,"result":{"thread":{"id":"t"}}}"#),
+            AgentEvent::ThreadStarted {
+                thread_id: "t".into(),
+                model: None,
+                effort: None,
+            }
+        );
+    }
+
+    /// The reported model and effort must survive a journal round trip, since a
+    /// stored session is read back through the same decoded events.
+    #[test]
+    fn a_reported_model_and_effort_survive_the_journal_round_trip() {
+        let event = AgentEvent::ThreadStarted {
+            thread_id: "t-9".into(),
+            model: Some("gpt-5.6-sol".into()),
+            effort: Some("xhigh".into()),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert_eq!(serde_json::from_str::<AgentEvent>(&json).unwrap(), event);
+        assert!(event.summary().contains("gpt-5.6-sol"));
+        assert!(event.summary().contains("xhigh"));
+
+        // An older journal entry with neither field still reads back.
+        let bare: AgentEvent =
+            serde_json::from_str(r#"{"type":"thread_started","thread_id":"t"}"#).unwrap();
+        assert_eq!(
+            bare,
+            AgentEvent::ThreadStarted {
+                thread_id: "t".into(),
+                model: None,
+                effort: None,
+            }
+        );
+    }
+
     #[test]
     fn appserver_turn_completed_is_the_end_of_turn_signal() {
         let event = decode_line(
@@ -1158,11 +1291,17 @@ mod tests {
 
     #[test]
     fn appserver_control_and_echoed_user_message_carry_without_rendering() {
-        // A response (no "method") is control traffic.
-        assert_eq!(
-            decode_line(Protocol::CodexAppServer, r#"{"id":2,"result":{"thread":{"id":"t"}}}"#),
-            AgentEvent::Unknown { wire_type: "response".into() }
-        );
+        // A response (no "method") is control traffic, unless it reports a
+        // started thread — see the model/effort test below.
+        for line in [
+            r#"{"id":1,"result":{}}"#,
+            r#"{"id":9,"result":{"turn":{"id":"t1"}}}"#,
+        ] {
+            assert_eq!(
+                decode_line(Protocol::CodexAppServer, line),
+                AgentEvent::Unknown { wire_type: "response".into() }
+            );
+        }
         // The server echoes the operator's own message; the host shows its own, so
         // this decodes to Unknown rather than duplicating it.
         assert_eq!(

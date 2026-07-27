@@ -105,7 +105,19 @@ impl AppServer {
                     .and_then(|thread| thread.get("id"))
                     .and_then(Value::as_str)
                 {
-                    Some(thread_id) => self.become_ready(thread_id.to_owned()),
+                    Some(thread_id) => {
+                        let mut actions = self.become_ready(thread_id.to_owned());
+                        // This response is the only place the app-server states
+                        // the model and reasoning effort the thread runs on, so
+                        // it is surfaced as an event rather than left as control
+                        // traffic. The decoder reads it from the same line a
+                        // replayed journal would.
+                        actions.push(Action::Event(decode_line(
+                            Protocol::CodexAppServer,
+                            line,
+                        )));
+                        actions
+                    }
                     None => Vec::new(),
                 }
             }
@@ -119,6 +131,7 @@ impl AppServer {
             // A notification: capture the thread id as a backup, then decode.
             (Some(notification), None) => {
                 let mut actions = Vec::new();
+                let mut already_started = false;
                 if notification == "thread/started" {
                     if let Some(thread_id) = value
                         .get("params")
@@ -126,8 +139,17 @@ impl AppServer {
                         .and_then(|thread| thread.get("id"))
                         .and_then(Value::as_str)
                     {
-                        actions.extend(self.become_ready(thread_id.to_owned()));
+                        let ready = self.become_ready(thread_id.to_owned());
+                        already_started = ready.is_empty();
+                        actions.extend(ready);
                     }
+                }
+                // This notification duplicates the thread the `thread/start`
+                // response already reported, and names neither model nor
+                // effort — so once the thread is known it adds nothing but a
+                // second, less informative session entry.
+                if already_started {
+                    return actions;
                 }
                 let event = decode_line(Protocol::CodexAppServer, line);
                 if !matches!(event, AgentEvent::Unknown { .. }) {
@@ -224,6 +246,45 @@ mod tests {
         assert_eq!(turn[0]["method"], "turn/start");
         assert_eq!(turn[0]["params"]["threadId"], "thread-xyz");
         assert_eq!(turn[0]["params"]["input"][0]["text"], "do the thing");
+    }
+
+    /// A live session must learn the model and effort it is running on from the
+    /// same line a replayed journal reads it from — and must not then repeat the
+    /// session as a second, less informative entry when the notification
+    /// restates the thread.
+    #[test]
+    fn the_thread_start_response_surfaces_the_model_and_the_notification_does_not_repeat_it() {
+        let client = AppServer::new("/tmp/styra/workspace".into());
+        client.handle_line(r#"{"id":1,"result":{}}"#);
+
+        let events = |actions: &[Action]| -> Vec<AgentEvent> {
+            actions
+                .iter()
+                .filter_map(|action| match action {
+                    Action::Event(event) => Some(event.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+
+        let actions = client.handle_line(
+            r#"{"id":2,"result":{"thread":{"id":"t-9"},"model":"gpt-5.6-sol","reasoningEffort":"xhigh"}}"#,
+        );
+        assert_eq!(
+            events(&actions),
+            vec![AgentEvent::ThreadStarted {
+                thread_id: "t-9".into(),
+                model: Some("gpt-5.6-sol".into()),
+                effort: Some("xhigh".into()),
+            }]
+        );
+
+        let actions =
+            client.handle_line(r#"{"method":"thread/started","params":{"thread":{"id":"t-9"}}}"#);
+        assert!(
+            events(&actions).is_empty(),
+            "the thread is already known: {actions:?}"
+        );
     }
 
     #[test]

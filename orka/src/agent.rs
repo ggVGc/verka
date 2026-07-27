@@ -136,10 +136,14 @@ pub fn codex(executable: &Path, layout: &SandboxLayout) -> Result<genta::agent::
         workspace: layout.workspace.clone(),
     };
     let executable = genta::agent::resolve_executable(executable)?;
+    // Model and reasoning effort are left to codex's own configuration: an Orka
+    // attempt has no operator present to pick them per run.
     Ok(genta::agent::codex_exec(
         &agent_layout,
         &executable,
         AGENT_PROMPT,
+        None,
+        None,
     ))
 }
 

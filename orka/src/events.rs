@@ -91,7 +91,10 @@ pub enum ContentBlock {
 pub fn event_blocks(event: &AgentEvent) -> Vec<WorkLogBlock> {
     let clean = clean_terminal_text;
     let block = match event {
-        AgentEvent::ThreadStarted { thread_id } => WorkLogBlock::Session {
+        // Genta also carries the model and effort an interactive session
+        // reports; an Orka attempt's model is a property of its recorded
+        // request, so the work log names only the session.
+        AgentEvent::ThreadStarted { thread_id, .. } => WorkLogBlock::Session {
             id: clean(thread_id),
         },
         AgentEvent::TurnStarted => WorkLogBlock::TurnStarted,

@@ -4,8 +4,8 @@
 //! inline when expanded), the message box, and a one-line status/help footer.
 //! Rendering is a pure function of `App`; all state lives in [`crate::app`].
 
-use styra_server::agent::SandboxLayout;
-use crate::app::{App, Entry, Focus, Status, View};
+use styra_server::agent::{Provider, SandboxLayout};
+use crate::app::{App, Entry, Focus, LaunchColumn, LaunchLabel, Launcher, Status, View};
 use styra_server::event::{DetailBlock, AgentEvent};
 use styra_server::{SessionSummary, TrackSummary, TrackUpdate};
 use styra_server::{Direction as WireDirection, LogLevel};
@@ -42,21 +42,49 @@ fn status_color(status: &Status) -> Color {
     }
 }
 
-/// Build a block title of the form " styra · profile · ● status[ · suffix] ".
+/// Build a block title of the form
+/// " styra · agent · model · effort · ● status[ · suffix] ".
+///
+/// The model and effort are named in every view's title because they are what
+/// the session is actually spending: the agent alone does not say it (a bare
+/// provider pins no model), and the answer can differ from what was asked for.
+/// A value the agent itself reported is shown plainly; one that only reflects
+/// the launch request, not yet confirmed by the agent, is dimmed to mark it as
+/// such. See [`App::launch_label`].
 ///
 /// The plain-text spans are explicitly colored rather than left unstyled:
 /// an unstyled span only patches over whatever the block's border already
 /// painted underneath it, so when the border dims to `DarkGray` for an
 /// unfocused panel, unstyled title text would dim right along with it and
 /// become hard to read.
-fn title_line(profile: &str, status: &Status, suffix: Option<&str>) -> Line<'static> {
+fn title_line(label: &LaunchLabel, status: &Status, suffix: Option<&str>) -> Line<'static> {
     let color = status_color(status);
     let text_style = Style::default().fg(Color::Gray);
-    let mut spans = vec![
-        Span::styled(format!(" styra · {profile} · "), text_style),
-        Span::styled("● ", Style::default().fg(color)),
-        Span::styled(status.label(), Style::default().fg(color).add_modifier(Modifier::BOLD)),
-    ];
+    let value_style = |reported: bool| {
+        if reported {
+            Style::default().fg(Color::White)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        }
+    };
+    let mut spans = vec![Span::styled(
+        format!(" styra · {} · ", label.agent),
+        text_style,
+    )];
+    // No model named anywhere: the agent is on its own configured default and
+    // has not said which, so the display says exactly that rather than guessing.
+    let model = label.model.clone().unwrap_or_else(|| "default model".into());
+    spans.push(Span::styled(model, value_style(label.model_reported)));
+    if let Some(effort) = &label.effort {
+        spans.push(Span::styled(" · ", text_style));
+        spans.push(Span::styled(effort.clone(), value_style(label.effort_reported)));
+    }
+    spans.push(Span::styled(" · ", text_style));
+    spans.push(Span::styled("● ", Style::default().fg(color)));
+    spans.push(Span::styled(
+        status.label(),
+        Style::default().fg(color).add_modifier(Modifier::BOLD),
+    ));
     spans.push(match suffix {
         Some(suffix) => Span::styled(format!(" · {suffix} "), text_style),
         None => Span::styled(" ", text_style),
@@ -65,6 +93,14 @@ fn title_line(profile: &str, status: &Status, suffix: Option<&str>) -> Line<'sta
 }
 
 pub fn render(frame: &mut Frame, app: &App) {
+    // The launch picker is modal: it is the only thing that can be acted on
+    // while open, so it takes the whole frame like the session and track
+    // pickers do, rather than overlaying a screen whose keys are inert.
+    if let Some(launcher) = &app.launcher {
+        render_launcher(frame, launcher, frame.area());
+        return;
+    }
+
     // The full-screen preview replaces everything — no input box, no footer,
     // no border — so the whole terminal is nothing but the selected entry's
     // text, cleanly selectable and copyable.
@@ -168,6 +204,128 @@ pub fn render_tracks_picker(
     render_track_log_preview(frame, tracks.get(selected), updates, panes[1]);
 }
 
+/// Render the launch picker: agent, model, and reasoning effort side by side,
+/// with the resulting profile name spelled out along the bottom border so the
+/// operator sees exactly what an `Enter` records.
+fn render_launcher(frame: &mut Frame, launcher: &Launcher, area: Rect) {
+    let provider = launcher.provider();
+    let selection = launcher.selection();
+    let hint = " j/k choose · Tab/h/l column · Enter apply · q cancel ";
+    // The composed profile name and the key hints go on the outer frame rather
+    // than on a column, where a narrow terminal would clip them.
+    let frame_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .title(Line::from(vec![
+            Span::styled(" styra · launch · ", Style::default().fg(Color::Gray)),
+            Span::styled(
+                format!("{} ", selection.name()),
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            ),
+        ]))
+        .title_bottom(Line::from(Span::styled(hint, Style::default().fg(Color::Gray))));
+    let inner = frame_block.inner(area);
+    frame.render_widget(frame_block, area);
+
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(34),
+            Constraint::Percentage(33),
+            Constraint::Percentage(33),
+        ])
+        .split(inner);
+
+    let providers: Vec<String> = Provider::ALL
+        .iter()
+        .map(|provider| provider.as_str().to_owned())
+        .collect();
+    // "agent default" is not a level Styra could name: no override is sent and
+    // the agent uses its own configuration, so it reads as such rather than as
+    // a guess at what that configuration is.
+    let mut models = vec![AGENT_DEFAULT.to_owned()];
+    models.extend(provider.models().iter().map(|model| (*model).to_owned()));
+    // A model the catalog doesn't list, carried from the profile the picker was
+    // opened on, is shown last so it stays selectable — see `Launcher`.
+    if let Some(carried) = &launcher.carried_model {
+        models.push(carried.clone());
+    }
+    let mut efforts = vec![AGENT_DEFAULT.to_owned()];
+    efforts.extend(
+        provider
+            .efforts()
+            .iter()
+            .map(|effort| effort.as_str().to_owned()),
+    );
+
+    render_launcher_column(
+        frame,
+        columns[0],
+        " agent ",
+        &providers,
+        launcher.provider,
+        launcher.column == LaunchColumn::Provider,
+    );
+    render_launcher_column(
+        frame,
+        columns[1],
+        " model ",
+        &models,
+        launcher.model,
+        launcher.column == LaunchColumn::Model,
+    );
+    render_launcher_column(
+        frame,
+        columns[2],
+        " effort ",
+        &efforts,
+        launcher.effort,
+        launcher.column == LaunchColumn::Effort,
+    );
+}
+
+/// The label for the row that sends no override at all.
+const AGENT_DEFAULT: &str = "agent default";
+
+fn render_launcher_column(
+    frame: &mut Frame,
+    area: Rect,
+    title: &str,
+    rows: &[String],
+    selected: usize,
+    focused: bool,
+) {
+    let border_style = if focused {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(border_style)
+        .title(Span::styled(
+            title.to_owned(),
+            Style::default().fg(Color::Gray),
+        ));
+    let items: Vec<ListItem> = rows
+        .iter()
+        .map(|row| {
+            ListItem::new(Line::from(Span::styled(
+                format!(" {row}"),
+                Style::default().fg(Color::White),
+            )))
+        })
+        .collect();
+    let list = List::new(items)
+        .block(block)
+        .highlight_style(Style::default().bg(SELECTION_BG).add_modifier(Modifier::BOLD));
+    let mut state = ListState::default();
+    if !rows.is_empty() {
+        state.select(Some(selected.min(rows.len() - 1)));
+    }
+    frame.render_stateful_widget(list, area, &mut state);
+}
+
 fn render_track_log_preview(
     frame: &mut Frame,
     track: Option<&TrackSummary>,
@@ -269,7 +427,7 @@ fn render_log(frame: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(border_style)
-        .title(title_line(&app.profile_name, &app.status, Some("log")));
+        .title(title_line(&app.launch_label(), &app.status, Some("log")));
 
     if app.log.is_empty() {
         let empty = Paragraph::new(Line::from(Span::styled(
@@ -321,7 +479,7 @@ fn render_transcript_view(frame: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(border_style)
-        .title(title_line(&app.profile_name, &app.status, Some("transcript")));
+        .title(title_line(&app.launch_label(), &app.status, Some("transcript")));
 
     if app.entries.is_empty() {
         let empty = Paragraph::new(Line::from(Span::styled(
@@ -356,7 +514,7 @@ fn render_raw(frame: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(border_style)
-        .title(title_line(&app.profile_name, &app.status, Some("raw")));
+        .title(title_line(&app.launch_label(), &app.status, Some("raw")));
 
     if app.raw.is_empty() {
         let empty = Paragraph::new(Line::from(Span::styled(
@@ -412,7 +570,7 @@ fn render_driva(frame: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(border_style)
-        .title(title_line(&app.profile_name, &app.status, Some("driva")));
+        .title(title_line(&app.launch_label(), &app.status, Some("driva")));
 
     let Some(options) = &app.driva_options else {
         let empty = Paragraph::new(Line::from(Span::styled(
@@ -597,16 +755,34 @@ fn render_list(frame: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(border_style)
-        .title(title_line(&app.profile_name, &app.status, None))
+        .title(title_line(&app.launch_label(), &app.status, None))
         .title_bottom(Line::from(usage).right_aligned());
 
     if app.entries.is_empty() {
-        let empty = Paragraph::new(Line::from(vec![Span::styled(
-            "  waiting for the agent — press i to send a message",
-            Style::default().fg(Color::Gray),
-        )]))
-        .block(block);
-        frame.render_widget(empty, area);
+        // Before anything is launched, the empty list is the start screen: the
+        // one moment the agent, model, and effort are still open, so it says
+        // what they are and how to change them instead of only waiting.
+        let lines = if app.can_configure_launch() {
+            vec![
+                Line::from(vec![
+                    Span::styled("  launching with ", Style::default().fg(Color::Gray)),
+                    Span::styled(
+                        app.selection.name(),
+                        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                    ),
+                ]),
+                Line::from(Span::styled(
+                    "  press L to choose the agent, model, and effort — or i to write the first message",
+                    Style::default().fg(Color::Gray),
+                )),
+            ]
+        } else {
+            vec![Line::from(Span::styled(
+                "  waiting for the agent — press i to send a message",
+                Style::default().fg(Color::Gray),
+            ))]
+        };
+        frame.render_widget(Paragraph::new(lines).block(block), area);
         return;
     }
 
@@ -862,6 +1038,21 @@ fn input_text(app: &App) -> Vec<Line<'static>> {
 }
 
 fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
+    // The launch keys are only listed while they do something: once a session
+    // is launched, its agent and model are settled and `L` is inert.
+    if app.can_configure_launch() {
+        let hints = match app.focus {
+            Focus::Input => "Enter send (starts the agent) · Ctrl+L choose agent/model/effort · Alt+Enter newline · Esc back to list",
+            Focus::List => "L choose agent/model/effort · i message · A tracks · V switch · q quit",
+        };
+        let footer = Paragraph::new(Line::from(Span::styled(
+            format!(" {hints}"),
+            Style::default().fg(Color::Gray),
+        )));
+        frame.render_widget(footer, area);
+        return;
+    }
+
     let hints = match (app.focus, app.view) {
         (Focus::Input, _) => "Enter send · Alt+Enter newline · Ctrl+W delete word · Esc back to list",
         (Focus::List, View::Events) => {
@@ -1167,7 +1358,7 @@ mod tests {
     #[test]
     fn minor_events_are_omitted_from_the_list_when_hidden() {
         let mut app = App::new("codex", "s1");
-        app.push_event(AgentEvent::ThreadStarted { thread_id: "t-1".into() });
+        app.push_event(AgentEvent::ThreadStarted { thread_id: "t-1".into(), model: None, effort: None });
         app.push_event(AgentEvent::AgentMessage { text: "hello world".into() });
         // Hidden by default; no toggle needed to get here.
         assert!(!app.show_minor);
@@ -1473,7 +1664,7 @@ mod tests {
     #[test]
     fn transcript_view_follows_the_minor_toggle_and_rerenders_when_flipped() {
         let mut app = App::new("codex", "s1");
-        app.push_event(AgentEvent::ThreadStarted { thread_id: "t-1".into() });
+        app.push_event(AgentEvent::ThreadStarted { thread_id: "t-1".into(), model: None, effort: None });
         app.push_event(AgentEvent::AgentMessage { text: "hello world".into() });
         app.toggle_transcript();
 
@@ -1491,6 +1682,145 @@ mod tests {
         let mut app = App::new("codex", "s1");
         app.toggle_transcript();
         assert!(rendered(&app).contains("nothing to render yet"));
+    }
+
+    /// Every view's status line must name the model and effort in use, since
+    /// the agent name alone does not say it and the session may be spending a
+    /// model nobody typed.
+    #[test]
+    fn the_status_line_names_the_model_and_effort_in_use() {
+        let mut app = App::new("codex", "s-1");
+        // Nothing pinned and nothing reported yet: said plainly, not guessed.
+        assert!(rendered(&app).contains("styra · codex · default model"), "{}", rendered(&app));
+
+        app.push_event(AgentEvent::ThreadStarted {
+            thread_id: "t-9".into(),
+            model: Some("gpt-5.6-sol".into()),
+            effort: Some("high".into()),
+        });
+        let screen = rendered(&app);
+        assert!(
+            screen.contains("styra · codex · gpt-5.6-sol · high · ● running"),
+            "{screen}"
+        );
+
+        // Every other view carries the same status line, so switching away from
+        // the event list does not lose it.
+        for toggle in [App::toggle_raw, App::toggle_log, App::toggle_transcript, App::toggle_driva] {
+            toggle(&mut app);
+            assert!(rendered(&app).contains("gpt-5.6-sol · high"), "{}", rendered(&app));
+            toggle(&mut app);
+        }
+    }
+
+    /// A launch that pinned a model shows it before the agent confirms anything,
+    /// but dimmed: it is what was asked for, not yet what is known to run.
+    #[test]
+    fn a_requested_model_is_shown_dimmed_until_the_agent_reports_one() {
+        let mut app = App::new("claude:opus/max", "s-1");
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        terminal.draw(|frame| render(frame, &app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let (x, y) = find_column(&buffer, "opus");
+        assert_eq!(buffer.cell((x, y)).unwrap().fg, Color::DarkGray);
+
+        app.push_event(AgentEvent::ThreadStarted {
+            thread_id: "s-1".into(),
+            model: Some("claude-opus-4-8".into()),
+            effort: None,
+        });
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        terminal.draw(|frame| render(frame, &app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let (x, y) = find_column(&buffer, "claude-opus-4-8");
+        assert_eq!(buffer.cell((x, y)).unwrap().fg, Color::White);
+        // The launch's own effort stays alongside the reported model, still
+        // dimmed: Claude Code never reports one, so it remains only what was
+        // asked for.
+        let (x, y) = find_column(&buffer, "max");
+        assert_eq!(buffer.cell((x, y)).unwrap().fg, Color::DarkGray);
+    }
+
+    /// Before anything is launched, the empty list is the start screen: it must
+    /// say what would be launched and how to change it, since that is the only
+    /// moment the choice is still open.
+    #[test]
+    fn the_start_screen_names_the_launch_and_how_to_change_it() {
+        let selection = styra_server::agent::Selection::parse("claude:opus/max").unwrap();
+        let app = App::pending(selection);
+        let screen = rendered(&app);
+        assert!(screen.contains("claude:opus/max"), "{screen}");
+        assert!(screen.contains("press L to choose"), "{screen}");
+        assert!(screen.contains("Ctrl+L"), "the start screen opens in input focus: {screen}");
+
+        // A launched session shows the plain waiting message instead: its agent
+        // and model are settled, so there is nothing to offer choosing.
+        let app = App::new("claude:opus/max", "s-1");
+        let screen = rendered(&app);
+        assert!(screen.contains("waiting for the agent"), "{screen}");
+        assert!(!screen.contains("press L to choose"), "{screen}");
+    }
+
+    /// The picker is modal: it replaces the session view entirely, and spells
+    /// out the profile its current rows add up to.
+    #[test]
+    fn the_launcher_shows_three_columns_and_the_resulting_profile() {
+        let mut app = App::pending(styra_server::agent::Selection::parse("codex").unwrap());
+        app.push_log(styra_server::LogEntry::info("journal: /tmp/styra/s-1"));
+        app.open_launcher();
+        let launcher = app.launcher.as_mut().unwrap();
+        launcher.next_column();
+        launcher.next();
+        launcher.next_column();
+        launcher.next();
+
+        let screen = rendered(&app);
+        assert!(screen.contains("styra · launch"), "{screen}");
+        for column in ["model", "effort"] {
+            assert!(screen.contains(column), "missing the {column} column: {screen}");
+        }
+        // Both defaults are offered as their own rows, distinct from any level
+        // Styra could name.
+        assert!(screen.contains(AGENT_DEFAULT), "{screen}");
+        assert!(screen.contains("gpt-5.6-sol"), "{screen}");
+        // The picker offers the agent's catalog and nothing else — there is no
+        // free-text row to type an id into.
+        assert!(!screen.contains("custom"), "{screen}");
+        assert!(screen.contains("codex:gpt-5.6-sol/minimal"), "{screen}");
+        assert!(screen.contains("Enter apply"), "{screen}");
+        // Nothing of the session view shows through a modal picker.
+        assert!(!screen.contains("message"), "{screen}");
+    }
+
+    /// A model the catalog does not list — one the operator named with
+    /// `--profile` — is still shown, as a final row the picker carries.
+    #[test]
+    fn the_launcher_shows_a_carried_model_alongside_the_catalog() {
+        let mut app = App::pending(
+            styra_server::agent::Selection::parse("claude:claude-opus-4-1-20250805").unwrap(),
+        );
+        app.open_launcher();
+
+        let screen = rendered(&app);
+        assert!(screen.contains("claude-opus-4-1-20250805"), "{screen}");
+        // Alongside the catalog it is not part of.
+        assert!(screen.contains("claude-opus-5"), "{screen}");
+        assert!(screen.contains("claude:claude-opus-4-1-20250805"), "{screen}");
+    }
+
+    /// Every model the picker offers for Claude Code is a full id, so the
+    /// composed profile names the exact model rather than a moving alias.
+    #[test]
+    fn the_claude_column_offers_full_model_ids() {
+        let mut app = App::pending(styra_server::agent::Selection::parse("claude").unwrap());
+        app.open_launcher();
+        let screen = rendered(&app);
+        for model in Provider::Claude.models() {
+            assert!(model.starts_with("claude-"), "{model} is not a full id");
+        }
+        // The top of the catalog is visible on an 80x20 screen.
+        assert!(screen.contains("claude-fable-5"), "{screen}");
+        assert!(screen.contains("claude-opus-5"), "{screen}");
     }
 
     fn picker_summary(id: &str, profile: Option<&str>, age: &str) -> SessionSummary {

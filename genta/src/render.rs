@@ -125,7 +125,7 @@ mod tests {
             "{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"done\"}}\n",
         );
         let events = vec![
-            AgentEvent::ThreadStarted { thread_id: "t-1".into() },
+            AgentEvent::ThreadStarted { thread_id: "t-1".into(), model: None, effort: None },
             AgentEvent::AgentMessage { text: "done".into() },
         ];
         assert_eq!(
@@ -137,7 +137,7 @@ mod tests {
     #[test]
     fn minor_events_are_skipped_unless_show_minor_is_requested() {
         let events = vec![
-            AgentEvent::ThreadStarted { thread_id: "t-1".into() },
+            AgentEvent::ThreadStarted { thread_id: "t-1".into(), model: None, effort: None },
             AgentEvent::TurnStarted,
             AgentEvent::AgentMessage { text: "done".into() },
             AgentEvent::TurnCompleted { usage: Default::default() },

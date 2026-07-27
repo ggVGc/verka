@@ -508,6 +508,7 @@ mod tests {
     use crate::event::Protocol;
     use driva::{ExecutionOutcome, ProcessExit};
     use std::collections::BTreeMap;
+    use std::os::unix::fs::PermissionsExt;
     use std::time::{Duration, SystemTime};
 
     /// A backend that speaks a tiny protocol: for each submission line it reads
@@ -555,7 +556,7 @@ mod tests {
         // A profile with no credential mounts so request validation only needs
         // the workspace directory to exist.
         let mut profile =
-            crate::agent::codex(&SandboxLayout::default(), std::path::Path::new("codex"));
+            crate::agent::codex(&SandboxLayout::default(), std::path::Path::new("codex"), None, None);
         profile.mounts.clear();
         profile.network = false;
         profile.message_format = MessageFormat::CodexSubmission;
@@ -609,6 +610,40 @@ mod tests {
             Some(&OsString::from("/tmp/agent-home"))
         );
         assert!(request.network);
+    }
+
+    /// A client picks an agent, model, and effort by sending one profile name;
+    /// what the sandbox actually runs — and what the Driva view reports — must
+    /// carry all three, or the picked model silently is not the one that runs.
+    #[test]
+    fn a_profile_name_carrying_a_model_and_effort_reaches_the_launched_command() {
+        let root = std::env::temp_dir().join(format!("styra-track-model-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let stub = root.join("codex");
+        std::fs::write(&stub, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let mut spec = workspace_spec(&root);
+        spec.profile = Profile::builtin_on_path(
+            "codex:gpt-5.6-terra/xhigh",
+            &SandboxLayout::default(),
+            root.as_os_str(),
+        )
+        .unwrap();
+        spec.profile.mounts.clear();
+
+        let command = DrivaOptions::capture(&spec, "bwrap").command;
+        assert_eq!(spec.profile.name, "codex:gpt-5.6-terra/xhigh");
+        assert!(
+            command.contains(&r#"model="gpt-5.6-terra""#.to_string()),
+            "{command:?}"
+        );
+        assert!(
+            command.contains(&r#"model_reasoning_effort="xhigh""#.to_string()),
+            "{command:?}"
+        );
+        assert_eq!(command.last().unwrap(), "app-server");
+        std::fs::remove_dir_all(root).ok();
     }
 
     #[test]
