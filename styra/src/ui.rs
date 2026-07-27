@@ -1106,10 +1106,16 @@ fn summary_line(entry: &Entry, has_detail: bool) -> Line<'static> {
         (true, false) => "▸",
     };
     let tag = entry.event.tag();
-    let summary_style = if tag == "command" {
-        Style::default().fg(tag_color(tag))
-    } else {
-        Style::default().fg(Color::White)
+    // A completed tool call gets its own color and a checkmark/cross prefix —
+    // otherwise it reads identically to the "running" row it replaced, save
+    // for the word "(completed)" buried at the end of the summary text.
+    let (summary_style, prefix) = match &entry.event {
+        AgentEvent::ToolCompleted { status, .. } if status == "error" => {
+            (Style::default().fg(Color::Red), "✗ ")
+        }
+        AgentEvent::ToolCompleted { .. } => (Style::default().fg(Color::Green), "✓ "),
+        _ if tag == "command" => (Style::default().fg(tag_color(tag)), ""),
+        _ => (Style::default().fg(Color::White), ""),
     };
     Line::from(vec![
         Span::raw(format!("{marker} ")),
@@ -1119,7 +1125,7 @@ fn summary_line(entry: &Entry, has_detail: bool) -> Line<'static> {
                 .fg(tag_color(tag))
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(entry.event.summary(), summary_style),
+        Span::styled(format!("{prefix}{}", entry.event.summary()), summary_style),
     ])
 }
 
@@ -1674,6 +1680,50 @@ mod tests {
         assert!(expanded.contains('▾'));
         let expanded_xs = expanded.chars().filter(|&c| c == 'x').count();
         assert!(expanded_xs > collapsed_xs);
+    }
+
+    #[test]
+    fn a_completed_tool_shows_a_checkmark_instead_of_just_the_word_completed() {
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
+        app.push_event(AgentEvent::ToolStarted {
+            id: "toolu_1".into(),
+            name: "Bash".into(),
+            detail: "{\"command\":\"cargo test\"}".into(),
+        });
+        app.push_event(AgentEvent::ToolCompleted {
+            id: "toolu_1".into(),
+            name: "toolu_1".into(),
+            status: "completed".into(),
+            output: "ok".into(),
+        });
+        let screen = rendered(&app);
+        assert!(screen.contains('✓'));
+        assert!(screen.contains("Bash"));
+    }
+
+    #[test]
+    fn a_failed_tool_shows_a_cross_instead_of_a_checkmark() {
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
+        app.push_event(AgentEvent::ToolStarted {
+            id: "toolu_1".into(),
+            name: "Bash".into(),
+            detail: "{\"command\":\"cargo test\"}".into(),
+        });
+        app.push_event(AgentEvent::ToolCompleted {
+            id: "toolu_1".into(),
+            name: "toolu_1".into(),
+            status: "error".into(),
+            output: "boom".into(),
+        });
+        let screen = rendered(&app);
+        assert!(screen.contains('✗'));
+        assert!(!screen.contains('✓'));
     }
 
     #[test]
