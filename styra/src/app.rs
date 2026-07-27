@@ -5,10 +5,10 @@
 //! so the whole interaction model is unit-testable. [`crate::ui`] renders it and
 //! `main` feeds it input and session updates.
 
+use std::path::PathBuf;
 use styra_server::agent::{Provider, Selection};
 use styra_server::event::{AgentEvent, DetailBlock, TokenUsage};
-use styra_server::{DrivaOptions, LogEntry, RawLine, TrackEnd};
-use std::path::PathBuf;
+use styra_server::{DrivaOptions, InteractionEnd, LogEntry, RawLine};
 
 /// Which region receives keys, like vim's normal/insert split.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -45,7 +45,10 @@ pub enum Status {
     /// The operator stopped the session; the process may still be winding down.
     Stopped,
     /// The agent process ended.
-    Ended { exit_code: Option<i32>, error: Option<String> },
+    Ended {
+        exit_code: Option<i32>,
+        error: Option<String>,
+    },
 }
 
 impl Status {
@@ -56,7 +59,10 @@ impl Status {
             Status::Idle => "idle".into(),
             Status::Stopped => "stopped".into(),
             Status::Ended { error: Some(_), .. } => "failed".into(),
-            Status::Ended { exit_code: Some(code), .. } => format!("ended ({code})"),
+            Status::Ended {
+                exit_code: Some(code),
+                ..
+            } => format!("ended ({code})"),
             Status::Ended { .. } => "ended".into(),
         }
     }
@@ -352,10 +358,10 @@ pub struct App {
     /// Set when the operator asks to switch to a different stored session;
     /// the event loop observes it and opens the session picker.
     pub switch_requested: bool,
-    /// Set when the operator asks to list the server's live tracks; the event
-    /// loop observes it and opens the tracks picker to attach to one.
-    pub tracks_requested: bool,
-    /// Set when the operator asks to stop the current track and return to the
+    /// Set when the operator asks to list the server's live interactions; the event
+    /// loop observes it and opens the interactions picker to attach to one.
+    pub interactions_requested: bool,
+    /// Set when the operator asks to stop the current interaction and return to the
     /// blank start screen; the event loop observes it.
     pub reset_requested: bool,
 }
@@ -366,12 +372,12 @@ impl App {
         // A profile name *is* a selection (`provider[:model][/effort]`), so a
         // session that is being viewed or attached to seeds the launch choice
         // with what it was itself launched with: resetting away from a
-        // `claude:opus/max` track offers the same agent again. A replayed
+        // `claude:opus/max` interaction offers the same agent again. A replayed
         // session whose recorded profile no longer parses (an older store, an
         // unknown agent) falls back to the default agent rather than failing to
         // open — nothing is launched from it either way.
-        let selection = Selection::parse(&profile_name)
-            .unwrap_or_else(|_| Selection::new(Provider::ALL[0]));
+        let selection =
+            Selection::parse(&profile_name).unwrap_or_else(|_| Selection::new(Provider::ALL[0]));
         Self {
             entries: Vec::new(),
             selected: 0,
@@ -397,7 +403,7 @@ impl App {
             transcript_scroll: 0,
             should_quit: false,
             switch_requested: false,
-            tracks_requested: false,
+            interactions_requested: false,
             reset_requested: false,
         }
     }
@@ -666,14 +672,17 @@ impl App {
             }
             _ => {}
         }
-        self.entries.push(Entry { event, expanded: false });
+        self.entries.push(Entry {
+            event,
+            expanded: false,
+        });
         if self.follow {
             self.selected = self.entries.len() - 1;
         }
     }
 
     /// Record that the session ended. This is terminal regardless of `Stopped`.
-    pub fn on_ended(&mut self, end: TrackEnd) {
+    pub fn on_ended(&mut self, end: InteractionEnd) {
         self.status = Status::Ended {
             exit_code: end.exit_code,
             error: end.error,
@@ -737,7 +746,10 @@ impl App {
     pub fn toggle_minor(&mut self) {
         self.show_minor = !self.show_minor;
         if !self.entries.is_empty() && !self.is_visible(self.selected) {
-            if let Some(idx) = self.prev_visible(self.selected).or_else(|| self.next_visible(self.selected)) {
+            if let Some(idx) = self
+                .prev_visible(self.selected)
+                .or_else(|| self.next_visible(self.selected))
+            {
                 self.selected = idx;
             }
         }
@@ -756,7 +768,11 @@ impl App {
 
     /// Move to the previous entry with an arrow; see [`Self::select_next`].
     pub fn select_prev(&mut self) {
-        if let Some(prev) = self.selected.checked_sub(1).and_then(|from| self.prev_navigable(from)) {
+        if let Some(prev) = self
+            .selected
+            .checked_sub(1)
+            .and_then(|from| self.prev_navigable(from))
+        {
             self.selected = prev;
         }
         // Moving off the tail pins the view.
@@ -776,7 +792,11 @@ impl App {
 
     /// Move to the previous visible entry; see [`Self::select_next_line`].
     pub fn select_prev_line(&mut self) {
-        if let Some(prev) = self.selected.checked_sub(1).and_then(|from| self.prev_visible(from)) {
+        if let Some(prev) = self
+            .selected
+            .checked_sub(1)
+            .and_then(|from| self.prev_visible(from))
+        {
             self.selected = prev;
         }
         // Moving off the tail pins the view.
@@ -908,15 +928,15 @@ impl App {
         self.switch_requested = true;
     }
 
-    /// Ask the event loop to list the server's live tracks and, if the operator
-    /// picks one, attach to it. The current track is left running on the server,
+    /// Ask the event loop to list the server's live interactions and, if the operator
+    /// picks one, attach to it. The current interaction is left running on the server,
     /// not stopped: attaching only changes what this client views.
-    pub fn request_tracks(&mut self) {
-        self.tracks_requested = true;
+    pub fn request_interactions(&mut self) {
+        self.interactions_requested = true;
     }
 
-    /// Ask the event loop to stop the current track and return to the blank
-    /// start screen, with no track viewed.
+    /// Ask the event loop to stop the current interaction and return to the blank
+    /// start screen, with no interaction viewed.
     pub fn request_reset(&mut self) {
         self.reset_requested = true;
     }
@@ -946,14 +966,18 @@ mod tests {
         // Multi-line so every entry has detail and so is reachable by the
         // has-detail-only select_next/select_prev this test exercises.
         for _ in 0..3 {
-            app.push_event(AgentEvent::AgentMessage { text: "x\nmore x".into() });
+            app.push_event(AgentEvent::AgentMessage {
+                text: "x\nmore x".into(),
+            });
         }
         app.select_prev();
         assert!(!app.follow);
         assert_eq!(app.selected, 1);
 
         // New events no longer move the selection while pinned.
-        app.push_event(AgentEvent::AgentMessage { text: "x\nmore x".into() });
+        app.push_event(AgentEvent::AgentMessage {
+            text: "x\nmore x".into(),
+        });
         assert_eq!(app.selected, 1);
 
         // Walking back down to the tail re-enables follow.
@@ -1009,12 +1033,17 @@ mod tests {
         let mut app = app();
         assert_eq!(app.status, Status::Running);
         app.push_event(AgentEvent::TurnCompleted {
-            usage: TokenUsage { input_tokens: 7, ..Default::default() },
+            usage: TokenUsage {
+                input_tokens: 7,
+                ..Default::default()
+            },
         });
         assert_eq!(app.status, Status::Idle);
         assert_eq!(app.latest_usage.as_ref().unwrap().input_tokens, 7);
 
-        app.push_event(AgentEvent::UserMessage { text: "more".into() });
+        app.push_event(AgentEvent::UserMessage {
+            text: "more".into(),
+        });
         assert_eq!(app.status, Status::Running);
     }
 
@@ -1026,25 +1055,41 @@ mod tests {
         // idle; `UsageUpdated` must not, or the indicator falsely reads idle
         // while the agent is still actively working.
         let mut app = app();
-        app.push_event(AgentEvent::CommandStarted { command: "cargo test".into() });
+        app.push_event(AgentEvent::CommandStarted {
+            command: "cargo test".into(),
+        });
         assert_eq!(app.status, Status::Running);
 
         app.push_event(AgentEvent::UsageUpdated {
-            usage: TokenUsage { input_tokens: 10, ..Default::default() },
+            usage: TokenUsage {
+                input_tokens: 10,
+                ..Default::default()
+            },
         });
-        assert_eq!(app.status, Status::Running, "a usage ping mid-turn must not end it");
+        assert_eq!(
+            app.status,
+            Status::Running,
+            "a usage ping mid-turn must not end it"
+        );
         assert_eq!(app.latest_usage.as_ref().unwrap().input_tokens, 10);
 
-        app.push_event(AgentEvent::CommandStarted { command: "cargo build".into() });
+        app.push_event(AgentEvent::CommandStarted {
+            command: "cargo build".into(),
+        });
         app.push_event(AgentEvent::UsageUpdated {
-            usage: TokenUsage { input_tokens: 20, ..Default::default() },
+            usage: TokenUsage {
+                input_tokens: 20,
+                ..Default::default()
+            },
         });
         assert_eq!(app.status, Status::Running);
         assert_eq!(app.latest_usage.as_ref().unwrap().input_tokens, 20);
 
         // The app-server's real end-of-turn signal carries no usage of its
         // own; the last reported usage must survive it, not reset to zero.
-        app.push_event(AgentEvent::TurnCompleted { usage: TokenUsage::default() });
+        app.push_event(AgentEvent::TurnCompleted {
+            usage: TokenUsage::default(),
+        });
         assert_eq!(app.status, Status::Idle);
         assert_eq!(app.latest_usage.as_ref().unwrap().input_tokens, 20);
     }
@@ -1052,11 +1097,22 @@ mod tests {
     #[test]
     fn ending_is_terminal_and_disables_sending() {
         let mut app = app();
-        app.on_ended(TrackEnd { exit_code: Some(0), error: None });
-        assert_eq!(app.status, Status::Ended { exit_code: Some(0), error: None });
+        app.on_ended(InteractionEnd {
+            exit_code: Some(0),
+            error: None,
+        });
+        assert_eq!(
+            app.status,
+            Status::Ended {
+                exit_code: Some(0),
+                error: None
+            }
+        );
         assert!(!app.can_send());
         // A late event does not revive an ended session.
-        app.push_event(AgentEvent::AgentMessage { text: "late".into() });
+        app.push_event(AgentEvent::AgentMessage {
+            text: "late".into(),
+        });
         assert!(matches!(app.status, Status::Ended { .. }));
     }
 
@@ -1076,7 +1132,10 @@ mod tests {
         let mut app = App::pending(Selection::new(Provider::Codex));
         app.set_input("earlier session's transcript".into());
         assert_eq!(app.input, "earlier session's transcript");
-        assert_eq!(app.take_message(), Some("earlier session's transcript".into()));
+        assert_eq!(
+            app.take_message(),
+            Some("earlier session's transcript".into())
+        );
     }
 
     /// The whole point of the start screen: all three of agent, model, and
@@ -1146,7 +1205,10 @@ mod tests {
         let mut app = App::pending(selection.clone());
         app.open_launcher();
         let launcher = app.launcher.as_ref().unwrap();
-        assert_eq!(launcher.carried_model.as_deref(), Some("claude-opus-4-1-20250805"));
+        assert_eq!(
+            launcher.carried_model.as_deref(),
+            Some("claude-opus-4-1-20250805")
+        );
         assert_eq!(
             launcher.model,
             Provider::Claude.models().len() + 1,
@@ -1185,7 +1247,10 @@ mod tests {
         assert_eq!(launcher.selection().model, None);
         // And the column is back to just the agent default plus the catalog.
         launcher.next_column();
-        assert_eq!(launcher.model_rows(), launcher.provider().models().len() + 1);
+        assert_eq!(
+            launcher.model_rows(),
+            launcher.provider().models().len() + 1
+        );
     }
 
     /// The two agents' model catalogs and effort ladders are unrelated, so a
@@ -1243,7 +1308,10 @@ mod tests {
         assert_eq!(label.agent, "claude");
         assert_eq!(label.model.as_deref(), Some("opus"));
         assert_eq!(label.effort.as_deref(), Some("max"));
-        assert!(!label.model_reported, "nothing has been reported by the agent yet");
+        assert!(
+            !label.model_reported,
+            "nothing has been reported by the agent yet"
+        );
         assert!(!label.effort_reported);
 
         // A bare provider pins no model, so there is nothing to name until the
@@ -1326,13 +1394,13 @@ mod tests {
     }
 
     #[test]
-    fn request_tracks_and_reset_set_flags_for_the_event_loop_to_observe() {
+    fn request_interactions_and_reset_set_flags_for_the_event_loop_to_observe() {
         let mut app = app();
-        assert!(!app.tracks_requested);
+        assert!(!app.interactions_requested);
         assert!(!app.reset_requested);
-        app.request_tracks();
+        app.request_interactions();
         app.request_reset();
-        assert!(app.tracks_requested);
+        assert!(app.interactions_requested);
         assert!(app.reset_requested);
     }
 
@@ -1355,7 +1423,10 @@ mod tests {
         app.raw_scroll_up();
         assert_eq!(app.raw_scroll_back, 1);
         // A new line while scrolled up keeps the same content in view.
-        app.push_raw(RawLine { direction: Direction::ToAgent, text: "new".into() });
+        app.push_raw(RawLine {
+            direction: Direction::ToAgent,
+            text: "new".into(),
+        });
         assert_eq!(app.raw_scroll_back, 2);
 
         app.raw_to_bottom();
@@ -1401,7 +1472,10 @@ mod tests {
         assert_eq!(app.view, View::Events);
 
         app.toggle_transcript();
-        assert_eq!(app.transcript_scroll, 0, "starts at the beginning, not the tail");
+        assert_eq!(
+            app.transcript_scroll, 0,
+            "starts at the beginning, not the tail"
+        );
 
         app.transcript_scroll_down();
         app.transcript_scroll_down();
@@ -1418,29 +1492,59 @@ mod tests {
     #[test]
     fn minor_events_are_hidden_and_skipped_by_navigation() {
         let mut app = app();
-        app.push_event(AgentEvent::ThreadStarted { thread_id: "t".into(), model: None, effort: None });
+        app.push_event(AgentEvent::ThreadStarted {
+            thread_id: "t".into(),
+            model: None,
+            effort: None,
+        });
         // Multi-line so each entry has detail beyond its summary, and so
         // qualifies for the has-detail navigation this test also exercises.
-        app.push_event(AgentEvent::AgentMessage { text: "a\nmore a".into() });
+        app.push_event(AgentEvent::AgentMessage {
+            text: "a\nmore a".into(),
+        });
         app.push_event(AgentEvent::TurnStarted);
-        app.push_event(AgentEvent::AgentMessage { text: "b\nmore b".into() });
-        app.push_event(AgentEvent::TurnCompleted { usage: TokenUsage::default() });
+        app.push_event(AgentEvent::AgentMessage {
+            text: "b\nmore b".into(),
+        });
+        app.push_event(AgentEvent::TurnCompleted {
+            usage: TokenUsage::default(),
+        });
 
         // Hidden by default; no toggle needed to get here.
         assert!(!app.show_minor);
 
         app.select_first();
-        assert_eq!(app.entries[app.selected].event, AgentEvent::AgentMessage { text: "a\nmore a".into() });
+        assert_eq!(
+            app.entries[app.selected].event,
+            AgentEvent::AgentMessage {
+                text: "a\nmore a".into()
+            }
+        );
 
         app.select_next();
-        assert_eq!(app.entries[app.selected].event, AgentEvent::AgentMessage { text: "b\nmore b".into() });
+        assert_eq!(
+            app.entries[app.selected].event,
+            AgentEvent::AgentMessage {
+                text: "b\nmore b".into()
+            }
+        );
 
         // No more visible entries after "b"; select_next is a no-op.
         app.select_next();
-        assert_eq!(app.entries[app.selected].event, AgentEvent::AgentMessage { text: "b\nmore b".into() });
+        assert_eq!(
+            app.entries[app.selected].event,
+            AgentEvent::AgentMessage {
+                text: "b\nmore b".into()
+            }
+        );
 
         app.select_prev();
-        assert_eq!(app.entries[app.selected].event, AgentEvent::AgentMessage { text: "a\nmore a".into() });
+        assert_eq!(
+            app.entries[app.selected].event,
+            AgentEvent::AgentMessage {
+                text: "a\nmore a".into()
+            }
+        );
 
         app.toggle_minor();
         assert!(app.show_minor);
@@ -1451,9 +1555,15 @@ mod tests {
         let mut app = app();
         // A single line of text is entirely a restatement of the summary, so
         // this entry has no arrow and should not be a stop for j/k.
-        app.push_event(AgentEvent::AgentMessage { text: "no detail here".into() });
-        app.push_event(AgentEvent::AgentMessage { text: "has detail\nsecond line".into() });
-        app.push_event(AgentEvent::AgentMessage { text: "also no detail".into() });
+        app.push_event(AgentEvent::AgentMessage {
+            text: "no detail here".into(),
+        });
+        app.push_event(AgentEvent::AgentMessage {
+            text: "has detail\nsecond line".into(),
+        });
+        app.push_event(AgentEvent::AgentMessage {
+            text: "also no detail".into(),
+        });
         assert!(!app.entries[0].has_detail());
         assert!(app.entries[1].has_detail());
         assert!(!app.entries[2].has_detail());
@@ -1498,7 +1608,10 @@ mod tests {
         app.toggle_minor(); // hide them again
         assert!(!app.show_minor);
         assert!(app.is_visible(app.selected));
-        assert_eq!(app.entries[app.selected].event, AgentEvent::AgentMessage { text: "a".into() });
+        assert_eq!(
+            app.entries[app.selected].event,
+            AgentEvent::AgentMessage { text: "a".into() }
+        );
     }
 
     #[test]
@@ -1527,7 +1640,10 @@ mod tests {
                 access: MountAccess::ReadWrite,
             }],
         });
-        assert_eq!(app.driva_options.as_ref().unwrap().isolation_backend, "bwrap");
+        assert_eq!(
+            app.driva_options.as_ref().unwrap().isolation_backend,
+            "bwrap"
+        );
 
         assert_eq!(app.view, View::Events);
         app.toggle_driva();

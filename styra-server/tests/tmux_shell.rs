@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use styra_server::api::CreateSession;
 use styra_server::event::AgentEvent;
-use styra_server::{Client, TrackUpdate};
+use styra_server::{Client, InteractionUpdate};
 
 fn integration_tools_available() -> bool {
     Command::new("tmux")
@@ -161,7 +161,7 @@ done
         reply = batch.updates.iter().any(|update| {
             matches!(
                 &update.update,
-                TrackUpdate::Event(AgentEvent::AgentMessage { text }) if text == "fake reply"
+                InteractionUpdate::Event(AgentEvent::AgentMessage { text }) if text == "fake reply"
             )
         });
         std::thread::sleep(Duration::from_millis(20));
@@ -184,14 +184,14 @@ done
         "shell terminal traffic must not enter the agent journal"
     );
 
-    client.stop_session(&session.id).unwrap();
+    client.stop_interaction(&session.id).unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
     while shell.socket.exists() && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(20));
     }
     assert!(
         !shell.socket.exists(),
-        "tmux should end with the live track"
+        "tmux should end with the live interaction"
     );
 
     client.shutdown().ok();

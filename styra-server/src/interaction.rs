@@ -1,22 +1,22 @@
-//! One live agent track: the Driva launch, pipe plumbing, and threads behind a
-//! single running agent process. A `Track` belongs to a persistent Styra
+//! One live agent interaction: the Driva launch, pipe plumbing, and threads behind a
+//! single running agent process. A `Interaction` belongs to a persistent Styra
 //! session (identified by `session_id`) and carries that session's events to
 //! the UI while it runs.
 //!
-//! Driva's interface fits a live track without change. Its
+//! Driva's interface fits a live interaction without change. Its
 //! [`ExecutionIo`] takes plain `File` handles wired to the child's stdio; where
 //! Orka passes `/dev/null` for a one-shot run, Styra passes the ends of OS
 //! pipes and drives a bidirectional protocol:
 //!
 //! - the child's stdin-read and stdout-write ends become the `ExecutionIo`;
-//! - `driva::execute` runs on a worker thread and blocks for the track's life;
+//! - `driva::execute` runs on a worker thread and blocks for the interaction's life;
 //! - a reader thread decodes newline-delimited events from the stdout-read end;
 //! - the UI thread writes operator messages to the stdin-write end.
 
 use crate::agent::{MountSpec, Profile};
 use crate::event::{decode_line, AgentEvent};
 use crate::journal::Journal;
-use crate::types::{Direction, DrivaOptions, LogEntry, RawLine, TrackEnd, TrackUpdate};
+use crate::types::{Direction, DrivaOptions, InteractionEnd, InteractionUpdate, LogEntry, RawLine};
 use anyhow::{Context, Result};
 use driva::{ExecutionIo, ExecutionRequest, Isolation, Mount, MountAccess};
 use std::collections::BTreeMap;
@@ -29,9 +29,9 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
-/// What Styra needs to launch one track: an agent profile plus the concrete
+/// What Styra needs to launch one interaction: an agent profile plus the concrete
 /// workspace mount and working directory the operator selected.
-pub struct TrackSpec {
+pub struct InteractionSpec {
     pub profile: Profile,
     pub working_directory: PathBuf,
     /// The operator's project, mounted writable as the agent workspace.
@@ -89,12 +89,12 @@ impl ResolvedTemplate {
     }
 }
 
-/// Capture the Driva policy a [`TrackSpec`] would launch under, without
+/// Capture the Driva policy a [`InteractionSpec`] would launch under, without
 /// running it. This fills the [`DrivaOptions`] the server reports for a live
-/// track, taken from the same [`ExecutionRequest`] Driva executes, so it can
+/// interaction, taken from the same [`ExecutionRequest`] Driva executes, so it can
 /// never drift from what is actually running.
 impl DrivaOptions {
-    pub fn capture(spec: &TrackSpec, isolation_backend: impl Into<String>) -> Self {
+    pub fn capture(spec: &InteractionSpec, isolation_backend: impl Into<String>) -> Self {
         let request = build_request(spec);
         Self {
             isolation_backend: isolation_backend.into(),
@@ -106,14 +106,14 @@ impl DrivaOptions {
     }
 }
 
-/// A running agent track. Dropping it closes the agent's stdin, which ends most
+/// A running agent interaction. Dropping it closes the agent's stdin, which ends most
 /// protocol agents; the worker thread then observes the child exit.
-pub struct Track {
+pub struct Interaction {
     profile: Profile,
     session_id: String,
     stdin: Arc<Mutex<Option<PipeWriter>>>,
     journal: Arc<Mutex<Journal>>,
-    updates: Sender<TrackUpdate>,
+    updates: Sender<InteractionUpdate>,
     /// Present when the profile speaks the stateful app-server protocol; owns
     /// the JSON-RPC handshake and turn dispatch.
     appserver: Option<Arc<crate::appserver::AppServer>>,
@@ -122,16 +122,16 @@ pub struct Track {
     stderr: Option<JoinHandle<()>>,
 }
 
-impl Track {
+impl Interaction {
     /// Launch the agent and start the worker and reader threads. Returns the
-    /// track and the receiver the UI polls for updates.
+    /// interaction and the receiver the UI polls for updates.
     pub fn spawn(
-        spec: TrackSpec,
+        spec: InteractionSpec,
         backend: Box<dyn Isolation + Send>,
         journal: Journal,
         session_id: String,
         diagnostics_path: PathBuf,
-    ) -> Result<(Track, Receiver<TrackUpdate>)> {
+    ) -> Result<(Interaction, Receiver<InteractionUpdate>)> {
         let broker_control = spec
             .broker
             .as_ref()
@@ -159,15 +159,15 @@ impl Track {
         // A stateful protocol gets a client that owns its handshake; the
         // reader thread routes lines through it instead of plain decoding.
         let appserver = match protocol {
-            crate::event::Protocol::CodexAppServer => Some(Arc::new(
-                crate::appserver::AppServer::new(
+            crate::event::Protocol::CodexAppServer => {
+                Some(Arc::new(crate::appserver::AppServer::new(
                     spec.working_directory.to_string_lossy().into_owned(),
-                ),
-            )),
+                )))
+            }
             crate::event::Protocol::CodexJsonl | crate::event::Protocol::ClaudeJsonl => None,
         };
 
-        let _ = updates.send(TrackUpdate::Log(LogEntry::info(format!(
+        let _ = updates.send(InteractionUpdate::Log(LogEntry::info(format!(
             "launching {} (network {})",
             spec.profile.command.join(" "),
             if spec.profile.network { "on" } else { "off" }
@@ -196,7 +196,7 @@ impl Track {
                                 continue;
                             }
                             let entry = LogEntry::warn(format!("agent: {text}"));
-                            if stderr_updates.send(TrackUpdate::Log(entry)).is_err() {
+                            if stderr_updates.send(InteractionUpdate::Log(entry)).is_err() {
                                 break;
                             }
                         }
@@ -234,7 +234,10 @@ impl Track {
                                 direction: Direction::FromAgent,
                                 text: raw.to_owned(),
                             };
-                            if reader_updates.send(TrackUpdate::Raw(raw_line)).is_err() {
+                            if reader_updates
+                                .send(InteractionUpdate::Raw(raw_line))
+                                .is_err()
+                            {
                                 break;
                             }
                             match &reader_client {
@@ -245,7 +248,10 @@ impl Track {
                                 ),
                                 None => {
                                     let event = decode_line(protocol, raw);
-                                    if reader_updates.send(TrackUpdate::Event(event)).is_err() {
+                                    if reader_updates
+                                        .send(InteractionUpdate::Event(event))
+                                        .is_err()
+                                    {
                                         break;
                                     }
                                 }
@@ -265,23 +271,29 @@ impl Track {
                 let end = match driva::execute(backend.as_ref(), &request, io) {
                     Ok(outcome) => {
                         let code = outcome.exit.code();
-                        let _ = exec_updates.send(TrackUpdate::Log(LogEntry::info(format!(
+                        let _ = exec_updates.send(InteractionUpdate::Log(LogEntry::info(format!(
                             "agent process exited with code {code}"
                         ))));
-                        TrackEnd { exit_code: Some(code), error: None }
+                        InteractionEnd {
+                            exit_code: Some(code),
+                            error: None,
+                        }
                     }
                     Err(error) => {
                         let message = format!("{error:#}");
-                        let _ = exec_updates.send(TrackUpdate::Log(LogEntry::error(format!(
-                            "could not run the agent: {message}"
-                        ))));
-                        TrackEnd { exit_code: None, error: Some(message) }
+                        let _ = exec_updates.send(InteractionUpdate::Log(LogEntry::error(
+                            format!("could not run the agent: {message}"),
+                        )));
+                        InteractionEnd {
+                            exit_code: None,
+                            error: Some(message),
+                        }
                     }
                 };
                 if let Some(control) = broker_control {
                     std::fs::remove_dir_all(control).ok();
                 }
-                let _ = exec_updates.send(TrackUpdate::Ended(end));
+                let _ = exec_updates.send(InteractionUpdate::Ended(end));
             })
             .context("starting the execution thread")?;
 
@@ -290,7 +302,7 @@ impl Track {
             apply_appserver_actions(client.start(), &stdin, &updates);
         }
 
-        let track = Track {
+        let interaction = Interaction {
             profile: spec.profile,
             session_id,
             stdin,
@@ -301,7 +313,7 @@ impl Track {
             reader: Some(reader),
             stderr: Some(stderr),
         };
-        Ok((track, receiver))
+        Ok((interaction, receiver))
     }
 
     pub fn session_id(&self) -> &str {
@@ -315,9 +327,11 @@ impl Track {
         if let Ok(mut journal) = self.journal.lock() {
             let _ = journal.record_user_message(text);
         }
-        let _ = self.updates.send(TrackUpdate::Event(AgentEvent::UserMessage {
-            text: text.to_owned(),
-        }));
+        let _ = self
+            .updates
+            .send(InteractionUpdate::Event(AgentEvent::UserMessage {
+                text: text.to_owned(),
+            }));
 
         // The app-server client owns turn dispatch (and emits its own raw
         // update for the exact wire line).
@@ -328,29 +342,31 @@ impl Track {
 
         let bytes = self.profile.encode_message(text);
         // Surface the exact bytes going onto the wire in the raw view.
-        let _ = self.updates.send(TrackUpdate::Raw(RawLine {
+        let _ = self.updates.send(InteractionUpdate::Raw(RawLine {
             direction: Direction::ToAgent,
             text: String::from_utf8_lossy(&bytes)
                 .trim_end_matches(['\r', '\n'])
                 .to_owned(),
         }));
-        let mut guard = self.stdin.lock().expect("track stdin lock poisoned");
+        let mut guard = self.stdin.lock().expect("interaction stdin lock poisoned");
         {
             let writer = guard
                 .as_mut()
-                .context("the track input is closed; the agent has stopped")?;
+                .context("the interaction input is closed; the agent has stopped")?;
             writer.write_all(&bytes).context("writing to agent stdin")?;
             writer.flush().context("flushing agent stdin")?;
         }
-        let _ = self.updates.send(TrackUpdate::Log(LogEntry::info(format!(
-            "sent {} bytes to the agent",
-            bytes.len()
-        ))));
+        let _ = self
+            .updates
+            .send(InteractionUpdate::Log(LogEntry::info(format!(
+                "sent {} bytes to the agent",
+                bytes.len()
+            ))));
         if self.profile.single_turn {
             // A one-shot exec agent reads the prompt to end-of-input; close
             // stdin so the turn starts.
             guard.take();
-            let _ = self.updates.send(TrackUpdate::Log(LogEntry::info(
+            let _ = self.updates.send(InteractionUpdate::Log(LogEntry::info(
                 "closed input (single-turn profile); the agent is running the turn",
             )));
         }
@@ -358,7 +374,7 @@ impl Track {
     }
 
     /// Close the agent's stdin, signalling end-of-input. Most protocol agents
-    /// exit on stdin EOF; the worker thread then delivers [`TrackUpdate::Ended`].
+    /// exit on stdin EOF; the worker thread then delivers [`InteractionUpdate::Ended`].
     pub fn stop(&self) {
         if let Ok(mut guard) = self.stdin.lock() {
             guard.take();
@@ -366,7 +382,7 @@ impl Track {
     }
 }
 
-impl Drop for Track {
+impl Drop for Interaction {
     fn drop(&mut self) {
         self.stop();
         if let Some(handle) = self.reader.take() {
@@ -383,17 +399,17 @@ impl Drop for Track {
 
 /// Carry out the actions the pure app-server client asked for: write outgoing
 /// lines to the agent's stdin (surfacing them in the raw view), and forward
-/// events and diagnostics as track updates.
+/// events and diagnostics as interaction updates.
 fn apply_appserver_actions(
     actions: Vec<crate::appserver::Action>,
     stdin: &Mutex<Option<PipeWriter>>,
-    updates: &Sender<TrackUpdate>,
+    updates: &Sender<InteractionUpdate>,
 ) {
     use crate::appserver::Action;
     for action in actions {
         match action {
             Action::Send(line) => {
-                let _ = updates.send(TrackUpdate::Raw(RawLine {
+                let _ = updates.send(InteractionUpdate::Raw(RawLine {
                     direction: Direction::ToAgent,
                     text: line.clone(),
                 }));
@@ -406,21 +422,21 @@ fn apply_appserver_actions(
                 }
             }
             Action::Event(event) => {
-                let _ = updates.send(TrackUpdate::Event(event));
+                let _ = updates.send(InteractionUpdate::Event(event));
             }
             Action::Info(message) => {
-                let _ = updates.send(TrackUpdate::Log(LogEntry::info(message)));
+                let _ = updates.send(InteractionUpdate::Log(LogEntry::info(message)));
             }
             Action::Warn(message) => {
-                let _ = updates.send(TrackUpdate::Log(LogEntry::warn(message)));
+                let _ = updates.send(InteractionUpdate::Log(LogEntry::warn(message)));
             }
         }
     }
 }
 
-/// Translate a [`TrackSpec`] into a validated-shape Driva request. Mount and
+/// Translate a [`InteractionSpec`] into a validated-shape Driva request. Mount and
 /// policy translation mirrors Orka's Driva adapter.
-fn build_request(spec: &TrackSpec) -> ExecutionRequest {
+fn build_request(spec: &InteractionSpec) -> ExecutionRequest {
     let mut mounts: Vec<Mount> = spec
         .temporary_mounts
         .iter()
@@ -552,18 +568,22 @@ mod tests {
         }
     }
 
-    fn workspace_spec(dir: &std::path::Path) -> TrackSpec {
+    fn workspace_spec(dir: &std::path::Path) -> InteractionSpec {
         // A profile with no credential mounts so request validation only needs
         // the workspace directory to exist.
-        let mut profile =
-            crate::agent::codex(&SandboxLayout::default(), std::path::Path::new("codex"), None, None);
+        let mut profile = crate::agent::codex(
+            &SandboxLayout::default(),
+            std::path::Path::new("codex"),
+            None,
+            None,
+        );
         profile.mounts.clear();
         profile.network = false;
         profile.message_format = MessageFormat::CodexSubmission;
         // Keep input open across the turn so the test's explicit stop() is what
         // signals end-of-input (exercises the multi-turn-capable path).
         profile.single_turn = false;
-        TrackSpec {
+        InteractionSpec {
             profile,
             working_directory: dir.to_path_buf(),
             workspace: MountSpec {
@@ -617,7 +637,8 @@ mod tests {
     /// carry all three, or the picked model silently is not the one that runs.
     #[test]
     fn a_profile_name_carrying_a_model_and_effort_reaches_the_launched_command() {
-        let root = std::env::temp_dir().join(format!("styra-track-model-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("styra-interaction-model-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         let stub = root.join("codex");
         std::fs::write(&stub, "#!/bin/sh\n").unwrap();
@@ -648,7 +669,8 @@ mod tests {
 
     #[test]
     fn broker_wraps_the_command_without_changing_the_reported_agent_policy() {
-        let root = std::env::temp_dir().join(format!("styra-track-broker-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("styra-interaction-broker-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         let mut spec = workspace_spec(&root);
         let agent_command = spec.profile.command.clone();
@@ -695,7 +717,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let journal = Journal::create(&dir).unwrap();
 
-        let (track, updates) = Track::spawn(
+        let (interaction, updates) = Interaction::spawn(
             workspace_spec(&dir),
             Box::new(EchoBackend),
             journal,
@@ -704,9 +726,9 @@ mod tests {
         )
         .unwrap();
 
-        track.send("hello agent").unwrap();
+        interaction.send("hello agent").unwrap();
         // Closing stdin lets the echo backend finish after replying.
-        track.stop();
+        interaction.stop();
 
         let mut user = None;
         let mut agent = None;
@@ -725,34 +747,40 @@ mod tests {
                 && stderr_seen(&logs))
         {
             match updates.recv_timeout(Duration::from_millis(200)) {
-                Ok(TrackUpdate::Event(AgentEvent::UserMessage { text })) => user = Some(text),
-                Ok(TrackUpdate::Event(AgentEvent::AgentMessage { text })) => agent = Some(text),
-                Ok(TrackUpdate::Event(_)) => {}
-                Ok(TrackUpdate::Raw(line)) => raw_directions.push(line.direction),
-                Ok(TrackUpdate::Log(entry)) => logs.push(entry.message),
-                Ok(TrackUpdate::Ended(_)) => ended = true,
+                Ok(InteractionUpdate::Event(AgentEvent::UserMessage { text })) => user = Some(text),
+                Ok(InteractionUpdate::Event(AgentEvent::AgentMessage { text })) => {
+                    agent = Some(text)
+                }
+                Ok(InteractionUpdate::Event(_)) => {}
+                Ok(InteractionUpdate::Raw(line)) => raw_directions.push(line.direction),
+                Ok(InteractionUpdate::Log(entry)) => logs.push(entry.message),
+                Ok(InteractionUpdate::Ended(_)) => ended = true,
                 Err(_) => {}
             }
         }
 
         assert_eq!(user.as_deref(), Some("hello agent"));
         assert_eq!(agent.as_deref(), Some("echo: hello agent"));
-        assert!(ended, "the track should report that it ended");
+        assert!(ended, "the interaction should report that it ended");
         // The raw view sees both the outgoing submission and the agent reply.
         assert!(raw_directions.contains(&Direction::ToAgent));
         assert!(raw_directions.contains(&Direction::FromAgent));
         // Agent stderr is streamed to the log view.
         assert!(stderr_seen(&logs), "agent stderr should reach the log");
 
-        drop(track);
+        drop(interaction);
 
         // The journal captured both the operator turn and the agent reply.
         let replayed = crate::journal::replay(&dir, Protocol::CodexJsonl).unwrap();
         assert_eq!(
             replayed,
             vec![
-                AgentEvent::UserMessage { text: "hello agent".into() },
-                AgentEvent::AgentMessage { text: "echo: hello agent".into() },
+                AgentEvent::UserMessage {
+                    text: "hello agent".into()
+                },
+                AgentEvent::AgentMessage {
+                    text: "echo: hello agent".into()
+                },
             ]
         );
 
@@ -772,7 +800,10 @@ mod tests {
         assert!(matches!(request.mounts[0], Mount::Temporary { .. }));
         assert!(request.mounts.iter().any(|mount| matches!(
             mount,
-            Mount::Bind { access: MountAccess::ReadWrite, .. }
+            Mount::Bind {
+                access: MountAccess::ReadWrite,
+                ..
+            }
         )));
         assert_eq!(
             request.environment.get(&OsString::from("HOME")),

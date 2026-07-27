@@ -40,7 +40,7 @@ Workspace
     └── Interaction (zero or one live)
 ```
 
-- [ ] **10. Interaction terminology.** Rename the live `Track` process/protocol
+- [x] **10. Interaction terminology.** Rename the live `Track` process/protocol
   wrapper and all of its server, API, client, TUI, test, and documentation
   vocabulary to `Interaction`, without changing behaviour.
 - [ ] **11. Workspace storage.** Add durable Workspace metadata and nest new

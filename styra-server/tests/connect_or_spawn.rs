@@ -31,16 +31,23 @@ fn spawns_reuses_and_outlives_the_caller() {
     let again = ensure_server(&socket).expect("second ensure_server should reuse the daemon");
     again.health().expect("daemon should still be healthy");
 
-    // The live-tracks listing round-trips over the socket; a fresh daemon has
+    // The live-interactions listing round-trips over the socket; a fresh daemon has
     // none running yet.
-    let tracks = client.list_tracks().expect("listing live tracks should succeed");
-    assert!(tracks.is_empty(), "a fresh daemon should report no live tracks");
+    let interactions = client
+        .list_interactions()
+        .expect("listing live interactions should succeed");
+    assert!(
+        interactions.is_empty(),
+        "a fresh daemon should report no live interactions"
+    );
 
     // The daemon is detached, so it is still serving after we would have exited.
     let deadline = Instant::now() + Duration::from_secs(1);
     while Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(50));
-        client.health().expect("detached daemon should keep serving");
+        client
+            .health()
+            .expect("detached daemon should keep serving");
     }
 
     // Best-effort cleanup: stop serving by removing the socket and the store.

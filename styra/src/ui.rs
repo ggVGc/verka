@@ -4,18 +4,18 @@
 //! inline when expanded), the message box, and a one-line status/help footer.
 //! Rendering is a pure function of `App`; all state lives in [`crate::app`].
 
-use styra_server::agent::{Provider, SandboxLayout};
 use crate::app::{App, Entry, Focus, LaunchColumn, LaunchLabel, Launcher, Status, View};
-use styra_server::event::{DetailBlock, AgentEvent};
-use styra_server::{SessionSummary, TrackSummary, TrackUpdate};
-use styra_server::{Direction as WireDirection, LogLevel};
-use styra_server::{Mount, MountAccess};
 use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::Frame;
 use std::path::{Path, PathBuf};
+use styra_server::agent::{Provider, SandboxLayout};
+use styra_server::event::{AgentEvent, DetailBlock};
+use styra_server::{Direction as WireDirection, LogLevel};
+use styra_server::{InteractionSummary, InteractionUpdate, SessionSummary};
+use styra_server::{Mount, MountAccess};
 
 /// Cap on detail lines shown for one expanded entry, so a single noisy command
 /// cannot bury the rest of the session.
@@ -73,11 +73,17 @@ fn title_line(label: &LaunchLabel, status: &Status, suffix: Option<&str>) -> Lin
     )];
     // No model named anywhere: the agent is on its own configured default and
     // has not said which, so the display says exactly that rather than guessing.
-    let model = label.model.clone().unwrap_or_else(|| "default model".into());
+    let model = label
+        .model
+        .clone()
+        .unwrap_or_else(|| "default model".into());
     spans.push(Span::styled(model, value_style(label.model_reported)));
     if let Some(effort) = &label.effort {
         spans.push(Span::styled(" · ", text_style));
-        spans.push(Span::styled(effort.clone(), value_style(label.effort_reported)));
+        spans.push(Span::styled(
+            effort.clone(),
+            value_style(label.effort_reported),
+        ));
     }
     spans.push(Span::styled(" · ", text_style));
     spans.push(Span::styled("● ", Style::default().fg(color)));
@@ -94,7 +100,7 @@ fn title_line(label: &LaunchLabel, status: &Status, suffix: Option<&str>) -> Lin
 
 pub fn render(frame: &mut Frame, app: &App) {
     // The launch picker is modal: it is the only thing that can be acted on
-    // while open, so it takes the whole frame like the session and track
+    // while open, so it takes the whole frame like the session and interaction
     // pickers do, rather than overlaying a screen whose keys are inert.
     if let Some(launcher) = &app.launcher {
         render_launcher(frame, launcher, frame.area());
@@ -152,56 +158,60 @@ pub fn render_picker(frame: &mut Frame, sessions: &[SessionSummary], selected: u
     }
 
     let items: Vec<ListItem> = sessions.iter().map(session_item).collect();
-    let list = List::new(items)
-        .block(block)
-        .highlight_style(Style::default().bg(SELECTION_BG).add_modifier(Modifier::BOLD));
+    let list = List::new(items).block(block).highlight_style(
+        Style::default()
+            .bg(SELECTION_BG)
+            .add_modifier(Modifier::BOLD),
+    );
     let mut state = ListState::default();
     state.select(Some(selected.min(sessions.len() - 1)));
     frame.render_stateful_widget(list, area, &mut state);
 }
 
-/// Render the current-tracks picker: tracks on the left and the selected
-/// track's live diagnostic/stderr log on the right.
+/// Render the current-interactions picker: interactions on the left and the selected
+/// interaction's live diagnostic/stderr log on the right.
 ///
 /// Like [`render_picker`], it stands apart from [`App`] because it overlays
 /// whichever session is currently loaded. The picker loop owns and refreshes
 /// `updates`, while this function remains a pure renderer.
-pub fn render_tracks_picker(
+pub fn render_interactions_picker(
     frame: &mut Frame,
-    tracks: &[TrackSummary],
+    interactions: &[InteractionSummary],
     selected: usize,
-    updates: &[TrackUpdate],
+    updates: &[InteractionUpdate],
 ) {
     let area = frame.area();
     let panes = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(42), Constraint::Percentage(58)])
         .split(area);
-    let tracks_block = Block::default()
+    let interactions_block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
-        .title(" styra · current tracks · Enter attach · q cancel ");
+        .title(" styra · current interactions · Enter attach · q cancel ");
 
-    if tracks.is_empty() {
+    if interactions.is_empty() {
         let empty = Paragraph::new(Line::from(Span::styled(
-            "  no live tracks on the server",
+            "  no live interactions on the server",
             Style::default().fg(Color::Gray),
         )))
-        .block(tracks_block);
+        .block(interactions_block);
         frame.render_widget(empty, panes[0]);
-        render_track_log_preview(frame, None, updates, panes[1]);
+        render_interaction_log_preview(frame, None, updates, panes[1]);
         return;
     }
 
-    let items: Vec<ListItem> = tracks.iter().map(track_item).collect();
-    let list = List::new(items)
-        .block(tracks_block)
-        .highlight_style(Style::default().bg(SELECTION_BG).add_modifier(Modifier::BOLD));
+    let items: Vec<ListItem> = interactions.iter().map(interaction_item).collect();
+    let list = List::new(items).block(interactions_block).highlight_style(
+        Style::default()
+            .bg(SELECTION_BG)
+            .add_modifier(Modifier::BOLD),
+    );
     let mut state = ListState::default();
-    let selected = selected.min(tracks.len() - 1);
+    let selected = selected.min(interactions.len() - 1);
     state.select(Some(selected));
     frame.render_stateful_widget(list, panes[0], &mut state);
-    render_track_log_preview(frame, tracks.get(selected), updates, panes[1]);
+    render_interaction_log_preview(frame, interactions.get(selected), updates, panes[1]);
 }
 
 /// Render the launch picker: agent, model, and reasoning effort side by side,
@@ -220,10 +230,15 @@ fn render_launcher(frame: &mut Frame, launcher: &Launcher, area: Rect) {
             Span::styled(" styra · launch · ", Style::default().fg(Color::Gray)),
             Span::styled(
                 format!("{} ", selection.name()),
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
             ),
         ]))
-        .title_bottom(Line::from(Span::styled(hint, Style::default().fg(Color::Gray))));
+        .title_bottom(Line::from(Span::styled(
+            hint,
+            Style::default().fg(Color::Gray),
+        )));
     let inner = frame_block.inner(area);
     frame.render_widget(frame_block, area);
 
@@ -316,9 +331,11 @@ fn render_launcher_column(
             )))
         })
         .collect();
-    let list = List::new(items)
-        .block(block)
-        .highlight_style(Style::default().bg(SELECTION_BG).add_modifier(Modifier::BOLD));
+    let list = List::new(items).block(block).highlight_style(
+        Style::default()
+            .bg(SELECTION_BG)
+            .add_modifier(Modifier::BOLD),
+    );
     let mut state = ListState::default();
     if !rows.is_empty() {
         state.select(Some(selected.min(rows.len() - 1)));
@@ -326,14 +343,14 @@ fn render_launcher_column(
     frame.render_stateful_widget(list, area, &mut state);
 }
 
-fn render_track_log_preview(
+fn render_interaction_log_preview(
     frame: &mut Frame,
-    track: Option<&TrackSummary>,
-    updates: &[TrackUpdate],
+    interaction: Option<&InteractionSummary>,
+    updates: &[InteractionUpdate],
     area: Rect,
 ) {
-    let title = track
-        .map(|track| format!(" current log · {} ", track.id))
+    let title = interaction
+        .map(|interaction| format!(" current log · {} ", interaction.id))
         .unwrap_or_else(|| " current log ".into());
     let block = Block::default()
         .borders(Borders::ALL)
@@ -357,25 +374,27 @@ fn render_track_log_preview(
     let start = updates.len().saturating_sub(viewport);
     let lines: Vec<Line<'static>> = updates[start..]
         .iter()
-        .map(track_preview_line)
+        .map(interaction_preview_line)
         .collect();
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 
-fn track_preview_line(update: &TrackUpdate) -> Line<'static> {
+fn interaction_preview_line(update: &InteractionUpdate) -> Line<'static> {
     match update {
-        TrackUpdate::Event(event) => {
+        InteractionUpdate::Event(event) => {
             let tag = event.tag();
             Line::from(vec![
                 Span::styled(
                     format!("{tag:<8} "),
-                    Style::default().fg(tag_color(tag)).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(tag_color(tag))
+                        .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(event.summary(), Style::default().fg(Color::White)),
             ])
         }
-        TrackUpdate::Log(entry) => log_line(entry),
-        TrackUpdate::Ended(end) => {
+        InteractionUpdate::Log(entry) => log_line(entry),
+        InteractionUpdate::Ended(end) => {
             let (message, color) = match (&end.error, end.exit_code) {
                 (Some(error), _) => (format!("failed: {error}"), Color::Red),
                 (None, Some(code)) => (format!("ended with exit code {code}"), Color::DarkGray),
@@ -383,26 +402,28 @@ fn track_preview_line(update: &TrackUpdate) -> Line<'static> {
             };
             Line::from(Span::styled(message, Style::default().fg(color)))
         }
-        TrackUpdate::Raw(_) => Line::default(),
+        InteractionUpdate::Raw(_) => Line::default(),
     }
 }
 
-fn track_item(track: &TrackSummary) -> ListItem<'static> {
-    let (label, color) = if track.accepting {
+fn interaction_item(interaction: &InteractionSummary) -> ListItem<'static> {
+    let (label, color) = if interaction.accepting {
         ("live", Color::Green)
     } else {
         ("ended", Color::DarkGray)
     };
     ListItem::new(Line::from(vec![
         Span::styled(
-            format!("{:<14} ", track.profile),
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            format!("{:<14} ", interaction.profile),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             format!("{label:<6} "),
             Style::default().fg(color).add_modifier(Modifier::BOLD),
         ),
-        Span::styled(track.id.clone(), Style::default().fg(Color::White)),
+        Span::styled(interaction.id.clone(), Style::default().fg(Color::White)),
     ]))
 }
 
@@ -411,9 +432,14 @@ fn session_item(session: &SessionSummary) -> ListItem<'static> {
     ListItem::new(Line::from(vec![
         Span::styled(
             format!("{profile:<14} "),
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(format!("{:<10} ", session.age), Style::default().fg(Color::Gray)),
+        Span::styled(
+            format!("{:<10} ", session.age),
+            Style::default().fg(Color::Gray),
+        ),
         Span::styled(session.id.clone(), Style::default().fg(Color::White)),
     ]))
 }
@@ -454,7 +480,10 @@ fn log_line(entry: &styra_server::LogEntry) -> Line<'static> {
         LogLevel::Error => ("error", Color::Red),
     };
     Line::from(vec![
-        Span::styled(format!("{label} "), Style::default().fg(color).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            format!("{label} "),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ),
         Span::styled(entry.message.clone(), Style::default().fg(Color::White)),
     ])
 }
@@ -479,7 +508,11 @@ fn render_transcript_view(frame: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(border_style)
-        .title(title_line(&app.launch_label(), &app.status, Some("transcript")));
+        .title(title_line(
+            &app.launch_label(),
+            &app.status,
+            Some("transcript"),
+        ));
 
     if app.entries.is_empty() {
         let empty = Paragraph::new(Line::from(Span::styled(
@@ -491,11 +524,20 @@ fn render_transcript_view(frame: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    let events: Vec<AgentEvent> = app.entries.iter().map(|entry| entry.event.clone()).collect();
+    let events: Vec<AgentEvent> = app
+        .entries
+        .iter()
+        .map(|entry| entry.event.clone())
+        .collect();
     let text = styra_server::render::render_events(&events, false, app.show_minor);
     let lines: Vec<Line<'static>> = text
         .lines()
-        .map(|line| Line::from(Span::styled(line.to_owned(), Style::default().fg(Color::White))))
+        .map(|line| {
+            Line::from(Span::styled(
+                line.to_owned(),
+                Style::default().fg(Color::White),
+            ))
+        })
         .collect();
 
     let viewport = area.height.saturating_sub(2) as usize;
@@ -590,12 +632,16 @@ fn render_driva(frame: &mut Frame, app: &App, area: Rect) {
         Line::from(""),
         Line::from(Span::styled(
             "mounts",
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
         )),
     ];
     lines.extend(options.mounts.iter().map(mount_line));
 
-    let paragraph = Paragraph::new(lines).block(block).wrap(Wrap { trim: false });
+    let paragraph = Paragraph::new(lines)
+        .block(block)
+        .wrap(Wrap { trim: false });
     frame.render_widget(paragraph, area);
 }
 
@@ -603,7 +649,9 @@ fn driva_field_line(label: &str, value: &str) -> Line<'static> {
     Line::from(vec![
         Span::styled(
             format!("  {label:<8} "),
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled(value.to_owned(), Style::default().fg(Color::White)),
     ])
@@ -611,7 +659,11 @@ fn driva_field_line(label: &str, value: &str) -> Line<'static> {
 
 fn mount_line(mount: &Mount) -> Line<'static> {
     match mount {
-        Mount::Bind { source, destination, access } => {
+        Mount::Bind {
+            source,
+            destination,
+            access,
+        } => {
             let (label, color) = match access {
                 MountAccess::ReadWrite => ("rw", Color::Yellow),
                 MountAccess::ReadOnly => ("ro", Color::Gray),
@@ -628,8 +680,16 @@ fn mount_line(mount: &Mount) -> Line<'static> {
             ])
         }
         Mount::Temporary { destination } => Line::from(vec![
-            Span::styled("  tmp ", Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD)),
-            Span::styled(destination.display().to_string(), Style::default().fg(Color::White)),
+            Span::styled(
+                "  tmp ",
+                Style::default()
+                    .fg(Color::Blue)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                destination.display().to_string(),
+                Style::default().fg(Color::White),
+            ),
         ]),
     }
 }
@@ -641,7 +701,9 @@ fn render_preview(frame: &mut Frame, app: &App, area: Rect) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::DarkGray))
         .title(Span::styled(" preview ", Style::default().fg(Color::Gray)));
-    let paragraph = Paragraph::new(preview_lines(app)).block(block).wrap(Wrap { trim: false });
+    let paragraph = Paragraph::new(preview_lines(app))
+        .block(block)
+        .wrap(Wrap { trim: false });
     frame.render_widget(paragraph, area);
 }
 
@@ -688,7 +750,9 @@ fn file_content_lines(paths: &[String], workspace_root: Option<&Path>) -> Vec<Li
     for path in paths {
         lines.push(Line::from(Span::styled(
             format!("{DETAIL_INDENT}── {path} ──"),
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
         )));
         match std::fs::read_to_string(resolve_workspace_path(root, path)) {
             Ok(content) => {
@@ -942,7 +1006,9 @@ fn summary_line(entry: &Entry, has_detail: bool) -> Line<'static> {
         Span::raw(format!("{marker} ")),
         Span::styled(
             format!("{tag:<8} "),
-            Style::default().fg(tag_color(tag)).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(tag_color(tag))
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled(entry.event.summary(), Style::default().fg(Color::White)),
     ])
@@ -1033,7 +1099,12 @@ fn input_text(app: &App) -> Vec<Line<'static>> {
     }
     app.input
         .split('\n')
-        .map(|line| Line::from(Span::styled(line.to_owned(), Style::default().fg(Color::White))))
+        .map(|line| {
+            Line::from(Span::styled(
+                line.to_owned(),
+                Style::default().fg(Color::White),
+            ))
+        })
         .collect()
 }
 
@@ -1043,7 +1114,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     if app.can_configure_launch() {
         let hints = match app.focus {
             Focus::Input => "Enter send (starts the agent) · Ctrl+L choose agent/model/effort · Alt+Enter newline · Esc back to list",
-            Focus::List => "L choose agent/model/effort · i message · A tracks · V switch · q quit",
+            Focus::List => "L choose agent/model/effort · i message · A interactions · V switch · q quit",
         };
         let footer = Paragraph::new(Line::from(Span::styled(
             format!(" {hints}"),
@@ -1056,22 +1127,22 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     let hints = match (app.focus, app.view) {
         (Focus::Input, _) => "Enter send · Alt+Enter newline · Ctrl+W delete word · Esc back to list",
         (Focus::List, View::Events) => {
-            "j/k next/prev with detail · J/K next/prev line · space fold · C collapse all · m minor · p preview · P full-screen · t transcript · r raw · l log · d driva · i message · s stop · A tracks · S reset · V switch · q quit"
+            "j/k next/prev with detail · J/K next/prev line · space fold · C collapse all · m minor · p preview · P full-screen · t transcript · r raw · l log · d driva · i message · s stop · A interactions · S reset · V switch · q quit"
         }
         (Focus::List, View::Raw) => {
-            "j/k scroll · g/G top/bottom · r events · l log · t transcript · d driva · i message · s stop · A tracks · S reset · V switch · q quit"
+            "j/k scroll · g/G top/bottom · r events · l log · t transcript · d driva · i message · s stop · A interactions · S reset · V switch · q quit"
         }
         (Focus::List, View::Log) => {
-            "j/k scroll · g/G top/bottom · l events · r raw · t transcript · d driva · i message · s stop · A tracks · S reset · V switch · q quit"
+            "j/k scroll · g/G top/bottom · l events · r raw · t transcript · d driva · i message · s stop · A interactions · S reset · V switch · q quit"
         }
         (Focus::List, View::Transcript) => {
-            "j/k scroll · g/G top/bottom · t events · r raw · l log · d driva · i message · s stop · A tracks · S reset · V switch · q quit"
+            "j/k scroll · g/G top/bottom · t events · r raw · l log · d driva · i message · s stop · A interactions · S reset · V switch · q quit"
         }
         (Focus::List, View::Driva) => {
-            "d events · r raw · l log · t transcript · i message · s stop · A tracks · S reset · V switch · q quit"
+            "d events · r raw · l log · t transcript · i message · s stop · A interactions · S reset · V switch · q quit"
         }
         (Focus::List, View::Preview) => {
-            "j/k next/prev with detail · J/K next/prev line · g/G top/bottom · P events · i message · s stop · A tracks · S reset · V switch · q quit"
+            "j/k next/prev with detail · J/K next/prev line · g/G top/bottom · P events · i message · s stop · A interactions · S reset · V switch · q quit"
         }
     };
     let footer = Paragraph::new(Line::from(Span::styled(
@@ -1109,10 +1180,10 @@ fn tag_color(tag: &str) -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use styra_server::event::{AgentEvent, TokenUsage};
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
     use ratatui::Terminal;
+    use styra_server::event::{AgentEvent, TokenUsage};
 
     fn rendered(app: &App) -> String {
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
@@ -1137,10 +1208,9 @@ mod tests {
                 .map(|x| buffer.cell((x, y)).unwrap().symbol())
                 .collect();
             let found = (0..symbols.len()).find(|&start| {
-                needle_chars
-                    .iter()
-                    .enumerate()
-                    .all(|(i, &ch)| symbols.get(start + i).and_then(|s| s.chars().next()) == Some(ch))
+                needle_chars.iter().enumerate().all(|(i, &ch)| {
+                    symbols.get(start + i).and_then(|s| s.chars().next()) == Some(ch)
+                })
             });
             if let Some(x) = found {
                 return (x as u16, y);
@@ -1183,7 +1253,9 @@ mod tests {
     #[test]
     fn expanded_and_selected_content_uses_a_gray_backdrop_not_white() {
         let mut app = App::new("codex", "s1");
-        app.push_event(AgentEvent::AgentMessage { text: "hello\nworld".into() });
+        app.push_event(AgentEvent::AgentMessage {
+            text: "hello\nworld".into(),
+        });
         // `push_event` leaves the newest entry both selected (via follow) and,
         // once expanded, the case that used to flip to a reversed-white fill.
         app.expand_all();
@@ -1204,7 +1276,9 @@ mod tests {
     #[test]
     fn an_expanded_selected_entrys_detail_body_is_never_bold() {
         let mut app = App::new("codex", "s1");
-        app.push_event(AgentEvent::AgentMessage { text: "hello\nworld".into() });
+        app.push_event(AgentEvent::AgentMessage {
+            text: "hello\nworld".into(),
+        });
         app.expand_all();
 
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
@@ -1213,8 +1287,9 @@ mod tests {
 
         let detail_row = (0..buffer.area.height)
             .find(|&y| {
-                let row: String =
-                    (0..buffer.area.width).map(|x| buffer.cell((x, y)).unwrap().symbol()).collect();
+                let row: String = (0..buffer.area.width)
+                    .map(|x| buffer.cell((x, y)).unwrap().symbol())
+                    .collect();
                 row.contains("world")
             })
             .expect("no row contains the detail line");
@@ -1226,14 +1301,21 @@ mod tests {
                 .add_modifier
                 .contains(Modifier::BOLD)
         });
-        assert!(!is_bold, "an expanded, selected entry's detail body must not be forced bold");
+        assert!(
+            !is_bold,
+            "an expanded, selected entry's detail body must not be forced bold"
+        );
     }
 
     #[test]
     fn only_the_selected_entrys_expanded_content_gets_a_gray_backdrop() {
         let mut app = App::new("codex", "s1");
-        app.push_event(AgentEvent::AgentMessage { text: "one\ntwo".into() });
-        app.push_event(AgentEvent::AgentMessage { text: "three\nfour".into() });
+        app.push_event(AgentEvent::AgentMessage {
+            text: "one\ntwo".into(),
+        });
+        app.push_event(AgentEvent::AgentMessage {
+            text: "three\nfour".into(),
+        });
         // `push_event` leaves the second (last) entry selected via follow;
         // both get expanded, but only the selected one should be highlighted.
         app.expand_all();
@@ -1253,9 +1335,8 @@ mod tests {
                 .unwrap_or_else(|| panic!("no row contains {text:?}"))
         };
         let row_has_gray_backdrop = |y: u16| {
-            (0..buffer.area.width).any(|x| {
-                buffer.cell((x, y)).unwrap().style().bg == Some(SELECTION_BG)
-            })
+            (0..buffer.area.width)
+                .any(|x| buffer.cell((x, y)).unwrap().style().bg == Some(SELECTION_BG))
         };
 
         let unselected_detail_row = row_containing("two");
@@ -1270,7 +1351,9 @@ mod tests {
         assert!(rendered(&app).contains('●'));
         assert_eq!(status_color(&app.status), Color::Yellow);
 
-        app.push_event(AgentEvent::TurnCompleted { usage: TokenUsage::default() });
+        app.push_event(AgentEvent::TurnCompleted {
+            usage: TokenUsage::default(),
+        });
         assert!(rendered(&app).contains("idle"));
         assert_eq!(status_color(&app.status), Color::Green);
     }
@@ -1278,7 +1361,9 @@ mod tests {
     #[test]
     fn a_collapsed_entry_with_more_to_show_has_a_fold_marker() {
         let mut app = App::new("codex", "s1");
-        app.push_event(AgentEvent::AgentMessage { text: "hello world\nmore detail".into() });
+        app.push_event(AgentEvent::AgentMessage {
+            text: "hello world\nmore detail".into(),
+        });
         let screen = rendered(&app);
         assert!(screen.contains("hello world"));
         assert!(screen.contains('▸'));
@@ -1290,7 +1375,9 @@ mod tests {
         let mut app = App::new("codex", "s1");
         // A single-line agent message: its detail body is identical to the
         // summary already shown, so there is nothing left to expand into.
-        app.push_event(AgentEvent::AgentMessage { text: "hello world".into() });
+        app.push_event(AgentEvent::AgentMessage {
+            text: "hello world".into(),
+        });
         let screen = rendered(&app);
         assert!(screen.contains("hello world"));
         assert!(!screen.contains('▸'));
@@ -1300,7 +1387,9 @@ mod tests {
     #[test]
     fn a_truncated_single_line_summary_has_a_fold_marker_and_expands_to_the_full_text() {
         let mut app = App::new("codex", "s1");
-        app.push_event(AgentEvent::AgentMessage { text: "x".repeat(500) });
+        app.push_event(AgentEvent::AgentMessage {
+            text: "x".repeat(500),
+        });
         let collapsed = rendered(&app);
         assert!(collapsed.contains('…'));
         assert!(collapsed.contains('▸'));
@@ -1349,7 +1438,11 @@ mod tests {
     fn usage_is_shown_once_recorded() {
         let mut app = App::new("codex", "s1");
         app.push_event(AgentEvent::TurnCompleted {
-            usage: TokenUsage { input_tokens: 12, output_tokens: 3, ..Default::default() },
+            usage: TokenUsage {
+                input_tokens: 12,
+                output_tokens: 3,
+                ..Default::default()
+            },
         });
         let screen = rendered(&app);
         assert!(screen.contains("in 12"));
@@ -1358,8 +1451,14 @@ mod tests {
     #[test]
     fn minor_events_are_omitted_from_the_list_when_hidden() {
         let mut app = App::new("codex", "s1");
-        app.push_event(AgentEvent::ThreadStarted { thread_id: "t-1".into(), model: None, effort: None });
-        app.push_event(AgentEvent::AgentMessage { text: "hello world".into() });
+        app.push_event(AgentEvent::ThreadStarted {
+            thread_id: "t-1".into(),
+            model: None,
+            effort: None,
+        });
+        app.push_event(AgentEvent::AgentMessage {
+            text: "hello world".into(),
+        });
         // Hidden by default; no toggle needed to get here.
         assert!(!app.show_minor);
         let screen = rendered(&app);
@@ -1426,12 +1525,21 @@ mod tests {
         let mut app = App::new("codex", "s1");
         app.push_raw(RawLine {
             direction: Direction::FromAgent,
-            text: format!(r#"{{"type":"item.completed","text":"{}END"}}"#, "a".repeat(200)),
+            text: format!(
+                r#"{{"type":"item.completed","text":"{}END"}}"#,
+                "a".repeat(200)
+            ),
         });
         app.toggle_raw();
         let screen = rendered(&app);
-        assert!(screen.contains("item.completed"), "start of the line is shown");
-        assert!(screen.contains("END"), "the tail wraps into view instead of being clipped");
+        assert!(
+            screen.contains("item.completed"),
+            "start of the line is shown"
+        );
+        assert!(
+            screen.contains("END"),
+            "the tail wraps into view instead of being clipped"
+        );
     }
 
     #[test]
@@ -1470,7 +1578,9 @@ mod tests {
         // Long enough that a single 80-column row (minus borders) could not
         // hold it; a fixed-width row concatenation of the test buffer would
         // otherwise cut this down to a handful of repetitions.
-        app.push_event(AgentEvent::AgentMessage { text: "word ".repeat(40) });
+        app.push_event(AgentEvent::AgentMessage {
+            text: "word ".repeat(40),
+        });
         let screen = rendered(&app);
         assert!(
             screen.matches("word").count() > 20,
@@ -1526,7 +1636,9 @@ mod tests {
     #[test]
     fn fullscreen_preview_has_no_border_or_title() {
         let mut app = App::new("codex", "s1");
-        app.push_event(AgentEvent::AgentMessage { text: "hello".into() });
+        app.push_event(AgentEvent::AgentMessage {
+            text: "hello".into(),
+        });
         app.toggle_fullscreen_preview();
 
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
@@ -1535,16 +1647,17 @@ mod tests {
         let screen: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
 
         for border_char in ['┌', '┐', '└', '┘', '─', '│'] {
-            assert!(!screen.contains(border_char), "found border character {border_char:?}");
+            assert!(
+                !screen.contains(border_char),
+                "found border character {border_char:?}"
+            );
         }
     }
 
     #[test]
     fn preview_shows_the_current_content_of_a_changed_file() {
-        let dir = std::env::temp_dir().join(format!(
-            "styra-preview-file-test-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("styra-preview-file-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("notes.txt"), "line one\nline two").unwrap();
 
@@ -1599,7 +1712,10 @@ mod tests {
         let has_highlight = preview_columns
             .flat_map(|x| (0..buffer.area.height).map(move |y| (x, y)))
             .any(|(x, y)| buffer.cell((x, y)).unwrap().style().bg == Some(SELECTION_BG));
-        assert!(!has_highlight, "preview text should never carry a background highlight");
+        assert!(
+            !has_highlight,
+            "preview text should never carry a background highlight"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -1610,7 +1726,9 @@ mod tests {
         // separate focus state), so its unstyled title used to inherit that
         // same dim color from the border paint underneath it.
         let mut app = App::new("codex", "s1");
-        app.push_event(AgentEvent::AgentMessage { text: "hello".into() });
+        app.push_event(AgentEvent::AgentMessage {
+            text: "hello".into(),
+        });
         app.toggle_preview();
 
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
@@ -1652,8 +1770,12 @@ mod tests {
     #[test]
     fn transcript_view_renders_the_current_session() {
         let mut app = App::new("codex", "s1");
-        app.push_event(AgentEvent::UserMessage { text: "implement retry backoff".into() });
-        app.push_event(AgentEvent::AgentMessage { text: "Added backoff, tests pass.".into() });
+        app.push_event(AgentEvent::UserMessage {
+            text: "implement retry backoff".into(),
+        });
+        app.push_event(AgentEvent::AgentMessage {
+            text: "Added backoff, tests pass.".into(),
+        });
         app.toggle_transcript();
         let screen = rendered(&app);
         assert!(screen.contains("transcript"));
@@ -1664,8 +1786,14 @@ mod tests {
     #[test]
     fn transcript_view_follows_the_minor_toggle_and_rerenders_when_flipped() {
         let mut app = App::new("codex", "s1");
-        app.push_event(AgentEvent::ThreadStarted { thread_id: "t-1".into(), model: None, effort: None });
-        app.push_event(AgentEvent::AgentMessage { text: "hello world".into() });
+        app.push_event(AgentEvent::ThreadStarted {
+            thread_id: "t-1".into(),
+            model: None,
+            effort: None,
+        });
+        app.push_event(AgentEvent::AgentMessage {
+            text: "hello world".into(),
+        });
         app.toggle_transcript();
 
         assert!(!app.show_minor);
@@ -1691,7 +1819,11 @@ mod tests {
     fn the_status_line_names_the_model_and_effort_in_use() {
         let mut app = App::new("codex", "s-1");
         // Nothing pinned and nothing reported yet: said plainly, not guessed.
-        assert!(rendered(&app).contains("styra · codex · default model"), "{}", rendered(&app));
+        assert!(
+            rendered(&app).contains("styra · codex · default model"),
+            "{}",
+            rendered(&app)
+        );
 
         app.push_event(AgentEvent::ThreadStarted {
             thread_id: "t-9".into(),
@@ -1706,9 +1838,18 @@ mod tests {
 
         // Every other view carries the same status line, so switching away from
         // the event list does not lose it.
-        for toggle in [App::toggle_raw, App::toggle_log, App::toggle_transcript, App::toggle_driva] {
+        for toggle in [
+            App::toggle_raw,
+            App::toggle_log,
+            App::toggle_transcript,
+            App::toggle_driva,
+        ] {
             toggle(&mut app);
-            assert!(rendered(&app).contains("gpt-5.6-sol · high"), "{}", rendered(&app));
+            assert!(
+                rendered(&app).contains("gpt-5.6-sol · high"),
+                "{}",
+                rendered(&app)
+            );
             toggle(&mut app);
         }
     }
@@ -1751,7 +1892,10 @@ mod tests {
         let screen = rendered(&app);
         assert!(screen.contains("claude:opus/max"), "{screen}");
         assert!(screen.contains("press L to choose"), "{screen}");
-        assert!(screen.contains("Ctrl+L"), "the start screen opens in input focus: {screen}");
+        assert!(
+            screen.contains("Ctrl+L"),
+            "the start screen opens in input focus: {screen}"
+        );
 
         // A launched session shows the plain waiting message instead: its agent
         // and model are settled, so there is nothing to offer choosing.
@@ -1777,7 +1921,10 @@ mod tests {
         let screen = rendered(&app);
         assert!(screen.contains("styra · launch"), "{screen}");
         for column in ["model", "effort"] {
-            assert!(screen.contains(column), "missing the {column} column: {screen}");
+            assert!(
+                screen.contains(column),
+                "missing the {column} column: {screen}"
+            );
         }
         // Both defaults are offered as their own rows, distinct from any level
         // Styra could name.
@@ -1805,7 +1952,10 @@ mod tests {
         assert!(screen.contains("claude-opus-4-1-20250805"), "{screen}");
         // Alongside the catalog it is not part of.
         assert!(screen.contains("claude-opus-5"), "{screen}");
-        assert!(screen.contains("claude:claude-opus-4-1-20250805"), "{screen}");
+        assert!(
+            screen.contains("claude:claude-opus-4-1-20250805"),
+            "{screen}"
+        );
     }
 
     /// Every model the picker offers for Claude Code is a full id, so the
@@ -1835,7 +1985,9 @@ mod tests {
 
     fn rendered_picker(sessions: &[SessionSummary], selected: usize) -> String {
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
-        terminal.draw(|frame| render_picker(frame, sessions, selected)).unwrap();
+        terminal
+            .draw(|frame| render_picker(frame, sessions, selected))
+            .unwrap();
         terminal
             .backend()
             .buffer()
@@ -1868,8 +2020,8 @@ mod tests {
         assert!(screen.contains("no sessions found"));
     }
 
-    fn track_summary(id: &str, profile: &str, accepting: bool) -> TrackSummary {
-        TrackSummary {
+    fn interaction_summary(id: &str, profile: &str, accepting: bool) -> InteractionSummary {
+        InteractionSummary {
             id: id.into(),
             profile: profile.into(),
             workspace: std::path::PathBuf::from("/home/op/project"),
@@ -1884,14 +2036,14 @@ mod tests {
         }
     }
 
-    fn rendered_tracks_picker(
-        tracks: &[TrackSummary],
+    fn rendered_interactions_picker(
+        interactions: &[InteractionSummary],
         selected: usize,
-        updates: &[TrackUpdate],
+        updates: &[InteractionUpdate],
     ) -> String {
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
         terminal
-            .draw(|frame| render_tracks_picker(frame, tracks, selected, updates))
+            .draw(|frame| render_interactions_picker(frame, interactions, selected, updates))
             .unwrap();
         terminal
             .backend()
@@ -1904,13 +2056,13 @@ mod tests {
     }
 
     #[test]
-    fn tracks_picker_lists_tracks_with_profile_and_live_state() {
-        let tracks = vec![
-            track_summary("s-1", "codex", true),
-            track_summary("s-2", "claude", false),
+    fn interactions_picker_lists_interactions_with_profile_and_live_state() {
+        let interactions = vec![
+            interaction_summary("s-1", "codex", true),
+            interaction_summary("s-2", "claude", false),
         ];
-        let screen = rendered_tracks_picker(&tracks, 0, &[]);
-        assert!(screen.contains("current tracks"));
+        let screen = rendered_interactions_picker(&interactions, 0, &[]);
+        assert!(screen.contains("current interactions"));
         assert!(screen.contains("current log"));
         assert!(screen.contains("codex"));
         assert!(screen.contains("live"));
@@ -1921,28 +2073,28 @@ mod tests {
     }
 
     #[test]
-    fn tracks_picker_shows_a_placeholder_when_there_are_no_live_tracks() {
-        let screen = rendered_tracks_picker(&[], 0, &[]);
-        assert!(screen.contains("no live tracks"));
+    fn interactions_picker_shows_a_placeholder_when_there_are_no_live_interactions() {
+        let screen = rendered_interactions_picker(&[], 0, &[]);
+        assert!(screen.contains("no live interactions"));
     }
 
     #[test]
-    fn tracks_picker_previews_the_selected_tracks_log() {
-        let tracks = vec![
-            track_summary("s-1", "codex", true),
-            track_summary("s-2", "claude", true),
+    fn interactions_picker_previews_the_selected_interactions_log() {
+        let interactions = vec![
+            interaction_summary("s-1", "codex", true),
+            interaction_summary("s-2", "claude", true),
         ];
         let updates = vec![
-            TrackUpdate::Event(AgentEvent::CommandStarted {
+            InteractionUpdate::Event(AgentEvent::CommandStarted {
                 command: "cargo test".into(),
             }),
-            TrackUpdate::Log(styra_server::LogEntry::warn("waiting for response")),
-            TrackUpdate::Event(AgentEvent::AgentMessage {
+            InteractionUpdate::Log(styra_server::LogEntry::warn("waiting for response")),
+            InteractionUpdate::Event(AgentEvent::AgentMessage {
                 text: "Tests pass.".into(),
             }),
         ];
 
-        let screen = rendered_tracks_picker(&tracks, 1, &updates);
+        let screen = rendered_interactions_picker(&interactions, 1, &updates);
         assert!(screen.contains("current log · s-2"));
         assert!(screen.contains("cargo test"));
         assert!(screen.contains("waiting for response"));
@@ -1951,11 +2103,15 @@ mod tests {
 
     #[test]
     fn picker_highlights_the_selected_session() {
-        let sessions =
-            vec![picker_summary("s-1", Some("codex"), "2m ago"), picker_summary("s-2", Some("codex"), "3h ago")];
+        let sessions = vec![
+            picker_summary("s-1", Some("codex"), "2m ago"),
+            picker_summary("s-2", Some("codex"), "3h ago"),
+        ];
 
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
-        terminal.draw(|frame| render_picker(frame, &sessions, 1)).unwrap();
+        terminal
+            .draw(|frame| render_picker(frame, &sessions, 1))
+            .unwrap();
         let buffer = terminal.backend().buffer().clone();
 
         let row_containing = |text: &str| -> u16 {

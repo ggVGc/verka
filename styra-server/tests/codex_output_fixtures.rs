@@ -5,7 +5,7 @@
 //! rather than hand-written approximations. If codex changes its output, these
 //! fail and the recorded protocol version needs a new decoder.
 
-use styra_server::event::{decode_line, Protocol, AgentEvent};
+use styra_server::event::{decode_line, AgentEvent, Protocol};
 
 /// A real `codex exec --json` run that executed a shell command and answered.
 const EXEC_COMMAND: &str = include_str!("fixtures/codex_exec_command.jsonl");
@@ -20,7 +20,9 @@ fn real_codex_exec_output_decodes_to_the_expected_event_sequence() {
 
     // Nothing in real output should fail to decode.
     assert!(
-        !events.iter().any(|e| matches!(e, AgentEvent::Malformed { .. } | AgentEvent::Unknown { .. })),
+        !events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::Malformed { .. } | AgentEvent::Unknown { .. })),
         "real codex output produced an undecoded event: {events:#?}"
     );
 
@@ -43,7 +45,12 @@ fn real_codex_exec_output_decodes_to_the_expected_event_sequence() {
             output: "hello-from-codex\n".into(),
         }
     );
-    assert_eq!(events[4], AgentEvent::AgentMessage { text: "done".into() });
+    assert_eq!(
+        events[4],
+        AgentEvent::AgentMessage {
+            text: "done".into()
+        }
+    );
     match &events[5] {
         AgentEvent::TurnCompleted { usage } => {
             assert_eq!(usage.input_tokens, 26011);

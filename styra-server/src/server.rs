@@ -1,13 +1,13 @@
-//! Styra's Unix-socket server and server-owned track manager.
+//! Styra's Unix-socket server and server-owned interaction manager.
 
 use crate::agent::{MountSpec, Profile, SandboxLayout};
 use crate::api::{
     CreateSession, Health, Request, Response, SequencedUpdate, SessionInfo, ShellInfo,
     StoredSession, Transcript, Updates, WireRequest, WireResponse, API_VERSION,
 };
+use crate::interaction::{Interaction, InteractionSpec, ResolvedTemplate, SandboxBroker};
 use crate::journal::{self, Journal};
-use crate::track::{ResolvedTemplate, SandboxBroker, Track, TrackSpec};
-use crate::types::{DrivaOptions, SessionSummary, TrackSummary};
+use crate::types::{DrivaOptions, InteractionSummary, SessionSummary};
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
@@ -31,18 +31,18 @@ struct ServerInner {
     /// the next client sees no stale socket to trip over.
     socket: PathBuf,
     layout: SandboxLayout,
-    tracks: Mutex<HashMap<String, Arc<ManagedTrack>>>,
+    interactions: Mutex<HashMap<String, Arc<ManagedInteraction>>>,
     /// Set by a [`Request::Shutdown`]; the connection thread checks it after
     /// acknowledging and then exits the process.
     shutdown: AtomicBool,
 }
 
-struct ManagedTrack {
-    track: Track,
+struct ManagedInteraction {
+    interaction: Interaction,
     updates: Arc<Mutex<Vec<SequencedUpdate>>>,
     accepting_messages: Arc<AtomicBool>,
     single_turn: bool,
-    /// Captured at spawn so the track can be listed and reattached to without
+    /// Captured at spawn so the interaction can be listed and reattached to without
     /// re-deriving them: the profile name, host workspace, and launch policy.
     profile: String,
     workspace: PathBuf,
@@ -50,10 +50,10 @@ struct ManagedTrack {
     shell: ShellInfo,
 }
 
-impl ManagedTrack {
-    fn summary(&self) -> TrackSummary {
-        TrackSummary {
-            id: self.track.session_id().to_owned(),
+impl ManagedInteraction {
+    fn summary(&self) -> InteractionSummary {
+        InteractionSummary {
+            id: self.interaction.session_id().to_owned(),
             profile: self.profile.clone(),
             workspace: self.workspace.clone(),
             driva: self.driva.clone(),
@@ -62,15 +62,15 @@ impl ManagedTrack {
     }
 }
 
-impl ManagedTrack {
+impl ManagedInteraction {
     fn send(&self, text: &str) -> Result<()> {
         if !self.accepting_messages.load(Ordering::Acquire) {
             anyhow::bail!(
                 "session {} is not accepting messages",
-                self.track.session_id()
+                self.interaction.session_id()
             );
         }
-        self.track.send(text)?;
+        self.interaction.send(text)?;
         if self.single_turn {
             self.accepting_messages.store(false, Ordering::Release);
         }
@@ -79,7 +79,7 @@ impl ManagedTrack {
 
     fn stop(&self) {
         self.accepting_messages.store(false, Ordering::Release);
-        self.track.stop();
+        self.interaction.stop();
     }
 }
 
@@ -90,7 +90,7 @@ impl ServerState {
                 store_root,
                 socket,
                 layout: SandboxLayout::default(),
-                tracks: Mutex::new(HashMap::new()),
+                interactions: Mutex::new(HashMap::new()),
                 shutdown: AtomicBool::new(false),
             }),
         }
@@ -132,7 +132,7 @@ impl ServerState {
             .parent()
             .unwrap_or(&self.inner.store_root)
             .join("diagnostics.log");
-        let spec = TrackSpec {
+        let spec = InteractionSpec {
             profile,
             working_directory: self.inner.layout.workspace.clone(),
             workspace: MountSpec {
@@ -156,20 +156,20 @@ impl ServerState {
             executable: "bwrap".into(),
             rootfs: Some(PathBuf::from("/")),
         });
-        let (track, receiver) = match Track::spawn(spec, backend, journal, id.clone(), diagnostics)
-        {
-            Ok(spawned) => spawned,
-            Err(error) => {
-                if let Some(control) = shell.socket.parent() {
-                    std::fs::remove_dir_all(control).ok();
+        let (interaction, receiver) =
+            match Interaction::spawn(spec, backend, journal, id.clone(), diagnostics) {
+                Ok(spawned) => spawned,
+                Err(error) => {
+                    if let Some(control) = shell.socket.parent() {
+                        std::fs::remove_dir_all(control).ok();
+                    }
+                    return Err(error);
                 }
-                return Err(error);
-            }
-        };
+            };
         let updates = Arc::new(Mutex::new(Vec::new()));
         let accepting_messages = Arc::new(AtomicBool::new(true));
-        let managed = Arc::new(ManagedTrack {
-            track,
+        let managed = Arc::new(ManagedInteraction {
+            interaction,
             updates: Arc::clone(&updates),
             accepting_messages: Arc::clone(&accepting_messages),
             single_turn,
@@ -182,19 +182,19 @@ impl ServerState {
             .name(format!("styra-updates-{id}"))
             .spawn(move || {
                 while let Ok(update) = receiver.recv() {
-                    if matches!(update, crate::types::TrackUpdate::Ended(_)) {
+                    if matches!(update, crate::types::InteractionUpdate::Ended(_)) {
                         accepting_messages.store(false, Ordering::Release);
                     }
-                    let mut history = updates.lock().expect("track update lock poisoned");
+                    let mut history = updates.lock().expect("interaction update lock poisoned");
                     let sequence = history.len() as u64 + 1;
                     history.push(SequencedUpdate { sequence, update });
                 }
             })
-            .context("starting the track update collector")?;
+            .context("starting the interaction update collector")?;
         self.inner
-            .tracks
+            .interactions
             .lock()
-            .expect("server track lock poisoned")
+            .expect("server interaction lock poisoned")
             .insert(id.clone(), Arc::clone(&managed));
 
         if let Some(message) = request
@@ -206,9 +206,9 @@ impl ServerState {
             if let Err(error) = managed.send(message) {
                 managed.stop();
                 self.inner
-                    .tracks
+                    .interactions
                     .lock()
-                    .expect("server track lock poisoned")
+                    .expect("server interaction lock poisoned")
                     .remove(&id);
                 return Err(error);
             }
@@ -223,14 +223,14 @@ impl ServerState {
         })
     }
 
-    fn track(&self, id: &str) -> Result<Arc<ManagedTrack>> {
+    fn interaction(&self, id: &str) -> Result<Arc<ManagedInteraction>> {
         self.inner
-            .tracks
+            .interactions
             .lock()
-            .expect("server track lock poisoned")
+            .expect("server interaction lock poisoned")
             .get(id)
             .cloned()
-            .with_context(|| format!("no live track for session {id:?}"))
+            .with_context(|| format!("no live interaction for session {id:?}"))
     }
 
     fn prepare_broker(
@@ -269,13 +269,13 @@ impl ServerState {
     }
 
     fn shell(&self, id: &str) -> Result<ShellInfo> {
-        let track = self.track(id)?;
+        let interaction = self.interaction(id)?;
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
-            if track.shell.socket.exists() {
-                return Ok(track.shell.clone());
+            if interaction.shell.socket.exists() {
+                return Ok(interaction.shell.clone());
             }
-            if !track.accepting_messages.load(Ordering::Acquire) {
+            if !interaction.accepting_messages.load(Ordering::Acquire) {
                 anyhow::bail!("session {id:?} has ended; its sandbox shell is no longer running");
             }
             if Instant::now() >= deadline {
@@ -302,19 +302,19 @@ impl ServerState {
                 Ok(Response::SessionCreated(self.create_session(request)?))
             }
             Request::SendMessage { id, message } => {
-                self.track(&id)?.send(&message.text)?;
+                self.interaction(&id)?.send(&message.text)?;
                 Ok(Response::Accepted)
             }
-            Request::StopSession { id } => {
-                self.track(&id)?.stop();
+            Request::StopInteraction { id } => {
+                self.interaction(&id)?.stop();
                 Ok(Response::Accepted)
             }
             Request::Updates { id, after } => {
-                let track = self.track(&id)?;
-                let all = track
+                let interaction = self.interaction(&id)?;
+                let all = interaction
                     .updates
                     .lock()
-                    .expect("track update lock poisoned");
+                    .expect("interaction update lock poisoned");
                 let updates = all
                     .iter()
                     .filter(|update| update.sequence > after)
@@ -323,14 +323,20 @@ impl ServerState {
                 let next = all.last().map(|update| update.sequence).unwrap_or(after);
                 Ok(Response::Updates(Updates { updates, next }))
             }
-            Request::ListTracks => {
-                let tracks = self.inner.tracks.lock().expect("server track lock poisoned");
-                let mut summaries: Vec<TrackSummary> =
-                    tracks.values().map(|managed| managed.summary()).collect();
+            Request::ListInteractions => {
+                let interactions = self
+                    .inner
+                    .interactions
+                    .lock()
+                    .expect("server interaction lock poisoned");
+                let mut summaries: Vec<InteractionSummary> = interactions
+                    .values()
+                    .map(|managed| managed.summary())
+                    .collect();
                 // Newest first: the id embeds a millisecond timestamp, so a
-                // descending id sort orders tracks by creation time.
+                // descending id sort orders interactions by creation time.
                 summaries.sort_by(|a, b| b.id.cmp(&a.id));
-                Ok(Response::Tracks(summaries))
+                Ok(Response::Interactions(summaries))
             }
             Request::ListStoredSessions => Ok(Response::StoredSessions(journal::list_sessions(
                 self.store_root(),
@@ -391,8 +397,7 @@ fn resolve_templates(workspace: &Path, names: &[String]) -> Result<Option<Resolv
             None => merged = Some(later),
         }
     }
-    ResolvedTemplate::resolve(merged.expect("non-empty names produces a merged template"))
-        .map(Some)
+    ResolvedTemplate::resolve(merged.expect("non-empty names produces a merged template")).map(Some)
 }
 
 /// Serve socket connections until the listener fails or the process exits.

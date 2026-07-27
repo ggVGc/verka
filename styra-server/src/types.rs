@@ -1,22 +1,22 @@
 //! The data vocabulary that crosses the Styra socket boundary.
 //!
 //! These are the types a client receives and renders: the live update stream
-//! ([`TrackUpdate`] and its parts), the captured Driva policy
+//! ([`InteractionUpdate`] and its parts), the captured Driva policy
 //! ([`DrivaOptions`]), and the stored-session listing ([`SessionSummary`]).
-//! They carry no behaviour tied to running a track — the server machinery
-//! that produces them lives in [`crate::track`], [`crate::journal`], and
+//! They carry no behaviour tied to running an interaction — the server machinery
+//! that produces them lives in [`crate::interaction`], [`crate::journal`], and
 //! [`crate::server`]. Keeping them here lets a client depend on the interface
-//! without pulling in the track runner.
+//! without pulling in the interaction runner.
 
 use crate::event::AgentEvent;
 use driva::Mount;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// An update delivered from the track's threads to the UI.
+/// An update delivered from the interaction's threads to the UI.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
-pub enum TrackUpdate {
+pub enum InteractionUpdate {
     /// A decoded agent event or an operator message, in occurrence order.
     Event(AgentEvent),
     /// One verbatim wire line, for the raw-interaction view.
@@ -24,7 +24,7 @@ pub enum TrackUpdate {
     /// A diagnostic message for the log view.
     Log(LogEntry),
     /// The agent process ended; no further events will arrive.
-    Ended(TrackEnd),
+    Ended(InteractionEnd),
 }
 
 /// Severity of a [`LogEntry`], used to colour the log view.
@@ -45,13 +45,22 @@ pub struct LogEntry {
 
 impl LogEntry {
     pub fn info(message: impl Into<String>) -> Self {
-        Self { level: LogLevel::Info, message: message.into() }
+        Self {
+            level: LogLevel::Info,
+            message: message.into(),
+        }
     }
     pub fn warn(message: impl Into<String>) -> Self {
-        Self { level: LogLevel::Warn, message: message.into() }
+        Self {
+            level: LogLevel::Warn,
+            message: message.into(),
+        }
     }
     pub fn error(message: impl Into<String>) -> Self {
-        Self { level: LogLevel::Error, message: message.into() }
+        Self {
+            level: LogLevel::Error,
+            message: message.into(),
+        }
     }
 }
 
@@ -72,18 +81,18 @@ pub struct RawLine {
     pub text: String,
 }
 
-/// How a track finished.
+/// How an interaction finished.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TrackEnd {
+pub struct InteractionEnd {
     pub exit_code: Option<i32>,
     pub error: Option<String>,
 }
 
-/// A human-facing summary of the Driva policy a track was launched with:
+/// A human-facing summary of the Driva policy an interaction was launched with:
 /// the isolation backend, the command it runs, and the mount/network policy
 /// enforced around it. Captured once at spawn time from the same
 /// `ExecutionRequest` Driva itself executes (see [`DrivaOptions::capture`] in
-/// [`crate::track`]), so it can never drift from what is actually running.
+/// [`crate::interaction`]), so it can never drift from what is actually running.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DrivaOptions {
     pub isolation_backend: String,
@@ -93,22 +102,22 @@ pub struct DrivaOptions {
     pub mounts: Vec<Mount>,
 }
 
-/// A track the server is currently running (this process's live sessions),
+/// An interaction the server is currently running (this process's live sessions),
 /// enough to list it and to reattach a client to it. Distinct from
 /// [`SessionSummary`], which describes a session persisted in the store
 /// whether or not it is still live.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TrackSummary {
+pub struct InteractionSummary {
     /// The session id, as used everywhere else on the wire.
     pub id: String,
-    /// The agent profile the track is running.
+    /// The agent profile the interaction is running.
     pub profile: String,
     /// The host directory bound as the agent's workspace, so a reattaching
     /// client can resolve changed-file previews.
     pub workspace: PathBuf,
-    /// The Driva policy the track was launched under, for the driva view.
+    /// The Driva policy the interaction was launched under, for the driva view.
     pub driva: DrivaOptions,
-    /// Whether the track still takes messages: its agent process is alive and,
+    /// Whether the interaction still takes messages: its agent process is alive and,
     /// for a single-turn profile, it has not spent its one turn yet.
     pub accepting: bool,
 }

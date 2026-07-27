@@ -124,10 +124,8 @@ mod tests {
 
     #[test]
     fn default_socket_directory_and_socket_are_private() {
-        let root = std::env::temp_dir().join(format!(
-            "styra-server-permissions-{}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("styra-server-permissions-{}", std::process::id()));
         std::fs::remove_dir_all(&root).ok();
         let socket = root.join("styra/styra.sock");
         let listener = bind_socket(&socket, true).unwrap();

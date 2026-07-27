@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use styra_server::api::CreateSession;
 use styra_server::event::AgentEvent;
-use styra_server::{Client, TrackUpdate};
+use styra_server::{Client, InteractionUpdate};
 
 fn main() -> anyhow::Result<()> {
     let prompt = {
@@ -40,18 +40,18 @@ fn main() -> anyhow::Result<()> {
         cursor = batch.next;
         for item in batch.updates {
             match item.update {
-                TrackUpdate::Event(event) => {
+                InteractionUpdate::Event(event) => {
                     println!("EVENT  {:<9} {}", event.tag(), event.summary());
                     if matches!(event, AgentEvent::TurnCompleted { .. }) {
-                        client.stop_session(&session.id)?;
+                        client.stop_interaction(&session.id)?;
                         return Ok(());
                     }
                 }
-                TrackUpdate::Raw(raw) => println!("RAW    {:?}: {}", raw.direction, raw.text),
-                TrackUpdate::Log(entry) => {
+                InteractionUpdate::Raw(raw) => println!("RAW    {:?}: {}", raw.direction, raw.text),
+                InteractionUpdate::Log(entry) => {
                     println!("LOG    {:?}: {}", entry.level, entry.message)
                 }
-                TrackUpdate::Ended(end) => {
+                InteractionUpdate::Ended(end) => {
                     println!("ENDED  exit={:?} error={:?}", end.exit_code, end.error);
                     return Ok(());
                 }
@@ -59,6 +59,6 @@ fn main() -> anyhow::Result<()> {
         }
         std::thread::sleep(Duration::from_millis(100));
     }
-    client.stop_session(&session.id)?;
+    client.stop_interaction(&session.id)?;
     anyhow::bail!("timed out waiting for the session")
 }

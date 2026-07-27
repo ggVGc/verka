@@ -14,7 +14,7 @@
 //! store — without depending on an operator re-supplying the same profile.
 
 use crate::agent::{Profile, SessionMeta};
-use crate::event::{decode_line, Protocol, AgentEvent};
+use crate::event::{decode_line, AgentEvent, Protocol};
 use crate::types::{Direction, RawLine, SessionSummary};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -196,8 +196,8 @@ pub fn read_session_meta(path: &Path) -> Result<Option<SessionMeta>> {
     }
     let text = std::fs::read_to_string(&meta_path)
         .with_context(|| format!("reading {}", meta_path.display()))?;
-    let meta = serde_json::from_str(&text)
-        .with_context(|| format!("parsing {}", meta_path.display()))?;
+    let meta =
+        serde_json::from_str(&text).with_context(|| format!("parsing {}", meta_path.display()))?;
     Ok(Some(meta))
 }
 
@@ -232,7 +232,7 @@ pub fn replay(path: &Path, protocol: Protocol) -> Result<Vec<AgentEvent>> {
 /// Render a stored journal as a plain-text transcript, suitable as a seed
 /// message for a freshly launched agent that should pick up where this
 /// session left off. See [`replay`] for the decode this builds on, and
-/// `DESIGN.md`'s *Track switching* for why a rendered transcript rather
+/// `DESIGN.md`'s *Interaction switching* for why a rendered transcript rather
 /// than a native protocol resume.
 ///
 /// Always includes minor lifecycle events (thread/turn markers, usage) —
@@ -318,9 +318,15 @@ mod tests {
         assert_eq!(
             events,
             vec![
-                AgentEvent::UserMessage { text: "do the thing".into() },
-                AgentEvent::AgentMessage { text: "done".into() },
-                AgentEvent::UserMessage { text: "thanks".into() },
+                AgentEvent::UserMessage {
+                    text: "do the thing".into()
+                },
+                AgentEvent::AgentMessage {
+                    text: "done".into()
+                },
+                AgentEvent::UserMessage {
+                    text: "thanks".into()
+                },
             ]
         );
 
@@ -342,7 +348,10 @@ mod tests {
 
         let events = replay(&dir, Protocol::CodexJsonl).unwrap();
         let expected = crate::render::render_events(&events, false, true);
-        assert_eq!(render_transcript(&dir, Protocol::CodexJsonl).unwrap(), expected);
+        assert_eq!(
+            render_transcript(&dir, Protocol::CodexJsonl).unwrap(),
+            expected
+        );
         assert!(expected.contains("do the thing"));
         assert!(expected.contains("done"));
 
@@ -401,7 +410,10 @@ mod tests {
         let meta = read_session_meta(journal.path()).unwrap();
         assert_eq!(
             meta,
-            Some(SessionMeta { profile: "claude:opus".into(), protocol: Protocol::ClaudeJsonl })
+            Some(SessionMeta {
+                profile: "claude:opus".into(),
+                protocol: Protocol::ClaudeJsonl
+            })
         );
 
         std::fs::remove_dir_all(&root).ok();
@@ -479,8 +491,12 @@ mod tests {
             age: String::new(),
             created_at_ms,
         };
-        let mut sessions =
-            vec![summary(Some(100)), summary(None), summary(Some(300)), summary(Some(200))];
+        let mut sessions = vec![
+            summary(Some(100)),
+            summary(None),
+            summary(Some(300)),
+            summary(Some(200)),
+        ];
         sort_newest_first(&mut sessions);
         let order: Vec<Option<u64>> = sessions.iter().map(|s| s.created_at_ms).collect();
         assert_eq!(order, vec![Some(300), Some(200), Some(100), None]);

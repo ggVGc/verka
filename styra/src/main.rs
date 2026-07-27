@@ -21,7 +21,7 @@ mod ui;
 use app::{App, Focus, Status, View};
 use styra_server::agent::Selection;
 use styra_server::api::{CreateSession, SessionInfo};
-use styra_server::{Client, LogEntry, TrackSummary, TrackUpdate};
+use styra_server::{Client, InteractionSummary, InteractionUpdate, LogEntry};
 
 /// Run an interactive, isolated agent session in a terminal interface.
 #[derive(Parser)]
@@ -35,7 +35,7 @@ struct Cli {
     #[arg(short = 'd', long = "daemon", conflicts_with = "stop")]
     daemon: bool,
     /// Stop the Styra daemon listening on the socket (if any) and exit. Any
-    /// live tracks it owns are ended with it.
+    /// live interactions it owns are ended with it.
     #[arg(long)]
     stop: bool,
     /// Agent profile to launch a live session with, as
@@ -107,9 +107,8 @@ fn main() -> Result<()> {
     // Connect-or-spawn: use the running server if one answers, otherwise start
     // a detached daemon bound to this socket and wait for it. The daemon
     // outlives this client, so live sessions survive detach/quit.
-    let client = styra_server::ensure_server(&socket).with_context(|| {
-        format!("Styra server is unavailable at {}", socket.display())
-    })?;
+    let client = styra_server::ensure_server(&socket)
+        .with_context(|| format!("Styra server is unavailable at {}", socket.display()))?;
     if let Some(CliCommand::Shell { session }) = &cli.command {
         return attach_shell(&client, session);
     }
@@ -176,7 +175,7 @@ fn main() -> Result<()> {
             app.push_raw(line);
         }
         // A replayed session has no live agent to end; mark it stopped.
-        app.on_ended(styra_server::TrackEnd {
+        app.on_ended(styra_server::InteractionEnd {
             exit_code: None,
             error: None,
         });
@@ -231,7 +230,7 @@ fn main() -> Result<()> {
                 if let Live::Running { session_id, .. } =
                     std::mem::replace(&mut live, Live::Pending)
                 {
-                    client.stop_session(&session_id).ok();
+                    client.stop_interaction(&session_id).ok();
                 }
                 match client.transcript(&seed_id) {
                     Ok(transcript) => {
@@ -250,31 +249,31 @@ fn main() -> Result<()> {
                     }
                 }
             }
-            // Attach to another live track. The outgoing one is left running on
-            // the server (tracks outlive a client); we just stop viewing it.
-            RunOutcome::Attach(track) => {
-                let id = track.id.clone();
-                match attach_live_track(&client, track) {
+            // Attach to another live interaction. The outgoing one is left running on
+            // the server (interactions outlive a client); we just stop viewing it.
+            RunOutcome::Attach(interaction) => {
+                let id = interaction.id.clone();
+                match attach_live_interaction(&client, interaction) {
                     Ok((new_app, new_live)) => {
                         app = new_app;
                         live = new_live;
                     }
                     Err(error) => {
                         app.push_log(LogEntry::error(format!(
-                            "could not attach to track {id}: {error:#}"
+                            "could not attach to interaction {id}: {error:#}"
                         )));
                     }
                 }
             }
-            // Stop the current track and return to the blank start screen.
+            // Stop the current interaction and return to the blank start screen.
             RunOutcome::Reset => {
                 if let Live::Running { session_id, .. } =
                     std::mem::replace(&mut live, Live::Pending)
                 {
-                    client.stop_session(&session_id).ok();
+                    client.stop_interaction(&session_id).ok();
                 }
                 // The blank start screen is where a launch is chosen, so it
-                // opens on whatever the stopped track ran with — the usual next
+                // opens on whatever the stopped interaction ran with — the usual next
                 // step is the same agent again, or a deliberate change to
                 // another one.
                 let selection = app.selection.clone();
@@ -285,7 +284,7 @@ fn main() -> Result<()> {
 
     restore_terminal(&mut terminal)?;
     if let Live::Running { session_id, .. } = live {
-        client.stop_session(&session_id).ok();
+        client.stop_interaction(&session_id).ok();
     }
     result
 }
@@ -376,19 +375,28 @@ fn launch_live_session(
     Ok((app, info))
 }
 
-/// Attach to a live track: rebuild an `App` from its summary and replay the
-/// updates the server has accumulated for it, so the view matches what the track
+/// Attach to a live interaction: rebuild an `App` from its summary and replay the
+/// updates the server has accumulated for it, so the view matches what the interaction
 /// has done so far and the event loop can continue polling from the cursor.
-fn attach_live_track(client: &Client, track: TrackSummary) -> Result<(App, Live)> {
-    let mut app = App::new(track.profile.clone(), track.id.clone());
-    app.set_workspace_root(track.workspace.clone());
-    app.set_driva_options(track.driva.clone());
-    let batch = client.updates(&track.id, 0)?;
+fn attach_live_interaction(
+    client: &Client,
+    interaction: InteractionSummary,
+) -> Result<(App, Live)> {
+    let mut app = App::new(interaction.profile.clone(), interaction.id.clone());
+    app.set_workspace_root(interaction.workspace.clone());
+    app.set_driva_options(interaction.driva.clone());
+    let batch = client.updates(&interaction.id, 0)?;
     let cursor = batch.next;
     for sequenced in batch.updates {
         apply_update(&mut app, sequenced.update);
     }
-    Ok((app, Live::Running { session_id: track.id, cursor }))
+    Ok((
+        app,
+        Live::Running {
+            session_id: interaction.id,
+            cursor,
+        },
+    ))
 }
 
 fn session_id_from_target(target: &Path) -> Result<String> {
@@ -430,22 +438,22 @@ fn run_picker(
     }
 }
 
-/// The current-tracks picker loop: j/k or arrows to move, Enter to attach to a
-/// live track, Esc or q to back out. Mirrors [`run_picker`] but over the
-/// server's live tracks rather than the stored-session store.
-fn run_tracks_picker(
+/// The current-interactions picker loop: j/k or arrows to move, Enter to attach to a
+/// live interaction, Esc or q to back out. Mirrors [`run_picker`] but over the
+/// server's live interactions rather than the stored-session store.
+fn run_interactions_picker(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     client: &Client,
-    tracks: &[TrackSummary],
-) -> Result<Option<TrackSummary>> {
+    interactions: &[InteractionSummary],
+) -> Result<Option<InteractionSummary>> {
     let mut selected = 0usize;
     let mut preview_id = String::new();
     let mut preview_cursor = 0u64;
     let mut preview_updates = Vec::new();
     loop {
-        let selected_track = &tracks[selected];
-        if preview_id != selected_track.id {
-            preview_id.clone_from(&selected_track.id);
+        let selected_interaction = &interactions[selected];
+        if preview_id != selected_interaction.id {
+            preview_id.clone_from(&selected_interaction.id);
             preview_cursor = 0;
             preview_updates.clear();
         }
@@ -457,8 +465,8 @@ fn run_tracks_picker(
                     match sequenced.update {
                         // Raw lines duplicate decoded events and make the
                         // compact preview noisy. Everything human-facing is
-                        // useful here: activity, diagnostics, and track end.
-                        TrackUpdate::Raw(_) => None,
+                        // useful here: activity, diagnostics, and interaction end.
+                        InteractionUpdate::Raw(_) => None,
                         update => Some(update),
                     }
                 }));
@@ -468,16 +476,16 @@ fn run_tracks_picker(
                 if !preview_updates
                     .last()
                     .is_some_and(
-                        |update| matches!(update, TrackUpdate::Log(entry) if entry.message == message),
+                        |update| matches!(update, InteractionUpdate::Log(entry) if entry.message == message),
                     )
                 {
-                    preview_updates.push(TrackUpdate::Log(LogEntry::error(message)));
+                    preview_updates.push(InteractionUpdate::Log(LogEntry::error(message)));
                 }
             }
         }
 
         terminal.draw(|frame| {
-            ui::render_tracks_picker(frame, tracks, selected, &preview_updates)
+            ui::render_interactions_picker(frame, interactions, selected, &preview_updates)
         })?;
 
         if !event::poll(Duration::from_millis(100))? {
@@ -492,10 +500,10 @@ fn run_tracks_picker(
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => return Ok(None),
             KeyCode::Char('j') | KeyCode::Down => {
-                selected = (selected + 1).min(tracks.len() - 1);
+                selected = (selected + 1).min(interactions.len() - 1);
             }
             KeyCode::Char('k') | KeyCode::Up => selected = selected.saturating_sub(1),
-            KeyCode::Enter => return Ok(Some(tracks[selected].clone())),
+            KeyCode::Enter => return Ok(Some(interactions[selected].clone())),
             _ => {}
         }
     }
@@ -507,10 +515,10 @@ enum RunOutcome {
     Quit,
     /// The operator picked a stored session to switch to.
     Switch(String),
-    /// The operator picked a live track to attach this client to. The outgoing
-    /// track is left running on the server, not stopped.
-    Attach(TrackSummary),
-    /// The operator stopped the current track and asked to return to the blank
+    /// The operator picked a live interaction to attach this client to. The outgoing
+    /// interaction is left running on the server, not stopped.
+    Attach(InteractionSummary),
+    /// The operator stopped the current interaction and asked to return to the blank
     /// start screen.
     Reset,
 }
@@ -553,7 +561,7 @@ fn run(
                 }
                 Err(error) => {
                     app.push_log(LogEntry::error(format!("update poll failed: {error:#}")));
-                    app.on_ended(styra_server::TrackEnd {
+                    app.on_ended(styra_server::InteractionEnd {
                         exit_code: None,
                         error: Some(error.to_string()),
                     });
@@ -605,14 +613,14 @@ fn run(
             // Cancelled: the next iteration redraws the normal session view.
         }
 
-        if std::mem::take(&mut app.tracks_requested) {
-            let tracks = client.list_tracks()?;
-            if tracks.is_empty() {
-                app.push_log(LogEntry::warn("no live tracks on the server"));
+        if std::mem::take(&mut app.interactions_requested) {
+            let interactions = client.list_interactions()?;
+            if interactions.is_empty() {
+                app.push_log(LogEntry::warn("no live interactions on the server"));
                 continue;
             }
-            if let Some(track) = run_tracks_picker(terminal, client, &tracks)? {
-                return Ok(RunOutcome::Attach(track));
+            if let Some(interaction) = run_interactions_picker(terminal, client, &interactions)? {
+                return Ok(RunOutcome::Attach(interaction));
             }
             // Cancelled: the next iteration redraws the normal session view.
         }
@@ -624,13 +632,13 @@ fn run(
 }
 
 /// Apply one session update to the app. Shared by the live event loop and by
-/// [`attach_live_track`], which replays a track's accumulated updates the same way.
-fn apply_update(app: &mut App, update: TrackUpdate) {
+/// [`attach_live_interaction`], which replays an interaction's accumulated updates the same way.
+fn apply_update(app: &mut App, update: InteractionUpdate) {
     match update {
-        TrackUpdate::Event(event) => app.push_event(event),
-        TrackUpdate::Raw(line) => app.push_raw(line),
-        TrackUpdate::Log(entry) => app.push_log(entry),
-        TrackUpdate::Ended(end) => app.on_ended(end),
+        InteractionUpdate::Event(event) => app.push_event(event),
+        InteractionUpdate::Raw(line) => app.push_raw(line),
+        InteractionUpdate::Log(entry) => app.push_log(entry),
+        InteractionUpdate::Ended(end) => app.on_ended(end),
     }
 }
 
@@ -682,7 +690,7 @@ fn handle_list_key(
         KeyCode::Char('P') => return app.toggle_fullscreen_preview(),
         KeyCode::Char('s') => {
             if let Live::Running { session_id, .. } = live {
-                client.stop_session(session_id).ok();
+                client.stop_interaction(session_id).ok();
                 app.push_log(LogEntry::info("stop requested; closing agent input"));
             }
             return;
@@ -691,7 +699,7 @@ fn handle_list_key(
         // facts about a process that is already up. `S` first, then `L`.
         KeyCode::Char('L') => return app.open_launcher(),
         KeyCode::Char('V') => return app.request_switch(),
-        KeyCode::Char('A') => return app.request_tracks(),
+        KeyCode::Char('A') => return app.request_interactions(),
         KeyCode::Char('S') => return app.request_reset(),
         _ => {}
     }

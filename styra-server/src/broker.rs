@@ -1,6 +1,6 @@
 //! Hidden entry point that owns the auxiliary shell inside one sandbox.
 //!
-//! A Styra track still speaks to its agent over the agent's inherited standard
+//! A Styra interaction still speaks to its agent over the agent's inherited standard
 //! streams. The broker only wraps that launch: it starts a detached tmux server
 //! in the same Bubblewrap sandbox, launches the agent with unchanged stdio, and
 //! tears tmux down when the agent exits.

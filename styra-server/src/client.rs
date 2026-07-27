@@ -4,7 +4,7 @@ use crate::api::{
     CreateSession, Health, Request, Response, SendMessage, SessionInfo, ShellInfo, StoredSession,
     Updates, WireRequest, WireResponse, API_VERSION,
 };
-use crate::types::{TrackSummary, SessionSummary};
+use crate::types::{InteractionSummary, SessionSummary};
 use anyhow::{bail, Context, Result};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
@@ -52,8 +52,8 @@ impl Client {
         }
     }
 
-    pub fn stop_session(&self, id: &str) -> Result<()> {
-        match self.request(Request::StopSession { id: id.to_owned() })? {
+    pub fn stop_interaction(&self, id: &str) -> Result<()> {
+        match self.request(Request::StopInteraction { id: id.to_owned() })? {
             Response::Accepted => Ok(()),
             other => unexpected("accepted", other),
         }
@@ -69,10 +69,10 @@ impl Client {
         }
     }
 
-    pub fn list_tracks(&self) -> Result<Vec<TrackSummary>> {
-        match self.request(Request::ListTracks)? {
-            Response::Tracks(value) => Ok(value),
-            other => unexpected("tracks", other),
+    pub fn list_interactions(&self) -> Result<Vec<InteractionSummary>> {
+        match self.request(Request::ListInteractions)? {
+            Response::Interactions(value) => Ok(value),
+            other => unexpected("interactions", other),
         }
     }
 
@@ -106,7 +106,7 @@ impl Client {
 
     /// Ask the server to shut down. It acknowledges before exiting, so a
     /// successful return means the daemon received the request and is on its
-    /// way out (any live tracks it owns go with it).
+    /// way out (any live interactions it owns go with it).
     pub fn shutdown(&self) -> Result<()> {
         match self.request(Request::Shutdown)? {
             Response::Accepted => Ok(()),

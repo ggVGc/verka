@@ -65,7 +65,7 @@ Operations:
 | `create_session` | profile, workspace, network, optional message | `session_created` |
 | `send_message` | session id and message | `accepted` |
 | `updates` | session id and `after` cursor | `updates` |
-| `stop_session` | session id | `accepted` |
+| `stop_interaction` | session id | `accepted` |
 | `list_stored_sessions` | none | `stored_sessions` |
 | `stored_session` | session id | `stored_session` |
 | `transcript` | session id | `transcript` |

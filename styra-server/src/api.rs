@@ -1,7 +1,7 @@
 //! Stable JSON contract shared by the Styra Unix-socket server and its clients.
 
 use crate::event::AgentEvent;
-use crate::types::{DrivaOptions, TrackSummary, RawLine, SessionSummary, TrackUpdate};
+use crate::types::{DrivaOptions, InteractionSummary, InteractionUpdate, RawLine, SessionSummary};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -52,7 +52,7 @@ pub struct SendMessage {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SequencedUpdate {
     pub sequence: u64,
-    pub update: TrackUpdate,
+    pub update: InteractionUpdate,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -80,15 +80,29 @@ pub struct Transcript {
 pub enum Request {
     Health,
     CreateSession(CreateSession),
-    SendMessage { id: String, message: SendMessage },
-    StopSession { id: String },
-    Updates { id: String, after: u64 },
-    ListTracks,
+    SendMessage {
+        id: String,
+        message: SendMessage,
+    },
+    StopInteraction {
+        id: String,
+    },
+    Updates {
+        id: String,
+        after: u64,
+    },
+    ListInteractions,
     ListStoredSessions,
-    StoredSession { id: String },
-    Transcript { id: String },
-    Shell { id: String },
-    /// Ask the server to remove its socket and exit. Any live tracks it owns die
+    StoredSession {
+        id: String,
+    },
+    Transcript {
+        id: String,
+    },
+    Shell {
+        id: String,
+    },
+    /// Ask the server to remove its socket and exit. Any live interactions it owns die
     /// with it, so this is the deliberate counterpart to the daemon outliving
     /// its clients.
     Shutdown,
@@ -110,7 +124,7 @@ pub enum Response {
     SessionCreated(SessionInfo),
     Accepted,
     Updates(Updates),
-    Tracks(Vec<TrackSummary>),
+    Interactions(Vec<InteractionSummary>),
     StoredSessions(Vec<SessionSummary>),
     StoredSession(StoredSession),
     Transcript(Transcript),
@@ -128,14 +142,14 @@ pub enum WireResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{LogEntry, TrackUpdate};
+    use crate::types::{InteractionUpdate, LogEntry};
 
     #[test]
     fn update_stream_has_an_explicit_cursor_and_tagged_payload() {
         let response = Updates {
             updates: vec![SequencedUpdate {
                 sequence: 4,
-                update: TrackUpdate::Log(LogEntry::info("ready")),
+                update: InteractionUpdate::Log(LogEntry::info("ready")),
             }],
             next: 4,
         };
