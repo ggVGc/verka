@@ -85,6 +85,9 @@ impl Journal {
         workspace_id: &str,
         profile: &Profile,
     ) -> Result<(Self, String)> {
+        if workspace_id == crate::workspace::LEGACY_WORKSPACE_ID {
+            anyhow::bail!("cannot create a Session in the read-only Legacy sessions Workspace");
+        }
         crate::workspace::get(store_root, workspace_id)?;
         let id = new_session_id();
         let directory = crate::workspace::sessions_dir(store_root, workspace_id).join(&id);
@@ -165,6 +168,9 @@ pub fn list_workspace_sessions(
     store_root: &Path,
     workspace_id: &str,
 ) -> Result<Vec<SessionSummary>> {
+    if workspace_id == crate::workspace::LEGACY_WORKSPACE_ID {
+        return list_sessions(store_root);
+    }
     crate::workspace::get(store_root, workspace_id)?;
     list_sessions_at(
         &crate::workspace::sessions_dir(store_root, workspace_id),

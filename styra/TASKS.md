@@ -57,7 +57,7 @@ Workspace
   keep its Session and Workspace intact. Support opening stored Sessions without
   an Interaction and make transcript seeding create a new Session in the current
   Workspace.
-- [ ] **15. Legacy store compatibility.** Surface pre-Workspace Session
+- [x] **15. Legacy store compatibility.** Surface pre-Workspace Session
   directories under a synthetic `Legacy sessions` Workspace without guessing
   their original host directory or destructively moving their journals.
 - [ ] **16. Documentation and validation.** Rewrite the architecture, CLI/API
