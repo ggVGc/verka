@@ -224,6 +224,9 @@ fn main() -> Result<()> {
             Ok(outcome) => outcome,
             Err(error) => break Err(error),
         };
+        if let Some(session_id) = interaction_stopped_by(&outcome, &live) {
+            client.stop_interaction(session_id).ok();
+        }
         match outcome {
             RunOutcome::Quit => break Ok(()),
             RunOutcome::OpenWorkspace {
@@ -288,11 +291,7 @@ fn main() -> Result<()> {
             }
             // Stop the current interaction and return to the blank start screen.
             RunOutcome::Reset => {
-                if let Live::Running { session_id, .. } =
-                    std::mem::replace(&mut live, Live::Pending)
-                {
-                    client.stop_interaction(&session_id).ok();
-                }
+                live = Live::Pending;
                 // A reset returns to the standing launch default, independent
                 // of the selection recorded by the Session just left.
                 let selection = preferences::load_or_default(&preferences_path)?;
@@ -303,9 +302,6 @@ fn main() -> Result<()> {
     };
 
     restore_terminal(&mut terminal)?;
-    if let Live::Running { session_id, .. } = live {
-        client.stop_interaction(&session_id).ok();
-    }
     result
 }
 
@@ -639,6 +635,18 @@ enum Live {
     Running { session_id: String, cursor: u64 },
     /// A replayed journal (`--view`); there is no live agent to launch.
     Viewing,
+}
+
+/// Return the running interaction an in-client transition explicitly stops.
+///
+/// Quitting the TUI is a detach: the daemon keeps owning the interaction so a
+/// later client can reattach through the Workspace/Session or Interactions
+/// picker. Reset is the destructive transition and deliberately stops it.
+fn interaction_stopped_by<'a>(outcome: &RunOutcome, live: &'a Live) -> Option<&'a str> {
+    match (outcome, live) {
+        (RunOutcome::Reset, Live::Running { session_id, .. }) => Some(session_id),
+        _ => None,
+    }
 }
 
 /// The event loop: apply pending session updates, render, and handle input
@@ -1018,6 +1026,20 @@ mod cli_tests {
     #[test]
     fn profile_is_not_a_command_line_option() {
         assert!(Cli::try_parse_from(["styra", "--profile", "codex"]).is_err());
+    }
+
+    #[test]
+    fn quitting_detaches_but_reset_stops_the_running_interaction() {
+        let live = Live::Running {
+            session_id: "styra-live".into(),
+            cursor: 7,
+        };
+
+        assert_eq!(interaction_stopped_by(&RunOutcome::Quit, &live), None);
+        assert_eq!(
+            interaction_stopped_by(&RunOutcome::Reset, &live),
+            Some("styra-live")
+        );
     }
 
     #[test]
