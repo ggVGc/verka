@@ -1,3 +1,8 @@
+2026-07-27
+Subagents are the wrong approach.
+Instead, I would like linka nodes to be created for the side-quest, and further work on the main node depend on the output of the sub-work.
+
+
 2026-07-25
 == 15:00 ==
 People talk about loops, in loosely defined ways.
