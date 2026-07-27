@@ -113,7 +113,8 @@ impl ServerState {
     }
 
     fn create_session(&self, request: CreateSession) -> Result<SessionInfo> {
-        let owning_workspace = crate::workspace::get(&self.inner.store_root, &request.workspace_id)?;
+        let owning_workspace =
+            crate::workspace::get(&self.inner.store_root, &request.workspace_id)?;
         let workspace = owning_workspace.host_path;
         let mut profile = Profile::builtin(&request.profile, &self.inner.layout)?;
         profile.network = profile.network || request.network;
@@ -124,11 +125,8 @@ impl ServerState {
             .context("tmux is required for Styra session shells")?;
         let broker_executable =
             std::env::current_exe().context("locating the Styra sandbox broker")?;
-        let (journal, id) = Journal::create_in_workspace(
-            &self.inner.store_root,
-            &request.workspace_id,
-            &profile,
-        )?;
+        let (journal, id) =
+            Journal::create_in_workspace(&self.inner.store_root, &request.workspace_id, &profile)?;
         let journal_path = journal.path().to_path_buf();
         let diagnostics = journal_path
             .parent()
@@ -365,12 +363,9 @@ impl ServerState {
                 summaries.sort_by(|a, b| b.id.cmp(&a.id));
                 Ok(Response::Interactions(summaries))
             }
-            Request::ListSessions { workspace_id } => {
-                Ok(Response::StoredSessions(journal::list_workspace_sessions(
-                    self.store_root(),
-                    &workspace_id,
-                )?))
-            }
+            Request::ListSessions { workspace_id } => Ok(Response::StoredSessions(
+                journal::list_workspace_sessions(self.store_root(), &workspace_id)?,
+            )),
             Request::ListStoredSessions => Ok(Response::StoredSessions(journal::list_sessions(
                 self.store_root(),
             )?)),
@@ -538,8 +533,10 @@ mod tests {
 
     #[test]
     fn workspace_api_creates_lists_and_scopes_sessions() {
-        let store =
-            std::env::temp_dir().join(format!("styra-server-workspace-test-{}", std::process::id()));
+        let store = std::env::temp_dir().join(format!(
+            "styra-server-workspace-test-{}",
+            std::process::id()
+        ));
         let host = store.with_extension("host");
         std::fs::remove_dir_all(&store).ok();
         std::fs::create_dir_all(&host).unwrap();

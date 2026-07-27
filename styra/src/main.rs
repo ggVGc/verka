@@ -932,13 +932,8 @@ fn handle_input_key(
                     // The launch picker's standing choice is what starts here.
                     Live::Pending => {
                         let selection = app.selection.clone();
-                        match create_session(
-                            client,
-                            cli,
-                            workspace_id,
-                            &selection,
-                            Some(&message),
-                        ) {
+                        match create_session(client, cli, workspace_id, &selection, Some(&message))
+                        {
                             Ok(info) => {
                                 app.profile_name = info.profile;
                                 app.workspace_id = Some(info.workspace_id);

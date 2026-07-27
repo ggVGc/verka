@@ -60,6 +60,6 @@ Workspace
 - [x] **15. Legacy store compatibility.** Surface pre-Workspace Session
   directories under a synthetic `Legacy sessions` Workspace without guessing
   their original host directory or destructively moving their journals.
-- [ ] **16. Documentation and validation.** Rewrite the architecture, CLI/API
+- [x] **16. Documentation and validation.** Rewrite the architecture, CLI/API
   reference, and tests around Workspace → Session → Interaction, then run all
   Styra and repository-level checks.

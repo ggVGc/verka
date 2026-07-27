@@ -1,11 +1,14 @@
 # Styra
 
-Styra is a local server for interactive, isolated agent sessions plus a
-terminal client. The server uses [Driva](../driva) to execute agents with
-deny-by-default isolation, owns their machine-readable protocols and journals,
-and exposes a versioned JSON API over a Unix domain socket. The `styra` TUI
-uses only that API, so other local tools can create, steer, observe, stop, and
-replay the same sessions without depending on the TUI.
+Styra is a local server for Workspaces containing interactive, isolated agent
+Sessions, plus a terminal client. A Workspace groups related work against one
+host directory. A Session is one durable provider conversation and journal. An
+Interaction is the live process/protocol wrapper serving a Session while its
+agent is running.
+
+The server uses [Driva](../driva) for deny-by-default isolation and exposes a
+versioned JSON API over a Unix socket. The `styra` TUI uses only that API, so
+other local tools can create, steer, observe, stop, and replay the same Sessions.
 
 Styra is the interactive counterpart to an [Orka](../orka) attempt: the same
 isolation, the same raw-event-journal-as-truth stance, but steered turn by turn
@@ -37,17 +40,29 @@ styra shell --session <ID>
                        bare, browse sessions in the server's store and pick one
 ```
 
-Every live session also owns a detached `/bin/sh` in tmux inside the same
-Bubblewrap sandbox as its agent. Attach with `styra shell --session <ID>`;
-detaching leaves the shell and its processes running, while stopping the Styra
-session ends both the agent and tmux. The agent remains on its original piped
-machine protocol, so shell traffic never enters the raw event journal.
+Every live Interaction also owns a detached `/bin/sh` in tmux inside the same
+Bubblewrap sandbox as its agent. Attach with `styra shell --session <ID>`.
+Stopping the Interaction ends the agent and tmux but preserves its Session,
+journal, and Workspace. The agent remains on its original piped machine
+protocol, so shell traffic never enters the raw event journal.
 
 The server accepts `--store <DIR>` and `--socket <PATH>`. By default, durable
-sessions live under `$XDG_STATE_HOME/styra`, or `$HOME/.local/state/styra`
+Workspaces and Sessions live under `$XDG_STATE_HOME/styra`, or
+`$HOME/.local/state/styra`
 when `XDG_STATE_HOME` is unset. The socket lives independently at
 `$XDG_RUNTIME_DIR/styra/styra.sock`. Default Styra directories use mode `0700`
 and the socket uses mode `0600`.
+
+The durable layout is:
+
+```text
+workspaces/<WORKSPACE-ID>/
+  workspace.json
+  sessions/<SESSION-ID>/
+    session.json
+    journal.jsonl
+    diagnostics.log
+```
 
 ## Socket API
 
@@ -62,14 +77,22 @@ Operations:
 | Operation | Data | Result type |
 | --- | --- | --- |
 | `health` | none | `health` |
-| `create_session` | profile, workspace, network, optional message | `session_created` |
+| `create_workspace` | host path and optional name | `workspace_created` |
+| `list_workspaces` | none | `workspaces` |
+| `workspace` | Workspace id | `workspace` |
+| `create_session` | Workspace id, profile, network, optional message | `session_created` |
+| `list_sessions` | Workspace id | `stored_sessions` |
 | `send_message` | session id and message | `accepted` |
 | `updates` | session id and `after` cursor | `updates` |
 | `stop_interaction` | session id | `accepted` |
-| `list_stored_sessions` | none | `stored_sessions` |
 | `stored_session` | session id | `stored_session` |
 | `transcript` | session id | `transcript` |
 | `shell` | live session id | `shell` (tmux executable and socket) |
+| `list_interactions` | none | `interactions` |
+
+`list_stored_sessions` remains as the compatibility operation for Sessions
+created before Workspaces existed. They appear in the TUI under the synthetic,
+read-only `Legacy sessions` Workspace.
 
 The update stream is cursor-based. Clients pass the last observed sequence as
 `after`; the response supplies `next`. Repeating a request with the same cursor
@@ -78,7 +101,7 @@ is safe, and different clients can observe a session independently.
 For example, a shell tool can check the server with `socat`:
 
 ```sh
-printf '%s\n' '{"api_version":"v1","operation":"health"}' \
+printf '%s\n' '{"api_version":"v2","operation":"health"}' \
   | socat - UNIX-CONNECT:"$XDG_RUNTIME_DIR/styra/styra.sock"
 ```
 
@@ -132,3 +155,10 @@ dying inside the sandbox.
 Two focuses, like vim modes: list focus navigates and folds the event list,
 input focus types into the message box. `i` or `Tab` enters input focus; `Esc`
 or `Tab` returns to list focus.
+
+`V` first chooses a Workspace, then a Session within it. This only changes what
+the client views; it never stops an outgoing Interaction. `A` lists all live
+Interactions with their Workspace and Session identities. `s` stops the current
+Interaction while retaining its Session. `F` renders the current Session into
+the message box for an explicit new Session in the same Workspace; the new
+Session is not created until the operator sends that opening message.

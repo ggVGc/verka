@@ -298,8 +298,8 @@ pub fn replay(path: &Path, protocol: Protocol) -> Result<Vec<AgentEvent>> {
 /// Render a stored journal as a plain-text transcript, suitable as a seed
 /// message for a freshly launched agent that should pick up where this
 /// session left off. See [`replay`] for the decode this builds on, and
-/// `DESIGN.md`'s *Interaction switching* for why a rendered transcript rather
-/// than a native protocol resume.
+/// `DESIGN.md`'s native-resume discussion for why the current explicit seed is
+/// a rendered transcript rather than a provider protocol resume.
 ///
 /// Always includes minor lifecycle events (thread/turn markers, usage) —
 /// this seeds a *different* session's context, not the operator's own
@@ -492,8 +492,7 @@ mod tests {
         let workspace = crate::workspace::create(&root, &host, Some("work".into())).unwrap();
         let profile = test_profile("codex", Protocol::CodexJsonl);
 
-        let (journal, id) =
-            Journal::create_in_workspace(&root, &workspace.id, &profile).unwrap();
+        let (journal, id) = Journal::create_in_workspace(&root, &workspace.id, &profile).unwrap();
         let directory = journal.path().parent().unwrap();
         assert_eq!(
             directory,
@@ -507,8 +506,16 @@ mod tests {
         let sessions = list_workspace_sessions(&root, &workspace.id).unwrap();
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].id, id);
-        assert_eq!(sessions[0].workspace_id.as_deref(), Some(workspace.id.as_str()));
-        assert_eq!(crate::workspace::get(&root, &workspace.id).unwrap().session_count, 1);
+        assert_eq!(
+            sessions[0].workspace_id.as_deref(),
+            Some(workspace.id.as_str())
+        );
+        assert_eq!(
+            crate::workspace::get(&root, &workspace.id)
+                .unwrap()
+                .session_count,
+            1
+        );
 
         std::fs::remove_dir_all(&root).ok();
         std::fs::remove_dir_all(&host).ok();

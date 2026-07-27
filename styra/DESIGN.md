@@ -2,12 +2,11 @@
 
 ## Purpose
 
-Styra runs one interactive agent session in isolation and presents it as a
-navigable terminal application. It uses Driva to execute the agent command with
-deny-by-default isolation, speaks the agent's machine-readable protocol over
-piped standard streams, and shows every agent output as a selectable one-line
-entry that can be expanded in place. A message box lets the operator send input
-to the running agent.
+Styra manages durable Workspaces containing provider-native agent Sessions. A
+Session may have one live Interaction: Styra's isolated process/protocol wrapper
+around the provider conversation. The terminal application navigates
+Workspaces and Sessions, renders a Session's events, and steers its Interaction
+when one is live.
 
 Where Orka runs an agent *non-interactively* against a Linka node — one prompt,
 run to completion, transcript captured as durable evidence — Styra runs an agent
@@ -28,13 +27,14 @@ Styra ----> Driva ----> Bubblewrap
 
 Styra owns, in its first form:
 
-- launching one isolated agent process through Driva;
+- durable Workspaces grouping related Sessions against a host directory;
+- launching isolated Interactions through Driva;
 - the wire protocol spoken to that agent and its decoding into a small, stable
   event vocabulary;
 - capturing the raw event journal verbatim as the session's fundamental record;
 - a terminal application that lists events, expands and collapses them, and
   sends operator messages to the agent;
-- session lifecycle: start, send, stop, and view the captured journal.
+- separate Workspace, Session, and Interaction lifecycles.
 
 Styra does **not**, in its first form:
 
@@ -44,11 +44,9 @@ Styra does **not**, in its first form:
 - interpret which program produced a stream inside Driva (Driva transports
   bytes; Styra owns interpretation, exactly as Orka does).
 
-Session switching — seeding a fresh session with a prior one's rendered
-context, described under *The raw journal is the session* and *Session
-switching* — has since landed. Forking (keeping both branches) and native,
-protocol-level resume remain later phases, described under the same sections'
-future-ideas notes.
+Rendered transcript seeding is explicit: `F` prepares a new Session in the
+current Workspace without mutating or stopping the source Session. Native,
+protocol-level resume remains a later phase.
 
 ## Server-client architecture
 
@@ -61,15 +59,15 @@ other tools ─────────────>       │
                                  └──> XDG journal store
 ```
 
-`styra-server` owns all mutable and durable state for a session and its live
-interaction: process launch, agent stdin/stdout, Genta protocol state, journals, update
-ordering, and stored-session replay. Each socket connection carries one newline-terminated
-JSON request and response. Live updates have monotonically increasing sequence
-numbers; clients poll with an `after` cursor, which supports reconnects and
-multiple independent observers without coupling them to Rust channels.
+`styra-server` owns Workspace metadata, durable Sessions, and live
+Interactions: process launch, agent stdin/stdout, Genta protocol state,
+journals, update ordering, and replay. Each socket connection carries one
+newline-terminated JSON request and response. Live updates have monotonically
+increasing sequence numbers; clients poll with an `after` cursor, which
+supports reconnects and multiple independent observers.
 
 The TUI is an ordinary socket client. It owns presentation and input state, but
-never constructs a `Interaction`, opens a journal, decodes provider traffic, or
+never constructs an `Interaction`, opens a journal, decodes provider traffic, or
 calls Driva. The headless example uses the same client. Public wire types live
 in `api.rs`, the reusable Rust client in `client.rs`, and server dispatch in
 `server.rs`.
@@ -82,7 +80,7 @@ control bind mount, allowing `styra shell --session ID` to attach from the host
 without exposing a host shell inside the sandbox or mixing terminal bytes into
 the agent journal. The broker kills tmux when the agent interaction ends.
 
-Durable sessions default to `$XDG_STATE_HOME/styra` (falling back to
+Durable Workspaces and Sessions default to `$XDG_STATE_HOME/styra` (falling back to
 `$HOME/.local/state/styra`). The socket is independent, ephemeral runtime state
 at `$XDG_RUNTIME_DIR/styra/styra.sock`. Default Styra directories use mode
 `0700`, and the socket uses mode `0600`. This is deliberately a local API: it
@@ -285,9 +283,8 @@ This is what makes the wishlist's session properties fall out cheaply:
   profile, hence a different model — while preserving the original journal.
   Fork is resume that keeps both branches. These reuse the launch and decode
   paths and add no new persistence concept, so they stay cheap. The first cut
-  (see *Session switching* below) does this the simple way: render the old
-  journal to a text transcript and send it as the new session's opening
-  message. A native alternative, deferred for now, is described next.
+  (`F`) explicitly renders the old journal to a text transcript and prepares it
+  as a new Session's opening message. A native alternative is described next.
 
 ### Future idea: native resume instead of a rendered seed message
 
@@ -336,18 +333,32 @@ not a reshaping of what already exists. Deferred alongside native resume;
 worth it if the rendered transcript's token cost becomes the actual pain
 point in practice.
 
-Journals live under a per-session directory in the Styra store
-(`$XDG_STATE_HOME/styra` by default, separately owned from `.orka/` and
-`.linka/`), named by a session id.
+The durable layout makes ownership explicit:
+
+```text
+workspaces/<workspace-id>/
+  workspace.json
+  sessions/<session-id>/
+    session.json
+    journal.jsonl
+    diagnostics.log
+```
+
+`workspace.json` records the Workspace identity, optional display name, host
+directory, and creation time. A host directory does not determine identity:
+separate Workspaces may intentionally refer to the same checkout.
 
 Alongside `journal.jsonl`, one `session.json` is written once at session
-creation: genta's `SessionMeta` (the profile name and wire protocol that
-launched the session). The journal itself is agent-agnostic — it stores
-whatever raw line arrived — so without this sidecar there is no record of
-which agent a stored session came from. `--view` reads `session.json` and
+creation: the owning Workspace plus genta's `SessionMeta` (the profile name and
+wire protocol that launched the Session). The journal itself is agent-agnostic
+— it stores whatever raw line arrived — so without this sidecar there is no
+record of which agent a stored Session came from. `--view` reads `session.json` and
 decodes with the protocol it names; there is no `--profile` fallback, since an
 operator-supplied guess could silently mis-decode a mismatched session. A
-session predating this sidecar has no `session.json` and so cannot be viewed.
+Session predating this sidecar has no `session.json` and so cannot be viewed.
+Pre-Workspace flat Session directories are not moved or guessed into a host
+directory; the server exposes them beneath a synthetic, read-only `Legacy
+sessions` Workspace.
 
 ## Terminal interface
 
@@ -421,8 +432,8 @@ view shares the raw view's bottom-anchored scrolling.
 
 `t` toggles a **transcript view**: the current session's decoded events laid
 out as plain text through genta's `render_events` — the same rendering
-`journal::render_transcript` uses to seed a switched-to session (see *Session
-switching*), just read from the live entries in memory each frame rather than
+`journal::render_transcript` uses to seed a new Session, just read from the live
+entries in memory each frame rather than
 a stored journal. It exists for operators who want to skim or copy the whole
 conversation as prose instead of navigating the folded event list one entry
 at a time. Unlike the raw and log views, it anchors to the *start*: a
@@ -457,10 +468,11 @@ current focus is shown in the status line and by which region draws the cursor.
 | `t`             | Toggle the rendered transcript view (`j`/`k`/`g`/`G` scroll from the start) |
 | `i`             | Enter input focus                                           |
 | `L`             | Choose the agent, model, and effort for the next session (start screen only; see *Choosing what to launch*) |
-| `s`             | Stop the session (keeps the journal)                        |
-| `A`             | Show current jobs with a live preview of the selected job   |
-| `S`             | Stop the session and return to the blank start screen       |
-| `V`             | Switch to a different stored session (see *Session switching*) |
+| `s`             | Stop the Interaction (keeps the Session and journal)        |
+| `F`             | Seed an explicit new Session from this Session's transcript |
+| `A`             | Show live Interactions with a preview                       |
+| `S`             | Stop the Interaction and return to a blank Session screen   |
+| `V`             | Choose a Workspace, then browse its Sessions                |
 | `q`             | Quit (prompts if the session is still running)              |
 
 ### Input-focus keys
@@ -484,47 +496,36 @@ wishlist's "show the diff in two vim buffers") is a later hook: a `FileChanged`
 entry can offer to open the change in a configured external viewer against a
 temporary worktree, but the first form only summarizes the paths.
 
-### Session switching
+### Workspace and Session navigation
 
-`V` opens the same session picker `--view` (bare) shows at startup, but from
-inside an already-running session. Picking one stops the current session
-(same effect as `s`, then the child is joined) and renders the picked
-session's journal to a plain-text transcript (`journal::render_transcript`,
-built on genta's `render_events`) — but nothing is launched or sent yet. The
-transcript is only prefilled into the message box, and the view resets to a
-fresh, unlaunched `App` in input focus (`Status::Pending`, see *Starting and
-switching send nothing on their own* below): the operator reviews it, edits
-or appends to it, or clears it and writes something else, and only their own
-`Enter` starts the new session — on the same profile the process was started
-with (the standing launch selection, not the picked session's own recorded one,
-so switching changes *what you're talking about*, not *what you're talking to*;
-see *Choosing what to launch*) — sending
-whatever is currently in the box as its opening message. The outgoing
-session's journal is untouched; only the current view moves on. See *The raw
-journal is the session* for why the seed is a rendered transcript rather than
-a native protocol resume, and the future ideas recorded there for
-alternatives.
+`V` opens the Workspace picker. Choosing a Workspace then opens its Session
+picker; choosing a Session attaches to its Interaction when live, otherwise it
+replays the stored journal read-only. Neither step stops the Interaction the
+client was previously viewing. An empty Workspace opens a blank pending Session
+screen. `Esc`/`q` cancels without changing the current view.
 
-Cancelling out of the picker (`Esc`/`q`) leaves the current session running
-untouched. Picking one when there is nothing stored yet logs a message in the
-diagnostic log view rather than doing nothing silently.
+`F` is the separate transcript-seeding operation. It renders the current
+Session, opens a fresh pending Session in the same Workspace, and prefills the
+message box. The operator can edit or clear it; only `Enter` creates the new
+Session and launches its Interaction.
 
-### Current jobs
+### Current Interactions
 
-`A` opens the server's current-jobs picker. The job list stays on the left,
-while the right pane follows the selected job's live log: decoded agent
+`A` opens the server's current-Interactions picker. Each entry names its
+Workspace and Session. The list stays on the left, while the right pane follows
+the selected Interaction's live log: decoded agent
 activity, Styra diagnostics and stderr, and the final process outcome. Moving
-the selection with `j`/`k` immediately loads that job's history and continues
-polling for new entries. `Enter` attaches to the selected job; `Esc`/`q`
+the selection with `j`/`k` immediately loads its history and continues
+polling for new entries. `Enter` attaches to the selected Interaction; `Esc`/`q`
 returns without affecting any running process.
 
-### Starting and switching send nothing on their own
+### Starting and seeding send nothing on their own
 
-Neither a bare `styra` invocation nor a session switch spawns the agent
+Neither a bare `styra` invocation nor transcript seeding spawns the agent
 process by itself. Both land in `Status::Pending` (`App::pending`): an `App`
 with no session id yet, opened directly in input focus, and a `Live::Pending`
 event-loop state that holds no session id or cursor. The message box may be
-empty (a bare start) or prefilled with a switched-from transcript, but either
+empty (a bare start) or prefilled with a source Session's transcript, but either
 way the operator's own submitted message is what triggers a `create_session`
 request to the server — creating the journal, launching the sandboxed interaction
 through Driva, and sending that first message once the agent is ready. A
@@ -563,10 +564,10 @@ carry such an id, never author one.
 The picker is reachable only in `Status::Pending`. A live or replayed session's
 agent, model, and effort are settled facts about a process that already ran;
 changing them is a property of the *next* session, reached by resetting (`S`)
-first — which carries the stopped interaction's selection over, so the usual next step
-is the same agent again and a deliberate change is one keypress away. A switch
-(`V`) carries it over for the same reason: switching changes what you are talking
-about, not what you are talking to. The process-wide `--profile` is only the
+first — which carries the stopped Interaction's selection over, so the usual
+next step is the same agent again and a deliberate change is one keypress away.
+Opening another Session (`V`) adopts that Session's recorded launch selection.
+The process-wide `--profile` is only the
 opening choice, parsed before the terminal is taken over so an unknown agent or
 effort level is a plain error rather than a failure at the first message.
 
@@ -597,12 +598,18 @@ clients — without coupling to the interaction's threads.
 The server-client split is also a crate split: two standalone crates, siblings
 to `orka/` and `driva/`, linked by a plain path dependency (no workspace).
 
-Two things are called out by distinct names to avoid the overloaded word
-"session": a **session** is the persistent, server-owned unit — a session id, a
-journal, and its `session.json`, listed and replayable from the store — while a
-**interaction** is one live agent process serving a session (the Driva launch, the
-pipes, the protocol, steered turn by turn). A session outlives any single interaction;
-resume/fork/switch spawn a fresh interaction against a preserved session journal.
+Three names describe distinct ownership:
+
+- A **Workspace** is the durable top-level container and host-directory binding.
+- A **Session** is one durable provider-native conversation, identity, and
+  append-only journal within a Workspace.
+- An **Interaction** is the optional live process, sandbox, pipes, protocol
+  driver, shell, and update stream serving a Session.
+
+Stopping an Interaction preserves its Session. Navigating to another Workspace
+or Session only changes the client view. A new Session may be explicitly seeded
+from another Session; native provider resume may eventually attach a new
+Interaction to an existing stopped Session.
 
 ```text
 styra-server/            # the server application + its client interface library
@@ -619,6 +626,7 @@ styra-server/            # the server application + its client interface library
     server.rs            # socket dispatch and the server-owned interaction manager
     interaction.rs               # one live agent interaction: Driva launch, pipes, threads
     journal.rs           # raw event/input capture and replay
+    workspace.rs         # Workspace metadata, hierarchy, and legacy adapter
 
 styra/                   # the terminal client application
   Cargo.toml             # [[bin]] styra; depends on styra-server (path)
@@ -677,7 +685,7 @@ interactions it owns with it. Both are pure lifecycle commands: they act and exi
 without touching the terminal. An optional trailing `PROMPT` seeds the first turn so a
 session can start with one message already sent, launching the interaction immediately;
 without it, the application opens in input focus with an empty box and launches
-nothing until the operator submits a message (see *Starting and switching send
+nothing until the operator submits a message (see *Starting and seeding send
 nothing on their own*). `--view` opens the view/replay path over a stored
 journal; it decodes with the session's own recorded profile and protocol, so
 `--profile` is not read in this mode.

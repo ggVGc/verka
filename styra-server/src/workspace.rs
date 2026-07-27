@@ -197,8 +197,7 @@ mod tests {
     use super::*;
 
     fn temp_dir(tag: &str) -> PathBuf {
-        let root =
-            std::env::temp_dir().join(format!("styra-workspace-{tag}-{}", new_id(now_ms())));
+        let root = std::env::temp_dir().join(format!("styra-workspace-{tag}-{}", new_id(now_ms())));
         std::fs::create_dir_all(&root).unwrap();
         root
     }
@@ -218,7 +217,10 @@ mod tests {
         let listed = list(&store).unwrap();
         assert_eq!(listed.len(), 2);
         assert_eq!(listed[0].id, second.id);
-        assert_eq!(get(&store, &first.id).unwrap().name.as_deref(), Some("first"));
+        assert_eq!(
+            get(&store, &first.id).unwrap().name.as_deref(),
+            Some("first")
+        );
     }
 
     #[test]

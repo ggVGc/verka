@@ -208,7 +208,10 @@ pub fn render_workspace_picker(
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
-                    format!("{:>3} sessions  {:<10} ", workspace.session_count, workspace.age),
+                    format!(
+                        "{:>3} sessions  {:<10} ",
+                        workspace.session_count, workspace.age
+                    ),
                     Style::default().fg(Color::Gray),
                 ),
                 Span::styled(

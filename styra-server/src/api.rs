@@ -2,8 +2,7 @@
 
 use crate::event::AgentEvent;
 use crate::types::{
-    DrivaOptions, InteractionSummary, InteractionUpdate, RawLine, SessionSummary,
-    WorkspaceSummary,
+    DrivaOptions, InteractionSummary, InteractionUpdate, RawLine, SessionSummary, WorkspaceSummary,
 };
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
