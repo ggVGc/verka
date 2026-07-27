@@ -297,10 +297,7 @@ impl ServerState {
                 return Ok(session);
             }
         }
-        journal::list_sessions(&self.inner.store_root)?
-            .into_iter()
-            .find(|session| session.id == id)
-            .with_context(|| format!("stored session {id:?} was not found"))
+        anyhow::bail!("stored session {id:?} was not found")
     }
 
     fn handle(&self, request: Request) -> Result<Response> {
@@ -366,13 +363,9 @@ impl ServerState {
             Request::ListSessions { workspace_id } => Ok(Response::StoredSessions(
                 journal::list_workspace_sessions(self.store_root(), &workspace_id)?,
             )),
-            Request::ListStoredSessions => Ok(Response::StoredSessions(journal::list_sessions(
-                self.store_root(),
-            )?)),
             Request::StoredSession { id } => {
                 let summary = self.stored_summary(&id)?;
-                let meta = journal::read_session_meta(&summary.path)?
-                    .with_context(|| format!("session {id:?} has no session.json"))?;
+                let meta = journal::read_session_meta(&summary.path)?;
                 let events = journal::replay(&summary.path, meta.protocol)?;
                 let raw = journal::replay_raw(&summary.path)?;
                 Ok(Response::StoredSession(StoredSession {
@@ -383,8 +376,7 @@ impl ServerState {
             }
             Request::Transcript { id } => {
                 let summary = self.stored_summary(&id)?;
-                let meta = journal::read_session_meta(&summary.path)?
-                    .with_context(|| format!("session {id:?} has no session.json"))?;
+                let meta = journal::read_session_meta(&summary.path)?;
                 let text = journal::render_transcript(&summary.path, meta.protocol)?;
                 Ok(Response::Transcript(Transcript { text }))
             }
@@ -490,13 +482,7 @@ mod tests {
     use crate::client::Client;
 
     fn temp_path(tag: &str) -> PathBuf {
-        std::env::temp_dir().join(format!(
-            "styra-server-{tag}-{}-{}.sock",
-            std::process::id(),
-            crate::journal::sessions_dir(Path::new(""))
-                .components()
-                .count()
-        ))
+        std::env::temp_dir().join(format!("styra-server-{tag}-{}.sock", std::process::id(),))
     }
 
     #[test]

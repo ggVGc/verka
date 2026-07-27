@@ -151,14 +151,12 @@ pub struct InteractionSummary {
 pub struct SessionSummary {
     /// The session's directory name, and the id `--view` expects.
     pub id: String,
-    /// The owning Workspace. `None` identifies a legacy flat-store Session.
-    pub workspace_id: Option<String>,
+    /// The owning Workspace.
+    pub workspace_id: String,
     /// Its directory, ready to pass straight to `--view`.
     pub path: PathBuf,
-    /// The agent that produced it, if recorded (see
-    /// [`crate::journal::read_session_meta`]); `None` for a session that
-    /// predates provenance tracking.
-    pub profile: Option<String>,
+    /// The agent that produced it.
+    pub profile: String,
     /// Roughly how long ago it was created, e.g. "3h ago".
     pub age: String,
     /// The millisecond timestamp embedded in `id`, used to sort newest

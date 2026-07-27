@@ -91,10 +91,6 @@ Operations:
 | `shell` | live session id | `shell` (tmux executable and socket) |
 | `list_interactions` | none | `interactions` |
 
-`list_stored_sessions` remains as the compatibility operation for Sessions
-created before Workspaces existed. They appear in the TUI under the synthetic,
-read-only `Legacy sessions` Workspace.
-
 The update stream is cursor-based. Clients pass the last observed sequence as
 `after`; the response supplies `next`. Repeating a request with the same cursor
 is safe, and different clients can observe a session independently.

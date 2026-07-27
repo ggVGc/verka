@@ -11,7 +11,6 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const WORKSPACE_META_FILE: &str = "workspace.json";
-pub const LEGACY_WORKSPACE_ID: &str = "__legacy__";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct WorkspaceMeta {
@@ -86,47 +85,15 @@ pub fn list(store_root: &Path) -> Result<Vec<WorkspaceSummary>> {
         }
     }
     workspaces.sort_by(|a, b| b.created_at_ms.cmp(&a.created_at_ms));
-    if let Some(legacy) = legacy_summary(store_root)? {
-        workspaces.push(legacy);
-    }
     Ok(workspaces)
 }
 
 pub fn get(store_root: &Path, id: &str) -> Result<WorkspaceSummary> {
-    if id == LEGACY_WORKSPACE_ID {
-        return legacy_summary(store_root)?
-            .with_context(|| "Legacy sessions Workspace was not found");
-    }
     let path = workspace_dir(store_root, id);
     if !path.is_dir() {
         anyhow::bail!("Workspace {id:?} was not found");
     }
     summary_from_dir(&path, now_ms())
-}
-
-fn legacy_summary(store_root: &Path) -> Result<Option<WorkspaceSummary>> {
-    let path = crate::journal::sessions_dir(store_root);
-    if !path.is_dir() {
-        return Ok(None);
-    }
-    let session_count = std::fs::read_dir(&path)
-        .with_context(|| format!("reading {}", path.display()))?
-        .filter_map(Result::ok)
-        .filter(|entry| entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false))
-        .count();
-    if session_count == 0 {
-        return Ok(None);
-    }
-    Ok(Some(WorkspaceSummary {
-        id: LEGACY_WORKSPACE_ID.into(),
-        name: Some("Legacy sessions".into()),
-        // Old Session metadata did not persist the mounted host directory.
-        host_path: PathBuf::new(),
-        path,
-        session_count,
-        age: "legacy".into(),
-        created_at_ms: 0,
-    }))
 }
 
 fn summary_from_dir(path: &Path, now: u64) -> Result<WorkspaceSummary> {
@@ -221,16 +188,5 @@ mod tests {
             get(&store, &first.id).unwrap().name.as_deref(),
             Some("first")
         );
-    }
-
-    #[test]
-    fn flat_sessions_appear_as_one_synthetic_legacy_workspace() {
-        let store = temp_dir("legacy-store");
-        std::fs::create_dir_all(crate::journal::sessions_dir(&store).join("old-session")).unwrap();
-        let workspaces = list(&store).unwrap();
-        assert_eq!(workspaces.len(), 1);
-        assert_eq!(workspaces[0].id, LEGACY_WORKSPACE_ID);
-        assert_eq!(workspaces[0].session_count, 1);
-        assert_eq!(workspaces[0].name.as_deref(), Some("Legacy sessions"));
     }
 }

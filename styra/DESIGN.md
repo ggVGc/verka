@@ -372,11 +372,9 @@ wire protocol that launched the Session). The journal itself is agent-agnostic
 — it stores whatever raw line arrived — so without this sidecar there is no
 record of which agent a stored Session came from. `--view` reads `session.json` and
 decodes with the protocol it names; there is no `--profile` fallback, since an
-operator-supplied guess could silently mis-decode a mismatched session. A
-Session predating this sidecar has no `session.json` and so cannot be viewed.
-Pre-Workspace flat Session directories are not moved or guessed into a host
-directory; the server exposes them beneath a synthetic, read-only `Legacy
-sessions` Workspace.
+operator-supplied guess could silently mis-decode a mismatched Session.
+Workspace ownership and `session.json` are required; incomplete or flat Session
+directories are invalid store entries.
 
 ## Terminal interface
 
@@ -645,7 +643,7 @@ styra-server/            # the server application + its client interface library
     server.rs            # socket dispatch and the server-owned interaction manager
     interaction.rs               # one live agent interaction: Driva launch, pipes, threads
     journal.rs           # raw event/input capture and replay
-    workspace.rs         # Workspace metadata, hierarchy, and legacy adapter
+    workspace.rs         # Workspace metadata and hierarchy
 
 styra/                   # the terminal client application
   Cargo.toml             # [[bin]] styra; depends on styra-server (path)

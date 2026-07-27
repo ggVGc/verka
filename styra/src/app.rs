@@ -126,9 +126,7 @@ fn split_profile_name(profile: &str) -> (String, Option<String>, Option<String>)
 /// names them.
 ///
 /// `model` and `effort` are what the agent *reported* once it started, falling
-/// back to what the launch asked for. Both are `None` only for a session whose
-/// recorded profile does not parse as a selection — an older store, or an agent
-/// this build does not know — since every selection pins both.
+/// back to what the launch asked for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LaunchLabel {
     pub agent: String,
@@ -394,16 +392,15 @@ pub struct App {
 
 impl App {
     pub fn new(profile_name: impl Into<String>, session_id: impl Into<String>) -> Self {
-        let profile_name = profile_name.into();
+        let requested_profile = profile_name.into();
         // A profile name *is* a selection (`provider[:model][/effort]`), so a
         // session that is being viewed or attached to seeds the launch choice
         // with what it was itself launched with: resetting away from a
-        // `claude:opus/max` interaction offers the same agent again. A replayed
-        // session whose recorded profile no longer parses (an older store, an
-        // unknown agent) falls back to the default agent rather than failing to
-        // open — nothing is launched from it either way.
-        let selection =
-            Selection::parse(&profile_name).unwrap_or_else(|_| Selection::new(Provider::ALL[0]));
+        // `claude:opus/max` interaction offers the same agent again. Stored
+        // Session profiles are required to be valid launch selections.
+        let selection = Selection::parse(&requested_profile)
+            .expect("Session profile must be a valid selection");
+        let profile_name = selection.name();
         Self {
             entries: Vec::new(),
             selected: 0,
@@ -491,12 +488,8 @@ impl App {
     ///
     /// The agent's own report wins where it made one, since that is what is
     /// actually running; otherwise the profile the session was launched with
-    /// answers for it, and that profile always names a model. The profile name is
-    /// read apart here textually rather than through [`Selection::parse`], so a
-    /// stored session whose recorded profile this build cannot resolve — an older
-    /// journal that recorded a bare `codex`, an agent this build does not know —
-    /// still shows verbatim what it says instead of a default that never ran.
-    /// That is the only case where the label names no model.
+    /// answers for it, and that normalized profile always names a model and
+    /// effort.
     pub fn launch_label(&self) -> LaunchLabel {
         let (agent, requested_model, requested_effort) = split_profile_name(&self.profile_name);
         match &self.reported_model {
@@ -1365,11 +1358,6 @@ mod tests {
             app.selection,
             Selection::parse("claude:opus/xhigh").unwrap()
         );
-
-        // A stored session from an older or unknown agent still opens; nothing
-        // is launched from it, and the choice falls back to the default agent.
-        let app = App::new("unknown", "session-2");
-        assert_eq!(app.selection, Selection::new(Provider::ALL[0]));
     }
 
     /// What the status line names before the agent has spoken: the launch it was
@@ -1387,21 +1375,22 @@ mod tests {
         );
         assert!(!label.effort_reported);
 
-        // An older journal that recorded a bare provider name pinned no model, so
-        // there is nothing to name until the agent says what it resolved.
+        // Short launch syntax is normalized to the provider's declared defaults.
         let app = App::new("codex", "s-2");
         let label = app.launch_label();
         assert_eq!(label.agent, "codex");
-        assert_eq!(label.model, None);
-        assert_eq!(label.effort, None);
-
-        // A stored session whose recorded profile this build cannot resolve is
-        // shown verbatim rather than as some default that never ran.
-        assert_eq!(App::new("unknown", "s-3").launch_label().agent, "unknown");
+        assert_eq!(
+            label.model.as_deref(),
+            Some(Provider::Codex.default_model())
+        );
+        assert_eq!(
+            label.effort.as_deref(),
+            Some(Provider::Codex.default_effort().as_str())
+        );
     }
 
     /// The agent's own report is what is actually running, so it replaces the
-    /// launch request — including when the request named no model at all.
+    /// launch request.
     #[test]
     fn a_reported_model_and_effort_replace_the_requested_ones() {
         let mut app = App::new("codex", "s-1");

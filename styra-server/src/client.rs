@@ -106,13 +106,6 @@ impl Client {
         }
     }
 
-    pub fn list_legacy_sessions(&self) -> Result<Vec<SessionSummary>> {
-        match self.request(Request::ListStoredSessions)? {
-            Response::StoredSessions(value) => Ok(value),
-            other => unexpected("stored_sessions", other),
-        }
-    }
-
     pub fn stored_session(&self, id: &str) -> Result<StoredSession> {
         match self.request(Request::StoredSession { id: id.to_owned() })? {
             Response::StoredSession(value) => Ok(value),

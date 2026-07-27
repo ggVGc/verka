@@ -110,7 +110,6 @@ pub enum Request {
     ListSessions {
         workspace_id: String,
     },
-    ListStoredSessions,
     StoredSession {
         id: String,
     },

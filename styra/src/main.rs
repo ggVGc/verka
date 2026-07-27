@@ -160,15 +160,8 @@ fn main() -> Result<()> {
     if let Some(view) = &view_target {
         let id = session_id_from_target(view)?;
         let stored = client.stored_session(&id)?;
-        app = App::new(
-            stored
-                .summary
-                .profile
-                .clone()
-                .unwrap_or_else(|| "unknown".into()),
-            stored.summary.id,
-        );
-        app.workspace_id = stored.summary.workspace_id;
+        app = App::new(stored.summary.profile, stored.summary.id);
+        app.workspace_id = Some(stored.summary.workspace_id);
         for event in stored.events {
             // Skip carried-but-viewless traffic (e.g. app-server control
             // lines), matching what a live session shows; it stays available
@@ -381,7 +374,7 @@ fn workspace_for_host(client: &Client, host_path: &Path) -> Result<WorkspaceSumm
 }
 
 fn all_sessions(client: &Client) -> Result<Vec<SessionSummary>> {
-    let mut sessions = client.list_legacy_sessions()?;
+    let mut sessions = Vec::new();
     for workspace in client.list_workspaces()? {
         sessions.extend(client.list_sessions(&workspace.id)?);
     }
@@ -461,15 +454,8 @@ fn open_session(client: &Client, session_id: &str) -> Result<(App, Live)> {
         return attach_live_interaction(client, interaction);
     }
     let stored = client.stored_session(session_id)?;
-    let mut app = App::new(
-        stored
-            .summary
-            .profile
-            .clone()
-            .unwrap_or_else(|| "unknown".into()),
-        stored.summary.id,
-    );
-    app.workspace_id = stored.summary.workspace_id;
+    let mut app = App::new(stored.summary.profile, stored.summary.id);
+    app.workspace_id = Some(stored.summary.workspace_id);
     for event in stored.events {
         if !matches!(event, styra_server::event::AgentEvent::Unknown { .. }) {
             app.push_event(event);
@@ -1015,7 +1001,7 @@ mod cli_tests {
     }
 
     #[test]
-    fn legacy_prompt_launch_still_parses_without_a_subcommand() {
+    fn trailing_prompt_launch_parses_without_a_subcommand() {
         let cli = Cli::try_parse_from(["styra", "--profile", "codex", "hello"]).unwrap();
         assert!(cli.command.is_none());
         assert_eq!(cli.prompt, vec!["hello"]);

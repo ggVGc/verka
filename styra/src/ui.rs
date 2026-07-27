@@ -71,9 +71,8 @@ fn title_line(label: &LaunchLabel, status: &Status, suffix: Option<&str>) -> Lin
         format!(" styra · {} · ", label.agent),
         text_style,
     )];
-    // No model named anywhere — only reachable for a stored session whose
-    // recorded profile named none (see `App::launch_label`), since a launch now
-    // always pins one.
+    // Launch profiles always name a model; retain a plain fallback for a
+    // malformed in-memory label rather than leaving the title empty.
     let model = label
         .model
         .clone()
@@ -491,7 +490,7 @@ fn interaction_item(interaction: &InteractionSummary) -> ListItem<'static> {
 }
 
 fn session_item(session: &SessionSummary) -> ListItem<'static> {
-    let profile = session.profile.clone().unwrap_or_else(|| "unknown".into());
+    let profile = session.profile.clone();
     ListItem::new(Line::from(vec![
         Span::styled(
             format!("{profile:<14} "),
@@ -1880,14 +1879,8 @@ mod tests {
     /// model nobody typed.
     #[test]
     fn the_status_line_names_the_model_and_effort_in_use() {
-        // A stored session whose recorded profile named no model — the only case
-        // left now that a launch always pins one: said plainly, not guessed.
         let mut app = App::new("codex", "s-1");
-        assert!(
-            rendered(&app).contains("styra · codex · default model"),
-            "{}",
-            rendered(&app)
-        );
+        assert!(rendered(&app).contains("styra · codex · gpt-5.6-sol · high"));
 
         app.push_event(AgentEvent::ThreadStarted {
             thread_id: "t-9".into(),
@@ -2037,12 +2030,12 @@ mod tests {
         assert!(screen.contains("claude-opus-5"), "{screen}");
     }
 
-    fn picker_summary(id: &str, profile: Option<&str>, age: &str) -> SessionSummary {
+    fn picker_summary(id: &str, profile: &str, age: &str) -> SessionSummary {
         SessionSummary {
             id: id.into(),
-            workspace_id: None,
+            workspace_id: "w-1".into(),
             path: std::path::PathBuf::from(id),
-            profile: profile.map(str::to_owned),
+            profile: profile.into(),
             age: age.into(),
             created_at_ms: None,
         }
@@ -2066,15 +2059,15 @@ mod tests {
     #[test]
     fn picker_lists_sessions_with_profile_and_age() {
         let sessions = vec![
-            picker_summary("s-1", Some("codex"), "2m ago"),
-            picker_summary("s-2", None, "3h ago"),
+            picker_summary("s-1", "codex", "2m ago"),
+            picker_summary("s-2", "claude", "3h ago"),
         ];
         let screen = rendered_picker(&sessions, 0);
         assert!(screen.contains("choose a session"));
         assert!(screen.contains("codex"));
         assert!(screen.contains("2m ago"));
         assert!(screen.contains("s-1"));
-        assert!(screen.contains("unknown"));
+        assert!(screen.contains("claude"));
         assert!(screen.contains("3h ago"));
         assert!(screen.contains("s-2"));
     }
@@ -2199,8 +2192,8 @@ mod tests {
     #[test]
     fn picker_highlights_the_selected_session() {
         let sessions = vec![
-            picker_summary("s-1", Some("codex"), "2m ago"),
-            picker_summary("s-2", Some("codex"), "3h ago"),
+            picker_summary("s-1", "codex", "2m ago"),
+            picker_summary("s-2", "codex", "3h ago"),
         ];
 
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();

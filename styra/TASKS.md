@@ -57,9 +57,8 @@ Workspace
   keep its Session and Workspace intact. Support opening stored Sessions without
   an Interaction and make transcript seeding create a new Session in the current
   Workspace.
-- [x] **15. Legacy store compatibility.** Surface pre-Workspace Session
-  directories under a synthetic `Legacy sessions` Workspace without guessing
-  their original host directory or destructively moving their journals.
+- [x] **15. Strict Workspace store.** Require Workspace ownership and complete
+  Session metadata; reject invalid Session entries.
 - [x] **16. Documentation and validation.** Rewrite the architecture, CLI/API
   reference, and tests around Workspace → Session → Interaction, then run all
   Styra and repository-level checks.
