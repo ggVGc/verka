@@ -154,16 +154,19 @@ fn main() -> Result<()> {
         let stored = client.stored_session(&id)?;
         app = App::new(stored.summary.selection, stored.summary.id);
         app.workspace_id = Some(stored.summary.workspace_id);
-        for event in stored.events {
+        // `stored.events[i]` and `stored.raw[i]` are decoded from the same
+        // journal record (see `journal::replay`/`replay_raw`), so pushing
+        // them in lockstep — raw line first, as a live session receives it —
+        // gives each kept entry a `raw_index` that actually points at its
+        // own wire line instead of leaving it unset.
+        for (event, line) in stored.events.into_iter().zip(stored.raw) {
+            app.push_raw(line);
             // Skip carried-but-viewless traffic (e.g. app-server control
             // lines), matching what a live session shows; it stays available
-            // in the raw view below.
+            // in the raw view above.
             if !matches!(event, styra_server::event::AgentEvent::Unknown { .. }) {
                 app.push_event(event);
             }
-        }
-        for line in stored.raw {
-            app.push_raw(line);
         }
         // A replayed session has no live agent to end; mark it stopped.
         app.on_ended(styra_server::InteractionEnd {
@@ -430,13 +433,14 @@ fn open_session(client: &Client, session_id: &str) -> Result<(App, Live)> {
     let stored = client.stored_session(session_id)?;
     let mut app = App::new(stored.summary.selection, stored.summary.id);
     app.workspace_id = Some(stored.summary.workspace_id);
-    for event in stored.events {
+    // See the matching loop in `main`'s `--view` handling for why raw and
+    // event are pushed together, index for index, rather than as two
+    // separate passes.
+    for (event, line) in stored.events.into_iter().zip(stored.raw) {
+        app.push_raw(line);
         if !matches!(event, styra_server::event::AgentEvent::Unknown { .. }) {
             app.push_event(event);
         }
-    }
-    for line in stored.raw {
-        app.push_raw(line);
     }
     app.on_ended(styra_server::InteractionEnd {
         exit_code: None,
@@ -853,10 +857,12 @@ fn handle_list_key(
             _ => {}
         },
         View::Raw => match key.code {
-            KeyCode::Char('j') | KeyCode::Down => app.raw_scroll_down(),
-            KeyCode::Char('k') | KeyCode::Up => app.raw_scroll_up(),
-            KeyCode::Char('g') => app.raw_to_top(),
-            KeyCode::Char('G') => app.raw_to_bottom(),
+            KeyCode::PageDown => app.raw_preview_page_down(),
+            KeyCode::PageUp => app.raw_preview_page_up(),
+            KeyCode::Char('j') | KeyCode::Down => app.raw_select_next(),
+            KeyCode::Char('k') | KeyCode::Up => app.raw_select_prev(),
+            KeyCode::Char('g') => app.raw_select_first(),
+            KeyCode::Char('G') => app.raw_select_last(),
             _ => {}
         },
         View::Log => match key.code {

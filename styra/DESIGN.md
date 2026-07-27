@@ -401,10 +401,23 @@ a **raw view** that shows that interaction undecoded, one wire line per row:
 outgoing operator submissions marked `»` and incoming agent lines marked `«`, in
 occurrence order. It is the same fact the decoder reads and the journal stores,
 shown directly — useful for understanding an `Unknown`/`Malformed` event, or
-just watching the protocol. The raw view anchors to the newest line and scrolls
-back with `j`/`k` (`g`/`G` jump to top/bottom); a new line while scrolled up
-keeps the current content in place rather than yanking to the tail. Under
-`--view` the raw view is reconstructed from the stored journal.
+just watching the protocol.
+
+Each row is truncated to one line rather than wrapped, so the list reads as a
+dense timeline instead of a wall of JSON; a side **entry panel** pretty-prints
+and syntax-highlights the selected line in full (falling back to the verbatim
+text if it does not parse as JSON), so nothing is actually lost to the
+truncation. `j`/`k` move the selection one line at a time (`g`/`G` jump to the
+first/last line), `PgUp`/`PgDn` scroll the entry panel for a line whose
+pretty-printed form overflows it, and the selection tracks the newest line
+until the operator moves off the tail.
+
+Entering the raw view focuses the wire line behind whatever entry was
+selected in the event list (or the tail, if the list was following it), so
+switching views keeps the same point in the session in view rather than
+resetting to wherever the raw view was last left. Under `--view` the raw view
+is reconstructed from the stored journal, replayed in the same order as the
+event list so that correspondence still holds.
 
 ### The log view
 
@@ -451,7 +464,7 @@ current focus is shown in the status line and by which region draws the cursor.
 | `o` / `c`       | Expand / collapse the selected entry explicitly             |
 | `zR` / `zM`     | Expand all / collapse all                                   |
 | `g` / `G`       | Jump to first / last entry (`G` re-enables tail-follow)     |
-| `r`             | Toggle the raw wire view (in the raw view, `j`/`k`/`g`/`G` scroll) |
+| `r`             | Toggle the raw wire view, focused on the selected entry's wire line (in the raw view, `j`/`k`/`g`/`G` select, `PgUp`/`PgDn` scroll the entry panel) |
 | `l`             | Toggle the diagnostic log view (same scrolling as the raw view) |
 | `t`             | Toggle the rendered transcript view (`j`/`k`/`g`/`G` scroll from the start) |
 | `i`             | Enter input focus                                           |

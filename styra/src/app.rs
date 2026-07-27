@@ -81,6 +81,13 @@ impl Status {
 pub struct Entry {
     pub event: AgentEvent,
     pub expanded: bool,
+    /// The index into [`App::raw`] of the wire line this entry was decoded
+    /// from, if known — lets the raw view jump straight to the line behind
+    /// an entry instead of making the operator hunt for it. Best-effort: an
+    /// operator's own message is echoed as an entry before its encoded wire
+    /// line is journaled, so for it this points at whatever line came just
+    /// before instead of its own.
+    pub raw_index: Option<usize>,
 }
 
 impl Entry {
@@ -365,8 +372,14 @@ pub struct App {
     pub latest_usage: Option<TokenUsage>,
     /// The verbatim wire interaction, in occurrence order.
     pub raw: Vec<RawLine>,
-    /// Lines scrolled back from the bottom of the raw view; 0 tracks the tail.
-    pub raw_scroll_back: u16,
+    /// Which wire line the raw view has selected.
+    pub raw_selected: usize,
+    /// When true, `raw_selected` tracks the newest line as it arrives.
+    pub raw_follow: bool,
+    /// Lines scrolled down from the top of the selected wire line's pretty-
+    /// printed preview. Rendering clamps this to the last page, as
+    /// [`preview_scroll`](Self::preview_scroll) does for the entry preview.
+    pub raw_preview_scroll: u16,
     /// Diagnostic log entries, in occurrence order.
     pub log: Vec<LogEntry>,
     /// Lines scrolled back from the bottom of the log view; 0 tracks the tail.
@@ -413,7 +426,9 @@ impl App {
             driva_options: None,
             latest_usage: None,
             raw: Vec::new(),
-            raw_scroll_back: 0,
+            raw_selected: 0,
+            raw_follow: true,
+            raw_preview_scroll: 0,
             log: Vec::new(),
             log_scroll_back: 0,
             transcript_scroll: 0,
@@ -536,22 +551,42 @@ impl App {
         self.log_scroll_back = 0;
     }
 
-    /// Append a verbatim wire line. When the operator has scrolled up, the
-    /// view is kept pinned to the same content; otherwise it tracks the tail.
+    /// Append a verbatim wire line. When the operator has selected a line
+    /// explicitly, the view stays pinned to it; otherwise the selection
+    /// tracks the new tail.
     pub fn push_raw(&mut self, line: RawLine) {
         self.raw.push(line);
-        if self.raw_scroll_back > 0 {
-            self.raw_scroll_back = self.raw_scroll_back.saturating_add(1);
+        if self.raw_follow {
+            self.raw_selected = self.raw.len() - 1;
+            self.raw_preview_scroll = 0;
         }
     }
 
-    /// Toggle the raw wire view on, or back to the event list.
+    /// Toggle the raw wire view on, or back to the event list. Entering it
+    /// focuses the wire line behind the currently selected entry (or the
+    /// tail, while the list is following it, or if no line is known for the
+    /// selection), so switching views keeps the same point in the session
+    /// in view rather than resetting to wherever the raw view was last left.
     pub fn toggle_raw(&mut self) {
-        self.view = if self.view == View::Raw {
-            View::Events
-        } else {
-            View::Raw
-        };
+        if self.view == View::Raw {
+            self.view = View::Events;
+            return;
+        }
+        self.view = View::Raw;
+        self.raw_preview_scroll = 0;
+        if !self.follow {
+            if let Some(idx) = self
+                .entries
+                .get(self.selected)
+                .and_then(|entry| entry.raw_index)
+            {
+                self.raw_selected = idx.min(self.raw.len().saturating_sub(1));
+                self.raw_follow = false;
+                return;
+            }
+        }
+        self.raw_selected = self.raw.len().saturating_sub(1);
+        self.raw_follow = true;
     }
 
     /// Toggle the diagnostic log view on, or back to the event list.
@@ -591,21 +626,50 @@ impl App {
         };
     }
 
-    pub fn raw_scroll_up(&mut self) {
-        let max = self.raw.len().saturating_sub(1) as u16;
-        self.raw_scroll_back = self.raw_scroll_back.saturating_add(1).min(max);
+    /// Move the raw view's selection to the next wire line.
+    pub fn raw_select_next(&mut self) {
+        if self.raw_selected + 1 < self.raw.len() {
+            self.raw_selected += 1;
+            self.raw_preview_scroll = 0;
+        }
+        // Re-enable follow only when the selection reaches the tail.
+        self.raw_follow = !self.raw.is_empty() && self.raw_selected + 1 >= self.raw.len();
     }
 
-    pub fn raw_scroll_down(&mut self) {
-        self.raw_scroll_back = self.raw_scroll_back.saturating_sub(1);
+    /// Move the raw view's selection to the previous wire line.
+    pub fn raw_select_prev(&mut self) {
+        if self.raw_selected > 0 {
+            self.raw_selected -= 1;
+            self.raw_preview_scroll = 0;
+        }
+        // Moving off the tail pins the view.
+        self.raw_follow = false;
     }
 
-    pub fn raw_to_top(&mut self) {
-        self.raw_scroll_back = self.raw.len().saturating_sub(1) as u16;
+    pub fn raw_select_first(&mut self) {
+        if self.raw.is_empty() {
+            return;
+        }
+        self.raw_selected = 0;
+        self.raw_preview_scroll = 0;
+        self.raw_follow = false;
     }
 
-    pub fn raw_to_bottom(&mut self) {
-        self.raw_scroll_back = 0;
+    pub fn raw_select_last(&mut self) {
+        if self.raw.is_empty() {
+            return;
+        }
+        self.raw_selected = self.raw.len() - 1;
+        self.raw_preview_scroll = 0;
+        self.raw_follow = true;
+    }
+
+    pub fn raw_preview_page_down(&mut self) {
+        self.raw_preview_scroll = self.raw_preview_scroll.saturating_add(10);
+    }
+
+    pub fn raw_preview_page_up(&mut self) {
+        self.raw_preview_scroll = self.raw_preview_scroll.saturating_sub(10);
     }
 
     /// Scroll the transcript view forward (towards its end).
@@ -778,6 +842,7 @@ impl App {
         self.entries.push(Entry {
             event,
             expanded: false,
+            raw_index: self.raw.len().checked_sub(1),
         });
         if self.follow {
             self.selected = self.entries.len() - 1;
@@ -1716,7 +1781,7 @@ mod tests {
     }
 
     #[test]
-    fn raw_view_toggles_and_scrolls_from_the_tail() {
+    fn raw_view_toggles_and_selects_from_the_tail() {
         use styra_server::{Direction, RawLine};
         let mut app = app();
         assert_eq!(app.view, View::Events);
@@ -1729,21 +1794,53 @@ mod tests {
                 text: format!("line {i}"),
             });
         }
-        assert_eq!(app.raw_scroll_back, 0, "starts pinned to the tail");
+        assert_eq!(app.raw_selected, 4, "starts pinned to the tail");
+        assert!(app.raw_follow);
 
-        app.raw_scroll_up();
-        assert_eq!(app.raw_scroll_back, 1);
-        // A new line while scrolled up keeps the same content in view.
+        app.raw_select_prev();
+        assert_eq!(app.raw_selected, 3);
+        assert!(!app.raw_follow);
+        // A new line while a specific line is selected keeps that same line
+        // in view rather than yanking to the new tail.
         app.push_raw(RawLine {
             direction: Direction::ToAgent,
             text: "new".into(),
         });
-        assert_eq!(app.raw_scroll_back, 2);
+        assert_eq!(app.raw_selected, 3);
 
-        app.raw_to_bottom();
-        assert_eq!(app.raw_scroll_back, 0);
-        app.raw_to_top();
-        assert_eq!(app.raw_scroll_back, app.raw.len() as u16 - 1);
+        app.raw_select_last();
+        assert_eq!(app.raw_selected, 5);
+        assert!(app.raw_follow);
+        app.raw_select_first();
+        assert_eq!(app.raw_selected, 0);
+        assert!(!app.raw_follow);
+    }
+
+    #[test]
+    fn entering_raw_view_focuses_the_selected_entrys_wire_line() {
+        use styra_server::{Direction, RawLine};
+        let mut app = app();
+        for i in 0..3 {
+            app.push_raw(RawLine {
+                direction: Direction::FromAgent,
+                text: format!("{{\"n\":{i}}}"),
+            });
+            app.push_event(AgentEvent::AgentMessage {
+                text: format!("message {i}"),
+            });
+        }
+        // Step off the tail so the list is no longer following, landing on
+        // the middle entry.
+        app.select_prev_line();
+        assert_eq!(app.selected, 1);
+        assert!(!app.follow);
+
+        app.toggle_raw();
+        assert_eq!(
+            app.raw_selected, 1,
+            "focuses the wire line behind the selected entry"
+        );
+        assert!(!app.raw_follow);
     }
 
     #[test]
