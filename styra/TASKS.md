@@ -43,7 +43,7 @@ Workspace
 - [x] **10. Interaction terminology.** Rename the live `Track` process/protocol
   wrapper and all of its server, API, client, TUI, test, and documentation
   vocabulary to `Interaction`, without changing behaviour.
-- [ ] **11. Workspace storage.** Add durable Workspace metadata and nest new
+- [x] **11. Workspace storage.** Add durable Workspace metadata and nest new
   Session directories below their owning Workspace. Keep the Session journal
   as the durable provider-conversation record.
 - [ ] **12. Workspace API.** Bump the wire API version and add create, list, and

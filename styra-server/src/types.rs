@@ -13,6 +13,27 @@ use driva::Mount;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// A durable Styra Workspace, which groups provider Sessions that operate on
+/// the same host directory.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceSummary {
+    /// The Workspace directory name and stable wire identifier.
+    pub id: String,
+    /// Optional operator-facing name. The host directory name is the display
+    /// fallback when this is absent.
+    pub name: Option<String>,
+    /// Canonical host directory mounted into Sessions in this Workspace.
+    pub host_path: PathBuf,
+    /// Directory holding `workspace.json` and this Workspace's Sessions.
+    pub path: PathBuf,
+    /// Number of durable Sessions currently stored in the Workspace.
+    pub session_count: usize,
+    /// Roughly how long ago the Workspace was created.
+    pub age: String,
+    /// Millisecond creation timestamp used to sort newest first.
+    pub created_at_ms: u64,
+}
+
 /// An update delivered from the interaction's threads to the UI.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
@@ -128,6 +149,8 @@ pub struct InteractionSummary {
 pub struct SessionSummary {
     /// The session's directory name, and the id `--view` expects.
     pub id: String,
+    /// The owning Workspace. `None` identifies a legacy flat-store Session.
+    pub workspace_id: Option<String>,
     /// Its directory, ready to pass straight to `--view`.
     pub path: PathBuf,
     /// The agent that produced it, if recorded (see

@@ -1976,6 +1976,7 @@ mod tests {
     fn picker_summary(id: &str, profile: Option<&str>, age: &str) -> SessionSummary {
         SessionSummary {
             id: id.into(),
+            workspace_id: None,
             path: std::path::PathBuf::from(id),
             profile: profile.map(str::to_owned),
             age: age.into(),

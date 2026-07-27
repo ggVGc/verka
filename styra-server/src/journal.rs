@@ -23,6 +23,14 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct StoredSessionMeta {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    workspace_id: Option<String>,
+    #[serde(flatten)]
+    agent: SessionMeta,
+}
+
 /// One line of the journal. Tagged by source so replay knows whether to decode
 /// the record as an agent wire line or surface it as an operator message.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -67,7 +75,25 @@ impl Journal {
         let id = new_session_id();
         let directory = sessions_dir(store_root).join(&id);
         let journal = Self::create(&directory)?;
-        write_session_meta(&directory, &SessionMeta::for_profile(profile))?;
+        write_session_meta(&directory, &SessionMeta::for_profile(profile), None)?;
+        Ok((journal, id))
+    }
+
+    /// Create a Session beneath its owning durable Workspace.
+    pub fn create_in_workspace(
+        store_root: &Path,
+        workspace_id: &str,
+        profile: &Profile,
+    ) -> Result<(Self, String)> {
+        crate::workspace::get(store_root, workspace_id)?;
+        let id = new_session_id();
+        let directory = crate::workspace::sessions_dir(store_root, workspace_id).join(&id);
+        let journal = Self::create(&directory)?;
+        write_session_meta(
+            &directory,
+            &SessionMeta::for_profile(profile),
+            Some(workspace_id),
+        )?;
         Ok((journal, id))
     }
 
@@ -113,9 +139,17 @@ pub fn sessions_dir(store_root: &Path) -> PathBuf {
     store_root.join("sessions")
 }
 
-fn write_session_meta(directory: &Path, meta: &SessionMeta) -> Result<()> {
+fn write_session_meta(
+    directory: &Path,
+    meta: &SessionMeta,
+    workspace_id: Option<&str>,
+) -> Result<()> {
     let path = directory.join(SESSION_META_FILE);
-    let json = serde_json::to_string_pretty(meta).context("serializing session metadata")?;
+    let stored = StoredSessionMeta {
+        workspace_id: workspace_id.map(str::to_owned),
+        agent: meta.clone(),
+    };
+    let json = serde_json::to_string_pretty(&stored).context("serializing session metadata")?;
     std::fs::write(&path, json).with_context(|| format!("writing {}", path.display()))
 }
 
@@ -123,7 +157,22 @@ fn write_session_meta(directory: &Path, meta: &SessionMeta) -> Result<()> {
 /// sessions directory (nothing has ever been recorded) is an empty list, not
 /// an error.
 pub fn list_sessions(store_root: &Path) -> Result<Vec<SessionSummary>> {
-    let dir = sessions_dir(store_root);
+    list_sessions_at(&sessions_dir(store_root), None)
+}
+
+/// List Sessions belonging to one durable Workspace, newest first.
+pub fn list_workspace_sessions(
+    store_root: &Path,
+    workspace_id: &str,
+) -> Result<Vec<SessionSummary>> {
+    crate::workspace::get(store_root, workspace_id)?;
+    list_sessions_at(
+        &crate::workspace::sessions_dir(store_root, workspace_id),
+        Some(workspace_id),
+    )
+}
+
+fn list_sessions_at(dir: &Path, workspace_id: Option<&str>) -> Result<Vec<SessionSummary>> {
     if !dir.exists() {
         return Ok(Vec::new());
     }
@@ -140,6 +189,7 @@ pub fn list_sessions(store_root: &Path) -> Result<Vec<SessionSummary>> {
         let created_at_ms = session_created_at_ms(&id);
         sessions.push(SessionSummary {
             id,
+            workspace_id: workspace_id.map(str::to_owned),
             path,
             profile,
             age: humanize_age(now, created_at_ms),
@@ -185,6 +235,16 @@ fn humanize_age(now_ms: u64, created_at_ms: Option<u64>) -> String {
 /// directory or its file may be passed. Sessions created before this sidecar
 /// existed have none, so `Ok(None)` — not an error — means "unknown".
 pub fn read_session_meta(path: &Path) -> Result<Option<SessionMeta>> {
+    Ok(read_stored_session_meta(path)?.map(|stored| stored.agent))
+}
+
+/// Return the durable Workspace owning this Session. Legacy flat-store
+/// Sessions have no owner recorded.
+pub fn read_session_workspace_id(path: &Path) -> Result<Option<String>> {
+    Ok(read_stored_session_meta(path)?.and_then(|stored| stored.workspace_id))
+}
+
+fn read_stored_session_meta(path: &Path) -> Result<Option<StoredSessionMeta>> {
     let directory = if path.is_dir() {
         path.to_path_buf()
     } else {
@@ -196,7 +256,7 @@ pub fn read_session_meta(path: &Path) -> Result<Option<SessionMeta>> {
     }
     let text = std::fs::read_to_string(&meta_path)
         .with_context(|| format!("reading {}", meta_path.display()))?;
-    let meta =
+    let meta: StoredSessionMeta =
         serde_json::from_str(&text).with_context(|| format!("parsing {}", meta_path.display()))?;
     Ok(Some(meta))
 }
@@ -420,6 +480,35 @@ mod tests {
     }
 
     #[test]
+    fn workspace_sessions_are_nested_and_record_their_owner() {
+        let root = temp_dir("workspace-session");
+        let host = temp_dir("workspace-host");
+        let workspace = crate::workspace::create(&root, &host, Some("work".into())).unwrap();
+        let profile = test_profile("codex", Protocol::CodexJsonl);
+
+        let (journal, id) =
+            Journal::create_in_workspace(&root, &workspace.id, &profile).unwrap();
+        let directory = journal.path().parent().unwrap();
+        assert_eq!(
+            directory,
+            crate::workspace::sessions_dir(&root, &workspace.id).join(&id)
+        );
+        assert_eq!(
+            read_session_workspace_id(directory).unwrap().as_deref(),
+            Some(workspace.id.as_str())
+        );
+
+        let sessions = list_workspace_sessions(&root, &workspace.id).unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].id, id);
+        assert_eq!(sessions[0].workspace_id.as_deref(), Some(workspace.id.as_str()));
+        assert_eq!(crate::workspace::get(&root, &workspace.id).unwrap().session_count, 1);
+
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::remove_dir_all(&host).ok();
+    }
+
+    #[test]
     fn a_session_without_stored_meta_reads_as_unknown_not_an_error() {
         // Sessions created before this sidecar existed have no session.json;
         // that must read as "unknown", not fail.
@@ -486,6 +575,7 @@ mod tests {
     fn sessions_sort_newest_first_with_unknown_age_last() {
         let summary = |created_at_ms: Option<u64>| SessionSummary {
             id: format!("{created_at_ms:?}"),
+            workspace_id: None,
             path: PathBuf::new(),
             profile: None,
             age: String::new(),

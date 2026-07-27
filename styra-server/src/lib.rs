@@ -42,7 +42,7 @@ pub use daemon::{run, serve_if_requested, ServerConfig};
 pub use spawn::ensure_server;
 pub use types::{
     Direction, DrivaOptions, InteractionEnd, InteractionSummary, InteractionUpdate, LogEntry,
-    LogLevel, RawLine, SessionSummary,
+    LogLevel, RawLine, SessionSummary, WorkspaceSummary,
 };
 
 // --- The session runner ---
@@ -53,3 +53,4 @@ pub mod broker;
 pub mod interaction;
 pub mod journal;
 pub mod server;
+pub mod workspace;
