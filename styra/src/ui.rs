@@ -1204,7 +1204,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     // is launched, its agent and model are settled and `L` is inert.
     if app.can_configure_launch() {
         let hints = match app.focus {
-            Focus::Input => "Enter send (starts the agent) · Ctrl+L choose default agent/model/effort · Alt+Enter newline · Esc back to list",
+            Focus::Input => "Enter send (starts the agent) · ↑/↓ history · Ctrl+L choose default agent/model/effort · Alt+Enter newline · Esc back to list",
             Focus::List => "L choose default agent/model/effort · i message · A interactions · V Workspaces · q quit",
         };
         let footer = Paragraph::new(Line::from(Span::styled(
@@ -1216,7 +1216,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     }
 
     let hints = match (app.focus, app.view) {
-        (Focus::Input, _) => "Enter send · Alt+Enter newline · Ctrl+W delete word · Esc back to list (Esc again clears queue)",
+        (Focus::Input, _) => "Enter send · ↑/↓ history · Alt+Enter newline · Ctrl+W delete word · Esc back to list",
         (Focus::List, View::Events) => {
             "j/k next/prev with detail · J/K next/prev line · space fold · C collapse all · m minor · p preview · P full-screen · t transcript · r raw · l log · d driva · i message · s stop · F resume · A interactions · S reset · V Workspaces · q quit"
         }

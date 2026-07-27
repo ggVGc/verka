@@ -319,8 +319,13 @@ pub struct App {
     pub focus: Focus,
     pub view: View,
     pub input: String,
+    /// Submitted prompts, oldest first, for readline-style Up/Down recall.
+    prompt_history: Vec<String>,
+    /// The recalled history row and the draft that was present before recall.
+    history_cursor: Option<usize>,
+    history_draft: String,
     /// Messages submitted while the current turn is running. They remain
-    /// visible and survive stopping the interaction until explicitly cleared.
+    /// visible until sent or the interaction is stopped.
     queued_messages: VecDeque<String>,
     pub status: Status,
     /// When true, the selection tracks the newest entry as events arrive.
@@ -389,6 +394,9 @@ impl App {
             focus: Focus::List,
             view: View::Events,
             input: String::new(),
+            prompt_history: Vec::new(),
+            history_cursor: None,
+            history_draft: String::new(),
             queued_messages: VecDeque::new(),
             status: Status::Running,
             follow: true,
@@ -498,6 +506,7 @@ impl App {
     /// that failed to launch so it isn't lost.
     pub fn set_input(&mut self, text: String) {
         self.input = text;
+        self.reset_history_navigation();
     }
 
     /// Append a diagnostic log entry, keeping the tail in view unless the
@@ -911,10 +920,12 @@ impl App {
     // --- Message editing -----------------------------------------------------
 
     pub fn input_char(&mut self, ch: char) {
+        self.reset_history_navigation();
         self.input.push(ch);
     }
 
     pub fn input_backspace(&mut self) {
+        self.reset_history_navigation();
         self.input.pop();
     }
 
@@ -922,6 +933,7 @@ impl App {
     /// readline-style: trailing whitespace first, then non-whitespace back
     /// to the previous word boundary (or the start of the buffer).
     pub fn input_delete_word(&mut self) {
+        self.reset_history_navigation();
         let trimmed = self.input.trim_end_matches(char::is_whitespace).len();
         self.input.truncate(trimmed);
         let word_start = self
@@ -933,11 +945,50 @@ impl App {
     }
 
     pub fn input_newline(&mut self) {
+        self.reset_history_navigation();
         self.input.push('\n');
     }
 
     pub fn input_clear(&mut self) {
         self.input.clear();
+        self.reset_history_navigation();
+    }
+
+    /// Recall older submitted prompts, preserving the current draft so Down
+    /// can return to it after walking back to the newest history entry.
+    pub fn input_history_previous(&mut self) {
+        if self.prompt_history.is_empty() {
+            return;
+        }
+        let next = match self.history_cursor {
+            Some(index) => index.saturating_sub(1),
+            None => {
+                self.history_draft.clone_from(&self.input);
+                self.prompt_history.len() - 1
+            }
+        };
+        self.history_cursor = Some(next);
+        self.input.clone_from(&self.prompt_history[next]);
+    }
+
+    pub fn input_history_next(&mut self) {
+        let Some(index) = self.history_cursor else {
+            return;
+        };
+        if index + 1 < self.prompt_history.len() {
+            let next = index + 1;
+            self.history_cursor = Some(next);
+            self.input.clone_from(&self.prompt_history[next]);
+        } else {
+            self.history_cursor = None;
+            self.input.clone_from(&self.history_draft);
+            self.history_draft.clear();
+        }
+    }
+
+    fn reset_history_navigation(&mut self) {
+        self.history_cursor = None;
+        self.history_draft.clear();
     }
 
     /// Take the trimmed message for sending, clearing the buffer. Returns
@@ -948,6 +999,8 @@ impl App {
         if message.is_empty() {
             None
         } else {
+            self.prompt_history.push(message.clone());
+            self.reset_history_navigation();
             Some(message)
         }
     }
@@ -1838,5 +1891,37 @@ mod tests {
         app.set_input("hello\nworld".into());
         app.input_delete_word();
         assert_eq!(app.input, "hello\n");
+    }
+
+    #[test]
+    fn input_history_moves_through_prompts_and_restores_the_draft() {
+        let mut app = app();
+        app.set_input("first".into());
+        assert_eq!(app.take_message(), Some("first".into()));
+        app.set_input("second".into());
+        assert_eq!(app.take_message(), Some("second".into()));
+        app.set_input("unfinished draft".into());
+
+        app.input_history_previous();
+        assert_eq!(app.input, "second");
+        app.input_history_previous();
+        assert_eq!(app.input, "first");
+        app.input_history_previous();
+        assert_eq!(app.input, "first");
+        app.input_history_next();
+        assert_eq!(app.input, "second");
+        app.input_history_next();
+        assert_eq!(app.input, "unfinished draft");
+    }
+
+    #[test]
+    fn editing_a_recalled_prompt_leaves_history_navigation() {
+        let mut app = app();
+        app.set_input("original".into());
+        app.take_message();
+        app.input_history_previous();
+        app.input_char('!');
+        app.input_history_next();
+        assert_eq!(app.input, "original!");
     }
 }

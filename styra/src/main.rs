@@ -993,6 +993,8 @@ fn handle_input_key(
             }
         }
         KeyCode::Backspace => app.input_backspace(),
+        KeyCode::Up => app.input_history_previous(),
+        KeyCode::Down => app.input_history_next(),
         KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             app.input_delete_word()
         }
@@ -1013,15 +1015,17 @@ fn pause_interaction(app: &mut App, client: &Client, live: &mut Live) {
         if let Err(error) = client.stop_interaction(session_id) {
             app.push_log(LogEntry::error(format!("pause failed: {error:#}")));
         } else {
+            let cleared = app.clear_queued_messages();
             app.status = Status::Stopped;
-            app.push_log(LogEntry::info(
-                "interaction paused; send a new message to start again",
-            ));
+            app.push_log(LogEntry::info(if cleared == 0 {
+                "interaction paused; send a new message to start again".into()
+            } else {
+                format!(
+                    "interaction paused; cleared {cleared} queued message(s); send a new message to start again"
+                )
+            }));
             *live = Live::Pending;
         }
-    } else if app.queued_message_count() > 0 {
-        let count = app.clear_queued_messages();
-        app.push_log(LogEntry::info(format!("cleared {count} queued message(s)")));
     } else {
         app.enter_list();
     }
