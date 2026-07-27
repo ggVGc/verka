@@ -928,10 +928,11 @@ fn render_list(frame: &mut Frame, app: &App, area: Rect) {
     }
 
     let width = area.width.saturating_sub(2) as usize;
-    let items: Vec<ListItem> = visible
+    let mut items: Vec<ListItem> = visible
         .iter()
         .map(|(_, entry)| entry_item(entry, width))
         .collect();
+    items.push(ListItem::new(status_tail(app)));
     // An explicit background rather than `Modifier::REVERSED`: reversing
     // would swap a `White` foreground (summary and detail text alike) into
     // the background, flashing the selected row to a glaring full white.
@@ -949,6 +950,15 @@ fn render_list(frame: &mut Frame, app: &App, area: Rect) {
         .or_else(|| visible.iter().rposition(|(idx, _)| *idx < app.selected));
     state.select(position);
     frame.render_stateful_widget(list, area, &mut state);
+}
+
+fn status_tail(app: &App) -> Line<'static> {
+    let (text, color) = match app.status {
+        Status::Pending => ("  … waiting for your first message", Color::DarkGray),
+        Status::Idle => ("  ── idle · waiting for your message ──", Color::Green),
+        _ => return Line::default(),
+    };
+    Line::from(Span::styled(text, Style::default().fg(color)))
 }
 
 fn entry_item(entry: &Entry, width: usize) -> ListItem<'static> {
