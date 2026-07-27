@@ -910,7 +910,10 @@ fn handle_input_key(
     key: KeyEvent,
 ) {
     match key.code {
-        KeyCode::Esc => pause_interaction(app, client, live),
+        // Escape only leaves the message box.  Stopping a running interaction
+        // is a list-view action; doing it here would make an incidental Escape
+        // while editing cancel the agent as well.
+        KeyCode::Esc => app.enter_list(),
         KeyCode::Tab => app.toggle_focus(),
         KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => app.input_newline(),
         KeyCode::Enter => {
