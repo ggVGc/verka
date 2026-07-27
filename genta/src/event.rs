@@ -699,6 +699,18 @@ fn decode_claude_assistant(message: &Value) -> AgentEvent {
 }
 
 fn claude_tool_started(block: &Value) -> AgentEvent {
+    let name = string(block, "name").unwrap_or("tool");
+    if matches!(name, "Edit" | "Write" | "MultiEdit") {
+        if let Some(change) = claude_file_change(block, name) {
+            return AgentEvent::FileChanged {
+                id: clean_terminal_text(string(block, "id").unwrap_or_default()),
+                paths: vec![change.path],
+                diff: change.diff,
+                checkpoint: None,
+                checkpoint_error: None,
+            };
+        }
+    }
     let detail = block
         .get("input")
         .filter(|input| !input.is_null())
@@ -709,6 +721,63 @@ fn claude_tool_started(block: &Value) -> AgentEvent {
         name: clean_terminal_text(string(block, "name").unwrap_or("tool")),
         detail: clean_terminal_text(&detail),
     }
+}
+
+/// Reconstruct the useful part of Claude's Edit/Write tool request. This is
+/// intentionally best-effort: Edit has an exact old/new snippet, while Write
+/// only gives us the replacement content and no original file contents.
+fn claude_file_change(block: &Value, name: &str) -> Option<FileChange> {
+    let input = block.get("input")?;
+    let path = string(input, "file_path")
+        .or_else(|| string(input, "path"))?
+        .to_owned();
+    let diff = match name {
+        "Edit" => {
+            let old = string(input, "old_string")?;
+            let new = string(input, "new_string")?;
+            Some(unified_snippet(old, new))
+        }
+        "MultiEdit" => input.get("edits").and_then(Value::as_array).map(|edits| {
+            edits
+                .iter()
+                .filter_map(|edit| {
+                    Some(unified_snippet(
+                        string(edit, "old_string")?,
+                        string(edit, "new_string")?,
+                    ))
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        }),
+        "Write" => string(input, "content").map(|content| {
+            let added = content
+                .lines()
+                .map(|line| format!("+{line}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            format!("@@ write {path} @@\n{added}")
+        }),
+        _ => None,
+    }?;
+    Some(FileChange {
+        path,
+        kind: name.to_lowercase(),
+        diff: Some(diff),
+    })
+}
+
+fn unified_snippet(old: &str, new: &str) -> String {
+    let old = old
+        .lines()
+        .map(|line| format!("-{line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let new = new
+        .lines()
+        .map(|line| format!("+{line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("@@ edit @@\n{old}\n{new}")
 }
 
 /// A Claude `user` message is a synthetic turn carrying tool results back to the
@@ -1265,6 +1334,25 @@ mod tests {
         );
         assert_eq!(event.summary(), "Bash: {\"command\":\"cargo test\"}");
     }
+
+    #[test]
+    fn claude_edit_captures_a_best_effort_change_without_git() {
+        let event = decode_line(
+            Protocol::ClaudeJsonl,
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"tool-1","name":"Edit","input":{"file_path":"src/lib.rs","old_string":"old line","new_string":"new line"}}]}}"#,
+        );
+        assert_eq!(
+            event,
+            AgentEvent::FileChanged {
+                id: "tool-1".into(),
+                paths: vec!["src/lib.rs".into()],
+                diff: Some("@@ edit @@\n-old line\n+new line".into()),
+                checkpoint: None,
+                checkpoint_error: None,
+            }
+        );
+    }
+
     #[test]
     fn claude_thinking_only_message_falls_back_to_a_minor_thinking_event() {
         let event = decode_line(
