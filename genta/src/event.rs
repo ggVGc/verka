@@ -97,12 +97,21 @@ pub enum AgentEvent {
         checkpoint_error: Option<String>,
     },
     ToolStarted {
+        /// Correlates with the matching `ToolCompleted`, so the host can
+        /// replace the running row in place rather than appending a second
+        /// line for the same call.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        id: String,
         name: String,
         detail: String,
     },
     ToolCompleted {
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        id: String,
         name: String,
         status: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        output: String,
     },
     PlanUpdated {
         text: String,
@@ -208,11 +217,11 @@ impl AgentEvent {
                 None => format!("{} ({status})", first_line(command)),
             },
             AgentEvent::FileChanged { paths, .. } => paths.join(", "),
-            AgentEvent::ToolStarted { name, detail } if !detail.is_empty() => {
+            AgentEvent::ToolStarted { name, detail, .. } if !detail.is_empty() => {
                 format!("{name}: {}", first_line(detail))
             }
             AgentEvent::ToolStarted { name, .. } => name.clone(),
-            AgentEvent::ToolCompleted { name, status } => format!("{name} ({status})"),
+            AgentEvent::ToolCompleted { name, status, .. } => format!("{name} ({status})"),
             AgentEvent::PlanUpdated { text }
             | AgentEvent::AgentMessage { text }
             | AgentEvent::Thinking { text } => first_line(text),
@@ -278,7 +287,7 @@ impl AgentEvent {
             AgentEvent::FileChanged { paths, .. } => {
                 vec![DetailBlock::Text(paths.join("\n"))]
             }
-            AgentEvent::ToolStarted { name, detail } => {
+            AgentEvent::ToolStarted { name, detail, .. } => {
                 let mut text = name.clone();
                 if !detail.is_empty() {
                     text.push('\n');
@@ -286,8 +295,20 @@ impl AgentEvent {
                 }
                 vec![DetailBlock::Text(text)]
             }
-            AgentEvent::ToolCompleted { name, status } => {
-                vec![DetailBlock::Text(format!("{name}: {status}"))]
+            AgentEvent::ToolCompleted {
+                name,
+                status,
+                output,
+                ..
+            } => {
+                let mut blocks = vec![DetailBlock::Text(format!("{name}: {status}"))];
+                if !output.is_empty() {
+                    blocks.push(DetailBlock::Code {
+                        language: None,
+                        text: output.clone(),
+                    });
+                }
+                blocks
             }
             AgentEvent::PlanUpdated { text }
             | AgentEvent::AgentMessage { text }
@@ -426,12 +447,15 @@ fn decode_appserver_item(item: &Value, completed: bool) -> AgentEvent {
             text: clean(string(item, "text").unwrap_or_default()),
         },
         ("mcpToolCall", false) | ("webSearch", false) => AgentEvent::ToolStarted {
+            id: clean(string(item, "id").unwrap_or_default()),
             name: clean(tool_name(item, kind)),
             detail: clean(tool_detail(item)),
         },
         ("mcpToolCall", true) | ("webSearch", true) => AgentEvent::ToolCompleted {
+            id: clean(string(item, "id").unwrap_or_default()),
             name: clean(tool_name(item, kind)),
             status: clean(string(item, "status").unwrap_or("completed")),
+            output: clean(tool_output(item)),
         },
         // userMessage (echoed back — the host shows its own), reasoning, deltas,
         // and item lifecycles with no view carry without rendering.
@@ -531,12 +555,15 @@ fn decode_codex_item(event_type: &str, item: &Value) -> AgentEvent {
             ),
         },
         ("mcp_tool_call", false) | ("web_search", false) => AgentEvent::ToolStarted {
+            id: clean(string(item, "id").unwrap_or_default()),
             name: clean(tool_name(item, kind)),
             detail: clean(tool_detail(item)),
         },
         ("mcp_tool_call", true) | ("web_search", true) => AgentEvent::ToolCompleted {
+            id: clean(string(item, "id").unwrap_or_default()),
             name: clean(tool_name(item, kind)),
             status: clean(string(item, "status").unwrap_or("completed")),
+            output: clean(tool_output(item)),
         },
         (_, _) => AgentEvent::Unknown {
             wire_type: format!("{event_type}:{kind}"),
@@ -641,6 +668,7 @@ fn claude_tool_started(block: &Value) -> AgentEvent {
         .map(|input| input.to_string())
         .unwrap_or_default();
     AgentEvent::ToolStarted {
+        id: clean_terminal_text(string(block, "id").unwrap_or_default()),
         name: clean_terminal_text(string(block, "name").unwrap_or("tool")),
         detail: clean_terminal_text(&detail),
     }
@@ -648,6 +676,9 @@ fn claude_tool_started(block: &Value) -> AgentEvent {
 
 /// A Claude `user` message is a synthetic turn carrying tool results back to the
 /// model; it is not an echo of the operator's input (the host records that itself).
+/// Its `tool_result` block never repeats the tool's name — only the
+/// `tool_use_id` from the matching `ToolStarted` — so `name` here is a
+/// placeholder; the host resolves the real name by correlating on `id`.
 fn decode_claude_user(message: &Value) -> AgentEvent {
     if let Some(Value::Array(blocks)) = message.get("content") {
         for block in blocks {
@@ -656,19 +687,37 @@ fn decode_claude_user(message: &Value) -> AgentEvent {
                     .get("is_error")
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
+                let id = clean_terminal_text(string(block, "tool_use_id").unwrap_or("tool"));
                 return AgentEvent::ToolCompleted {
-                    name: clean_terminal_text(string(block, "tool_use_id").unwrap_or("tool")),
+                    id: id.clone(),
+                    name: id,
                     status: if is_error {
                         "error".into()
                     } else {
                         "completed".into()
                     },
+                    output: clean_terminal_text(&claude_tool_result_text(block)),
                 };
             }
         }
     }
     AgentEvent::Unknown {
         wire_type: "user".into(),
+    }
+}
+
+/// A `tool_result` block's `content` is either a plain string or a list of
+/// content blocks (mirroring assistant messages); either way, the stdout the
+/// tool reported for its preview is the text within.
+fn claude_tool_result_text(block: &Value) -> String {
+    match block.get("content") {
+        Some(Value::String(text)) => text.clone(),
+        Some(Value::Array(blocks)) => blocks
+            .iter()
+            .filter_map(|block| string(block, "text"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
     }
 }
 
@@ -735,6 +784,12 @@ fn tool_detail(item: &Value) -> &str {
     string(item, "query")
         .or_else(|| string(item, "arguments"))
         .or_else(|| string(item, "detail"))
+        .unwrap_or_default()
+}
+
+fn tool_output(item: &Value) -> &str {
+    string(item, "result")
+        .or_else(|| string(item, "output"))
         .unwrap_or_default()
 }
 
@@ -1126,6 +1181,7 @@ mod tests {
         assert_eq!(
             event,
             AgentEvent::ToolStarted {
+                id: "toolu_1".into(),
                 name: "Bash".into(),
                 detail: "{\"command\":\"cargo test\"}".into()
             }
@@ -1171,8 +1227,10 @@ mod tests {
                 r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"ok"}]}}"#,
             ),
             AgentEvent::ToolCompleted {
+                id: "toolu_1".into(),
                 name: "toolu_1".into(),
-                status: "completed".into()
+                status: "completed".into(),
+                output: "ok".into()
             }
         );
         assert_eq!(
@@ -1181,8 +1239,10 @@ mod tests {
                 r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_2","is_error":true,"content":"boom"}]}}"#,
             ),
             AgentEvent::ToolCompleted {
+                id: "toolu_2".into(),
                 name: "toolu_2".into(),
-                status: "error".into()
+                status: "error".into(),
+                output: "boom".into()
             }
         );
     }

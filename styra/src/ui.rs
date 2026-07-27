@@ -1405,7 +1405,7 @@ mod tests {
             styra_server::agent::Selection::parse("codex").unwrap(),
             "s1",
         );
-        app.toggle_focus();
+        app.enter_input();
         assert_eq!(app.focus, Focus::Input);
 
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();

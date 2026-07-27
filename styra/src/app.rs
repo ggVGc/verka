@@ -679,6 +679,36 @@ impl App {
                 return;
             }
         }
+        // Same as above, for tool calls: a `ToolCompleted` is the final state
+        // of its matching `ToolStarted` row, correlated by id rather than
+        // name — Claude's `tool_result` only ever repeats the `tool_use_id`,
+        // never the tool's name, so the completed event's own `name` is a
+        // placeholder that gets replaced with the started row's real name.
+        if let AgentEvent::ToolCompleted {
+            id,
+            status,
+            output,
+            ..
+        } = &event
+        {
+            if let Some(entry) = self.entries.iter_mut().rev().find(|entry| {
+                matches!(&entry.event, AgentEvent::ToolStarted { id: started, .. } if started == id)
+            }) {
+                if let AgentEvent::ToolStarted { id, name, .. } = &entry.event {
+                    entry.event = AgentEvent::ToolCompleted {
+                        id: id.clone(),
+                        name: name.clone(),
+                        status: status.clone(),
+                        output: output.clone(),
+                    };
+                }
+                if self.follow {
+                    self.selected = self.entries.len() - 1;
+                    self.preview_scroll = 0;
+                }
+                return;
+            }
+        }
         match &event {
             AgentEvent::TurnCompleted { usage } => {
                 // The app-server protocol's `turn/completed` carries no usage
@@ -931,13 +961,6 @@ impl App {
 
     pub fn enter_list(&mut self) {
         self.focus = Focus::List;
-    }
-
-    pub fn toggle_focus(&mut self) {
-        self.focus = match self.focus {
-            Focus::List => Focus::Input,
-            Focus::Input => Focus::List,
-        };
     }
 
     // --- Message editing -----------------------------------------------------
@@ -1224,6 +1247,37 @@ mod tests {
         });
         assert_eq!(app.status, Status::Idle);
         assert_eq!(app.latest_usage.as_ref().unwrap().input_tokens, 20);
+    }
+
+    #[test]
+    fn a_tool_completion_replaces_its_started_row_and_recovers_the_tool_name() {
+        // Claude's `tool_result` only ever repeats the `tool_use_id`, never
+        // the tool's name, so the merge must pull the name back from the
+        // matching `ToolStarted` row rather than leaving the placeholder id
+        // on screen, and it must not append a second line.
+        let mut app = app();
+        app.push_event(AgentEvent::ToolStarted {
+            id: "toolu_1".into(),
+            name: "Bash".into(),
+            detail: "{\"command\":\"cargo test\"}".into(),
+        });
+        app.push_event(AgentEvent::ToolCompleted {
+            id: "toolu_1".into(),
+            name: "toolu_1".into(),
+            status: "completed".into(),
+            output: "ok".into(),
+        });
+
+        assert_eq!(app.entries.len(), 1);
+        assert_eq!(
+            app.entries[0].event,
+            AgentEvent::ToolCompleted {
+                id: "toolu_1".into(),
+                name: "Bash".into(),
+                status: "completed".into(),
+                output: "ok".into(),
+            }
+        );
     }
 
     #[test]
@@ -1916,7 +1970,7 @@ mod tests {
     fn focus_toggles_and_input_edits() {
         let mut app = app();
         assert_eq!(app.focus, Focus::List);
-        app.toggle_focus();
+        app.enter_input();
         assert_eq!(app.focus, Focus::Input);
 
         app.input_char('h');
