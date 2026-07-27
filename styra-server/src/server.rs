@@ -2,8 +2,8 @@
 
 use crate::agent::{MountSpec, Profile, SandboxLayout};
 use crate::api::{
-    CreateSession, Health, Request, Response, SequencedUpdate, SessionInfo, ShellInfo,
-    StoredSession, Transcript, Updates, WireRequest, WireResponse, API_VERSION,
+    CreateSession, CreateWorkspace, Health, Request, Response, SequencedUpdate, SessionInfo,
+    ShellInfo, StoredSession, Transcript, Updates, WireRequest, WireResponse, API_VERSION,
 };
 use crate::interaction::{Interaction, InteractionSpec, ResolvedTemplate, SandboxBroker};
 use crate::journal::{self, Journal};
@@ -44,6 +44,7 @@ struct ManagedInteraction {
     single_turn: bool,
     /// Captured at spawn so the interaction can be listed and reattached to without
     /// re-deriving them: the profile name, host workspace, and launch policy.
+    workspace_id: String,
     profile: String,
     workspace: PathBuf,
     driva: DrivaOptions,
@@ -54,6 +55,7 @@ impl ManagedInteraction {
     fn summary(&self) -> InteractionSummary {
         InteractionSummary {
             id: self.interaction.session_id().to_owned(),
+            workspace_id: self.workspace_id.clone(),
             profile: self.profile.clone(),
             workspace: self.workspace.clone(),
             driva: self.driva.clone(),
@@ -111,12 +113,8 @@ impl ServerState {
     }
 
     fn create_session(&self, request: CreateSession) -> Result<SessionInfo> {
-        let workspace = request.workspace.canonicalize().with_context(|| {
-            format!(
-                "workspace directory {} must exist",
-                request.workspace.display()
-            )
-        })?;
+        let owning_workspace = crate::workspace::get(&self.inner.store_root, &request.workspace_id)?;
+        let workspace = owning_workspace.host_path;
         let mut profile = Profile::builtin(&request.profile, &self.inner.layout)?;
         profile.network = profile.network || request.network;
         let template = resolve_templates(&workspace, &request.templates)?;
@@ -126,7 +124,11 @@ impl ServerState {
             .context("tmux is required for Styra session shells")?;
         let broker_executable =
             std::env::current_exe().context("locating the Styra sandbox broker")?;
-        let (journal, id) = Journal::create_in_store(&self.inner.store_root, &profile)?;
+        let (journal, id) = Journal::create_in_workspace(
+            &self.inner.store_root,
+            &request.workspace_id,
+            &profile,
+        )?;
         let journal_path = journal.path().to_path_buf();
         let diagnostics = journal_path
             .parent()
@@ -173,6 +175,7 @@ impl ServerState {
             updates: Arc::clone(&updates),
             accepting_messages: Arc::clone(&accepting_messages),
             single_turn,
+            workspace_id: request.workspace_id.clone(),
             profile: profile_name.clone(),
             workspace: workspace.clone(),
             driva: driva.clone(),
@@ -216,6 +219,7 @@ impl ServerState {
 
         Ok(SessionInfo {
             id,
+            workspace_id: request.workspace_id,
             profile: profile_name,
             workspace,
             journal_path,
@@ -286,6 +290,15 @@ impl ServerState {
     }
 
     fn stored_summary(&self, id: &str) -> Result<SessionSummary> {
+        for workspace in crate::workspace::list(&self.inner.store_root)? {
+            if let Some(session) =
+                journal::list_workspace_sessions(&self.inner.store_root, &workspace.id)?
+                    .into_iter()
+                    .find(|session| session.id == id)
+            {
+                return Ok(session);
+            }
+        }
         journal::list_sessions(&self.inner.store_root)?
             .into_iter()
             .find(|session| session.id == id)
@@ -298,6 +311,20 @@ impl ServerState {
                 service: "styra".into(),
                 api_version: API_VERSION.into(),
             })),
+            Request::CreateWorkspace(CreateWorkspace { host_path, name }) => {
+                Ok(Response::WorkspaceCreated(crate::workspace::create(
+                    &self.inner.store_root,
+                    &host_path,
+                    name,
+                )?))
+            }
+            Request::ListWorkspaces => Ok(Response::Workspaces(crate::workspace::list(
+                &self.inner.store_root,
+            )?)),
+            Request::Workspace { id } => Ok(Response::Workspace(crate::workspace::get(
+                &self.inner.store_root,
+                &id,
+            )?)),
             Request::CreateSession(request) => {
                 Ok(Response::SessionCreated(self.create_session(request)?))
             }
@@ -337,6 +364,12 @@ impl ServerState {
                 // descending id sort orders interactions by creation time.
                 summaries.sort_by(|a, b| b.id.cmp(&a.id));
                 Ok(Response::Interactions(summaries))
+            }
+            Request::ListSessions { workspace_id } => {
+                Ok(Response::StoredSessions(journal::list_workspace_sessions(
+                    self.store_root(),
+                    &workspace_id,
+                )?))
             }
             Request::ListStoredSessions => Ok(Response::StoredSessions(journal::list_sessions(
                 self.store_root(),
@@ -501,5 +534,42 @@ mod tests {
         let error = state.stored_summary("../../etc").unwrap_err();
         assert!(error.to_string().contains("was not found"));
         std::fs::remove_dir_all(store).ok();
+    }
+
+    #[test]
+    fn workspace_api_creates_lists_and_scopes_sessions() {
+        let store =
+            std::env::temp_dir().join(format!("styra-server-workspace-test-{}", std::process::id()));
+        let host = store.with_extension("host");
+        std::fs::remove_dir_all(&store).ok();
+        std::fs::create_dir_all(&host).unwrap();
+        let state = ServerState::new(store.clone(), store.with_extension("sock"));
+
+        let created = match state
+            .handle(Request::CreateWorkspace(CreateWorkspace {
+                host_path: host.clone(),
+                name: Some("api test".into()),
+            }))
+            .unwrap()
+        {
+            Response::WorkspaceCreated(workspace) => workspace,
+            other => panic!("unexpected response: {other:?}"),
+        };
+        assert_eq!(created.name.as_deref(), Some("api test"));
+        assert!(matches!(
+            state.handle(Request::ListWorkspaces).unwrap(),
+            Response::Workspaces(workspaces) if workspaces == vec![created.clone()]
+        ));
+        assert!(matches!(
+            state
+                .handle(Request::ListSessions {
+                    workspace_id: created.id,
+                })
+                .unwrap(),
+            Response::StoredSessions(sessions) if sessions.is_empty()
+        ));
+
+        std::fs::remove_dir_all(store).ok();
+        std::fs::remove_dir_all(host).ok();
     }
 }

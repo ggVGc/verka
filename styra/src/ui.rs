@@ -2024,6 +2024,7 @@ mod tests {
     fn interaction_summary(id: &str, profile: &str, accepting: bool) -> InteractionSummary {
         InteractionSummary {
             id: id.into(),
+            workspace_id: "w-1".into(),
             profile: profile.into(),
             workspace: std::path::PathBuf::from("/home/op/project"),
             driva: styra_server::DrivaOptions {

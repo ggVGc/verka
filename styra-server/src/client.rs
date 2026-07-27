@@ -1,10 +1,10 @@
 //! Blocking client for Styra's JSON protocol over a Unix domain socket.
 
 use crate::api::{
-    CreateSession, Health, Request, Response, SendMessage, SessionInfo, ShellInfo, StoredSession,
-    Updates, WireRequest, WireResponse, API_VERSION,
+    CreateSession, CreateWorkspace, Health, Request, Response, SendMessage, SessionInfo, ShellInfo,
+    StoredSession, Updates, WireRequest, WireResponse, API_VERSION,
 };
-use crate::types::{InteractionSummary, SessionSummary};
+use crate::types::{InteractionSummary, SessionSummary, WorkspaceSummary};
 use anyhow::{bail, Context, Result};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
@@ -37,6 +37,27 @@ impl Client {
         match self.request(Request::CreateSession(request.clone()))? {
             Response::SessionCreated(value) => Ok(value),
             other => unexpected("session_created", other),
+        }
+    }
+
+    pub fn create_workspace(&self, request: &CreateWorkspace) -> Result<WorkspaceSummary> {
+        match self.request(Request::CreateWorkspace(request.clone()))? {
+            Response::WorkspaceCreated(value) => Ok(value),
+            other => unexpected("workspace_created", other),
+        }
+    }
+
+    pub fn list_workspaces(&self) -> Result<Vec<WorkspaceSummary>> {
+        match self.request(Request::ListWorkspaces)? {
+            Response::Workspaces(value) => Ok(value),
+            other => unexpected("workspaces", other),
+        }
+    }
+
+    pub fn workspace(&self, id: &str) -> Result<WorkspaceSummary> {
+        match self.request(Request::Workspace { id: id.to_owned() })? {
+            Response::Workspace(value) => Ok(value),
+            other => unexpected("workspace", other),
         }
     }
 
@@ -76,7 +97,16 @@ impl Client {
         }
     }
 
-    pub fn list_sessions(&self) -> Result<Vec<SessionSummary>> {
+    pub fn list_sessions(&self, workspace_id: &str) -> Result<Vec<SessionSummary>> {
+        match self.request(Request::ListSessions {
+            workspace_id: workspace_id.to_owned(),
+        })? {
+            Response::StoredSessions(value) => Ok(value),
+            other => unexpected("stored_sessions", other),
+        }
+    }
+
+    pub fn list_legacy_sessions(&self) -> Result<Vec<SessionSummary>> {
         match self.request(Request::ListStoredSessions)? {
             Response::StoredSessions(value) => Ok(value),
             other => unexpected("stored_sessions", other),

@@ -1,11 +1,14 @@
 //! Stable JSON contract shared by the Styra Unix-socket server and its clients.
 
 use crate::event::AgentEvent;
-use crate::types::{DrivaOptions, InteractionSummary, InteractionUpdate, RawLine, SessionSummary};
+use crate::types::{
+    DrivaOptions, InteractionSummary, InteractionUpdate, RawLine, SessionSummary,
+    WorkspaceSummary,
+};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-pub const API_VERSION: &str = "v1";
+pub const API_VERSION: &str = "v2";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Health {
@@ -14,9 +17,16 @@ pub struct Health {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreateWorkspace {
+    pub host_path: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CreateSession {
+    pub workspace_id: String,
     pub profile: String,
-    pub workspace: PathBuf,
     #[serde(default)]
     pub network: bool,
     /// Named Driva execution templates (see `driva templates`), applied as an
@@ -31,6 +41,7 @@ pub struct CreateSession {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionInfo {
     pub id: String,
+    pub workspace_id: String,
     pub profile: String,
     pub workspace: PathBuf,
     pub journal_path: PathBuf,
@@ -79,6 +90,11 @@ pub struct Transcript {
 #[serde(tag = "operation", content = "data", rename_all = "snake_case")]
 pub enum Request {
     Health,
+    CreateWorkspace(CreateWorkspace),
+    ListWorkspaces,
+    Workspace {
+        id: String,
+    },
     CreateSession(CreateSession),
     SendMessage {
         id: String,
@@ -92,6 +108,9 @@ pub enum Request {
         after: u64,
     },
     ListInteractions,
+    ListSessions {
+        workspace_id: String,
+    },
     ListStoredSessions,
     StoredSession {
         id: String,
@@ -121,6 +140,9 @@ pub struct WireRequest {
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
 pub enum Response {
     Health(Health),
+    WorkspaceCreated(WorkspaceSummary),
+    Workspaces(Vec<WorkspaceSummary>),
+    Workspace(WorkspaceSummary),
     SessionCreated(SessionInfo),
     Accepted,
     Updates(Updates),
@@ -171,7 +193,7 @@ mod tests {
             },
         };
         let json = serde_json::to_value(&request).unwrap();
-        assert_eq!(json["api_version"], "v1");
+        assert_eq!(json["api_version"], "v2");
         assert_eq!(json["operation"], "updates");
         assert_eq!(json["data"]["id"], "s-1");
         assert_eq!(json["data"]["after"], 8);

@@ -20,8 +20,10 @@ mod ui;
 
 use app::{App, Focus, Status, View};
 use styra_server::agent::Selection;
-use styra_server::api::{CreateSession, SessionInfo};
-use styra_server::{Client, InteractionSummary, InteractionUpdate, LogEntry};
+use styra_server::api::{CreateSession, CreateWorkspace, SessionInfo};
+use styra_server::{
+    Client, InteractionSummary, InteractionUpdate, LogEntry, SessionSummary, WorkspaceSummary,
+};
 
 /// Run an interactive, isolated agent session in a terminal interface.
 #[derive(Parser)]
@@ -112,6 +114,8 @@ fn main() -> Result<()> {
     if let Some(CliCommand::Shell { session }) = &cli.command {
         return attach_shell(&client, session);
     }
+    let host_path = resolve_workspace(cli.workspace.as_deref())?;
+    let active_workspace = workspace_for_host(&client, &host_path)?;
 
     // Bare `--view` (no path) needs an interactive terminal to browse
     // sessions in, so it is opened early only in that case; the other paths
@@ -122,7 +126,7 @@ fn main() -> Result<()> {
     let view_target: Option<PathBuf> = match &cli.view {
         Some(Some(path)) => Some(path.clone()),
         Some(None) => {
-            let sessions = client.list_sessions()?;
+            let sessions = all_sessions(&client)?;
             if sessions.is_empty() {
                 println!("No sessions found by the Styra server");
                 return Ok(());
@@ -192,7 +196,13 @@ fn main() -> Result<()> {
             // A trailing prompt is input the operator already gave (as a CLI
             // argument), so it is fine to launch immediately.
             Some(seed) => {
-                let (new_app, info) = launch_live_session(&client, &cli, &selection, Some(seed))?;
+                let (new_app, info) = launch_live_session(
+                    &client,
+                    &cli,
+                    &active_workspace.id,
+                    &selection,
+                    Some(seed),
+                )?;
                 app = new_app;
                 live = Live::Running {
                     session_id: info.id,
@@ -220,7 +230,14 @@ fn main() -> Result<()> {
     // and loops back into run() pending a fresh launch, all inside the same
     // terminal.
     let result = loop {
-        let outcome = match run(&mut terminal, &mut app, &client, &cli, &mut live) {
+        let outcome = match run(
+            &mut terminal,
+            &mut app,
+            &client,
+            &cli,
+            &active_workspace.id,
+            &mut live,
+        ) {
             Ok(outcome) => outcome,
             Err(error) => break Err(error),
         };
@@ -339,16 +356,40 @@ fn stop_daemon(socket: &Path) -> Result<()> {
 /// is the wire profile (`provider[:model][/effort]`), so the server resolves the
 /// same agent, model, and effort the operator picked, and records that name in
 /// the session's journal.
+fn workspace_for_host(client: &Client, host_path: &Path) -> Result<WorkspaceSummary> {
+    let canonical = host_path.canonicalize()?;
+    if let Some(workspace) = client
+        .list_workspaces()?
+        .into_iter()
+        .find(|workspace| workspace.host_path == canonical)
+    {
+        return Ok(workspace);
+    }
+    client.create_workspace(&CreateWorkspace {
+        host_path: canonical,
+        name: None,
+    })
+}
+
+fn all_sessions(client: &Client) -> Result<Vec<SessionSummary>> {
+    let mut sessions = client.list_legacy_sessions()?;
+    for workspace in client.list_workspaces()? {
+        sessions.extend(client.list_sessions(&workspace.id)?);
+    }
+    sessions.sort_by(|a, b| b.created_at_ms.cmp(&a.created_at_ms));
+    Ok(sessions)
+}
+
 fn create_session(
     client: &Client,
     cli: &Cli,
+    workspace_id: &str,
     selection: &Selection,
     seed: Option<&str>,
 ) -> Result<SessionInfo> {
-    let workspace = resolve_workspace(cli.workspace.as_deref())?;
     client.create_session(&CreateSession {
+        workspace_id: workspace_id.to_owned(),
         profile: selection.name(),
-        workspace,
         network: cli.network,
         templates: cli.template.clone(),
         message: seed.map(str::to_owned),
@@ -361,10 +402,11 @@ fn create_session(
 fn launch_live_session(
     client: &Client,
     cli: &Cli,
+    workspace_id: &str,
     selection: &Selection,
     seed: Option<&str>,
 ) -> Result<(App, SessionInfo)> {
-    let info = create_session(client, cli, selection, seed)?;
+    let info = create_session(client, cli, workspace_id, selection, seed)?;
     let mut app = App::new(info.profile.clone(), info.id.clone());
     app.set_workspace_root(info.workspace.clone());
     app.set_driva_options(info.driva.clone());
@@ -546,6 +588,7 @@ fn run(
     app: &mut App,
     client: &Client,
     cli: &Cli,
+    workspace_id: &str,
     live: &mut Live,
 ) -> Result<RunOutcome> {
     let mut pending_fold = false;
@@ -594,7 +637,7 @@ fn run(
 
         match app.focus {
             Focus::List => handle_list_key(app, client, live, key, &mut pending_fold),
-            Focus::Input => handle_input_key(app, client, cli, live, key),
+            Focus::Input => handle_input_key(app, client, cli, workspace_id, live, key),
         }
 
         if app.should_quit {
@@ -602,7 +645,7 @@ fn run(
         }
 
         if std::mem::take(&mut app.switch_requested) {
-            let sessions = client.list_sessions()?;
+            let sessions = all_sessions(client)?;
             if sessions.is_empty() {
                 app.push_log(LogEntry::warn("no stored sessions to switch to"));
                 continue;
@@ -756,7 +799,14 @@ fn handle_list_key(
     }
 }
 
-fn handle_input_key(app: &mut App, client: &Client, cli: &Cli, live: &mut Live, key: KeyEvent) {
+fn handle_input_key(
+    app: &mut App,
+    client: &Client,
+    cli: &Cli,
+    workspace_id: &str,
+    live: &mut Live,
+    key: KeyEvent,
+) {
     match key.code {
         KeyCode::Esc => app.enter_list(),
         KeyCode::Tab => app.toggle_focus(),
@@ -784,7 +834,13 @@ fn handle_input_key(app: &mut App, client: &Client, cli: &Cli, live: &mut Live, 
                     // The launch picker's standing choice is what starts here.
                     Live::Pending => {
                         let selection = app.selection.clone();
-                        match create_session(client, cli, &selection, Some(&message)) {
+                        match create_session(
+                            client,
+                            cli,
+                            workspace_id,
+                            &selection,
+                            Some(&message),
+                        ) {
                             Ok(info) => {
                                 app.profile_name = info.profile;
                                 app.session_id = info.id.clone();

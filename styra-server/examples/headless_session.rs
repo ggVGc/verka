@@ -8,7 +8,7 @@
 
 use std::time::{Duration, Instant};
 
-use styra_server::api::CreateSession;
+use styra_server::api::{CreateSession, CreateWorkspace};
 use styra_server::event::AgentEvent;
 use styra_server::{Client, InteractionUpdate};
 
@@ -24,9 +24,13 @@ fn main() -> anyhow::Result<()> {
     let socket = styra_server::paths::default_socket()?;
     let client = Client::new(socket);
     client.health()?;
+    let workspace = client.create_workspace(&CreateWorkspace {
+        host_path: std::env::current_dir()?.canonicalize()?,
+        name: Some("headless".into()),
+    })?;
     let session = client.create_session(&CreateSession {
+        workspace_id: workspace.id,
         profile: "codex".into(),
-        workspace: std::env::current_dir()?.canonicalize()?,
         network: false,
         templates: Vec::new(),
         message: Some(prompt),

@@ -131,6 +131,8 @@ pub struct DrivaOptions {
 pub struct InteractionSummary {
     /// The session id, as used everywhere else on the wire.
     pub id: String,
+    /// The Workspace containing the Session served by this Interaction.
+    pub workspace_id: String,
     /// The agent profile the interaction is running.
     pub profile: String,
     /// The host directory bound as the agent's workspace, so a reattaching

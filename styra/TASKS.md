@@ -46,7 +46,7 @@ Workspace
 - [x] **11. Workspace storage.** Add durable Workspace metadata and nest new
   Session directories below their owning Workspace. Keep the Session journal
   as the durable provider-conversation record.
-- [ ] **12. Workspace API.** Bump the wire API version and add create, list, and
+- [x] **12. Workspace API.** Bump the wire API version and add create, list, and
   inspect operations for Workspaces plus Workspace-scoped Session creation and
   listing. Key live Interactions by their Session IDs.
 - [ ] **13. Workspace-aware TUI.** Make `V` choose a Workspace, browse the

@@ -6,7 +6,7 @@ use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use styra_server::api::CreateSession;
+use styra_server::api::{CreateSession, CreateWorkspace};
 use styra_server::event::AgentEvent;
 use styra_server::{Client, InteractionUpdate};
 
@@ -116,10 +116,16 @@ done
     let client = Client::new(&socket);
     wait_for_server(&client, &mut server);
 
+    let owning_workspace = client
+        .create_workspace(&CreateWorkspace {
+            host_path: workspace.clone(),
+            name: Some("tmux test".into()),
+        })
+        .unwrap();
     let session = client
         .create_session(&CreateSession {
+            workspace_id: owning_workspace.id,
             profile: "codex".into(),
-            workspace: workspace.clone(),
             network: false,
             templates: Vec::new(),
             message: None,
