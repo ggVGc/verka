@@ -841,7 +841,7 @@ fn handle_list_key(
     // focus would leave keystrokes going nowhere visible.
     match key.code {
         KeyCode::Char('q') => return app.request_quit(),
-        KeyCode::Esc => return pause_interaction(app, client, live),
+        KeyCode::Char('c') => return pause_interaction(app, client, live),
         KeyCode::Char('i') if app.view != View::Preview => return app.enter_input(),
         KeyCode::Char('r') => return app.toggle_raw(),
         KeyCode::Char('l') => return app.toggle_log(),
@@ -874,7 +874,6 @@ fn handle_list_key(
             KeyCode::Char('K') => app.select_prev_line(),
             KeyCode::Char(' ') | KeyCode::Enter => app.toggle_expand(),
             KeyCode::Char('o') => app.expand_selected(),
-            KeyCode::Char('c') => app.collapse_selected(),
             KeyCode::Char('g') => app.select_first(),
             KeyCode::Char('G') => app.select_last(),
             KeyCode::Char('z') => *pending_fold = true,
@@ -930,9 +929,7 @@ fn handle_input_key(
     key: KeyEvent,
 ) {
     match key.code {
-        // Escape only leaves the message box.  Stopping a running interaction
-        // is a list-view action; doing it here would make an incidental Escape
-        // while editing cancel the agent as well.
+        // Escape leaves the message box and returns to the list view.
         KeyCode::Esc => app.enter_list(),
         KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => app.input_newline(),
         KeyCode::Enter => {
@@ -1010,7 +1007,7 @@ fn handle_input_key(
 }
 
 fn pause_interaction(app: &mut App, client: &Client, live: &mut Live) {
-    // Esc in the main interaction is an interrupt, like the agent clients'
+    // `c` in the main interaction is an interrupt, like the agent clients'
     // own escape key. Close this agent's input stream but keep the TUI ready
     // to launch a fresh interaction on the next message.
     if let Live::Running { session_id, .. } = live {

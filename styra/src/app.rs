@@ -931,12 +931,6 @@ impl App {
         }
     }
 
-    pub fn collapse_selected(&mut self) {
-        if let Some(entry) = self.entries.get_mut(self.selected) {
-            entry.expanded = false;
-        }
-    }
-
     pub fn expand_all(&mut self) {
         for entry in &mut self.entries {
             entry.expanded = true;
