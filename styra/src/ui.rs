@@ -1123,6 +1123,88 @@ fn summary_line(entry: &Entry, has_detail: bool) -> Line<'static> {
     ])
 }
 
+/// Renders one line of an agent message's markdown as styled spans: `#`
+/// headings, `- `/`* ` bullets, and inline `` `code` `` / `**bold**`.
+fn markdown_line_spans(line: &str, base_style: Style) -> Vec<Span<'static>> {
+    let trimmed = line.trim_start();
+    let indent = &line[..line.len() - trimmed.len()];
+
+    if let Some(rest) = ["### ", "## ", "# "]
+        .iter()
+        .find_map(|prefix| trimmed.strip_prefix(prefix))
+    {
+        let mut spans = vec![Span::styled(indent.to_owned(), base_style)];
+        spans.extend(parse_inline_spans(
+            rest,
+            base_style.fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        ));
+        return spans;
+    }
+    if let Some(rest) = ["- ", "* "]
+        .iter()
+        .find_map(|prefix| trimmed.strip_prefix(prefix))
+    {
+        let mut spans = vec![Span::styled(format!("{indent}• "), base_style)];
+        spans.extend(parse_inline_spans(rest, base_style));
+        return spans;
+    }
+    let mut spans = vec![Span::styled(indent.to_owned(), base_style)];
+    spans.extend(parse_inline_spans(trimmed, base_style));
+    spans
+}
+
+enum InlineMarker {
+    Code,
+    Bold,
+}
+
+/// Splits `text` on `` `code` `` and `**bold**` markers, styling each run;
+/// unmatched openers are left as literal text rather than swallowed.
+fn parse_inline_spans(text: &str, base_style: Style) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    let mut rest = text;
+    loop {
+        let code = rest.find('`').map(|i| (i, InlineMarker::Code));
+        let bold = rest.find("**").map(|i| (i, InlineMarker::Bold));
+        let next = match (code, bold) {
+            (Some(c), Some(b)) if c.0 <= b.0 => Some(c),
+            (Some(_), Some(b)) => Some(b),
+            (Some(c), None) => Some(c),
+            (None, Some(b)) => Some(b),
+            (None, None) => None,
+        };
+        let Some((start, marker)) = next else {
+            if !rest.is_empty() {
+                spans.push(Span::styled(rest.to_owned(), base_style));
+            }
+            break;
+        };
+        let marker_str = match marker {
+            InlineMarker::Code => "`",
+            InlineMarker::Bold => "**",
+        };
+        let inner_start = start + marker_str.len();
+        let Some(close_off) = rest[inner_start..].find(marker_str) else {
+            spans.push(Span::styled(rest.to_owned(), base_style));
+            break;
+        };
+        if start > 0 {
+            spans.push(Span::styled(rest[..start].to_owned(), base_style));
+        }
+        let inner = &rest[inner_start..inner_start + close_off];
+        let inner_style = match marker {
+            InlineMarker::Code => base_style.fg(Color::Yellow),
+            InlineMarker::Bold => base_style.add_modifier(Modifier::BOLD),
+        };
+        spans.push(Span::styled(inner.to_owned(), inner_style));
+        rest = &rest[inner_start + close_off + marker_str.len()..];
+    }
+    if spans.is_empty() {
+        spans.push(Span::styled(String::new(), base_style));
+    }
+    spans
+}
+
 /// The expandable body of an entry. `cap` bounds how many lines are shown
 /// inline in the list (so one noisy command cannot bury the rest of the
 /// session); pass `None` for the preview panel, which shows the body in full.
@@ -1131,11 +1213,11 @@ fn detail_lines(event: &AgentEvent, cap: Option<usize>) -> Vec<Line<'static>> {
     for block in event.detail() {
         match block {
             DetailBlock::Text(text) => {
+                let base_style = Style::default().fg(Color::White);
                 for line in text.lines() {
-                    lines.push(Line::from(vec![Span::styled(
-                        format!("{DETAIL_INDENT}{line}"),
-                        Style::default().fg(Color::White),
-                    )]));
+                    let mut spans = vec![Span::styled(DETAIL_INDENT.to_owned(), base_style)];
+                    spans.extend(markdown_line_spans(line, base_style));
+                    lines.push(Line::from(spans));
                 }
             }
             DetailBlock::Code { text, .. } => {
