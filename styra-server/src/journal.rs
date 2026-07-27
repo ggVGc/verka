@@ -11,9 +11,9 @@
 //! Alongside the journal, one [`SessionMeta`] (genta's record of which agent
 //! produced a session) is written once at session creation, so a stored
 //! session can later be replayed — and understood by a human browsing the
-//! store — without depending on an operator re-supplying the same profile.
+//! store — without re-deriving its launch selection.
 
-use crate::agent::{Profile, SessionMeta};
+use crate::agent::{Profile, Selection, SessionMeta};
 use crate::event::{decode_line, AgentEvent, Protocol};
 use crate::types::{Direction, RawLine, SessionSummary};
 use anyhow::{Context, Result};
@@ -71,12 +71,17 @@ impl Journal {
         store_root: &Path,
         workspace_id: &str,
         profile: &Profile,
+        selection: &Selection,
     ) -> Result<(Self, String)> {
         crate::workspace::get(store_root, workspace_id)?;
         let id = new_session_id();
         let directory = crate::workspace::sessions_dir(store_root, workspace_id).join(&id);
         let journal = Self::create(&directory)?;
-        write_session_meta(&directory, &SessionMeta::for_profile(profile), workspace_id)?;
+        write_session_meta(
+            &directory,
+            &SessionMeta::new(selection.clone(), profile.protocol),
+            workspace_id,
+        )?;
         Ok((journal, id))
     }
 
@@ -152,8 +157,7 @@ fn list_sessions_at(dir: &Path, workspace_id: &str) -> Result<Vec<SessionSummary
         }
         let path = entry.path();
         let id = entry.file_name().to_string_lossy().into_owned();
-        let selection = crate::agent::Selection::parse(&read_session_meta(&path)?.profile)
-            .with_context(|| format!("reading agent selection from {}", path.display()))?;
+        let selection = read_session_meta(&path)?.selection;
         let created_at_ms = session_created_at_ms(&id);
         sessions.push(SessionSummary {
             id,
@@ -416,7 +420,9 @@ mod tests {
         let workspace = crate::workspace::create(&root, &host, Some("work".into())).unwrap();
         let profile = test_profile("codex", Protocol::CodexJsonl);
 
-        let (journal, id) = Journal::create_in_workspace(&root, &workspace.id, &profile).unwrap();
+        let selection = crate::agent::Selection::new(crate::agent::Provider::Codex);
+        let (journal, id) =
+            Journal::create_in_workspace(&root, &workspace.id, &profile, &selection).unwrap();
         let directory = journal.path().parent().unwrap();
         assert_eq!(
             directory,

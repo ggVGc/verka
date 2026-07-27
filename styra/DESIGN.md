@@ -95,7 +95,7 @@ has no TCP listener or remote-access configuration.
   is encoded as an input line), the decoding of provider wire events into
   Styra's event vocabulary, the raw journal, and live interaction lifecycle.
 - **Styra clients** own presentation and operator interaction. They consume
-  only the versioned JSON API and never receive process or journal handles.
+  only the JSON API and never receive process or journal handles.
 
 The boundary mirrors Orka's: the provider wire format stops inside Styra. The
 rest of the application — the list, the renderer, session state — consumes only
@@ -175,9 +175,9 @@ Both parts reach each agent its own way — codex as `-c model=…` and
 and `--effort` — and the effort ladders differ at the ends (codex has `minimal`,
 Claude Code has `max`), so each provider publishes the levels it accepts.
 
-The server resolves the structured selection to an internal Genta profile. Its
-canonical name is persisted in `SessionMeta`, so the model and effort that ran
-can be reconstructed during replay. Model ids are free-form strings, not an enum
+The server resolves the structured selection to an internal Genta profile. The
+selection itself is persisted in `SessionMeta`, so the model and effort that ran
+are available directly during replay. Model ids are free-form strings, not an enum
 — the authoritative catalog belongs to the agent, and an id it does not know
 fails there rather than being second-guessed here. Genta only suggests a
 per-provider list for a picker to offer.
@@ -348,8 +348,8 @@ directory, and creation time. A host directory does not determine identity:
 separate Workspaces may intentionally refer to the same checkout.
 
 Alongside `journal.jsonl`, one `session.json` is written once at session
-creation: the owning Workspace plus genta's `SessionMeta` (the profile name and
-wire protocol that launched the Session). The journal itself is agent-agnostic
+creation: the owning Workspace plus genta's `SessionMeta` (the structured
+selection and wire protocol that launched the Session). The journal itself is agent-agnostic
 — it stores whatever raw line arrived — so without this sidecar there is no
 record of which agent a stored Session came from. `--view` reads `session.json`
 and decodes with the protocol it names rather than guessing from current launch
@@ -610,7 +610,7 @@ styra-server/            # the server application + its client interface library
     main.rs              # server binary: a thin CLI shim over daemon::run
     daemon.rs            # server bootstrap: socket bind, store setup, serve loop
     spawn.rs             # connect-or-spawn: re-exec self as a detached daemon
-    api.rs               # versioned JSON wire types (interface)
+    api.rs               # JSON wire types (interface)
     client.rs            # blocking Rust client over the socket (interface)
     types.rs             # data vocabulary that crosses the wire (interface)
     paths.rs             # default socket/store locations (interface + server)

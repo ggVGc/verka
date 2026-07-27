@@ -3,7 +3,7 @@
 use crate::agent::{MountSpec, SandboxLayout, Selection};
 use crate::api::{
     CreateSession, CreateWorkspace, Health, Request, Response, SequencedUpdate, SessionInfo,
-    ShellInfo, StoredSession, Transcript, Updates, WireRequest, WireResponse, API_VERSION,
+    ShellInfo, StoredSession, Transcript, Updates, WireResponse,
 };
 use crate::interaction::{Interaction, InteractionSpec, ResolvedTemplate, SandboxBroker};
 use crate::journal::{self, Journal};
@@ -122,8 +122,12 @@ impl ServerState {
             .context("tmux is required for Styra session shells")?;
         let broker_executable =
             std::env::current_exe().context("locating the Styra sandbox broker")?;
-        let (journal, id) =
-            Journal::create_in_workspace(&self.inner.store_root, &request.workspace_id, &profile)?;
+        let (journal, id) = Journal::create_in_workspace(
+            &self.inner.store_root,
+            &request.workspace_id,
+            &profile,
+            &selection,
+        )?;
         let journal_path = journal.path().to_path_buf();
         let diagnostics = journal_path
             .parent()
@@ -298,7 +302,6 @@ impl ServerState {
         match request {
             Request::Health => Ok(Response::Health(Health {
                 service: "styra".into(),
-                api_version: API_VERSION.into(),
             })),
             Request::CreateWorkspace(CreateWorkspace { host_path, name }) => {
                 Ok(Response::WorkspaceCreated(crate::workspace::create(
@@ -459,15 +462,7 @@ fn read_request(stream: &UnixStream) -> Result<Request> {
     if line.len() > MAX_REQUEST_BYTES {
         anyhow::bail!("request exceeds the {MAX_REQUEST_BYTES}-byte limit");
     }
-    let wire: WireRequest = serde_json::from_str(&line).context("decoding the Styra request")?;
-    if wire.api_version != API_VERSION {
-        anyhow::bail!(
-            "unsupported API version {:?}; server supports {:?}",
-            wire.api_version,
-            API_VERSION
-        );
-    }
-    Ok(wire.request)
+    serde_json::from_str(&line).context("decoding the Styra request")
 }
 
 #[cfg(test)]
@@ -480,7 +475,7 @@ mod tests {
     }
 
     #[test]
-    fn socket_protocol_reports_version() {
+    fn socket_health_reports_the_service() {
         let socket = temp_path("health");
         std::fs::remove_file(&socket).ok();
         let listener = UnixListener::bind(&socket).unwrap();
@@ -493,7 +488,6 @@ mod tests {
 
         let health = Client::new(&socket).health().unwrap();
         assert_eq!(health.service, "styra");
-        assert_eq!(health.api_version, API_VERSION);
 
         server.join().unwrap();
         std::fs::remove_file(socket).ok();

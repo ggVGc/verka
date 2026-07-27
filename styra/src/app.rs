@@ -1319,11 +1319,10 @@ mod tests {
         assert!(app.launcher.is_none());
     }
 
-    /// A live or replayed session's recorded profile *is* a selection, so
-    /// resetting away from one offers the same agent again rather than the
-    /// process-wide default.
+    /// A live or replayed session carries its selection, so resetting away
+    /// from one offers the same agent again rather than the process-wide default.
     #[test]
-    fn a_sessions_recorded_profile_seeds_the_next_launch() {
+    fn a_sessions_recorded_selection_seeds_the_next_launch() {
         let app = App::new(
             styra_server::agent::Selection::parse("claude:opus/xhigh").unwrap(),
             "session-1",
@@ -1337,7 +1336,7 @@ mod tests {
     /// What the status line names before the agent has spoken: the launch it was
     /// started with, model and effort included, marked as not yet confirmed.
     #[test]
-    fn the_launch_label_falls_back_to_the_profile_the_session_was_launched_with() {
+    fn the_launch_label_falls_back_to_the_requested_selection() {
         let app = App::new(
             styra_server::agent::Selection::parse("claude:opus/max").unwrap(),
             "s-1",

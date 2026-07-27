@@ -1283,7 +1283,7 @@ mod tests {
     }
 
     #[test]
-    fn header_shows_profile_and_status() {
+    fn header_shows_selection_and_status() {
         let app = App::new(
             styra_server::agent::Selection::parse("codex").unwrap(),
             "s1",
@@ -2068,7 +2068,7 @@ mod tests {
     /// The picker is modal: it replaces the session view entirely, and spells
     /// out the profile its current rows add up to.
     #[test]
-    fn the_launcher_shows_three_columns_and_the_resulting_profile() {
+    fn the_launcher_shows_three_columns_and_the_resulting_selection() {
         let mut app = App::pending(styra_server::agent::Selection::parse("codex").unwrap());
         app.push_log(styra_server::LogEntry::info("journal: /tmp/styra/s-1"));
         app.open_launcher();
@@ -2133,12 +2133,12 @@ mod tests {
         assert!(screen.contains("claude-opus-5"), "{screen}");
     }
 
-    fn picker_summary(id: &str, profile: &str, age: &str) -> SessionSummary {
+    fn picker_summary(id: &str, selection: &str, age: &str) -> SessionSummary {
         SessionSummary {
             id: id.into(),
             workspace_id: "w-1".into(),
             path: std::path::PathBuf::from(id),
-            selection: styra_server::agent::Selection::parse(profile).unwrap(),
+            selection: styra_server::agent::Selection::parse(selection).unwrap(),
             age: age.into(),
             created_at_ms: None,
         }
@@ -2160,7 +2160,7 @@ mod tests {
     }
 
     #[test]
-    fn picker_lists_sessions_with_profile_and_age() {
+    fn picker_lists_sessions_with_provider_and_age() {
         let sessions = vec![
             picker_summary("s-1", "codex", "2m ago"),
             picker_summary("s-2", "claude", "3h ago"),
@@ -2210,15 +2210,15 @@ mod tests {
         assert!(screen.contains("/home/op/retry"), "{screen}");
     }
 
-    fn interaction_summary(id: &str, profile: &str, accepting: bool) -> InteractionSummary {
+    fn interaction_summary(id: &str, selection: &str, accepting: bool) -> InteractionSummary {
         InteractionSummary {
             id: id.into(),
             workspace_id: "w-1".into(),
-            selection: styra_server::agent::Selection::parse(profile).unwrap(),
+            selection: styra_server::agent::Selection::parse(selection).unwrap(),
             workspace: std::path::PathBuf::from("/home/op/project"),
             driva: styra_server::DrivaOptions {
                 isolation_backend: "bwrap".into(),
-                command: vec![profile.into()],
+                command: vec![selection.into()],
                 working_directory: std::path::PathBuf::from("/tmp/styra/workspace"),
                 network: false,
                 mounts: Vec::new(),
@@ -2247,7 +2247,7 @@ mod tests {
     }
 
     #[test]
-    fn interactions_picker_lists_interactions_with_profile_and_live_state() {
+    fn interactions_picker_lists_interactions_with_provider_and_live_state() {
         let interactions = vec![
             interaction_summary("s-1", "codex", true),
             interaction_summary("s-2", "claude", false),

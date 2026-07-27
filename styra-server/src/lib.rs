@@ -5,7 +5,7 @@
 //! binary owns all mutable and durable state for a session and its live interaction —
 //! process launch, agent
 //! stdin/stdout, Genta protocol state, journals, update ordering, and
-//! stored-session replay — behind a versioned JSON Unix-socket API. As a
+//! stored-session replay — behind a JSON Unix-socket API. As a
 //! library, it exposes only what a client needs to speak that API: the wire
 //! contract ([`api`]), a blocking [`Client`], the data vocabulary that crosses
 //! the socket ([`types`]), and the default socket location ([`paths`]).

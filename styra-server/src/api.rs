@@ -8,12 +8,9 @@ use crate::types::{
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-pub const API_VERSION: &str = "v3";
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Health {
     pub service: String,
-    pub api_version: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -24,6 +21,7 @@ pub struct CreateWorkspace {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CreateSession {
     pub workspace_id: String,
     pub selection: Selection,
@@ -87,7 +85,12 @@ pub struct Transcript {
 
 /// One JSON request sent as a single line over the Unix socket.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "operation", content = "data", rename_all = "snake_case")]
+#[serde(
+    tag = "operation",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum Request {
     Health,
     CreateWorkspace(CreateWorkspace),
@@ -127,13 +130,6 @@ pub enum Request {
 }
 
 /// Versioned request envelope. Flattening keeps `operation` at the top level.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct WireRequest {
-    pub api_version: String,
-    #[serde(flatten)]
-    pub request: Request,
-}
-
 /// Successful response payload. The variant must match the request operation.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
@@ -184,48 +180,38 @@ mod tests {
 
     #[test]
     fn requests_are_self_describing_json_messages() {
-        let request = WireRequest {
-            api_version: API_VERSION.into(),
-            request: Request::Updates {
-                id: "s-1".into(),
-                after: 8,
-            },
+        let request = Request::Updates {
+            id: "s-1".into(),
+            after: 8,
         };
         let json = serde_json::to_value(&request).unwrap();
-        assert_eq!(json["api_version"], "v3");
         assert_eq!(json["operation"], "updates");
         assert_eq!(json["data"]["id"], "s-1");
         assert_eq!(json["data"]["after"], 8);
-        assert_eq!(
-            serde_json::from_value::<WireRequest>(json).unwrap(),
-            request
+        assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
+        assert!(
+            serde_json::from_str::<Request>(r#"{"api_version":"v3","operation":"health"}"#)
+                .is_err()
         );
     }
 
     #[test]
     fn session_creation_carries_a_structured_agent_selection() {
-        let request = WireRequest {
-            api_version: API_VERSION.into(),
-            request: Request::CreateSession(CreateSession {
-                workspace_id: "w-1".into(),
-                selection: crate::agent::Selection {
-                    provider: crate::agent::Provider::Claude,
-                    model: "claude-opus-5".into(),
-                    effort: crate::agent::Effort::XHigh,
-                },
-                network: false,
-                templates: Vec::new(),
-                message: None,
-            }),
-        };
+        let request = Request::CreateSession(CreateSession {
+            workspace_id: "w-1".into(),
+            selection: crate::agent::Selection {
+                provider: crate::agent::Provider::Claude,
+                model: "claude-opus-5".into(),
+                effort: crate::agent::Effort::XHigh,
+            },
+            network: false,
+            templates: Vec::new(),
+            message: None,
+        });
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(json["data"]["selection"]["provider"], "claude");
         assert_eq!(json["data"]["selection"]["model"], "claude-opus-5");
         assert_eq!(json["data"]["selection"]["effort"], "xhigh");
-        assert!(json["data"].get("profile").is_none());
-        assert_eq!(
-            serde_json::from_value::<WireRequest>(json).unwrap(),
-            request
-        );
+        assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
     }
 }

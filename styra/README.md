@@ -7,7 +7,7 @@ Interaction is the live process/protocol wrapper serving a Session while its
 agent is running.
 
 The server uses [Driva](../driva) for deny-by-default isolation and exposes a
-versioned JSON API over a Unix socket. The `styra` TUI uses only that API, so
+JSON API over a Unix socket. The `styra` TUI uses only that API, so
 other local tools can create, steer, observe, stop, and replay the same Sessions.
 
 Styra is the interactive counterpart to an [Orka](../orka) attempt: the same
@@ -65,8 +65,7 @@ workspaces/<WORKSPACE-ID>/
 ## Socket API
 
 Each connection carries one newline-terminated JSON request and one
-newline-terminated JSON response. Requests carry `api_version` and an
-`operation` tag. Successful responses use
+newline-terminated JSON response. Requests carry an `operation` tag. Successful responses use
 `{"status":"ok","response":...}`; failures use
 `{"status":"error","error":"..."}`.
 
@@ -95,7 +94,7 @@ is safe, and different clients can observe a session independently.
 For example, a shell tool can check the server with `socat`:
 
 ```sh
-printf '%s\n' '{"api_version":"v3","operation":"health"}' \
+printf '%s\n' '{"operation":"health"}' \
   | socat - UNIX-CONNECT:"$XDG_RUNTIME_DIR/styra/styra.sock"
 ```
 

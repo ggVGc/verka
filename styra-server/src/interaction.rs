@@ -622,7 +622,7 @@ mod tests {
     /// A client selection must reach the internal profile's command unchanged;
     /// otherwise the picked model is not the one the sandbox runs.
     #[test]
-    fn a_profile_name_carrying_a_model_and_effort_reaches_the_launched_command() {
+    fn a_selection_carrying_a_model_and_effort_reaches_the_launched_command() {
         let root =
             std::env::temp_dir().join(format!("styra-interaction-model-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
@@ -631,11 +631,12 @@ mod tests {
         std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
 
         let mut spec = workspace_spec(&root);
-        spec.profile = Profile::builtin_on_path(
-            "codex:gpt-5.6-terra/xhigh",
-            &SandboxLayout::default(),
-            root.as_os_str(),
-        )
+        spec.profile = crate::agent::Selection {
+            provider: crate::agent::Provider::Codex,
+            model: "gpt-5.6-terra".into(),
+            effort: crate::agent::Effort::XHigh,
+        }
+        .resolve_on_path(&SandboxLayout::default(), root.as_os_str())
         .unwrap();
         spec.profile.mounts.clear();
 

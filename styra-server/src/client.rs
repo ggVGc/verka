@@ -2,7 +2,7 @@
 
 use crate::api::{
     CreateSession, CreateWorkspace, Health, Request, Response, SendMessage, SessionInfo, ShellInfo,
-    StoredSession, Updates, WireRequest, WireResponse, API_VERSION,
+    StoredSession, Updates, WireResponse,
 };
 use crate::types::{InteractionSummary, SessionSummary, WorkspaceSummary};
 use anyhow::{bail, Context, Result};
@@ -140,10 +140,6 @@ impl Client {
     fn request(&self, request: Request) -> Result<Response> {
         let mut stream = UnixStream::connect(&self.socket)
             .with_context(|| format!("connecting to Styra socket {}", self.socket.display()))?;
-        let request = WireRequest {
-            api_version: API_VERSION.into(),
-            request,
-        };
         serde_json::to_writer(&mut stream, &request).context("encoding the Styra request")?;
         stream
             .write_all(b"\n")

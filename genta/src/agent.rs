@@ -375,25 +375,23 @@ impl Profile {
 /// Which agent produced a session, recorded so a host can persist it
 /// alongside a session's journal and later know what to decode the journal
 /// with — and, for a human reading the store, which agent and model actually
-/// ran — without depending on an operator re-supplying the same profile name.
+/// ran.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SessionMeta {
-    /// The profile name that launched the session — for anything a
-    /// [`Selection`] resolved, the full `provider:model/effort` (e.g.
-    /// `claude:claude-opus-5/high`), so the record states the model and effort
-    /// that ran.
-    pub profile: String,
+    /// The provider, model, and effort that launched the session.
+    pub selection: Selection,
     /// The wire protocol the agent speaks, and thus the decoder its journal
     /// must be replayed with.
     pub protocol: Protocol,
 }
 
 impl SessionMeta {
-    /// Capture the provenance of a session launched with `profile`.
-    pub fn for_profile(profile: &Profile) -> Self {
+    /// Capture the provenance of a session launch.
+    pub fn new(selection: Selection, protocol: Protocol) -> Self {
         Self {
-            profile: profile.name.clone(),
-            protocol: profile.protocol,
+            selection,
+            protocol,
         }
     }
 }
@@ -898,10 +896,14 @@ mod tests {
     }
 
     #[test]
-    fn session_meta_captures_the_launching_profile_and_survives_json_round_trip() {
-        let profile = builtin("claude:opus", &SandboxLayout::default()).unwrap();
-        let meta = SessionMeta::for_profile(&profile);
-        assert_eq!(meta.profile, "claude:opus/high");
+    fn session_meta_captures_the_selection_and_survives_json_round_trip() {
+        let selection = Selection {
+            provider: Provider::Claude,
+            model: "opus".into(),
+            effort: Effort::High,
+        };
+        let meta = SessionMeta::new(selection.clone(), Protocol::ClaudeJsonl);
+        assert_eq!(meta.selection, selection);
         assert_eq!(meta.protocol, Protocol::ClaudeJsonl);
 
         let json = serde_json::to_string(&meta).unwrap();
