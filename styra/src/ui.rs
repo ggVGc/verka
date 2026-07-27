@@ -817,9 +817,8 @@ fn preview_lines(app: &App) -> Vec<Line<'static>> {
         ))];
     };
 
-    let detail = detail_lines(&entry.event, None);
-    let mut lines = vec![summary_line(entry, entry.has_detail())];
-    lines.extend(detail);
+    let mut lines = vec![summary_line(entry, entry.has_detail(), false)];
+    lines.extend(detail_lines(&entry.event, None));
     if let AgentEvent::FileChanged { paths, .. } = &entry.event {
         lines.extend(file_content_lines(paths, app.workspace_root.as_deref()));
     }
@@ -996,10 +995,9 @@ fn status_tail(app: &App) -> Line<'static> {
 }
 
 fn entry_item(entry: &Entry, width: usize) -> ListItem<'static> {
-    let detail = detail_lines(&entry.event, Some(MAX_DETAIL_LINES));
-    let mut lines = vec![summary_line(entry, entry.has_detail())];
+    let mut lines = vec![summary_line(entry, entry.has_detail(), !entry.expanded)];
     if entry.expanded {
-        lines.extend(detail);
+        lines.extend(detail_lines(&entry.event, Some(MAX_DETAIL_LINES)));
     }
     let wrapped: Vec<Line<'static>> = lines
         .into_iter()
@@ -1099,7 +1097,11 @@ fn split_keep_whitespace(s: &str) -> Vec<String> {
 /// `has_detail` is false when the entry has nothing beyond its summary (e.g.
 /// a bare `turn started` marker); folding is meaningless there, so no arrow
 /// is shown at all rather than one that never does anything when pressed.
-fn summary_line(entry: &Entry, has_detail: bool) -> Line<'static> {
+/// `show_summary` is false while expanded (inline or in the preview panel):
+/// the detail body that follows already carries the full, untruncated
+/// content, so repeating the (possibly truncated) summary text above it
+/// would just show the same thing twice.
+fn summary_line(entry: &Entry, has_detail: bool, show_summary: bool) -> Line<'static> {
     let marker = match (has_detail, entry.expanded) {
         (false, _) => " ",
         (true, true) => "▾",
@@ -1111,7 +1113,7 @@ fn summary_line(entry: &Entry, has_detail: bool) -> Line<'static> {
     } else {
         Style::default().fg(Color::White)
     };
-    Line::from(vec![
+    let mut spans = vec![
         Span::raw(format!("{marker} ")),
         Span::styled(
             format!("{tag:<8} "),
@@ -1119,8 +1121,11 @@ fn summary_line(entry: &Entry, has_detail: bool) -> Line<'static> {
                 .fg(tag_color(tag))
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(entry.event.summary(), summary_style),
-    ])
+    ];
+    if show_summary {
+        spans.extend(parse_inline_spans(&entry.event.summary(), summary_style));
+    }
+    Line::from(spans)
 }
 
 /// Renders one line of an agent message's markdown as styled spans: `#`
@@ -1229,15 +1234,6 @@ fn detail_lines(event: &AgentEvent, cap: Option<usize>) -> Vec<Line<'static>> {
                 }
             }
         }
-    }
-    // The detail body's first line is invariably a restatement of what the
-    // summary line above it already shows (the command, the message's first
-    // line, ...); drop it so expanding an entry doesn't just echo itself.
-    // Exception: when there's only that one line and the summary was
-    // truncated with an ellipsis, it's the only place the full untruncated
-    // text lives, so keep it instead of dropping the entry's only content.
-    if !lines.is_empty() && (lines.len() > 1 || !event.summary().ends_with('…')) {
-        lines.remove(0);
     }
     if let Some(cap) = cap {
         if lines.len() > cap {
@@ -1662,18 +1658,41 @@ mod tests {
             "s1",
         );
         app.push_event(AgentEvent::AgentMessage {
-            text: "x".repeat(500),
+            text: "z".repeat(500),
         });
         let collapsed = rendered(&app);
         assert!(collapsed.contains('…'));
         assert!(collapsed.contains('▸'));
-        let collapsed_xs = collapsed.chars().filter(|&c| c == 'x').count();
+        let collapsed_zs = collapsed.chars().filter(|&c| c == 'z').count();
 
         app.toggle_expand();
         let expanded = rendered(&app);
         assert!(expanded.contains('▾'));
-        let expanded_xs = expanded.chars().filter(|&c| c == 'x').count();
-        assert!(expanded_xs > collapsed_xs);
+        let expanded_zs = expanded.chars().filter(|&c| c == 'z').count();
+        assert!(expanded_zs > collapsed_zs);
+        // The full message appears exactly once — not the truncated summary
+        // fragment followed by the whole message again.
+        assert_eq!(expanded_zs, 500);
+    }
+
+    #[test]
+    fn preview_of_a_truncated_message_shows_the_full_text_only_once() {
+        // The list pane keeps showing its own truncated summary line
+        // regardless of the preview panel, so this checks the preview's own
+        // content directly rather than the whole screen.
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
+        app.push_event(AgentEvent::AgentMessage {
+            text: "z".repeat(500),
+        });
+        let zs: usize = preview_lines(&app)
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.chars().filter(|&c| c == 'z').count())
+            .sum();
+        assert_eq!(zs, 500);
     }
 
     #[test]
@@ -1708,9 +1727,11 @@ mod tests {
         });
         app.expand_all();
         let screen = rendered(&app);
-        // "$ cargo test" is the detail body's first line and only restates
-        // the summary shown just above it; it must not be printed again.
-        assert!(!screen.contains("$ cargo test"));
+        // Expanding shows the full detail body ("$ cargo test", the status
+        // line, and the output) but the header above it drops the summary
+        // text once expanded, so nothing here is printed twice.
+        assert_eq!(screen.matches("cargo test").count(), 1);
+        assert!(screen.contains("$ cargo test"));
         assert!(screen.contains("24 passed"));
     }
 
