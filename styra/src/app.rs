@@ -619,6 +619,21 @@ impl App {
 
     /// Append a decoded event, advancing status and, while following, selection.
     pub fn push_event(&mut self, event: AgentEvent) {
+        // A command completion is the final state of the command-start row.
+        // Replace the most recent matching start instead of adding a second
+        // line, so the list shows one command whose indication changes from
+        // running to its result.
+        if let AgentEvent::CommandCompleted { command, .. } = &event {
+            if let Some(entry) = self.entries.iter_mut().rev().find(|entry| {
+                matches!(&entry.event, AgentEvent::CommandStarted { command: started } if started == command)
+            }) {
+                entry.event = event;
+                if self.follow {
+                    self.selected = self.entries.len() - 1;
+                }
+                return;
+            }
+        }
         match &event {
             AgentEvent::TurnCompleted { usage } => {
                 // The app-server protocol's `turn/completed` carries no usage

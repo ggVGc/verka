@@ -195,7 +195,9 @@ impl AgentEvent {
                 "in {} · out {} · cached {}",
                 usage.input_tokens, usage.output_tokens, usage.cached_input_tokens
             ),
-            AgentEvent::CommandStarted { command } => first_line(command),
+            AgentEvent::CommandStarted { command } => {
+                format!("{} (running)", first_line(command))
+            }
             AgentEvent::CommandCompleted {
                 command,
                 status,
