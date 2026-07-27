@@ -1541,6 +1541,7 @@ fn render_block(block: &WorkLogBlock) -> String {
                 .map(|e| format!("\ncheckpoint error: {e}"))
                 .unwrap_or_default()
         ),
+        WorkLogBlock::Diff { content: blocks } => format!("DIFF\n{}", content(blocks)),
         WorkLogBlock::ToolStarted { name, detail } => format!("TOOL {name}\n{detail}"),
         WorkLogBlock::ToolCompleted { name, status } => format!("TOOL {name}: {status}"),
         WorkLogBlock::Plan { content: blocks } => format!("PLAN\n{}", content(blocks)),
