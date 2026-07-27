@@ -370,6 +370,28 @@ impl Profile {
         line.push('\n');
         line.into_bytes()
     }
+
+    /// Configure this profile to reopen an existing provider conversation.
+    ///
+    /// Codex resumes through its app-server protocol, so its command line is
+    /// unchanged and the host passes the id to `AppServer`. Claude Code
+    /// resumes at process launch time.
+    pub fn resume(&mut self, provider: Provider, provider_session_id: &str) -> Result<()> {
+        if provider_session_id.trim().is_empty() {
+            bail!("cannot resume an empty provider session id");
+        }
+        match provider {
+            Provider::Codex => Ok(()),
+            Provider::Claude => {
+                self.command.push("--resume".into());
+                self.command.push(provider_session_id.to_owned());
+                Ok(())
+            }
+            Provider::CodexExec => {
+                bail!("provider codex-exec does not support resuming sessions")
+            }
+        }
+    }
 }
 
 /// Which agent produced a session, recorded so a host can persist it
@@ -420,11 +442,17 @@ pub fn resolve_executable(name: &Path) -> Result<PathBuf> {
 /// but the returned path is the one given: a launcher symlink is what the
 /// operator installed, and it resolves the same way inside the sandbox.
 pub fn resolve_executable_on_path(name: &Path, search: &OsStr) -> Result<PathBuf> {
-    if name.parent().is_some_and(|parent| !parent.as_os_str().is_empty()) {
+    if name
+        .parent()
+        .is_some_and(|parent| !parent.as_os_str().is_empty())
+    {
         if is_executable_file(name) {
             return Ok(name.to_path_buf());
         }
-        bail!("agent executable {} is not an executable file", name.display());
+        bail!(
+            "agent executable {} is not an executable file",
+            name.display()
+        );
     }
     std::env::split_paths(search)
         .filter(|directory| !directory.as_os_str().is_empty())
@@ -505,8 +533,8 @@ fn codex_model_overrides(model: &str, effort: Effort) -> Vec<String> {
 ///
 /// Isolation follows Orka's proven codex shape: the workspace is trusted so
 /// codex does not prompt, its inner sandbox is disabled in favour of Driva's
-/// outer Bubblewrap isolation, `~/.codex/auth.json` is mounted writable so
-/// credential refreshes persist, and stable `HOME`/`TERM` are set because
+/// outer Bubblewrap isolation, `~/.codex` is mounted writable so credentials
+/// and native session state persist, and stable `HOME`/`TERM` are set because
 /// Bubblewrap clears the environment.
 ///
 /// The command is `codex exec --json -`: a single-turn run that reads the
@@ -515,12 +543,7 @@ fn codex_model_overrides(model: &str, effort: Effort) -> Vec<String> {
 ///
 /// `executable` is the codex binary to launch, as located by
 /// [`resolve_executable`].
-pub fn codex(
-    layout: &SandboxLayout,
-    executable: &Path,
-    model: &str,
-    effort: Effort,
-) -> Profile {
+pub fn codex(layout: &SandboxLayout, executable: &Path, model: &str, effort: Effort) -> Profile {
     codex_exec(layout, executable, "-", model, effort)
 }
 
@@ -550,10 +573,14 @@ pub fn codex_exec(
         protocol: Protocol::CodexJsonl,
         // HOME lives under /tmp, the writable tmpfs Driva always provides, so
         // codex has a disposable, always-present home without depending on
-        // /root existing in the host rootfs. The auth file is bound in below it.
+        // /root existing in the host rootfs. Codex's state directory is bound
+        // in below it.
         mounts: vec![MountSpec {
-            source: "~/.codex/auth.json".into(),
-            destination: "/tmp/agent-home/.codex/auth.json".into(),
+            // Native resume reads Codex's rollout files from this directory.
+            // Keeping the whole provider directory mounted also preserves new
+            // rollout files created by this interaction.
+            source: "~/.codex".into(),
+            destination: "/tmp/agent-home/.codex".into(),
             writable: true,
         }],
         environment: BTreeMap::from([
@@ -618,9 +645,9 @@ fn codex_submission(text: &str) -> String {
 /// `--dangerously-skip-permissions`. `HOME` lives under `/tmp`, the writable
 /// tmpfs Driva always provides, matching the codex profile's rationale: a
 /// disposable, always-present home without depending on a particular
-/// directory existing in the host rootfs. `~/.claude/.credentials.json` is
-/// bound in under it, writable, so a refreshed OAuth token persists across
-/// sessions; the rest of the config directory is discarded with the tmpfs.
+/// directory existing in the host rootfs. `~/.claude` is bound in under it,
+/// writable, so refreshed credentials and native session transcripts persist
+/// across interactions.
 ///
 /// The command drives Claude Code's bidirectional `stream-json` mode: it reads
 /// `stream-json` user messages on stdin and emits `stream-json` events on
@@ -638,12 +665,7 @@ fn codex_submission(text: &str) -> String {
 /// here so adapting to a different contract is a localized change plus, if the
 /// event schema differs, the [`Protocol::ClaudeJsonl`](crate::event::Protocol)
 /// decoder.
-pub fn claude(
-    _layout: &SandboxLayout,
-    executable: &Path,
-    model: &str,
-    effort: Effort,
-) -> Profile {
+pub fn claude(_layout: &SandboxLayout, executable: &Path, model: &str, effort: Effort) -> Profile {
     let mut command = vec![
         executable.to_string_lossy().into_owned(),
         "--print".into(),
@@ -663,8 +685,10 @@ pub fn claude(
         command,
         protocol: Protocol::ClaudeJsonl,
         mounts: vec![MountSpec {
-            source: "~/.claude/.credentials.json".into(),
-            destination: "/tmp/agent-home/.claude/.credentials.json".into(),
+            // Claude Code's native resume state lives alongside its
+            // credentials under ~/.claude.
+            source: "~/.claude".into(),
+            destination: "/tmp/agent-home/.claude".into(),
             writable: true,
         }],
         environment: BTreeMap::from([
@@ -709,10 +733,8 @@ mod tests {
     /// resolution is exercised against a known install rather than whatever the
     /// machine running the tests happens to have on its own `PATH`.
     fn agent_bin() -> PathBuf {
-        let directory = std::env::temp_dir().join(format!(
-            "genta-agent-bin-{}",
-            std::process::id()
-        ));
+        let directory =
+            std::env::temp_dir().join(format!("genta-agent-bin-{}", std::process::id()));
         std::fs::create_dir_all(&directory).unwrap();
         for name in ["codex", "claude"] {
             let path = directory.join(name);
@@ -822,19 +844,28 @@ mod tests {
         assert!(profile.network);
         assert!(profile.single_turn);
         assert_eq!(profile.command[0], stub("codex"));
-        assert!(profile.command.iter().any(|arg| arg == "danger-full-access"));
+        assert!(profile
+            .command
+            .iter()
+            .any(|arg| arg == "danger-full-access"));
         assert!(profile.command.iter().any(|arg| arg == "exec"));
         assert!(profile.command.iter().any(|arg| arg == "--json"));
-        assert_eq!(profile.command.last().unwrap(), "-", "prompt is read from stdin");
+        assert_eq!(
+            profile.command.last().unwrap(),
+            "-",
+            "prompt is read from stdin"
+        );
         assert!(profile
             .command
             .iter()
             .any(|arg| arg.contains("/tmp/styra/workspace") && arg.contains("trusted")));
         assert!(profile.mounts.iter().any(|mount| {
-            mount.destination == std::path::Path::new("/tmp/agent-home/.codex/auth.json")
-                && mount.writable
+            mount.destination == std::path::Path::new("/tmp/agent-home/.codex") && mount.writable
         }));
-        assert_eq!(profile.environment.get("HOME"), Some(&"/tmp/agent-home".to_string()));
+        assert_eq!(
+            profile.environment.get("HOME"),
+            Some(&"/tmp/agent-home".to_string())
+        );
     }
 
     #[test]
@@ -859,7 +890,7 @@ mod tests {
         assert_eq!(profile.environment["HOME"], "/tmp/agent-home");
         assert_eq!(
             profile.mounts[0].destination,
-            PathBuf::from("/tmp/agent-home/.codex/auth.json")
+            PathBuf::from("/tmp/agent-home/.codex")
         );
         assert!(profile.network);
         assert!(profile.single_turn);
@@ -884,10 +915,14 @@ mod tests {
             .any(|arg| arg == r#"model_reasoning_effort="high""#));
         assert!(profile.network);
         // Isolation policy is shared with the exec profile.
-        assert!(profile.mounts.iter().any(|mount| {
-            mount.destination == std::path::Path::new("/tmp/agent-home/.codex/auth.json")
-        }));
-        assert_eq!(profile.environment.get("HOME"), Some(&"/tmp/agent-home".to_string()));
+        assert!(profile
+            .mounts
+            .iter()
+            .any(|mount| { mount.destination == std::path::Path::new("/tmp/agent-home/.codex") }));
+        assert_eq!(
+            profile.environment.get("HOME"),
+            Some(&"/tmp/agent-home".to_string())
+        );
     }
 
     #[test]
@@ -927,7 +962,10 @@ mod tests {
     fn claude_profile_speaks_stream_json_and_isolates_credentials() {
         let profile = builtin("claude", &SandboxLayout::default()).unwrap();
 
-        assert_eq!(profile.name, "claude:claude-opus-5/high", "a bare name still pins");
+        assert_eq!(
+            profile.name, "claude:claude-opus-5/high",
+            "a bare name still pins"
+        );
         assert_eq!(profile.protocol, Protocol::ClaudeJsonl);
         assert_eq!(profile.message_format, MessageFormat::ClaudeStreamJson);
         assert!(profile.network);
@@ -943,11 +981,27 @@ mod tests {
             .command
             .windows(2)
             .any(|pair| pair[0] == "--model" && pair[1] == Provider::Claude.default_model()));
-        assert!(!profile.single_turn, "an interactive claude session spans many turns");
+        assert!(
+            !profile.single_turn,
+            "an interactive claude session spans many turns"
+        );
         assert!(profile.mounts.iter().any(|mount| mount.destination
-            == std::path::Path::new("/tmp/agent-home/.claude/.credentials.json")
+            == std::path::Path::new("/tmp/agent-home/.claude")
             && mount.writable));
-        assert_eq!(profile.environment.get("HOME"), Some(&"/tmp/agent-home".to_string()));
+        assert_eq!(
+            profile.environment.get("HOME"),
+            Some(&"/tmp/agent-home".to_string())
+        );
+    }
+
+    #[test]
+    fn claude_resume_is_a_native_launch_flag() {
+        let mut profile = builtin("claude", &SandboxLayout::default()).unwrap();
+        profile.resume(Provider::Claude, "claude-session-1").unwrap();
+        assert!(profile
+            .command
+            .windows(2)
+            .any(|pair| pair[0] == "--resume" && pair[1] == "claude-session-1"));
     }
 
     /// Claude Code's own aliases (`opus`, `sonnet`) move to whatever the latest
@@ -957,20 +1011,28 @@ mod tests {
     #[test]
     fn the_claude_catalog_offers_full_model_ids() {
         for model in Provider::Claude.models() {
-            assert!(model.starts_with("claude-"), "{model} is not a full model id");
+            assert!(
+                model.starts_with("claude-"),
+                "{model} is not a full model id"
+            );
         }
         assert!(Provider::Claude.models().contains(&"claude-opus-5"));
         // Anthropic lists this one as deprecated, and Mythos is reachable only
         // through Project Glasswing — neither belongs in a catalog offered to
         // every operator.
-        assert!(!Provider::Claude.models().contains(&"claude-opus-4-1-20250805"));
+        assert!(!Provider::Claude
+            .models()
+            .contains(&"claude-opus-4-1-20250805"));
         assert!(!Provider::Claude.models().contains(&"claude-mythos-5"));
     }
 
     #[test]
     fn claude_model_is_selected_by_the_profile_suffix() {
         let profile = builtin("claude:opus", &SandboxLayout::default()).unwrap();
-        assert_eq!(profile.name, "claude:opus/high", "the missing effort defaults");
+        assert_eq!(
+            profile.name, "claude:opus/high",
+            "the missing effort defaults"
+        );
         let model = profile
             .command
             .windows(2)
@@ -1031,7 +1093,10 @@ mod tests {
             ("claude", "claude:claude-opus-5/high"),
             ("codex-exec", "codex-exec:gpt-5.6-sol/high"),
             // Whichever half is given is kept; only the missing half defaults.
-            ("claude:claude-haiku-4-5-20251001", "claude:claude-haiku-4-5-20251001/high"),
+            (
+                "claude:claude-haiku-4-5-20251001",
+                "claude:claude-haiku-4-5-20251001/high",
+            ),
             ("codex/minimal", "codex:gpt-5.6-sol/minimal"),
         ] {
             let parsed = Selection::parse(short).unwrap();
@@ -1066,7 +1131,10 @@ mod tests {
         // Claude Code's default is deliberately not the catalog's lead: the
         // flagship tier is priced above Opus.
         assert_eq!(Provider::Claude.default_model(), "claude-opus-5");
-        assert_ne!(Provider::Claude.default_model(), Provider::Claude.models()[0]);
+        assert_ne!(
+            Provider::Claude.default_model(),
+            Provider::Claude.models()[0]
+        );
     }
 
     #[test]

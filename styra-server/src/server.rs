@@ -2,8 +2,8 @@
 
 use crate::agent::{MountSpec, SandboxLayout, Selection};
 use crate::api::{
-    CreateSession, CreateWorkspace, Health, Request, Response, SequencedUpdate, SessionInfo,
-    ShellInfo, StoredSession, Transcript, Updates, WireResponse,
+    CreateSession, CreateWorkspace, Health, Request, Response, ResumeSession, SequencedUpdate,
+    SessionInfo, ShellInfo, StoredSession, Updates, WireResponse,
 };
 use crate::interaction::{Interaction, InteractionSpec, ResolvedTemplate, SandboxBroker};
 use crate::journal::{self, Journal};
@@ -135,6 +135,7 @@ impl ServerState {
             .join("diagnostics.log");
         let spec = InteractionSpec {
             profile,
+            resume_provider_session_id: None,
             working_directory: self.inner.layout.workspace.clone(),
             workspace: MountSpec {
                 source: workspace.clone(),
@@ -216,6 +217,110 @@ impl ServerState {
         Ok(SessionInfo {
             id,
             workspace_id: request.workspace_id,
+            selection,
+            workspace,
+            journal_path,
+            driva,
+        })
+    }
+
+    fn resume_session(&self, request: ResumeSession) -> Result<SessionInfo> {
+        if self
+            .inner
+            .interactions
+            .lock()
+            .expect("server interaction lock poisoned")
+            .get(&request.id)
+            .is_some_and(|managed| managed.accepting_messages.load(Ordering::Acquire))
+        {
+            anyhow::bail!("session {:?} already has a live interaction", request.id);
+        }
+
+        let summary = self.stored_summary(&request.id)?;
+        let provider_session_id = journal::read_provider_session_id(&summary.path)?
+            .with_context(|| {
+                format!(
+                    "session {:?} has no stored provider session id; it can be viewed but not resumed",
+                    request.id
+                )
+            })?;
+        ensure_native_session_exists(summary.selection.provider, &provider_session_id)?;
+        let owning_workspace =
+            crate::workspace::get(&self.inner.store_root, &summary.workspace_id)?;
+        let workspace = owning_workspace.host_path;
+        let selection = summary.selection;
+        let mut profile = crate::agent::resolve_profile(&selection, &self.inner.layout)?;
+        profile.resume(selection.provider, &provider_session_id)?;
+        profile.network = profile.network || request.network;
+        let template = resolve_templates(&workspace, &request.templates)?;
+
+        let tmux = genta::agent::resolve_executable(Path::new("tmux"))
+            .context("tmux is required for Styra session shells")?;
+        let broker_executable =
+            std::env::current_exe().context("locating the Styra sandbox broker")?;
+        let journal = Journal::open(&summary.path)?;
+        let journal_path = journal.path().to_path_buf();
+        let diagnostics = summary.path.join("diagnostics.log");
+        let spec = InteractionSpec {
+            profile,
+            resume_provider_session_id: Some(provider_session_id),
+            working_directory: self.inner.layout.workspace.clone(),
+            workspace: MountSpec {
+                source: workspace.clone(),
+                destination: self.inner.layout.workspace.clone(),
+                writable: true,
+            },
+            temporary_mounts: Vec::new(),
+            template,
+            broker: Some(self.prepare_broker(&request.id, broker_executable, tmux)?),
+        };
+        let driva = DrivaOptions::capture(&spec, "bwrap");
+        let prepared_broker = spec.broker.as_ref().expect("broker was prepared");
+        let shell = ShellInfo {
+            tmux: prepared_broker.tmux.clone(),
+            socket: prepared_broker.control.source.join("tmux.sock"),
+        };
+        let backend = Box::new(driva::BwrapIsolation {
+            executable: "bwrap".into(),
+            rootfs: Some(PathBuf::from("/")),
+        });
+        let (interaction, receiver) =
+            Interaction::spawn(spec, backend, journal, request.id.clone(), diagnostics)?;
+        let updates = Arc::new(Mutex::new(Vec::new()));
+        let accepting_messages = Arc::new(AtomicBool::new(true));
+        let managed = Arc::new(ManagedInteraction {
+            interaction,
+            updates: Arc::clone(&updates),
+            accepting_messages: Arc::clone(&accepting_messages),
+            workspace_id: summary.workspace_id.clone(),
+            selection: selection.clone(),
+            workspace: workspace.clone(),
+            driva: driva.clone(),
+            shell,
+        });
+        let id = request.id.clone();
+        std::thread::Builder::new()
+            .name(format!("styra-updates-{id}"))
+            .spawn(move || {
+                while let Ok(update) = receiver.recv() {
+                    if matches!(update, crate::types::InteractionUpdate::Ended(_)) {
+                        accepting_messages.store(false, Ordering::Release);
+                    }
+                    let mut history = updates.lock().expect("interaction update lock poisoned");
+                    let sequence = history.len() as u64 + 1;
+                    history.push(SequencedUpdate { sequence, update });
+                }
+            })
+            .context("starting the resumed interaction update collector")?;
+        self.inner
+            .interactions
+            .lock()
+            .expect("server interaction lock poisoned")
+            .insert(request.id.clone(), managed);
+
+        Ok(SessionInfo {
+            id: request.id,
+            workspace_id: summary.workspace_id,
             selection,
             workspace,
             journal_path,
@@ -320,6 +425,9 @@ impl ServerState {
             Request::CreateSession(request) => {
                 Ok(Response::SessionCreated(self.create_session(request)?))
             }
+            Request::ResumeSession(request) => {
+                Ok(Response::SessionResumed(self.resume_session(request)?))
+            }
             Request::SendMessage { id, message } => {
                 self.interaction(&id)?.send(&message.text)?;
                 Ok(Response::Accepted)
@@ -371,12 +479,6 @@ impl ServerState {
                     raw,
                 }))
             }
-            Request::Transcript { id } => {
-                let summary = self.stored_summary(&id)?;
-                let meta = journal::read_session_meta(&summary.path)?;
-                let text = journal::render_transcript(&summary.path, meta.protocol)?;
-                Ok(Response::Transcript(Transcript { text }))
-            }
             Request::Shell { id } => Ok(Response::Shell(self.shell(&id)?)),
             // Flag the shutdown; the connection thread acts on it once this
             // acknowledgement has gone back over the wire.
@@ -386,6 +488,55 @@ impl ServerState {
             }
         }
     }
+}
+
+/// Fail before launching a sandbox when the provider has already discarded
+/// the conversation Styra was asked to resume. The journal remains usable for
+/// viewing regardless.
+fn ensure_native_session_exists(
+    provider: crate::agent::Provider,
+    provider_session_id: &str,
+) -> Result<()> {
+    let home = std::env::var_os("HOME").context("HOME is required to locate provider sessions")?;
+    let home = PathBuf::from(home);
+    let roots: Vec<PathBuf> = match provider {
+        crate::agent::Provider::Codex => vec![
+            home.join(".codex/sessions"),
+            home.join(".codex/archived_sessions"),
+        ],
+        crate::agent::Provider::Claude => vec![home.join(".claude/projects")],
+        crate::agent::Provider::CodexExec => {
+            anyhow::bail!("provider codex-exec does not support resuming sessions")
+        }
+    };
+    if roots
+        .iter()
+        .any(|root| tree_has_session(root, provider_session_id))
+    {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "{} session {:?} does not exist anymore; the Styra transcript is still available read-only",
+        provider.as_str(),
+        provider_session_id
+    )
+}
+
+fn tree_has_session(root: &Path, provider_session_id: &str) -> bool {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return false;
+    };
+    entries.filter_map(|entry| entry.ok()).any(|entry| {
+        let path = entry.path();
+        if entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
+            tree_has_session(&path, provider_session_id)
+        } else {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .contains(provider_session_id)
+        }
+    })
 }
 
 /// Resolve and merge the named Driva templates against a `driva.toml` in the
@@ -503,6 +654,68 @@ mod tests {
         let error = state.stored_summary("../../etc").unwrap_err();
         assert!(error.to_string().contains("was not found"));
         std::fs::remove_dir_all(store).ok();
+    }
+
+    #[test]
+    fn a_legacy_session_without_a_provider_id_is_viewable_but_not_resumable() {
+        let store =
+            std::env::temp_dir().join(format!("styra-server-legacy-test-{}", std::process::id()));
+        let host = store.with_extension("host");
+        std::fs::remove_dir_all(&store).ok();
+        std::fs::create_dir_all(&host).unwrap();
+        let state = ServerState::new(store.clone(), store.with_extension("sock"));
+        let workspace =
+            crate::workspace::create(&store, &host, Some("legacy".into())).unwrap();
+        let session_dir =
+            crate::workspace::sessions_dir(&store, &workspace.id).join("0000000000001-1-1");
+        std::fs::create_dir_all(&session_dir).unwrap();
+        std::fs::write(session_dir.join("journal.jsonl"), "").unwrap();
+        std::fs::write(
+            session_dir.join("session.json"),
+            serde_json::json!({
+                "workspace_id": workspace.id,
+                "selection": {
+                    "provider": "codex",
+                    "model": "gpt-5.6-sol",
+                    "effort": "high"
+                },
+                "protocol": "codex-app-server"
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            state
+                .handle(Request::StoredSession {
+                    id: "0000000000001-1-1".into()
+                })
+                .unwrap(),
+            Response::StoredSession(_)
+        ));
+        let error = state
+            .resume_session(ResumeSession {
+                id: "0000000000001-1-1".into(),
+                network: false,
+                templates: Vec::new(),
+            })
+            .unwrap_err();
+        assert!(error.to_string().contains("can be viewed but not resumed"));
+
+        std::fs::remove_dir_all(store).ok();
+        std::fs::remove_dir_all(host).ok();
+    }
+
+    #[test]
+    fn native_session_lookup_detects_removal() {
+        let root =
+            std::env::temp_dir().join(format!("styra-native-test-{}", std::process::id()));
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::create_dir_all(root.join("nested")).unwrap();
+        std::fs::write(root.join("nested/rollout-provider-7.jsonl"), "").unwrap();
+        assert!(tree_has_session(&root, "provider-7"));
+        assert!(!tree_has_session(&root, "provider-gone"));
+        std::fs::remove_dir_all(root).ok();
     }
 
     #[test]

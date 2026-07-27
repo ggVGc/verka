@@ -33,6 +33,9 @@ use std::thread::JoinHandle;
 /// workspace mount and working directory the operator selected.
 pub struct InteractionSpec {
     pub profile: Profile,
+    /// Provider-native conversation to reopen, if this Interaction resumes a
+    /// stopped Session.
+    pub resume_provider_session_id: Option<String>,
     pub working_directory: PathBuf,
     /// The operator's project, mounted writable as the agent workspace.
     pub workspace: MountSpec,
@@ -160,9 +163,11 @@ impl Interaction {
         // reader thread routes lines through it instead of plain decoding.
         let appserver = match protocol {
             crate::event::Protocol::CodexAppServer => {
-                Some(Arc::new(crate::appserver::AppServer::new(
-                    spec.working_directory.to_string_lossy().into_owned(),
-                )))
+                let cwd = spec.working_directory.to_string_lossy().into_owned();
+                Some(Arc::new(match &spec.resume_provider_session_id {
+                    Some(thread_id) => crate::appserver::AppServer::resume(cwd, thread_id.clone()),
+                    None => crate::appserver::AppServer::new(cwd),
+                }))
             }
             crate::event::Protocol::CodexJsonl | crate::event::Protocol::ClaudeJsonl => None,
         };
@@ -229,6 +234,20 @@ impl Interaction {
                             }
                             if let Ok(mut journal) = reader_journal.lock() {
                                 let _ = journal.record_agent_line(raw);
+                                if let AgentEvent::ThreadStarted { thread_id, .. } =
+                                    decode_line(protocol, raw)
+                                {
+                                    if let Err(error) = crate::journal::store_provider_session_id(
+                                        journal.path(),
+                                        &thread_id,
+                                    ) {
+                                        let _ = reader_updates.send(InteractionUpdate::Log(
+                                            LogEntry::error(format!(
+                                                "could not store provider session id: {error:#}"
+                                            )),
+                                        ));
+                                    }
+                                }
                             }
                             let raw_line = RawLine {
                                 direction: Direction::FromAgent,
@@ -420,6 +439,12 @@ fn apply_appserver_actions(
             Action::Warn(message) => {
                 let _ = updates.send(InteractionUpdate::Log(LogEntry::warn(message)));
             }
+            Action::Error(message) => {
+                let _ = updates.send(InteractionUpdate::Log(LogEntry::error(message)));
+                if let Ok(mut guard) = stdin.lock() {
+                    guard.take();
+                }
+            }
         }
     }
 }
@@ -572,6 +597,7 @@ mod tests {
         profile.message_format = MessageFormat::ClaudeStreamJson;
         InteractionSpec {
             profile,
+            resume_provider_session_id: None,
             working_directory: dir.to_path_buf(),
             workspace: MountSpec {
                 source: dir.to_path_buf(),

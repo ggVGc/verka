@@ -44,9 +44,8 @@ Styra does **not**, in its first form:
 - interpret which program produced a stream inside Driva (Driva transports
   bytes; Styra owns interpretation, exactly as Orka does).
 
-Rendered transcript seeding is explicit: `F` prepares a new Session in the
-current Workspace without mutating or stopping the source Session. Native,
-protocol-level resume remains a later phase.
+`F` starts a new Interaction for a stopped Session using the provider's native
+resume mechanism. Styra never reconstructs old context into a new prompt.
 
 ## Server-client architecture
 
@@ -214,10 +213,11 @@ event stream, so it has two cooperating parts:
   thread already known, naming neither, so the client suppresses it rather than
   logging a second, less informative session entry;
 - an `AppServer` client owns the session state machine: `initialize` →
-  `initialized` → `thread/start` (capturing the thread id) → one `turn/start`
-  per operator message. Messages sent before the thread is ready are queued and
-  flushed on readiness. The reader thread routes every line through this client;
-  the client forwards decoded events and answers control traffic.
+  `initialized` → `thread/start` for a new Session or `thread/resume` for a
+  stopped one → one `turn/start` per operator message. Messages sent before the
+  thread is ready are queued and flushed on readiness. The reader thread routes
+  every line through this client; the client forwards decoded events and answers
+  control traffic.
 
 The turn's token usage arrives as `thread/tokenUsage/updated` just before
 `turn/completed` (which itself carries none), so that notification is what maps
@@ -277,15 +277,11 @@ This is what makes the wishlist's session properties fall out cheaply:
   remains. The context *is* the journal.
 - **View.** Styra can open a journal and replay it into the same list view
   without a live agent.
-- **Resume / fork / switch model.** A new session is seeded by feeding a prior
-  journal's context to a freshly launched agent — possibly a different
-  selection, hence a different provider or model — while preserving the original journal.
-  Fork is resume that keeps both branches. These reuse the launch and decode
-  paths and add no new persistence concept, so they stay cheap. The first cut
-  (`F`) explicitly renders the old journal to a text transcript and prepares it
-  as a new Session's opening message. A native alternative is described next.
+- **Resume.** A stopped Session starts a new Interaction using the provider's
+  native conversation id, appending new traffic to the same Styra journal.
+  The raw journal remains independently viewable even if native state is gone.
 
-### Future idea: native resume instead of a rendered seed message
+### Native resume
 
 Both codex and Claude Code implement their own `resume` by replaying a
 persisted transcript to reconstruct context, not by restoring literal model
@@ -298,26 +294,19 @@ keyed by the same thread/session id genta already captures via
 - **Codex app-server** exposes a `thread/resume` JSON-RPC method that
   reconstructs the thread's internal context by replaying **codex's own
   rollout file** (`~/.codex/sessions/...`) — storage separate from Styra's
-  journal. genta doesn't implement or send this RPC today (only
-  `initialize` → `thread/start` → `turn/start`), so this is new protocol
-  surface, not something already wired up. Forking works the same way
-  (`forked_from_id`): a new thread inheriting the parent's history as context.
+  journal. Genta sends this RPC when reopening a stopped Session.
 - **Claude Code** has no equivalent mid-stream RPC; resume is a
   process-launch-time CLI flag (`--resume <session_id>` / `--continue`) that
   reloads Claude's own locally stored transcript before the new process's
   first turn.
 
-Using these would mean handing the freshly spawned agent process *its own*
+Styra hands the freshly spawned agent process *its own*
 thread/session id and letting its native resume machinery reconstruct context
 from *its own* storage, rather than Styra reconstructing a prompt from *its*
-journal. That should be more faithful (each agent's own well-tested
-reconstruction of its own format) but is real new work — `thread/resume`
-isn't in genta yet, and using it means "load a session" needs the *agent's*
-thread id, not just a Styra session directory, plus the picker would need to
-distinguish sessions it can natively resume from ones it can only seed as
-text. Worth revisiting once the simple version is in and its limits (token
-cost of the rendered transcript, fidelity of the reconstruction) are felt in
-practice.
+journal. `session.json` stores that provider identity once `ThreadStarted` is
+observed. Provider state directories are mounted writable so their native
+records survive the sandbox. Sessions without an id, and sessions whose native
+record has disappeared, remain viewable but return an error from resume.
 
 A structurally different alternative, seen in the `pi.dev` harness: rather
 than replaying raw or rendered history, generate a goal-first **recap**
@@ -328,9 +317,7 @@ provider APIs directly, so it owns the conversation's message array end to
 end; Styra only ever owns a subprocess's text-shaped input. A recap here
 would mean Styra itself calling out to a model to summarize before seeding
 the new session — a real new capability (an API client, a key, a cost),
-not a reshaping of what already exists. Deferred alongside native resume;
-worth it if the rendered transcript's token cost becomes the actual pain
-point in practice.
+not a reshaping of what already exists. It remains deferred.
 
 The durable layout makes ownership explicit:
 
@@ -347,13 +334,14 @@ workspaces/<workspace-id>/
 directory, and creation time. A host directory does not determine identity:
 separate Workspaces may intentionally refer to the same checkout.
 
-Alongside `journal.jsonl`, one `session.json` is written once at session
-creation: the owning Workspace plus genta's `SessionMeta` (the structured
-selection and wire protocol that launched the Session). The journal itself is agent-agnostic
-— it stores whatever raw line arrived — so without this sidecar there is no
-record of which agent a stored Session came from. `--view` reads `session.json`
-and decodes with the protocol it names rather than guessing from current launch
-defaults.
+Alongside `journal.jsonl`, one `session.json` is written at session creation:
+the owning Workspace plus genta's `SessionMeta` (the structured selection and
+wire protocol that launched the Session). Once the provider reports its
+conversation id, that id is added to the sidecar for native resume. The journal
+itself is agent-agnostic—it stores whatever raw line arrived—so without this
+sidecar there is no record of which agent a stored Session came from. `--view`
+reads `session.json` and decodes with the protocol it names rather than guessing
+from current launch defaults.
 Workspace ownership and `session.json` are required; incomplete or flat Session
 directories are invalid store entries.
 
@@ -425,10 +413,9 @@ view shares the raw view's bottom-anchored scrolling.
 ### The transcript view
 
 `t` toggles a **transcript view**: the current session's decoded events laid
-out as plain text through genta's `render_events` — the same rendering
-`journal::render_transcript` uses to seed a new Session, just read from the live
-entries in memory each frame rather than
-a stored journal. It exists for operators who want to skim or copy the whole
+out as plain text through genta's `render_events`, read from the live entries
+in memory each frame rather than a stored journal. It exists for operators who
+want to skim or copy the whole
 conversation as prose instead of navigating the folded event list one entry
 at a time. Unlike the raw and log views, it anchors to the *start*: a
 transcript reads as a document front-to-back, not a tail-following stream, so
@@ -498,10 +485,10 @@ replays the stored journal read-only. Neither step stops the Interaction the
 client was previously viewing. An empty Workspace opens a blank pending Session
 screen. `Esc`/`q` cancels without changing the current view.
 
-`F` is the separate transcript-seeding operation. It renders the current
-Session, opens a fresh pending Session in the same Workspace, and prefills the
-message box. The operator can edit or clear it; only `Enter` creates the new
-Session and launches its Interaction.
+`F` resumes the selected stopped Session. It reopens the existing journal for
+append and starts a new Interaction using the native provider id captured when
+the Session began. A missing id or missing provider record is an error, without
+affecting read-only journal replay.
 
 ### Current Interactions
 
@@ -513,14 +500,13 @@ the selection with `j`/`k` immediately loads its history and continues
 polling for new entries. `Enter` attaches to the selected Interaction; `Esc`/`q`
 returns without affecting any running process.
 
-### Starting and seeding send nothing on their own
+### Starting sends nothing on its own
 
-Neither a bare `styra` invocation nor transcript seeding spawns the agent
-process by itself. Both land in `Status::Pending` (`App::pending`): an `App`
+A bare `styra` invocation does not spawn the agent process by itself. It lands
+in `Status::Pending` (`App::pending`): an `App`
 with no session id yet, opened directly in input focus, and a `Live::Pending`
-event-loop state that holds no session id or cursor. The message box may be
-empty (a bare start) or prefilled with a source Session's transcript, but either
-way the operator's own submitted message is what triggers a `create_session`
+event-loop state that holds no session id or cursor. The operator's submitted
+message is what triggers a `create_session`
 request to the server — creating the journal, launching the sandboxed interaction
 through Driva, and sending that first message once the agent is ready. A
 launch failure (e.g. a missing binary) is reported by the server, logged in the
@@ -598,8 +584,7 @@ Three names describe distinct ownership:
   driver, shell, and update stream serving a Session.
 
 Stopping an Interaction preserves its Session. Navigating to another Workspace
-or Session only changes the client view. A new Session may be explicitly seeded
-from another Session; native provider resume may eventually attach a new
+or Session only changes the client view. Native provider resume attaches a new
 Interaction to an existing stopped Session.
 
 ```text
@@ -674,8 +659,8 @@ interactions it owns with it. Both are pure lifecycle commands: they act and exi
 without touching the terminal. An optional trailing `PROMPT` seeds the first turn so a
 session can start with one message already sent, launching the interaction immediately;
 without it, the application opens in input focus with an empty box and launches
-nothing until the operator submits a message (see *Starting and seeding send
-nothing on their own*). `--view` opens the view/replay path over a stored
+nothing until the operator submits a message (see *Starting sends nothing on
+its own*). `--view` opens the view/replay path over a stored
 journal; it decodes with the session's own recorded profile and protocol.
 
 ## Relationship to Orka and the wishlist

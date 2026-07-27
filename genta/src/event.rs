@@ -45,7 +45,9 @@ pub struct TokenUsage {
 pub enum AgentEvent {
     /// A message the operator sent to the agent, recorded so their own turns
     /// appear inline in the same list. Host-originated, never decoded.
-    UserMessage { text: String },
+    UserMessage {
+        text: String,
+    },
     /// A session began. Both agents report what they are actually running as
     /// they start one, so this is also where the effective model and reasoning
     /// effort come from — not from what the operator asked for, which may have
@@ -131,7 +133,10 @@ pub enum AgentEvent {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DetailBlock {
     Text(String),
-    Code { language: Option<String>, text: String },
+    Code {
+        language: Option<String>,
+        text: String,
+    },
 }
 
 impl AgentEvent {
@@ -287,7 +292,9 @@ impl AgentEvent {
             | AgentEvent::Thinking { text } => markdown_blocks(text),
             AgentEvent::Error { message } => vec![DetailBlock::Text(message.clone())],
             AgentEvent::Unknown { wire_type } => {
-                vec![DetailBlock::Text(format!("unrecognised event: {wire_type}"))]
+                vec![DetailBlock::Text(format!(
+                    "unrecognised event: {wire_type}"
+                ))]
             }
             AgentEvent::Malformed { error } => vec![DetailBlock::Text(error.clone())],
         }
@@ -378,12 +385,8 @@ fn decode_appserver_notification(method: &str, params: &Value) -> AgentEvent {
         "thread/tokenUsage/updated" => AgentEvent::UsageUpdated {
             usage: appserver_usage(params),
         },
-        "item/started" => {
-            decode_appserver_item(params.get("item").unwrap_or(&Value::Null), false)
-        }
-        "item/completed" => {
-            decode_appserver_item(params.get("item").unwrap_or(&Value::Null), true)
-        }
+        "item/started" => decode_appserver_item(params.get("item").unwrap_or(&Value::Null), false),
+        "item/completed" => decode_appserver_item(params.get("item").unwrap_or(&Value::Null), true),
         "error" | "warning" | "guardianWarning" | "configWarning" => AgentEvent::Error {
             message: clean_terminal_text(
                 string(params, "message").unwrap_or("agent reported an error"),
@@ -607,9 +610,7 @@ fn decode_claude_assistant(message: &Value) -> AgentEvent {
                 match string(block, "type") {
                     Some("tool_use") => return claude_tool_started(block),
                     Some("text") if text.is_none() => text = string(block, "text"),
-                    Some("thinking") if thinking.is_none() => {
-                        thinking = string(block, "thinking")
-                    }
+                    Some("thinking") if thinking.is_none() => thinking = string(block, "thinking"),
                     _ => {}
                 }
             }
@@ -626,7 +627,9 @@ fn decode_claude_assistant(message: &Value) -> AgentEvent {
         }
         _ => {}
     }
-    AgentEvent::Unknown { wire_type: "assistant".into() }
+    AgentEvent::Unknown {
+        wire_type: "assistant".into(),
+    }
 }
 
 fn claude_tool_started(block: &Value) -> AgentEvent {
@@ -647,20 +650,32 @@ fn decode_claude_user(message: &Value) -> AgentEvent {
     if let Some(Value::Array(blocks)) = message.get("content") {
         for block in blocks {
             if string(block, "type") == Some("tool_result") {
-                let is_error = block.get("is_error").and_then(Value::as_bool).unwrap_or(false);
+                let is_error = block
+                    .get("is_error")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
                 return AgentEvent::ToolCompleted {
                     name: clean_terminal_text(string(block, "tool_use_id").unwrap_or("tool")),
-                    status: if is_error { "error".into() } else { "completed".into() },
+                    status: if is_error {
+                        "error".into()
+                    } else {
+                        "completed".into()
+                    },
                 };
             }
         }
     }
-    AgentEvent::Unknown { wire_type: "user".into() }
+    AgentEvent::Unknown {
+        wire_type: "user".into(),
+    }
 }
 
 fn decode_claude_result(value: &Value) -> AgentEvent {
     let subtype = string(value, "subtype").unwrap_or_default();
-    let is_error = value.get("is_error").and_then(Value::as_bool).unwrap_or(false);
+    let is_error = value
+        .get("is_error")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     if is_error || subtype.starts_with("error") {
         return AgentEvent::Error {
             message: clean_terminal_text(
@@ -742,7 +757,10 @@ fn first_line(text: &str) -> String {
 }
 
 fn truncate_line(line: &str, max: usize) -> String {
-    let flat: String = line.chars().map(|c| if c == '\n' { ' ' } else { c }).collect();
+    let flat: String = line
+        .chars()
+        .map(|c| if c == '\n' { ' ' } else { c })
+        .collect();
     if flat.chars().count() <= max {
         flat
     } else {
@@ -831,7 +849,10 @@ pub fn markdown_blocks(markdown: &str) -> Vec<DetailBlock> {
         }
     }
     if let Some((_, _, language)) = fence {
-        blocks.push(DetailBlock::Code { language, text: code });
+        blocks.push(DetailBlock::Code {
+            language,
+            text: code,
+        });
     }
     if !prose.is_empty() {
         blocks.push(DetailBlock::Text(prose.trim_end().to_owned()));
@@ -898,7 +919,12 @@ mod tests {
             Protocol::CodexJsonl,
             r#"{"type":"item.started","item":{"id":"c1","type":"command_execution","command":"cargo test"}}"#,
         );
-        assert_eq!(started, AgentEvent::CommandStarted { command: "cargo test".into() });
+        assert_eq!(
+            started,
+            AgentEvent::CommandStarted {
+                command: "cargo test".into()
+            }
+        );
 
         let completed = decode_line(
             Protocol::CodexJsonl,
@@ -919,8 +945,15 @@ mod tests {
     #[test]
     fn thread_and_turn_events_decode() {
         assert_eq!(
-            decode_line(Protocol::CodexJsonl, r#"{"type":"thread.started","thread_id":"t-7"}"#),
-            AgentEvent::ThreadStarted { thread_id: "t-7".into(), model: None, effort: None }
+            decode_line(
+                Protocol::CodexJsonl,
+                r#"{"type":"thread.started","thread_id":"t-7"}"#
+            ),
+            AgentEvent::ThreadStarted {
+                thread_id: "t-7".into(),
+                model: None,
+                effort: None
+            }
         );
         assert_eq!(
             decode_line(Protocol::CodexJsonl, r#"{"type":"turn.started"}"#),
@@ -966,7 +999,9 @@ mod tests {
     fn unknown_and_malformed_are_preserved_not_dropped() {
         assert_eq!(
             decode_line(Protocol::CodexJsonl, r#"{"type":"future.event"}"#),
-            AgentEvent::Unknown { wire_type: "future.event".into() }
+            AgentEvent::Unknown {
+                wire_type: "future.event".into()
+            }
         );
         assert!(matches!(
             decode_line(Protocol::CodexJsonl, "not json"),
@@ -981,7 +1016,12 @@ mod tests {
             Protocol::CodexJsonl,
             "{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"\\u001b[31mred\\u001b[0m done\"}}",
         );
-        assert_eq!(event, AgentEvent::AgentMessage { text: "red done".into() });
+        assert_eq!(
+            event,
+            AgentEvent::AgentMessage {
+                text: "red done".into()
+            }
+        );
     }
 
     #[test]
@@ -991,7 +1031,10 @@ mod tests {
             blocks,
             vec![
                 DetailBlock::Text("before".into()),
-                DetailBlock::Code { language: Some("rust".into()), text: "fn main() {}\n".into() },
+                DetailBlock::Code {
+                    language: Some("rust".into()),
+                    text: "fn main() {}\n".into()
+                },
                 DetailBlock::Text("after".into()),
             ]
         );
@@ -999,12 +1042,17 @@ mod tests {
 
     #[test]
     fn agent_message_detail_uses_markdown_blocks() {
-        let event = AgentEvent::AgentMessage { text: "text\n```\ncode\n```".into() };
+        let event = AgentEvent::AgentMessage {
+            text: "text\n```\ncode\n```".into(),
+        };
         assert_eq!(
             event.detail(),
             vec![
                 DetailBlock::Text("text".into()),
-                DetailBlock::Code { language: None, text: "code\n".into() },
+                DetailBlock::Code {
+                    language: None,
+                    text: "code\n".into()
+                },
             ]
         );
     }
@@ -1026,7 +1074,12 @@ mod tests {
             Protocol::ClaudeJsonl,
             r#"{"type":"system","subtype":"compact_boundary"}"#,
         );
-        assert_eq!(event, AgentEvent::Unknown { wire_type: "system:compact_boundary".into() });
+        assert_eq!(
+            event,
+            AgentEvent::Unknown {
+                wire_type: "system:compact_boundary".into()
+            }
+        );
         assert!(event.is_minor());
     }
 
@@ -1036,7 +1089,12 @@ mod tests {
             Protocol::ClaudeJsonl,
             r#"{"type":"system","subtype":"thinking_tokens"}"#,
         );
-        assert_eq!(event, AgentEvent::Unknown { wire_type: "system:thinking_tokens".into() });
+        assert_eq!(
+            event,
+            AgentEvent::Unknown {
+                wire_type: "system:thinking_tokens".into()
+            }
+        );
         assert!(event.is_minor());
     }
 
@@ -1048,7 +1106,9 @@ mod tests {
         );
         assert_eq!(
             event,
-            AgentEvent::AgentMessage { text: "Added backoff.\nTests pass.".into() }
+            AgentEvent::AgentMessage {
+                text: "Added backoff.\nTests pass.".into()
+            }
         );
         assert_eq!(event.summary(), "Added backoff.");
     }
@@ -1063,7 +1123,10 @@ mod tests {
         );
         assert_eq!(
             event,
-            AgentEvent::ToolStarted { name: "Bash".into(), detail: "{\"command\":\"cargo test\"}".into() }
+            AgentEvent::ToolStarted {
+                name: "Bash".into(),
+                detail: "{\"command\":\"cargo test\"}".into()
+            }
         );
         assert_eq!(event.summary(), "Bash: {\"command\":\"cargo test\"}");
     }
@@ -1074,7 +1137,12 @@ mod tests {
             Protocol::ClaudeJsonl,
             r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"weigh the options"}]}}"#,
         );
-        assert_eq!(event, AgentEvent::Thinking { text: "weigh the options".into() });
+        assert_eq!(
+            event,
+            AgentEvent::Thinking {
+                text: "weigh the options".into()
+            }
+        );
         assert!(event.is_minor());
     }
 
@@ -1084,7 +1152,12 @@ mod tests {
             Protocol::ClaudeJsonl,
             r#"{"type":"rate_limit_event","rate_limit":{"status":"ok"}}"#,
         );
-        assert_eq!(event, AgentEvent::Unknown { wire_type: "rate_limit_event".into() });
+        assert_eq!(
+            event,
+            AgentEvent::Unknown {
+                wire_type: "rate_limit_event".into()
+            }
+        );
         assert!(event.is_minor());
     }
 
@@ -1095,14 +1168,20 @@ mod tests {
                 Protocol::ClaudeJsonl,
                 r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"ok"}]}}"#,
             ),
-            AgentEvent::ToolCompleted { name: "toolu_1".into(), status: "completed".into() }
+            AgentEvent::ToolCompleted {
+                name: "toolu_1".into(),
+                status: "completed".into()
+            }
         );
         assert_eq!(
             decode_line(
                 Protocol::ClaudeJsonl,
                 r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_2","is_error":true,"content":"boom"}]}}"#,
             ),
-            AgentEvent::ToolCompleted { name: "toolu_2".into(), status: "error".into() }
+            AgentEvent::ToolCompleted {
+                name: "toolu_2".into(),
+                status: "error".into()
+            }
         );
     }
 
@@ -1130,7 +1209,9 @@ mod tests {
                 Protocol::ClaudeJsonl,
                 r#"{"type":"result","subtype":"error_max_turns","is_error":true,"result":"hit the turn limit"}"#,
             ),
-            AgentEvent::Error { message: "hit the turn limit".into() }
+            AgentEvent::Error {
+                message: "hit the turn limit".into()
+            }
         );
     }
 
@@ -1138,7 +1219,9 @@ mod tests {
     fn claude_unknown_and_malformed_are_preserved() {
         assert_eq!(
             decode_line(Protocol::ClaudeJsonl, r#"{"type":"stream_event"}"#),
-            AgentEvent::Unknown { wire_type: "stream_event".into() }
+            AgentEvent::Unknown {
+                wire_type: "stream_event".into()
+            }
         );
         assert!(matches!(
             decode_line(Protocol::ClaudeJsonl, "not json"),
@@ -1162,17 +1245,26 @@ mod tests {
     fn appserver_notifications_decode_from_real_output() {
         let d = |line| decode_line(Protocol::CodexAppServer, line);
         assert_eq!(
-            d(r#"{"method":"thread/started","params":{"thread":{"id":"019f8f61-b7df-7291-81fc-04ff0bfb786f"}}}"#),
+            d(
+                r#"{"method":"thread/started","params":{"thread":{"id":"019f8f61-b7df-7291-81fc-04ff0bfb786f"}}}"#
+            ),
             AgentEvent::ThreadStarted {
                 thread_id: "019f8f61-b7df-7291-81fc-04ff0bfb786f".into(),
                 model: None,
                 effort: None,
             }
         );
-        assert_eq!(d(r#"{"method":"turn/started","params":{"threadId":"t"}}"#), AgentEvent::TurnStarted);
         assert_eq!(
-            d(r#"{"method":"item/completed","params":{"item":{"type":"agentMessage","id":"msg_1","text":"hello","phase":"final_answer"}}}"#),
-            AgentEvent::AgentMessage { text: "hello".into() }
+            d(r#"{"method":"turn/started","params":{"threadId":"t"}}"#),
+            AgentEvent::TurnStarted
+        );
+        assert_eq!(
+            d(
+                r#"{"method":"item/completed","params":{"item":{"type":"agentMessage","id":"msg_1","text":"hello","phase":"final_answer"}}}"#
+            ),
+            AgentEvent::AgentMessage {
+                text: "hello".into()
+            }
         );
     }
 
@@ -1184,7 +1276,9 @@ mod tests {
         );
         assert_eq!(
             started,
-            AgentEvent::CommandStarted { command: "/usr/bin/bash -lc 'echo hi'".into() }
+            AgentEvent::CommandStarted {
+                command: "/usr/bin/bash -lc 'echo hi'".into()
+            }
         );
         let completed = decode_line(
             Protocol::CodexAppServer,
@@ -1244,7 +1338,10 @@ mod tests {
         // `thread/started` notification) still decodes; the fields stay absent
         // rather than being guessed at.
         assert_eq!(
-            decode_line(Protocol::CodexAppServer, r#"{"id":2,"result":{"thread":{"id":"t"}}}"#),
+            decode_line(
+                Protocol::CodexAppServer,
+                r#"{"id":2,"result":{"thread":{"id":"t"}}}"#
+            ),
             AgentEvent::ThreadStarted {
                 thread_id: "t".into(),
                 model: None,
@@ -1286,7 +1383,12 @@ mod tests {
             Protocol::CodexAppServer,
             r#"{"method":"turn/completed","params":{"threadId":"t","turn":{"id":"t1","status":"completed"}}}"#,
         );
-        assert_eq!(event, AgentEvent::TurnCompleted { usage: TokenUsage::default() });
+        assert_eq!(
+            event,
+            AgentEvent::TurnCompleted {
+                usage: TokenUsage::default()
+            }
+        );
     }
 
     #[test]
@@ -1299,7 +1401,9 @@ mod tests {
         ] {
             assert_eq!(
                 decode_line(Protocol::CodexAppServer, line),
-                AgentEvent::Unknown { wire_type: "response".into() }
+                AgentEvent::Unknown {
+                    wire_type: "response".into()
+                }
             );
         }
         // The server echoes the operator's own message; the host shows its own, so
@@ -1309,7 +1413,9 @@ mod tests {
                 Protocol::CodexAppServer,
                 r#"{"method":"item/completed","params":{"item":{"type":"userMessage","id":"u","content":[{"type":"text","text":"hi"}]}}}"#
             ),
-            AgentEvent::Unknown { wire_type: "item:userMessage".into() }
+            AgentEvent::Unknown {
+                wire_type: "item:userMessage".into()
+            }
         );
     }
 }

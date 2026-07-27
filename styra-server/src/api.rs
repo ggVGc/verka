@@ -37,6 +37,16 @@ pub struct CreateSession {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResumeSession {
+    pub id: String,
+    #[serde(default)]
+    pub network: bool,
+    #[serde(default)]
+    pub templates: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionInfo {
     pub id: String,
     pub workspace_id: String,
@@ -78,11 +88,6 @@ pub struct StoredSession {
     pub raw: Vec<RawLine>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Transcript {
-    pub text: String,
-}
-
 /// One JSON request sent as a single line over the Unix socket.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(
@@ -99,6 +104,7 @@ pub enum Request {
         id: String,
     },
     CreateSession(CreateSession),
+    ResumeSession(ResumeSession),
     SendMessage {
         id: String,
         message: SendMessage,
@@ -115,9 +121,6 @@ pub enum Request {
         workspace_id: String,
     },
     StoredSession {
-        id: String,
-    },
-    Transcript {
         id: String,
     },
     Shell {
@@ -139,12 +142,12 @@ pub enum Response {
     Workspaces(Vec<WorkspaceSummary>),
     Workspace(WorkspaceSummary),
     SessionCreated(SessionInfo),
+    SessionResumed(SessionInfo),
     Accepted,
     Updates(Updates),
     Interactions(Vec<InteractionSummary>),
     StoredSessions(Vec<SessionSummary>),
     StoredSession(StoredSession),
-    Transcript(Transcript),
     Shell(ShellInfo),
 }
 
@@ -212,6 +215,20 @@ mod tests {
         assert_eq!(json["data"]["selection"]["provider"], "claude");
         assert_eq!(json["data"]["selection"]["model"], "claude-opus-5");
         assert_eq!(json["data"]["selection"]["effort"], "xhigh");
+        assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
+    }
+
+    #[test]
+    fn resume_names_only_the_existing_session_and_launch_policy() {
+        let request = Request::ResumeSession(ResumeSession {
+            id: "styra-1".into(),
+            network: true,
+            templates: vec!["rust".into()],
+        });
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["operation"], "resume_session");
+        assert_eq!(json["data"]["id"], "styra-1");
+        assert_eq!(json["data"]["templates"][0], "rust");
         assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
     }
 }

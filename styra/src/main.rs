@@ -20,7 +20,7 @@ mod ui;
 
 use app::{App, Focus, Status, View};
 use styra_server::agent::{Provider, Selection};
-use styra_server::api::{CreateSession, CreateWorkspace, SessionInfo};
+use styra_server::api::{CreateSession, CreateWorkspace, ResumeSession, SessionInfo};
 use styra_server::{
     Client, InteractionSummary, InteractionUpdate, LogEntry, SessionSummary, WorkspaceSummary,
 };
@@ -246,12 +246,26 @@ fn main() -> Result<()> {
                     }
                 }
             }
-            RunOutcome::Seed(transcript) => {
-                let selection = app.selection.clone();
-                app = App::pending(selection);
-                app.workspace_id = Some(active_workspace.id.clone());
-                app.set_input(transcript);
-                live = Live::Pending;
+            RunOutcome::Resume(id) => {
+                match client.resume_session(&ResumeSession {
+                    id: id.clone(),
+                    network: cli.network,
+                    templates: cli.template.clone(),
+                }) {
+                    Ok(info) => {
+                        app.set_workspace_root(info.workspace);
+                        app.set_driva_options(info.driva);
+                        app.status = Status::Running;
+                        app.push_log(LogEntry::info("resumed with provider-native context"));
+                        live = Live::Running {
+                            session_id: info.id,
+                            cursor: 0,
+                        };
+                    }
+                    Err(error) => app.push_log(LogEntry::error(format!(
+                        "could not resume Session {id}: {error:#}"
+                    ))),
+                }
             }
             // Attach to another live interaction. The outgoing one is left running on
             // the server (interactions outlive a client); we just stop viewing it.
@@ -602,8 +616,8 @@ enum RunOutcome {
         workspace: WorkspaceSummary,
         session_id: Option<String>,
     },
-    /// Start composing a new Session from an existing Session's transcript.
-    Seed(String),
+    /// Resume a stopped Session through its provider's native mechanism.
+    Resume(String),
     /// The operator picked a live interaction to attach this client to. The outgoing
     /// interaction is left running on the server, not stopped.
     Attach(InteractionSummary),
@@ -716,11 +730,11 @@ fn run(
             // Cancelling the Session picker leaves the current view untouched.
         }
 
-        if std::mem::take(&mut app.seed_requested) {
+        if std::mem::take(&mut app.resume_requested) {
             if app.session_id.is_empty() {
-                app.push_log(LogEntry::warn("no Session to seed from"));
+                app.push_log(LogEntry::warn("no Session to resume"));
             } else {
-                return Ok(RunOutcome::Seed(client.transcript(&app.session_id)?));
+                return Ok(RunOutcome::Resume(app.session_id.clone()));
             }
         }
 
@@ -810,7 +824,7 @@ fn handle_list_key(
         // facts about a process that is already up. `S` first, then `L`.
         KeyCode::Char('L') => return app.open_launcher(),
         KeyCode::Char('V') => return app.request_workspace(),
-        KeyCode::Char('F') => return app.request_seed(),
+        KeyCode::Char('F') => return app.request_resume(),
         KeyCode::Char('A') => return app.request_interactions(),
         KeyCode::Char('S') => return app.request_reset(),
         _ => {}

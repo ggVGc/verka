@@ -1,8 +1,8 @@
 //! Blocking client for Styra's JSON protocol over a Unix domain socket.
 
 use crate::api::{
-    CreateSession, CreateWorkspace, Health, Request, Response, SendMessage, SessionInfo, ShellInfo,
-    StoredSession, Updates, WireResponse,
+    CreateSession, CreateWorkspace, Health, Request, Response, ResumeSession, SendMessage,
+    SessionInfo, ShellInfo, StoredSession, Updates, WireResponse,
 };
 use crate::types::{InteractionSummary, SessionSummary, WorkspaceSummary};
 use anyhow::{bail, Context, Result};
@@ -37,6 +37,13 @@ impl Client {
         match self.request(Request::CreateSession(request.clone()))? {
             Response::SessionCreated(value) => Ok(value),
             other => unexpected("session_created", other),
+        }
+    }
+
+    pub fn resume_session(&self, request: &ResumeSession) -> Result<SessionInfo> {
+        match self.request(Request::ResumeSession(request.clone()))? {
+            Response::SessionResumed(value) => Ok(value),
+            other => unexpected("session_resumed", other),
         }
     }
 
@@ -110,13 +117,6 @@ impl Client {
         match self.request(Request::StoredSession { id: id.to_owned() })? {
             Response::StoredSession(value) => Ok(value),
             other => unexpected("stored_session", other),
-        }
-    }
-
-    pub fn transcript(&self, id: &str) -> Result<String> {
-        match self.request(Request::Transcript { id: id.to_owned() })? {
-            Response::Transcript(value) => Ok(value.text),
-            other => unexpected("transcript", other),
         }
     }
 

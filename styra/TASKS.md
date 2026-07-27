@@ -55,8 +55,10 @@ Workspace
   Interactions.
 - [x] **14. Session lifecycle.** Make stopping affect only the live Interaction;
   keep its Session and Workspace intact. Support opening stored Sessions without
-  an Interaction and make transcript seeding create a new Session in the current
-  Workspace.
+  an Interaction.
+- [x] **17. Native resume.** Store provider conversation ids and resume stopped
+  Sessions with Codex `thread/resume` or Claude Code `--resume`; retain
+  view-only access when native state is unavailable.
 - [x] **15. Strict Workspace store.** Require Workspace ownership and complete
   Session metadata; reject invalid Session entries.
 - [x] **16. Documentation and validation.** Rewrite the architecture, CLI/API

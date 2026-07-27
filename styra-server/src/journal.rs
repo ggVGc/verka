@@ -26,6 +26,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct StoredSessionMeta {
     workspace_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    provider_session_id: Option<String>,
     #[serde(flatten)]
     agent: SessionMeta,
 }
@@ -63,6 +65,16 @@ impl Journal {
             .truncate(true)
             .open(&path)
             .with_context(|| format!("creating journal {}", path.display()))?;
+        Ok(Self { file, path })
+    }
+
+    /// Reopen an existing session journal for a native provider resume.
+    pub fn open(directory: &Path) -> Result<Self> {
+        let path = directory.join(JOURNAL_FILE);
+        let file = OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .with_context(|| format!("opening journal {} for append", path.display()))?;
         Ok(Self { file, path })
     }
 
@@ -126,6 +138,7 @@ fn write_session_meta(directory: &Path, meta: &SessionMeta, workspace_id: &str) 
     let path = directory.join(SESSION_META_FILE);
     let stored = StoredSessionMeta {
         workspace_id: workspace_id.to_owned(),
+        provider_session_id: None,
         agent: meta.clone(),
     };
     let json = serde_json::to_string_pretty(&stored).context("serializing session metadata")?;
@@ -213,6 +226,31 @@ pub fn read_session_workspace_id(path: &Path) -> Result<String> {
     Ok(read_stored_session_meta(path)?.workspace_id)
 }
 
+/// Read the provider's native identity for a stored Session.
+pub fn read_provider_session_id(path: &Path) -> Result<Option<String>> {
+    Ok(read_stored_session_meta(path)?.provider_session_id)
+}
+
+/// Persist the native identity reported by the provider.
+pub fn store_provider_session_id(path: &Path, provider_session_id: &str) -> Result<()> {
+    let directory = if path.is_dir() {
+        path.to_path_buf()
+    } else {
+        path.parent().map(Path::to_path_buf).unwrap_or_default()
+    };
+    let mut stored = read_stored_session_meta(&directory)?;
+    match stored.provider_session_id.as_deref() {
+        Some(existing) if existing == provider_session_id => return Ok(()),
+        Some(existing) => anyhow::bail!(
+            "session already belongs to provider conversation {existing:?}, not {provider_session_id:?}"
+        ),
+        None => stored.provider_session_id = Some(provider_session_id.to_owned()),
+    }
+    let meta_path = directory.join(SESSION_META_FILE);
+    let json = serde_json::to_string_pretty(&stored).context("serializing session metadata")?;
+    std::fs::write(&meta_path, json).with_context(|| format!("writing {}", meta_path.display()))
+}
+
 fn read_stored_session_meta(path: &Path) -> Result<StoredSessionMeta> {
     let directory = if path.is_dir() {
         path.to_path_buf()
@@ -253,20 +291,6 @@ pub fn replay(path: &Path, protocol: Protocol) -> Result<Vec<AgentEvent>> {
         }
     }
     Ok(events)
-}
-
-/// Render a stored journal as a plain-text transcript, suitable as a seed
-/// message for a freshly launched agent that should pick up where this
-/// session left off. See [`replay`] for the decode this builds on, and
-/// `DESIGN.md`'s native-resume discussion for why the current explicit seed is
-/// a rendered transcript rather than a provider protocol resume.
-///
-/// Always includes minor lifecycle events (thread/turn markers, usage) —
-/// this seeds a *different* session's context, not the operator's own
-/// `show_minor` toggle for the one being switched away from.
-pub fn render_transcript(path: &Path, protocol: Protocol) -> Result<String> {
-    let events = replay(path, protocol)?;
-    Ok(crate::render::render_events(&events, false, true))
 }
 
 /// Reconstruct the raw interaction from a stored journal: each agent record is
@@ -360,31 +384,6 @@ mod tests {
     }
 
     #[test]
-    fn render_transcript_matches_rendering_the_replayed_events() {
-        let dir = temp_dir("render-transcript");
-        {
-            let mut journal = Journal::create(&dir).unwrap();
-            journal.record_user_message("do the thing").unwrap();
-            journal
-                .record_agent_line(
-                    r#"{"type":"item.completed","item":{"type":"agent_message","text":"done"}}"#,
-                )
-                .unwrap();
-        }
-
-        let events = replay(&dir, Protocol::CodexJsonl).unwrap();
-        let expected = crate::render::render_events(&events, false, true);
-        assert_eq!(
-            render_transcript(&dir, Protocol::CodexJsonl).unwrap(),
-            expected
-        );
-        assert!(expected.contains("do the thing"));
-        assert!(expected.contains("done"));
-
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
     fn agent_lines_are_stored_verbatim() {
         let dir = temp_dir("verbatim");
         let raw = r#"{"type":"turn.completed","usage":{"input_tokens":5}}"#;
@@ -429,6 +428,12 @@ mod tests {
             crate::workspace::sessions_dir(&root, &workspace.id).join(&id)
         );
         assert_eq!(read_session_workspace_id(directory).unwrap(), workspace.id);
+        assert_eq!(read_provider_session_id(directory).unwrap(), None);
+        store_provider_session_id(directory, "provider-1").unwrap();
+        assert_eq!(
+            read_provider_session_id(directory).unwrap().as_deref(),
+            Some("provider-1")
+        );
 
         let sessions = list_workspace_sessions(&root, &workspace.id).unwrap();
         assert_eq!(sessions.len(), 1);

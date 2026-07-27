@@ -59,11 +59,18 @@ impl From<Wire> for Protocol {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Command::Render { path, protocol, all } => {
+        Command::Render {
+            path,
+            protocol,
+            all,
+        } => {
             let log = read_input(&path)?;
             // The CLI has no notion of "minor" lifecycle events to hide, unlike
             // Styra's TUI toggle; always show them here.
-            print!("{}", genta::render::render(&log, protocol.into(), all, true));
+            print!(
+                "{}",
+                genta::render::render(&log, protocol.into(), all, true)
+            );
         }
     }
     Ok(())

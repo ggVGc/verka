@@ -363,9 +363,9 @@ pub struct App {
     pub should_quit: bool,
     /// Set when the operator asks to choose a Workspace.
     pub workspace_requested: bool,
-    /// Set when the operator asks to seed a new Session from the current
-    /// Session's rendered transcript.
-    pub seed_requested: bool,
+    /// Set when the operator asks to resume the current stopped Session using
+    /// the provider's native conversation state.
+    pub resume_requested: bool,
     /// Set when the operator asks to list the server's live interactions; the event
     /// loop observes it and opens the interactions picker to attach to one.
     pub interactions_requested: bool,
@@ -401,7 +401,7 @@ impl App {
             transcript_scroll: 0,
             should_quit: false,
             workspace_requested: false,
-            seed_requested: false,
+            resume_requested: false,
             interactions_requested: false,
             reset_requested: false,
         }
@@ -409,9 +409,7 @@ impl App {
 
     /// A fresh App with no agent process launched yet: no journal or session
     /// id exists until the operator submits a first message, at which point
-    /// the event loop spawns the session and fills those in. Used both for a
-    /// bare startup with no seed prompt and after picking a session to
-    /// switch to (see `set_input` for prefilling that pick's transcript).
+    /// the event loop spawns the session and fills those in.
     /// Opens directly in input focus, since typing there is the only thing
     /// that moves the session forward.
     ///
@@ -488,9 +486,8 @@ impl App {
         self.selection = selection;
     }
 
-    /// Replace the message box's contents outright: used to prefill it with
-    /// a switched-from session's rendered transcript, or to restore a
-    /// message that failed to launch so it isn't lost.
+    /// Replace the message box's contents outright, used to restore a message
+    /// that failed to launch so it isn't lost.
     pub fn set_input(&mut self, text: String) {
         self.input = text;
     }
@@ -919,8 +916,8 @@ impl App {
         self.workspace_requested = true;
     }
 
-    pub fn request_seed(&mut self) {
-        self.seed_requested = true;
+    pub fn request_resume(&mut self) {
+        self.resume_requested = true;
     }
 
     /// Ask the event loop to list the server's live interactions and, if the operator
@@ -1447,11 +1444,11 @@ mod tests {
     }
 
     #[test]
-    fn request_seed_sets_a_flag_for_the_event_loop_to_observe() {
+    fn request_resume_sets_a_flag_for_the_event_loop_to_observe() {
         let mut app = app();
-        assert!(!app.seed_requested);
-        app.request_seed();
-        assert!(app.seed_requested);
+        assert!(!app.resume_requested);
+        app.request_resume();
+        assert!(app.resume_requested);
     }
 
     #[test]

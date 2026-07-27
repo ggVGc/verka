@@ -33,6 +33,8 @@ pub enum Action {
     Info(String),
     /// Log a warning diagnostic.
     Warn(String),
+    /// The requested provider conversation could not be opened.
+    Error(String),
 }
 
 struct State {
@@ -47,6 +49,7 @@ struct State {
 pub struct AppServer {
     cwd: String,
     sandbox: String,
+    resume_thread_id: Option<String>,
     state: Mutex<State>,
 }
 
@@ -54,9 +57,20 @@ impl AppServer {
     /// Create a client that will start its thread in `cwd` (the workspace path
     /// inside the sandbox).
     pub fn new(cwd: String) -> Self {
+        Self::with_resume(cwd, None)
+    }
+
+    /// Create a client which resumes `thread_id` after initialization instead
+    /// of creating a new thread.
+    pub fn resume(cwd: String, thread_id: String) -> Self {
+        Self::with_resume(cwd, Some(thread_id))
+    }
+
+    fn with_resume(cwd: String, resume_thread_id: Option<String>) -> Self {
         Self {
             cwd,
             sandbox: "danger-full-access".into(),
+            resume_thread_id,
             state: Mutex::new(State {
                 thread_id: None,
                 ready: false,
@@ -90,15 +104,41 @@ impl AppServer {
 
         match (method, id) {
             // A response to one of our requests: advance the handshake.
-            (None, Some(INIT_ID)) => vec![
-                send(&json!({ "method": "initialized" })),
-                send(&json!({
-                    "id": THREAD_START_ID,
-                    "method": "thread/start",
-                    "params": { "cwd": self.cwd, "approvalPolicy": "never", "sandbox": self.sandbox }
-                })),
-            ],
+            (None, Some(INIT_ID)) => {
+                let open_thread = match &self.resume_thread_id {
+                    Some(thread_id) => send(&json!({
+                        "id": THREAD_START_ID,
+                        "method": "thread/resume",
+                        "params": {
+                            "threadId": thread_id,
+                            "cwd": self.cwd,
+                            "approvalPolicy": "never",
+                            "sandbox": self.sandbox
+                        }
+                    })),
+                    None => send(&json!({
+                        "id": THREAD_START_ID,
+                        "method": "thread/start",
+                        "params": {
+                            "cwd": self.cwd,
+                            "approvalPolicy": "never",
+                            "sandbox": self.sandbox
+                        }
+                    })),
+                };
+                vec![send(&json!({ "method": "initialized" })), open_thread]
+            }
             (None, Some(THREAD_START_ID)) => {
+                if let Some(error) = value.get("error") {
+                    return vec![Action::Error(format!(
+                        "could not {} Codex thread: {error}",
+                        if self.resume_thread_id.is_some() {
+                            "resume"
+                        } else {
+                            "start"
+                        }
+                    ))];
+                }
                 match value
                     .get("result")
                     .and_then(|result| result.get("thread"))
@@ -112,10 +152,7 @@ impl AppServer {
                         // it is surfaced as an event rather than left as control
                         // traffic. The decoder reads it from the same line a
                         // replayed journal would.
-                        actions.push(Action::Event(decode_line(
-                            Protocol::CodexAppServer,
-                            line,
-                        )));
+                        actions.push(Action::Event(decode_line(Protocol::CodexAppServer, line)));
                         actions
                     }
                     None => Vec::new(),
@@ -192,7 +229,9 @@ impl AppServer {
             state.ready = true;
             std::mem::take(&mut state.pending)
         };
-        let mut actions = vec![Action::Info(format!("app-server ready; thread {thread_id}"))];
+        let mut actions = vec![Action::Info(format!(
+            "app-server ready; thread {thread_id}"
+        ))];
         for text in pending {
             actions.extend(self.send(&text));
         }
@@ -225,6 +264,26 @@ mod tests {
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0]["method"], "initialize");
         assert_eq!(sent[0]["id"], INIT_ID);
+    }
+
+    #[test]
+    fn resume_uses_the_native_thread_resume_method() {
+        let client = AppServer::resume("/tmp/styra/workspace".into(), "thread-old".into());
+        let sent_lines = sent(&client.handle_line(r#"{"id":1,"result":{}}"#));
+        assert_eq!(sent_lines[1]["method"], "thread/resume");
+        assert_eq!(sent_lines[1]["params"]["threadId"], "thread-old");
+        assert_eq!(sent_lines[1]["params"]["cwd"], "/tmp/styra/workspace");
+    }
+
+    #[test]
+    fn a_missing_native_thread_is_an_error() {
+        let client = AppServer::resume("/tmp/styra/workspace".into(), "gone".into());
+        let actions =
+            client.handle_line(r#"{"id":2,"error":{"code":-32602,"message":"not found"}}"#);
+        assert!(matches!(
+            actions.as_slice(),
+            [Action::Error(message)] if message.contains("could not resume Codex thread")
+        ));
     }
 
     #[test]
@@ -315,6 +374,9 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(events, vec![&AgentEvent::AgentMessage { text: "hi".into() }]);
+        assert_eq!(
+            events,
+            vec![&AgentEvent::AgentMessage { text: "hi".into() }]
+        );
     }
 }

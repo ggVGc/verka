@@ -78,12 +78,12 @@ Operations:
 | `list_workspaces` | none | `workspaces` |
 | `workspace` | Workspace id | `workspace` |
 | `create_session` | Workspace id, provider/model/effort selection, network, optional message | `session_created` |
+| `resume_session` | Session id, network, templates | `session_resumed` |
 | `list_sessions` | Workspace id | `stored_sessions` |
 | `send_message` | session id and message | `accepted` |
 | `updates` | session id and `after` cursor | `updates` |
 | `stop_interaction` | session id | `accepted` |
 | `stored_session` | session id | `stored_session` |
-| `transcript` | session id | `transcript` |
 | `shell` | live session id | `shell` (tmux executable and socket) |
 | `list_interactions` | none | `interactions` |
 
@@ -146,6 +146,9 @@ or `Tab` returns to list focus.
 `V` first chooses a Workspace, then a Session within it. This only changes what
 the client views; it never stops an outgoing Interaction. `A` lists all live
 Interactions with their Workspace and Session identities. `s` stops the current
-Interaction while retaining its Session. `F` renders the current Session into
-the message box for an explicit new Session in the same Workspace; the new
-Session is not created until the operator sends that opening message.
+Interaction while retaining its Session. `F` resumes that stopped Session with
+the provider's native conversation id: Codex uses `thread/resume`, while Claude
+Code starts with `--resume`. Styra preserves the provider's own state directory
+for this purpose. If the provider has removed its session—or an older Styra
+journal predates native-id capture—the raw journal remains viewable, but resume
+returns an error.
