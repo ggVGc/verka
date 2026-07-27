@@ -5,6 +5,7 @@
 //! so the whole interaction model is unit-testable. [`crate::ui`] renders it and
 //! `main` feeds it input and session updates.
 
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use styra_server::agent::{Provider, Selection, PROVIDERS};
 use styra_server::event::{AgentEvent, DetailBlock, TokenUsage};
@@ -68,7 +69,10 @@ impl Status {
     }
 
     pub fn is_active(&self) -> bool {
-        matches!(self, Status::Pending | Status::Running | Status::Idle | Status::Stopped)
+        matches!(
+            self,
+            Status::Pending | Status::Running | Status::Idle | Status::Stopped
+        )
     }
 }
 
@@ -315,6 +319,9 @@ pub struct App {
     pub focus: Focus,
     pub view: View,
     pub input: String,
+    /// Messages submitted while the current turn is running. They remain
+    /// visible and survive stopping the interaction until explicitly cleared.
+    queued_messages: VecDeque<String>,
     pub status: Status,
     /// When true, the selection tracks the newest entry as events arrive.
     pub follow: bool,
@@ -382,6 +389,7 @@ impl App {
             focus: Focus::List,
             view: View::Events,
             input: String::new(),
+            queued_messages: VecDeque::new(),
             status: Status::Running,
             follow: true,
             show_minor: false,
@@ -613,6 +621,28 @@ impl App {
     /// True when the operator can still send messages.
     pub fn can_send(&self) -> bool {
         self.status.is_active()
+    }
+
+    pub fn queued_messages(&self) -> impl Iterator<Item = &str> {
+        self.queued_messages.iter().map(String::as_str)
+    }
+
+    pub fn queued_message_count(&self) -> usize {
+        self.queued_messages.len()
+    }
+
+    pub fn queue_message(&mut self, message: String) {
+        self.queued_messages.push_back(message);
+    }
+
+    pub fn take_queued_message(&mut self) -> Option<String> {
+        self.queued_messages.pop_front()
+    }
+
+    pub fn clear_queued_messages(&mut self) -> usize {
+        let count = self.queued_messages.len();
+        self.queued_messages.clear();
+        count
     }
 
     // --- Ingesting session updates -----------------------------------------
@@ -1055,6 +1085,22 @@ mod tests {
             text: "more".into(),
         });
         assert_eq!(app.status, Status::Running);
+    }
+
+    #[test]
+    fn queued_messages_are_fifo_and_can_be_cleared() {
+        let mut app = app();
+        app.queue_message("first".into());
+        app.queue_message("second".into());
+
+        assert_eq!(app.queued_message_count(), 2);
+        assert_eq!(app.take_queued_message(), Some("first".into()));
+        assert_eq!(app.take_queued_message(), Some("second".into()));
+        assert_eq!(app.take_queued_message(), None);
+
+        app.queue_message("keep until Esc".into());
+        assert_eq!(app.clear_queued_messages(), 1);
+        assert_eq!(app.queued_message_count(), 0);
     }
 
     #[test]

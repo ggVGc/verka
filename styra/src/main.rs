@@ -687,6 +687,23 @@ fn run(
             *live = Live::Viewing;
         }
 
+        // A queued message is dispatched only after the preceding turn has
+        // completed. Keep it queued if the interaction was stopped or the
+        // send fails, so Esc can preserve it for a later resume.
+        if let Live::Running { session_id, .. } = live {
+            if app.status == Status::Idle {
+                if let Some(message) = app.take_queued_message() {
+                    match client.send_message(session_id, &message) {
+                        Ok(()) => app.status = Status::Running,
+                        Err(error) => {
+                            app.queue_message(message);
+                            app.push_log(LogEntry::error(format!("queued send failed: {error:#}")));
+                        }
+                    }
+                }
+            }
+        }
+
         terminal.draw(|frame| ui::render(frame, app))?;
 
         if !event::poll(Duration::from_millis(100))? {
@@ -922,7 +939,13 @@ fn handle_input_key(
                     // The sent message returns as a UserMessage event, so it is
                     // not pushed here; send failures surface in the log view.
                     Live::Running { session_id, .. } if app.can_send() => {
-                        if let Err(error) = client.send_message(session_id, &message) {
+                        if app.status == Status::Running {
+                            app.queue_message(message);
+                            app.push_log(LogEntry::info(format!(
+                                "message queued ({} waiting)",
+                                app.queued_message_count()
+                            )));
+                        } else if let Err(error) = client.send_message(session_id, &message) {
                             app.push_log(LogEntry::error(format!("send failed: {error:#}")));
                         }
                     }
@@ -996,6 +1019,9 @@ fn pause_interaction(app: &mut App, client: &Client, live: &mut Live) {
             ));
             *live = Live::Pending;
         }
+    } else if app.queued_message_count() > 0 {
+        let count = app.clear_queued_messages();
+        app.push_log(LogEntry::info(format!("cleared {count} queued message(s)")));
     } else {
         app.enter_list();
     }

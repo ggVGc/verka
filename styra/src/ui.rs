@@ -956,7 +956,10 @@ fn status_tail(app: &App) -> Line<'static> {
     let (text, color) = match app.status {
         Status::Pending => ("  … waiting for your first message", Color::DarkGray),
         Status::Idle => ("  ── idle · waiting for your message ──", Color::Green),
-        Status::Stopped => ("  ── paused · waiting for your next message ──", Color::DarkGray),
+        Status::Stopped => (
+            "  ── paused · waiting for your next message ──",
+            Color::DarkGray,
+        ),
         _ => return Line::default(),
     };
     Line::from(Span::styled(text, Style::default().fg(color)))
@@ -1145,9 +1148,13 @@ fn render_input(frame: &mut Frame, app: &App, area: Rect) {
         Style::default().fg(Color::DarkGray)
     };
     let title = if app.can_send() {
-        " message "
+        if app.queued_message_count() == 0 {
+            " message ".to_owned()
+        } else {
+            format!(" message · {} queued ", app.queued_message_count())
+        }
     } else {
-        " message (session ended) "
+        " message (session ended) ".to_owned()
     };
     let block = Block::default()
         .borders(Borders::ALL)
@@ -1158,7 +1165,7 @@ fn render_input(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(paragraph, area);
 
     if focused {
-        let (col, row) = cursor_offset(&app.input);
+        let (col, row) = cursor_offset(&app.input, app.queued_message_count() as u16);
         frame.set_cursor_position(Position {
             x: inner.x + col,
             y: inner.y + row,
@@ -1167,21 +1174,29 @@ fn render_input(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn input_text(app: &App) -> Vec<Line<'static>> {
+    let mut lines = app
+        .queued_messages()
+        .map(|message| {
+            Line::from(Span::styled(
+                format!("queued: {message}"),
+                Style::default().fg(Color::DarkGray),
+            ))
+        })
+        .collect::<Vec<_>>();
     if app.input.is_empty() {
-        return vec![Line::from(Span::styled(
+        lines.push(Line::from(Span::styled(
             "type a message, Enter to send",
             Style::default().fg(Color::Gray),
-        ))];
-    }
-    app.input
-        .split('\n')
-        .map(|line| {
+        )));
+    } else {
+        lines.extend(app.input.split('\n').map(|line| {
             Line::from(Span::styled(
                 line.to_owned(),
                 Style::default().fg(Color::White),
             ))
-        })
-        .collect()
+        }));
+    }
+    lines
 }
 
 fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
@@ -1201,7 +1216,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     }
 
     let hints = match (app.focus, app.view) {
-        (Focus::Input, _) => "Enter send · Alt+Enter newline · Ctrl+W delete word · Esc back to list",
+        (Focus::Input, _) => "Enter send · Alt+Enter newline · Ctrl+W delete word · Esc back to list (Esc again clears queue)",
         (Focus::List, View::Events) => {
             "j/k next/prev with detail · J/K next/prev line · space fold · C collapse all · m minor · p preview · P full-screen · t transcript · r raw · l log · d driva · i message · s stop · F resume · A interactions · S reset · V Workspaces · q quit"
         }
@@ -1230,13 +1245,13 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
 
 /// Input box height: borders plus the number of message lines, within bounds.
 fn input_area_height(app: &App) -> u16 {
-    let lines = app.input.split('\n').count().max(1);
+    let lines = app.queued_message_count() + app.input.split('\n').count().max(1);
     (lines as u16 + 2).clamp(3, 8)
 }
 
 /// Column and row of the cursor at the end of the message buffer.
-fn cursor_offset(input: &str) -> (u16, u16) {
-    let row = input.matches('\n').count() as u16;
+fn cursor_offset(input: &str, preceding_rows: u16) -> (u16, u16) {
+    let row = preceding_rows + input.matches('\n').count() as u16;
     let last = input.rsplit('\n').next().unwrap_or("");
     (last.chars().count() as u16, row)
 }
