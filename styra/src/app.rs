@@ -359,6 +359,9 @@ pub struct App {
     pub should_quit: bool,
     /// Set when the operator asks to choose a Workspace.
     pub workspace_requested: bool,
+    /// Set when the operator asks to seed a new Session from the current
+    /// Session's rendered transcript.
+    pub seed_requested: bool,
     /// Set when the operator asks to list the server's live interactions; the event
     /// loop observes it and opens the interactions picker to attach to one.
     pub interactions_requested: bool,
@@ -405,6 +408,7 @@ impl App {
             transcript_scroll: 0,
             should_quit: false,
             workspace_requested: false,
+            seed_requested: false,
             interactions_requested: false,
             reset_requested: false,
         }
@@ -928,6 +932,10 @@ impl App {
         self.workspace_requested = true;
     }
 
+    pub fn request_seed(&mut self) {
+        self.seed_requested = true;
+    }
+
     /// Ask the event loop to list the server's live interactions and, if the operator
     /// picks one, attach to it. The current interaction is left running on the server,
     /// not stopped: attaching only changes what this client views.
@@ -1391,6 +1399,14 @@ mod tests {
         assert!(!app.workspace_requested);
         app.request_workspace();
         assert!(app.workspace_requested);
+    }
+
+    #[test]
+    fn request_seed_sets_a_flag_for_the_event_loop_to_observe() {
+        let mut app = app();
+        assert!(!app.seed_requested);
+        app.request_seed();
+        assert!(app.seed_requested);
     }
 
     #[test]

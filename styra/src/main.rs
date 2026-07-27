@@ -266,6 +266,13 @@ fn main() -> Result<()> {
                     }
                 }
             }
+            RunOutcome::Seed(transcript) => {
+                let selection = app.selection.clone();
+                app = App::pending(selection);
+                app.workspace_id = Some(active_workspace.id.clone());
+                app.set_input(transcript);
+                live = Live::Pending;
+            }
             // Attach to another live interaction. The outgoing one is left running on
             // the server (interactions outlive a client); we just stop viewing it.
             RunOutcome::Attach(interaction) => {
@@ -624,6 +631,8 @@ enum RunOutcome {
         workspace: WorkspaceSummary,
         session_id: Option<String>,
     },
+    /// Start composing a new Session from an existing Session's transcript.
+    Seed(String),
     /// The operator picked a live interaction to attach this client to. The outgoing
     /// interaction is left running on the server, not stopped.
     Attach(InteractionSummary),
@@ -736,6 +745,14 @@ fn run(
             // Cancelling the Session picker leaves the current view untouched.
         }
 
+        if std::mem::take(&mut app.seed_requested) {
+            if app.session_id.is_empty() {
+                app.push_log(LogEntry::warn("no Session to seed from"));
+            } else {
+                return Ok(RunOutcome::Seed(client.transcript(&app.session_id)?));
+            }
+        }
+
         if std::mem::take(&mut app.interactions_requested) {
             let interactions = client.list_interactions()?;
             if interactions.is_empty() {
@@ -822,6 +839,7 @@ fn handle_list_key(
         // facts about a process that is already up. `S` first, then `L`.
         KeyCode::Char('L') => return app.open_launcher(),
         KeyCode::Char('V') => return app.request_workspace(),
+        KeyCode::Char('F') => return app.request_seed(),
         KeyCode::Char('A') => return app.request_interactions(),
         KeyCode::Char('S') => return app.request_reset(),
         _ => {}

@@ -53,7 +53,7 @@ Workspace
   Workspace's Sessions separately, and attach to a live Interaction when the
   selected Session has one. Switching views must not stop unrelated
   Interactions.
-- [ ] **14. Session lifecycle.** Make stopping affect only the live Interaction;
+- [x] **14. Session lifecycle.** Make stopping affect only the live Interaction;
   keep its Session and Workspace intact. Support opening stored Sessions without
   an Interaction and make transcript seeding create a new Session in the current
   Workspace.
