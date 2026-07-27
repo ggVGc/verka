@@ -46,6 +46,9 @@ pub enum WorkLogBlock {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         checkpoint_error: Option<String>,
     },
+    Diff {
+        content: Vec<ContentBlock>,
+    },
     ToolStarted {
         name: String,
         detail: String,
@@ -129,6 +132,12 @@ pub fn event_blocks(event: &AgentEvent) -> Vec<WorkLogBlock> {
             paths: paths.iter().map(|path| clean(path)).collect(),
             checkpoint: checkpoint.clone(),
             checkpoint_error: checkpoint_error.clone(),
+        },
+        AgentEvent::DiffUpdated { diff } => WorkLogBlock::Diff {
+            content: vec![ContentBlock::Code {
+                language: None,
+                text: clean(diff),
+            }],
         },
         AgentEvent::ToolStarted { name, detail, .. } => WorkLogBlock::ToolStarted {
             name: clean(name),
@@ -394,6 +403,10 @@ impl<W: Write> RichRenderer<W> {
                     paths.join(", ")
                 };
                 writeln!(self.out, "{yellow}✎{reset} changed {detail}")?;
+            }
+            WorkLogBlock::Diff { content } => {
+                writeln!(self.out, "{bold}{cyan}━━ Diff{reset}")?;
+                self.render_content(content, "", "", None)?;
             }
             WorkLogBlock::ToolStarted { name, detail } => {
                 writeln!(self.out, "{cyan}◆{reset} {name} {detail}")?

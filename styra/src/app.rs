@@ -1832,6 +1832,7 @@ mod tests {
         app.push_event(AgentEvent::FileChanged {
             id: String::new(),
             paths: vec!["notes.txt".into()],
+            diff: None,
             checkpoint: None,
             checkpoint_error: None,
         });

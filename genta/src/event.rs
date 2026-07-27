@@ -39,6 +39,16 @@ pub struct TokenUsage {
     pub reasoning_output_tokens: u64,
 }
 
+/// A provider-reported or locally reconstructed file change.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileChange {
+    pub path: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff: Option<String>,
+}
+
 /// The stable, provider-independent event vocabulary.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -89,12 +99,20 @@ pub enum AgentEvent {
         #[serde(default, skip_serializing_if = "String::is_empty")]
         id: String,
         paths: Vec<String>,
+        /// A best-effort provider diff for this file-change item.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        diff: Option<String>,
         /// A host-attached checkpoint commit for this change, never decoded
         /// from the wire.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         checkpoint: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         checkpoint_error: Option<String>,
+    },
+    /// An aggregated diff snapshot that is not itself a file-change item.
+    /// Codex app-server emits this after each file-change item.
+    DiffUpdated {
+        diff: String,
     },
     ToolStarted {
         /// Correlates with the matching `ToolCompleted`, so the host can
@@ -157,7 +175,7 @@ impl AgentEvent {
             AgentEvent::TurnStarted => "turn",
             AgentEvent::TurnCompleted { .. } | AgentEvent::UsageUpdated { .. } => "usage",
             AgentEvent::CommandStarted { .. } | AgentEvent::CommandCompleted { .. } => "command",
-            AgentEvent::FileChanged { .. } => "files",
+            AgentEvent::FileChanged { .. } | AgentEvent::DiffUpdated { .. } => "files",
             AgentEvent::ToolStarted { .. } | AgentEvent::ToolCompleted { .. } => "tool",
             AgentEvent::PlanUpdated { .. } => "plan",
             AgentEvent::AgentMessage { .. } => "agent",
@@ -217,6 +235,7 @@ impl AgentEvent {
                 None => format!("{} ({status})", first_line(command)),
             },
             AgentEvent::FileChanged { paths, .. } => paths.join(", "),
+            AgentEvent::DiffUpdated { diff } => diff_paths(diff).join(", "),
             AgentEvent::ToolStarted { name, detail, .. } if !detail.is_empty() => {
                 format!("{name}: {}", first_line(detail))
             }
@@ -284,9 +303,22 @@ impl AgentEvent {
                 }
                 blocks
             }
-            AgentEvent::FileChanged { paths, .. } => {
-                vec![DetailBlock::Text(paths.join("\n"))]
+            AgentEvent::FileChanged { paths, diff, .. } => {
+                let mut blocks = vec![DetailBlock::Text(paths.join("\n"))];
+                if let Some(diff) = diff {
+                    if !diff.is_empty() {
+                        blocks.push(DetailBlock::Code {
+                            language: None,
+                            text: diff.clone(),
+                        });
+                    }
+                }
+                blocks
             }
+            AgentEvent::DiffUpdated { diff } => vec![DetailBlock::Code {
+                language: None,
+                text: diff.clone(),
+            }],
             AgentEvent::ToolStarted { name, detail, .. } => {
                 let mut text = name.clone();
                 if !detail.is_empty() {
@@ -408,6 +440,9 @@ fn decode_appserver_notification(method: &str, params: &Value) -> AgentEvent {
         "thread/tokenUsage/updated" => AgentEvent::UsageUpdated {
             usage: appserver_usage(params),
         },
+        "turn/diff/updated" => AgentEvent::DiffUpdated {
+            diff: clean_terminal_text(string(params, "diff").unwrap_or_default()),
+        },
         "item/started" => decode_appserver_item(params.get("item").unwrap_or(&Value::Null), false),
         "item/completed" => decode_appserver_item(params.get("item").unwrap_or(&Value::Null), true),
         "error" | "warning" | "guardianWarning" | "configWarning" => AgentEvent::Error {
@@ -440,6 +475,7 @@ fn decode_appserver_item(item: &Value, completed: bool) -> AgentEvent {
         ("fileChange", true) => AgentEvent::FileChanged {
             id: clean(string(item, "id").unwrap_or_default()),
             paths: changed_paths(item),
+            diff: changes_diff(item),
             checkpoint: None,
             checkpoint_error: None,
         },
@@ -541,6 +577,7 @@ fn decode_codex_item(event_type: &str, item: &Value) -> AgentEvent {
         ("file_change", true) => AgentEvent::FileChanged {
             id: clean(string(item, "id").unwrap_or_default()),
             paths: changed_paths(item),
+            diff: changes_diff(item),
             checkpoint: None,
             checkpoint_error: None,
         },
@@ -771,6 +808,29 @@ fn changed_paths(item: &Value) -> Vec<String> {
         }
     }
     paths
+}
+
+fn changes_diff(item: &Value) -> Option<String> {
+    let changes = item.get("changes").and_then(Value::as_array)?;
+    let diffs = changes
+        .iter()
+        .filter_map(|change| string(change, "diff"))
+        .filter(|diff| !diff.is_empty())
+        .collect::<Vec<_>>();
+    (!diffs.is_empty()).then(|| clean_terminal_text(&diffs.join("\n")))
+}
+
+fn diff_paths(diff: &str) -> Vec<String> {
+    diff.lines()
+        .filter_map(|line| {
+            line.strip_prefix("+++ b/")
+                .or_else(|| line.strip_prefix("--- a/"))
+        })
+        .filter(|path| *path != "/dev/null")
+        .map(str::to_owned)
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 fn tool_name<'a>(item: &'a Value, kind: &'a str) -> &'a str {
@@ -1045,11 +1105,28 @@ mod tests {
             AgentEvent::FileChanged {
                 id: "f1".into(),
                 paths: vec!["src/a.rs".into(), "src/b.rs".into()],
+                diff: None,
                 checkpoint: None,
                 checkpoint_error: None,
             }
         );
         assert_eq!(event.summary(), "src/a.rs, src/b.rs");
+    }
+
+    #[test]
+    fn appserver_aggregated_diff_is_renderable_without_git() {
+        let event = decode_line(
+            Protocol::CodexAppServer,
+            r#"{"method":"turn/diff/updated","params":{"threadId":"t","turnId":"u","diff":"diff --git a/src/a.rs b/src/a.rs\n+++ b/src/a.rs\n@@\n-old\n+new\n"}}"#,
+        );
+        assert_eq!(
+            event,
+            AgentEvent::DiffUpdated {
+                diff: "diff --git a/src/a.rs b/src/a.rs\n+++ b/src/a.rs\n@@\n-old\n+new\n".into()
+            }
+        );
+        assert_eq!(event.summary(), "src/a.rs");
+        assert!(matches!(event.detail()[0], DetailBlock::Code { .. }));
     }
 
     #[test]
@@ -1188,7 +1265,6 @@ mod tests {
         );
         assert_eq!(event.summary(), "Bash: {\"command\":\"cargo test\"}");
     }
-
     #[test]
     fn claude_thinking_only_message_falls_back_to_a_minor_thinking_event() {
         let event = decode_line(

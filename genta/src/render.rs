@@ -49,7 +49,9 @@ fn render_event(out: &mut String, event: &AgentEvent) {
         AgentEvent::AgentMessage { .. }
         | AgentEvent::PlanUpdated { .. }
         | AgentEvent::UserMessage { .. }
-        | AgentEvent::Thinking { .. } => {
+        | AgentEvent::Thinking { .. }
+        | AgentEvent::FileChanged { diff: Some(_), .. }
+        | AgentEvent::DiffUpdated { .. } => {
             out.push_str(&format!("{:>8} ", event.tag()));
             let mut first = true;
             for block in event.detail() {
@@ -97,7 +99,7 @@ mod tests {
         assert_eq!(
             text,
             "  thread session t-1\n\
-             \x20command cargo test\n\
+             \x20command cargo test (running)\n\
              \x20command cargo test (completed, exit 0)\n\
              \x20  agent All good.\n\
              \x20        Tests pass.\n"

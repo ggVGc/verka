@@ -1937,6 +1937,7 @@ mod tests {
         app.push_event(AgentEvent::FileChanged {
             id: "f1".into(),
             paths: vec!["notes.txt".into()],
+            diff: None,
             checkpoint: None,
             checkpoint_error: None,
         });
@@ -1969,6 +1970,7 @@ mod tests {
         app.push_event(AgentEvent::FileChanged {
             id: "f1".into(),
             paths: vec!["notes.txt".into()],
+            diff: None,
             checkpoint: None,
             checkpoint_error: None,
         });
@@ -2026,6 +2028,7 @@ mod tests {
         app.push_event(AgentEvent::FileChanged {
             id: "f1".into(),
             paths: vec!["notes.txt".into()],
+            diff: None,
             checkpoint: None,
             checkpoint_error: None,
         });
