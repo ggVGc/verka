@@ -127,6 +127,11 @@ pub enum AgentEvent {
         #[serde(default, skip_serializing_if = "String::is_empty")]
         id: String,
         name: String,
+        /// The same call detail `ToolStarted` carried (e.g. a command's
+        /// arguments), so the completed row still shows what actually ran
+        /// rather than just the bare tool name.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        detail: String,
         status: String,
         #[serde(default, skip_serializing_if = "String::is_empty")]
         output: String,
@@ -240,6 +245,14 @@ impl AgentEvent {
                 format!("{name}: {}", first_line(detail))
             }
             AgentEvent::ToolStarted { name, .. } => name.clone(),
+            AgentEvent::ToolCompleted {
+                name,
+                detail,
+                status,
+                ..
+            } if !detail.is_empty() => {
+                format!("{name}: {} ({status})", first_line(detail))
+            }
             AgentEvent::ToolCompleted { name, status, .. } => format!("{name} ({status})"),
             AgentEvent::PlanUpdated { text }
             | AgentEvent::AgentMessage { text }
@@ -329,11 +342,17 @@ impl AgentEvent {
             }
             AgentEvent::ToolCompleted {
                 name,
+                detail,
                 status,
                 output,
                 ..
             } => {
-                let mut blocks = vec![DetailBlock::Text(format!("{name}: {status}"))];
+                let mut text = format!("{name}: {status}");
+                if !detail.is_empty() {
+                    text.push('\n');
+                    text.push_str(detail);
+                }
+                let mut blocks = vec![DetailBlock::Text(text)];
                 if !output.is_empty() {
                     blocks.push(DetailBlock::Code {
                         language: None,
@@ -490,6 +509,7 @@ fn decode_appserver_item(item: &Value, completed: bool) -> AgentEvent {
         ("mcpToolCall", true) | ("webSearch", true) => AgentEvent::ToolCompleted {
             id: clean(string(item, "id").unwrap_or_default()),
             name: clean(tool_name(item, kind)),
+            detail: clean(tool_detail(item)),
             status: clean(string(item, "status").unwrap_or("completed")),
             output: clean(tool_output(item)),
         },
@@ -599,6 +619,7 @@ fn decode_codex_item(event_type: &str, item: &Value) -> AgentEvent {
         ("mcp_tool_call", true) | ("web_search", true) => AgentEvent::ToolCompleted {
             id: clean(string(item, "id").unwrap_or_default()),
             name: clean(tool_name(item, kind)),
+            detail: clean(tool_detail(item)),
             status: clean(string(item, "status").unwrap_or("completed")),
             output: clean(tool_output(item)),
         },
@@ -797,6 +818,7 @@ fn decode_claude_user(message: &Value) -> AgentEvent {
                 return AgentEvent::ToolCompleted {
                     id: id.clone(),
                     name: id,
+                    detail: String::new(),
                     status: if is_error {
                         "error".into()
                     } else {
@@ -1393,6 +1415,7 @@ mod tests {
             AgentEvent::ToolCompleted {
                 id: "toolu_1".into(),
                 name: "toolu_1".into(),
+                detail: String::new(),
                 status: "completed".into(),
                 output: "ok".into()
             }
@@ -1405,6 +1428,7 @@ mod tests {
             AgentEvent::ToolCompleted {
                 id: "toolu_2".into(),
                 name: "toolu_2".into(),
+                detail: String::new(),
                 status: "error".into(),
                 output: "boom".into()
             }

@@ -1696,12 +1696,14 @@ mod tests {
         app.push_event(AgentEvent::ToolCompleted {
             id: "toolu_1".into(),
             name: "toolu_1".into(),
+            detail: String::new(),
             status: "completed".into(),
             output: "ok".into(),
         });
         let screen = rendered(&app);
         assert!(screen.contains('✓'));
         assert!(screen.contains("Bash"));
+        assert!(screen.contains("cargo test"));
     }
 
     #[test]
@@ -1718,6 +1720,7 @@ mod tests {
         app.push_event(AgentEvent::ToolCompleted {
             id: "toolu_1".into(),
             name: "toolu_1".into(),
+            detail: String::new(),
             status: "error".into(),
             output: "boom".into(),
         });

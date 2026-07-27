@@ -678,8 +678,10 @@ impl App {
         // Same as above, for tool calls: a `ToolCompleted` is the final state
         // of its matching `ToolStarted` row, correlated by id rather than
         // name — Claude's `tool_result` only ever repeats the `tool_use_id`,
-        // never the tool's name, so the completed event's own `name` is a
-        // placeholder that gets replaced with the started row's real name.
+        // never the tool's name or arguments, so the completed event's own
+        // `name`/`detail` are placeholders that get replaced with the started
+        // row's real ones (e.g. `Bash` and its command), so the finished row
+        // still shows what actually ran rather than just the bare tool name.
         if let AgentEvent::ToolCompleted {
             id,
             status,
@@ -690,10 +692,11 @@ impl App {
             if let Some(entry) = self.entries.iter_mut().rev().find(|entry| {
                 matches!(&entry.event, AgentEvent::ToolStarted { id: started, .. } if started == id)
             }) {
-                if let AgentEvent::ToolStarted { id, name, .. } = &entry.event {
+                if let AgentEvent::ToolStarted { id, name, detail } = &entry.event {
                     entry.event = AgentEvent::ToolCompleted {
                         id: id.clone(),
                         name: name.clone(),
+                        detail: detail.clone(),
                         status: status.clone(),
                         output: output.clone(),
                     };
@@ -1274,6 +1277,7 @@ mod tests {
         app.push_event(AgentEvent::ToolCompleted {
             id: "toolu_1".into(),
             name: "toolu_1".into(),
+            detail: String::new(),
             status: "completed".into(),
             output: "ok".into(),
         });
@@ -1284,6 +1288,7 @@ mod tests {
             AgentEvent::ToolCompleted {
                 id: "toolu_1".into(),
                 name: "Bash".into(),
+                detail: "{\"command\":\"cargo test\"}".into(),
                 status: "completed".into(),
                 output: "ok".into(),
             }
@@ -1307,6 +1312,7 @@ mod tests {
         app.push_event(AgentEvent::ToolCompleted {
             id: "toolu_2".into(),
             name: "toolu_2".into(),
+            detail: String::new(),
             status: "completed".into(),
             output: String::new(),
         });
@@ -1328,6 +1334,7 @@ mod tests {
         app.push_event(AgentEvent::ToolCompleted {
             id: "toolu_3".into(),
             name: "toolu_3".into(),
+            detail: String::new(),
             status: "error".into(),
             output: "old_string not found".into(),
         });
