@@ -29,3 +29,37 @@ Each is committed on its own. Check off as completed.
 - [x] **9. Server-client split.** Versioned JSON API over a local Unix socket,
   server-owned live sessions and journal replay, cursor-based updates, reusable
   Rust client, and migration of the TUI and headless example.
+
+## Workspace / Session / Interaction redesign
+
+The vocabulary and ownership model for the next storage/API version is:
+
+```text
+Workspace
+└── Session
+    └── Interaction (zero or one live)
+```
+
+- [ ] **10. Interaction terminology.** Rename the live `Track` process/protocol
+  wrapper and all of its server, API, client, TUI, test, and documentation
+  vocabulary to `Interaction`, without changing behaviour.
+- [ ] **11. Workspace storage.** Add durable Workspace metadata and nest new
+  Session directories below their owning Workspace. Keep the Session journal
+  as the durable provider-conversation record.
+- [ ] **12. Workspace API.** Bump the wire API version and add create, list, and
+  inspect operations for Workspaces plus Workspace-scoped Session creation and
+  listing. Key live Interactions by their Session IDs.
+- [ ] **13. Workspace-aware TUI.** Make `V` choose a Workspace, browse the
+  Workspace's Sessions separately, and attach to a live Interaction when the
+  selected Session has one. Switching views must not stop unrelated
+  Interactions.
+- [ ] **14. Session lifecycle.** Make stopping affect only the live Interaction;
+  keep its Session and Workspace intact. Support opening stored Sessions without
+  an Interaction and make transcript seeding create a new Session in the current
+  Workspace.
+- [ ] **15. Legacy store compatibility.** Surface pre-Workspace Session
+  directories under a synthetic `Legacy sessions` Workspace without guessing
+  their original host directory or destructively moving their journals.
+- [ ] **16. Documentation and validation.** Rewrite the architecture, CLI/API
+  reference, and tests around Workspace → Session → Interaction, then run all
+  Styra and repository-level checks.
