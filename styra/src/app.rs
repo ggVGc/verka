@@ -863,12 +863,24 @@ impl App {
             }
             _ => {}
         }
+        let transfer_expansion = self.follow
+            && (self.show_minor || !event.is_minor())
+            && self
+                .entries
+                .get(self.selected)
+                .is_some_and(|entry| entry.expanded)
+            && self.next_visible(self.selected + 1).is_none();
+        if transfer_expansion {
+            self.entries[self.selected].expanded = false;
+        }
         self.entries.push(Entry {
             event,
-            expanded: false,
+            expanded: transfer_expansion,
             raw_index: self.raw.len().checked_sub(1),
         });
-        if self.follow {
+        // Follow the tail of what is actually rendered. Hidden minor events
+        // must not move the selection (and therefore the list viewport).
+        if self.follow && self.is_visible(self.entries.len() - 1) {
             self.selected = self.entries.len() - 1;
             self.preview_scroll = 0;
         }
@@ -1214,6 +1226,38 @@ mod tests {
         app.push_event(AgentEvent::AgentMessage { text: "hi".into() });
         assert!(app.follow);
         assert_eq!(app.selected, 1);
+    }
+
+    #[test]
+    fn following_ignores_hidden_minor_events() {
+        let mut app = app();
+        app.push_event(AgentEvent::AgentMessage { text: "hi".into() });
+        app.entries[0].expanded = true;
+        app.preview_scroll = 3;
+
+        app.push_event(AgentEvent::TurnStarted);
+
+        assert!(app.follow);
+        assert_eq!(app.selected, 0);
+        assert_eq!(app.preview_scroll, 3);
+        assert!(app.is_visible(app.selected));
+        assert!(app.entries[0].expanded);
+        assert!(!app.entries[1].expanded);
+    }
+
+    #[test]
+    fn following_transfers_expansion_to_a_new_visible_entry() {
+        let mut app = app();
+        app.push_event(AgentEvent::AgentMessage { text: "first".into() });
+        app.entries[0].expanded = true;
+
+        app.push_event(AgentEvent::AgentMessage {
+            text: "second".into(),
+        });
+
+        assert_eq!(app.selected, 1);
+        assert!(!app.entries[0].expanded);
+        assert!(app.entries[1].expanded);
     }
 
     #[test]
