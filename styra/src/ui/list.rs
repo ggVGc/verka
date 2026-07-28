@@ -329,7 +329,7 @@ pub(crate) fn summary_line(entry: &Entry, has_detail: bool, show_summary: bool) 
         if !prefix.is_empty() {
             spans.push(Span::styled(prefix, summary_style));
         }
-        let summary = entry.event.summary();
+        let summary = file_action_summary(&entry.event).unwrap_or_else(|| entry.event.summary());
         let summary = match &entry.event {
             AgentEvent::ToolStarted { name, .. } | AgentEvent::ToolCompleted { name, .. } => {
                 summary
@@ -342,6 +342,41 @@ pub(crate) fn summary_line(entry: &Entry, has_detail: bool, show_summary: bool) 
         spans.extend(super::markdown::parse_inline_spans(summary, summary_style));
     }
     Line::from(spans)
+}
+
+/// File-event summaries should say what happened, not merely repeat paths
+/// under an opaque `files` tag. Providers do not always report a change kind,
+/// so unified-diff creation/deletion markers are used when present and the
+/// honest fallback is "changed".
+fn file_action_summary(event: &AgentEvent) -> Option<String> {
+    let (paths, diff) = match event {
+        AgentEvent::FileChanged { paths, diff, .. } => (paths.clone(), diff.as_deref()),
+        AgentEvent::DiffUpdated { diff } => {
+            let paths = event
+                .summary()
+                .split(", ")
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
+            (paths, Some(diff.as_str()))
+        }
+        _ => return None,
+    };
+    let action = match diff {
+        Some(diff) => {
+            let added = diff.contains("new file mode")
+                || diff.lines().any(|line| line == "--- /dev/null");
+            let deleted = diff.contains("deleted file mode")
+                || diff.lines().any(|line| line == "+++ /dev/null");
+            match (added, deleted) {
+                (true, false) => "added",
+                (false, true) => "deleted",
+                (false, false) => "modified",
+                (true, true) => "changed",
+            }
+        }
+        None => "changed",
+    };
+    Some(format!("{action} {}", paths.join(", ")))
 }
 
 /// The expandable body of an entry. `cap` bounds how many lines are shown
@@ -553,6 +588,42 @@ mod tests {
         assert!(screen.contains("hello world"));
         assert!(!screen.contains('▸'));
         assert!(!screen.contains('▾'));
+    }
+
+    #[test]
+    fn file_entries_name_the_action_taken() {
+        let changed = AgentEvent::FileChanged {
+            id: "f1".into(),
+            paths: vec!["src/lib.rs".into()],
+            diff: Some("@@ -1 +1 @@\n-old\n+new".into()),
+            checkpoint: None,
+            checkpoint_error: None,
+        };
+        assert_eq!(
+            file_action_summary(&changed).as_deref(),
+            Some("modified src/lib.rs")
+        );
+
+        let added = AgentEvent::DiffUpdated {
+            diff: "diff --git a/new.rs b/new.rs\nnew file mode 100644\n--- /dev/null\n+++ b/new.rs"
+                .into(),
+        };
+        assert_eq!(
+            file_action_summary(&added).as_deref(),
+            Some("added new.rs")
+        );
+
+        let deleted = AgentEvent::FileChanged {
+            id: "f2".into(),
+            paths: vec!["old.rs".into()],
+            diff: Some("--- a/old.rs\n+++ /dev/null".into()),
+            checkpoint: None,
+            checkpoint_error: None,
+        };
+        assert_eq!(
+            file_action_summary(&deleted).as_deref(),
+            Some("deleted old.rs")
+        );
     }
 
     #[test]
