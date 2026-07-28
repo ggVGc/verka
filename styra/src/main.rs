@@ -3,17 +3,16 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use std::io::Stdout;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::Duration;
-
 mod app;
 mod cli;
+mod event_loop;
 mod keys;
 mod picker;
 mod preferences;
@@ -21,10 +20,11 @@ mod session;
 mod terminal;
 mod ui;
 
-use app::{App, Focus, Status};
+use app::App;
 use cli::{Cli, CliCommand};
+use event_loop::RunOutcome;
 use session::Live;
-use styra_server::{Client, InteractionSummary, LogEntry, WorkspaceSummary};
+use styra_server::{Client, LogEntry};
 
 fn main() -> Result<()> {
     if let Some(result) = styra_server::broker::exit_if_requested() {
@@ -168,7 +168,7 @@ fn main() -> Result<()> {
     // Runs until the operator quits. Workspace and Session selection only
     // changes what this client views; server-owned Interactions continue.
     let result = loop {
-        let outcome = match run(
+        let outcome = match event_loop::run(
             &mut terminal,
             &mut app,
             &client,
@@ -180,7 +180,7 @@ fn main() -> Result<()> {
             Ok(outcome) => outcome,
             Err(error) => break Err(error),
         };
-        if let Some(session_id) = interaction_stopped_by(&outcome, &live) {
+        if let Some(session_id) = event_loop::interaction_stopped_by(&outcome, &live) {
             client.stop_interaction(session_id).ok();
         }
         match outcome {
@@ -284,160 +284,6 @@ fn stop_daemon(socket: &Path) -> Result<()> {
 }
 
 
-/// What the interactive loop returned control to `main` for.
-enum RunOutcome {
-    /// The operator quit.
-    Quit,
-    /// The operator chose a Workspace and optionally one of its Sessions.
-    OpenWorkspace {
-        workspace: WorkspaceSummary,
-        session_id: Option<String>,
-    },
-    /// The operator picked a live interaction to attach this client to. The outgoing
-    /// interaction is left running on the server, not stopped.
-    Attach(InteractionSummary),
-    /// The operator stopped the current interaction and asked to return to the blank
-    /// start screen.
-    Reset,
-}
-
-/// Return the running interaction an in-client transition explicitly stops.
-///
-/// Quitting the TUI is a detach: the daemon keeps owning the interaction so a
-/// later client can reattach through the Workspace/Session or Interactions
-/// picker. Reset is the destructive transition and deliberately stops it.
-fn interaction_stopped_by<'a>(outcome: &RunOutcome, live: &'a Live) -> Option<&'a str> {
-    match (outcome, live) {
-        (RunOutcome::Reset, Live::Running { session_id, .. }) => Some(session_id),
-        _ => None,
-    }
-}
-
-/// The event loop: apply pending session updates, render, and handle input
-/// until the operator quits or asks to switch sessions. `cli` and `layout`
-/// are only needed to spawn a session lazily out of `Live::Pending` once the
-/// operator writes a first message.
-fn run(
-    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
-    app: &mut App,
-    client: &Client,
-    cli: &Cli,
-    workspace_id: &str,
-    live: &mut Live,
-    preferences_path: &Path,
-) -> Result<RunOutcome> {
-    let mut pending_fold = false;
-    loop {
-        let mut disconnected = false;
-        if let Live::Running { session_id, cursor } = live {
-            match client.updates(session_id, *cursor) {
-                Ok(batch) => {
-                    *cursor = batch.next;
-                    for sequenced in batch.updates {
-                        session::apply_update(app, sequenced.update);
-                    }
-                }
-                Err(error) => {
-                    app.push_log(LogEntry::error(format!("update poll failed: {error:#}")));
-                    app.on_ended(styra_server::InteractionEnd {
-                        exit_code: None,
-                        error: Some(error.to_string()),
-                    });
-                    disconnected = true;
-                }
-            }
-        }
-        if disconnected {
-            *live = Live::Viewing;
-        }
-
-        // A queued message is dispatched only after the preceding turn has
-        // completed. Keep it queued if the interaction was stopped or the
-        // send fails, so Esc can preserve it for a later resume.
-        if let Live::Running { session_id, .. } = live {
-            if app.status == Status::Idle {
-                if let Some(message) = app.take_queued_message() {
-                    match client.send_message(session_id, &message) {
-                        Ok(()) => app.status = Status::Running,
-                        Err(error) => {
-                            app.queue_message(message);
-                            app.push_log(LogEntry::error(format!("queued send failed: {error:#}")));
-                        }
-                    }
-                }
-            }
-        }
-
-        terminal.draw(|frame| ui::render(frame, app))?;
-
-        if !event::poll(Duration::from_millis(100))? {
-            continue;
-        }
-        let Event::Key(key) = event::read()? else {
-            continue;
-        };
-        if key.kind != KeyEventKind::Press {
-            continue;
-        }
-
-        // The launch picker is modal: while it is open it owns every key, so
-        // neither focus's bindings can fire behind it.
-        if app.launcher.is_some() {
-            keys::handle_launcher_key(app, key, preferences_path);
-            continue;
-        }
-
-        match app.focus {
-            Focus::List => keys::handle_list_key(app, client, live, key, &mut pending_fold),
-            Focus::Input => keys::handle_input_key(app, client, cli, workspace_id, live, key),
-        }
-
-        if app.should_quit {
-            return Ok(RunOutcome::Quit);
-        }
-
-        if std::mem::take(&mut app.workspace_requested) {
-            let workspaces = client.list_workspaces()?;
-            if workspaces.is_empty() {
-                app.push_log(LogEntry::warn("no Workspaces to open"));
-                continue;
-            }
-            let Some(workspace) = picker::run_workspace_picker(terminal, &workspaces)? else {
-                continue;
-            };
-            let sessions = client.list_sessions(&workspace.id)?;
-            if sessions.is_empty() {
-                return Ok(RunOutcome::OpenWorkspace {
-                    workspace,
-                    session_id: None,
-                });
-            }
-            if let Some(id) = picker::run_session_picker(terminal, &sessions)? {
-                return Ok(RunOutcome::OpenWorkspace {
-                    workspace,
-                    session_id: Some(id),
-                });
-            }
-            // Cancelling the Session picker leaves the current view untouched.
-        }
-
-        if std::mem::take(&mut app.interactions_requested) {
-            let interactions = client.list_interactions()?;
-            if interactions.is_empty() {
-                app.push_log(LogEntry::warn("no live interactions on the server"));
-                continue;
-            }
-            if let Some(interaction) = picker::run_interactions_picker(terminal, client, &interactions)? {
-                return Ok(RunOutcome::Attach(interaction));
-            }
-            // Cancelled: the next iteration redraws the normal session view.
-        }
-
-        if std::mem::take(&mut app.reset_requested) {
-            return Ok(RunOutcome::Reset);
-        }
-    }
-}
 
 
 
@@ -475,9 +321,9 @@ mod cli_tests {
             cursor: 7,
         };
 
-        assert_eq!(interaction_stopped_by(&RunOutcome::Quit, &live), None);
+        assert_eq!(event_loop::interaction_stopped_by(&RunOutcome::Quit, &live), None);
         assert_eq!(
-            interaction_stopped_by(&RunOutcome::Reset, &live),
+            event_loop::interaction_stopped_by(&RunOutcome::Reset, &live),
             Some("styra-live")
         );
     }
