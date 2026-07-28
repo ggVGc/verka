@@ -53,11 +53,13 @@ pub(crate) fn render_fullscreen_preview(frame: &mut Frame, app: &App, area: Rect
 }
 
 pub(crate) fn preview_scroll_limit(lines: &[Line<'_>], width: u16, height: u16) -> u16 {
-    let width = usize::from(width.max(1));
-    let rendered_lines: usize = lines
-        .iter()
-        .map(|line| line.width().max(1).div_ceil(width))
-        .sum();
+    // Use the same wrapping implementation as the widget below. Dividing a
+    // line's display width by the panel width undercounts when word wrapping
+    // moves a word to the next row and leaves unused cells on the previous
+    // one, which made the final preview rows unreachable.
+    let rendered_lines = Paragraph::new(lines.to_vec())
+        .wrap(Wrap { trim: false })
+        .line_count(width.max(1));
     rendered_lines
         .saturating_sub(usize::from(height))
         .min(usize::from(u16::MAX)) as u16
@@ -284,6 +286,15 @@ mod tests {
             .map(|span| span.content.chars().filter(|&c| c == 'z').count())
             .sum();
         assert_eq!(zs, 500);
+    }
+
+    #[test]
+    fn preview_scroll_limit_accounts_for_word_wrapping() {
+        // At six columns this wraps onto three rows ("aaa", "bbb", "ccc"),
+        // even though its total display width divided by six only rounds to
+        // two. The last row must remain reachable in a one-row viewport.
+        let lines = vec![Line::from("aaa bbb ccc")];
+        assert_eq!(preview_scroll_limit(&lines, 6, 1), 2);
     }
 
     #[test]
