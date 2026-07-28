@@ -138,6 +138,7 @@ pub fn handle_input_key(
         KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => app.input_newline(),
         KeyCode::Enter => {
             if let Some(message) = app.take_message() {
+                app.enter_list();
                 match live {
                     Live::Running { session_id, .. } if app.status == Status::Running => {
                         if let Err(error) = client.queue_message(session_id, &message) {
@@ -189,6 +190,7 @@ pub fn handle_input_key(
                                     "could not launch the agent: {error:#}"
                                 )));
                                 app.set_input(message);
+                                app.enter_input();
                             }
                         }
                     }
