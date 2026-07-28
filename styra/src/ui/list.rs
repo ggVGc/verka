@@ -94,6 +94,7 @@ pub(crate) fn render_list(frame: &mut Frame, app: &App, area: Rect) {
         .iter()
         .map(|(_, entry)| entry_item(entry, width))
         .collect();
+    let item_heights: Vec<usize> = items.iter().map(ListItem::height).collect();
     items.push(ListItem::new(status_tail(app)));
     // An explicit background rather than `Modifier::REVERSED`: reversing
     // would swap a `White` foreground (summary and detail text alike) into
@@ -110,8 +111,65 @@ pub(crate) fn render_list(frame: &mut Frame, app: &App, area: Rect) {
         .iter()
         .position(|(idx, _)| *idx == app.selected)
         .or_else(|| visible.iter().rposition(|(idx, _)| *idx < app.selected));
+    let viewport_height = area.height.saturating_sub(2) as usize;
+    let offset = list_offset_with_scrolloff(
+        app.list_offset.get(),
+        position,
+        &item_heights,
+        viewport_height,
+    );
+    *state.offset_mut() = offset;
     state.select(position);
     frame.render_stateful_widget(list, area, &mut state);
+    app.list_offset.set(state.offset());
+}
+
+/// Keep the selected item within a small margin of the viewport edges, like
+/// vim's `scrolloff`. Heights are rendered rows rather than item counts so
+/// wrapped summaries and expanded details do not break the margin.
+fn list_offset_with_scrolloff(
+    current: usize,
+    selected: Option<usize>,
+    heights: &[usize],
+    viewport_height: usize,
+) -> usize {
+    let Some(selected) = selected else {
+        return current.min(heights.len().saturating_sub(1));
+    };
+    if viewport_height == 0 {
+        return selected;
+    }
+
+    let margin = 2.min(viewport_height.saturating_sub(1) / 2);
+    let mut offset = current.min(selected);
+
+    while offset < selected
+        && heights[offset..selected].iter().sum::<usize>() < margin
+    {
+        offset = offset.saturating_sub(1);
+        if offset == 0 {
+            break;
+        }
+    }
+
+    while offset < selected {
+        let rows_through_selection = heights[offset..=selected].iter().sum::<usize>();
+        if rows_through_selection <= viewport_height.saturating_sub(margin) {
+            break;
+        }
+        offset += 1;
+    }
+
+    // Moving upward may have left the selection close to the top edge. Pull
+    // earlier items back into view until the margin is restored.
+    while offset > 0 {
+        let rows_before = heights[offset..selected].iter().sum::<usize>();
+        if rows_before >= margin {
+            break;
+        }
+        offset -= 1;
+    }
+    offset
 }
 
 fn status_tail(app: &App) -> Line<'static> {
@@ -316,6 +374,22 @@ mod tests {
     use super::*;
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
+
+    #[test]
+    fn list_scrolloff_moves_before_selection_reaches_an_edge() {
+        let heights = vec![1; 20];
+
+        assert_eq!(list_offset_with_scrolloff(0, Some(5), &heights, 8), 0);
+        assert_eq!(list_offset_with_scrolloff(0, Some(6), &heights, 8), 1);
+        assert_eq!(list_offset_with_scrolloff(5, Some(5), &heights, 8), 3);
+    }
+
+    #[test]
+    fn list_scrolloff_counts_expanded_rows() {
+        let heights = vec![1, 1, 5, 1, 1];
+
+        assert_eq!(list_offset_with_scrolloff(0, Some(3), &heights, 8), 2);
+    }
     use styra_server::event::TokenUsage;
 
     fn rendered(app: &App) -> String {

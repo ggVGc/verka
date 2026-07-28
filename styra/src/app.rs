@@ -5,6 +5,7 @@
 //! so the whole interaction model is unit-testable. [`crate::ui`] renders it and
 //! `main` feeds it input and session updates.
 
+use std::cell::Cell;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use styra_server::agent::{Provider, Selection, PROVIDERS};
@@ -337,6 +338,10 @@ pub struct App {
     pub status: Status,
     /// When true, the selection tracks the newest entry as events arrive.
     pub follow: bool,
+    /// First visible item in the event list. Rendering updates this after it
+    /// accounts for wrapped and expanded row heights, so navigation can keep
+    /// a vim-like margin above and below the selection.
+    pub list_offset: Cell<usize>,
     /// When false, minor lifecycle events (thread/turn/usage) are hidden from
     /// the list and skipped by navigation.
     pub show_minor: bool,
@@ -414,6 +419,7 @@ impl App {
             queued_messages: VecDeque::new(),
             status: Status::Running,
             follow: true,
+            list_offset: Cell::new(0),
             show_minor: false,
             show_preview: false,
             preview_scroll: 0,
