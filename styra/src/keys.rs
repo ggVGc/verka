@@ -56,6 +56,9 @@ pub fn handle_list_key(
         KeyCode::Char('r') => return app.toggle_raw(),
         KeyCode::Char('l') => return app.toggle_log(),
         KeyCode::Char('t') => return app.toggle_transcript(),
+        KeyCode::Char('c') if app.view != View::Transcript => {
+            return app.show_transcript_conversation_only()
+        }
         KeyCode::Char('d') => return app.toggle_driva(),
         KeyCode::Char('P') => return app.toggle_fullscreen_preview(),
         KeyCode::Char('L') => return app.open_launcher(),

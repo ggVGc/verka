@@ -632,6 +632,14 @@ impl App {
         };
     }
 
+    /// Open the transcript in conversation-only mode. This is idempotent so
+    /// the global `c` shortcut always means "show conversation".
+    pub fn show_transcript_conversation_only(&mut self) {
+        self.view = View::Transcript;
+        self.transcript_conversation_only = true;
+        self.transcript_scroll = 0;
+    }
+
     /// Toggle between the full rendered transcript and just the human/agent
     /// conversation. Start at the top because filtering changes line offsets.
     pub fn toggle_transcript_conversation_only(&mut self) {
@@ -2021,6 +2029,18 @@ mod tests {
         assert_eq!(app.transcript_scroll, 0);
         app.toggle_transcript_conversation_only();
         assert!(!app.transcript_conversation_only);
+    }
+
+    #[test]
+    fn show_conversation_only_opens_a_filtered_transcript() {
+        let mut app = app();
+        app.transcript_scroll = 12;
+
+        app.show_transcript_conversation_only();
+
+        assert_eq!(app.view, View::Transcript);
+        assert!(app.transcript_conversation_only);
+        assert_eq!(app.transcript_scroll, 0);
     }
 
     #[test]
