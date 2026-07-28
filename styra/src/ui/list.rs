@@ -299,6 +299,12 @@ pub(crate) fn summary_line(entry: &Entry, has_detail: bool, show_summary: bool) 
         (true, false) => "▸",
     };
     let tag = entry.event.tag();
+    let display_tag = match &entry.event {
+        AgentEvent::ToolStarted { name, .. } | AgentEvent::ToolCompleted { name, .. } => {
+            name.as_str()
+        }
+        _ => tag,
+    };
     // A completed tool call gets its own color and a checkmark/cross prefix —
     // otherwise it reads identically to the "running" row it replaced, save
     // for the word "(completed)" buried at the end of the summary text.
@@ -313,7 +319,7 @@ pub(crate) fn summary_line(entry: &Entry, has_detail: bool, show_summary: bool) 
     let mut spans = vec![
         Span::raw(format!("{marker} ")),
         Span::styled(
-            format!("{tag:<8} "),
+            format!("{display_tag:<8} "),
             Style::default()
                 .fg(tag_color(tag))
                 .add_modifier(Modifier::BOLD),
@@ -323,10 +329,17 @@ pub(crate) fn summary_line(entry: &Entry, has_detail: bool, show_summary: bool) 
         if !prefix.is_empty() {
             spans.push(Span::styled(prefix, summary_style));
         }
-        spans.extend(super::markdown::parse_inline_spans(
-            &entry.event.summary(),
-            summary_style,
-        ));
+        let summary = entry.event.summary();
+        let summary = match &entry.event {
+            AgentEvent::ToolStarted { name, .. } | AgentEvent::ToolCompleted { name, .. } => {
+                summary
+                    .strip_prefix(name)
+                    .unwrap_or(&summary)
+                    .trim_start_matches(": ")
+            }
+            _ => &summary,
+        };
+        spans.extend(super::markdown::parse_inline_spans(summary, summary_style));
     }
     Line::from(spans)
 }
@@ -588,6 +601,8 @@ mod tests {
         assert!(screen.contains('✓'));
         assert!(screen.contains("Bash"));
         assert!(screen.contains("cargo test"));
+        assert!(!screen.contains("tool     "));
+        assert_eq!(screen.matches("Bash").count(), 1);
     }
 
     #[test]
