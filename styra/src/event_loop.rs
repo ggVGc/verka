@@ -135,12 +135,18 @@ pub fn run(
 
         if std::mem::take(&mut app.workspace_requested) {
             let workspaces = client.list_workspaces()?;
-            if workspaces.is_empty() {
-                app.push_log(LogEntry::warn("no Workspaces to open"));
+            let Some(choice) = picker::run_workspace_picker(terminal, &workspaces)? else {
                 continue;
-            }
-            let Some(workspace) = picker::run_workspace_picker(terminal, &workspaces)? else {
-                continue;
+            };
+            let workspace = match choice {
+                picker::WorkspaceChoice::Existing(workspace) => workspace,
+                picker::WorkspaceChoice::CreateCurrentDirectory => {
+                    let host_path = session::resolve_workspace(None)?;
+                    client.create_workspace(&styra_server::api::CreateWorkspace {
+                        host_path,
+                        name: None,
+                    })?
+                }
             };
             let sessions = client.list_sessions(&workspace.id)?;
             if sessions.is_empty() {

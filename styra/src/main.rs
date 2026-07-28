@@ -59,8 +59,6 @@ fn main() -> Result<()> {
     if let Some(CliCommand::Shell { session }) = &cli.command {
         return attach_shell(&client, session);
     }
-    let host_path = session::resolve_workspace(cli.workspace.as_deref())?;
-    let mut active_workspace = session::workspace_for_host(&client, &host_path)?;
     let preferences_path = preferences::default_path()?;
 
     // Bare `--view` (no path) needs an interactive terminal to browse
@@ -94,6 +92,53 @@ fn main() -> Result<()> {
             }
         }
         None => None,
+    };
+
+    // An ordinary interactive launch starts with the durable Workspace list.
+    // Explicit CLI targets retain their direct, non-modal behavior.
+    let mut active_workspace = if cli.workspace.is_none()
+        && cli.view.is_none()
+        && cli.command.is_none()
+    {
+        let workspaces = client.list_workspaces()?;
+        let mut term = match terminal.take() {
+            Some(term) => term,
+            None => terminal::setup()?,
+        };
+        let choice = match picker::run_workspace_picker(&mut term, &workspaces) {
+            Ok(Some(choice)) => choice,
+            Ok(None) => {
+                terminal::restore(&mut term)?;
+                return Ok(());
+            }
+            Err(error) => {
+                terminal::restore(&mut term)?;
+                return Err(error);
+            }
+        };
+        let workspace = match choice {
+            picker::WorkspaceChoice::Existing(workspace) => Ok(workspace),
+            picker::WorkspaceChoice::CreateCurrentDirectory => {
+                session::resolve_workspace(None).and_then(|host_path| {
+                    client.create_workspace(&styra_server::api::CreateWorkspace {
+                        host_path,
+                        name: None,
+                    })
+                })
+            }
+        };
+        let workspace = match workspace {
+            Ok(workspace) => workspace,
+            Err(error) => {
+                terminal::restore(&mut term)?;
+                return Err(error);
+            }
+        };
+        terminal = Some(term);
+        workspace
+    } else {
+        let host_path = session::resolve_workspace(cli.workspace.as_deref())?;
+        session::workspace_for_host(&client, &host_path)?
     };
 
     // Build the application and, unless viewing or awaiting the operator's

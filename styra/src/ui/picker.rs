@@ -54,10 +54,10 @@ pub fn render_workspace_picker(
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
-        .title(" styra · choose a Workspace · Enter open · q cancel ");
+        .title(" styra · choose a Workspace · Enter open · c create in current dir · q cancel ");
     if workspaces.is_empty() {
         let empty = Paragraph::new(Line::from(Span::styled(
-            "  no Workspaces found",
+            "  no Workspaces found · press c to create one in the current directory",
             Style::default().fg(Color::Gray),
         )))
         .block(block);
