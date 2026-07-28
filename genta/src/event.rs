@@ -518,6 +518,9 @@ fn decode_appserver_notification(method: &str, params: &Value) -> AgentEvent {
         "turn/diff/updated" => AgentEvent::DiffUpdated {
             diff: clean_terminal_text(string(params, "diff").unwrap_or_default()),
         },
+        "turn/plan/updated" => AgentEvent::PlanUpdated {
+            text: appserver_plan_text(params),
+        },
         "item/started" => decode_appserver_item(params.get("item").unwrap_or(&Value::Null), false),
         "item/completed" => decode_appserver_item(params.get("item").unwrap_or(&Value::Null), true),
         "error" | "warning" | "guardianWarning" | "configWarning" => AgentEvent::Error {
@@ -589,6 +592,41 @@ fn appserver_usage(params: &Value) -> TokenUsage {
         output_tokens: field("outputTokens"),
         reasoning_output_tokens: field("reasoningOutputTokens"),
     }
+}
+
+/// Render the app-server's structured turn plan into the provider-independent
+/// text representation used by [`AgentEvent::PlanUpdated`]. Keep the status
+/// names explicit: unlike a checkbox, that preserves the distinction between
+/// a pending step and the one currently in progress.
+fn appserver_plan_text(params: &Value) -> String {
+    let mut parts = Vec::new();
+    if let Some(explanation) = string(params, "explanation") {
+        let explanation = clean_terminal_text(explanation);
+        if !explanation.is_empty() {
+            parts.push(explanation);
+        }
+    }
+
+    let steps = params
+        .get("plan")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| {
+            let step = clean_terminal_text(string(entry, "step")?);
+            if step.is_empty() {
+                return None;
+            }
+            let status = clean_terminal_text(string(entry, "status").unwrap_or("pending"));
+            Some(format!("- [{status}] {step}"))
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if !steps.is_empty() {
+        parts.push(steps);
+    }
+
+    parts.join("\n\n")
 }
 
 fn decode_codex_line(line: &str) -> AgentEvent {
@@ -1277,6 +1315,36 @@ mod tests {
         );
         assert_eq!(event.summary(), "src/a.rs");
         assert!(matches!(event.detail()[0], DetailBlock::Code { .. }));
+    }
+
+    #[test]
+    fn appserver_turn_plan_update_preserves_explanation_steps_and_statuses() {
+        let event = decode_line(
+            Protocol::CodexAppServer,
+            r#"{"method":"turn/plan/updated","params":{"turnId":"u","explanation":"Adjusted after inspection.","plan":[{"step":"Read the code","status":"completed"},{"step":"Implement the fix","status":"inProgress"},{"step":"Run tests","status":"pending"}]}}"#,
+        );
+        assert_eq!(
+            event,
+            AgentEvent::PlanUpdated {
+                text: "Adjusted after inspection.\n\n- [completed] Read the code\n- [inProgress] Implement the fix\n- [pending] Run tests".into()
+            }
+        );
+        assert_eq!(event.summary(), "Adjusted after inspection.");
+    }
+
+    #[test]
+    fn appserver_turn_plan_update_without_explanation_uses_first_step_as_summary() {
+        let event = decode_line(
+            Protocol::CodexAppServer,
+            r#"{"method":"turn/plan/updated","params":{"turnId":"u","plan":[{"step":"Inspect\u001b[31m code","status":"inProgress"}]}}"#,
+        );
+        assert_eq!(
+            event,
+            AgentEvent::PlanUpdated {
+                text: "- [inProgress] Inspect code".into()
+            }
+        );
+        assert_eq!(event.summary(), "- [inProgress] Inspect code");
     }
 
     #[test]
