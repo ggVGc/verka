@@ -329,11 +329,15 @@ pub(crate) fn summary_line(
         }
         _ => tag,
     };
-    // A completed tool call (or shell command — Codex's own first-class
-    // equivalent) gets a checkmark/cross prefix so it does not read like the
-    // running row it replaced. Keep a successful checkmark green without
-    // painting the command text itself as a status color.
+    // Shell rows use one color across their whole summary, matching the old
+    // Codex command presentation. Other completed tools get a checkmark/cross
+    // prefix so they do not read like the running row they replaced.
     let (summary_style, prefix, prefix_style) = match &entry.event {
+        _ if tag == "shell" => (
+            Style::default().fg(tag_color(tag)),
+            "",
+            Style::default(),
+        ),
         AgentEvent::ToolCompleted { status, .. } | AgentEvent::CommandCompleted { status, .. }
             if status == "error" =>
         {
@@ -706,7 +710,7 @@ mod tests {
     }
 
     #[test]
-    fn a_completed_tool_shows_a_checkmark_instead_of_just_the_word_completed() {
+    fn a_completed_shell_tool_uses_shell_color_for_the_whole_summary() {
         let mut app = App::new(
             styra_server::agent::Selection::parse("codex").unwrap(),
             "s1",
@@ -724,7 +728,7 @@ mod tests {
             output: "ok".into(),
         });
         let screen = rendered(&app);
-        assert!(screen.contains('✓'));
+        assert!(!screen.contains('✓'));
         assert!(screen.contains("Shell"));
         assert!(screen.contains("cargo test"));
         assert!(!screen.contains("tool     "));
@@ -736,22 +740,22 @@ mod tests {
             true,
             app.selection.provider.protocol(),
         );
-        let check = line
+        let tag = line
             .spans
             .iter()
-            .find(|span| span.content.contains('✓'))
+            .find(|span| span.content.contains("Shell"))
             .unwrap();
         let command = line
             .spans
             .iter()
             .find(|span| span.content.contains("cargo test"))
             .unwrap();
-        assert_eq!(check.style.fg, Some(Color::Green));
-        assert_eq!(command.style.fg, Some(Color::White));
+        assert_eq!(tag.style.fg, Some(tag_color("shell")));
+        assert_eq!(command.style.fg, Some(tag_color("shell")));
     }
 
     #[test]
-    fn a_failed_tool_shows_a_cross_instead_of_a_checkmark() {
+    fn a_failed_shell_tool_stays_shell_colored_without_a_cross() {
         let mut app = App::new(
             styra_server::agent::Selection::parse("codex").unwrap(),
             "s1",
@@ -769,7 +773,7 @@ mod tests {
             output: "boom".into(),
         });
         let screen = rendered(&app);
-        assert!(screen.contains('✗'));
+        assert!(!screen.contains('✗'));
         assert!(!screen.contains('✓'));
     }
 
