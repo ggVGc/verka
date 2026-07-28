@@ -6,22 +6,21 @@
 use super::title_line;
 use crate::app::{App, Focus};
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
-/// Follows `app.show_minor`, same as the event list; since this recomputes
-/// from `app.entries` fresh every frame rather than caching anything,
-/// toggling `m` while the transcript is open re-renders it with no extra
-/// wiring needed.
+/// Follows the event list's minor and conversation-only filters; since this
+/// recomputes from `app.entries` fresh every frame rather than caching
+/// anything, changing a filter re-renders it with no extra wiring needed.
 pub(crate) fn render_transcript_view(frame: &mut Frame, app: &App, area: Rect) {
     let border_style = if app.focus == Focus::List {
         Style::default().fg(Color::Cyan)
     } else {
         Style::default().fg(Color::DarkGray)
     };
-    let block = Block::default()
+    let mut block = Block::default()
         .borders(Borders::ALL)
         .border_style(border_style)
         .title(title_line(
@@ -29,6 +28,14 @@ pub(crate) fn render_transcript_view(frame: &mut Frame, app: &App, area: Rect) {
             &app.status,
             Some("transcript"),
         ));
+    if app.conversation_only {
+        block = block.title_bottom(Line::from(Span::styled(
+            " conversation only ",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )));
+    }
 
     if app.entries.is_empty() {
         let empty = Paragraph::new(Line::from(Span::styled(
@@ -43,7 +50,9 @@ pub(crate) fn render_transcript_view(frame: &mut Frame, app: &App, area: Rect) {
     let events = app
         .entries
         .iter()
-        .map(|entry| entry.event.clone())
+        .enumerate()
+        .filter(|(idx, _)| app.is_visible(*idx))
+        .map(|(_, entry)| entry.event.clone())
         .collect::<Vec<_>>();
     let text = styra_server::render::render_events(&events, false, app.show_minor);
     let lines: Vec<Line<'static>> = text
@@ -125,6 +134,31 @@ mod tests {
         // re-render it on the very next frame, not require reopening the view.
         app.toggle_minor();
         assert!(rendered(&app).contains("t-1"));
+    }
+
+    #[test]
+    fn transcript_view_follows_conversation_only_filter_and_shows_indicator() {
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
+        app.push_event(AgentEvent::UserMessage {
+            text: "keep this prompt".into(),
+        });
+        app.push_event(AgentEvent::Thinking {
+            text: "hide this reasoning".into(),
+        });
+        app.push_event(AgentEvent::AgentMessage {
+            text: "keep this reply".into(),
+        });
+        app.toggle_conversation_only();
+        app.toggle_transcript();
+
+        let screen = rendered(&app);
+        assert!(screen.contains("conversation only"));
+        assert!(screen.contains("keep this prompt"));
+        assert!(screen.contains("keep this reply"));
+        assert!(!screen.contains("hide this reasoning"));
     }
 
     #[test]

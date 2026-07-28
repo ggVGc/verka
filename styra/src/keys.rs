@@ -102,6 +102,7 @@ pub fn handle_list_key(
             _ => {}
         },
         View::Transcript => match key.code {
+            KeyCode::Char('c') => app.toggle_conversation_only(),
             KeyCode::Char('j') | KeyCode::Down => app.transcript_scroll_down(),
             KeyCode::Char('k') | KeyCode::Up => app.transcript_scroll_up(),
             KeyCode::Char('g') => app.transcript_to_top(),

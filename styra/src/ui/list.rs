@@ -41,11 +41,19 @@ pub(crate) fn render_list(frame: &mut Frame, app: &App, area: Rect) {
     } else {
         Style::default().fg(Color::DarkGray)
     };
-    let block = Block::default()
+    let mut block = Block::default()
         .borders(Borders::ALL)
         .border_style(border_style)
         .title(title_line(&app.launch_label(), &app.status, None))
         .title_bottom(Line::from(usage).right_aligned());
+    if app.conversation_only {
+        block = block.title_bottom(Line::from(Span::styled(
+            " conversation only ",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )));
+    }
 
     if app.entries.is_empty() {
         // Before anything is launched, the empty list is the start screen: the

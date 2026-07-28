@@ -226,6 +226,16 @@ mod tests {
     }
 
     #[test]
+    fn event_list_header_indicates_conversation_only_filter() {
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
+        app.toggle_conversation_only();
+        assert!(rendered(&app).contains("conversation only"));
+    }
+
+    #[test]
     fn header_shows_a_dot_indicating_running_vs_idle() {
         let mut app = App::new(
             styra_server::agent::Selection::parse("codex").unwrap(),
