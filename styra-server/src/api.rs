@@ -59,6 +59,12 @@ pub struct SessionInfo {
     /// here; a later attachment starts at zero to receive the full history.
     #[serde(default)]
     pub updates_after: u64,
+    /// Operator messages the interaction has queued but not yet sent, carried
+    /// over from a previous attachment (e.g. one stopped before the interaction
+    /// went idle), so a fresh client hydrates its input queue instead of
+    /// silently dropping it.
+    #[serde(default)]
+    pub queued: Vec<String>,
 }
 
 /// Host-side tmux endpoint for the shell owned by a live session's sandbox.
@@ -114,6 +120,25 @@ pub enum Request {
         id: String,
         message: SendMessage,
     },
+    /// Persist an operator message in the session's durable input queue
+    /// without sending it yet, so it survives the client disconnecting before
+    /// the interaction is idle enough to accept it.
+    QueueMessage {
+        id: String,
+        message: SendMessage,
+    },
+    /// Pop the oldest durably queued message, if any, for the client to send.
+    TakeQueuedMessage {
+        id: String,
+    },
+    /// Read back the session's durably queued, not-yet-sent messages.
+    QueuedMessages {
+        id: String,
+    },
+    /// Discard the session's durably queued messages.
+    ClearQueuedMessages {
+        id: String,
+    },
     StopInteraction {
         id: String,
     },
@@ -149,6 +174,9 @@ pub enum Response {
     SessionCreated(SessionInfo),
     SessionResumed(SessionInfo),
     Accepted,
+    Queued(usize),
+    TakenQueuedMessage(Option<String>),
+    QueuedMessages(Vec<String>),
     Updates(Updates),
     Interactions(Vec<InteractionSummary>),
     StoredSessions(Vec<SessionSummary>),

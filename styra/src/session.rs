@@ -93,6 +93,9 @@ pub fn launch_live_session(
         "journal: {}",
         info.journal_path.display()
     )));
+    for message in &info.queued {
+        app.queue_message(message.clone());
+    }
     Ok((app, info))
 }
 
@@ -111,6 +114,9 @@ pub fn attach_live_interaction(
     let cursor = batch.next;
     for sequenced in batch.updates {
         apply_update(&mut app, sequenced.update);
+    }
+    for message in client.queued_messages(&interaction.id)? {
+        app.queue_message(message);
     }
     Ok((
         app,
@@ -175,6 +181,9 @@ pub fn resume_and_send(
             app.set_workspace_root(info.workspace);
             app.set_driva_options(info.driva);
             app.push_log(LogEntry::info("resumed with provider-native context"));
+            for message in &info.queued {
+                app.queue_message(message.clone());
+            }
             let session_id = info.id;
             app.session_id = session_id.clone();
             app.status = Status::Running;
@@ -201,6 +210,11 @@ pub fn pause_interaction(app: &mut App, client: &Client, live: &mut Live) {
         if let Err(error) = client.stop_interaction(session_id) {
             app.push_log(LogEntry::error(format!("pause failed: {error:#}")));
         } else {
+            if let Err(error) = client.clear_queued_messages(session_id) {
+                app.push_log(LogEntry::error(format!(
+                    "could not clear the durable message queue: {error:#}"
+                )));
+            }
             let cleared = app.clear_queued_messages();
             app.status = Status::Stopped;
             app.push_log(LogEntry::info(if cleared == 0 {

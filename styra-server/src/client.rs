@@ -80,6 +80,46 @@ impl Client {
         }
     }
 
+    /// Durably queue an operator message on the server without sending it,
+    /// so it survives the client disconnecting before the interaction is idle
+    /// enough to accept it. Returns the new queue length.
+    pub fn queue_message(&self, id: &str, text: &str) -> Result<usize> {
+        match self.request(Request::QueueMessage {
+            id: id.to_owned(),
+            message: SendMessage {
+                text: text.to_owned(),
+            },
+        })? {
+            Response::Queued(count) => Ok(count),
+            other => unexpected("queued", other),
+        }
+    }
+
+    /// Pop the oldest durably queued message, if any.
+    pub fn take_queued_message(&self, id: &str) -> Result<Option<String>> {
+        match self.request(Request::TakeQueuedMessage { id: id.to_owned() })? {
+            Response::TakenQueuedMessage(message) => Ok(message),
+            other => unexpected("taken_queued_message", other),
+        }
+    }
+
+    /// Read back the session's durably queued, not-yet-sent messages.
+    pub fn queued_messages(&self, id: &str) -> Result<Vec<String>> {
+        match self.request(Request::QueuedMessages { id: id.to_owned() })? {
+            Response::QueuedMessages(messages) => Ok(messages),
+            other => unexpected("queued_messages", other),
+        }
+    }
+
+    /// Discard the session's durably queued messages. Returns how many were
+    /// cleared.
+    pub fn clear_queued_messages(&self, id: &str) -> Result<usize> {
+        match self.request(Request::ClearQueuedMessages { id: id.to_owned() })? {
+            Response::Queued(count) => Ok(count),
+            other => unexpected("queued", other),
+        }
+    }
+
     pub fn stop_interaction(&self, id: &str) -> Result<()> {
         match self.request(Request::StopInteraction { id: id.to_owned() })? {
             Response::Accepted => Ok(()),

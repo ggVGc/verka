@@ -73,7 +73,14 @@ pub fn run(
             if app.status == Status::Idle {
                 if let Some(message) = app.take_queued_message() {
                     match client.send_message(session_id, &message) {
-                        Ok(()) => app.status = Status::Running,
+                        Ok(()) => {
+                            app.status = Status::Running;
+                            if let Err(error) = client.take_queued_message(session_id) {
+                                app.push_log(LogEntry::error(format!(
+                                    "could not clear sent message from the durable queue: {error:#}"
+                                )));
+                            }
+                        }
                         Err(error) => {
                             app.queue_message(message);
                             app.push_log(LogEntry::error(format!("queued send failed: {error:#}")));

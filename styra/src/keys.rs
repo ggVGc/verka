@@ -136,7 +136,12 @@ pub fn handle_input_key(
         KeyCode::Enter => {
             if let Some(message) = app.take_message() {
                 match live {
-                    Live::Running { .. } if app.status == Status::Running => {
+                    Live::Running { session_id, .. } if app.status == Status::Running => {
+                        if let Err(error) = client.queue_message(session_id, &message) {
+                            app.push_log(LogEntry::error(format!(
+                                "could not persist queued message: {error:#}"
+                            )));
+                        }
                         app.queue_message(message);
                         app.push_log(LogEntry::info(format!(
                             "message queued ({} waiting)",

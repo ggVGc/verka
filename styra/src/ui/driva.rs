@@ -100,6 +100,21 @@ fn mount_line(mount: &Mount) -> Line<'static> {
                 Style::default().fg(Color::White),
             ),
         ]),
+        Mount::Overlay {
+            source,
+            destination,
+        } => Line::from(vec![
+            Span::styled(
+                "  ovl ",
+                Style::default()
+                    .fg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("{} → {}", source.display(), destination.display()),
+                Style::default().fg(Color::White),
+            ),
+        ]),
     }
 }
 

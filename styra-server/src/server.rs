@@ -48,6 +48,11 @@ struct ManagedInteraction {
     workspace: PathBuf,
     driva: DrivaOptions,
     shell: ShellInfo,
+    /// Operator messages not yet sent to the agent, durably mirrored to
+    /// `queue_path` on every mutation so the queue survives the operator
+    /// closing the Styra UI (or the daemon restarting) before it drains.
+    queue: Mutex<std::collections::VecDeque<String>>,
+    queue_path: PathBuf,
 }
 
 impl ManagedInteraction {
@@ -78,6 +83,44 @@ impl ManagedInteraction {
     fn stop(&self) {
         self.accepting_messages.store(false, Ordering::Release);
         self.interaction.stop();
+    }
+
+    fn persist_queue(&self, queue: &std::collections::VecDeque<String>) -> Result<()> {
+        let messages: Vec<String> = queue.iter().cloned().collect();
+        journal::write_queued_messages(&self.queue_path, &messages)
+    }
+
+    fn queue_message(&self, text: &str) -> Result<usize> {
+        let mut queue = self.queue.lock().expect("interaction queue lock poisoned");
+        queue.push_back(text.to_owned());
+        self.persist_queue(&queue)?;
+        Ok(queue.len())
+    }
+
+    fn take_queued_message(&self) -> Result<Option<String>> {
+        let mut queue = self.queue.lock().expect("interaction queue lock poisoned");
+        let next = queue.pop_front();
+        if next.is_some() {
+            self.persist_queue(&queue)?;
+        }
+        Ok(next)
+    }
+
+    fn clear_queue(&self) -> Result<usize> {
+        let mut queue = self.queue.lock().expect("interaction queue lock poisoned");
+        let count = queue.len();
+        queue.clear();
+        self.persist_queue(&queue)?;
+        Ok(count)
+    }
+
+    fn queued_messages(&self) -> Vec<String> {
+        self.queue
+            .lock()
+            .expect("interaction queue lock poisoned")
+            .iter()
+            .cloned()
+            .collect()
     }
 }
 
@@ -177,6 +220,11 @@ impl ServerState {
             workspace: workspace.clone(),
             driva: driva.clone(),
             shell,
+            queue: Mutex::new(std::collections::VecDeque::new()),
+            queue_path: journal_path
+                .parent()
+                .unwrap_or(&self.inner.store_root)
+                .to_path_buf(),
         });
         std::thread::Builder::new()
             .name(format!("styra-updates-{id}"))
@@ -222,6 +270,7 @@ impl ServerState {
             journal_path,
             driva,
             updates_after: 0,
+            queued: Vec::new(),
         })
     }
 
@@ -296,6 +345,10 @@ impl ServerState {
             Interaction::spawn(spec, backend, journal, request.id.clone(), diagnostics)?;
         let updates = Arc::new(Mutex::new(seeded_updates));
         let accepting_messages = Arc::new(AtomicBool::new(true));
+        // A resumed Session may carry over messages that were durably queued
+        // on a previous attachment (one stopped before the interaction went
+        // idle enough to send them), so reload them rather than starting empty.
+        let queued = journal::read_queued_messages(&summary.path)?;
         let managed = Arc::new(ManagedInteraction {
             interaction,
             updates: Arc::clone(&updates),
@@ -305,6 +358,8 @@ impl ServerState {
             workspace: workspace.clone(),
             driva: driva.clone(),
             shell,
+            queue: Mutex::new(queued.into_iter().collect()),
+            queue_path: summary.path.clone(),
         });
         let id = request.id.clone();
         std::thread::Builder::new()
@@ -320,6 +375,7 @@ impl ServerState {
                 }
             })
             .context("starting the resumed interaction update collector")?;
+        let queued = managed.queued_messages();
         self.inner
             .interactions
             .lock()
@@ -334,6 +390,7 @@ impl ServerState {
             journal_path,
             driva,
             updates_after,
+            queued,
         })
     }
 
@@ -441,6 +498,18 @@ impl ServerState {
                 self.interaction(&id)?.send(&message.text)?;
                 Ok(Response::Accepted)
             }
+            Request::QueueMessage { id, message } => Ok(Response::Queued(
+                self.interaction(&id)?.queue_message(&message.text)?,
+            )),
+            Request::TakeQueuedMessage { id } => Ok(Response::TakenQueuedMessage(
+                self.interaction(&id)?.take_queued_message()?,
+            )),
+            Request::QueuedMessages { id } => Ok(Response::QueuedMessages(
+                self.interaction(&id)?.queued_messages(),
+            )),
+            Request::ClearQueuedMessages { id } => Ok(Response::Queued(
+                self.interaction(&id)?.clear_queue()?,
+            )),
             Request::StopInteraction { id } => {
                 self.interaction(&id)?.stop();
                 Ok(Response::Accepted)

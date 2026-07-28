@@ -133,6 +133,27 @@ impl Journal {
 
 const JOURNAL_FILE: &str = "journal.jsonl";
 const SESSION_META_FILE: &str = "session.json";
+const QUEUE_FILE: &str = "queue.json";
+
+/// Read the operator messages a Session's interaction had queued but not yet
+/// sent, so the queue survives a client disconnect (closing the Styra UI) or a
+/// server restart. Absent file means an empty queue, not an error.
+pub fn read_queued_messages(directory: &Path) -> Result<Vec<String>> {
+    let path = directory.join(QUEUE_FILE);
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let text = std::fs::read_to_string(&path)
+        .with_context(|| format!("reading {}", path.display()))?;
+    serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))
+}
+
+/// Persist the current queue of not-yet-sent operator messages for a Session.
+pub fn write_queued_messages(directory: &Path, messages: &[String]) -> Result<()> {
+    let path = directory.join(QUEUE_FILE);
+    let json = serde_json::to_string_pretty(messages).context("serializing the message queue")?;
+    std::fs::write(&path, json).with_context(|| format!("writing {}", path.display()))
+}
 
 fn write_session_meta(directory: &Path, meta: &SessionMeta, workspace_id: &str) -> Result<()> {
     let path = directory.join(SESSION_META_FILE);
