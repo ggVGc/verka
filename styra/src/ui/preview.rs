@@ -3,7 +3,7 @@
 //! is folded in the list.
 
 use super::{detail_lines, summary_line, DETAIL_INDENT};
-use crate::app::App;
+use crate::app::{App, DiffPreviewMode};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -14,10 +14,17 @@ use styra_server::agent::SandboxLayout;
 use styra_server::event::AgentEvent;
 
 pub(crate) fn render_preview(frame: &mut Frame, app: &App, area: Rect) {
+    let title = match selected_diff(app) {
+        Some(_) => match app.diff_preview_mode {
+            DiffPreviewMode::Minimal => " preview · minimal diff · v: raw ",
+            DiffPreviewMode::Raw => " preview · raw diff · v: minimal ",
+        },
+        None => " preview ",
+    };
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::DarkGray))
-        .title(Span::styled(" preview ", Style::default().fg(Color::Gray)));
+        .title(Span::styled(title, Style::default().fg(Color::Gray)));
     let lines = preview_lines(app);
     let scroll = preview_scroll(
         &lines,
@@ -67,11 +74,58 @@ pub(crate) fn preview_lines(app: &App) -> Vec<Line<'static>> {
     };
 
     let mut lines = vec![summary_line(entry, entry.has_detail(), false)];
-    lines.extend(detail_lines(&entry.event, None));
-    if let AgentEvent::FileChanged { paths, .. } = &entry.event {
-        lines.extend(file_content_lines(paths, app.workspace_root.as_deref()));
+    if let Some(diff) = event_diff(&entry.event) {
+        lines.extend(diff_lines(diff, app.diff_preview_mode));
+    } else {
+        lines.extend(detail_lines(&entry.event, None));
+        if let AgentEvent::FileChanged { paths, .. } = &entry.event {
+            lines.extend(file_content_lines(paths, app.workspace_root.as_deref()));
+        }
     }
     lines
+}
+
+fn selected_diff(app: &App) -> Option<&str> {
+    app.selected_entry().and_then(|entry| event_diff(&entry.event))
+}
+
+fn event_diff(event: &AgentEvent) -> Option<&str> {
+    match event {
+        AgentEvent::FileChanged {
+            diff: Some(diff), ..
+        }
+        | AgentEvent::DiffUpdated { diff } => Some(diff),
+        _ => None,
+    }
+}
+
+fn diff_lines(diff: &str, mode: DiffPreviewMode) -> Vec<Line<'static>> {
+    diff.lines()
+        .filter(|line| {
+            mode == DiffPreviewMode::Raw
+                || line.starts_with("diff --git ")
+                || line.starts_with("--- ")
+                || line.starts_with("+++ ")
+                || line.starts_with("@@")
+                || (line.starts_with('+') && !line.starts_with("+++"))
+                || (line.starts_with('-') && !line.starts_with("---"))
+        })
+        .map(|line| {
+            let color = if line.starts_with('+') && !line.starts_with("+++") {
+                Color::Green
+            } else if line.starts_with('-') && !line.starts_with("---") {
+                Color::Red
+            } else if line.starts_with("@@") {
+                Color::Cyan
+            } else {
+                Color::Gray
+            };
+            Line::from(Span::styled(
+                format!("{DETAIL_INDENT}{line}"),
+                Style::default().fg(color),
+            ))
+        })
+        .collect()
 }
 
 /// Read back the current content of files a `FileChanged` event touched, so
@@ -205,6 +259,38 @@ mod tests {
         let shown = rendered(&app);
         assert!(shown.contains("preview"));
         assert!(shown.contains("24 passed"));
+    }
+
+    #[test]
+    fn file_diff_preview_toggles_between_minimal_and_raw_output() {
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
+        app.push_event(AgentEvent::FileChanged {
+            id: "f1".into(),
+            paths: vec!["src/lib.rs".into()],
+            diff: Some(
+                "diff --git a/src/lib.rs b/src/lib.rs\nindex 123..456 100644\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,3 @@\n context\n-old\n+new"
+                    .into(),
+            ),
+            checkpoint: None,
+            checkpoint_error: None,
+        });
+        app.toggle_preview();
+
+        let minimal = rendered(&app);
+        assert!(minimal.contains("minimal diff"));
+        assert!(minimal.contains("-old"));
+        assert!(minimal.contains("+new"));
+        assert!(!minimal.contains("index 123"));
+        assert!(!minimal.contains(" context"));
+
+        app.toggle_diff_preview_mode();
+        let raw = rendered(&app);
+        assert!(raw.contains("raw diff"));
+        assert!(raw.contains("index 123"));
+        assert!(raw.contains(" context"));
     }
 
     #[test]

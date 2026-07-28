@@ -34,6 +34,15 @@ pub enum View {
     Preview,
 }
 
+/// How a file diff is presented in the entry preview.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DiffPreviewMode {
+    /// File headers, hunk headers, and changed lines only.
+    Minimal,
+    /// The provider's complete diff output, byte-for-byte by line.
+    Raw,
+}
+
 /// The session's lifecycle as the operator sees it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Status {
@@ -352,6 +361,7 @@ pub struct App {
     /// Rendering clamps this to the last page because wrapping depends on the
     /// terminal width.
     pub preview_scroll: u16,
+    pub diff_preview_mode: DiffPreviewMode,
     /// What the next session launches with: agent, model, reasoning effort.
     /// This is the operator's standing choice, edited through [`Launcher`] while
     /// nothing is running. The terminal client persists a confirmed choice.
@@ -423,6 +433,7 @@ impl App {
             show_minor: false,
             show_preview: false,
             preview_scroll: 0,
+            diff_preview_mode: DiffPreviewMode::Minimal,
             selection,
             launcher: None,
             reported_model: None,
@@ -912,6 +923,14 @@ impl App {
 
     pub fn preview_page_up(&mut self) {
         self.preview_scroll = self.preview_scroll.saturating_sub(10);
+    }
+
+    pub fn toggle_diff_preview_mode(&mut self) {
+        self.diff_preview_mode = match self.diff_preview_mode {
+            DiffPreviewMode::Minimal => DiffPreviewMode::Raw,
+            DiffPreviewMode::Raw => DiffPreviewMode::Minimal,
+        };
+        self.preview_scroll = 0;
     }
 
     /// Record the host directory backing the agent's workspace, so the
