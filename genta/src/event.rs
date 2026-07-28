@@ -274,16 +274,6 @@ impl AgentEvent {
         truncate_line(&line, 200)
     }
 
-    /// A collapsed-line summary under the requested presentation mode.
-    pub fn presented_summary(&self, protocol: Protocol, mode: PresentationMode) -> String {
-        if mode == PresentationMode::Pretty {
-            if let Some(command) = pretty_bash_command(protocol, self) {
-                return truncate_line(&command, 200);
-            }
-        }
-        self.summary()
-    }
-
     /// The expandable detail body as escape-free structured blocks.
     pub fn detail(&self) -> Vec<DetailBlock> {
         match self {
@@ -394,25 +384,10 @@ impl AgentEvent {
         }
     }
 
-    /// Structured detail under the requested presentation mode.
-    pub fn presented_detail(&self, protocol: Protocol, mode: PresentationMode) -> Vec<DetailBlock> {
+    /// Provider-independent presentation shared by all provider presenters.
+    pub(crate) fn presented_detail_default(&self, mode: PresentationMode) -> Vec<DetailBlock> {
         if mode == PresentationMode::Raw {
             return self.detail();
-        }
-        if let Some(command) = pretty_bash_command(protocol, self) {
-            let mut blocks = vec![DetailBlock::Code {
-                language: Some("bash".into()),
-                text: command,
-            }];
-            if let AgentEvent::ToolCompleted { output, .. } = self {
-                if !output.is_empty() {
-                    blocks.push(DetailBlock::Code {
-                        language: None,
-                        text: output.clone(),
-                    });
-                }
-            }
-            return blocks;
         }
         match self {
             AgentEvent::FileChanged { paths, diff, .. } => {
@@ -437,23 +412,8 @@ impl AgentEvent {
     }
 }
 
-fn pretty_bash_command(protocol: Protocol, event: &AgentEvent) -> Option<String> {
-    if protocol != Protocol::ClaudeJsonl {
-        return None;
-    }
-    let (name, detail) = match event {
-        AgentEvent::ToolStarted { name, detail, .. }
-        | AgentEvent::ToolCompleted { name, detail, .. } => (name, detail),
-        _ => return None,
-    };
-    if name != "Bash" {
-        return None;
-    }
-    serde_json::from_str::<Value>(detail)
-        .ok()?
-        .get("command")?
-        .as_str()
-        .map(str::to_owned)
+pub(crate) fn truncate_summary(line: &str) -> String {
+    truncate_line(line, 200)
 }
 
 fn minimal_diff(diff: &str) -> String {
@@ -1607,18 +1567,18 @@ mod tests {
             detail: r#"{"command":"cargo test --all","description":"run tests"}"#.into(),
         };
         assert_eq!(
-            event.presented_summary(Protocol::ClaudeJsonl, PresentationMode::Pretty),
+            Protocol::ClaudeJsonl.presented_summary(&event, PresentationMode::Pretty),
             "cargo test --all"
         );
         assert_eq!(
-            event.presented_detail(Protocol::ClaudeJsonl, PresentationMode::Pretty),
+            Protocol::ClaudeJsonl.presented_detail(&event, PresentationMode::Pretty),
             vec![DetailBlock::Code {
                 language: Some("bash".into()),
                 text: "cargo test --all".into(),
             }]
         );
-        assert!(event
-            .presented_detail(Protocol::ClaudeJsonl, PresentationMode::Raw)
+        assert!(Protocol::ClaudeJsonl
+            .presented_detail(&event, PresentationMode::Raw)
             .iter()
             .any(|block| matches!(block, DetailBlock::Text(text) if text.contains("description"))));
     }
@@ -1629,7 +1589,7 @@ mod tests {
             diff: "diff --git a/a b/a\n@@ -1 +1 @@\n-old\n+new".into(),
         };
         assert_eq!(
-            event.presented_detail(Protocol::CodexAppServer, PresentationMode::Pretty),
+            Protocol::CodexAppServer.presented_detail(&event, PresentationMode::Pretty),
             vec![DetailBlock::Code {
                 language: Some("diff".into()),
                 text: "-old\n+new".into(),

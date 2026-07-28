@@ -78,7 +78,7 @@ pub(crate) fn preview_lines(app: &App) -> Vec<Line<'static>> {
 
     let protocol = app.selection.provider.protocol();
     let mut lines = vec![summary_line(entry, entry.has_detail(), false, protocol)];
-    for block in entry.event.presented_detail(protocol, app.preview_mode) {
+    for block in protocol.presented_detail(&entry.event, app.preview_mode) {
         lines.extend(presented_block_lines(
             block,
             message_text_color(entry.event.tag()),
@@ -423,6 +423,38 @@ mod tests {
             .map(|span| span.content.as_ref())
             .collect::<String>();
         assert!(raw.contains("description"));
+    }
+
+    #[test]
+    fn codex_bash_toggles_between_highlighted_command_and_wrapper() {
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
+        app.push_event(AgentEvent::CommandStarted {
+            command: "/usr/bin/bash -lc 'cargo test --all'".into(),
+        });
+
+        let pretty = preview_lines(&app);
+        let pretty_text = pretty
+            .iter()
+            .flat_map(|line| &line.spans)
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        assert!(pretty_text.contains("cargo test --all"));
+        assert!(!pretty_text.contains("/usr/bin/bash"));
+        assert!(pretty
+            .iter()
+            .flat_map(|line| &line.spans)
+            .any(|span| span.style.fg == Some(Color::Cyan)));
+
+        app.toggle_preview_mode();
+        let raw = preview_lines(&app)
+            .iter()
+            .flat_map(|line| &line.spans)
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        assert!(raw.contains("/usr/bin/bash -lc"));
     }
 
     #[test]

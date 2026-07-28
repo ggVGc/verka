@@ -224,8 +224,8 @@ fn interaction_preview_line(
                 Span::styled(
                     protocol
                         .map(|protocol| {
-                            event.presented_summary(
-                                protocol,
+                            protocol.presented_summary(
+                                event,
                                 styra_server::event::PresentationMode::Pretty,
                             )
                         })

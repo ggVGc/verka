@@ -367,11 +367,8 @@ pub(crate) fn summary_line(
         if !prefix.is_empty() {
             spans.push(Span::styled(prefix, prefix_style));
         }
-        let summary = file_action_summary(&entry.event).unwrap_or_else(|| {
-            entry
-                .event
-                .presented_summary(protocol, PresentationMode::Pretty)
-        });
+        let summary = file_action_summary(&entry.event)
+            .unwrap_or_else(|| protocol.presented_summary(&entry.event, PresentationMode::Pretty));
         let summary = match &entry.event {
             AgentEvent::ToolStarted { name, .. } | AgentEvent::ToolCompleted { name, .. } => {
                 summary
