@@ -978,7 +978,9 @@ fn truncate_line(line: &str, max: usize) -> String {
 }
 
 /// Strip ANSI escape sequences and stray control characters, keeping newlines
-/// and tabs. Provider text is presentation data, not a terminal to replay.
+/// and expanding tabs. Provider text is presentation data, not a terminal to
+/// replay, and a literal tab would move the physical terminal cursor without
+/// Ratatui's virtual buffer accounting for it.
 pub fn clean_terminal_text(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut chars = text.chars().peekable();
@@ -1013,7 +1015,8 @@ pub fn clean_terminal_text(text: &str) -> String {
                 }
                 None => {}
             },
-            '\n' | '\t' => out.push(ch),
+            '\n' => out.push(ch),
+            '\t' => out.push_str("    "),
             '\r' => {}
             c if c.is_control() => {}
             c => out.push(c),
@@ -1247,6 +1250,23 @@ mod tests {
                 text: "red done".into()
             }
         );
+    }
+
+    #[test]
+    fn terminal_tabs_are_expanded_before_rendering() {
+        let event = decode_line(
+            Protocol::CodexAppServer,
+            r#"{"method":"turn/diff/updated","params":{"diff":"@@\n-\told\n+\tnew"}}"#,
+        );
+        assert_eq!(
+            event,
+            AgentEvent::DiffUpdated {
+                diff: "@@\n-    old\n+    new".into()
+            }
+        );
+        assert!(!event.detail().iter().any(|block| match block {
+            DetailBlock::Text(text) | DetailBlock::Code { text, .. } => text.contains('\t'),
+        }));
     }
 
     #[test]
