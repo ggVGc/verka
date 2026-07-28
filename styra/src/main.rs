@@ -16,16 +16,14 @@ mod app;
 mod cli;
 mod picker;
 mod preferences;
+mod session;
 mod terminal;
 mod ui;
 
 use app::{App, Focus, Status, View};
 use cli::{Cli, CliCommand};
-use styra_server::agent::Selection;
-use styra_server::api::{CreateSession, CreateWorkspace, ResumeSession, SessionInfo};
-use styra_server::{
-    Client, InteractionSummary, InteractionUpdate, LogEntry, SessionSummary, WorkspaceSummary,
-};
+use session::Live;
+use styra_server::{Client, InteractionSummary, LogEntry, WorkspaceSummary};
 
 fn main() -> Result<()> {
     if let Some(result) = styra_server::broker::exit_if_requested() {
@@ -60,8 +58,8 @@ fn main() -> Result<()> {
     if let Some(CliCommand::Shell { session }) = &cli.command {
         return attach_shell(&client, session);
     }
-    let host_path = resolve_workspace(cli.workspace.as_deref())?;
-    let mut active_workspace = workspace_for_host(&client, &host_path)?;
+    let host_path = session::resolve_workspace(cli.workspace.as_deref())?;
+    let mut active_workspace = session::workspace_for_host(&client, &host_path)?;
     let preferences_path = preferences::default_path()?;
 
     // Bare `--view` (no path) needs an interactive terminal to browse
@@ -73,7 +71,7 @@ fn main() -> Result<()> {
     let view_target: Option<PathBuf> = match &cli.view {
         Some(Some(path)) => Some(path.clone()),
         Some(None) => {
-            let sessions = all_sessions(&client)?;
+            let sessions = session::all_sessions(&client)?;
             if sessions.is_empty() {
                 println!("No sessions found by the Styra server");
                 return Ok(());
@@ -104,7 +102,7 @@ fn main() -> Result<()> {
     let mut live: Live;
 
     if let Some(view) = &view_target {
-        let id = session_id_from_target(view)?;
+        let id = session::session_id_from_target(view)?;
         let stored = client.stored_session(&id)?;
         app = App::new(stored.summary.selection, stored.summary.id);
         app.workspace_id = Some(stored.summary.workspace_id);
@@ -136,7 +134,7 @@ fn main() -> Result<()> {
             // A trailing prompt is input the operator already gave (as a CLI
             // argument), so it is fine to launch immediately.
             Some(seed) => {
-                let (new_app, info) = launch_live_session(
+                let (new_app, info) = session::launch_live_session(
                     &client,
                     &cli,
                     &active_workspace.id,
@@ -192,7 +190,7 @@ fn main() -> Result<()> {
             } => {
                 active_workspace = workspace;
                 match session_id {
-                    Some(session_id) => match open_session(&client, &session_id) {
+                    Some(session_id) => match session::open_session(&client, &session_id) {
                         Ok((new_app, new_live)) => {
                             app = new_app;
                             live = new_live;
@@ -213,7 +211,7 @@ fn main() -> Result<()> {
             // the server (interactions outlive a client); we just stop viewing it.
             RunOutcome::Attach(interaction) => {
                 let id = interaction.id.clone();
-                match attach_live_interaction(&client, interaction) {
+                match session::attach_live_interaction(&client, interaction) {
                     Ok((new_app, new_live)) => {
                         app = new_app;
                         live = new_live;
@@ -258,9 +256,7 @@ fn attach_shell(client: &Client, session: &str) -> Result<()> {
     })
 }
 
-/// `--daemon`: bring up the background daemon and return. Reuses the ordinary
-/// connect-or-spawn path, so it is idempotent — if one is already listening,
-/// it is left as-is rather than started twice.
+/// `--daemon`: bring up the background daemon and return.
 fn start_daemon(socket: &Path) -> Result<()> {
     if Client::new(socket).health().is_ok() {
         println!("styra daemon already running on {}", socket.display());
@@ -272,8 +268,7 @@ fn start_daemon(socket: &Path) -> Result<()> {
     Ok(())
 }
 
-/// `--stop`: ask the daemon on `socket` to shut down. Reports plainly when
-/// none is listening rather than treating it as an error.
+/// `--stop`: ask the daemon on `socket` to shut down.
 fn stop_daemon(socket: &Path) -> Result<()> {
     let client = Client::new(socket);
     if client.health().is_err() {
@@ -285,130 +280,6 @@ fn stop_daemon(socket: &Path) -> Result<()> {
         .with_context(|| format!("stopping the Styra daemon on {}", socket.display()))?;
     println!("stopped styra daemon on {}", socket.display());
     Ok(())
-}
-
-/// Ask the server for a session with the provider, model, and effort selected
-/// by the operator. The launch profile is resolved internally by the server.
-fn workspace_for_host(client: &Client, host_path: &Path) -> Result<WorkspaceSummary> {
-    let canonical = host_path.canonicalize()?;
-    if let Some(workspace) = client
-        .list_workspaces()?
-        .into_iter()
-        .find(|workspace| workspace.host_path == canonical)
-    {
-        return Ok(workspace);
-    }
-    client.create_workspace(&CreateWorkspace {
-        host_path: canonical,
-        name: None,
-    })
-}
-
-fn all_sessions(client: &Client) -> Result<Vec<SessionSummary>> {
-    let mut sessions = Vec::new();
-    for workspace in client.list_workspaces()? {
-        sessions.extend(client.list_sessions(&workspace.id)?);
-    }
-    sessions.sort_by(|a, b| b.created_at_ms.cmp(&a.created_at_ms));
-    Ok(sessions)
-}
-
-fn create_session(
-    client: &Client,
-    cli: &Cli,
-    workspace_id: &str,
-    selection: &Selection,
-    seed: Option<&str>,
-) -> Result<SessionInfo> {
-    client.create_session(&CreateSession {
-        workspace_id: workspace_id.to_owned(),
-        selection: selection.clone(),
-        network: cli.network,
-        templates: cli.template.clone(),
-        message: seed.map(str::to_owned),
-    })
-}
-
-/// Spawn a session and wrap it in a fresh `App`. Used for the CLI's trailing
-/// prompt on first launch, the only case where the agent starts before the
-/// event loop takes over.
-fn launch_live_session(
-    client: &Client,
-    cli: &Cli,
-    workspace_id: &str,
-    selection: &Selection,
-    seed: Option<&str>,
-) -> Result<(App, SessionInfo)> {
-    let info = create_session(client, cli, workspace_id, selection, seed)?;
-    let mut app = App::new(info.selection.clone(), info.id.clone());
-    app.workspace_id = Some(info.workspace_id.clone());
-    app.set_workspace_root(info.workspace.clone());
-    app.set_driva_options(info.driva.clone());
-    app.push_log(LogEntry::info(format!(
-        "journal: {}",
-        info.journal_path.display()
-    )));
-    Ok((app, info))
-}
-
-/// Attach to a live interaction: rebuild an `App` from its summary and replay the
-/// updates the server has accumulated for it, so the view matches what the interaction
-/// has done so far and the event loop can continue polling from the cursor.
-fn attach_live_interaction(
-    client: &Client,
-    interaction: InteractionSummary,
-) -> Result<(App, Live)> {
-    let mut app = App::new(interaction.selection.clone(), interaction.id.clone());
-    app.workspace_id = Some(interaction.workspace_id.clone());
-    app.set_workspace_root(interaction.workspace.clone());
-    app.set_driva_options(interaction.driva.clone());
-    let batch = client.updates(&interaction.id, 0)?;
-    let cursor = batch.next;
-    for sequenced in batch.updates {
-        apply_update(&mut app, sequenced.update);
-    }
-    Ok((
-        app,
-        Live::Running {
-            session_id: interaction.id,
-            cursor,
-        },
-    ))
-}
-
-fn open_session(client: &Client, session_id: &str) -> Result<(App, Live)> {
-    if let Some(interaction) = client
-        .list_interactions()?
-        .into_iter()
-        .find(|interaction| interaction.id == session_id)
-    {
-        return attach_live_interaction(client, interaction);
-    }
-    let stored = client.stored_session(session_id)?;
-    let mut app = App::new(stored.summary.selection, stored.summary.id);
-    app.workspace_id = Some(stored.summary.workspace_id);
-    // See the matching loop in `main`'s `--view` handling for why raw and
-    // event are pushed together, index for index, rather than as two
-    // separate passes.
-    for (event, line) in stored.events.into_iter().zip(stored.raw) {
-        app.push_raw(line);
-        if !matches!(event, styra_server::event::AgentEvent::Unknown { .. }) {
-            app.push_event(event);
-        }
-    }
-    app.on_ended(styra_server::InteractionEnd {
-        exit_code: None,
-        error: None,
-    });
-    Ok((app, Live::Viewing))
-}
-
-fn session_id_from_target(target: &Path) -> Result<String> {
-    target
-        .file_name()
-        .and_then(|name| name.to_str())
-        .map(str::to_owned)
-        .with_context(|| format!("invalid session target {}", target.display()))
 }
 
 
@@ -427,22 +298,6 @@ enum RunOutcome {
     /// The operator stopped the current interaction and asked to return to the blank
     /// start screen.
     Reset,
-}
-
-/// The live-agent side of the interactive loop: no process yet (awaiting the
-/// operator's first message), a spawned agent, or a replayed journal with no
-/// live agent to send to.
-enum Live {
-    /// Nothing has been launched; the event loop spawns the session itself
-    /// the moment the operator submits a message from `Focus::Input`.
-    Pending,
-    /// A server-owned agent process, addressed by id. `cursor` makes polling
-    /// incremental and preserves the server's update order.
-    Running { session_id: String, cursor: u64 },
-    /// A replayed journal (`--view`, a reopened Session, or one this client
-    /// lost its connection to); no live agent is attached. Sending a message
-    /// resumes it through the provider's native mechanism.
-    Viewing,
 }
 
 /// Return the running interaction an in-client transition explicitly stops.
@@ -478,7 +333,7 @@ fn run(
                 Ok(batch) => {
                     *cursor = batch.next;
                     for sequenced in batch.updates {
-                        apply_update(app, sequenced.update);
+                        session::apply_update(app, sequenced.update);
                     }
                 }
                 Err(error) => {
@@ -583,17 +438,6 @@ fn run(
     }
 }
 
-/// Apply one session update to the app. Shared by the live event loop and by
-/// [`attach_live_interaction`], which replays an interaction's accumulated updates the same way.
-fn apply_update(app: &mut App, update: InteractionUpdate) {
-    match update {
-        InteractionUpdate::Event(event) => app.push_event(event),
-        InteractionUpdate::Raw(line) => app.push_raw(line),
-        InteractionUpdate::Log(entry) => app.push_log(entry),
-        InteractionUpdate::Ended(end) => app.on_ended(end),
-    }
-}
-
 /// Keys for the launch picker: `j`/`k` within a column, `Tab`/`h`/`l` between
 /// them, `Enter` to save and apply the standing default (it never launches —
 /// the operator's first message still does that), `Esc`/`q` to leave it as it
@@ -641,7 +485,7 @@ fn handle_list_key(
     // focus would leave keystrokes going nowhere visible.
     match key.code {
         KeyCode::Char('q') => return app.request_quit(),
-        KeyCode::Char('s') => return pause_interaction(app, client, live),
+        KeyCode::Char('s') => return session::pause_interaction(app, client, live),
         KeyCode::Char('i') if app.view != View::Preview => return app.enter_input(),
         KeyCode::Char('r') => return app.toggle_raw(),
         KeyCode::Char('l') => return app.toggle_log(),
@@ -748,7 +592,7 @@ fn handle_input_key(
                     // through its provider's native mechanism, then deliver
                     // the message to the revived agent.
                     Live::Running { .. } | Live::Viewing => {
-                        resume_and_send(app, client, cli, live, message)
+                        session::resume_and_send(app, client, cli, live, message)
                     }
                     // The operator's first message: this is what actually
                     // starts the agent. Nothing was launched or sent before
@@ -756,7 +600,7 @@ fn handle_input_key(
                     // The launch picker's standing choice is what starts here.
                     Live::Pending => {
                         let selection = app.selection.clone();
-                        match create_session(client, cli, workspace_id, &selection, Some(&message))
+                        match session::create_session(client, cli, workspace_id, &selection, Some(&message))
                         {
                             Ok(info) => {
                                 app.selection = info.selection;
@@ -801,83 +645,12 @@ fn handle_input_key(
     }
 }
 
-/// Resume `app.session_id` through its provider's native mechanism, then
-/// deliver `message` to the freshly revived agent. Used when the operator
-/// sends a new message to a Session that is stopped, ended, or only being
-/// viewed (no live agent attached).
-fn resume_and_send(app: &mut App, client: &Client, cli: &Cli, live: &mut Live, message: String) {
-    if app.session_id.is_empty() {
-        app.push_log(LogEntry::warn("not sent: no Session to resume"));
-        return;
-    }
-    match client.resume_session(&ResumeSession {
-        id: app.session_id.clone(),
-        network: cli.network,
-        templates: cli.template.clone(),
-    }) {
-        Ok(info) => {
-            app.set_workspace_root(info.workspace);
-            app.set_driva_options(info.driva);
-            app.push_log(LogEntry::info("resumed with provider-native context"));
-            let session_id = info.id;
-            app.session_id = session_id.clone();
-            app.status = Status::Running;
-            *live = Live::Running {
-                session_id: session_id.clone(),
-                cursor: info.updates_after,
-            };
-            if let Err(error) = client.send_message(&session_id, &message) {
-                app.push_log(LogEntry::error(format!("send failed: {error:#}")));
-            }
-        }
-        Err(error) => {
-            app.push_log(LogEntry::error(format!(
-                "could not resume Session {}: {error:#}",
-                app.session_id
-            )));
-            // Don't lose what they typed; let them retry.
-            app.set_input(message);
-        }
-    }
-}
-
-fn pause_interaction(app: &mut App, client: &Client, live: &mut Live) {
-    // `c` in the main interaction is an interrupt, like the agent clients'
-    // own escape key. Close this agent's input stream but keep the TUI ready
-    // to launch a fresh interaction on the next message.
-    if let Live::Running { session_id, .. } = live {
-        if let Err(error) = client.stop_interaction(session_id) {
-            app.push_log(LogEntry::error(format!("pause failed: {error:#}")));
-        } else {
-            let cleared = app.clear_queued_messages();
-            app.status = Status::Stopped;
-            app.push_log(LogEntry::info(if cleared == 0 {
-                "interaction paused; send a new message to start again".into()
-            } else {
-                format!(
-                    "interaction paused; cleared {cleared} queued message(s); send a new message to start again"
-                )
-            }));
-            *live = Live::Pending;
-        }
-    } else {
-        app.enter_list();
-    }
-}
-
-fn resolve_workspace(workspace: Option<&std::path::Path>) -> Result<PathBuf> {
-    let raw = match workspace {
-        Some(path) => path.to_path_buf(),
-        None => std::env::current_dir().context("determining the current directory")?,
-    };
-    raw.canonicalize()
-        .with_context(|| format!("workspace directory {} must exist", raw.display()))
-}
 
 
 #[cfg(test)]
 mod cli_tests {
     use super::*;
+    use styra_server::agent::Selection;
 
     #[test]
     fn shell_subcommand_requires_and_captures_a_session() {
