@@ -10,7 +10,6 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
-use styra_server::event::AgentEvent;
 
 /// Follows `app.show_minor`, same as the event list; since this recomputes
 /// from `app.entries` fresh every frame rather than caching anything,
@@ -28,11 +27,7 @@ pub(crate) fn render_transcript_view(frame: &mut Frame, app: &App, area: Rect) {
         .title(title_line(
             &app.launch_label(),
             &app.status,
-            Some(if app.transcript_conversation_only {
-                "transcript · conversation only"
-            } else {
-                "transcript"
-            }),
+            Some("transcript"),
         ));
 
     if app.entries.is_empty() {
@@ -45,27 +40,11 @@ pub(crate) fn render_transcript_view(frame: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    let events: Vec<AgentEvent> = app
+    let events = app
         .entries
         .iter()
-        .filter(|entry| {
-            !app.transcript_conversation_only
-                || matches!(
-                    entry.event,
-                    AgentEvent::UserMessage { .. } | AgentEvent::AgentMessage { .. }
-                )
-        })
         .map(|entry| entry.event.clone())
-        .collect();
-    if events.is_empty() {
-        let empty = Paragraph::new(Line::from(Span::styled(
-            "  no conversational lines yet",
-            Style::default().fg(Color::Gray),
-        )))
-        .block(block);
-        frame.render_widget(empty, area);
-        return;
-    }
+        .collect::<Vec<_>>();
     let text = styra_server::render::render_events(&events, false, app.show_minor);
     let lines: Vec<Line<'static>> = text
         .lines()
@@ -89,6 +68,7 @@ mod tests {
     use super::*;
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
+    use styra_server::event::AgentEvent;
 
     fn rendered(app: &App) -> String {
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
@@ -155,46 +135,5 @@ mod tests {
         );
         app.toggle_transcript();
         assert!(rendered(&app).contains("nothing to render yet"));
-    }
-
-    #[test]
-    fn conversation_only_hides_non_message_events() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
-        app.push_event(AgentEvent::ThreadStarted {
-            thread_id: "hidden-thread".into(),
-            model: None,
-            effort: None,
-        });
-        app.push_event(AgentEvent::UserMessage {
-            text: "human line".into(),
-        });
-        app.push_event(AgentEvent::AgentMessage {
-            text: "agent line".into(),
-        });
-        app.toggle_transcript();
-        app.toggle_minor();
-        assert!(rendered(&app).contains("hidden-thread"));
-
-        app.toggle_transcript_conversation_only();
-        let screen = rendered(&app);
-        assert!(screen.contains("conversation only"));
-        assert!(screen.contains("human line"));
-        assert!(screen.contains("agent line"));
-        assert!(!screen.contains("hidden-thread"));
-    }
-
-    #[test]
-    fn conversation_only_has_a_specific_empty_state() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
-        app.push_event(AgentEvent::TurnStarted);
-        app.toggle_transcript();
-        app.toggle_transcript_conversation_only();
-        assert!(rendered(&app).contains("no conversational lines yet"));
     }
 }

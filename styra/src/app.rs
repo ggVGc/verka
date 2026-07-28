@@ -348,6 +348,9 @@ pub struct App {
     /// When false, minor lifecycle events (thread/turn/usage) are hidden from
     /// the list and skipped by navigation.
     pub show_minor: bool,
+    /// When true, the event list contains only messages exchanged between
+    /// the operator and the agent.
+    pub conversation_only: bool,
     /// When true, a side panel shows the full expanded content of the
     /// selected entry, independent of whether it is folded in the list.
     pub show_preview: bool,
@@ -403,10 +406,6 @@ pub struct App {
     /// shows its start. Unlike the raw/log views, the transcript reads as a
     /// document from the beginning rather than anchoring to the tail.
     pub transcript_scroll: u16,
-    /// When true, the transcript contains only messages exchanged between
-    /// the operator and the agent, omitting tools, thinking, plans, and
-    /// lifecycle events.
-    pub transcript_conversation_only: bool,
     /// Set when the operator asks to quit; the event loop observes it.
     pub should_quit: bool,
     /// Set when the operator asks to choose a Workspace.
@@ -436,6 +435,7 @@ impl App {
             follow: true,
             list_offset: Cell::new(0),
             show_minor: false,
+            conversation_only: false,
             show_preview: false,
             preview_scroll: 0,
             preview_scroll_limit: Cell::new(0),
@@ -456,7 +456,6 @@ impl App {
             log: Vec::new(),
             log_scroll_back: 0,
             transcript_scroll: 0,
-            transcript_conversation_only: false,
             should_quit: false,
             workspace_requested: false,
             interactions_requested: false,
@@ -630,21 +629,6 @@ impl App {
         } else {
             View::Transcript
         };
-    }
-
-    /// Open the transcript in conversation-only mode. This is idempotent so
-    /// the global `c` shortcut always means "show conversation".
-    pub fn show_transcript_conversation_only(&mut self) {
-        self.view = View::Transcript;
-        self.transcript_conversation_only = true;
-        self.transcript_scroll = 0;
-    }
-
-    /// Toggle between the full rendered transcript and just the human/agent
-    /// conversation. Start at the top because filtering changes line offsets.
-    pub fn toggle_transcript_conversation_only(&mut self) {
-        self.transcript_conversation_only = !self.transcript_conversation_only;
-        self.transcript_scroll = 0;
     }
 
     /// Toggle the Driva policy view on, or back to the event list.
@@ -887,7 +871,7 @@ impl App {
             _ => {}
         }
         let transfer_expansion = self.follow
-            && (self.show_minor || !event.is_minor())
+            && self.event_is_visible(&event)
             && self
                 .entries
                 .get(self.selected)
@@ -919,9 +903,18 @@ impl App {
 
     // --- List navigation ----------------------------------------------------
 
-    /// Whether an entry is shown in the list under the current minor filter.
+    fn event_is_visible(&self, event: &AgentEvent) -> bool {
+        (self.show_minor || !event.is_minor())
+            && (!self.conversation_only
+                || matches!(
+                    event,
+                    AgentEvent::UserMessage { .. } | AgentEvent::AgentMessage { .. }
+                ))
+    }
+
+    /// Whether an entry is shown in the list under the current filters.
     pub fn is_visible(&self, idx: usize) -> bool {
-        self.show_minor || !self.entries[idx].event.is_minor()
+        self.event_is_visible(&self.entries[idx].event)
     }
 
     /// Whether an entry is one `j`/`k` should land on: visible, and carrying
@@ -997,6 +990,16 @@ impl App {
     /// Toggle whether minor lifecycle events (thread/turn/usage) are shown.
     pub fn toggle_minor(&mut self) {
         self.show_minor = !self.show_minor;
+        self.reconcile_filtered_selection();
+    }
+
+    /// Toggle whether the main event list shows only operator/agent messages.
+    pub fn toggle_conversation_only(&mut self) {
+        self.conversation_only = !self.conversation_only;
+        self.reconcile_filtered_selection();
+    }
+
+    fn reconcile_filtered_selection(&mut self) {
         if !self.entries.is_empty() && !self.is_visible(self.selected) {
             if let Some(idx) = self
                 .prev_visible(self.selected)
@@ -2021,26 +2024,25 @@ mod tests {
     }
 
     #[test]
-    fn conversational_transcript_toggle_resets_scroll() {
+    fn conversation_only_filters_the_event_list_without_changing_views() {
         let mut app = app();
-        app.transcript_scroll = 12;
-        app.toggle_transcript_conversation_only();
-        assert!(app.transcript_conversation_only);
-        assert_eq!(app.transcript_scroll, 0);
-        app.toggle_transcript_conversation_only();
-        assert!(!app.transcript_conversation_only);
-    }
+        app.push_event(AgentEvent::AgentMessage {
+            text: "hello".into(),
+        });
+        app.push_event(AgentEvent::CommandStarted {
+            command: "cargo test".into(),
+        });
 
-    #[test]
-    fn show_conversation_only_opens_a_filtered_transcript() {
-        let mut app = app();
-        app.transcript_scroll = 12;
+        app.toggle_conversation_only();
 
-        app.show_transcript_conversation_only();
+        assert_eq!(app.view, View::Events);
+        assert!(app.conversation_only);
+        assert!(app.is_visible(0));
+        assert!(!app.is_visible(1));
 
-        assert_eq!(app.view, View::Transcript);
-        assert!(app.transcript_conversation_only);
-        assert_eq!(app.transcript_scroll, 0);
+        app.toggle_conversation_only();
+        assert!(!app.conversation_only);
+        assert!(app.is_visible(1));
     }
 
     #[test]

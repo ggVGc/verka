@@ -442,11 +442,9 @@ transcript reads as a document front-to-back, not a tail-following stream, so
 there is no "stays put while scrolled up" logic to speak of — new content
 just extends past whatever is already below the viewport.
 
-`c` opens the transcript in conversation-only mode from any list-focus view.
-Within the transcript, it toggles between that filtered rendering and the full
-transcript. The filtered rendering contains just the operator's messages and
-the agent's replies. Tool calls, thinking, plans, and lifecycle events remain
-in the journal and event list but are omitted from it.
+`c` toggles a conversation-only filter in the main event list, hiding tools,
+thinking, plans, and lifecycle events while retaining the operator's messages
+and the agent's replies. Like the minor-event filter, it does not switch views.
 
 ### Two focuses, like vim modes
 

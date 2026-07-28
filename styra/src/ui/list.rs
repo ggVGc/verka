@@ -84,7 +84,7 @@ pub(crate) fn render_list(frame: &mut Frame, app: &App, area: Rect) {
 
     if visible.is_empty() {
         let empty = Paragraph::new(Line::from(vec![Span::styled(
-            "  all entries hidden — press m to show minor events",
+            "  all entries hidden — press c or m to change filters",
             Style::default().fg(Color::Gray),
         )]))
         .block(block);

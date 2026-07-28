@@ -56,9 +56,6 @@ pub fn handle_list_key(
         KeyCode::Char('r') => return app.toggle_raw(),
         KeyCode::Char('l') => return app.toggle_log(),
         KeyCode::Char('t') => return app.toggle_transcript(),
-        KeyCode::Char('c') if app.view != View::Transcript => {
-            return app.show_transcript_conversation_only()
-        }
         KeyCode::Char('d') => return app.toggle_driva(),
         KeyCode::Char('P') => return app.toggle_fullscreen_preview(),
         KeyCode::Char('L') => return app.open_launcher(),
@@ -69,6 +66,7 @@ pub fn handle_list_key(
     }
     match app.view {
         View::Events => match key.code {
+            KeyCode::Char('c') => app.toggle_conversation_only(),
             KeyCode::Char('v') if app.show_preview => app.toggle_preview_mode(),
             KeyCode::PageDown if app.show_preview => app.preview_page_down(),
             KeyCode::PageUp if app.show_preview => app.preview_page_up(),
@@ -104,7 +102,6 @@ pub fn handle_list_key(
             _ => {}
         },
         View::Transcript => match key.code {
-            KeyCode::Char('c') => app.toggle_transcript_conversation_only(),
             KeyCode::Char('j') | KeyCode::Down => app.transcript_scroll_down(),
             KeyCode::Char('k') | KeyCode::Up => app.transcript_scroll_up(),
             KeyCode::Char('g') => app.transcript_to_top(),
