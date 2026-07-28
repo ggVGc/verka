@@ -26,17 +26,26 @@ pub(crate) fn render_preview(frame: &mut Frame, app: &App, area: Rect) {
         .border_style(Style::default().fg(Color::DarkGray))
         .title(Span::styled(title, Style::default().fg(Color::Gray)));
     let lines = preview_lines(app);
-    let scroll_limit = preview_scroll_limit(
-        &lines,
-        area.width.saturating_sub(2),
-        area.height.saturating_sub(2),
-    );
+    let is_diff = selected_diff(app).is_some();
+    let scroll_limit = if is_diff {
+        unwrapped_scroll_limit(&lines, area.height.saturating_sub(2))
+    } else {
+        preview_scroll_limit(
+            &lines,
+            area.width.saturating_sub(2),
+            area.height.saturating_sub(2),
+        )
+    };
     app.preview_scroll_limit.set(scroll_limit);
     let scroll = app.preview_scroll.min(scroll_limit);
     let paragraph = Paragraph::new(lines)
         .block(block)
-        .wrap(Wrap { trim: false })
         .scroll((scroll, 0));
+    let paragraph = if is_diff {
+        paragraph
+    } else {
+        paragraph.wrap(Wrap { trim: false })
+    };
     frame.render_widget(paragraph, area);
 }
 
@@ -46,12 +55,20 @@ pub(crate) fn render_preview(frame: &mut Frame, app: &App, area: Rect) {
 /// selected and copied cleanly.
 pub(crate) fn render_fullscreen_preview(frame: &mut Frame, app: &App, area: Rect) {
     let lines = preview_lines(app);
-    let scroll_limit = preview_scroll_limit(&lines, area.width, area.height);
+    let is_diff = selected_diff(app).is_some();
+    let scroll_limit = if is_diff {
+        unwrapped_scroll_limit(&lines, area.height)
+    } else {
+        preview_scroll_limit(&lines, area.width, area.height)
+    };
     app.preview_scroll_limit.set(scroll_limit);
     let scroll = app.preview_scroll.min(scroll_limit);
-    let paragraph = Paragraph::new(lines)
-        .wrap(Wrap { trim: false })
-        .scroll((scroll, 0));
+    let paragraph = Paragraph::new(lines).scroll((scroll, 0));
+    let paragraph = if is_diff {
+        paragraph
+    } else {
+        paragraph.wrap(Wrap { trim: false })
+    };
     frame.render_widget(paragraph, area);
 }
 
@@ -62,6 +79,13 @@ pub(crate) fn preview_scroll_limit(lines: &[Line<'_>], width: u16, height: u16) 
         .map(|line| line.width().max(1).div_ceil(width))
         .sum();
     rendered_lines
+        .saturating_sub(usize::from(height))
+        .min(usize::from(u16::MAX)) as u16
+}
+
+fn unwrapped_scroll_limit(lines: &[Line<'_>], height: u16) -> u16 {
+    lines
+        .len()
         .saturating_sub(usize::from(height))
         .min(usize::from(u16::MAX)) as u16
 }
@@ -295,6 +319,29 @@ mod tests {
         assert!(raw.contains("raw diff"));
         assert!(raw.contains("index 123"));
         assert!(raw.contains(" context"));
+    }
+
+    #[test]
+    fn diff_preview_clips_long_indented_lines_instead_of_scattering_continuations() {
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
+        app.push_event(AgentEvent::FileChanged {
+            id: "f1".into(),
+            paths: vec!["src/lib.rs".into()],
+            diff: Some(format!(
+                "@@ -1 +1 @@\n+{}SENTINEL\n+next line",
+                " ".repeat(120)
+            )),
+            checkpoint: None,
+            checkpoint_error: None,
+        });
+        app.toggle_preview();
+
+        let screen = rendered(&app);
+        assert!(!screen.contains("SENTINEL"));
+        assert!(screen.contains("next line"));
     }
 
     #[test]
