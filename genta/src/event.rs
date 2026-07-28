@@ -189,8 +189,13 @@ impl AgentEvent {
             AgentEvent::ThreadStarted { .. } => "thread",
             AgentEvent::TurnStarted => "turn",
             AgentEvent::TurnCompleted { .. } | AgentEvent::UsageUpdated { .. } => "usage",
-            AgentEvent::CommandStarted { .. } | AgentEvent::CommandCompleted { .. } => "command",
+            AgentEvent::CommandStarted { .. } | AgentEvent::CommandCompleted { .. } => "shell",
             AgentEvent::FileChanged { .. } | AgentEvent::DiffUpdated { .. } => "files",
+            AgentEvent::ToolStarted { name, .. } | AgentEvent::ToolCompleted { name, .. }
+                if name == "Bash" =>
+            {
+                "shell"
+            }
             AgentEvent::ToolStarted { .. } | AgentEvent::ToolCompleted { .. } => "tool",
             AgentEvent::PlanUpdated { .. } => "plan",
             AgentEvent::AgentMessage { .. } => "agent",

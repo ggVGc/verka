@@ -99,8 +99,8 @@ mod tests {
         assert_eq!(
             text,
             "  thread session t-1\n\
-             \x20command cargo test (running)\n\
-             \x20command cargo test (completed, exit 0)\n\
+             \x20  shell cargo test (running)\n\
+             \x20  shell cargo test (completed, exit 0)\n\
              \x20  agent All good.\n\
              \x20        Tests pass.\n"
         );

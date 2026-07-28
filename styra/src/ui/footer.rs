@@ -57,7 +57,7 @@ pub(crate) fn tag_color(tag: &str) -> Color {
     match tag {
         "agent" => Color::Rgb(211, 158, 96),
         "user" => Color::Rgb(115, 190, 137),
-        "command" => Color::Rgb(184, 124, 0),
+        "shell" => Color::Rgb(184, 124, 0),
         "tool" => Color::Magenta,
         "plan" | "files" => Color::Blue,
         "error" | "malformed" => Color::Red,

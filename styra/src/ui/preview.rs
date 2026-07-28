@@ -500,7 +500,7 @@ mod tests {
         app.toggle_fullscreen_preview();
         let restored = rendered(&app);
         assert!(restored.contains("styra"));
-        assert!(restored.contains("command"));
+        assert!(restored.contains("Shell"));
     }
 
     #[test]

@@ -318,31 +318,35 @@ pub(crate) fn summary_line(
     let display_tag = match &entry.event {
         AgentEvent::UserMessage { .. } => "»",
         AgentEvent::AgentMessage { .. } => "«",
+        AgentEvent::CommandStarted { .. } | AgentEvent::CommandCompleted { .. } => "Shell",
+        AgentEvent::ToolStarted { name, .. } | AgentEvent::ToolCompleted { name, .. }
+            if name == "Bash" =>
+        {
+            "Shell"
+        }
         AgentEvent::ToolStarted { name, .. } | AgentEvent::ToolCompleted { name, .. } => {
             name.as_str()
         }
         _ => tag,
     };
-    // A completed tool call gets a checkmark/cross prefix so it does not read
-    // like the running row it replaced. Keep a successful checkmark green
-    // without painting the command text itself as a status color.
+    // A completed tool call (or shell command — Codex's own first-class
+    // equivalent) gets a checkmark/cross prefix so it does not read like the
+    // running row it replaced. Keep a successful checkmark green without
+    // painting the command text itself as a status color.
     let (summary_style, prefix, prefix_style) = match &entry.event {
-        AgentEvent::ToolCompleted { status, .. } if status == "error" => {
+        AgentEvent::ToolCompleted { status, .. } | AgentEvent::CommandCompleted { status, .. }
+            if status == "error" =>
+        {
             (
                 Style::default().fg(Color::Red),
                 "✗ ",
                 Style::default().fg(Color::Red),
             )
         }
-        AgentEvent::ToolCompleted { .. } => (
+        AgentEvent::ToolCompleted { .. } | AgentEvent::CommandCompleted { .. } => (
             Style::default().fg(Color::White),
             "✓ ",
             Style::default().fg(Color::Green),
-        ),
-        _ if tag == "command" => (
-            Style::default().fg(tag_color(tag)),
-            "",
-            Style::default(),
         ),
         _ => (
             Style::default().fg(message_text_color(tag)),
@@ -721,10 +725,10 @@ mod tests {
         });
         let screen = rendered(&app);
         assert!(screen.contains('✓'));
-        assert!(screen.contains("Bash"));
+        assert!(screen.contains("Shell"));
         assert!(screen.contains("cargo test"));
         assert!(!screen.contains("tool     "));
-        assert_eq!(screen.matches("Bash").count(), 1);
+        assert_eq!(screen.matches("Shell").count(), 1);
 
         let line = summary_line(
             &app.entries[0],
