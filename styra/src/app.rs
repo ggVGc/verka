@@ -327,6 +327,8 @@ pub struct App {
     pub selected: usize,
     pub focus: Focus,
     pub view: View,
+    /// Whether the full-screen keyboard shortcut reference is open.
+    pub show_keybinds: bool,
     pub input: String,
     /// Submitted prompts, oldest first, for readline-style Up/Down recall.
     prompt_history: Vec<String>,
@@ -424,6 +426,7 @@ impl App {
             selected: 0,
             focus: Focus::List,
             view: View::Events,
+            show_keybinds: false,
             input: String::new(),
             prompt_history: Vec::new(),
             history_cursor: None,

@@ -6,6 +6,7 @@
 
 mod driva;
 mod footer;
+mod help;
 mod input;
 mod launcher;
 mod list;
@@ -19,6 +20,7 @@ mod transcript;
 use driva::render_driva;
 pub(crate) use footer::{message_text_color, tag_color};
 use footer::render_footer;
+use help::render_keybinds;
 use input::{input_area_height, render_input};
 use launcher::render_launcher;
 pub(crate) use list::summary_line;
@@ -119,6 +121,11 @@ fn title_line(label: &LaunchLabel, status: &Status, suffix: Option<&str>) -> Lin
 }
 
 pub fn render(frame: &mut Frame, app: &App) {
+    if app.show_keybinds {
+        render_keybinds(frame, frame.area());
+        return;
+    }
+
     // The launch picker is modal: it is the only thing that can be acted on
     // while open, so it takes the whole frame like the session and interaction
     // pickers do, rather than overlaying a screen whose keys are inert.

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyEventKind};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use std::io::Stdout;
@@ -99,6 +99,23 @@ pub fn run(
             continue;
         };
         if key.kind != KeyEventKind::Press {
+            continue;
+        }
+
+        // ? is available from both list and input focus. While the reference
+        // is open it is modal, so none of the commands described by it can
+        // accidentally act on the session underneath.
+        if app.show_keybinds {
+            if matches!(
+                key.code,
+                KeyCode::Char('?') | KeyCode::Esc | KeyCode::Char('q')
+            ) {
+                app.show_keybinds = false;
+            }
+            continue;
+        }
+        if key.code == KeyCode::Char('?') {
+            app.show_keybinds = true;
             continue;
         }
 

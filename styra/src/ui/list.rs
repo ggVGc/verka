@@ -900,10 +900,7 @@ mod tests {
         let screen = rendered(&app);
         assert!(screen.contains("claude:opus/max"), "{screen}");
         assert!(screen.contains("press L to choose"), "{screen}");
-        assert!(
-            screen.contains("Ctrl+L"),
-            "the start screen opens in input focus: {screen}"
-        );
+        assert!(screen.contains("? keybinds"), "{screen}");
 
         // A launched session shows the plain waiting message instead: its agent
         // and model are settled, so there is nothing to offer choosing.
