@@ -87,6 +87,39 @@ fn translates_request_without_implicit_host_access() {
 }
 
 #[test]
+fn overlay_mount_reads_host_source_with_a_discarded_tmpfs_upper_layer() {
+    let rootfs = TestRootfs::new();
+    let backend = BwrapIsolation {
+        executable: "bwrap".into(),
+        rootfs: Some(rootfs.0.clone()),
+    };
+    let request = ExecutionRequest {
+        command: vec!["printf".into(), "hello".into()],
+        working_directory: "/work".into(),
+        mounts: vec![Mount::Overlay {
+            source: "/host".into(),
+            destination: "/work".into(),
+        }],
+        environment: BTreeMap::new(),
+        network: false,
+        interactive: true,
+        new_session: true,
+    };
+
+    let command = backend.command(&request).unwrap();
+    let args: Vec<_> = command
+        .get_args()
+        .map(|value| value.to_string_lossy().into_owned())
+        .collect();
+    assert!(args
+        .windows(2)
+        .any(|pair| pair == ["--overlay-src", "/host"]));
+    assert!(args
+        .windows(2)
+        .any(|pair| pair == ["--tmp-overlay", "/work"]));
+}
+
+#[test]
 fn omits_new_session_when_disabled() {
     let rootfs = TestRootfs::new();
     let backend = BwrapIsolation {
@@ -104,7 +137,9 @@ fn omits_new_session_when_disabled() {
     };
 
     let command = backend.command(&request).unwrap();
-    assert!(!command.get_args().any(|argument| argument == "--new-session"));
+    assert!(!command
+        .get_args()
+        .any(|argument| argument == "--new-session"));
 }
 
 #[test]

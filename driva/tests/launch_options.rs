@@ -84,6 +84,19 @@ fn configured_workdir_suppresses_the_default_workspace_mount() {
 }
 
 #[test]
+fn overlay_mount_reports_as_writable_but_discarded() {
+    let directory = TestDirectory::new("overlay-mount");
+    let output = stdout(directory.run(&["run", "--dry-run", "--overlay", ".", "--", "true"]));
+    let workspace = directory.0.canonicalize().unwrap();
+
+    assert!(output.contains(&format!(
+        "mount: {} -> {} (overlay, writes discarded)",
+        workspace.display(),
+        workspace.display()
+    )));
+}
+
+#[test]
 fn explicit_current_directory_mount_replaces_the_default_workspace_mount() {
     let directory = TestDirectory::new("explicit-default-workspace");
     let output = stdout(directory.run(&["run", "--dry-run", "--read", ".", "--", "true"]));

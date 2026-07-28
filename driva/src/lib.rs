@@ -50,12 +50,22 @@ pub enum Mount {
     },
     /// An empty, writable filesystem discarded after execution.
     Temporary { destination: PathBuf },
+    /// Host content exposed read-only as the lower layer, writable through an
+    /// invisible tmpfs upper layer. Writes are visible for the life of the
+    /// process and discarded when it exits; the host source is never
+    /// mutated.
+    Overlay {
+        source: PathBuf,
+        destination: PathBuf,
+    },
 }
 
 impl Mount {
     pub fn destination(&self) -> &Path {
         match self {
-            Self::Bind { destination, .. } | Self::Temporary { destination } => destination,
+            Self::Bind { destination, .. }
+            | Self::Temporary { destination }
+            | Self::Overlay { destination, .. } => destination,
         }
     }
 
@@ -173,7 +183,7 @@ pub fn validate_request(request: &ExecutionRequest) -> Result<ExecutionRequest> 
         if !destinations.insert(destination.to_path_buf()) {
             bail!("conflicting mount destination: {}", destination.display());
         }
-        if let Mount::Bind { source, .. } = mount {
+        if let Mount::Bind { source, .. } | Mount::Overlay { source, .. } = mount {
             *source = canonicalize_mount(source)
                 .with_context(|| format!("invalid mount source {}", source.display()))?;
         }

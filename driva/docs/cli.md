@@ -66,6 +66,7 @@ Options:
       --template <NAME>        Apply a named execution template; may be repeated
       --read <MOUNT>           Add a read-only mount as SOURCE or SOURCE:DESTINATION
       --write <MOUNT>          Add a writable mount as SOURCE or SOURCE:DESTINATION
+      --overlay <MOUNT>        Add a mount as SOURCE or SOURCE:DESTINATION that reads the host content and is writable, but writes are discarded after execution
       --no-write               Make every host mount read-only, overriding configuration and templates
       --path <DIRECTORY>       Add a host directory read-only and prepend it to the isolated PATH
       --backend <BACKEND>      Select the isolation backend
@@ -109,6 +110,7 @@ Policy options (shared by `run` and `shell`):
 | `--template <NAME>` | Apply a built-in or project-defined execution template; repeat it to combine templates in option order. |
 | `--read <MOUNT>` | Bind-mount a host path read-only. Repeatable. |
 | `--write <MOUNT>` | Bind-mount a host path read-write. Repeatable. |
+| `--overlay <MOUNT>` | Mount a host path read-write through a discarded tmpfs upper layer; the sandbox sees the host content and can write to it, but writes never reach the host. Repeatable. |
 | `--no-write` | Make every host bind mount read-only, overriding project configuration, templates, and `--write`. |
 | `--path <DIRECTORY>` | Bind-mount a host directory read-only and prepend it to the isolated `PATH`. Repeatable. |
 | `--backend <BACKEND>` | Select the isolation backend for this invocation (`bwrap`). |
@@ -179,6 +181,7 @@ claude-exec	Run Claude Code non-interactively against the current project
 codex	Run the host's Codex binary interactively in Bubblewrap
 codex-exec	Run OpenAI Codex non-interactively against the current project
 codex-runtime	Run OpenAI Codex interactively against the current project
+rust	Rust/Cargo
 sbt	Scala sbt
 ```
 
@@ -360,6 +363,7 @@ Options:
       --template <NAME>        Apply a named execution template; may be repeated
       --read <MOUNT>           Add a read-only mount as SOURCE or SOURCE:DESTINATION
       --write <MOUNT>          Add a writable mount as SOURCE or SOURCE:DESTINATION
+      --overlay <MOUNT>        Add a mount as SOURCE or SOURCE:DESTINATION that reads the host content and is writable, but writes are discarded after execution
       --no-write               Make every host mount read-only, overriding configuration and templates
       --path <DIRECTORY>       Add a host directory read-only and prepend it to the isolated PATH
       --backend <BACKEND>      Select the isolation backend

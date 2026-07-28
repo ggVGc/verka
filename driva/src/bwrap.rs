@@ -68,8 +68,11 @@ impl BwrapIsolation {
                 "working directory",
             )?;
             for mount in &request.mounts {
-                let Mount::Bind { destination, .. } = mount else {
-                    continue;
+                let destination = match mount {
+                    Mount::Bind { destination, .. } | Mount::Overlay { destination, .. } => {
+                        destination
+                    }
+                    Mount::Temporary { .. } => continue,
                 };
                 self.require_rootfs_path_or_temporary(
                     rootfs,
@@ -131,6 +134,20 @@ impl BwrapIsolation {
                 MountAccess::ReadWrite => "--bind",
             });
             command.arg(source).arg(destination);
+        }
+        for mount in &request.mounts {
+            let Mount::Overlay {
+                source,
+                destination,
+            } = mount
+            else {
+                continue;
+            };
+            command
+                .arg("--overlay-src")
+                .arg(source)
+                .arg("--tmp-overlay")
+                .arg(destination);
         }
         command
             .arg("--chdir")

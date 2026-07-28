@@ -85,6 +85,7 @@ pub enum MountKind {
     #[default]
     Bind,
     Temporary,
+    Overlay,
 }
 
 impl MountConfig {
@@ -114,6 +115,19 @@ impl MountConfig {
                     .destination
                     .context("temporary mount requires a destination")?;
                 Ok(Mount::Temporary { destination })
+            }
+            MountKind::Overlay => {
+                let source = self.source.context("overlay mount requires a source")?;
+                let source = crate::canonicalize_mount(&source)
+                    .with_context(|| format!("invalid mount source {}", source.display()))?;
+                if self.access.is_some() {
+                    bail!("overlay mount does not accept an access mode");
+                }
+                let destination = self.destination.unwrap_or_else(|| source.clone());
+                Ok(Mount::Overlay {
+                    source,
+                    destination,
+                })
             }
         }
     }

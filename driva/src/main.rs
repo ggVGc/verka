@@ -78,6 +78,10 @@ struct PolicyArgs {
     /// Add a writable mount as SOURCE or SOURCE:DESTINATION.
     #[arg(long = "write", value_name = "MOUNT")]
     writes: Vec<String>,
+    /// Add a mount as SOURCE or SOURCE:DESTINATION that reads the host
+    /// content and is writable, but writes are discarded after execution.
+    #[arg(long = "overlay", value_name = "MOUNT")]
+    overlays: Vec<String>,
     /// Make every host mount read-only, overriding configuration and templates.
     #[arg(long)]
     no_write: bool,
@@ -248,6 +252,9 @@ fn real_main() -> Result<()> {
     }
     for spec in &policy.writes {
         mounts.push(parse_mount(spec, MountAccess::ReadWrite, &workdir)?);
+    }
+    for spec in &policy.overlays {
+        mounts.push(parse_overlay_mount(spec, &workdir)?);
     }
     mounts.extend(
         policy
@@ -470,6 +477,23 @@ fn parse_environment(value: &str) -> Result<(OsString, OsString), String> {
 }
 
 fn parse_mount(spec: &str, access: MountAccess, workdir: &Path) -> Result<Mount> {
+    let (source, destination) = parse_mount_spec(spec, workdir)?;
+    Ok(Mount::Bind {
+        source,
+        destination,
+        access,
+    })
+}
+
+fn parse_overlay_mount(spec: &str, workdir: &Path) -> Result<Mount> {
+    let (source, destination) = parse_mount_spec(spec, workdir)?;
+    Ok(Mount::Overlay {
+        source,
+        destination,
+    })
+}
+
+fn parse_mount_spec(spec: &str, workdir: &Path) -> Result<(PathBuf, PathBuf)> {
     let (source, explicit_destination) = match spec.split_once(':') {
         Some((source, destination)) if !destination.is_empty() => {
             (source, Some(PathBuf::from(destination)))
@@ -489,11 +513,7 @@ fn parse_mount(spec: &str, access: MountAccess, workdir: &Path) -> Result<Mount>
             workdir.join(&source)
         }
     });
-    Ok(Mount::Bind {
-        source,
-        destination,
-        access,
-    })
+    Ok((source, destination))
 }
 
 fn print_dry_run(name: &str, command: Command, request: &ExecutionRequest) {
@@ -527,6 +547,14 @@ fn print_dry_run(name: &str, command: Command, request: &ExecutionRequest) {
             Mount::Temporary { destination } => {
                 println!("mount: temporary -> {} (read-write)", destination.display())
             }
+            Mount::Overlay {
+                source,
+                destination,
+            } => println!(
+                "mount: {} -> {} (overlay, writes discarded)",
+                source.display(),
+                destination.display()
+            ),
         }
     }
     print!("invocation:");
