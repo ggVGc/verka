@@ -401,6 +401,10 @@ pub struct App {
     /// shows its start. Unlike the raw/log views, the transcript reads as a
     /// document from the beginning rather than anchoring to the tail.
     pub transcript_scroll: u16,
+    /// When true, the transcript contains only messages exchanged between
+    /// the operator and the agent, omitting tools, thinking, plans, and
+    /// lifecycle events.
+    pub transcript_conversation_only: bool,
     /// Set when the operator asks to quit; the event loop observes it.
     pub should_quit: bool,
     /// Set when the operator asks to choose a Workspace.
@@ -449,6 +453,7 @@ impl App {
             log: Vec::new(),
             log_scroll_back: 0,
             transcript_scroll: 0,
+            transcript_conversation_only: false,
             should_quit: false,
             workspace_requested: false,
             interactions_requested: false,
@@ -622,6 +627,13 @@ impl App {
         } else {
             View::Transcript
         };
+    }
+
+    /// Toggle between the full rendered transcript and just the human/agent
+    /// conversation. Start at the top because filtering changes line offsets.
+    pub fn toggle_transcript_conversation_only(&mut self) {
+        self.transcript_conversation_only = !self.transcript_conversation_only;
+        self.transcript_scroll = 0;
     }
 
     /// Toggle the Driva policy view on, or back to the event list.
@@ -1995,6 +2007,17 @@ mod tests {
         assert_eq!(app.transcript_scroll, u16::MAX);
         app.transcript_to_top();
         assert_eq!(app.transcript_scroll, 0);
+    }
+
+    #[test]
+    fn conversational_transcript_toggle_resets_scroll() {
+        let mut app = app();
+        app.transcript_scroll = 12;
+        app.toggle_transcript_conversation_only();
+        assert!(app.transcript_conversation_only);
+        assert_eq!(app.transcript_scroll, 0);
+        app.toggle_transcript_conversation_only();
+        assert!(!app.transcript_conversation_only);
     }
 
     #[test]

@@ -37,7 +37,7 @@ pub(crate) fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
             "j/k scroll · g/G top/bottom · l events · r raw · t transcript · d driva · i message · s stop · A interactions · S reset · V Workspaces · q quit"
         }
         (Focus::List, View::Transcript) => {
-            "j/k scroll · g/G top/bottom · t events · r raw · l log · d driva · i message · s stop · A interactions · S reset · V Workspaces · q quit"
+            "j/k scroll · g/G top/bottom · c conversation only · t events · r raw · l log · d driva · i message · s stop · A interactions · S reset · V Workspaces · q quit"
         }
         (Focus::List, View::Driva) => {
             "d events · r raw · l log · t transcript · i message · s stop · A interactions · S reset · V Workspaces · q quit"
