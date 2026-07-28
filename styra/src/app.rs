@@ -1059,9 +1059,9 @@ impl App {
         }
     }
 
-    pub fn expand_selected(&mut self) {
-        if let Some(entry) = self.entries.get_mut(self.selected) {
-            entry.expanded = true;
+    pub fn expand_only_selected(&mut self) {
+        for (index, entry) in self.entries.iter_mut().enumerate() {
+            entry.expanded = index == self.selected;
         }
     }
 
@@ -1289,6 +1289,23 @@ mod tests {
         assert!(app.entries.iter().all(|entry| entry.expanded));
         app.collapse_all();
         assert!(app.entries.iter().all(|entry| !entry.expanded));
+    }
+
+    #[test]
+    fn expanding_only_selected_collapses_every_other_entry() {
+        let mut app = app();
+        app.push_event(AgentEvent::AgentMessage { text: "a".into() });
+        app.push_event(AgentEvent::AgentMessage { text: "b".into() });
+        app.push_event(AgentEvent::AgentMessage { text: "c".into() });
+        app.expand_all();
+
+        app.select_first();
+        app.select_next_line();
+        app.expand_only_selected();
+
+        assert!(!app.entries[0].expanded);
+        assert!(app.entries[1].expanded);
+        assert!(!app.entries[2].expanded);
     }
 
     #[test]

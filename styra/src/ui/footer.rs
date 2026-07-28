@@ -28,7 +28,7 @@ pub(crate) fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     let hints = match (app.focus, app.view) {
         (Focus::Input, _) => "Enter send · ↑/↓ history · Alt+Enter newline · Ctrl+W delete word · Esc back to list",
         (Focus::List, View::Events) => {
-            "j/k next/prev with detail/files · C collapse all · J/K next/prev line · PgUp/PgDn preview scroll · v diff view · space fold · m minor · p preview · P full-screen · t transcript · r raw · l log · d driva · i message · s stop · A interactions · S reset · V Workspaces · q quit"
+            "j/k next/prev with detail/files · o toggle · O only this · C collapse all · J/K next/prev line · PgUp/PgDn preview scroll · v diff view · space fold · m minor · p preview · P full-screen · t transcript · r raw · l log · d driva · i message · s stop · A interactions · S reset · V Workspaces · q quit"
         }
         (Focus::List, View::Raw) => {
             "j/k next/prev line · g/G first/last · PgUp/PgDn preview scroll · r events · l log · t transcript · d driva · i message · s stop · A interactions · S reset · V Workspaces · q quit"
