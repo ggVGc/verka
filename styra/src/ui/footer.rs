@@ -1,18 +1,37 @@
-//! The one-line footer pointing to the full keyboard shortcut reference.
+//! The one-line footer with the keyboard shortcut reference and workspace.
 
 use crate::app::App;
-use ratatui::layout::Rect;
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
+use unicode_width::UnicodeWidthStr;
 
-pub(crate) fn render_footer(frame: &mut Frame, _app: &App, area: Rect) {
-    let footer = Paragraph::new(Line::from(Span::styled(
+pub(crate) fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
+    let working_directory = app
+        .workspace_root
+        .clone()
+        .or_else(|| std::env::current_dir().ok())
+        .map(|path| path.display().to_string())
+        .unwrap_or_default();
+    let directory_width = working_directory.width().min(area.width as usize) as u16;
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Min(0), Constraint::Length(directory_width)])
+        .split(area);
+
+    let keybinds = Paragraph::new(Line::from(Span::styled(
         " ? keybinds",
         Style::default().fg(Color::Gray),
     )));
-    frame.render_widget(footer, area);
+    let directory = Paragraph::new(Line::from(Span::styled(
+        working_directory,
+        Style::default().fg(Color::DarkGray),
+    )))
+    .right_aligned();
+    frame.render_widget(keybinds, chunks[0]);
+    frame.render_widget(directory, chunks[1]);
 }
 
 pub(crate) fn tag_color(tag: &str) -> Color {
@@ -46,7 +65,9 @@ mod tests {
 
     fn rendered(app: &App) -> String {
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
-        terminal.draw(|frame| super::super::render(frame, app)).unwrap();
+        terminal
+            .draw(|frame| super::super::render(frame, app))
+            .unwrap();
         terminal
             .backend()
             .buffer()
@@ -58,13 +79,34 @@ mod tests {
     }
 
     #[test]
-    fn footer_only_advertises_keybind_reference() {
-        let app = App::new(
+    fn footer_shows_keybinds_and_working_directory() {
+        let mut app = App::new(
             styra_server::agent::Selection::parse("codex").unwrap(),
             "s1",
         );
+        app.set_workspace_root("/tmp/styra/workspace".into());
         let screen = rendered(&app);
         assert!(screen.contains("? keybinds"));
+        assert!(screen.contains("/tmp/styra/workspace"));
         assert!(!screen.contains("j/k next/prev"));
+    }
+
+    #[test]
+    fn working_directory_is_aligned_to_the_bottom_right() {
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
+        app.set_workspace_root("/workspace".into());
+        let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        terminal
+            .draw(|frame| super::super::render(frame, &app))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+
+        let bottom_row: String = (0..40)
+            .map(|x| buffer.cell((x, 9)).unwrap().symbol())
+            .collect();
+        assert!(bottom_row.ends_with("/workspace"));
     }
 }
