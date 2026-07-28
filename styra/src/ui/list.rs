@@ -194,7 +194,11 @@ fn entry_item(entry: &Entry, width: usize, protocol: Protocol) -> ListItem<'stat
         protocol,
     )];
     if entry.expanded {
-        lines.extend(detail_lines(&entry.event, Some(MAX_DETAIL_LINES)));
+        lines.extend(detail_lines(
+            &entry.event,
+            protocol,
+            Some(MAX_DETAIL_LINES),
+        ));
     }
     let wrapped: Vec<Line<'static>> = lines
         .into_iter()
@@ -446,13 +450,17 @@ fn file_action_summary(event: &AgentEvent) -> Option<String> {
     Some(format!("{action} {}", paths.join(", ")))
 }
 
-/// The expandable body of an entry. `cap` bounds how many lines are shown
-/// inline in the list (so one noisy command cannot bury the rest of the
-/// session); pass `None` for the preview panel, which shows the body in full.
-pub(crate) fn detail_lines(event: &AgentEvent, cap: Option<usize>) -> Vec<Line<'static>> {
+/// The pretty, provider-aware expandable body of an entry. `cap` bounds how
+/// many lines are shown inline in the list so one noisy command cannot bury
+/// the rest of the session. The preview panel owns the optional raw view.
+pub(crate) fn detail_lines(
+    event: &AgentEvent,
+    protocol: Protocol,
+    cap: Option<usize>,
+) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let text_color = message_text_color(event.tag());
-    for block in event.detail() {
+    for block in protocol.presented_detail(event, PresentationMode::Pretty) {
         match block {
             DetailBlock::Text(text) => {
                 let base_style = Style::default().fg(text_color);
@@ -812,6 +820,24 @@ mod tests {
         let screen = rendered(&app);
         assert!(screen.contains('▾'));
         assert!(screen.contains("24 passed"));
+    }
+
+    #[test]
+    fn an_expanded_entry_uses_the_pretty_provider_presentation() {
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("claude").unwrap(),
+            "s1",
+        );
+        app.push_event(AgentEvent::ToolStarted {
+            id: "toolu_1".into(),
+            name: "Bash".into(),
+            detail: r#"{"command":"cargo test --all","description":"run the suite"}"#.into(),
+        });
+
+        app.expand_all();
+        let screen = rendered(&app);
+        assert!(screen.contains("cargo test --all"));
+        assert!(!screen.contains("description"));
     }
 
     #[test]
