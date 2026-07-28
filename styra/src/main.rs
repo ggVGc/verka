@@ -4,12 +4,9 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
-};
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
-use std::io::{Stdout, Write};
+use std::io::Stdout;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -18,6 +15,7 @@ use std::time::Duration;
 mod app;
 mod cli;
 mod preferences;
+mod terminal;
 mod ui;
 
 use app::{App, Focus, Status, View};
@@ -79,18 +77,18 @@ fn main() -> Result<()> {
                 println!("No sessions found by the Styra server");
                 return Ok(());
             }
-            let mut term = setup_terminal()?;
+            let mut term = terminal::setup()?;
             match run_picker(&mut term, &sessions) {
                 Ok(Some(id)) => {
                     terminal = Some(term);
                     Some(PathBuf::from(id))
                 }
                 Ok(None) => {
-                    restore_terminal(&mut term)?;
+                    terminal::restore(&mut term)?;
                     return Ok(());
                 }
                 Err(error) => {
-                    restore_terminal(&mut term)?;
+                    terminal::restore(&mut term)?;
                     return Err(error);
                 }
             }
@@ -164,7 +162,7 @@ fn main() -> Result<()> {
 
     let mut terminal = match terminal {
         Some(terminal) => terminal,
-        None => setup_terminal()?,
+        None => terminal::setup()?,
     };
 
     // Runs until the operator quits. Workspace and Session selection only
@@ -238,7 +236,7 @@ fn main() -> Result<()> {
         }
     };
 
-    restore_terminal(&mut terminal)?;
+    terminal::restore(&mut terminal)?;
     result
 }
 
@@ -1004,21 +1002,6 @@ fn resolve_workspace(workspace: Option<&std::path::Path>) -> Result<PathBuf> {
         .with_context(|| format!("workspace directory {} must exist", raw.display()))
 }
 
-fn setup_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>> {
-    enable_raw_mode().context("enabling raw mode")?;
-    let mut stdout = std::io::stdout();
-    crossterm::execute!(stdout, EnterAlternateScreen).context("entering the alternate screen")?;
-    let terminal = Terminal::new(CrosstermBackend::new(stdout)).context("initialising terminal")?;
-    Ok(terminal)
-}
-
-fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
-    disable_raw_mode().ok();
-    crossterm::execute!(terminal.backend_mut(), LeaveAlternateScreen).ok();
-    terminal.show_cursor().ok();
-    terminal.backend_mut().flush().ok();
-    Ok(())
-}
 
 #[cfg(test)]
 mod cli_tests {
