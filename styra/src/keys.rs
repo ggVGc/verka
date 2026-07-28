@@ -82,7 +82,7 @@ pub fn handle_list_key(
             KeyCode::Char('z') => *pending_fold = true,
             KeyCode::Char('m') => app.toggle_minor(),
             KeyCode::Char('p') => app.toggle_preview(),
-            KeyCode::Char('C') => app.collapse_all(),
+            KeyCode::Char('C') => app.expand_conversation(),
             _ => {}
         },
         View::Raw => match key.code {

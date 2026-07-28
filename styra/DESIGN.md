@@ -466,6 +466,7 @@ current focus is shown in the status line and by which region draws the cursor.
 | `k` / `↑`       | Select previous entry                                       |
 | `Space`/`Enter` | Toggle expand/collapse of the selected entry                |
 | `o` / `c`       | Expand / collapse the selected entry explicitly             |
+| `C`             | Expand conversation lines and collapse all other lines      |
 | `zR` / `zM`     | Expand all / collapse all                                   |
 | `g` / `G`       | Jump to first / last entry (`G` re-enables tail-follow)     |
 | `r`             | Toggle the raw wire view, focused on the selected entry's wire line (in the raw view, `j`/`k`/`g`/`G` select, `PgUp`/`PgDn` scroll the entry panel) |
