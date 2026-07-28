@@ -329,7 +329,7 @@ mod cli_tests {
     }
 
     #[test]
-    fn confirming_the_launcher_saves_the_selection_for_the_next_start() {
+    fn confirming_the_launcher_selects_for_this_workspace_without_saving_a_default() {
         let root = std::env::temp_dir().join(format!(
             "styra-launch-default-handler-{}",
             std::process::id()
@@ -344,6 +344,30 @@ mod cli_tests {
         keys::handle_launcher_key(
             &mut app,
             KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            &path,
+        );
+
+        assert_eq!(app.selection, selection);
+        assert!(!path.exists());
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn the_launcher_can_explicitly_save_the_selection_as_the_default() {
+        let root = std::env::temp_dir().join(format!(
+            "styra-launch-default-handler-explicit-{}",
+            std::process::id()
+        ));
+        std::fs::remove_dir_all(&root).ok();
+        let path = root.join("defaults.json");
+        let selection =
+            Selection::parse("claude:claude-sonnet-5/max").expect("valid test selection");
+        let mut app = App::pending(selection.clone());
+        app.open_launcher();
+
+        keys::handle_launcher_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('D'), KeyModifiers::SHIFT),
             &path,
         );
 

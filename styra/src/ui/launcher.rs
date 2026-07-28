@@ -1,6 +1,6 @@
 //! The launch picker: agent, model, and reasoning effort side by side, with
 //! the resulting selection spelled out along the bottom border so the
-//! operator sees exactly what an `Enter` saves as the standing default.
+//! operator sees exactly what it is selecting.
 
 use super::SELECTION_BG;
 use crate::app::{LaunchColumn, Launcher};
@@ -14,7 +14,7 @@ use styra_server::agent::PROVIDERS;
 pub(crate) fn render_launcher(frame: &mut Frame, launcher: &Launcher, area: Rect) {
     let provider = launcher.provider();
     let selection = launcher.selection();
-    let hint = " j/k choose · Tab/h/l column · Enter save default · q cancel ";
+    let hint = " j/k choose · Tab/h/l column · Enter select · D save default · q cancel ";
     // The composed selection and the key hints go on the outer frame rather
     // than on a column, where a narrow terminal would clip them.
     let frame_block = Block::default()
@@ -181,7 +181,8 @@ mod tests {
         assert!(!screen.contains("custom"), "{screen}");
         assert!(!screen.contains("│ default"), "{screen}");
         assert!(screen.contains("codex:gpt-5.6-terra/medium"), "{screen}");
-        assert!(screen.contains("Enter save default"), "{screen}");
+        assert!(screen.contains("Enter select"), "{screen}");
+        assert!(screen.contains("D save default"), "{screen}");
         // Nothing of the session view shows through a modal picker.
         assert!(!screen.contains("message"), "{screen}");
     }

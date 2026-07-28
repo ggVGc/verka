@@ -8,9 +8,9 @@ use crate::session::{self, Live};
 use styra_server::{Client, LogEntry};
 
 /// Keys for the launch picker: `j`/`k` within a column, `Tab`/`h`/`l` between
-/// them, `Enter` to save and apply the standing default (it never launches —
-/// the operator's first message still does that), `Esc`/`q` to leave it as it
-/// was.
+/// them, `Enter` to apply the choice to this workspace, `D` to also save it as
+/// the standing default (neither launches — the operator's first message still
+/// does that), `Esc`/`q` to leave it as it was.
 pub fn handle_launcher_key(app: &mut App, key: KeyEvent, preferences_path: &Path) {
     let Some(launcher) = app.launcher.as_mut() else {
         return;
@@ -20,7 +20,8 @@ pub fn handle_launcher_key(app: &mut App, key: KeyEvent, preferences_path: &Path
         KeyCode::Char('k') | KeyCode::Up => launcher.prev(),
         KeyCode::Char('l') | KeyCode::Right | KeyCode::Tab => launcher.next_column(),
         KeyCode::Char('h') | KeyCode::Left | KeyCode::BackTab => launcher.prev_column(),
-        KeyCode::Enter => {
+        KeyCode::Enter => app.confirm_launcher(),
+        KeyCode::Char('D') => {
             app.confirm_launcher();
             if let Err(error) = preferences::save(preferences_path, &app.selection) {
                 app.push_log(LogEntry::error(format!(

@@ -359,8 +359,9 @@ pub struct App {
     pub preview_scroll_limit: Cell<u16>,
     pub preview_mode: PresentationMode,
     /// What the next session launches with: agent, model, reasoning effort.
-    /// This is the operator's standing choice, edited through [`Launcher`] while
-    /// nothing is running. The terminal client persists a confirmed choice.
+    /// This is the choice for the current workspace, edited through [`Launcher`]
+    /// while nothing is running. The terminal client only persists it as the
+    /// standing default when the operator explicitly asks.
     pub selection: Selection,
     /// The open launch picker, while the operator is choosing.
     pub launcher: Option<Launcher>,
