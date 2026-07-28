@@ -12,6 +12,7 @@ use styra_server::{
 /// The live-agent side of the interactive loop: no process yet (awaiting the
 /// operator's first message), a spawned agent, or a replayed journal with no
 /// live agent to send to.
+#[derive(Debug, PartialEq, Eq)]
 pub enum Live {
     /// Nothing has been launched; the event loop spawns the session itself
     /// the moment the operator submits a message from `Focus::Input`.
@@ -118,13 +119,18 @@ pub fn attach_live_interaction(
     for message in client.queued_messages(&interaction.id)? {
         app.queue_message(message);
     }
-    Ok((
-        app,
-        Live::Running {
-            session_id: interaction.id,
-            cursor,
-        },
-    ))
+    let accepting = interaction.accepting;
+    let live = attached_live(interaction.id, cursor, accepting);
+    if !accepting {
+        // Stopped interactions remain in the server's interaction list until
+        // another interaction replaces them. Treat that stale record like a
+        // stored journal, otherwise input can be queued against a process that
+        // cannot receive it instead of taking the native-resume path.
+        if matches!(app.status, Status::Running | Status::Idle) {
+            app.status = Status::Stopped;
+        }
+    }
+    Ok((app, live))
 }
 
 pub fn open_session(client: &Client, session_id: &str) -> Result<(App, Live)> {
@@ -216,7 +222,6 @@ pub fn pause_interaction(app: &mut App, client: &Client, live: &mut Live) {
                 )));
             }
             let cleared = app.clear_queued_messages();
-            app.status = Status::Stopped;
             app.push_log(LogEntry::info(if cleared == 0 {
                 "interaction paused; send a new message to start again".into()
             } else {
@@ -224,7 +229,7 @@ pub fn pause_interaction(app: &mut App, client: &Client, live: &mut Live) {
                     "interaction paused; cleared {cleared} queued message(s); send a new message to start again"
                 )
             }));
-            *live = Live::Pending;
+            mark_stopped(app, live);
         }
     } else {
         app.enter_list();
@@ -239,5 +244,69 @@ pub fn apply_update(app: &mut App, update: InteractionUpdate) {
         InteractionUpdate::Raw(line) => app.push_raw(line),
         InteractionUpdate::Log(entry) => app.push_log(entry),
         InteractionUpdate::Ended(end) => app.on_ended(end),
+    }
+}
+
+fn mark_stopped(app: &mut App, live: &mut Live) {
+    app.status = Status::Stopped;
+    // This App still represents the same durable Session. `Pending` is
+    // reserved for a blank screen with no Session id; marking a stopped
+    // Session pending makes the next message create an unrelated session and
+    // therefore lose the conversation context.
+    *live = Live::Viewing;
+}
+
+fn attached_live(session_id: String, cursor: u64, accepting: bool) -> Live {
+    if accepting {
+        Live::Running { session_id, cursor }
+    } else {
+        Live::Viewing
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use styra_server::agent::{Provider, Selection};
+
+    fn app() -> App {
+        App::new(
+            Selection {
+                provider: Provider::Codex,
+                model: Provider::Codex.default_model().to_owned(),
+                effort: Provider::Codex.default_effort(),
+            },
+            "session-1",
+        )
+    }
+
+    #[test]
+    fn stopped_session_is_viewed_until_its_next_message_resumes_it() {
+        let mut app = app();
+        let mut live = Live::Running {
+            session_id: "session-1".into(),
+            cursor: 7,
+        };
+
+        mark_stopped(&mut app, &mut live);
+
+        assert_eq!(app.session_id, "session-1");
+        assert_eq!(app.status, Status::Stopped);
+        assert_eq!(live, Live::Viewing);
+    }
+
+    #[test]
+    fn stopped_server_interaction_is_opened_as_resumable_history() {
+        assert_eq!(
+            attached_live("session-1".into(), 7, false),
+            Live::Viewing
+        );
+        assert_eq!(
+            attached_live("session-1".into(), 7, true),
+            Live::Running {
+                session_id: "session-1".into(),
+                cursor: 7,
+            }
+        );
     }
 }
