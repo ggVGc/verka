@@ -2,8 +2,8 @@
 //! uncapped expanded content of the selected entry, regardless of whether it
 //! is folded in the list.
 
-use super::{detail_lines, summary_line, DETAIL_INDENT};
-use crate::app::{App, DiffPreviewMode};
+use super::{summary_line, DETAIL_INDENT};
+use crate::app::App;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -11,15 +11,12 @@ use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Frame;
 use std::path::{Path, PathBuf};
 use styra_server::agent::SandboxLayout;
-use styra_server::event::AgentEvent;
+use styra_server::event::{AgentEvent, DetailBlock, PresentationMode};
 
 pub(crate) fn render_preview(frame: &mut Frame, app: &App, area: Rect) {
-    let title = match selected_diff(app) {
-        Some(_) => match app.diff_preview_mode {
-            DiffPreviewMode::Minimal => " preview · minimal diff · v: raw ",
-            DiffPreviewMode::Raw => " preview · raw diff · v: minimal ",
-        },
-        None => " preview ",
+    let title = match app.preview_mode {
+        PresentationMode::Pretty => " preview · pretty · v: raw ",
+        PresentationMode::Raw => " preview · raw · v: pretty ",
     };
     let block = Block::default()
         .borders(Borders::ALL)
@@ -77,40 +74,32 @@ pub(crate) fn preview_lines(app: &App) -> Vec<Line<'static>> {
         ))];
     };
 
-    let mut lines = vec![summary_line(entry, entry.has_detail(), false)];
-    if let Some(diff) = event_diff(&entry.event) {
-        lines.extend(diff_lines(diff, app.diff_preview_mode));
-    } else {
-        lines.extend(detail_lines(&entry.event, None));
-        if let AgentEvent::FileChanged { paths, .. } = &entry.event {
-            lines.extend(file_content_lines(paths, app.workspace_root.as_deref()));
-        }
+    let protocol = app.selection.provider.protocol();
+    let mut lines = vec![summary_line(entry, entry.has_detail(), false, protocol)];
+    for block in entry.event.presented_detail(protocol, app.preview_mode) {
+        lines.extend(presented_block_lines(block));
+    }
+    if let AgentEvent::FileChanged { paths, .. } = &entry.event {
+        lines.extend(file_content_lines(paths, app.workspace_root.as_deref()));
     }
     lines
 }
 
-fn selected_diff(app: &App) -> Option<&str> {
-    app.selected_entry().and_then(|entry| event_diff(&entry.event))
-}
-
-fn event_diff(event: &AgentEvent) -> Option<&str> {
-    match event {
-        AgentEvent::FileChanged {
-            diff: Some(diff), ..
-        }
-        | AgentEvent::DiffUpdated { diff } => Some(diff),
-        _ => None,
-    }
-}
-
-fn diff_lines(diff: &str, mode: DiffPreviewMode) -> Vec<Line<'static>> {
-    diff.lines()
-        .filter(|line| {
-            mode == DiffPreviewMode::Raw
-                || (line.starts_with('+') && !line.starts_with("+++"))
-                || (line.starts_with('-') && !line.starts_with("---"))
-        })
+fn presented_block_lines(block: DetailBlock) -> Vec<Line<'static>> {
+    let (text, language) = match block {
+        DetailBlock::Text(text) => (text, None),
+        DetailBlock::Code { language, text } => (text, language),
+    };
+    text.lines()
         .map(|line| {
+            if language.as_deref() == Some("bash") {
+                let mut spans = vec![Span::styled(
+                    DETAIL_INDENT.to_owned(),
+                    Style::default().fg(Color::White),
+                )];
+                spans.extend(bash_spans(line));
+                return Line::from(spans);
+            }
             let color = if line.starts_with('+') && !line.starts_with("+++") {
                 Color::Green
             } else if line.starts_with('-') && !line.starts_with("---") {
@@ -126,6 +115,59 @@ fn diff_lines(diff: &str, mode: DiffPreviewMode) -> Vec<Line<'static>> {
             ))
         })
         .collect()
+}
+
+/// Small shell highlighter for command previews. Genta identifies the code as
+/// Bash; Styra owns the terminal palette.
+fn bash_spans(line: &str) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    let mut rest = line;
+    while !rest.is_empty() {
+        if rest.starts_with('#') {
+            spans.push(Span::styled(
+                rest.to_owned(),
+                Style::default().fg(Color::DarkGray),
+            ));
+            break;
+        }
+        let first = rest.chars().next().unwrap();
+        let (len, color) = if first == '\'' || first == '"' {
+            let end = rest[1..]
+                .find(first)
+                .map(|offset| offset + 2)
+                .unwrap_or(rest.len());
+            (end, Color::Green)
+        } else if first.is_whitespace() {
+            (
+                rest.find(|ch: char| !ch.is_whitespace())
+                    .unwrap_or(rest.len()),
+                Color::White,
+            )
+        } else {
+            let end = rest
+                .find(|ch: char| ch.is_whitespace() || "|&;<>".contains(ch))
+                .unwrap_or(rest.len());
+            if end == 0 {
+                (first.len_utf8(), Color::Magenta)
+            } else {
+                let token = &rest[..end];
+                let color = if token.starts_with('-') {
+                    Color::Cyan
+                } else if token.contains('$') {
+                    Color::Yellow
+                } else {
+                    Color::White
+                };
+                (end, color)
+            }
+        };
+        spans.push(Span::styled(
+            rest[..len].to_owned(),
+            Style::default().fg(color),
+        ));
+        rest = &rest[len..];
+    }
+    spans
 }
 
 /// Read back the current content of files a `FileChanged` event touched, so
@@ -190,7 +232,9 @@ mod tests {
 
     fn rendered(app: &App) -> String {
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
-        terminal.draw(|frame| super::super::render(frame, app)).unwrap();
+        terminal
+            .draw(|frame| super::super::render(frame, app))
+            .unwrap();
         terminal
             .backend()
             .buffer()
@@ -280,7 +324,7 @@ mod tests {
         app.toggle_preview();
 
         let minimal = rendered(&app);
-        assert!(minimal.contains("minimal diff"));
+        assert!(minimal.contains("pretty"));
         assert!(minimal.contains("-old"));
         assert!(minimal.contains("+new"));
         assert!(!minimal.contains("diff --git"));
@@ -288,9 +332,9 @@ mod tests {
         assert!(!minimal.contains("index 123"));
         assert!(!minimal.contains(" context"));
 
-        app.toggle_diff_preview_mode();
+        app.toggle_preview_mode();
         let raw = rendered(&app);
-        assert!(raw.contains("raw diff"));
+        assert!(raw.contains("raw"));
         assert!(raw.contains("diff --git"));
         assert!(raw.contains("@@ -1,3"));
         assert!(raw.contains("index 123"));
@@ -321,7 +365,7 @@ mod tests {
         assert!(minimal.contains("-old"));
         assert!(minimal.contains("+new"));
 
-        app.toggle_diff_preview_mode();
+        app.toggle_preview_mode();
         let raw = preview_lines(&app);
         let raw = raw
             .iter()
@@ -331,6 +375,40 @@ mod tests {
         assert!(raw.contains("@@ edit @@"));
         assert!(raw.contains("-old"));
         assert!(raw.contains("+new"));
+    }
+
+    #[test]
+    fn claude_bash_toggles_between_highlighted_command_and_raw_json() {
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("claude").unwrap(),
+            "s1",
+        );
+        app.push_event(AgentEvent::ToolStarted {
+            id: "toolu_1".into(),
+            name: "Bash".into(),
+            detail: r#"{"command":"cargo test --all","description":"run the suite"}"#.into(),
+        });
+
+        let pretty = preview_lines(&app);
+        let pretty_text = pretty
+            .iter()
+            .flat_map(|line| &line.spans)
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        assert!(pretty_text.contains("cargo test --all"));
+        assert!(!pretty_text.contains("description"));
+        assert!(pretty
+            .iter()
+            .flat_map(|line| &line.spans)
+            .any(|span| span.style.fg == Some(Color::Cyan)));
+
+        app.toggle_preview_mode();
+        let raw = preview_lines(&app)
+            .iter()
+            .flat_map(|line| &line.spans)
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        assert!(raw.contains("description"));
     }
 
     #[test]
@@ -391,7 +469,9 @@ mod tests {
         app.toggle_fullscreen_preview();
 
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
-        terminal.draw(|frame| super::super::render(frame, &app)).unwrap();
+        terminal
+            .draw(|frame| super::super::render(frame, &app))
+            .unwrap();
         let buffer = terminal.backend().buffer().clone();
         let screen: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
 
@@ -458,7 +538,9 @@ mod tests {
         app.toggle_preview();
 
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
-        terminal.draw(|frame| super::super::render(frame, &app)).unwrap();
+        terminal
+            .draw(|frame| super::super::render(frame, &app))
+            .unwrap();
         let buffer = terminal.backend().buffer().clone();
 
         // The preview occupies the right ~40% of the frame (the list's own
@@ -468,7 +550,9 @@ mod tests {
         let preview_columns = 50..buffer.area.width;
         let has_highlight = preview_columns
             .flat_map(|x| (0..buffer.area.height).map(move |y| (x, y)))
-            .any(|(x, y)| buffer.cell((x, y)).unwrap().style().bg == Some(super::super::SELECTION_BG));
+            .any(|(x, y)| {
+                buffer.cell((x, y)).unwrap().style().bg == Some(super::super::SELECTION_BG)
+            });
         assert!(
             !has_highlight,
             "preview text should never carry a background highlight"
@@ -492,7 +576,9 @@ mod tests {
         app.toggle_preview();
 
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
-        terminal.draw(|frame| super::super::render(frame, &app)).unwrap();
+        terminal
+            .draw(|frame| super::super::render(frame, &app))
+            .unwrap();
         let buffer = terminal.backend().buffer().clone();
 
         let (x, y) = find_column(&buffer, "preview");

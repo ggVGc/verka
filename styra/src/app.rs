@@ -9,6 +9,7 @@ use std::cell::Cell;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use styra_server::agent::{Provider, Selection, PROVIDERS};
+use styra_server::event::PresentationMode;
 use styra_server::event::{AgentEvent, DetailBlock, TokenUsage};
 use styra_server::{DrivaOptions, InteractionEnd, LogEntry, RawLine};
 
@@ -32,15 +33,6 @@ pub enum View {
     Transcript,
     Driva,
     Preview,
-}
-
-/// How a file diff is presented in the entry preview.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DiffPreviewMode {
-    /// Changed lines only.
-    Minimal,
-    /// The provider's complete diff output, byte-for-byte by line.
-    Raw,
 }
 
 /// The session's lifecycle as the operator sees it.
@@ -365,7 +357,7 @@ pub struct App {
     /// repeated PageDown presses at the bottom from accumulating an invisible
     /// offset that PageUp would later have to unwind.
     pub preview_scroll_limit: Cell<u16>,
-    pub diff_preview_mode: DiffPreviewMode,
+    pub preview_mode: PresentationMode,
     /// What the next session launches with: agent, model, reasoning effort.
     /// This is the operator's standing choice, edited through [`Launcher`] while
     /// nothing is running. The terminal client persists a confirmed choice.
@@ -439,7 +431,7 @@ impl App {
             show_preview: false,
             preview_scroll: 0,
             preview_scroll_limit: Cell::new(0),
-            diff_preview_mode: DiffPreviewMode::Minimal,
+            preview_mode: PresentationMode::Pretty,
             selection,
             launcher: None,
             reported_model: None,
@@ -946,10 +938,10 @@ impl App {
             .saturating_sub(10);
     }
 
-    pub fn toggle_diff_preview_mode(&mut self) {
-        self.diff_preview_mode = match self.diff_preview_mode {
-            DiffPreviewMode::Minimal => DiffPreviewMode::Raw,
-            DiffPreviewMode::Raw => DiffPreviewMode::Minimal,
+    pub fn toggle_preview_mode(&mut self) {
+        self.preview_mode = match self.preview_mode {
+            PresentationMode::Pretty => PresentationMode::Raw,
+            PresentationMode::Raw => PresentationMode::Pretty,
         };
         self.preview_scroll = 0;
     }

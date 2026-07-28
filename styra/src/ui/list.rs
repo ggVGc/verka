@@ -9,7 +9,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
-use styra_server::event::{AgentEvent, DetailBlock};
+use styra_server::event::{AgentEvent, DetailBlock, PresentationMode, Protocol};
 
 pub(crate) fn render_list(frame: &mut Frame, app: &App, area: Rect) {
     let area = if app.show_preview {
@@ -92,7 +92,7 @@ pub(crate) fn render_list(frame: &mut Frame, app: &App, area: Rect) {
     let width = area.width.saturating_sub(2) as usize;
     let mut items: Vec<ListItem> = visible
         .iter()
-        .map(|(_, entry)| entry_item(entry, width))
+        .map(|(_, entry)| entry_item(entry, width, app.selection.provider.protocol()))
         .collect();
     let item_heights: Vec<usize> = items.iter().map(ListItem::height).collect();
     items.push(ListItem::new(status_tail(app)));
@@ -143,9 +143,7 @@ fn list_offset_with_scrolloff(
     let margin = 2.min(viewport_height.saturating_sub(1) / 2);
     let mut offset = current.min(selected);
 
-    while offset < selected
-        && heights[offset..selected].iter().sum::<usize>() < margin
-    {
+    while offset < selected && heights[offset..selected].iter().sum::<usize>() < margin {
         offset = offset.saturating_sub(1);
         if offset == 0 {
             break;
@@ -185,8 +183,13 @@ fn status_tail(app: &App) -> Line<'static> {
     Line::from(Span::styled(text, Style::default().fg(color)))
 }
 
-fn entry_item(entry: &Entry, width: usize) -> ListItem<'static> {
-    let mut lines = vec![summary_line(entry, entry.has_detail(), !entry.expanded)];
+fn entry_item(entry: &Entry, width: usize, protocol: Protocol) -> ListItem<'static> {
+    let mut lines = vec![summary_line(
+        entry,
+        entry.has_detail(),
+        !entry.expanded,
+        protocol,
+    )];
     if entry.expanded {
         lines.extend(detail_lines(&entry.event, Some(MAX_DETAIL_LINES)));
     }
@@ -292,7 +295,12 @@ fn split_keep_whitespace(s: &str) -> Vec<String> {
 /// the detail body that follows already carries the full, untruncated
 /// content, so repeating the (possibly truncated) summary text above it
 /// would just show the same thing twice.
-pub(crate) fn summary_line(entry: &Entry, has_detail: bool, show_summary: bool) -> Line<'static> {
+pub(crate) fn summary_line(
+    entry: &Entry,
+    has_detail: bool,
+    show_summary: bool,
+    protocol: Protocol,
+) -> Line<'static> {
     let marker = match (has_detail, entry.expanded) {
         (false, _) => " ",
         (true, true) => "▾",
@@ -329,7 +337,11 @@ pub(crate) fn summary_line(entry: &Entry, has_detail: bool, show_summary: bool) 
         if !prefix.is_empty() {
             spans.push(Span::styled(prefix, summary_style));
         }
-        let summary = file_action_summary(&entry.event).unwrap_or_else(|| entry.event.summary());
+        let summary = file_action_summary(&entry.event).unwrap_or_else(|| {
+            entry
+                .event
+                .presented_summary(protocol, PresentationMode::Pretty)
+        });
         let summary = match &entry.event {
             AgentEvent::ToolStarted { name, .. } | AgentEvent::ToolCompleted { name, .. } => {
                 summary
@@ -363,8 +375,8 @@ fn file_action_summary(event: &AgentEvent) -> Option<String> {
     };
     let action = match diff {
         Some(diff) => {
-            let added = diff.contains("new file mode")
-                || diff.lines().any(|line| line == "--- /dev/null");
+            let added =
+                diff.contains("new file mode") || diff.lines().any(|line| line == "--- /dev/null");
             let deleted = diff.contains("deleted file mode")
                 || diff.lines().any(|line| line == "+++ /dev/null");
             match (added, deleted) {
@@ -442,7 +454,9 @@ mod tests {
 
     fn rendered(app: &App) -> String {
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
-        terminal.draw(|frame| super::super::render(frame, app)).unwrap();
+        terminal
+            .draw(|frame| super::super::render(frame, app))
+            .unwrap();
         terminal
             .backend()
             .buffer()
@@ -467,7 +481,9 @@ mod tests {
         app.expand_all();
 
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
-        terminal.draw(|frame| super::super::render(frame, &app)).unwrap();
+        terminal
+            .draw(|frame| super::super::render(frame, &app))
+            .unwrap();
         let buffer = terminal.backend().buffer().clone();
 
         let backgrounds: Vec<Color> = buffer
@@ -492,7 +508,9 @@ mod tests {
         app.expand_all();
 
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
-        terminal.draw(|frame| super::super::render(frame, &app)).unwrap();
+        terminal
+            .draw(|frame| super::super::render(frame, &app))
+            .unwrap();
         let buffer = terminal.backend().buffer().clone();
 
         let detail_row = (0..buffer.area.height)
@@ -534,7 +552,9 @@ mod tests {
         app.expand_all();
 
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
-        terminal.draw(|frame| super::super::render(frame, &app)).unwrap();
+        terminal
+            .draw(|frame| super::super::render(frame, &app))
+            .unwrap();
         let buffer = terminal.backend().buffer().clone();
 
         let row_containing = |text: &str| -> u16 {
@@ -608,10 +628,7 @@ mod tests {
             diff: "diff --git a/new.rs b/new.rs\nnew file mode 100644\n--- /dev/null\n+++ b/new.rs"
                 .into(),
         };
-        assert_eq!(
-            file_action_summary(&added).as_deref(),
-            Some("added new.rs")
-        );
+        assert_eq!(file_action_summary(&added).as_deref(), Some("added new.rs"));
 
         let deleted = AgentEvent::FileChanged {
             id: "f2".into(),

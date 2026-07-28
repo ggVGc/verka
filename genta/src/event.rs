@@ -171,6 +171,16 @@ pub enum DetailBlock {
     },
 }
 
+/// Whether an event is shown in its concise, semantic form or in the complete
+/// provider-decoded form. Pretty presentation may be generic (minimal diffs)
+/// or protocol-specific (Claude's JSON-encoded Bash input).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PresentationMode {
+    #[default]
+    Pretty,
+    Raw,
+}
+
 impl AgentEvent {
     /// The short tag shown at the head of the collapsed list line.
     pub fn tag(&self) -> &'static str {
@@ -262,6 +272,16 @@ impl AgentEvent {
             AgentEvent::Malformed { error } => first_line(error),
         };
         truncate_line(&line, 200)
+    }
+
+    /// A collapsed-line summary under the requested presentation mode.
+    pub fn presented_summary(&self, protocol: Protocol, mode: PresentationMode) -> String {
+        if mode == PresentationMode::Pretty {
+            if let Some(command) = pretty_bash_command(protocol, self) {
+                return truncate_line(&command, 200);
+            }
+        }
+        self.summary()
     }
 
     /// The expandable detail body as escape-free structured blocks.
@@ -373,6 +393,77 @@ impl AgentEvent {
             AgentEvent::Malformed { error } => vec![DetailBlock::Text(error.clone())],
         }
     }
+
+    /// Structured detail under the requested presentation mode.
+    pub fn presented_detail(&self, protocol: Protocol, mode: PresentationMode) -> Vec<DetailBlock> {
+        if mode == PresentationMode::Raw {
+            return self.detail();
+        }
+        if let Some(command) = pretty_bash_command(protocol, self) {
+            let mut blocks = vec![DetailBlock::Code {
+                language: Some("bash".into()),
+                text: command,
+            }];
+            if let AgentEvent::ToolCompleted { output, .. } = self {
+                if !output.is_empty() {
+                    blocks.push(DetailBlock::Code {
+                        language: None,
+                        text: output.clone(),
+                    });
+                }
+            }
+            return blocks;
+        }
+        match self {
+            AgentEvent::FileChanged { paths, diff, .. } => {
+                let mut blocks = vec![DetailBlock::Text(paths.join("\n"))];
+                if let Some(diff) = diff {
+                    let minimal = minimal_diff(diff);
+                    if !minimal.is_empty() {
+                        blocks.push(DetailBlock::Code {
+                            language: Some("diff".into()),
+                            text: minimal,
+                        });
+                    }
+                }
+                blocks
+            }
+            AgentEvent::DiffUpdated { diff } => vec![DetailBlock::Code {
+                language: Some("diff".into()),
+                text: minimal_diff(diff),
+            }],
+            _ => self.detail(),
+        }
+    }
+}
+
+fn pretty_bash_command(protocol: Protocol, event: &AgentEvent) -> Option<String> {
+    if protocol != Protocol::ClaudeJsonl {
+        return None;
+    }
+    let (name, detail) = match event {
+        AgentEvent::ToolStarted { name, detail, .. }
+        | AgentEvent::ToolCompleted { name, detail, .. } => (name, detail),
+        _ => return None,
+    };
+    if name != "Bash" {
+        return None;
+    }
+    serde_json::from_str::<Value>(detail)
+        .ok()?
+        .get("command")?
+        .as_str()
+        .map(str::to_owned)
+}
+
+fn minimal_diff(diff: &str) -> String {
+    diff.lines()
+        .filter(|line| {
+            (line.starts_with('+') && !line.starts_with("+++"))
+                || (line.starts_with('-') && !line.starts_with("---"))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Decode one wire line under the given protocol. Never fails: undecodable
@@ -1506,6 +1597,44 @@ mod tests {
         let summary = event.summary();
         assert!(summary.chars().count() <= 200);
         assert!(summary.ends_with('…'));
+    }
+
+    #[test]
+    fn pretty_claude_bash_presents_only_the_command() {
+        let event = AgentEvent::ToolStarted {
+            id: "toolu_1".into(),
+            name: "Bash".into(),
+            detail: r#"{"command":"cargo test --all","description":"run tests"}"#.into(),
+        };
+        assert_eq!(
+            event.presented_summary(Protocol::ClaudeJsonl, PresentationMode::Pretty),
+            "cargo test --all"
+        );
+        assert_eq!(
+            event.presented_detail(Protocol::ClaudeJsonl, PresentationMode::Pretty),
+            vec![DetailBlock::Code {
+                language: Some("bash".into()),
+                text: "cargo test --all".into(),
+            }]
+        );
+        assert!(event
+            .presented_detail(Protocol::ClaudeJsonl, PresentationMode::Raw)
+            .iter()
+            .any(|block| matches!(block, DetailBlock::Text(text) if text.contains("description"))));
+    }
+
+    #[test]
+    fn pretty_diffs_are_provider_independent_and_changed_lines_only() {
+        let event = AgentEvent::DiffUpdated {
+            diff: "diff --git a/a b/a\n@@ -1 +1 @@\n-old\n+new".into(),
+        };
+        assert_eq!(
+            event.presented_detail(Protocol::CodexAppServer, PresentationMode::Pretty),
+            vec![DetailBlock::Code {
+                language: Some("diff".into()),
+                text: "-old\n+new".into(),
+            }]
+        );
     }
 
     // The following lines are copied verbatim from a live `codex app-server`

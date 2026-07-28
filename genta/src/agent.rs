@@ -66,6 +66,16 @@ impl Provider {
         }
     }
 
+    /// The wire protocol (and therefore provider-specific presentation rules)
+    /// used by this provider.
+    pub fn protocol(&self) -> Protocol {
+        match self {
+            Provider::Codex => Protocol::CodexAppServer,
+            Provider::CodexExec => Protocol::CodexJsonl,
+            Provider::Claude => Protocol::ClaudeJsonl,
+        }
+    }
+
     pub fn parse(name: &str) -> Result<Provider> {
         Provider::ALL
             .into_iter()
@@ -997,7 +1007,9 @@ mod tests {
     #[test]
     fn claude_resume_is_a_native_launch_flag() {
         let mut profile = builtin("claude", &SandboxLayout::default()).unwrap();
-        profile.resume(Provider::Claude, "claude-session-1").unwrap();
+        profile
+            .resume(Provider::Claude, "claude-session-1")
+            .unwrap();
         assert!(profile
             .command
             .windows(2)

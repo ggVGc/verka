@@ -21,7 +21,7 @@ pub(crate) use footer::tag_color;
 use footer::render_footer;
 use input::{input_area_height, render_input};
 use launcher::render_launcher;
-pub(crate) use list::{detail_lines, summary_line};
+pub(crate) use list::summary_line;
 use list::render_list;
 use log::render_log;
 pub(crate) use log::log_line;

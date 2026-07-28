@@ -65,7 +65,7 @@ pub fn handle_list_key(
     }
     match app.view {
         View::Events => match key.code {
-            KeyCode::Char('v') if app.show_preview => app.toggle_diff_preview_mode(),
+            KeyCode::Char('v') if app.show_preview => app.toggle_preview_mode(),
             KeyCode::PageDown if app.show_preview => app.preview_page_down(),
             KeyCode::PageUp if app.show_preview => app.preview_page_up(),
             KeyCode::Char('j') | KeyCode::Down => app.select_next(),
@@ -108,7 +108,7 @@ pub fn handle_list_key(
         },
         View::Driva => {}
         View::Preview => match key.code {
-            KeyCode::Char('v') => app.toggle_diff_preview_mode(),
+            KeyCode::Char('v') => app.toggle_preview_mode(),
             KeyCode::PageDown => app.preview_page_down(),
             KeyCode::PageUp => app.preview_page_up(),
             KeyCode::Char('j') | KeyCode::Down => app.select_next(),

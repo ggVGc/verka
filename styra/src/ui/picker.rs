@@ -183,12 +183,20 @@ fn render_interaction_log_preview(
     let start = updates.len().saturating_sub(viewport);
     let lines: Vec<Line<'static>> = updates[start..]
         .iter()
-        .map(interaction_preview_line)
+        .map(|update| {
+            interaction_preview_line(
+                update,
+                interaction.map(|item| item.selection.provider.protocol()),
+            )
+        })
         .collect();
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 
-fn interaction_preview_line(update: &InteractionUpdate) -> Line<'static> {
+fn interaction_preview_line(
+    update: &InteractionUpdate,
+    protocol: Option<styra_server::event::Protocol>,
+) -> Line<'static> {
     match update {
         InteractionUpdate::Event(event) => {
             let tag = event.tag();
@@ -199,7 +207,17 @@ fn interaction_preview_line(update: &InteractionUpdate) -> Line<'static> {
                         .fg(tag_color(tag))
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(event.summary(), Style::default().fg(Color::White)),
+                Span::styled(
+                    protocol
+                        .map(|protocol| {
+                            event.presented_summary(
+                                protocol,
+                                styra_server::event::PresentationMode::Pretty,
+                            )
+                        })
+                        .unwrap_or_else(|| event.summary()),
+                    Style::default().fg(Color::White),
+                ),
             ])
         }
         InteractionUpdate::Log(entry) => log_line(entry),
