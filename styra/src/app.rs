@@ -361,6 +361,10 @@ pub struct App {
     /// Rendering clamps this to the last page because wrapping depends on the
     /// terminal width.
     pub preview_scroll: u16,
+    /// Last maximum offset calculated by the preview renderer. This prevents
+    /// repeated PageDown presses at the bottom from accumulating an invisible
+    /// offset that PageUp would later have to unwind.
+    pub preview_scroll_limit: Cell<u16>,
     pub diff_preview_mode: DiffPreviewMode,
     /// What the next session launches with: agent, model, reasoning effort.
     /// This is the operator's standing choice, edited through [`Launcher`] while
@@ -395,6 +399,7 @@ pub struct App {
     /// printed preview. Rendering clamps this to the last page, as
     /// [`preview_scroll`](Self::preview_scroll) does for the entry preview.
     pub raw_preview_scroll: u16,
+    pub raw_preview_scroll_limit: Cell<u16>,
     /// Diagnostic log entries, in occurrence order.
     pub log: Vec<LogEntry>,
     /// Lines scrolled back from the bottom of the log view; 0 tracks the tail.
@@ -433,6 +438,7 @@ impl App {
             show_minor: false,
             show_preview: false,
             preview_scroll: 0,
+            preview_scroll_limit: Cell::new(0),
             diff_preview_mode: DiffPreviewMode::Minimal,
             selection,
             launcher: None,
@@ -446,6 +452,7 @@ impl App {
             raw_selected: 0,
             raw_follow: true,
             raw_preview_scroll: 0,
+            raw_preview_scroll_limit: Cell::new(0),
             log: Vec::new(),
             log_scroll_back: 0,
             transcript_scroll: 0,
@@ -682,11 +689,18 @@ impl App {
     }
 
     pub fn raw_preview_page_down(&mut self) {
-        self.raw_preview_scroll = self.raw_preview_scroll.saturating_add(10);
+        self.raw_preview_scroll = self
+            .raw_preview_scroll
+            .min(self.raw_preview_scroll_limit.get())
+            .saturating_add(10)
+            .min(self.raw_preview_scroll_limit.get());
     }
 
     pub fn raw_preview_page_up(&mut self) {
-        self.raw_preview_scroll = self.raw_preview_scroll.saturating_sub(10);
+        self.raw_preview_scroll = self
+            .raw_preview_scroll
+            .min(self.raw_preview_scroll_limit.get())
+            .saturating_sub(10);
     }
 
     /// Scroll the transcript view forward (towards its end).
@@ -918,11 +932,18 @@ impl App {
     }
 
     pub fn preview_page_down(&mut self) {
-        self.preview_scroll = self.preview_scroll.saturating_add(10);
+        self.preview_scroll = self
+            .preview_scroll
+            .min(self.preview_scroll_limit.get())
+            .saturating_add(10)
+            .min(self.preview_scroll_limit.get());
     }
 
     pub fn preview_page_up(&mut self) {
-        self.preview_scroll = self.preview_scroll.saturating_sub(10);
+        self.preview_scroll = self
+            .preview_scroll
+            .min(self.preview_scroll_limit.get())
+            .saturating_sub(10);
     }
 
     pub fn toggle_diff_preview_mode(&mut self) {
@@ -2062,12 +2083,27 @@ mod tests {
             text: "second\nbody".into(),
         });
         app.select_first();
+        app.preview_scroll_limit.set(100);
         app.preview_page_down();
         assert_eq!(app.preview_scroll, 10);
 
         app.select_next();
         assert_eq!(app.selected, 1);
         assert_eq!(app.preview_scroll, 0);
+    }
+
+    #[test]
+    fn preview_page_down_does_not_accumulate_past_the_rendered_end() {
+        let mut app = app();
+        app.preview_scroll_limit.set(23);
+
+        for _ in 0..100 {
+            app.preview_page_down();
+        }
+        assert_eq!(app.preview_scroll, 23);
+
+        app.preview_page_up();
+        assert_eq!(app.preview_scroll, 13);
     }
 
     #[test]

@@ -26,12 +26,13 @@ pub(crate) fn render_preview(frame: &mut Frame, app: &App, area: Rect) {
         .border_style(Style::default().fg(Color::DarkGray))
         .title(Span::styled(title, Style::default().fg(Color::Gray)));
     let lines = preview_lines(app);
-    let scroll = preview_scroll(
+    let scroll_limit = preview_scroll_limit(
         &lines,
         area.width.saturating_sub(2),
         area.height.saturating_sub(2),
-        app.preview_scroll,
     );
+    app.preview_scroll_limit.set(scroll_limit);
+    let scroll = app.preview_scroll.min(scroll_limit);
     let paragraph = Paragraph::new(lines)
         .block(block)
         .wrap(Wrap { trim: false })
@@ -45,21 +46,24 @@ pub(crate) fn render_preview(frame: &mut Frame, app: &App, area: Rect) {
 /// selected and copied cleanly.
 pub(crate) fn render_fullscreen_preview(frame: &mut Frame, app: &App, area: Rect) {
     let lines = preview_lines(app);
-    let scroll = preview_scroll(&lines, area.width, area.height, app.preview_scroll);
+    let scroll_limit = preview_scroll_limit(&lines, area.width, area.height);
+    app.preview_scroll_limit.set(scroll_limit);
+    let scroll = app.preview_scroll.min(scroll_limit);
     let paragraph = Paragraph::new(lines)
         .wrap(Wrap { trim: false })
         .scroll((scroll, 0));
     frame.render_widget(paragraph, area);
 }
 
-pub(crate) fn preview_scroll(lines: &[Line<'_>], width: u16, height: u16, requested: u16) -> u16 {
+pub(crate) fn preview_scroll_limit(lines: &[Line<'_>], width: u16, height: u16) -> u16 {
     let width = usize::from(width.max(1));
     let rendered_lines: usize = lines
         .iter()
         .map(|line| line.width().max(1).div_ceil(width))
         .sum();
-    let max_scroll = rendered_lines.saturating_sub(usize::from(height)) as u16;
-    requested.min(max_scroll)
+    rendered_lines
+        .saturating_sub(usize::from(height))
+        .min(usize::from(u16::MAX)) as u16
 }
 
 /// Shared body for the side-panel and full-screen preview: the selected

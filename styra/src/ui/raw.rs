@@ -4,7 +4,7 @@
 //! in full — the two together give both the overview and the detail that a
 //! single wrapped-line-per-row view couldn't.
 
-use super::{preview_scroll, title_line, SELECTION_BG};
+use super::{preview_scroll_limit, title_line, SELECTION_BG};
 use crate::app::{App, Focus};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Style};
@@ -72,12 +72,13 @@ fn render_raw_preview(frame: &mut Frame, app: &App, area: Rect) {
         .border_style(Style::default().fg(Color::DarkGray))
         .title(Span::styled(" entry ", Style::default().fg(Color::Gray)));
     let lines = raw_preview_lines(app);
-    let scroll = preview_scroll(
+    let scroll_limit = preview_scroll_limit(
         &lines,
         area.width.saturating_sub(2),
         area.height.saturating_sub(2),
-        app.raw_preview_scroll,
     );
+    app.raw_preview_scroll_limit.set(scroll_limit);
+    let scroll = app.raw_preview_scroll.min(scroll_limit);
     let paragraph = Paragraph::new(lines)
         .block(block)
         .wrap(Wrap { trim: false })

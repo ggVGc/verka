@@ -27,7 +27,7 @@ use log::render_log;
 pub(crate) use log::log_line;
 pub use picker::{render_interactions_picker, render_picker, render_workspace_picker};
 use preview::{render_fullscreen_preview, render_preview};
-pub(crate) use preview::preview_scroll;
+pub(crate) use preview::preview_scroll_limit;
 use raw::render_raw;
 use transcript::render_transcript_view;
 
