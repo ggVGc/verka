@@ -330,14 +330,28 @@ pub(crate) fn summary_line(
         _ => tag,
     };
     // Shell rows use one color across their whole summary, matching the old
-    // Codex command presentation. Other completed tools get a checkmark/cross
-    // prefix so they do not read like the running row they replaced.
+    // Codex command presentation. A running shell has no result marker; its
+    // completed replacement gains a checkmark/cross like every other tool.
     let (summary_style, prefix, prefix_style) = match &entry.event {
-        _ if tag == "shell" => (
-            Style::default().fg(tag_color(tag)),
-            "",
-            Style::default(),
-        ),
+        AgentEvent::ToolCompleted { status, .. } | AgentEvent::CommandCompleted { status, .. }
+            if tag == "shell" && status == "error" =>
+        {
+            (
+                Style::default().fg(tag_color(tag)),
+                "✗ ",
+                Style::default().fg(Color::Red),
+            )
+        }
+        AgentEvent::ToolCompleted { .. } | AgentEvent::CommandCompleted { .. }
+            if tag == "shell" =>
+        {
+            (
+                Style::default().fg(tag_color(tag)),
+                "✓ ",
+                Style::default().fg(Color::Green),
+            )
+        }
+        _ if tag == "shell" => (Style::default().fg(tag_color(tag)), "", Style::default()),
         AgentEvent::ToolCompleted { status, .. } | AgentEvent::CommandCompleted { status, .. }
             if status == "error" =>
         {
@@ -710,7 +724,7 @@ mod tests {
     }
 
     #[test]
-    fn a_completed_shell_tool_uses_shell_color_for_the_whole_summary() {
+    fn a_shell_tool_gets_a_checkmark_only_when_it_completes() {
         let mut app = App::new(
             styra_server::agent::Selection::parse("codex").unwrap(),
             "s1",
@@ -720,6 +734,11 @@ mod tests {
             name: "Bash".into(),
             detail: "{\"command\":\"cargo test\"}".into(),
         });
+        let running = rendered(&app);
+        assert!(!running.contains('✓'));
+        assert!(running.contains("Shell"));
+        assert!(running.contains("cargo test"));
+
         app.push_event(AgentEvent::ToolCompleted {
             id: "toolu_1".into(),
             name: "toolu_1".into(),
@@ -728,7 +747,7 @@ mod tests {
             output: "ok".into(),
         });
         let screen = rendered(&app);
-        assert!(!screen.contains('✓'));
+        assert!(screen.contains('✓'));
         assert!(screen.contains("Shell"));
         assert!(screen.contains("cargo test"));
         assert!(!screen.contains("tool     "));
@@ -755,7 +774,7 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_shell_tool_stays_shell_colored_without_a_cross() {
+    fn a_failed_shell_tool_gets_a_cross() {
         let mut app = App::new(
             styra_server::agent::Selection::parse("codex").unwrap(),
             "s1",
@@ -773,7 +792,7 @@ mod tests {
             output: "boom".into(),
         });
         let screen = rendered(&app);
-        assert!(!screen.contains('✗'));
+        assert!(screen.contains('✗'));
         assert!(!screen.contains('✓'));
     }
 
