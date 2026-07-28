@@ -14,13 +14,14 @@ use std::time::Duration;
 
 mod app;
 mod cli;
+mod keys;
 mod picker;
 mod preferences;
 mod session;
 mod terminal;
 mod ui;
 
-use app::{App, Focus, Status, View};
+use app::{App, Focus, Status};
 use cli::{Cli, CliCommand};
 use session::Live;
 use styra_server::{Client, InteractionSummary, LogEntry, WorkspaceSummary};
@@ -382,13 +383,13 @@ fn run(
         // The launch picker is modal: while it is open it owns every key, so
         // neither focus's bindings can fire behind it.
         if app.launcher.is_some() {
-            handle_launcher_key(app, key, preferences_path);
+            keys::handle_launcher_key(app, key, preferences_path);
             continue;
         }
 
         match app.focus {
-            Focus::List => handle_list_key(app, client, live, key, &mut pending_fold),
-            Focus::Input => handle_input_key(app, client, cli, workspace_id, live, key),
+            Focus::List => keys::handle_list_key(app, client, live, key, &mut pending_fold),
+            Focus::Input => keys::handle_input_key(app, client, cli, workspace_id, live, key),
         }
 
         if app.should_quit {
@@ -438,212 +439,6 @@ fn run(
     }
 }
 
-/// Keys for the launch picker: `j`/`k` within a column, `Tab`/`h`/`l` between
-/// them, `Enter` to save and apply the standing default (it never launches —
-/// the operator's first message still does that), `Esc`/`q` to leave it as it
-/// was.
-fn handle_launcher_key(app: &mut App, key: KeyEvent, preferences_path: &Path) {
-    let Some(launcher) = app.launcher.as_mut() else {
-        return;
-    };
-    match key.code {
-        KeyCode::Char('j') | KeyCode::Down => launcher.next(),
-        KeyCode::Char('k') | KeyCode::Up => launcher.prev(),
-        KeyCode::Char('l') | KeyCode::Right | KeyCode::Tab => launcher.next_column(),
-        KeyCode::Char('h') | KeyCode::Left | KeyCode::BackTab => launcher.prev_column(),
-        KeyCode::Enter => {
-            app.confirm_launcher();
-            if let Err(error) = preferences::save(preferences_path, &app.selection) {
-                app.push_log(LogEntry::error(format!(
-                    "could not save launch defaults: {error:#}"
-                )));
-            }
-        }
-        KeyCode::Esc | KeyCode::Char('q') => app.cancel_launcher(),
-        _ => {}
-    }
-}
-
-fn handle_list_key(
-    app: &mut App,
-    client: &Client,
-    live: &mut Live,
-    key: KeyEvent,
-    pending_fold: &mut bool,
-) {
-    // Vim-style fold chord: `z` then `R` (expand all) or `M` (collapse all).
-    if std::mem::take(pending_fold) {
-        match key.code {
-            KeyCode::Char('R') => app.expand_all(),
-            KeyCode::Char('M') => app.collapse_all(),
-            _ => {}
-        }
-        return;
-    }
-    // Keys common to both views. `i` is excluded while the full-screen
-    // preview is up: it renders with no input box at all, so entering input
-    // focus would leave keystrokes going nowhere visible.
-    match key.code {
-        KeyCode::Char('q') => return app.request_quit(),
-        KeyCode::Char('s') => return session::pause_interaction(app, client, live),
-        KeyCode::Char('i') if app.view != View::Preview => return app.enter_input(),
-        KeyCode::Char('r') => return app.toggle_raw(),
-        KeyCode::Char('l') => return app.toggle_log(),
-        KeyCode::Char('t') => return app.toggle_transcript(),
-        KeyCode::Char('d') => return app.toggle_driva(),
-        KeyCode::Char('P') => return app.toggle_fullscreen_preview(),
-        // Only before a launch: a running session's agent and model are settled
-        // facts about a process that is already up. `S` first, then `L`.
-        KeyCode::Char('L') => return app.open_launcher(),
-        KeyCode::Char('V') => return app.request_workspace(),
-        KeyCode::Char('A') => return app.request_interactions(),
-        KeyCode::Char('S') => return app.request_reset(),
-        _ => {}
-    }
-    match app.view {
-        View::Events => match key.code {
-            KeyCode::PageDown if app.show_preview => app.preview_page_down(),
-            KeyCode::PageUp if app.show_preview => app.preview_page_up(),
-            KeyCode::Char('j') | KeyCode::Down => app.select_next(),
-            KeyCode::Char('k') | KeyCode::Up => app.select_prev(),
-            KeyCode::Char('J') => app.select_next_line(),
-            KeyCode::Char('K') => app.select_prev_line(),
-            KeyCode::Char(' ') | KeyCode::Enter => app.toggle_expand(),
-            KeyCode::Char('o') => app.expand_selected(),
-            KeyCode::Char('g') => app.select_first(),
-            KeyCode::Char('G') => app.select_last(),
-            KeyCode::Char('z') => *pending_fold = true,
-            KeyCode::Char('m') => app.toggle_minor(),
-            KeyCode::Char('p') => app.toggle_preview(),
-            KeyCode::Char('C') => app.collapse_all(),
-            _ => {}
-        },
-        View::Raw => match key.code {
-            KeyCode::PageDown => app.raw_preview_page_down(),
-            KeyCode::PageUp => app.raw_preview_page_up(),
-            KeyCode::Char('j') | KeyCode::Down => app.raw_select_next(),
-            KeyCode::Char('k') | KeyCode::Up => app.raw_select_prev(),
-            KeyCode::Char('g') => app.raw_select_first(),
-            KeyCode::Char('G') => app.raw_select_last(),
-            _ => {}
-        },
-        View::Log => match key.code {
-            KeyCode::Char('j') | KeyCode::Down => app.log_scroll_down(),
-            KeyCode::Char('k') | KeyCode::Up => app.log_scroll_up(),
-            KeyCode::Char('g') => app.log_to_top(),
-            KeyCode::Char('G') => app.log_to_bottom(),
-            _ => {}
-        },
-        View::Transcript => match key.code {
-            KeyCode::Char('j') | KeyCode::Down => app.transcript_scroll_down(),
-            KeyCode::Char('k') | KeyCode::Up => app.transcript_scroll_up(),
-            KeyCode::Char('g') => app.transcript_to_top(),
-            KeyCode::Char('G') => app.transcript_to_bottom(),
-            _ => {}
-        },
-        // A short, static summary; nothing to scroll.
-        View::Driva => {}
-        // Browsing between entries updates which one's content is shown.
-        View::Preview => match key.code {
-            KeyCode::PageDown => app.preview_page_down(),
-            KeyCode::PageUp => app.preview_page_up(),
-            KeyCode::Char('j') | KeyCode::Down => app.select_next(),
-            KeyCode::Char('k') | KeyCode::Up => app.select_prev(),
-            KeyCode::Char('J') => app.select_next_line(),
-            KeyCode::Char('K') => app.select_prev_line(),
-            KeyCode::Char('g') => app.select_first(),
-            KeyCode::Char('G') => app.select_last(),
-            _ => {}
-        },
-    }
-}
-
-fn handle_input_key(
-    app: &mut App,
-    client: &Client,
-    cli: &Cli,
-    workspace_id: &str,
-    live: &mut Live,
-    key: KeyEvent,
-) {
-    match key.code {
-        // Escape leaves the message box and returns to the list view.
-        KeyCode::Esc => app.enter_list(),
-        KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => app.input_newline(),
-        KeyCode::Enter => {
-            if let Some(message) = app.take_message() {
-                match live {
-                    // The sent message returns as a UserMessage event, so it is
-                    // not pushed here; send failures surface in the log view.
-                    Live::Running { .. } if app.status == Status::Running => {
-                        app.queue_message(message);
-                        app.push_log(LogEntry::info(format!(
-                            "message queued ({} waiting)",
-                            app.queued_message_count()
-                        )));
-                    }
-                    Live::Running { session_id, .. } if app.status == Status::Idle => {
-                        if let Err(error) = client.send_message(session_id, &message) {
-                            app.push_log(LogEntry::error(format!("send failed: {error:#}")));
-                        }
-                    }
-                    // Stopped, ended, or merely viewed (reopened from the
-                    // picker, or `--view`'d from disk): resume the Session
-                    // through its provider's native mechanism, then deliver
-                    // the message to the revived agent.
-                    Live::Running { .. } | Live::Viewing => {
-                        session::resume_and_send(app, client, cli, live, message)
-                    }
-                    // The operator's first message: this is what actually
-                    // starts the agent. Nothing was launched or sent before
-                    // this point.
-                    // The launch picker's standing choice is what starts here.
-                    Live::Pending => {
-                        let selection = app.selection.clone();
-                        match session::create_session(client, cli, workspace_id, &selection, Some(&message))
-                        {
-                            Ok(info) => {
-                                app.selection = info.selection;
-                                app.workspace_id = Some(info.workspace_id);
-                                app.session_id = info.id.clone();
-                                app.set_workspace_root(info.workspace);
-                                app.set_driva_options(info.driva);
-                                app.push_log(LogEntry::info(format!(
-                                    "journal: {}",
-                                    info.journal_path.display()
-                                )));
-                                app.status = Status::Running;
-                                *live = Live::Running {
-                                    session_id: info.id,
-                                    cursor: info.updates_after,
-                                };
-                            }
-                            Err(error) => {
-                                app.push_log(LogEntry::error(format!(
-                                    "could not launch the agent: {error:#}"
-                                )));
-                                // Don't lose what they typed; let them retry.
-                                app.set_input(message);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        KeyCode::Backspace => app.input_backspace(),
-        KeyCode::Up => app.input_history_previous(),
-        KeyCode::Down => app.input_history_next(),
-        KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            app.input_delete_word()
-        }
-        // The start screen opens in input focus, so the launch picker is
-        // reachable from here too rather than only after an `Esc`. A control
-        // chord because plain letters are message text.
-        KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => app.open_launcher(),
-        KeyCode::Char(ch) => app.input_char(ch),
-        _ => {}
-    }
-}
 
 
 
@@ -700,7 +495,7 @@ mod cli_tests {
         let mut app = App::pending(selection.clone());
         app.open_launcher();
 
-        handle_launcher_key(
+        keys::handle_launcher_key(
             &mut app,
             KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
             &path,
