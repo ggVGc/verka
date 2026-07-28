@@ -686,6 +686,63 @@ fn no_write_makes_every_host_mount_read_only() {
     assert!(output.contains("mount: temporary -> /temporary (read-write)"));
 }
 
+#[test]
+fn overlay_writes_turns_template_writable_mounts_into_overlays() {
+    let directory = TestDirectory::new("overlay-writes");
+    for path in ["configured", "template", "cli"] {
+        std::fs::create_dir(directory.0.join(path)).unwrap();
+    }
+    directory.write_config(
+        r#"
+        [[mount]]
+        source = "configured"
+        destination = "/configured"
+        access = "write"
+
+        [template.readonly]
+
+        [[template.readonly.workspace-mount]]
+        source = "."
+        destination = "/workspace"
+        access = "write"
+
+        [[template.readonly.mount]]
+        source = "template"
+        destination = "/template"
+        access = "write"
+        "#,
+    );
+    let output = stdout(directory.run(&[
+        "run",
+        "--dry-run",
+        "--template",
+        "readonly",
+        "--overlay-writes",
+        "--write",
+        "cli:/cli",
+        "--",
+        "true",
+    ]));
+    let workspace = directory.0.canonicalize().unwrap();
+    let template = directory.0.join("template").canonicalize().unwrap();
+    let configured = directory.0.join("configured").canonicalize().unwrap();
+    let cli = directory.0.join("cli").canonicalize().unwrap();
+
+    assert!(output.contains(&format!(
+        "mount: {} -> /workspace (overlay, writes discarded)",
+        workspace.display()
+    )));
+    assert!(output.contains(&format!(
+        "mount: {} -> /template (overlay, writes discarded)",
+        template.display()
+    )));
+    assert!(output.contains(&format!(
+        "mount: {} -> /configured (read-write)",
+        configured.display()
+    )));
+    assert!(output.contains(&format!("mount: {} -> /cli (read-write)", cli.display())));
+}
+
 /// A template's mounts land at their host paths, so a template pointing a tool
 /// at host state names it with `~` and expects the host home — not whatever
 /// `HOME` the sandbox is given.

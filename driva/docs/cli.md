@@ -68,6 +68,7 @@ Options:
       --write <MOUNT>          Add a writable mount as SOURCE or SOURCE:DESTINATION
       --overlay <MOUNT>        Add a mount as SOURCE or SOURCE:DESTINATION that reads the host content and is writable, but writes are discarded after execution
       --no-write               Make every host mount read-only, overriding configuration and templates
+      --overlay-writes         Turn a template's writable mounts into overlays: the sandbox reads the host content and can write to it, but writes are discarded and never reach the host
       --path <DIRECTORY>       Add a host directory read-only and prepend it to the isolated PATH
       --backend <BACKEND>      Select the isolation backend
       --network                Permit networking (disabled otherwise)
@@ -112,6 +113,7 @@ Policy options (shared by `run` and `shell`):
 | `--write <MOUNT>` | Bind-mount a host path read-write. Repeatable. |
 | `--overlay <MOUNT>` | Mount a host path read-write through a discarded tmpfs upper layer; the sandbox sees the host content and can write to it, but writes never reach the host. Repeatable. |
 | `--no-write` | Make every host bind mount read-only, overriding project configuration, templates, and `--write`. |
+| `--overlay-writes` | Turn a template's writable mounts (including its workspace mount) into overlays: readable host content, writable in the sandbox, discarded instead of reaching the host. Does not affect `--write` or project-configured mounts. |
 | `--path <DIRECTORY>` | Bind-mount a host directory read-only and prepend it to the isolated `PATH`. Repeatable. |
 | `--backend <BACKEND>` | Select the isolation backend for this invocation (`bwrap`). |
 | `--network` | Enable networking (otherwise the sandbox has none). |
@@ -365,6 +367,7 @@ Options:
       --write <MOUNT>          Add a writable mount as SOURCE or SOURCE:DESTINATION
       --overlay <MOUNT>        Add a mount as SOURCE or SOURCE:DESTINATION that reads the host content and is writable, but writes are discarded after execution
       --no-write               Make every host mount read-only, overriding configuration and templates
+      --overlay-writes         Turn a template's writable mounts into overlays: the sandbox reads the host content and can write to it, but writes are discarded and never reach the host
       --path <DIRECTORY>       Add a host directory read-only and prepend it to the isolated PATH
       --backend <BACKEND>      Select the isolation backend
       --network                Permit networking (disabled otherwise)

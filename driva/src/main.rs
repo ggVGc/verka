@@ -85,6 +85,11 @@ struct PolicyArgs {
     /// Make every host mount read-only, overriding configuration and templates.
     #[arg(long)]
     no_write: bool,
+    /// Turn a template's writable mounts into overlays: the sandbox reads the
+    /// host content and can write to it, but writes are discarded and never
+    /// reach the host.
+    #[arg(long)]
+    overlay_writes: bool,
     /// Add a host directory read-only and prepend it to the isolated PATH.
     #[arg(long = "path", value_name = "DIRECTORY")]
     paths: Vec<PathBuf>,
@@ -235,16 +240,23 @@ fn real_main() -> Result<()> {
         .map(driva::MountConfig::resolve)
         .collect::<Result<_>>()?;
     if let Some(template) = &template {
-        mounts.extend(
-            template
-                .mounts
-                .iter()
-                .cloned()
-                .map(driva::MountConfig::resolve)
-                .collect::<Result<Vec<_>>>()?,
-        );
+        let mut template_mounts = template
+            .mounts
+            .iter()
+            .cloned()
+            .map(driva::MountConfig::resolve)
+            .collect::<Result<Vec<_>>>()?;
+        if policy.overlay_writes {
+            template_mounts = template_mounts.into_iter().map(overlay_writable).collect();
+        }
+        mounts.extend(template_mounts);
     }
     if let Some(workspace_mount) = workspace_mount {
+        let workspace_mount = if policy.overlay_writes {
+            overlay_writable(workspace_mount)
+        } else {
+            workspace_mount
+        };
         mounts.push(workspace_mount);
     }
     for spec in &policy.reads {
@@ -474,6 +486,23 @@ fn parse_environment(value: &str) -> Result<(OsString, OsString), String> {
         return Err("environment variable name cannot be empty".into());
     }
     Ok((key.into(), value.into()))
+}
+
+/// Replace a writable bind mount with an overlay reading the same host
+/// content, so writes are discarded instead of reaching the host. Other
+/// mount kinds are unaffected.
+fn overlay_writable(mount: Mount) -> Mount {
+    match mount {
+        Mount::Bind {
+            source,
+            destination,
+            access: MountAccess::ReadWrite,
+        } => Mount::Overlay {
+            source,
+            destination,
+        },
+        other => other,
+    }
 }
 
 fn parse_mount(spec: &str, access: MountAccess, workdir: &Path) -> Result<Mount> {
