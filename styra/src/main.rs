@@ -14,6 +14,7 @@ use std::time::Duration;
 
 mod app;
 mod cli;
+mod picker;
 mod preferences;
 mod terminal;
 mod ui;
@@ -78,7 +79,7 @@ fn main() -> Result<()> {
                 return Ok(());
             }
             let mut term = terminal::setup()?;
-            match run_picker(&mut term, &sessions) {
+            match picker::run_session_picker(&mut term, &sessions) {
                 Ok(Some(id)) => {
                     terminal = Some(term);
                     Some(PathBuf::from(id))
@@ -410,135 +411,6 @@ fn session_id_from_target(target: &Path) -> Result<String> {
         .with_context(|| format!("invalid session target {}", target.display()))
 }
 
-/// The session picker loop: j/k or arrows to move, Enter to choose a
-/// session, Esc or q to back out without picking one.
-fn run_picker(
-    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
-    sessions: &[styra_server::SessionSummary],
-) -> Result<Option<String>> {
-    let mut selected = 0usize;
-    loop {
-        terminal.draw(|frame| ui::render_picker(frame, sessions, selected))?;
-
-        if !event::poll(Duration::from_millis(100))? {
-            continue;
-        }
-        let Event::Key(key) = event::read()? else {
-            continue;
-        };
-        if key.kind != KeyEventKind::Press {
-            continue;
-        }
-        match key.code {
-            KeyCode::Char('q') | KeyCode::Esc => return Ok(None),
-            KeyCode::Char('j') | KeyCode::Down => {
-                selected = (selected + 1).min(sessions.len() - 1);
-            }
-            KeyCode::Char('k') | KeyCode::Up => selected = selected.saturating_sub(1),
-            KeyCode::Enter => return Ok(Some(sessions[selected].id.clone())),
-            _ => {}
-        }
-    }
-}
-
-fn run_workspace_picker(
-    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
-    workspaces: &[WorkspaceSummary],
-) -> Result<Option<WorkspaceSummary>> {
-    let mut selected = 0usize;
-    loop {
-        terminal.draw(|frame| ui::render_workspace_picker(frame, workspaces, selected))?;
-        if !event::poll(Duration::from_millis(100))? {
-            continue;
-        }
-        let Event::Key(key) = event::read()? else {
-            continue;
-        };
-        if key.kind != KeyEventKind::Press {
-            continue;
-        }
-        match key.code {
-            KeyCode::Char('q') | KeyCode::Esc => return Ok(None),
-            KeyCode::Char('j') | KeyCode::Down => {
-                selected = (selected + 1).min(workspaces.len() - 1);
-            }
-            KeyCode::Char('k') | KeyCode::Up => selected = selected.saturating_sub(1),
-            KeyCode::Enter => return Ok(Some(workspaces[selected].clone())),
-            _ => {}
-        }
-    }
-}
-
-/// The current-interactions picker loop: j/k or arrows to move, Enter to attach to a
-/// live interaction, Esc or q to back out. Mirrors [`run_picker`] but over the
-/// server's live interactions rather than the stored-session store.
-fn run_interactions_picker(
-    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
-    client: &Client,
-    interactions: &[InteractionSummary],
-) -> Result<Option<InteractionSummary>> {
-    let mut selected = 0usize;
-    let mut preview_id = String::new();
-    let mut preview_cursor = 0u64;
-    let mut preview_updates = Vec::new();
-    loop {
-        let selected_interaction = &interactions[selected];
-        if preview_id != selected_interaction.id {
-            preview_id.clone_from(&selected_interaction.id);
-            preview_cursor = 0;
-            preview_updates.clear();
-        }
-
-        match client.updates(&preview_id, preview_cursor) {
-            Ok(batch) => {
-                preview_cursor = batch.next;
-                preview_updates.extend(batch.updates.into_iter().filter_map(|sequenced| {
-                    match sequenced.update {
-                        // Raw lines duplicate decoded events and make the
-                        // compact preview noisy. Everything human-facing is
-                        // useful here: activity, diagnostics, and interaction end.
-                        InteractionUpdate::Raw(_) => None,
-                        update => Some(update),
-                    }
-                }));
-            }
-            Err(error) => {
-                let message = format!("could not load current log: {error:#}");
-                if !preview_updates
-                    .last()
-                    .is_some_and(
-                        |update| matches!(update, InteractionUpdate::Log(entry) if entry.message == message),
-                    )
-                {
-                    preview_updates.push(InteractionUpdate::Log(LogEntry::error(message)));
-                }
-            }
-        }
-
-        terminal.draw(|frame| {
-            ui::render_interactions_picker(frame, interactions, selected, &preview_updates)
-        })?;
-
-        if !event::poll(Duration::from_millis(100))? {
-            continue;
-        }
-        let Event::Key(key) = event::read()? else {
-            continue;
-        };
-        if key.kind != KeyEventKind::Press {
-            continue;
-        }
-        match key.code {
-            KeyCode::Char('q') | KeyCode::Esc => return Ok(None),
-            KeyCode::Char('j') | KeyCode::Down => {
-                selected = (selected + 1).min(interactions.len() - 1);
-            }
-            KeyCode::Char('k') | KeyCode::Up => selected = selected.saturating_sub(1),
-            KeyCode::Enter => return Ok(Some(interactions[selected].clone())),
-            _ => {}
-        }
-    }
-}
 
 /// What the interactive loop returned control to `main` for.
 enum RunOutcome {
@@ -674,7 +546,7 @@ fn run(
                 app.push_log(LogEntry::warn("no Workspaces to open"));
                 continue;
             }
-            let Some(workspace) = run_workspace_picker(terminal, &workspaces)? else {
+            let Some(workspace) = picker::run_workspace_picker(terminal, &workspaces)? else {
                 continue;
             };
             let sessions = client.list_sessions(&workspace.id)?;
@@ -684,7 +556,7 @@ fn run(
                     session_id: None,
                 });
             }
-            if let Some(id) = run_picker(terminal, &sessions)? {
+            if let Some(id) = picker::run_session_picker(terminal, &sessions)? {
                 return Ok(RunOutcome::OpenWorkspace {
                     workspace,
                     session_id: Some(id),
@@ -699,7 +571,7 @@ fn run(
                 app.push_log(LogEntry::warn("no live interactions on the server"));
                 continue;
             }
-            if let Some(interaction) = run_interactions_picker(terminal, client, &interactions)? {
+            if let Some(interaction) = picker::run_interactions_picker(terminal, client, &interactions)? {
                 return Ok(RunOutcome::Attach(interaction));
             }
             // Cancelled: the next iteration redraws the normal session view.

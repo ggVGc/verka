@@ -1,0 +1,137 @@
+use anyhow::Result;
+use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use ratatui::backend::CrosstermBackend;
+use ratatui::Terminal;
+use std::io::Stdout;
+use std::time::Duration;
+
+use styra_server::{Client, InteractionSummary, InteractionUpdate, LogEntry, WorkspaceSummary};
+
+use crate::ui;
+
+/// The session picker loop: j/k or arrows to move, Enter to choose a
+/// session, Esc or q to back out without picking one.
+pub fn run_session_picker(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    sessions: &[styra_server::SessionSummary],
+) -> Result<Option<String>> {
+    let mut selected = 0usize;
+    loop {
+        terminal.draw(|frame| ui::render_picker(frame, sessions, selected))?;
+
+        if !event::poll(Duration::from_millis(100))? {
+            continue;
+        }
+        let Event::Key(key) = event::read()? else {
+            continue;
+        };
+        if key.kind != KeyEventKind::Press {
+            continue;
+        }
+        match key.code {
+            KeyCode::Char('q') | KeyCode::Esc => return Ok(None),
+            KeyCode::Char('j') | KeyCode::Down => {
+                selected = (selected + 1).min(sessions.len() - 1);
+            }
+            KeyCode::Char('k') | KeyCode::Up => selected = selected.saturating_sub(1),
+            KeyCode::Enter => return Ok(Some(sessions[selected].id.clone())),
+            _ => {}
+        }
+    }
+}
+
+pub fn run_workspace_picker(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    workspaces: &[WorkspaceSummary],
+) -> Result<Option<WorkspaceSummary>> {
+    let mut selected = 0usize;
+    loop {
+        terminal.draw(|frame| ui::render_workspace_picker(frame, workspaces, selected))?;
+        if !event::poll(Duration::from_millis(100))? {
+            continue;
+        }
+        let Event::Key(key) = event::read()? else {
+            continue;
+        };
+        if key.kind != KeyEventKind::Press {
+            continue;
+        }
+        match key.code {
+            KeyCode::Char('q') | KeyCode::Esc => return Ok(None),
+            KeyCode::Char('j') | KeyCode::Down => {
+                selected = (selected + 1).min(workspaces.len() - 1);
+            }
+            KeyCode::Char('k') | KeyCode::Up => selected = selected.saturating_sub(1),
+            KeyCode::Enter => return Ok(Some(workspaces[selected].clone())),
+            _ => {}
+        }
+    }
+}
+
+/// The current-interactions picker loop: j/k or arrows to move, Enter to attach to a
+/// live interaction, Esc or q to back out. Mirrors [`run_session_picker`] but over the
+/// server's live interactions rather than the stored-session store.
+pub fn run_interactions_picker(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    client: &Client,
+    interactions: &[InteractionSummary],
+) -> Result<Option<InteractionSummary>> {
+    let mut selected = 0usize;
+    let mut preview_id = String::new();
+    let mut preview_cursor = 0u64;
+    let mut preview_updates = Vec::new();
+    loop {
+        let selected_interaction = &interactions[selected];
+        if preview_id != selected_interaction.id {
+            preview_id.clone_from(&selected_interaction.id);
+            preview_cursor = 0;
+            preview_updates.clear();
+        }
+
+        match client.updates(&preview_id, preview_cursor) {
+            Ok(batch) => {
+                preview_cursor = batch.next;
+                preview_updates.extend(batch.updates.into_iter().filter_map(|sequenced| {
+                    match sequenced.update {
+                        InteractionUpdate::Raw(_) => None,
+                        update => Some(update),
+                    }
+                }));
+            }
+            Err(error) => {
+                let message = format!("could not load current log: {error:#}");
+                if !preview_updates
+                    .last()
+                    .is_some_and(
+                        |update| matches!(update, InteractionUpdate::Log(entry) if entry.message == message),
+                    )
+                {
+                    preview_updates.push(InteractionUpdate::Log(LogEntry::error(message)));
+                }
+            }
+        }
+
+        terminal.draw(|frame| {
+            ui::render_interactions_picker(frame, interactions, selected, &preview_updates)
+        })?;
+
+        if !event::poll(Duration::from_millis(100))? {
+            continue;
+        }
+        let Event::Key(key) = event::read()? else {
+            continue;
+        };
+        if key.kind != KeyEventKind::Press {
+            continue;
+        }
+        match key.code {
+            KeyCode::Char('q') | KeyCode::Esc => return Ok(None),
+            KeyCode::Char('j') | KeyCode::Down => {
+                selected = (selected + 1).min(interactions.len() - 1);
+            }
+            KeyCode::Char('k') | KeyCode::Up => selected = selected.saturating_sub(1),
+            KeyCode::Enter => return Ok(Some(interactions[selected].clone())),
+            _ => {}
+        }
+    }
+}
