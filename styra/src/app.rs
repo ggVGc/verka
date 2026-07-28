@@ -37,7 +37,7 @@ pub enum View {
 /// How a file diff is presented in the entry preview.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DiffPreviewMode {
-    /// File headers, hunk headers, and changed lines only.
+    /// Changed lines only.
     Minimal,
     /// The provider's complete diff output, byte-for-byte by line.
     Raw,

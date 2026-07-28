@@ -107,10 +107,6 @@ fn diff_lines(diff: &str, mode: DiffPreviewMode) -> Vec<Line<'static>> {
     diff.lines()
         .filter(|line| {
             mode == DiffPreviewMode::Raw
-                || line.starts_with("diff --git ")
-                || line.starts_with("--- ")
-                || line.starts_with("+++ ")
-                || line.starts_with("@@")
                 || (line.starts_with('+') && !line.starts_with("+++"))
                 || (line.starts_with('-') && !line.starts_with("---"))
         })
@@ -287,14 +283,54 @@ mod tests {
         assert!(minimal.contains("minimal diff"));
         assert!(minimal.contains("-old"));
         assert!(minimal.contains("+new"));
+        assert!(!minimal.contains("diff --git"));
+        assert!(!minimal.contains("@@ -1,3"));
         assert!(!minimal.contains("index 123"));
         assert!(!minimal.contains(" context"));
 
         app.toggle_diff_preview_mode();
         let raw = rendered(&app);
         assert!(raw.contains("raw diff"));
+        assert!(raw.contains("diff --git"));
+        assert!(raw.contains("@@ -1,3"));
         assert!(raw.contains("index 123"));
         assert!(raw.contains(" context"));
+    }
+
+    #[test]
+    fn compact_provider_diff_still_changes_visibly_between_modes() {
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
+        app.push_event(AgentEvent::FileChanged {
+            id: "f1".into(),
+            paths: vec!["src/lib.rs".into()],
+            diff: Some("@@ edit @@\n-old\n+new".into()),
+            checkpoint: None,
+            checkpoint_error: None,
+        });
+
+        let minimal = preview_lines(&app);
+        let minimal = minimal
+            .iter()
+            .flat_map(|line| &line.spans)
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        assert!(!minimal.contains("@@ edit @@"));
+        assert!(minimal.contains("-old"));
+        assert!(minimal.contains("+new"));
+
+        app.toggle_diff_preview_mode();
+        let raw = preview_lines(&app);
+        let raw = raw
+            .iter()
+            .flat_map(|line| &line.spans)
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        assert!(raw.contains("@@ edit @@"));
+        assert!(raw.contains("-old"));
+        assert!(raw.contains("+new"));
     }
 
     #[test]
