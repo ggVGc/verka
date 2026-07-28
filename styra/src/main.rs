@@ -2,7 +2,7 @@
 //! drives the application through Styra's JSON Unix-socket API.
 
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
+use clap::Parser;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -16,62 +16,17 @@ use std::process::Command;
 use std::time::Duration;
 
 mod app;
+mod cli;
 mod preferences;
 mod ui;
 
 use app::{App, Focus, Status, View};
+use cli::{Cli, CliCommand};
 use styra_server::agent::Selection;
 use styra_server::api::{CreateSession, CreateWorkspace, ResumeSession, SessionInfo};
 use styra_server::{
     Client, InteractionSummary, InteractionUpdate, LogEntry, SessionSummary, WorkspaceSummary,
 };
-
-/// Run an interactive, isolated agent session in a terminal interface.
-#[derive(Parser)]
-#[command(name = "styra", about, version)]
-struct Cli {
-    /// Styra server Unix socket (default: $XDG_RUNTIME_DIR/styra/styra.sock).
-    #[arg(long, global = true)]
-    socket: Option<PathBuf>,
-    /// Start the Styra daemon in the background and exit, without opening the
-    /// interface. A no-op if one is already listening on the socket.
-    #[arg(short = 'd', long = "daemon", conflicts_with = "stop")]
-    daemon: bool,
-    /// Stop the Styra daemon listening on the socket (if any) and exit. Any
-    /// live interactions it owns are ended with it.
-    #[arg(long)]
-    stop: bool,
-    /// Host directory mounted writable as the agent workspace (default: cwd).
-    #[arg(long)]
-    workspace: Option<PathBuf>,
-    /// Permit agent networking (providers may default this on).
-    #[arg(long)]
-    network: bool,
-    /// Apply a Driva execution template to the agent sandbox (see `driva
-    /// templates`); may be repeated to layer several, e.g. a `rust` toolchain.
-    #[arg(long = "template", value_name = "NAME")]
-    template: Vec<String>,
-    /// Open a captured journal read-only instead of launching an agent: with
-    /// a path, that session directly; bare (no path), a picker to browse and
-    /// choose one from the server's store.
-    #[arg(long, num_args = 0..=1, value_name = "SESSION")]
-    view: Option<Option<PathBuf>>,
-    #[command(subcommand)]
-    command: Option<CliCommand>,
-    /// Optional first message, sent to seed the opening turn.
-    #[arg(trailing_var_arg = true)]
-    prompt: Vec<String>,
-}
-
-#[derive(Subcommand)]
-enum CliCommand {
-    /// Attach to the persistent shell inside a live session's sandbox.
-    Shell {
-        /// Live Styra session to attach to.
-        #[arg(long)]
-        session: String,
-    },
-}
 
 fn main() -> Result<()> {
     if let Some(result) = styra_server::broker::exit_if_requested() {
