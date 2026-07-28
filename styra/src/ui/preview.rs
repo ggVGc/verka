@@ -2,7 +2,7 @@
 //! uncapped expanded content of the selected entry, regardless of whether it
 //! is folded in the list.
 
-use super::{summary_line, DETAIL_INDENT};
+use super::{message_text_color, summary_line, DETAIL_INDENT};
 use crate::app::App;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -77,7 +77,10 @@ pub(crate) fn preview_lines(app: &App) -> Vec<Line<'static>> {
     let protocol = app.selection.provider.protocol();
     let mut lines = vec![summary_line(entry, entry.has_detail(), false, protocol)];
     for block in entry.event.presented_detail(protocol, app.preview_mode) {
-        lines.extend(presented_block_lines(block));
+        lines.extend(presented_block_lines(
+            block,
+            message_text_color(entry.event.tag()),
+        ));
     }
     if let AgentEvent::FileChanged { paths, .. } = &entry.event {
         lines.extend(file_content_lines(paths, app.workspace_root.as_deref()));
@@ -85,7 +88,7 @@ pub(crate) fn preview_lines(app: &App) -> Vec<Line<'static>> {
     lines
 }
 
-fn presented_block_lines(block: DetailBlock) -> Vec<Line<'static>> {
+fn presented_block_lines(block: DetailBlock, text_color: Color) -> Vec<Line<'static>> {
     let (text, language) = match block {
         DetailBlock::Text(text) => (text, None),
         DetailBlock::Code { language, text } => (text, language),
@@ -107,7 +110,7 @@ fn presented_block_lines(block: DetailBlock) -> Vec<Line<'static>> {
             } else if line.starts_with("@@") {
                 Color::Cyan
             } else {
-                Color::Gray
+                text_color
             };
             Line::from(Span::styled(
                 format!("{DETAIL_INDENT}{}", line.replace('\t', "    ")),

@@ -55,13 +55,24 @@ pub(crate) fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
 
 pub(crate) fn tag_color(tag: &str) -> Color {
     match tag {
-        "agent" => Color::Green,
-        "user" => Color::Cyan,
+        "agent" => Color::Rgb(211, 158, 96),
+        "user" => Color::Rgb(115, 190, 137),
         "command" => Color::Rgb(184, 124, 0),
         "tool" => Color::Magenta,
         "plan" | "files" => Color::Blue,
         "error" | "malformed" => Color::Red,
         _ => Color::DarkGray,
+    }
+}
+
+/// A very light tint for conversational prose. These stay close to the
+/// default foreground so messages are distinguishable without competing with
+/// the stronger colors reserved for status and errors.
+pub(crate) fn message_text_color(tag: &str) -> Color {
+    match tag {
+        "agent" => Color::Rgb(238, 219, 193),
+        "user" => Color::Rgb(207, 233, 214),
+        _ => Color::White,
     }
 }
 

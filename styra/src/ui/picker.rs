@@ -3,7 +3,7 @@
 //! instead of) any loaded session, so they render from their own borrowed
 //! data rather than app state.
 
-use super::{log_line, tag_color, SELECTION_BG};
+use super::{log_line, message_text_color, tag_color, SELECTION_BG};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -200,9 +200,23 @@ fn interaction_preview_line(
     match update {
         InteractionUpdate::Event(event) => {
             let tag = event.tag();
+            let display_tag = match event {
+                styra_server::event::AgentEvent::UserMessage { .. } => "»",
+                styra_server::event::AgentEvent::AgentMessage { .. } => "«",
+                _ => tag,
+            };
+            let indent = if matches!(
+                event,
+                styra_server::event::AgentEvent::UserMessage { .. }
+                    | styra_server::event::AgentEvent::AgentMessage { .. }
+            ) {
+                ""
+            } else {
+                "  "
+            };
             Line::from(vec![
                 Span::styled(
-                    format!("{tag:<8} "),
+                    format!("{indent}{display_tag:<8} "),
                     Style::default()
                         .fg(tag_color(tag))
                         .add_modifier(Modifier::BOLD),
@@ -216,7 +230,7 @@ fn interaction_preview_line(
                             )
                         })
                         .unwrap_or_else(|| event.summary()),
-                    Style::default().fg(Color::White),
+                    Style::default().fg(message_text_color(tag)),
                 ),
             ])
         }

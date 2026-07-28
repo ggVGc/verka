@@ -2,7 +2,10 @@
 //! expanded, plus the empty-list start screen and the trailing status tail.
 
 use super::markdown::markdown_line_spans;
-use super::{render_preview, tag_color, title_line, DETAIL_INDENT, MAX_DETAIL_LINES, SELECTION_BG};
+use super::{
+    message_text_color, render_preview, tag_color, title_line, DETAIL_INDENT, MAX_DETAIL_LINES,
+    SELECTION_BG,
+};
 use crate::app::{App, Entry, Focus, Status};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -307,27 +310,54 @@ pub(crate) fn summary_line(
         (true, false) => "▸",
     };
     let tag = entry.event.tag();
+    let is_conversation = matches!(
+        entry.event,
+        AgentEvent::UserMessage { .. } | AgentEvent::AgentMessage { .. }
+    );
+    let row_lead = if is_conversation { "" } else { "  " };
     let display_tag = match &entry.event {
+        AgentEvent::UserMessage { .. } => "»",
+        AgentEvent::AgentMessage { .. } => "«",
         AgentEvent::ToolStarted { name, .. } | AgentEvent::ToolCompleted { name, .. } => {
             name.as_str()
         }
         _ => tag,
     };
-    // A completed tool call gets its own color and a checkmark/cross prefix —
-    // otherwise it reads identically to the "running" row it replaced, save
-    // for the word "(completed)" buried at the end of the summary text.
-    let (summary_style, prefix) = match &entry.event {
+    // A completed tool call gets a checkmark/cross prefix so it does not read
+    // like the running row it replaced. Keep a successful checkmark green
+    // without painting the command text itself as a status color.
+    let (summary_style, prefix, prefix_style) = match &entry.event {
         AgentEvent::ToolCompleted { status, .. } if status == "error" => {
-            (Style::default().fg(Color::Red), "✗ ")
+            (
+                Style::default().fg(Color::Red),
+                "✗ ",
+                Style::default().fg(Color::Red),
+            )
         }
-        AgentEvent::ToolCompleted { .. } => (Style::default().fg(Color::Green), "✓ "),
-        _ if tag == "command" => (Style::default().fg(tag_color(tag)), ""),
-        _ => (Style::default().fg(Color::White), ""),
+        AgentEvent::ToolCompleted { .. } => (
+            Style::default().fg(Color::White),
+            "✓ ",
+            Style::default().fg(Color::Green),
+        ),
+        _ if tag == "command" => (
+            Style::default().fg(tag_color(tag)),
+            "",
+            Style::default(),
+        ),
+        _ => (
+            Style::default().fg(message_text_color(tag)),
+            "",
+            Style::default(),
+        ),
     };
     let mut spans = vec![
-        Span::raw(format!("{marker} ")),
+        Span::raw(row_lead),
         Span::styled(
-            format!("{display_tag:<8} "),
+            if is_conversation {
+                format!("{display_tag} ")
+            } else {
+                format!("{display_tag:<8}")
+            },
             Style::default()
                 .fg(tag_color(tag))
                 .add_modifier(Modifier::BOLD),
@@ -335,7 +365,7 @@ pub(crate) fn summary_line(
     ];
     if show_summary {
         if !prefix.is_empty() {
-            spans.push(Span::styled(prefix, summary_style));
+            spans.push(Span::styled(prefix, prefix_style));
         }
         let summary = file_action_summary(&entry.event).unwrap_or_else(|| {
             entry
@@ -352,6 +382,12 @@ pub(crate) fn summary_line(
             _ => &summary,
         };
         spans.extend(super::markdown::parse_inline_spans(summary, summary_style));
+    }
+    if has_detail {
+        spans.push(Span::styled(
+            format!(" {marker}"),
+            Style::default().fg(Color::DarkGray),
+        ));
     }
     Line::from(spans)
 }
@@ -396,10 +432,11 @@ fn file_action_summary(event: &AgentEvent) -> Option<String> {
 /// session); pass `None` for the preview panel, which shows the body in full.
 pub(crate) fn detail_lines(event: &AgentEvent, cap: Option<usize>) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
+    let text_color = message_text_color(event.tag());
     for block in event.detail() {
         match block {
             DetailBlock::Text(text) => {
-                let base_style = Style::default().fg(Color::White);
+                let base_style = Style::default().fg(text_color);
                 for line in text.lines() {
                     let mut spans = vec![Span::styled(DETAIL_INDENT.to_owned(), base_style)];
                     spans.extend(markdown_line_spans(line, base_style));
@@ -590,7 +627,7 @@ mod tests {
         let screen = rendered(&app);
         assert!(screen.contains("hello world"));
         assert!(screen.contains('▸'));
-        assert!(screen.contains("agent"));
+        assert!(screen.contains('«'));
     }
 
     #[test]
@@ -691,6 +728,25 @@ mod tests {
         assert!(screen.contains("cargo test"));
         assert!(!screen.contains("tool     "));
         assert_eq!(screen.matches("Bash").count(), 1);
+
+        let line = summary_line(
+            &app.entries[0],
+            app.entries[0].has_detail(),
+            true,
+            app.selection.provider.protocol(),
+        );
+        let check = line
+            .spans
+            .iter()
+            .find(|span| span.content.contains('✓'))
+            .unwrap();
+        let command = line
+            .spans
+            .iter()
+            .find(|span| span.content.contains("cargo test"))
+            .unwrap();
+        assert_eq!(check.style.fg, Some(Color::Green));
+        assert_eq!(command.style.fg, Some(Color::White));
     }
 
     #[test]

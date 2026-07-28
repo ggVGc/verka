@@ -17,7 +17,7 @@ mod raw;
 mod transcript;
 
 use driva::render_driva;
-pub(crate) use footer::tag_color;
+pub(crate) use footer::{message_text_color, tag_color};
 use footer::render_footer;
 use input::{input_area_height, render_input};
 use launcher::render_launcher;
