@@ -655,41 +655,12 @@ impl App {
         self.raw_follow = true;
     }
 
-    /// Toggle the diagnostic log view on, or back to the event list.
-    pub fn toggle_log(&mut self) {
-        self.view = if self.view == View::Log {
-            View::Events
-        } else {
-            View::Log
-        };
-    }
-
-    /// Toggle the rendered transcript view on, or back to the event list.
-    pub fn toggle_transcript(&mut self) {
-        self.view = if self.view == View::Transcript {
-            View::Events
-        } else {
-            View::Transcript
-        };
-    }
-
-    /// Toggle the Driva policy view on, or back to the event list.
-    pub fn toggle_driva(&mut self) {
-        self.view = if self.view == View::Driva {
-            View::Events
-        } else {
-            View::Driva
-        };
-    }
-
-    /// Toggle a full-screen view of the selected entry's content on, or back
-    /// to the event list.
-    pub fn toggle_fullscreen_preview(&mut self) {
-        self.view = if self.view == View::Preview {
-            View::Events
-        } else {
-            View::Preview
-        };
+    /// Show `view`, or return to the event list if it is already showing, so
+    /// one key both opens and closes each alternate view. [`Self::toggle_raw`]
+    /// stays separate because entering the raw view also has to line its
+    /// selection up with the event list's.
+    pub fn toggle_view(&mut self, view: View) {
+        self.view = if self.view == view { View::Events } else { view };
     }
 
     /// Move the raw view's selection to the next wire line.
@@ -2079,9 +2050,9 @@ mod tests {
         app.toggle_raw();
         assert_eq!(app.view, View::Raw);
         // Toggling the log from the raw view switches to it, not back to events.
-        app.toggle_log();
+        app.toggle_view(View::Log);
         assert_eq!(app.view, View::Log);
-        app.toggle_log();
+        app.toggle_view(View::Log);
         assert_eq!(app.view, View::Events);
 
         for i in 0..4 {
@@ -2103,12 +2074,12 @@ mod tests {
         assert_eq!(app.view, View::Raw);
         // Toggling the transcript from the raw view switches to it, not back
         // to events.
-        app.toggle_transcript();
+        app.toggle_view(View::Transcript);
         assert_eq!(app.view, View::Transcript);
-        app.toggle_transcript();
+        app.toggle_view(View::Transcript);
         assert_eq!(app.view, View::Events);
 
-        app.toggle_transcript();
+        app.toggle_view(View::Transcript);
         assert_eq!(
             app.transcript_scroll, 0,
             "starts at the beginning, not the tail"
@@ -2363,9 +2334,9 @@ mod tests {
         );
 
         assert_eq!(app.view, View::Events);
-        app.toggle_driva();
+        app.toggle_view(View::Driva);
         assert_eq!(app.view, View::Driva);
-        app.toggle_driva();
+        app.toggle_view(View::Driva);
         assert_eq!(app.view, View::Events);
     }
 
@@ -2383,12 +2354,12 @@ mod tests {
     fn fullscreen_preview_toggles_the_view_and_is_independent_of_the_side_panel() {
         let mut app = app();
         assert_eq!(app.view, View::Events);
-        app.toggle_fullscreen_preview();
+        app.toggle_view(View::Preview);
         assert_eq!(app.view, View::Preview);
         // The side-panel flag (bound to lowercase `p`) is a separate toggle;
         // the full-screen shortcut (`P`) does not touch it.
         assert!(!app.show_preview);
-        app.toggle_fullscreen_preview();
+        app.toggle_view(View::Preview);
         assert_eq!(app.view, View::Events);
     }
 

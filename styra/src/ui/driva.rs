@@ -108,6 +108,7 @@ fn mount_line(mount: &Mount) -> Line<'static> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::View;
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
     use std::path::PathBuf;
@@ -134,7 +135,7 @@ mod tests {
             styra_server::agent::Selection::parse("codex").unwrap(),
             "s1",
         );
-        app.toggle_driva();
+        app.toggle_view(View::Driva);
         let placeholder = rendered(&app);
         assert!(placeholder.contains("no live session"));
 

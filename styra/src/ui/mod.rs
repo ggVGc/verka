@@ -386,12 +386,13 @@ mod tests {
 
         // Every other view carries the same status line, so switching away from
         // the event list does not lose it.
-        for toggle in [
+        let toggles: [fn(&mut App); 4] = [
             App::toggle_raw,
-            App::toggle_log,
-            App::toggle_transcript,
-            App::toggle_driva,
-        ] {
+            |app| app.toggle_view(View::Log),
+            |app| app.toggle_view(View::Transcript),
+            |app| app.toggle_view(View::Driva),
+        ];
+        for toggle in toggles {
             toggle(&mut app);
             assert!(
                 rendered(&app).contains("gpt-5.6-sol · high"),

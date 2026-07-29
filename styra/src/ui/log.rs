@@ -43,6 +43,7 @@ pub(crate) fn log_line(entry: &styra_server::LogEntry) -> Line<'static> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::View;
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
 
@@ -68,7 +69,7 @@ mod tests {
         );
         app.push_log(LogEntry::info("launching codex"));
         app.push_log(LogEntry::error("could not run the agent: bwrap missing"));
-        app.toggle_log();
+        app.toggle_view(View::Log);
         let screen = rendered(&app);
         assert!(screen.contains("log"));
         assert!(screen.contains("info"));

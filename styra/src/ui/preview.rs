@@ -231,6 +231,7 @@ fn resolve_workspace_path(root: &Path, reported: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::View;
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
     use ratatui::Terminal;
@@ -488,7 +489,7 @@ mod tests {
         });
         assert!(!rendered(&app).contains("24 passed"));
 
-        app.toggle_fullscreen_preview();
+        app.toggle_view(View::Preview);
         let shown = rendered(&app);
         // No chrome at all: no title bar, no message box, no footer hints —
         // just the entry's text, so it can be selected and copied cleanly.
@@ -497,7 +498,7 @@ mod tests {
         assert!(!shown.contains("message"));
         assert!(!shown.contains("quit"));
 
-        app.toggle_fullscreen_preview();
+        app.toggle_view(View::Preview);
         let restored = rendered(&app);
         assert!(restored.contains("styra"));
         assert!(restored.contains("Shell"));
@@ -512,7 +513,7 @@ mod tests {
         app.push_event(AgentEvent::AgentMessage {
             text: "hello".into(),
         });
-        app.toggle_fullscreen_preview();
+        app.toggle_view(View::Preview);
 
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
         terminal

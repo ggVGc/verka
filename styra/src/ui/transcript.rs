@@ -53,6 +53,7 @@ pub(crate) fn render_transcript_view(frame: &mut Frame, app: &App, area: Rect) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::View;
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
     use styra_server::event::AgentEvent;
@@ -82,7 +83,7 @@ mod tests {
         app.push_event(AgentEvent::AgentMessage {
             text: "Added backoff, tests pass.".into(),
         });
-        app.toggle_transcript();
+        app.toggle_view(View::Transcript);
         let screen = rendered(&app);
         assert!(screen.contains("transcript"));
         assert!(screen.contains("implement retry backoff"));
@@ -103,7 +104,7 @@ mod tests {
         app.push_event(AgentEvent::AgentMessage {
             text: "hello world".into(),
         });
-        app.toggle_transcript();
+        app.toggle_view(View::Transcript);
 
         assert!(!app.show_minor);
         assert!(!rendered(&app).contains("t-1"));
@@ -130,7 +131,7 @@ mod tests {
             text: "keep this reply".into(),
         });
         app.toggle_conversation_only();
-        app.toggle_transcript();
+        app.toggle_view(View::Transcript);
 
         let screen = rendered(&app);
         assert!(screen.contains("conversation only"));
@@ -145,7 +146,7 @@ mod tests {
             styra_server::agent::Selection::parse("codex").unwrap(),
             "s1",
         );
-        app.toggle_transcript();
+        app.toggle_view(View::Transcript);
         assert!(rendered(&app).contains("nothing to render yet"));
     }
 }
