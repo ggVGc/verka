@@ -15,8 +15,17 @@ use styra_server::{InteractionSummary, InteractionUpdate, SessionSummary, Worksp
 /// with `selected` highlighted. Standalone from [`crate::app::App`] — the
 /// picker runs before any session is loaded, so it has no state of its own
 /// to render.
-pub fn render_picker(frame: &mut Frame, sessions: &[SessionSummary], selected: usize) {
+pub fn render_picker(
+    frame: &mut Frame,
+    sessions: &[SessionSummary],
+    selected: usize,
+    updates: &[InteractionUpdate],
+) {
     let area = frame.area();
+    let panes = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(42), Constraint::Percentage(58)])
+        .split(area);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
@@ -28,7 +37,8 @@ pub fn render_picker(frame: &mut Frame, sessions: &[SessionSummary], selected: u
             Style::default().fg(Color::Gray),
         )))
         .block(block);
-        frame.render_widget(empty, area);
+        frame.render_widget(empty, panes[0]);
+        render_log_preview(frame, None, None, updates, panes[1]);
         return;
     }
 
@@ -39,8 +49,17 @@ pub fn render_picker(frame: &mut Frame, sessions: &[SessionSummary], selected: u
             .add_modifier(Modifier::BOLD),
     );
     let mut state = ListState::default();
-    state.select(Some(selected.min(sessions.len() - 1)));
-    frame.render_stateful_widget(list, area, &mut state);
+    let selected = selected.min(sessions.len() - 1);
+    state.select(Some(selected));
+    frame.render_stateful_widget(list, panes[0], &mut state);
+    let session = sessions.get(selected);
+    render_log_preview(
+        frame,
+        session.map(|session| session.id.as_str()),
+        session.map(|session| session.selection.provider.protocol()),
+        updates,
+        panes[1],
+    );
 }
 
 /// Render the top-level Workspace picker. Entering a Workspace leads to its
@@ -135,7 +154,7 @@ pub fn render_interactions_picker(
         )))
         .block(interactions_block);
         frame.render_widget(empty, panes[0]);
-        render_interaction_log_preview(frame, None, updates, panes[1]);
+        render_log_preview(frame, None, None, updates, panes[1]);
         return;
     }
 
@@ -149,17 +168,25 @@ pub fn render_interactions_picker(
     let selected = selected.min(interactions.len() - 1);
     state.select(Some(selected));
     frame.render_stateful_widget(list, panes[0], &mut state);
-    render_interaction_log_preview(frame, interactions.get(selected), updates, panes[1]);
+    let interaction = interactions.get(selected);
+    render_log_preview(
+        frame,
+        interaction.map(|item| item.id.as_str()),
+        interaction.map(|item| item.selection.provider.protocol()),
+        updates,
+        panes[1],
+    );
 }
 
-fn render_interaction_log_preview(
+fn render_log_preview(
     frame: &mut Frame,
-    interaction: Option<&InteractionSummary>,
+    id: Option<&str>,
+    protocol: Option<styra_server::event::Protocol>,
     updates: &[InteractionUpdate],
     area: Rect,
 ) {
-    let title = interaction
-        .map(|interaction| format!(" current log · {} ", interaction.id))
+    let title = id
+        .map(|id| format!(" current log · {id} "))
         .unwrap_or_else(|| " current log ".into());
     let block = Block::default()
         .borders(Borders::ALL)
@@ -183,12 +210,7 @@ fn render_interaction_log_preview(
     let start = updates.len().saturating_sub(viewport);
     let lines: Vec<Line<'static>> = updates[start..]
         .iter()
-        .map(|update| {
-            interaction_preview_line(
-                update,
-                interaction.map(|item| item.selection.provider.protocol()),
-            )
-        })
+        .map(|update| interaction_preview_line(update, protocol))
         .collect();
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }
@@ -311,7 +333,7 @@ mod tests {
     fn rendered_picker(sessions: &[SessionSummary], selected: usize) -> String {
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
         terminal
-            .draw(|frame| render_picker(frame, sessions, selected))
+            .draw(|frame| render_picker(frame, sessions, selected, &[]))
             .unwrap();
         terminal
             .backend()
@@ -343,6 +365,35 @@ mod tests {
     fn picker_shows_a_placeholder_when_there_are_no_sessions() {
         let screen = rendered_picker(&[], 0);
         assert!(screen.contains("no sessions found"));
+    }
+
+    #[test]
+    fn session_picker_previews_the_selected_sessions_log() {
+        let sessions = vec![picker_summary("s-1", "codex", "2m ago")];
+        let updates = vec![
+            InteractionUpdate::Event(AgentEvent::CommandStarted {
+                command: "cargo test".into(),
+            }),
+            InteractionUpdate::Event(AgentEvent::AgentMessage {
+                text: "Tests pass.".into(),
+            }),
+        ];
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        terminal
+            .draw(|frame| render_picker(frame, &sessions, 0, &updates))
+            .unwrap();
+        let screen = terminal
+            .backend()
+            .buffer()
+            .clone()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+
+        assert!(screen.contains("current log · s-1"), "{screen}");
+        assert!(screen.contains("cargo test"), "{screen}");
+        assert!(screen.contains("Tests pass."), "{screen}");
     }
 
     #[test]
@@ -466,7 +517,7 @@ mod tests {
 
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
         terminal
-            .draw(|frame| render_picker(frame, &sessions, 1))
+            .draw(|frame| render_picker(frame, &sessions, 1, &[]))
             .unwrap();
         let buffer = terminal.backend().buffer().clone();
 

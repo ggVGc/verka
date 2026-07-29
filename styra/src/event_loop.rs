@@ -167,7 +167,7 @@ pub fn run(
                     session_id: None,
                 });
             }
-            if let Some(id) = picker::run_session_picker(terminal, &sessions)? {
+            if let Some(id) = picker::run_session_picker(terminal, client, &sessions)? {
                 return Ok(RunOutcome::OpenWorkspace {
                     workspace,
                     session_id: Some(id),

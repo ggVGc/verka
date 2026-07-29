@@ -104,7 +104,7 @@ fn main() -> Result<()> {
                 return Ok(());
             }
             let mut term = terminal::setup()?;
-            match picker::run_session_picker(&mut term, &sessions) {
+            match picker::run_session_picker(&mut term, &client, &sessions) {
                 Ok(Some(id)) => {
                     terminal = Some(term);
                     Some(PathBuf::from(id))

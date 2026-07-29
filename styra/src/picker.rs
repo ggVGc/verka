@@ -19,11 +19,71 @@ pub enum WorkspaceChoice {
 /// session, Esc or q to back out without picking one.
 pub fn run_session_picker(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    client: &Client,
     sessions: &[styra_server::SessionSummary],
 ) -> Result<Option<String>> {
     let mut selected = 0usize;
+    let mut preview_id = String::new();
+    let mut preview_cursor = 0u64;
+    let mut preview_updates = Vec::new();
+    let mut preview_live = false;
     loop {
-        terminal.draw(|frame| ui::render_picker(frame, sessions, selected))?;
+        if let Some(selected_session) = sessions.get(selected) {
+            if preview_id != selected_session.id {
+                preview_id.clone_from(&selected_session.id);
+                preview_cursor = 0;
+                preview_updates.clear();
+                preview_live = client
+                    .list_interactions()?
+                    .iter()
+                    .any(|interaction| interaction.id == preview_id);
+                if !preview_live {
+                    match client.stored_session(&preview_id) {
+                        Ok(stored) => {
+                            preview_updates.extend(
+                                stored
+                                    .events
+                                    .into_iter()
+                                    .filter(|event| {
+                                        !matches!(
+                                            event,
+                                            styra_server::event::AgentEvent::Unknown { .. }
+                                        )
+                                    })
+                                    .map(InteractionUpdate::Event),
+                            );
+                        }
+                        Err(error) => preview_updates.push(InteractionUpdate::Log(
+                            LogEntry::error(format!("could not load session log: {error:#}")),
+                        )),
+                    }
+                }
+            }
+            if preview_live {
+                match client.updates(&preview_id, preview_cursor) {
+                    Ok(batch) => {
+                        preview_cursor = batch.next;
+                        preview_updates.extend(batch.updates.into_iter().filter_map(|sequenced| {
+                            match sequenced.update {
+                                InteractionUpdate::Raw(_) => None,
+                                update => Some(update),
+                            }
+                        }));
+                    }
+                    Err(error) => {
+                        let message = format!("could not load current log: {error:#}");
+                        if !preview_updates.last().is_some_and(
+                            |update| matches!(update, InteractionUpdate::Log(entry) if entry.message == message),
+                        ) {
+                            preview_updates
+                                .push(InteractionUpdate::Log(LogEntry::error(message)));
+                        }
+                    }
+                }
+            }
+        }
+
+        terminal.draw(|frame| ui::render_picker(frame, sessions, selected, &preview_updates))?;
 
         if !event::poll(Duration::from_millis(100))? {
             continue;
@@ -37,10 +97,12 @@ pub fn run_session_picker(
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => return Ok(None),
             KeyCode::Char('j') | KeyCode::Down => {
-                selected = (selected + 1).min(sessions.len() - 1);
+                selected = (selected + 1).min(sessions.len().saturating_sub(1));
             }
             KeyCode::Char('k') | KeyCode::Up => selected = selected.saturating_sub(1),
-            KeyCode::Enter => return Ok(Some(sessions[selected].id.clone())),
+            KeyCode::Enter if !sessions.is_empty() => {
+                return Ok(Some(sessions[selected].id.clone()));
+            }
             _ => {}
         }
     }
