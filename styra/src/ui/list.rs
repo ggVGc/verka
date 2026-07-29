@@ -195,6 +195,14 @@ fn status_tail(app: &App) -> Line<'static> {
 }
 
 fn entry_item(entry: &Entry, width: usize, protocol: Protocol) -> ListItem<'static> {
+    let summary_indent = if matches!(
+        entry.event,
+        AgentEvent::UserMessage { .. } | AgentEvent::AgentMessage { .. }
+    ) {
+        2
+    } else {
+        0
+    };
     let mut lines = vec![summary_line(
         entry,
         entry.has_detail(),
@@ -202,23 +210,29 @@ fn entry_item(entry: &Entry, width: usize, protocol: Protocol) -> ListItem<'stat
         protocol,
     )];
     if entry.expanded {
-        lines.extend(detail_lines(
-            &entry.event,
-            protocol,
-            Some(MAX_DETAIL_LINES),
-        ));
+        lines.extend(detail_lines(&entry.event, protocol, Some(MAX_DETAIL_LINES)));
     }
     let wrapped: Vec<Line<'static>> = lines
         .into_iter()
-        .flat_map(|line| wrap_line(line, width))
+        .enumerate()
+        .flat_map(|(index, line)| {
+            let continuation_indent = if index == 0 {
+                summary_indent
+            } else {
+                DETAIL_INDENT.len()
+            };
+            wrap_line(line, width, continuation_indent)
+        })
         .collect();
     ListItem::new(wrapped)
 }
 
 /// Word-wrap one logical line to `width` columns, preserving each span's
-/// style across the break. `List` does not wrap on its own, so long lines
-/// would otherwise be clipped at the right edge instead of continuing below.
-fn wrap_line(line: Line<'static>, width: usize) -> Vec<Line<'static>> {
+/// style across the break. Continuation rows use a hanging indent so message
+/// text stays aligned with the text following its `«`/`»` marker (and detail
+/// rows retain their body indent) instead of jumping to the far-left edge.
+/// `List` does not wrap on its own, so long lines would otherwise be clipped.
+fn wrap_line(line: Line<'static>, width: usize, continuation_indent: usize) -> Vec<Line<'static>> {
     if width == 0 {
         return vec![line];
     }
@@ -226,6 +240,14 @@ fn wrap_line(line: Line<'static>, width: usize) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let mut current: Vec<Span<'static>> = Vec::new();
     let mut current_width = 0usize;
+    let continuation_indent = continuation_indent.min(width.saturating_sub(1));
+
+    let start_continuation = |current: &mut Vec<Span<'static>>, current_width: &mut usize| {
+        if continuation_indent > 0 {
+            current.push(Span::raw(" ".repeat(continuation_indent)));
+            *current_width = continuation_indent;
+        }
+    };
 
     for span in line.spans {
         let style = span.style;
@@ -237,6 +259,7 @@ fn wrap_line(line: Line<'static>, width: usize) -> Vec<Line<'static>> {
                     if !current.is_empty() {
                         lines.push(Line::from(std::mem::take(&mut current)));
                         current_width = 0;
+                        start_continuation(&mut current, &mut current_width);
                     }
                     continue;
                 }
@@ -252,6 +275,7 @@ fn wrap_line(line: Line<'static>, width: usize) -> Vec<Line<'static>> {
                     if current_width >= width {
                         lines.push(Line::from(std::mem::take(&mut current)));
                         current_width = 0;
+                        start_continuation(&mut current, &mut current_width);
                     }
                     let take = width - current_width;
                     let split_at = remaining
@@ -270,6 +294,7 @@ fn wrap_line(line: Line<'static>, width: usize) -> Vec<Line<'static>> {
             if current_width + token_width > width && !current.is_empty() {
                 lines.push(Line::from(std::mem::take(&mut current)));
                 current_width = 0;
+                start_continuation(&mut current, &mut current_width);
             }
             current.push(Span::styled(token, style));
             current_width += token_width;
@@ -921,6 +946,38 @@ mod tests {
         assert!(
             screen.matches("word").count() > 20,
             "expected wrapped continuation lines, only found: {screen:?}"
+        );
+    }
+
+    #[test]
+    fn wrapped_agent_messages_keep_a_hanging_indent() {
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
+        app.push_event(AgentEvent::AgentMessage {
+            text: "one two three four five six seven eight nine ten eleven twelve".into(),
+        });
+
+        let mut terminal = Terminal::new(TestBackend::new(24, 10)).unwrap();
+        terminal
+            .draw(|frame| super::super::render(frame, &app))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let message_rows = (1..9)
+            .map(|y| {
+                (1..23)
+                    .map(|x| buffer.cell((x, y)).unwrap().symbol())
+                    .collect::<String>()
+            })
+            .filter(|row| row.contains("one") || row.contains("four") || row.contains("seven"))
+            .collect::<Vec<_>>();
+
+        assert!(message_rows.len() >= 2, "{message_rows:?}");
+        assert!(message_rows[0].starts_with("« "), "{message_rows:?}");
+        assert!(
+            message_rows.iter().skip(1).all(|row| row.starts_with("  ")),
+            "{message_rows:?}"
         );
     }
 
