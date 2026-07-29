@@ -3,14 +3,14 @@
 
 use super::markdown::markdown_line_spans;
 use super::{
-    message_text_color, render_preview, tag_color, title_line, workspace_title, DETAIL_INDENT,
-    MAX_DETAIL_LINES, SELECTION_BG,
+    conversation_only_title, message_text_color, render_preview, tag_color, view_block,
+    DETAIL_INDENT, MAX_DETAIL_LINES, SELECTION_BG,
 };
-use crate::app::{App, Entry, Focus, Status};
+use crate::app::{App, Entry, Status};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 use styra_server::event::{AgentEvent, DetailBlock, PresentationMode, Protocol};
 
@@ -36,26 +36,9 @@ pub(crate) fn render_list(frame: &mut Frame, app: &App, area: Rect) {
             )
         })
         .unwrap_or_default();
-    let border_style = if app.focus == Focus::List {
-        Style::default().fg(Color::Cyan)
-    } else {
-        Style::default().fg(Color::DarkGray)
-    };
-    let mut block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(border_style)
-        .title(title_line(&app.launch_label(), &app.status, None))
-        .title_bottom(Line::from(usage).right_aligned());
-    if let Some(title) = workspace_title(app) {
-        block = block.title(title);
-    }
+    let mut block = view_block(app, None).title_bottom(Line::from(usage).right_aligned());
     if app.conversation_only {
-        block = block.title_bottom(Line::from(Span::styled(
-            " conversation only ",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        )));
+        block = conversation_only_title(block);
     }
 
     if app.entries.is_empty() {

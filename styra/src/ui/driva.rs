@@ -3,28 +3,17 @@
 //! answer to "what can this agent touch" without having to go dig through
 //! `main.rs`.
 
-use super::{title_line, workspace_title};
-use crate::app::{App, Focus};
+use super::view_block;
+use crate::app::App;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::widgets::{Paragraph, Wrap};
 use ratatui::Frame;
 use styra_server::{Mount, MountAccess};
 
 pub(crate) fn render_driva(frame: &mut Frame, app: &App, area: Rect) {
-    let border_style = if app.focus == Focus::List {
-        Style::default().fg(Color::Cyan)
-    } else {
-        Style::default().fg(Color::DarkGray)
-    };
-    let mut block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(border_style)
-        .title(title_line(&app.launch_label(), &app.status, Some("driva")));
-    if let Some(title) = workspace_title(app) {
-        block = block.title(title);
-    }
+    let block = view_block(app, Some("driva"));
 
     let Some(options) = &app.driva_options else {
         let empty = Paragraph::new(Line::from(Span::styled(

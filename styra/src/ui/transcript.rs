@@ -3,41 +3,21 @@
 //! `render_events`. Unlike the raw/log views, it reads as a document from the
 //! start rather than anchoring to the tail.
 
-use super::{title_line, workspace_title};
-use crate::app::{App, Focus};
+use super::{conversation_only_title, view_block};
+use crate::app::App;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 /// Follows the event list's minor and conversation-only filters; since this
 /// recomputes from `app.entries` fresh every frame rather than caching
 /// anything, changing a filter re-renders it with no extra wiring needed.
 pub(crate) fn render_transcript_view(frame: &mut Frame, app: &App, area: Rect) {
-    let border_style = if app.focus == Focus::List {
-        Style::default().fg(Color::Cyan)
-    } else {
-        Style::default().fg(Color::DarkGray)
-    };
-    let mut block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(border_style)
-        .title(title_line(
-            &app.launch_label(),
-            &app.status,
-            Some("transcript"),
-        ));
-    if let Some(title) = workspace_title(app) {
-        block = block.title(title);
-    }
+    let mut block = view_block(app, Some("transcript"));
     if app.conversation_only {
-        block = block.title_bottom(Line::from(Span::styled(
-            " conversation only ",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        )));
+        block = conversation_only_title(block);
     }
 
     if app.entries.is_empty() {

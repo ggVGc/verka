@@ -39,6 +39,7 @@ use crate::app::{App, Focus, LaunchLabel, Status, View};
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders};
 use ratatui::Frame;
 
 /// Cap on detail lines shown for one expanded entry, so a single noisy command
@@ -120,6 +121,38 @@ fn title_line(label: &LaunchLabel, status: &Status, suffix: Option<&str>) -> Lin
         None => Span::styled(" ", text_style),
     });
     Line::from(spans)
+}
+
+/// The chrome every full-region view wears: a border that brightens when the
+/// list has focus, the session's status title, and the Workspace name at the
+/// top right. `suffix` names the view in the title; `None` is the event list,
+/// which is the default view and so needs no name.
+fn view_block(app: &App, suffix: Option<&str>) -> Block<'static> {
+    let border_style = if app.focus == Focus::List {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    let mut block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(border_style)
+        .title(title_line(&app.launch_label(), &app.status, suffix));
+    if let Some(title) = workspace_title(app) {
+        block = block.title(title);
+    }
+    block
+}
+
+/// The marker the event list and transcript show while the conversation-only
+/// filter is on. Only those two views follow that filter, so this is kept out
+/// of [`view_block`] rather than shown over the raw, log, and driva views too.
+fn conversation_only_title(block: Block<'static>) -> Block<'static> {
+    block.title_bottom(Line::from(Span::styled(
+        " conversation only ",
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    )))
 }
 
 /// Right-aligned title for the primary panel's top border.
