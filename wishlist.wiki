@@ -1,3 +1,5 @@
+- Orka: Some protection mechanism which stops work on a node and raises a new node for human attention:
+  - Example: React to reading/writing of specific files, such as introducing new dependencies in mix.exs
 - We need a RAG:
   - Use something existing, for example https://github.com/Neverdecel/CodeRAG
   - Or from-scratch attempt. Indexing should be language-specific, and edges should be specific to source code
