@@ -81,14 +81,7 @@ pub fn render_workspace_picker(
     let items: Vec<ListItem> = workspaces
         .iter()
         .map(|workspace| {
-            let name = workspace.name.clone().unwrap_or_else(|| {
-                workspace
-                    .host_path
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .unwrap_or("workspace")
-                    .to_owned()
-            });
+            let name = crate::session::workspace_display_name(workspace);
             ListItem::new(Line::from(vec![
                 Span::styled(
                     format!("{name:<20} "),

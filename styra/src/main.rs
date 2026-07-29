@@ -26,17 +26,6 @@ use event_loop::RunOutcome;
 use session::Live;
 use styra_server::{Client, LogEntry, WorkspaceSummary};
 
-fn workspace_display_name(workspace: &WorkspaceSummary) -> String {
-    workspace.name.clone().unwrap_or_else(|| {
-        workspace
-            .host_path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("workspace")
-            .to_owned()
-    })
-}
-
 fn refresh_workspace_name(app: &mut App, client: &Client, active: &WorkspaceSummary) {
     let workspace = app
         .workspace_id
@@ -51,7 +40,7 @@ fn refresh_workspace_name(app: &mut App, client: &Client, active: &WorkspaceSumm
                 .into_iter()
                 .find(|workspace| workspace.id == id)
         });
-    app.workspace_name = workspace.as_ref().map(workspace_display_name);
+    app.workspace_name = workspace.as_ref().map(session::workspace_display_name);
 }
 
 fn main() -> Result<()> {
