@@ -158,23 +158,12 @@ pub enum LaunchColumn {
     Effort,
 }
 
-/// The row a column opens on for a newly chosen agent: the provider's own
-/// declared default (see [`Provider::default_model`]), so switching agents lands
-/// on that provider's standard model and effort.
-fn default_model_row(provider: Provider) -> usize {
-    provider
-        .models()
-        .iter()
-        .position(|model| *model == provider.default_model())
-        .unwrap_or(0)
-}
-
-fn default_effort_row(provider: Provider) -> usize {
-    provider
-        .efforts()
-        .iter()
-        .position(|effort| *effort == provider.default_effort())
-        .unwrap_or(0)
+/// Which row of a column holds `value`, falling back to the first. Used to open
+/// a column on a provider's own declared default (see
+/// [`Provider::default_model`]), so switching agents lands on that provider's
+/// standard model and effort.
+fn row_of<T: PartialEq>(rows: &[T], value: &T) -> usize {
+    rows.iter().position(|row| row == value).unwrap_or(0)
 }
 
 /// The launch picker: the agent, model, and reasoning effort the *next* session
@@ -208,11 +197,10 @@ impl Launcher {
     /// list is carried as its own final row rather than dropped, so confirming
     /// the picker cannot silently change an existing selection.
     pub fn from_selection(selection: &Selection) -> Self {
-        let provider = PROVIDERS
-            .iter()
-            .position(|candidate| *candidate == selection.provider)
-            .unwrap_or(0);
+        let provider = row_of(&PROVIDERS, &selection.provider);
         let models = selection.provider.models();
+        // Not `row_of`: a model the catalog does not list is carried as an
+        // extra row rather than falling back to the first.
         let (model, carried_model) = match models
             .iter()
             .position(|candidate| *candidate == selection.model)
@@ -220,12 +208,7 @@ impl Launcher {
             Some(index) => (index, None),
             None => (models.len(), Some(selection.model.clone())),
         };
-        let effort = selection
-            .provider
-            .efforts()
-            .iter()
-            .position(|candidate| *candidate == selection.effort)
-            .unwrap_or(0);
+        let effort = row_of(selection.provider.efforts(), &selection.effort);
         Self {
             column: LaunchColumn::Provider,
             provider,
@@ -307,8 +290,9 @@ impl Launcher {
         // index. That includes a carried model, which belonged to the agent the
         // picker was opened on.
         if self.column == LaunchColumn::Provider {
-            self.model = default_model_row(self.provider());
-            self.effort = default_effort_row(self.provider());
+            let provider = self.provider();
+            self.model = row_of(provider.models(), &provider.default_model());
+            self.effort = row_of(provider.efforts(), &provider.default_effort());
             self.carried_model = None;
         }
     }
@@ -1684,7 +1668,8 @@ mod tests {
         launcher.next_column();
         assert_eq!(launcher.selection().model, Provider::Claude.default_model());
         launcher.next();
-        let model = Provider::Claude.models()[default_model_row(Provider::Claude) + 1].to_owned();
+        let models = Provider::Claude.models();
+        let model = models[row_of(models, &Provider::Claude.default_model()) + 1].to_owned();
         assert_eq!(launcher.selection().model, model);
 
         // Effort column, likewise — the ladder itself, no extra row.
