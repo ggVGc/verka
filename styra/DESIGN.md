@@ -75,7 +75,8 @@ Each live interaction also has a persistent interactive shell. A hidden broker i
 the top-level command inside Bubblewrap: it starts a detached tmux server and
 `/bin/sh`, then launches the profile's agent with the inherited protocol
 streams unchanged. The tmux socket is created through a private per-session
-control bind mount, allowing `styra shell --session ID` to attach from the host
+control bind mount, allowing `styra shell` (or `styra shell --session ID`) to
+select and attach from the host
 without exposing a host shell inside the sandbox or mixing terminal bytes into
 the agent journal. The broker kills tmux when the agent interaction ends.
 

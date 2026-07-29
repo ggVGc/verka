@@ -29,7 +29,7 @@ Then start the TUI in another terminal:
 
 ```sh
 styra [OPTIONS] [-- PROMPT]
-styra shell --session <ID>
+styra shell [--session <ID>]
 
   --socket <PATH>      Server socket (default: $XDG_RUNTIME_DIR/styra/styra.sock)
   --workspace <DIR>    Host directory mounted writable as the agent workspace
@@ -39,7 +39,8 @@ styra shell --session <ID>
 ```
 
 Every live Interaction also owns a detached `/bin/sh` in tmux inside the same
-Bubblewrap sandbox as its agent. Attach with `styra shell --session <ID>`.
+Bubblewrap sandbox as its agent. Run `styra shell` to browse live sessions and
+attach, or use `styra shell --session <ID>` to attach directly.
 From the TUI, press `!` to open that shell in a new terminal window. Styra
 prefers the emulator named by `$TERMINAL`, then uses `TERM_PROGRAM` and `$TERM`
 as hints before trying common installed terminal emulators.

@@ -42,8 +42,8 @@ pub struct Cli {
 pub enum CliCommand {
     /// Attach to the persistent shell inside a live session's sandbox.
     Shell {
-        /// Live Styra session to attach to.
+        /// Live Styra session to attach to; omit to browse live sessions.
         #[arg(long)]
-        session: String,
+        session: Option<String>,
     },
 }

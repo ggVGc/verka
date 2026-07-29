@@ -73,7 +73,10 @@ fn main() -> Result<()> {
     let client = styra_server::ensure_server(&socket)
         .with_context(|| format!("Styra server is unavailable at {}", socket.display()))?;
     if let Some(CliCommand::Shell { session }) = &cli.command {
-        return attach_shell(&client, session);
+        return match session {
+            Some(session) => attach_shell(&client, session),
+            None => browse_shells(&client),
+        };
     }
     let preferences_path = preferences::default_path()?;
 
@@ -321,6 +324,30 @@ fn attach_shell(client: &Client, session: &str) -> Result<()> {
     })
 }
 
+fn browse_shells(client: &Client) -> Result<()> {
+    let live_ids = client
+        .list_interactions()?
+        .into_iter()
+        .map(|interaction| interaction.id)
+        .collect::<std::collections::HashSet<_>>();
+    let sessions = session::all_sessions(client)?
+        .into_iter()
+        .filter(|session| live_ids.contains(&session.id))
+        .collect::<Vec<_>>();
+    if sessions.is_empty() {
+        println!("No live sessions found by the Styra server");
+        return Ok(());
+    }
+
+    let mut terminal = terminal::setup()?;
+    let choice = picker::run_session_picker(&mut terminal, client, &sessions);
+    terminal::restore(&mut terminal)?;
+    match choice? {
+        Some(session) => attach_shell(client, &session),
+        None => Ok(()),
+    }
+}
+
 /// `--daemon`: bring up the background daemon and return.
 fn start_daemon(socket: &Path) -> Result<()> {
     if Client::new(socket).health().is_ok() {
@@ -359,11 +386,20 @@ mod cli_tests {
     use styra_server::agent::Selection;
 
     #[test]
-    fn shell_subcommand_requires_and_captures_a_session() {
+    fn shell_subcommand_captures_an_explicit_session() {
         let cli = Cli::try_parse_from(["styra", "shell", "--session", "styra-123"]).unwrap();
         assert!(matches!(
             cli.command,
-            Some(CliCommand::Shell { session }) if session == "styra-123"
+            Some(CliCommand::Shell { session: Some(session) }) if session == "styra-123"
+        ));
+    }
+
+    #[test]
+    fn shell_subcommand_without_a_session_opens_the_browser() {
+        let cli = Cli::try_parse_from(["styra", "shell"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(CliCommand::Shell { session: None })
         ));
     }
 
