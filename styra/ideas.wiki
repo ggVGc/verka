@@ -2,6 +2,7 @@
   - Useful for things like: "Tell me which improvements we can make"
   - Styra then understands the response in a structured way, and can launch a new session to work on each one (or selected)
   - This builds on introducing some session-forking, as well as tool exposure from Styra to agents.
+- Some way to jump to lines based on fuzzy sorting.
 - Quick actions for adding a file/directory telling the agent to read it for context
 - Some way to fork out from current context, run a new track, and summarize the outcome of that track into the initial one:
   - Essentially a manual sub-agent + compaction
@@ -47,7 +48,6 @@
 - Preview sessions on right side of selection screen:
   - Render lines in the same way as in the main log view, but without the arrows and body contents. Only single lines.
 - Clear options for driva invocation
-- Fix claude profile
 - Some way of listing models and selecting between them on-the-fly:
   - This will affect caching, I suppose?
 - Tag sessions
@@ -59,14 +59,11 @@
   - Maybe it's a "project", or workspace?
   - It can have many associated agent sessions
   - And other things, like notes, todo list etc.
-- Probably need some kind of daemon so sessions can run in background:
 - When resuming sessions with the same model provider, use the actual raw session logged from the agent.
   - Otherwise do a translation between the JSON formats
   - Or, if we can't, a text transcript
 - Resuming of sessions (copy of functionality in codex/claude):
   - Maybe use original transcripts unless model in styra was changed
-- Preview window on the side which shows the content of the current log entry:
-  - Syntax highlighting for code blocks
 - For file change/read/write messages in logs, store a hash of the file just after that message:
   - That way we can say in the preview window if we're viewing the same content that was originally written or not.
 - Experimental workflow:
