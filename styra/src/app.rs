@@ -704,7 +704,11 @@ impl App {
     /// stays separate because entering the raw view also has to line its
     /// selection up with the event list's.
     pub fn toggle_view(&mut self, view: View) {
-        self.view = if self.view == view { View::Events } else { view };
+        self.view = if self.view == view {
+            View::Events
+        } else {
+            view
+        };
     }
 
     /// Move the raw view's selection to the next wire line.
