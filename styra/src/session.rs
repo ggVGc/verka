@@ -37,17 +37,24 @@ pub fn resolve_workspace(workspace: Option<&Path>) -> Result<PathBuf> {
 
 pub fn workspace_for_host(client: &Client, host_path: &Path) -> Result<WorkspaceSummary> {
     let canonical = host_path.canonicalize()?;
-    if let Some(workspace) = client
-        .list_workspaces()?
-        .into_iter()
-        .find(|workspace| workspace.host_path == canonical)
-    {
+    if let Some(workspace) = find_workspace_for_host(&client.list_workspaces()?, &canonical) {
         return client.workspace(&workspace.id);
     }
     client.create_workspace(&CreateWorkspace {
         host_path: canonical,
         name: None,
     })
+}
+
+/// Find the durable Workspace associated with an already-canonical host path.
+pub fn find_workspace_for_host(
+    workspaces: &[WorkspaceSummary],
+    host_path: &Path,
+) -> Option<WorkspaceSummary> {
+    workspaces
+        .iter()
+        .find(|workspace| workspace.host_path == host_path)
+        .cloned()
 }
 
 pub fn all_sessions(client: &Client) -> Result<Vec<SessionSummary>> {
@@ -269,6 +276,19 @@ mod tests {
     use super::*;
     use styra_server::agent::{Provider, Selection};
 
+    fn workspace(id: &str, host_path: &str) -> WorkspaceSummary {
+        WorkspaceSummary {
+            id: id.into(),
+            name: None,
+            host_path: host_path.into(),
+            path: format!("/state/workspaces/{id}").into(),
+            session_count: 0,
+            age: "now".into(),
+            created_at_ms: 1,
+            last_accessed_at_ms: 1,
+        }
+    }
+
     fn app() -> App {
         App::new(
             Selection {
@@ -308,5 +328,24 @@ mod tests {
                 cursor: 7,
             }
         );
+    }
+
+    #[test]
+    fn finds_the_workspace_associated_with_the_host_directory() {
+        let workspaces = vec![
+            workspace("w-other", "/home/op/other"),
+            workspace("w-project", "/home/op/project"),
+        ];
+
+        let found = find_workspace_for_host(&workspaces, Path::new("/home/op/project")).unwrap();
+
+        assert_eq!(found.id, "w-project");
+    }
+
+    #[test]
+    fn does_not_associate_a_different_directory() {
+        let workspaces = vec![workspace("w-project", "/home/op/project")];
+
+        assert!(find_workspace_for_host(&workspaces, Path::new("/home/op/elsewhere")).is_none());
     }
 }

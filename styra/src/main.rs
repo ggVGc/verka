@@ -122,51 +122,55 @@ fn main() -> Result<()> {
         None => None,
     };
 
-    // An ordinary interactive launch starts with the durable Workspace list.
-    // Explicit CLI targets retain their direct, non-modal behavior.
+    // An ordinary interactive launch enters the Workspace associated with the
+    // current directory when one exists. Otherwise it starts with the durable
+    // Workspace list. Explicit CLI targets retain their direct behavior.
     let mut active_workspace = if cli.workspace.is_none()
         && cli.view.is_none()
         && cli.command.is_none()
     {
+        let current_directory = session::resolve_workspace(None)?;
         let workspaces = client.list_workspaces()?;
-        let mut term = match terminal.take() {
-            Some(term) => term,
-            None => terminal::setup()?,
-        };
-        let choice = match picker::run_workspace_picker(&mut term, &workspaces) {
-            Ok(Some(choice)) => choice,
-            Ok(None) => {
-                terminal::restore(&mut term)?;
-                return Ok(());
-            }
-            Err(error) => {
-                terminal::restore(&mut term)?;
-                return Err(error);
-            }
-        };
-        let workspace = match choice {
-            // Keep the summary returned by the list request. Fetching it again
-            // records an access on the server, which makes the same picker
-            // immediately reorder when it is reopened with `V`.
-            picker::WorkspaceChoice::Existing(workspace) => Ok(workspace),
-            picker::WorkspaceChoice::CreateCurrentDirectory => {
-                session::resolve_workspace(None).and_then(|host_path| {
+        if let Some(workspace) = session::find_workspace_for_host(&workspaces, &current_directory) {
+            workspace
+        } else {
+            let mut term = match terminal.take() {
+                Some(term) => term,
+                None => terminal::setup()?,
+            };
+            let choice = match picker::run_workspace_picker(&mut term, &workspaces) {
+                Ok(Some(choice)) => choice,
+                Ok(None) => {
+                    terminal::restore(&mut term)?;
+                    return Ok(());
+                }
+                Err(error) => {
+                    terminal::restore(&mut term)?;
+                    return Err(error);
+                }
+            };
+            let workspace = match choice {
+                // Keep the summary returned by the list request. Fetching it
+                // again records an access on the server, which makes the same
+                // picker immediately reorder when it is reopened with `V`.
+                picker::WorkspaceChoice::Existing(workspace) => Ok(workspace),
+                picker::WorkspaceChoice::CreateCurrentDirectory => {
                     client.create_workspace(&styra_server::protocol::CreateWorkspace {
-                        host_path,
+                        host_path: current_directory,
                         name: None,
                     })
-                })
-            }
-        };
-        let workspace = match workspace {
-            Ok(workspace) => workspace,
-            Err(error) => {
-                terminal::restore(&mut term)?;
-                return Err(error);
-            }
-        };
-        terminal = Some(term);
-        workspace
+                }
+            };
+            let workspace = match workspace {
+                Ok(workspace) => workspace,
+                Err(error) => {
+                    terminal::restore(&mut term)?;
+                    return Err(error);
+                }
+            };
+            terminal = Some(term);
+            workspace
+        }
     } else {
         let host_path = session::resolve_workspace(cli.workspace.as_deref())?;
         session::workspace_for_host(&client, &host_path)?
