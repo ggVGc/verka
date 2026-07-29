@@ -1,24 +1,22 @@
 //! Styra's Unix-socket server and server-owned interaction manager.
 
 use crate::agent::{MountSpec, SandboxLayout, Selection};
-use crate::api::{
-    CreateSession, CreateWorkspace, Health, Request, Response, ResumeSession, SequencedUpdate,
-    SessionInfo, ShellInfo, StoredSession, Updates, WireResponse,
-};
 use crate::interaction::{Interaction, InteractionSpec, ResolvedTemplate, SandboxBroker};
 use crate::journal::{self, Journal};
-use crate::types::{DrivaOptions, InteractionSummary, SessionSummary};
+use crate::protocol::{
+    CreateSession, CreateWorkspace, Health, Request, Response, ResumeSession, SequencedUpdate,
+    SessionInfo, ShellInfo, StoredSession, Updates, WireResponse, MAX_REQUEST_BYTES,
+};
+use crate::protocol::{DrivaOptions, InteractionSummary, InteractionUpdate, SessionSummary};
 use anyhow::{Context, Result};
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
+use std::io::BufReader;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-
-const MAX_REQUEST_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Clone)]
 pub struct ServerState {
@@ -230,7 +228,7 @@ impl ServerState {
             .name(format!("styra-updates-{id}"))
             .spawn(move || {
                 while let Ok(update) = receiver.recv() {
-                    if matches!(update, crate::types::InteractionUpdate::Ended(_)) {
+                    if matches!(update, InteractionUpdate::Ended(_)) {
                         accepting_messages.store(false, Ordering::Release);
                     }
                     let mut history = updates.lock().expect("interaction update lock poisoned");
@@ -366,7 +364,7 @@ impl ServerState {
             .name(format!("styra-updates-{id}"))
             .spawn(move || {
                 while let Ok(update) = receiver.recv() {
-                    if matches!(update, crate::types::InteractionUpdate::Ended(_)) {
+                    if matches!(update, InteractionUpdate::Ended(_)) {
                         accepting_messages.store(false, Ordering::Release);
                     }
                     let mut history = updates.lock().expect("interaction update lock poisoned");
@@ -507,9 +505,9 @@ impl ServerState {
             Request::QueuedMessages { id } => Ok(Response::QueuedMessages(
                 self.interaction(&id)?.queued_messages(),
             )),
-            Request::ClearQueuedMessages { id } => Ok(Response::Queued(
-                self.interaction(&id)?.clear_queue()?,
-            )),
+            Request::ClearQueuedMessages { id } => {
+                Ok(Response::Queued(self.interaction(&id)?.clear_queue()?))
+            }
             Request::StopInteraction { id } => {
                 self.interaction(&id)?.stop();
                 Ok(Response::Accepted)
@@ -579,16 +577,16 @@ fn replayed_session_updates(
         // App-server control traffic is carried by the raw view but omitted
         // from the live event list, matching normal Interaction behavior.
         if !matches!(event, crate::event::AgentEvent::Unknown { .. }) {
-            push_sequenced(&mut updates, crate::types::InteractionUpdate::Event(event));
+            push_sequenced(&mut updates, InteractionUpdate::Event(event));
         }
     }
     for line in raw {
-        push_sequenced(&mut updates, crate::types::InteractionUpdate::Raw(line));
+        push_sequenced(&mut updates, InteractionUpdate::Raw(line));
     }
     Ok(updates)
 }
 
-fn push_sequenced(updates: &mut Vec<SequencedUpdate>, update: crate::types::InteractionUpdate) {
+fn push_sequenced(updates: &mut Vec<SequencedUpdate>, update: InteractionUpdate) {
     let sequence = updates.len() as u64 + 1;
     updates.push(SequencedUpdate { sequence, update });
 }
@@ -689,34 +687,21 @@ pub fn serve(listener: UnixListener, state: ServerState) -> Result<()> {
 }
 
 fn serve_connection(mut stream: UnixStream, state: &ServerState) -> Result<()> {
-    let wire = match read_request(&stream).and_then(|request| state.handle(request)) {
+    let wire = match crate::protocol::read_message_limited(
+        &mut BufReader::new(&stream),
+        MAX_REQUEST_BYTES,
+    )
+    .and_then(|request| state.handle(request))
+    {
         Ok(response) => WireResponse::Ok { response },
         Err(error) => WireResponse::Error {
             error: format!("{error:#}"),
         },
     };
-    serde_json::to_writer(&mut stream, &wire).context("encoding the Styra response")?;
-    stream
-        .write_all(b"\n")
-        .context("writing the Styra response")?;
-    stream.flush().context("flushing the Styra response")?;
+    crate::protocol::write_message(&mut stream, &wire).context("writing the Styra response")?;
     // The ack is on its way to the client; only now is it safe to exit.
     state.shutdown_if_requested();
     Ok(())
-}
-
-fn read_request(stream: &UnixStream) -> Result<Request> {
-    let mut line = String::new();
-    BufReader::new(stream)
-        .read_line(&mut line)
-        .context("reading the Styra request")?;
-    if line.is_empty() {
-        anyhow::bail!("client closed the socket without a request");
-    }
-    if line.len() > MAX_REQUEST_BYTES {
-        anyhow::bail!("request exceeds the {MAX_REQUEST_BYTES}-byte limit");
-    }
-    serde_json::from_str(&line).context("decoding the Styra request")
 }
 
 #[cfg(test)]
@@ -813,19 +798,19 @@ mod tests {
         );
         assert!(matches!(
             &replayed[0].update,
-            crate::types::InteractionUpdate::Event(
+            InteractionUpdate::Event(
                 crate::event::AgentEvent::UserMessage { text }
             ) if text == "old question"
         ));
         assert!(matches!(
             &replayed[1].update,
-            crate::types::InteractionUpdate::Event(
+            InteractionUpdate::Event(
                 crate::event::AgentEvent::AgentMessage { text }
             ) if text == "old answer"
         ));
         assert!(replayed[2..]
             .iter()
-            .all(|update| matches!(update.update, crate::types::InteractionUpdate::Raw(_))));
+            .all(|update| matches!(update.update, InteractionUpdate::Raw(_))));
         let error = state
             .resume_session(ResumeSession {
                 id: "0000000000001-1-1".into(),

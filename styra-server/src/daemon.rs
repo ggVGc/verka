@@ -22,7 +22,7 @@ pub const SERVE_STORE_ENV: &str = "STYRA_SERVE_STORE";
 
 /// What a server needs to come up. `None` fields fall back to the private
 /// per-user defaults from [`crate::paths`]. The server runs until it is asked
-/// to stop ([`crate::api::Request::Shutdown`]) or killed.
+/// to stop ([`crate::protocol::Request::Shutdown`]) or killed.
 #[derive(Default)]
 pub struct ServerConfig {
     /// Store containing durable sessions.

@@ -120,7 +120,7 @@ fn main() -> Result<()> {
             picker::WorkspaceChoice::Existing(workspace) => Ok(workspace),
             picker::WorkspaceChoice::CreateCurrentDirectory => {
                 session::resolve_workspace(None).and_then(|host_path| {
-                    client.create_workspace(&styra_server::api::CreateWorkspace {
+                    client.create_workspace(&styra_server::protocol::CreateWorkspace {
                         host_path,
                         name: None,
                     })

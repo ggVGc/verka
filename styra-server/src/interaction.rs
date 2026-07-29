@@ -16,7 +16,9 @@
 use crate::agent::{MountSpec, Profile};
 use crate::event::{decode_line, AgentEvent};
 use crate::journal::Journal;
-use crate::types::{Direction, DrivaOptions, InteractionEnd, InteractionUpdate, LogEntry, RawLine};
+use crate::protocol::{
+    Direction, DrivaOptions, InteractionEnd, InteractionUpdate, LogEntry, RawLine,
+};
 use anyhow::{Context, Result};
 use driva::{ExecutionIo, ExecutionRequest, Isolation, Mount, MountAccess};
 use std::collections::BTreeMap;

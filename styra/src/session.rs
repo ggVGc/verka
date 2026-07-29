@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use crate::app::{App, Status};
 use crate::cli::Cli;
 use styra_server::agent::Selection;
-use styra_server::api::{CreateSession, CreateWorkspace, ResumeSession, SessionInfo};
+use styra_server::protocol::{CreateSession, CreateWorkspace, ResumeSession, SessionInfo};
 use styra_server::{
     Client, InteractionSummary, InteractionUpdate, LogEntry, SessionSummary, WorkspaceSummary,
 };

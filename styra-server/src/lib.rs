@@ -7,8 +7,8 @@
 //! stdin/stdout, Genta protocol state, journals, update ordering, and
 //! stored-session replay — behind a JSON Unix-socket API. As a
 //! library, it exposes only what a client needs to speak that API: the wire
-//! contract ([`api`]), a blocking [`Client`], the data vocabulary that crosses
-//! the socket ([`types`]), and the default socket location ([`paths`]).
+//! contract and data vocabulary ([`protocol`]), a blocking [`Client`], and the
+//! default socket location ([`paths`]).
 //!
 //! All coding-agent knowledge — launch profiles, wire protocols, event
 //! decoding, the app-server handshake — lives in the `genta` library and is
@@ -79,20 +79,19 @@ pub use genta::render;
 pub use driva::{Mount, MountAccess};
 
 // --- The client-facing interface ---
-pub mod api;
 pub mod client;
 pub mod daemon;
 pub mod paths;
+pub mod protocol;
 pub mod spawn;
-pub mod types;
 
 pub use client::Client;
 pub use daemon::{run, serve_if_requested, ServerConfig};
-pub use spawn::ensure_server;
-pub use types::{
+pub use protocol::{
     Direction, DrivaOptions, InteractionEnd, InteractionSummary, InteractionUpdate, LogEntry,
     LogLevel, RawLine, SessionSummary, WorkspaceSummary,
 };
+pub use spawn::ensure_server;
 
 // --- The session runner ---
 // An `interaction` is one live agent process serving a persistent session. Public so

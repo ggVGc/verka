@@ -8,8 +8,8 @@
 
 use std::time::{Duration, Instant};
 
-use styra_server::api::{CreateSession, CreateWorkspace};
 use styra_server::event::AgentEvent;
+use styra_server::protocol::{CreateSession, CreateWorkspace};
 use styra_server::{Client, InteractionUpdate};
 
 fn main() -> anyhow::Result<()> {

@@ -4,7 +4,7 @@
 //! directory and owns any number of durable provider Sessions beneath
 //! `workspaces/<workspace-id>/sessions/`.
 
-use crate::types::WorkspaceSummary;
+use crate::protocol::WorkspaceSummary;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};

@@ -1,12 +1,12 @@
 //! Blocking client for Styra's JSON protocol over a Unix domain socket.
 
-use crate::api::{
+use crate::protocol::{
     CreateSession, CreateWorkspace, Health, Request, Response, ResumeSession, SendMessage,
     SessionInfo, ShellInfo, StoredSession, Updates, WireResponse,
 };
-use crate::types::{InteractionSummary, SessionSummary, WorkspaceSummary};
+use crate::protocol::{InteractionSummary, SessionSummary, WorkspaceSummary};
 use anyhow::{bail, Context, Result};
-use std::io::{BufRead, BufReader, Write};
+use std::io::BufReader;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 
@@ -180,20 +180,12 @@ impl Client {
     fn request(&self, request: Request) -> Result<Response> {
         let mut stream = UnixStream::connect(&self.socket)
             .with_context(|| format!("connecting to Styra socket {}", self.socket.display()))?;
-        serde_json::to_writer(&mut stream, &request).context("encoding the Styra request")?;
-        stream
-            .write_all(b"\n")
+        crate::protocol::write_message(&mut stream, &request)
             .context("writing the Styra request")?;
-        stream.flush().context("flushing the Styra request")?;
 
-        let mut line = String::new();
-        BufReader::new(stream)
-            .read_line(&mut line)
+        let response = crate::protocol::read_message(&mut BufReader::new(stream))
             .context("reading the Styra response")?;
-        if line.is_empty() {
-            bail!("Styra server closed the socket without a response");
-        }
-        match serde_json::from_str(&line).context("decoding the Styra response")? {
+        match response {
             WireResponse::Ok { response } => Ok(response),
             WireResponse::Error { error } => bail!("Styra server: {error}"),
         }

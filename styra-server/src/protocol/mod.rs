@@ -1,12 +1,28 @@
 //! Stable JSON contract shared by the Styra Unix-socket server and its clients.
+//!
+//! This module is the single entry point for everything that crosses the
+//! Styra client/server boundary. See `protocol/README.md` for the transport
+//! framing and behavioral rules.
 
 use crate::agent::Selection;
 use crate::event::AgentEvent;
-use crate::types::{
-    DrivaOptions, InteractionSummary, InteractionUpdate, RawLine, SessionSummary, WorkspaceSummary,
-};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+
+mod transport;
+mod types;
+
+pub use transport::{read_message, read_message_limited, write_message, MAX_REQUEST_BYTES};
+pub use types::{
+    Direction, DrivaOptions, InteractionEnd, InteractionSummary, InteractionUpdate, LogEntry,
+    LogLevel, RawLine, SessionSummary, WorkspaceSummary,
+};
+
+// These external vocabularies are serialized inside protocol payloads. Re-export
+// them here so the complete wire surface is discoverable from this module.
+pub use crate::agent::{Effort, Provider, Selection as AgentSelection};
+pub use crate::event::AgentEvent as ProtocolAgentEvent;
+pub use crate::{Mount, MountAccess};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Health {
@@ -195,7 +211,6 @@ pub enum WireResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{InteractionUpdate, LogEntry};
 
     #[test]
     fn update_stream_has_an_explicit_cursor_and_tagged_payload() {
