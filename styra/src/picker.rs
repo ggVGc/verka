@@ -148,6 +148,7 @@ pub fn run_interactions_picker(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     client: &Client,
     interactions: &[InteractionSummary],
+    workspaces: &[WorkspaceSummary],
 ) -> Result<Option<InteractionSummary>> {
     let mut selected = 0usize;
     let mut preview_id = String::new();
@@ -185,7 +186,13 @@ pub fn run_interactions_picker(
         }
 
         terminal.draw(|frame| {
-            ui::render_interactions_picker(frame, interactions, selected, &preview_updates)
+            ui::render_interactions_picker(
+                frame,
+                interactions,
+                workspaces,
+                selected,
+                &preview_updates,
+            )
         })?;
 
         if !event::poll(Duration::from_millis(100))? {

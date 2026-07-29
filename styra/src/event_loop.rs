@@ -194,8 +194,14 @@ pub fn run(
                     app.push_log(LogEntry::warn("no live interactions on the server"));
                     continue;
                 }
+                let workspaces = client.list_workspaces()?;
                 if let Some(interaction) =
-                    picker::run_interactions_picker(terminal, client, &interactions)?
+                    picker::run_interactions_picker(
+                        terminal,
+                        client,
+                        &interactions,
+                        &workspaces,
+                    )?
                 {
                     return Ok(RunOutcome::Attach(interaction));
                 }

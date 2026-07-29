@@ -122,6 +122,7 @@ pub fn render_workspace_picker(
 pub fn render_interactions_picker(
     frame: &mut Frame,
     interactions: &[InteractionSummary],
+    workspaces: &[WorkspaceSummary],
     selected: usize,
     updates: &[InteractionUpdate],
 ) {
@@ -146,7 +147,10 @@ pub fn render_interactions_picker(
         return;
     }
 
-    let items: Vec<ListItem> = interactions.iter().map(interaction_item).collect();
+    let items: Vec<ListItem> = interactions
+        .iter()
+        .map(|interaction| interaction_item(interaction, workspaces))
+        .collect();
     let list = List::new(items).block(interactions_block).highlight_style(
         Style::default()
             .bg(SELECTION_BG)
@@ -252,15 +256,23 @@ fn interaction_preview_line(
     }
 }
 
-fn interaction_item(interaction: &InteractionSummary) -> ListItem<'static> {
+fn interaction_item(
+    interaction: &InteractionSummary,
+    workspaces: &[WorkspaceSummary],
+) -> ListItem<'static> {
     let (label, color) = if interaction.accepting {
         ("live", Color::Green)
     } else {
         ("ended", Color::DarkGray)
     };
+    let workspace_name = workspaces
+        .iter()
+        .find(|workspace| workspace.id == interaction.workspace_id)
+        .map(crate::session::workspace_display_name)
+        .unwrap_or_else(|| interaction.workspace_id.clone());
     ListItem::new(Line::from(vec![
         Span::styled(
-            format!("{:<14} ", interaction.selection.provider.as_str()),
+            format!("{:<7} ", interaction.selection.provider.as_str()),
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
@@ -270,7 +282,7 @@ fn interaction_item(interaction: &InteractionSummary) -> ListItem<'static> {
             Style::default().fg(color).add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            format!("{} · ", interaction.workspace_id),
+            format!("{workspace_name} · "),
             Style::default().fg(Color::Gray),
         ),
         Span::styled(interaction.id.clone(), Style::default().fg(Color::White)),
@@ -428,12 +440,15 @@ mod tests {
 
     fn rendered_interactions_picker(
         interactions: &[InteractionSummary],
+        workspaces: &[WorkspaceSummary],
         selected: usize,
         updates: &[InteractionUpdate],
     ) -> String {
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
         terminal
-            .draw(|frame| render_interactions_picker(frame, interactions, selected, updates))
+            .draw(|frame| {
+                render_interactions_picker(frame, interactions, workspaces, selected, updates)
+            })
             .unwrap();
         terminal
             .backend()
@@ -451,12 +466,23 @@ mod tests {
             interaction_summary("s-1", "codex", true),
             interaction_summary("s-2", "claude", false),
         ];
-        let screen = rendered_interactions_picker(&interactions, 0, &[]);
+        let workspaces = vec![WorkspaceSummary {
+            id: "w-1".into(),
+            name: Some("payments".into()),
+            host_path: PathBuf::from("/home/op/project"),
+            path: PathBuf::from("/state/workspaces/w-1"),
+            session_count: 2,
+            age: "2m ago".into(),
+            created_at_ms: 1,
+            last_accessed_at_ms: 1,
+        }];
+        let screen = rendered_interactions_picker(&interactions, &workspaces, 0, &[]);
         assert!(screen.contains("current interactions"));
         assert!(screen.contains("current log"));
         assert!(screen.contains("codex"));
         assert!(screen.contains("live"));
         assert!(screen.contains("s-1"));
+        assert!(screen.contains("payments"));
         assert!(screen.contains("claude"));
         assert!(screen.contains("ended"));
         assert!(screen.contains("s-2"));
@@ -464,7 +490,7 @@ mod tests {
 
     #[test]
     fn interactions_picker_shows_a_placeholder_when_there_are_no_live_interactions() {
-        let screen = rendered_interactions_picker(&[], 0, &[]);
+        let screen = rendered_interactions_picker(&[], &[], 0, &[]);
         assert!(screen.contains("no live interactions"));
     }
 
@@ -484,7 +510,7 @@ mod tests {
             }),
         ];
 
-        let screen = rendered_interactions_picker(&interactions, 1, &updates);
+        let screen = rendered_interactions_picker(&interactions, &[], 1, &updates);
         assert!(screen.contains("current log · s-2"));
         assert!(screen.contains("cargo test"));
         assert!(screen.contains("waiting for response"));
