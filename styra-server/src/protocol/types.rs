@@ -31,8 +31,11 @@ pub struct WorkspaceSummary {
     pub session_count: usize,
     /// Roughly how long ago the Workspace was created.
     pub age: String,
-    /// Millisecond creation timestamp used to sort newest first.
+    /// Millisecond creation timestamp retained for display and tie-breaking.
     pub created_at_ms: u64,
+    /// Millisecond timestamp of the most recent explicit access.
+    #[serde(default)]
+    pub last_accessed_at_ms: u64,
 }
 
 /// An update delivered from the interaction's threads to the UI.

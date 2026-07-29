@@ -482,7 +482,7 @@ impl ServerState {
             Request::ListWorkspaces => Ok(Response::Workspaces(crate::workspace::list(
                 &self.inner.store_root,
             )?)),
-            Request::Workspace { id } => Ok(Response::Workspace(crate::workspace::get(
+            Request::Workspace { id } => Ok(Response::Workspace(crate::workspace::access(
                 &self.inner.store_root,
                 &id,
             )?)),

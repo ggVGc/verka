@@ -19,6 +19,8 @@ struct WorkspaceMeta {
     name: Option<String>,
     host_path: PathBuf,
     created_at_ms: u64,
+    #[serde(default)]
+    last_accessed_at_ms: Option<u64>,
 }
 
 pub fn workspaces_dir(store_root: &Path) -> PathBuf {
@@ -55,6 +57,7 @@ pub fn create(
         name,
         host_path: host_path.clone(),
         created_at_ms,
+        last_accessed_at_ms: Some(created_at_ms),
     };
     write_meta(&path, &meta)?;
     Ok(WorkspaceSummary {
@@ -65,10 +68,11 @@ pub fn create(
         session_count: 0,
         age: "just now".into(),
         created_at_ms,
+        last_accessed_at_ms: created_at_ms,
     })
 }
 
-/// List durable Workspaces newest first.
+/// List durable Workspaces by most recent access, newest first.
 pub fn list(store_root: &Path) -> Result<Vec<WorkspaceSummary>> {
     let root = workspaces_dir(store_root);
     let now = now_ms();
@@ -84,7 +88,11 @@ pub fn list(store_root: &Path) -> Result<Vec<WorkspaceSummary>> {
             workspaces.push(summary_from_dir(&entry.path(), now)?);
         }
     }
-    workspaces.sort_by(|a, b| b.created_at_ms.cmp(&a.created_at_ms));
+    workspaces.sort_by(|a, b| {
+        b.last_accessed_at_ms
+            .cmp(&a.last_accessed_at_ms)
+            .then_with(|| b.created_at_ms.cmp(&a.created_at_ms))
+    });
     Ok(workspaces)
 }
 
@@ -96,8 +104,25 @@ pub fn get(store_root: &Path, id: &str) -> Result<WorkspaceSummary> {
     summary_from_dir(&path, now_ms())
 }
 
+/// Record an explicit operator access and return the updated Workspace.
+pub fn access(store_root: &Path, id: &str) -> Result<WorkspaceSummary> {
+    let path = workspace_dir(store_root, id);
+    if !path.is_dir() {
+        anyhow::bail!("Workspace {id:?} was not found");
+    }
+    let mut meta = read_meta(&path)?;
+    let previous = meta.last_accessed_at_ms.unwrap_or(meta.created_at_ms);
+    meta.last_accessed_at_ms = Some(now_ms().max(previous.saturating_add(1)));
+    write_meta(&path, &meta)?;
+    summary_from_meta(&path, meta, now_ms())
+}
+
 fn summary_from_dir(path: &Path, now: u64) -> Result<WorkspaceSummary> {
     let meta = read_meta(path)?;
+    summary_from_meta(path, meta, now)
+}
+
+fn summary_from_meta(path: &Path, meta: WorkspaceMeta, now: u64) -> Result<WorkspaceSummary> {
     let session_root = path.join("sessions");
     let session_count = if session_root.is_dir() {
         std::fs::read_dir(&session_root)
@@ -108,6 +133,7 @@ fn summary_from_dir(path: &Path, now: u64) -> Result<WorkspaceSummary> {
     } else {
         0
     };
+    let last_accessed_at_ms = meta.last_accessed_at_ms.unwrap_or(meta.created_at_ms);
     Ok(WorkspaceSummary {
         id: meta.id,
         name: meta.name,
@@ -116,6 +142,7 @@ fn summary_from_dir(path: &Path, now: u64) -> Result<WorkspaceSummary> {
         session_count,
         age: humanize_age(now, meta.created_at_ms),
         created_at_ms: meta.created_at_ms,
+        last_accessed_at_ms,
     })
 }
 
@@ -188,5 +215,19 @@ mod tests {
             get(&store, &first.id).unwrap().name.as_deref(),
             Some("first")
         );
+    }
+
+    #[test]
+    fn accessing_an_older_workspace_moves_it_to_the_front() {
+        let store = temp_dir("recent-store");
+        let host = temp_dir("recent-host");
+        let first = create(&store, &host, Some("first".into())).unwrap();
+        let second = create(&store, &host, Some("second".into())).unwrap();
+
+        access(&store, &first.id).unwrap();
+
+        let listed = list(&store).unwrap();
+        assert_eq!(listed[0].id, first.id);
+        assert_eq!(listed[1].id, second.id);
     }
 }

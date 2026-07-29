@@ -145,7 +145,7 @@ fn main() -> Result<()> {
             }
         };
         let workspace = match choice {
-            picker::WorkspaceChoice::Existing(workspace) => Ok(workspace),
+            picker::WorkspaceChoice::Existing(workspace) => client.workspace(&workspace.id),
             picker::WorkspaceChoice::CreateCurrentDirectory => {
                 session::resolve_workspace(None).and_then(|host_path| {
                     client.create_workspace(&styra_server::protocol::CreateWorkspace {

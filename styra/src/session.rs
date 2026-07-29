@@ -42,7 +42,7 @@ pub fn workspace_for_host(client: &Client, host_path: &Path) -> Result<Workspace
         .into_iter()
         .find(|workspace| workspace.host_path == canonical)
     {
-        return Ok(workspace);
+        return client.workspace(&workspace.id);
     }
     client.create_workspace(&CreateWorkspace {
         host_path: canonical,

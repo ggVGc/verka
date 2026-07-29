@@ -355,6 +355,7 @@ mod tests {
             session_count: 3,
             age: "2h ago".into(),
             created_at_ms: 1,
+            last_accessed_at_ms: 1,
         }];
         let mut terminal = Terminal::new(TestBackend::new(100, 12)).unwrap();
         terminal

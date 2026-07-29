@@ -139,7 +139,7 @@ pub fn run(
                 continue;
             };
             let workspace = match choice {
-                picker::WorkspaceChoice::Existing(workspace) => workspace,
+                picker::WorkspaceChoice::Existing(workspace) => client.workspace(&workspace.id)?,
                 picker::WorkspaceChoice::CreateCurrentDirectory => {
                     let host_path = session::resolve_workspace(None)?;
                     client.create_workspace(&styra_server::protocol::CreateWorkspace {
