@@ -3,7 +3,7 @@
 //! answer to "what can this agent touch" without having to go dig through
 //! `main.rs`.
 
-use super::title_line;
+use super::{title_line, workspace_title};
 use crate::app::{App, Focus};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -18,10 +18,13 @@ pub(crate) fn render_driva(frame: &mut Frame, app: &App, area: Rect) {
     } else {
         Style::default().fg(Color::DarkGray)
     };
-    let block = Block::default()
+    let mut block = Block::default()
         .borders(Borders::ALL)
         .border_style(border_style)
         .title(title_line(&app.launch_label(), &app.status, Some("driva")));
+    if let Some(title) = workspace_title(app) {
+        block = block.title(title);
+    }
 
     let Some(options) = &app.driva_options else {
         let empty = Paragraph::new(Line::from(Span::styled(

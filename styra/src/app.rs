@@ -377,6 +377,10 @@ pub struct App {
     pub reported_model: Option<(String, Option<String>)>,
     /// Durable Workspace containing the current Session, when known.
     pub workspace_id: Option<String>,
+    /// Operator-facing name of the active Workspace. This is resolved from
+    /// Workspace metadata (with the host directory name as its fallback) by
+    /// the client, since Sessions only carry the durable Workspace id.
+    pub workspace_name: Option<String>,
     pub session_id: String,
     /// The host directory backing the agent's sandboxed workspace, when
     /// known (a live session; a replayed journal has no live workspace).
@@ -444,6 +448,7 @@ impl App {
             launcher: None,
             reported_model: None,
             workspace_id: None,
+            workspace_name: None,
             session_id: session_id.into(),
             workspace_root: None,
             driva_options: None,

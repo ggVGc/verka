@@ -24,7 +24,35 @@ use app::App;
 use cli::{Cli, CliCommand};
 use event_loop::RunOutcome;
 use session::Live;
-use styra_server::{Client, LogEntry};
+use styra_server::{Client, LogEntry, WorkspaceSummary};
+
+fn workspace_display_name(workspace: &WorkspaceSummary) -> String {
+    workspace.name.clone().unwrap_or_else(|| {
+        workspace
+            .host_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("workspace")
+            .to_owned()
+    })
+}
+
+fn refresh_workspace_name(app: &mut App, client: &Client, active: &WorkspaceSummary) {
+    let workspace = app
+        .workspace_id
+        .as_deref()
+        .filter(|id| *id == active.id)
+        .map(|_| active.clone())
+        .or_else(|| {
+            let id = app.workspace_id.as_deref()?;
+            client
+                .list_workspaces()
+                .ok()?
+                .into_iter()
+                .find(|workspace| workspace.id == id)
+        });
+    app.workspace_name = workspace.as_ref().map(workspace_display_name);
+}
 
 fn main() -> Result<()> {
     if let Some(result) = styra_server::broker::exit_if_requested() {
@@ -204,6 +232,7 @@ fn main() -> Result<()> {
             }
         }
     }
+    refresh_workspace_name(&mut app, &client, &active_workspace);
 
     let mut terminal = match terminal {
         Some(terminal) => terminal,
@@ -279,6 +308,7 @@ fn main() -> Result<()> {
                 app.workspace_id = Some(active_workspace.id.clone());
             }
         }
+        refresh_workspace_name(&mut app, &client, &active_workspace);
     };
 
     terminal::restore(&mut terminal)?;

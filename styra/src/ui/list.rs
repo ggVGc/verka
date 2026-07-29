@@ -3,8 +3,8 @@
 
 use super::markdown::markdown_line_spans;
 use super::{
-    message_text_color, render_preview, tag_color, title_line, DETAIL_INDENT, MAX_DETAIL_LINES,
-    SELECTION_BG,
+    message_text_color, render_preview, tag_color, title_line, workspace_title, DETAIL_INDENT,
+    MAX_DETAIL_LINES, SELECTION_BG,
 };
 use crate::app::{App, Entry, Focus, Status};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -46,6 +46,9 @@ pub(crate) fn render_list(frame: &mut Frame, app: &App, area: Rect) {
         .border_style(border_style)
         .title(title_line(&app.launch_label(), &app.status, None))
         .title_bottom(Line::from(usage).right_aligned());
+    if let Some(title) = workspace_title(app) {
+        block = block.title(title);
+    }
     if app.conversation_only {
         block = block.title_bottom(Line::from(Span::styled(
             " conversation only ",

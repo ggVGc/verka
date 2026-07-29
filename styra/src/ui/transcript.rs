@@ -3,7 +3,7 @@
 //! `render_events`. Unlike the raw/log views, it reads as a document from the
 //! start rather than anchoring to the tail.
 
-use super::title_line;
+use super::{title_line, workspace_title};
 use crate::app::{App, Focus};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -28,6 +28,9 @@ pub(crate) fn render_transcript_view(frame: &mut Frame, app: &App, area: Rect) {
             &app.status,
             Some("transcript"),
         ));
+    if let Some(title) = workspace_title(app) {
+        block = block.title(title);
+    }
     if app.conversation_only {
         block = block.title_bottom(Line::from(Span::styled(
             " conversation only ",

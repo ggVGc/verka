@@ -120,6 +120,19 @@ fn title_line(label: &LaunchLabel, status: &Status, suffix: Option<&str>) -> Lin
     Line::from(spans)
 }
 
+/// Right-aligned title for the primary panel's top border.
+fn workspace_title(app: &App) -> Option<Line<'static>> {
+    app.workspace_name.as_ref().map(|name| {
+        Line::from(Span::styled(
+            format!(" {name} "),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .right_aligned()
+    })
+}
+
 pub fn render(frame: &mut Frame, app: &App) {
     if app.show_keybinds {
         render_keybinds(frame, frame.area());
@@ -223,6 +236,22 @@ mod tests {
         assert!(screen.contains("styra"));
         assert!(screen.contains("codex"));
         assert!(screen.contains("running"));
+    }
+
+    #[test]
+    fn header_shows_workspace_name_at_the_top_right() {
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
+        app.workspace_name = Some("payments".into());
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        terminal.draw(|frame| render(frame, &app)).unwrap();
+        let buffer = terminal.backend().buffer();
+
+        let (x, y) = find_column(buffer, "payments");
+        assert_eq!(y, 0);
+        assert_eq!(x, 80 - "payments".len() as u16 - 2);
     }
 
     #[test]

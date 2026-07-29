@@ -4,7 +4,7 @@
 //! in full — the two together give both the overview and the detail that a
 //! single wrapped-line-per-row view couldn't.
 
-use super::{preview_scroll_limit, title_line, SELECTION_BG};
+use super::{preview_scroll_limit, title_line, workspace_title, SELECTION_BG};
 use crate::app::{App, Focus};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Style};
@@ -30,10 +30,13 @@ pub(crate) fn render_raw(frame: &mut Frame, app: &App, area: Rect) {
     } else {
         Style::default().fg(Color::DarkGray)
     };
-    let block = Block::default()
+    let mut block = Block::default()
         .borders(Borders::ALL)
         .border_style(border_style)
         .title(title_line(&app.launch_label(), &app.status, Some("raw")));
+    if let Some(title) = workspace_title(app) {
+        block = block.title(title);
+    }
 
     if app.raw.is_empty() {
         let empty = Paragraph::new(Line::from(Span::styled(
