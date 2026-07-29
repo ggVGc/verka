@@ -140,6 +140,35 @@ pub fn attach_live_interaction(
     Ok((app, live))
 }
 
+/// Replay a stored journal into a fresh `App`, with no live agent attached.
+/// This is what `--view` opens directly, and what [`open_session`] falls back
+/// to once it finds no interaction serving the Session.
+pub fn open_stored(client: &Client, session_id: &str) -> Result<(App, Live)> {
+    let stored = client.stored_session(session_id)?;
+    let mut app = App::new(stored.summary.selection, stored.summary.id);
+    app.workspace_id = Some(stored.summary.workspace_id);
+    // `stored.events[i]` and `stored.raw[i]` are decoded from the same journal
+    // record (see `journal::replay`/`replay_raw`), so pushing them in lockstep
+    // — raw line first, as a live session receives it — gives each kept entry
+    // a `raw_index` that actually points at its own wire line instead of
+    // leaving it unset.
+    for (event, line) in stored.events.into_iter().zip(stored.raw) {
+        app.push_raw(line);
+        // Skip carried-but-viewless traffic (e.g. app-server control lines),
+        // matching what a live session shows; it stays available in the raw
+        // view above.
+        if !matches!(event, styra_server::event::AgentEvent::Unknown { .. }) {
+            app.push_event(event);
+        }
+    }
+    // A replayed session has no live agent to end; mark it stopped.
+    app.on_ended(styra_server::InteractionEnd {
+        exit_code: None,
+        error: None,
+    });
+    Ok((app, Live::Viewing))
+}
+
 pub fn open_session(client: &Client, session_id: &str) -> Result<(App, Live)> {
     if let Some(interaction) = client
         .list_interactions()?
@@ -148,20 +177,7 @@ pub fn open_session(client: &Client, session_id: &str) -> Result<(App, Live)> {
     {
         return attach_live_interaction(client, interaction);
     }
-    let stored = client.stored_session(session_id)?;
-    let mut app = App::new(stored.summary.selection, stored.summary.id);
-    app.workspace_id = Some(stored.summary.workspace_id);
-    for (event, line) in stored.events.into_iter().zip(stored.raw) {
-        app.push_raw(line);
-        if !matches!(event, styra_server::event::AgentEvent::Unknown { .. }) {
-            app.push_event(event);
-        }
-    }
-    app.on_ended(styra_server::InteractionEnd {
-        exit_code: None,
-        error: None,
-    });
-    Ok((app, Live::Viewing))
+    open_stored(client, session_id)
 }
 
 pub fn session_id_from_target(target: &Path) -> Result<String> {

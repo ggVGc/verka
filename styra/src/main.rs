@@ -183,30 +183,11 @@ fn main() -> Result<()> {
     let mut live: Live;
 
     if let Some(view) = &view_target {
+        // `--view` is explicitly read-only, so this replays the journal rather
+        // than going through `open_session`, which would attach to a live
+        // interaction if one happened to be serving the Session.
         let id = session::session_id_from_target(view)?;
-        let stored = client.stored_session(&id)?;
-        app = App::new(stored.summary.selection, stored.summary.id);
-        app.workspace_id = Some(stored.summary.workspace_id);
-        // `stored.events[i]` and `stored.raw[i]` are decoded from the same
-        // journal record (see `journal::replay`/`replay_raw`), so pushing
-        // them in lockstep — raw line first, as a live session receives it —
-        // gives each kept entry a `raw_index` that actually points at its
-        // own wire line instead of leaving it unset.
-        for (event, line) in stored.events.into_iter().zip(stored.raw) {
-            app.push_raw(line);
-            // Skip carried-but-viewless traffic (e.g. app-server control
-            // lines), matching what a live session shows; it stays available
-            // in the raw view above.
-            if !matches!(event, styra_server::event::AgentEvent::Unknown { .. }) {
-                app.push_event(event);
-            }
-        }
-        // A replayed session has no live agent to end; mark it stopped.
-        app.on_ended(styra_server::InteractionEnd {
-            exit_code: None,
-            error: None,
-        });
-        live = Live::Viewing;
+        (app, live) = session::open_stored(&client, &id)?;
     } else {
         let selection = preferences::load_or_default(&preferences_path)?;
         let prompt = cli.prompt.join(" ");
