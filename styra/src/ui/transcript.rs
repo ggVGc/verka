@@ -3,7 +3,7 @@
 //! `render_events`. Unlike the raw/log views, it reads as a document from the
 //! start rather than anchoring to the tail.
 
-use super::{conversation_only_title, view_block};
+use super::{conversation_only_title, render_placeholder, view_block};
 use crate::app::App;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
@@ -21,12 +21,7 @@ pub(crate) fn render_transcript_view(frame: &mut Frame, app: &App, area: Rect) {
     }
 
     if app.entries.is_empty() {
-        let empty = Paragraph::new(Line::from(Span::styled(
-            "  nothing to render yet",
-            Style::default().fg(Color::Gray),
-        )))
-        .block(block);
-        frame.render_widget(empty, area);
+        render_placeholder(frame, block, area, "  nothing to render yet");
         return;
     }
 

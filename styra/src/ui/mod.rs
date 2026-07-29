@@ -36,10 +36,10 @@ use raw::render_raw;
 use transcript::render_transcript_view;
 
 use crate::app::{App, Focus, LaunchLabel, Status, View};
-use ratatui::layout::{Constraint, Direction, Layout};
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders};
+use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
 /// Cap on detail lines shown for one expanded entry, so a single noisy command
@@ -141,6 +141,17 @@ fn view_block(app: &App, suffix: Option<&str>) -> Block<'static> {
         block = block.title(title);
     }
     block
+}
+
+/// A view's empty state: one muted line saying why there is nothing to show,
+/// inside that view's own block so the chrome stays put as content arrives.
+fn render_placeholder(frame: &mut Frame, block: Block<'static>, area: Rect, text: &str) {
+    let paragraph = Paragraph::new(Line::from(Span::styled(
+        text.to_owned(),
+        Style::default().fg(Color::Gray),
+    )))
+    .block(block);
+    frame.render_widget(paragraph, area);
 }
 
 /// The marker the event list and transcript show while the conversation-only

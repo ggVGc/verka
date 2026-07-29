@@ -3,8 +3,8 @@
 
 use super::markdown::markdown_line_spans;
 use super::{
-    conversation_only_title, message_text_color, render_preview, tag_color, view_block,
-    DETAIL_INDENT, MAX_DETAIL_LINES, SELECTION_BG,
+    conversation_only_title, message_text_color, render_placeholder, render_preview, tag_color,
+    view_block, DETAIL_INDENT, MAX_DETAIL_LINES, SELECTION_BG,
 };
 use crate::app::{App, Entry, Status};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -77,12 +77,12 @@ pub(crate) fn render_list(frame: &mut Frame, app: &App, area: Rect) {
         .collect();
 
     if visible.is_empty() {
-        let empty = Paragraph::new(Line::from(vec![Span::styled(
+        render_placeholder(
+            frame,
+            block,
+            area,
             "  all entries hidden — press c or m to change filters",
-            Style::default().fg(Color::Gray),
-        )]))
-        .block(block);
-        frame.render_widget(empty, area);
+        );
         return;
     }
 

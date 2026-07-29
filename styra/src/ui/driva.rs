@@ -3,7 +3,7 @@
 //! answer to "what can this agent touch" without having to go dig through
 //! `main.rs`.
 
-use super::view_block;
+use super::{render_placeholder, view_block};
 use crate::app::App;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -16,12 +16,7 @@ pub(crate) fn render_driva(frame: &mut Frame, app: &App, area: Rect) {
     let block = view_block(app, Some("driva"));
 
     let Some(options) = &app.driva_options else {
-        let empty = Paragraph::new(Line::from(Span::styled(
-            "  no live session yet; nothing to describe",
-            Style::default().fg(Color::Gray),
-        )))
-        .block(block);
-        frame.render_widget(empty, area);
+        render_placeholder(frame, block, area, "  no live session yet; nothing to describe");
         return;
     };
 

@@ -1,6 +1,6 @@
 //! The log view: Styra's own diagnostic/stderr log for the current session.
 
-use super::view_block;
+use super::{render_placeholder, view_block};
 use crate::app::App;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -13,12 +13,7 @@ pub(crate) fn render_log(frame: &mut Frame, app: &App, area: Rect) {
     let block = view_block(app, Some("log"));
 
     if app.log.is_empty() {
-        let empty = Paragraph::new(Line::from(Span::styled(
-            "  no log entries yet",
-            Style::default().fg(Color::Gray),
-        )))
-        .block(block);
-        frame.render_widget(empty, area);
+        render_placeholder(frame, block, area, "  no log entries yet");
         return;
     }
 

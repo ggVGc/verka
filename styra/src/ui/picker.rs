@@ -3,7 +3,7 @@
 //! instead of) any loaded session, so they render from their own borrowed
 //! data rather than app state.
 
-use super::{log_line, message_text_color, tag_color, SELECTION_BG};
+use super::{log_line, message_text_color, render_placeholder, tag_color, SELECTION_BG};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -32,12 +32,7 @@ pub fn render_picker(
         .title(" styra · choose a session · Enter open · q cancel ");
 
     if sessions.is_empty() {
-        let empty = Paragraph::new(Line::from(Span::styled(
-            "  no sessions found",
-            Style::default().fg(Color::Gray),
-        )))
-        .block(block);
-        frame.render_widget(empty, panes[0]);
+        render_placeholder(frame, block, panes[0], "  no sessions found");
         render_log_preview(frame, None, None, updates, panes[1]);
         return;
     }
@@ -75,12 +70,12 @@ pub fn render_workspace_picker(
         .border_style(Style::default().fg(Color::Cyan))
         .title(" styra · choose a Workspace · Enter open · c create in current dir · q cancel ");
     if workspaces.is_empty() {
-        let empty = Paragraph::new(Line::from(Span::styled(
+        render_placeholder(
+            frame,
+            block,
+            area,
             "  no Workspaces found · press c to create one in the current directory",
-            Style::default().fg(Color::Gray),
-        )))
-        .block(block);
-        frame.render_widget(empty, area);
+        );
         return;
     }
     let items: Vec<ListItem> = workspaces
@@ -148,12 +143,12 @@ pub fn render_interactions_picker(
         .title(" styra · current interactions · Enter attach · q cancel ");
 
     if interactions.is_empty() {
-        let empty = Paragraph::new(Line::from(Span::styled(
+        render_placeholder(
+            frame,
+            interactions_block,
+            panes[0],
             "  no live interactions on the server",
-            Style::default().fg(Color::Gray),
-        )))
-        .block(interactions_block);
-        frame.render_widget(empty, panes[0]);
+        );
         render_log_preview(frame, None, None, updates, panes[1]);
         return;
     }
@@ -194,12 +189,7 @@ fn render_log_preview(
         .title(title);
 
     if updates.is_empty() {
-        let empty = Paragraph::new(Line::from(Span::styled(
-            "  no log entries yet",
-            Style::default().fg(Color::Gray),
-        )))
-        .block(block);
-        frame.render_widget(empty, area);
+        render_placeholder(frame, block, area, "  no log entries yet");
         return;
     }
 
