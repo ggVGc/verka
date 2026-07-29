@@ -521,10 +521,14 @@ mod tests {
             .unwrap();
         let buffer = terminal.backend().buffer().clone();
 
+        // Scan only the session pane: the log-preview pane's title spells out
+        // the selected session's id too, so searching the full row width would
+        // match that border row instead of the list row it is describing.
+        let session_pane_width = buffer.area.width * 42 / 100;
         let row_containing = |text: &str| -> u16 {
             (0..buffer.area.height)
                 .find(|&y| {
-                    let row: String = (0..buffer.area.width)
+                    let row: String = (0..session_pane_width)
                         .map(|x| buffer.cell((x, y)).unwrap().symbol())
                         .collect();
                     row.contains(text)

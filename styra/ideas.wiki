@@ -1,3 +1,7 @@
+- Introduce Styra tool for list responses:
+  - Useful for things like: "Tell me which improvements we can make"
+  - Styra then understands the response in a structured way, and can launch a new session to work on each one (or selected)
+  - This builds on introducing some session-forking, as well as tool exposure from Styra to agents.
 - Quick actions for adding a file/directory telling the agent to read it for context
 - Some way to fork out from current context, run a new track, and summarize the outcome of that track into the initial one:
   - Essentially a manual sub-agent + compaction
