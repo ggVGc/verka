@@ -29,6 +29,7 @@ pub(crate) fn render_keybinds(frame: &mut Frame, area: Rect) {
         bindings("i / Esc", "focus message / return to list"),
         bindings("q", "quit"),
         bindings("s", "stop interaction"),
+        bindings("!", "open session shell in a new terminal"),
         bindings(
             "a / A / V / S",
             "current sessions / interactions / Workspaces / reset",

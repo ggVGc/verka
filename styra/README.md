@@ -40,6 +40,9 @@ styra shell --session <ID>
 
 Every live Interaction also owns a detached `/bin/sh` in tmux inside the same
 Bubblewrap sandbox as its agent. Attach with `styra shell --session <ID>`.
+From the TUI, press `!` to open that shell in a new terminal window. Styra
+prefers the emulator named by `$TERMINAL`, then uses `TERM_PROGRAM` and `$TERM`
+as hints before trying common installed terminal emulators.
 Stopping the Interaction ends the agent and tmux but preserves its Session,
 journal, and Workspace. The agent remains on its original piped machine
 protocol, so shell traffic never enters the raw event journal.

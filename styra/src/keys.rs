@@ -5,6 +5,7 @@ use crate::app::{App, Request, Status, View};
 use crate::cli::Cli;
 use crate::preferences;
 use crate::session::{self, Live};
+use crate::terminal;
 use styra_server::{Client, LogEntry};
 
 /// Keys for the launch picker: `j`/`k` within a column, `Tab`/`h`/`l` between
@@ -52,6 +53,18 @@ pub fn handle_list_key(
     match key.code {
         KeyCode::Char('q') => return app.ask(Request::Quit),
         KeyCode::Char('s') => return session::pause_interaction(app, client, live),
+        KeyCode::Char('!') => {
+            let Live::Running { session_id, .. } = live else {
+                return app.show_action_message("no live interaction to open a shell for");
+            };
+            match terminal::open_shell(client, session_id) {
+                Ok(program) => app.show_action_message(format!("opened shell in {program}")),
+                Err(error) => app.push_log(LogEntry::error(format!(
+                    "could not open session shell: {error:#}"
+                ))),
+            }
+            return;
+        }
         KeyCode::Char('i') if app.view != View::Preview => return app.enter_input(),
         KeyCode::Char('r') => return app.toggle_raw(),
         KeyCode::Char('l') => return app.toggle_view(View::Log),
