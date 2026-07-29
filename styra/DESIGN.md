@@ -358,15 +358,14 @@ directories are invalid store entries.
 The application is a single full-screen view with three regions:
 
 ```text
-┌─ message ─────────────────────────────────────────────────────────┐
-│ › _                                                              │
-└───────────────────────────────────────────────────────────────────┘
 ┌───────────────────────────────────────── styra · codex · running ─┐
 │  ▸ user     implement the retry backoff and add a test            │
 │  ▸ plan     3 steps · 1 done                                      │
 │  ▾ command  cargo test                                            │
 │      status: completed (exit 0)                                   │
-│      running 24 tests ...                                         │
+│        ┌─ message ──────────────────────────────────────┐          │
+│        │ › _                                           │          │
+│        └───────────────────────────────────────────────┘          │
 │      test result: ok. 24 passed; 0 failed                         │
 │  ▸ files    src/retry.rs, tests/retry.rs                          │
 │  ▸ agent    Added exponential backoff capped at 30s; tests pass.  │
@@ -378,9 +377,9 @@ The application is a single full-screen view with three regions:
   The list scrolls and auto-follows the tail while the newest entry is selected;
   moving the selection upward pins the view so incoming events do not yank it
   away.
-- **Message box (top).** A single- or multi-line editor. Submitting sends the
-  text to the agent (encoded by the profile) and appends a `UserMessage` entry
-  to the list.
+- **Message box (center overlay).** A floating single- or multi-line editor.
+  Submitting sends the text to the agent (encoded by the profile) and appends a
+  `UserMessage` entry to the list.
 - **Status line (top border).** Application name, the agent, the model and
   reasoning effort in use, and session state: `not started` (no interaction launched
   yet, awaiting the operator's first message), `running`, `idle` (turn complete,

@@ -1,8 +1,8 @@
 //! Terminal rendering of [`App`] with ratatui.
 //!
-//! Stacked regions: the message box (while active), the event list (each entry
-//! a summary line that grows inline when expanded), messages, and a one-line
-//! status/help footer.
+//! The event list (each entry a summary line that grows inline when expanded),
+//! messages, and a one-line status/help footer, with the message box floating
+//! over the center while active.
 //! Rendering is a pure function of `App`; all state lives in [`crate::app`].
 
 mod driva;
@@ -40,7 +40,7 @@ use crate::app::{App, Focus, LaunchLabel, Status, View};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
 /// Cap on detail lines shown for one expanded entry, so a single noisy command
@@ -203,43 +203,46 @@ pub fn render(frame: &mut Frame, app: &App) {
     }
 
     let input_active = app.focus == Focus::Input;
-    let input_height = if input_active {
-        input_area_height(app, frame.area().width.saturating_sub(2))
-    } else {
-        0
-    };
     let message_height = message_area_height(app).min(
         frame
             .area()
             .height
-            .saturating_sub(input_height)
             .saturating_sub(2),
     );
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(input_height),
             Constraint::Min(1),
             Constraint::Length(message_height),
             Constraint::Length(1),
         ])
         .split(frame.area());
 
-    if input_active {
-        render_input(frame, app, chunks[0]);
-    }
     match app.view {
-        View::Events => render_list(frame, app, chunks[1]),
-        View::Raw => render_raw(frame, app, chunks[1]),
-        View::Log => render_log(frame, app, chunks[1]),
-        View::Transcript => render_transcript_view(frame, app, chunks[1]),
-        View::Driva => render_driva(frame, app, chunks[1]),
+        View::Events => render_list(frame, app, chunks[0]),
+        View::Raw => render_raw(frame, app, chunks[0]),
+        View::Log => render_log(frame, app, chunks[0]),
+        View::Transcript => render_transcript_view(frame, app, chunks[0]),
+        View::Driva => render_driva(frame, app, chunks[0]),
         View::Preview => unreachable!("handled above"),
     }
     if message_height > 0 {
-        render_messages(frame, app, chunks[2]);
+        render_messages(frame, app, chunks[1]);
     }
-    render_footer(frame, app, chunks[3]);
+    render_footer(frame, app, chunks[2]);
+
+    if input_active {
+        let width = frame.area().width.saturating_sub(4).min(80);
+        let height = input_area_height(app, width.saturating_sub(2));
+        let area = Rect {
+            x: frame.area().x + frame.area().width.saturating_sub(width) / 2,
+            y: frame.area().y + frame.area().height.saturating_sub(height) / 2,
+            width,
+            height: height.min(frame.area().height),
+        };
+        frame.render_widget(Clear, area);
+        render_input(frame, app, area);
+    }
 }
 
 #[cfg(test)]
@@ -364,7 +367,7 @@ mod tests {
     }
 
     #[test]
-    fn message_box_opens_above_the_primary_view() {
+    fn message_box_floats_in_the_center_of_the_primary_view() {
         let mut app = App::new(
             styra_server::agent::Selection::parse("codex").unwrap(),
             "s1",
@@ -375,12 +378,12 @@ mod tests {
         terminal.draw(|frame| render(frame, &app)).unwrap();
         let buffer = terminal.backend().buffer();
 
-        let (_, input_y) = find_column(buffer, "message");
+        let (_, input_y) = find_column(buffer, "type a message, Enter to send");
         let (_, view_y) = find_column(buffer, "styra");
-        assert_eq!(input_y, 0);
+        assert_eq!(input_y, 9);
         assert!(
-            input_y < view_y,
-            "the message box should open above the primary view"
+            input_y > view_y,
+            "the message box should float over the primary view"
         );
     }
 
