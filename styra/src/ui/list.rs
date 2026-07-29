@@ -189,14 +189,21 @@ fn entry_item(entry: &Entry, width: usize, protocol: Protocol) -> ListItem<'stat
     } else {
         0
     };
-    let mut lines = vec![summary_line(
-        entry,
-        entry.has_detail(),
-        !entry.expanded,
-        protocol,
-    )];
+    let mut lines = vec![summary_line(entry, entry.has_detail(), true, protocol)];
     if entry.expanded {
-        lines.extend(detail_lines(&entry.event, protocol, Some(MAX_DETAIL_LINES)));
+        let mut detail = detail_lines(&entry.event, protocol, None);
+        if !detail.is_empty() {
+            detail.remove(0);
+        }
+        if detail.len() > MAX_DETAIL_LINES {
+            let hidden = detail.len() - MAX_DETAIL_LINES;
+            detail.truncate(MAX_DETAIL_LINES);
+            detail.push(Line::from(Span::styled(
+                format!("{DETAIL_INDENT}… {hidden} more lines"),
+                Style::default().fg(Color::Gray),
+            )));
+        }
+        lines.extend(detail);
     }
     let wrapped: Vec<Line<'static>> = lines
         .into_iter()
@@ -317,10 +324,10 @@ fn split_keep_whitespace(s: &str) -> Vec<String> {
 /// `has_detail` is false when the entry has nothing beyond its summary (e.g.
 /// a bare `turn started` marker); folding is meaningless there, so no arrow
 /// is shown at all rather than one that never does anything when pressed.
-/// `show_summary` is false while expanded (inline or in the preview panel):
-/// the detail body that follows already carries the full, untruncated
-/// content, so repeating the (possibly truncated) summary text above it
-/// would just show the same thing twice.
+/// `show_summary` is false in previews, whose detail body carries the full
+/// content. Inline expanded entries keep the summary in this first row and
+/// omit the matching first detail row, so expansion does not make the header
+/// appear empty or move its first line down.
 pub(crate) fn summary_line(
     entry: &Entry,
     has_detail: bool,
@@ -412,9 +419,20 @@ pub(crate) fn summary_line(
         if !prefix.is_empty() {
             spans.push(Span::styled(prefix, prefix_style));
         }
-        let summary = file_action_summary(&entry.event)
+        let mut summary = file_action_summary(&entry.event)
             .unwrap_or_else(|| protocol.presented_summary(&entry.event, PresentationMode::Pretty));
-        let summary = match &entry.event {
+        if entry.expanded && summary.ends_with('…') {
+            if let Some(first_line) = protocol
+                .presented_detail(&entry.event, PresentationMode::Pretty)
+                .first()
+                .and_then(|block| match block {
+                    DetailBlock::Text(text) | DetailBlock::Code { text, .. } => text.lines().next(),
+                })
+            {
+                summary = first_line.to_owned();
+            }
+        }
+        let display_summary = match &entry.event {
             AgentEvent::ToolStarted { name, .. } | AgentEvent::ToolCompleted { name, .. } => {
                 summary
                     .strip_prefix(name)
@@ -423,7 +441,10 @@ pub(crate) fn summary_line(
             }
             _ => &summary,
         };
-        spans.extend(super::markdown::parse_inline_spans(summary, summary_style));
+        spans.extend(super::markdown::parse_inline_spans(
+            display_summary,
+            summary_style,
+        ));
     }
     if has_detail {
         spans.push(Span::styled(
@@ -860,7 +881,7 @@ mod tests {
     }
 
     #[test]
-    fn expanding_does_not_repeat_the_summary_as_the_first_detail_line() {
+    fn expanding_keeps_the_summary_on_the_first_row_without_repeating_it() {
         let mut app = App::new(
             styra_server::agent::Selection::parse("codex").unwrap(),
             "s1",
@@ -873,11 +894,14 @@ mod tests {
         });
         app.expand_all();
         let screen = rendered(&app);
-        // Expanding shows the full detail body ("$ cargo test", the status
-        // line, and the output) but the header above it drops the summary
-        // text once expanded, so nothing here is printed twice.
+        // The command stays beside the Shell header when expanded, while its
+        // matching first detail line is omitted so it is not printed twice.
         assert_eq!(screen.matches("cargo test").count(), 1);
-        assert!(screen.contains("$ cargo test"));
+        let command_row = screen
+            .lines()
+            .find(|line| line.contains("cargo test"))
+            .unwrap();
+        assert!(command_row.contains("Shell"));
         assert!(screen.contains("24 passed"));
     }
 

@@ -232,6 +232,18 @@ pub fn render(frame: &mut Frame, app: &App) {
     render_footer(frame, app, chunks[2]);
 
     if input_active {
+        // The message box is modal while input has focus. Wash the completed
+        // screen beneath it down to dark gray (and request terminal dimming)
+        // so all text, borders, and status colors visibly recede. Then clear
+        // and redraw the box itself at normal brightness.
+        frame.render_widget(
+            Block::default().style(
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::DIM),
+            ),
+            frame.area(),
+        );
         let width = frame.area().width.saturating_sub(4).min(80);
         let height = input_area_height(app, width.saturating_sub(2));
         let area = Rect {
@@ -385,6 +397,29 @@ mod tests {
             input_y > view_y,
             "the message box should float over the primary view"
         );
+    }
+
+    #[test]
+    fn message_box_dims_the_view_behind_it_but_stays_bright() {
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
+        app.enter_input();
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        terminal.draw(|frame| render(frame, &app)).unwrap();
+        let buffer = terminal.backend().buffer();
+
+        let (view_x, view_y) = find_column(buffer, "styra");
+        let view_style = buffer.cell((view_x, view_y)).unwrap().style();
+        assert_eq!(view_style.fg, Some(Color::DarkGray));
+        assert!(view_style.add_modifier.contains(Modifier::DIM));
+
+        let (input_x, input_y) = find_column(buffer, "type a message, Enter to send");
+        let input_style = buffer.cell((input_x, input_y)).unwrap().style();
+        assert_eq!(input_style.fg, Some(Color::Gray));
+        assert!(!input_style.add_modifier.contains(Modifier::DIM));
     }
 
     /// Every view's status line must name the model and effort in use, since
