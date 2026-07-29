@@ -102,9 +102,8 @@ pub fn run(
             continue;
         }
 
-        // ? is available from both list and input focus. While the reference
-        // is open it is modal, so none of the commands described by it can
-        // accidentally act on the session underneath.
+        // While the reference is open it is modal, so none of the commands
+        // described by it can accidentally act on the session underneath.
         if app.show_keybinds {
             if matches!(
                 key.code,
@@ -114,7 +113,8 @@ pub fn run(
             }
             continue;
         }
-        if key.code == KeyCode::Char('?') {
+        // In input focus, `?` is message text rather than a shortcut.
+        if app.focus == Focus::List && key.code == KeyCode::Char('?') {
             app.show_keybinds = true;
             continue;
         }
