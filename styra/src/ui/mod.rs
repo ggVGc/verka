@@ -1,7 +1,8 @@
 //! Terminal rendering of [`App`] with ratatui.
 //!
-//! Three stacked regions: the event list (each entry a summary line that grows
-//! inline when expanded), the message box, and a one-line status/help footer.
+//! Stacked regions: the message box (while active), the event list (each entry
+//! a summary line that grows inline when expanded), messages, and a one-line
+//! status/help footer.
 //! Rendering is a pure function of `App`; all state lives in [`crate::app`].
 
 mod driva;
@@ -217,26 +218,26 @@ pub fn render(frame: &mut Frame, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
+            Constraint::Length(input_height),
             Constraint::Min(1),
             Constraint::Length(message_height),
-            Constraint::Length(input_height),
             Constraint::Length(1),
         ])
         .split(frame.area());
 
+    if input_active {
+        render_input(frame, app, chunks[0]);
+    }
     match app.view {
-        View::Events => render_list(frame, app, chunks[0]),
-        View::Raw => render_raw(frame, app, chunks[0]),
-        View::Log => render_log(frame, app, chunks[0]),
-        View::Transcript => render_transcript_view(frame, app, chunks[0]),
-        View::Driva => render_driva(frame, app, chunks[0]),
+        View::Events => render_list(frame, app, chunks[1]),
+        View::Raw => render_raw(frame, app, chunks[1]),
+        View::Log => render_log(frame, app, chunks[1]),
+        View::Transcript => render_transcript_view(frame, app, chunks[1]),
+        View::Driva => render_driva(frame, app, chunks[1]),
         View::Preview => unreachable!("handled above"),
     }
     if message_height > 0 {
-        render_messages(frame, app, chunks[1]);
-    }
-    if input_active {
-        render_input(frame, app, chunks[2]);
+        render_messages(frame, app, chunks[2]);
     }
     render_footer(frame, app, chunks[3]);
 }
@@ -359,6 +360,27 @@ mod tests {
             cell.style().fg,
             Some(Color::DarkGray),
             "title text must not inherit the dimmed unfocused border color"
+        );
+    }
+
+    #[test]
+    fn message_box_opens_above_the_primary_view() {
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
+        app.enter_input();
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        terminal.draw(|frame| render(frame, &app)).unwrap();
+        let buffer = terminal.backend().buffer();
+
+        let (_, input_y) = find_column(buffer, "message");
+        let (_, view_y) = find_column(buffer, "styra");
+        assert_eq!(input_y, 0);
+        assert!(
+            input_y < view_y,
+            "the message box should open above the primary view"
         );
     }
 

@@ -358,6 +358,9 @@ directories are invalid store entries.
 The application is a single full-screen view with three regions:
 
 ```text
+┌─ message ─────────────────────────────────────────────────────────┐
+│ › _                                                              │
+└───────────────────────────────────────────────────────────────────┘
 ┌───────────────────────────────────────── styra · codex · running ─┐
 │  ▸ user     implement the retry backoff and add a test            │
 │  ▸ plan     3 steps · 1 done                                      │
@@ -368,8 +371,6 @@ The application is a single full-screen view with three regions:
 │  ▸ files    src/retry.rs, tests/retry.rs                          │
 │  ▸ agent    Added exponential backoff capped at 30s; tests pass.  │
 │  ▸ usage    in 4.1k · out 900 · cached 2.0k                       │
-├───────────────────────────────────────────────────────────────────┤
-│ › _                                                                │
 └───────────────────────────────────────────────────────────────────┘
 ```
 
@@ -377,7 +378,7 @@ The application is a single full-screen view with three regions:
   The list scrolls and auto-follows the tail while the newest entry is selected;
   moving the selection upward pins the view so incoming events do not yank it
   away.
-- **Message box (bottom).** A single- or multi-line editor. Submitting sends the
+- **Message box (top).** A single- or multi-line editor. Submitting sends the
   text to the agent (encoded by the profile) and appends a `UserMessage` entry
   to the list.
 - **Status line (top border).** Application name, the agent, the model and
