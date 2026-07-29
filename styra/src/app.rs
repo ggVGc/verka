@@ -1189,11 +1189,6 @@ impl App {
         self.input.push('\n');
     }
 
-    pub fn input_clear(&mut self) {
-        self.input.clear();
-        self.reset_history_navigation();
-    }
-
     /// Recall older submitted prompts, preserving the current draft so Down
     /// can return to it after walking back to the newest history entry.
     pub fn input_history_previous(&mut self) {

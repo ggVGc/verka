@@ -3,7 +3,6 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use std::io::Stdout;
@@ -356,6 +355,7 @@ fn stop_daemon(socket: &Path) -> Result<()> {
 #[cfg(test)]
 mod cli_tests {
     use super::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use styra_server::agent::Selection;
 
     #[test]
