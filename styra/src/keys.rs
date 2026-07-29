@@ -69,8 +69,8 @@ pub fn handle_list_key(
         View::Events => match key.code {
             KeyCode::Char('c') => app.toggle_conversation_only(),
             KeyCode::Char('v') if app.show_preview => app.toggle_preview_mode(),
-            KeyCode::PageDown if app.show_preview => app.preview_page_down(),
-            KeyCode::PageUp if app.show_preview => app.preview_page_up(),
+            KeyCode::PageDown if app.show_preview => app.preview.page_down(),
+            KeyCode::PageUp if app.show_preview => app.preview.page_up(),
             KeyCode::Char('j') | KeyCode::Down => app.select_next(),
             KeyCode::Char('k') | KeyCode::Up => app.select_prev(),
             KeyCode::Char('J') => app.select_next_line(),
@@ -87,8 +87,8 @@ pub fn handle_list_key(
             _ => {}
         },
         View::Raw => match key.code {
-            KeyCode::PageDown => app.raw_preview_page_down(),
-            KeyCode::PageUp => app.raw_preview_page_up(),
+            KeyCode::PageDown => app.raw_preview.page_down(),
+            KeyCode::PageUp => app.raw_preview.page_up(),
             KeyCode::Char('j') | KeyCode::Down => app.raw_select_next(),
             KeyCode::Char('k') | KeyCode::Up => app.raw_select_prev(),
             KeyCode::Char('g') => app.raw_select_first(),
@@ -113,8 +113,8 @@ pub fn handle_list_key(
         View::Driva => {}
         View::Preview => match key.code {
             KeyCode::Char('v') => app.toggle_preview_mode(),
-            KeyCode::PageDown => app.preview_page_down(),
-            KeyCode::PageUp => app.preview_page_up(),
+            KeyCode::PageDown => app.preview.page_down(),
+            KeyCode::PageUp => app.preview.page_up(),
             KeyCode::Char('j') | KeyCode::Down => app.select_next(),
             KeyCode::Char('k') | KeyCode::Up => app.select_prev(),
             KeyCode::Char('J') => app.select_next_line(),

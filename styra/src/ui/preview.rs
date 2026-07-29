@@ -28,8 +28,8 @@ pub(crate) fn render_preview(frame: &mut Frame, app: &App, area: Rect) {
         area.width.saturating_sub(2),
         area.height.saturating_sub(2),
     );
-    app.preview_scroll_limit.set(scroll_limit);
-    let scroll = app.preview_scroll.min(scroll_limit);
+    app.preview.note_limit(scroll_limit);
+    let scroll = app.preview.clamped();
     let paragraph = Paragraph::new(lines)
         .block(block)
         .wrap(Wrap { trim: false })
@@ -44,8 +44,8 @@ pub(crate) fn render_preview(frame: &mut Frame, app: &App, area: Rect) {
 pub(crate) fn render_fullscreen_preview(frame: &mut Frame, app: &App, area: Rect) {
     let lines = preview_lines(app);
     let scroll_limit = preview_scroll_limit(&lines, area.width, area.height);
-    app.preview_scroll_limit.set(scroll_limit);
-    let scroll = app.preview_scroll.min(scroll_limit);
+    app.preview.note_limit(scroll_limit);
+    let scroll = app.preview.clamped();
     let paragraph = Paragraph::new(lines)
         .wrap(Wrap { trim: false })
         .scroll((scroll, 0));

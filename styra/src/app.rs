@@ -330,6 +330,51 @@ impl Launcher {
     }
 }
 
+/// How far a preview panel is scrolled, and the last maximum offset its
+/// renderer calculated.
+///
+/// The limit has to come back from rendering because wrapping depends on the
+/// terminal width, which only the renderer knows. Holding onto it stops
+/// repeated PageDown presses at the bottom from accumulating an invisible
+/// offset that PageUp would later have to unwind.
+#[derive(Default)]
+pub struct Scroll {
+    /// Lines scrolled down from the top. Only ever shown through
+    /// [`Scroll::clamped`], so it may sit past what currently fits.
+    pub offset: u16,
+    limit: Cell<u16>,
+}
+
+/// Lines moved by one PageUp/PageDown press.
+const SCROLL_PAGE: u16 = 10;
+
+impl Scroll {
+    /// The offset to render at: what was asked for, held to what actually fits.
+    pub fn clamped(&self) -> u16 {
+        self.offset.min(self.limit.get())
+    }
+
+    /// Record the furthest the renderer can actually scroll at this width.
+    pub fn note_limit(&self, limit: u16) {
+        self.limit.set(limit);
+    }
+
+    pub fn reset(&mut self) {
+        self.offset = 0;
+    }
+
+    pub fn page_down(&mut self) {
+        self.offset = self
+            .clamped()
+            .saturating_add(SCROLL_PAGE)
+            .min(self.limit.get());
+    }
+
+    pub fn page_up(&mut self) {
+        self.offset = self.clamped().saturating_sub(SCROLL_PAGE);
+    }
+}
+
 /// The complete UI state.
 pub struct App {
     pub entries: Vec<Entry>,
@@ -366,14 +411,8 @@ pub struct App {
     /// When true, a side panel shows the full expanded content of the
     /// selected entry, independent of whether it is folded in the list.
     pub show_preview: bool,
-    /// Lines scrolled down from the top of the selected entry's preview.
-    /// Rendering clamps this to the last page because wrapping depends on the
-    /// terminal width.
-    pub preview_scroll: u16,
-    /// Last maximum offset calculated by the preview renderer. This prevents
-    /// repeated PageDown presses at the bottom from accumulating an invisible
-    /// offset that PageUp would later have to unwind.
-    pub preview_scroll_limit: Cell<u16>,
+    /// How far the selected entry's preview is scrolled.
+    pub preview: Scroll,
     pub preview_mode: PresentationMode,
     /// What the next session launches with: agent, model, reasoning effort.
     /// This is the choice for the current workspace, edited through [`Launcher`]
@@ -409,11 +448,8 @@ pub struct App {
     pub raw_selected: usize,
     /// When true, `raw_selected` tracks the newest line as it arrives.
     pub raw_follow: bool,
-    /// Lines scrolled down from the top of the selected wire line's pretty-
-    /// printed preview. Rendering clamps this to the last page, as
-    /// [`preview_scroll`](Self::preview_scroll) does for the entry preview.
-    pub raw_preview_scroll: u16,
-    pub raw_preview_scroll_limit: Cell<u16>,
+    /// How far the selected wire line's pretty-printed preview is scrolled.
+    pub raw_preview: Scroll,
     /// Diagnostic log entries, in occurrence order.
     pub log: Vec<LogEntry>,
     /// Lines scrolled back from the bottom of the log view; 0 tracks the tail.
@@ -457,8 +493,7 @@ impl App {
             show_minor: false,
             conversation_only: false,
             show_preview: false,
-            preview_scroll: 0,
-            preview_scroll_limit: Cell::new(0),
+            preview: Scroll::default(),
             preview_mode: PresentationMode::Pretty,
             selection,
             launcher: None,
@@ -472,8 +507,7 @@ impl App {
             raw: Vec::new(),
             raw_selected: 0,
             raw_follow: true,
-            raw_preview_scroll: 0,
-            raw_preview_scroll_limit: Cell::new(0),
+            raw_preview: Scroll::default(),
             log: Vec::new(),
             log_scroll_back: 0,
             transcript_scroll: 0,
@@ -624,7 +658,7 @@ impl App {
         self.raw.push(line);
         if self.raw_follow {
             self.raw_selected = self.raw.len() - 1;
-            self.raw_preview_scroll = 0;
+            self.raw_preview.reset();
         }
     }
 
@@ -639,7 +673,7 @@ impl App {
             return;
         }
         self.view = View::Raw;
-        self.raw_preview_scroll = 0;
+        self.raw_preview.reset();
         if !self.follow {
             if let Some(idx) = self
                 .entries
@@ -667,7 +701,7 @@ impl App {
     pub fn raw_select_next(&mut self) {
         if self.raw_selected + 1 < self.raw.len() {
             self.raw_selected += 1;
-            self.raw_preview_scroll = 0;
+            self.raw_preview.reset();
         }
         // Re-enable follow only when the selection reaches the tail.
         self.raw_follow = !self.raw.is_empty() && self.raw_selected + 1 >= self.raw.len();
@@ -677,7 +711,7 @@ impl App {
     pub fn raw_select_prev(&mut self) {
         if self.raw_selected > 0 {
             self.raw_selected -= 1;
-            self.raw_preview_scroll = 0;
+            self.raw_preview.reset();
         }
         // Moving off the tail pins the view.
         self.raw_follow = false;
@@ -688,7 +722,7 @@ impl App {
             return;
         }
         self.raw_selected = 0;
-        self.raw_preview_scroll = 0;
+        self.raw_preview.reset();
         self.raw_follow = false;
     }
 
@@ -697,23 +731,8 @@ impl App {
             return;
         }
         self.raw_selected = self.raw.len() - 1;
-        self.raw_preview_scroll = 0;
+        self.raw_preview.reset();
         self.raw_follow = true;
-    }
-
-    pub fn raw_preview_page_down(&mut self) {
-        self.raw_preview_scroll = self
-            .raw_preview_scroll
-            .min(self.raw_preview_scroll_limit.get())
-            .saturating_add(10)
-            .min(self.raw_preview_scroll_limit.get());
-    }
-
-    pub fn raw_preview_page_up(&mut self) {
-        self.raw_preview_scroll = self
-            .raw_preview_scroll
-            .min(self.raw_preview_scroll_limit.get())
-            .saturating_sub(10);
     }
 
     /// Scroll the transcript view forward (towards its end).
@@ -778,7 +797,7 @@ impl App {
                 entry.event = event;
                 if self.follow {
                     self.selected = self.entries.len() - 1;
-                    self.preview_scroll = 0;
+                    self.preview.reset();
                 }
                 return;
             }
@@ -811,7 +830,7 @@ impl App {
                 }
                 if self.follow {
                     self.selected = self.entries.len() - 1;
-                    self.preview_scroll = 0;
+                    self.preview.reset();
                 }
                 return;
             }
@@ -835,7 +854,7 @@ impl App {
                 }
                 if self.follow {
                     self.selected = self.entries.len() - 1;
-                    self.preview_scroll = 0;
+                    self.preview.reset();
                 }
                 return;
             }
@@ -902,7 +921,7 @@ impl App {
         // must not move the selection (and therefore the list viewport).
         if self.follow && self.is_visible(self.entries.len() - 1) {
             self.selected = self.entries.len() - 1;
-            self.preview_scroll = 0;
+            self.preview.reset();
         }
     }
 
@@ -965,27 +984,12 @@ impl App {
         self.show_preview = !self.show_preview;
     }
 
-    pub fn preview_page_down(&mut self) {
-        self.preview_scroll = self
-            .preview_scroll
-            .min(self.preview_scroll_limit.get())
-            .saturating_add(10)
-            .min(self.preview_scroll_limit.get());
-    }
-
-    pub fn preview_page_up(&mut self) {
-        self.preview_scroll = self
-            .preview_scroll
-            .min(self.preview_scroll_limit.get())
-            .saturating_sub(10);
-    }
-
     pub fn toggle_preview_mode(&mut self) {
         self.preview_mode = match self.preview_mode {
             PresentationMode::Pretty => PresentationMode::Raw,
             PresentationMode::Raw => PresentationMode::Pretty,
         };
-        self.preview_scroll = 0;
+        self.preview.reset();
     }
 
     /// Record the host directory backing the agent's workspace, so the
@@ -1019,7 +1023,7 @@ impl App {
                 .or_else(|| self.next_visible(self.selected))
             {
                 self.selected = idx;
-                self.preview_scroll = 0;
+                self.preview.reset();
             }
         }
     }
@@ -1030,7 +1034,7 @@ impl App {
     pub fn select_next(&mut self) {
         if let Some(next) = self.next_navigable(self.selected + 1) {
             self.selected = next;
-            self.preview_scroll = 0;
+            self.preview.reset();
         }
         // Re-enable follow only when the selection reaches the navigable tail.
         self.follow = !self.entries.is_empty() && self.next_navigable(self.selected + 1).is_none();
@@ -1044,7 +1048,7 @@ impl App {
             .and_then(|from| self.prev_navigable(from))
         {
             self.selected = prev;
-            self.preview_scroll = 0;
+            self.preview.reset();
         }
         // Moving off the tail pins the view.
         self.follow = false;
@@ -1056,7 +1060,7 @@ impl App {
     pub fn select_next_line(&mut self) {
         if let Some(next) = self.next_visible(self.selected + 1) {
             self.selected = next;
-            self.preview_scroll = 0;
+            self.preview.reset();
         }
         // Re-enable follow only when the selection reaches the visible tail.
         self.follow = !self.entries.is_empty() && self.next_visible(self.selected + 1).is_none();
@@ -1070,7 +1074,7 @@ impl App {
             .and_then(|from| self.prev_visible(from))
         {
             self.selected = prev;
-            self.preview_scroll = 0;
+            self.preview.reset();
         }
         // Moving off the tail pins the view.
         self.follow = false;
@@ -1079,7 +1083,7 @@ impl App {
     pub fn select_first(&mut self) {
         if let Some(first) = self.next_visible(0) {
             self.selected = first;
-            self.preview_scroll = 0;
+            self.preview.reset();
         }
         self.follow = !self.entries.is_empty() && self.next_visible(self.selected + 1).is_none();
     }
@@ -1090,7 +1094,7 @@ impl App {
         }
         if let Some(last) = self.prev_visible(self.entries.len() - 1) {
             self.selected = last;
-            self.preview_scroll = 0;
+            self.preview.reset();
         }
         self.follow = true;
     }
@@ -1288,13 +1292,13 @@ mod tests {
         let mut app = app();
         app.push_event(AgentEvent::AgentMessage { text: "hi".into() });
         app.entries[0].expanded = true;
-        app.preview_scroll = 3;
+        app.preview.offset = 3;
 
         app.push_event(AgentEvent::TurnStarted);
 
         assert!(app.follow);
         assert_eq!(app.selected, 0);
-        assert_eq!(app.preview_scroll, 3);
+        assert_eq!(app.preview.offset, 3);
         assert!(app.is_visible(app.selected));
         assert!(app.entries[0].expanded);
         assert!(!app.entries[1].expanded);
@@ -2259,27 +2263,27 @@ mod tests {
             text: "second\nbody".into(),
         });
         app.select_first();
-        app.preview_scroll_limit.set(100);
-        app.preview_page_down();
-        assert_eq!(app.preview_scroll, 10);
+        app.preview.note_limit(100);
+        app.preview.page_down();
+        assert_eq!(app.preview.offset, 10);
 
         app.select_next();
         assert_eq!(app.selected, 1);
-        assert_eq!(app.preview_scroll, 0);
+        assert_eq!(app.preview.offset, 0);
     }
 
     #[test]
     fn preview_page_down_does_not_accumulate_past_the_rendered_end() {
         let mut app = app();
-        app.preview_scroll_limit.set(23);
+        app.preview.note_limit(23);
 
         for _ in 0..100 {
-            app.preview_page_down();
+            app.preview.page_down();
         }
-        assert_eq!(app.preview_scroll, 23);
+        assert_eq!(app.preview.offset, 23);
 
-        app.preview_page_up();
-        assert_eq!(app.preview_scroll, 13);
+        app.preview.page_up();
+        assert_eq!(app.preview.offset, 13);
     }
 
     #[test]

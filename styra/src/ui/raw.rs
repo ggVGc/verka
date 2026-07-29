@@ -64,8 +64,8 @@ fn render_raw_preview(frame: &mut Frame, app: &App, area: Rect) {
         area.width.saturating_sub(2),
         area.height.saturating_sub(2),
     );
-    app.raw_preview_scroll_limit.set(scroll_limit);
-    let scroll = app.raw_preview_scroll.min(scroll_limit);
+    app.raw_preview.note_limit(scroll_limit);
+    let scroll = app.raw_preview.clamped();
     let paragraph = Paragraph::new(lines)
         .block(block)
         .wrap(Wrap { trim: false })
