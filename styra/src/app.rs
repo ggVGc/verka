@@ -375,6 +375,16 @@ impl Scroll {
     }
 }
 
+/// How far one navigation key moves: the two step sizes the event list offers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Step {
+    /// Every visible entry, one at a time (`J`/`K`).
+    Line,
+    /// Only entries with something past their summary, so the keys that drive
+    /// the preview never stop on a row with nothing to preview (`j`/`k`).
+    WithDetail,
+}
+
 /// The complete UI state.
 pub struct App {
     pub entries: Vec<Entry>,
@@ -908,7 +918,7 @@ impl App {
                 .entries
                 .get(self.selected)
                 .is_some_and(|entry| entry.expanded)
-            && self.next_visible(self.selected + 1).is_none();
+            && self.seek_forward(self.selected + 1, Step::Line).is_none();
         if transfer_expansion {
             self.entries[self.selected].expanded = false;
         }
@@ -959,24 +969,45 @@ impl App {
                 || matches!(self.entries[idx].event, AgentEvent::FileChanged { .. }))
     }
 
-    /// The nearest visible index at or after `from`, if any.
-    fn next_visible(&self, from: usize) -> Option<usize> {
-        (from..self.entries.len()).find(|&i| self.is_visible(i))
+    fn reaches(&self, idx: usize, step: Step) -> bool {
+        match step {
+            Step::Line => self.is_visible(idx),
+            Step::WithDetail => self.is_navigable(idx),
+        }
     }
 
-    /// The nearest visible index at or before `from`, if any.
-    fn prev_visible(&self, from: usize) -> Option<usize> {
-        (0..=from).rev().find(|&i| self.is_visible(i))
+    /// The nearest index `step` can land on at or after `from`, if any.
+    fn seek_forward(&self, from: usize, step: Step) -> Option<usize> {
+        (from..self.entries.len()).find(|&i| self.reaches(i, step))
     }
 
-    /// The nearest navigable index at or after `from`, if any.
-    fn next_navigable(&self, from: usize) -> Option<usize> {
-        (from..self.entries.len()).find(|&i| self.is_navigable(i))
+    /// The nearest index `step` can land on at or before `from`, if any.
+    fn seek_back(&self, from: usize, step: Step) -> Option<usize> {
+        (0..=from).rev().find(|&i| self.reaches(i, step))
     }
 
-    /// The nearest navigable index at or before `from`, if any.
-    fn prev_navigable(&self, from: usize) -> Option<usize> {
-        (0..=from).rev().find(|&i| self.is_navigable(i))
+    /// Move towards the tail, re-enabling follow only once the selection
+    /// reaches the last entry this step can land on.
+    fn select_forward(&mut self, step: Step) {
+        if let Some(next) = self.seek_forward(self.selected + 1, step) {
+            self.selected = next;
+            self.preview.reset();
+        }
+        self.follow =
+            !self.entries.is_empty() && self.seek_forward(self.selected + 1, step).is_none();
+    }
+
+    /// Move towards the start. Leaving the tail always pins the view.
+    fn select_backward(&mut self, step: Step) {
+        if let Some(prev) = self
+            .selected
+            .checked_sub(1)
+            .and_then(|from| self.seek_back(from, step))
+        {
+            self.selected = prev;
+            self.preview.reset();
+        }
+        self.follow = false;
     }
 
     /// Toggle the side panel that previews the selected entry's full content.
@@ -1019,8 +1050,8 @@ impl App {
     fn reconcile_filtered_selection(&mut self) {
         if !self.entries.is_empty() && !self.is_visible(self.selected) {
             if let Some(idx) = self
-                .prev_visible(self.selected)
-                .or_else(|| self.next_visible(self.selected))
+                .seek_back(self.selected, Step::Line)
+                .or_else(|| self.seek_forward(self.selected, Step::Line))
             {
                 self.selected = idx;
                 self.preview.reset();
@@ -1032,67 +1063,40 @@ impl App {
     /// summary), skipping over ones with nothing else to show. See
     /// [`Self::select_next_line`] to instead step one entry at a time.
     pub fn select_next(&mut self) {
-        if let Some(next) = self.next_navigable(self.selected + 1) {
-            self.selected = next;
-            self.preview.reset();
-        }
-        // Re-enable follow only when the selection reaches the navigable tail.
-        self.follow = !self.entries.is_empty() && self.next_navigable(self.selected + 1).is_none();
+        self.select_forward(Step::WithDetail);
     }
 
     /// Move to the previous entry with an arrow; see [`Self::select_next`].
     pub fn select_prev(&mut self) {
-        if let Some(prev) = self
-            .selected
-            .checked_sub(1)
-            .and_then(|from| self.prev_navigable(from))
-        {
-            self.selected = prev;
-            self.preview.reset();
-        }
-        // Moving off the tail pins the view.
-        self.follow = false;
+        self.select_backward(Step::WithDetail);
     }
 
     /// Move to the next visible entry regardless of whether it has anything
     /// beyond its summary — a finer-grained step than [`Self::select_next`],
     /// which skips entries with no arrow.
     pub fn select_next_line(&mut self) {
-        if let Some(next) = self.next_visible(self.selected + 1) {
-            self.selected = next;
-            self.preview.reset();
-        }
-        // Re-enable follow only when the selection reaches the visible tail.
-        self.follow = !self.entries.is_empty() && self.next_visible(self.selected + 1).is_none();
+        self.select_forward(Step::Line);
     }
 
     /// Move to the previous visible entry; see [`Self::select_next_line`].
     pub fn select_prev_line(&mut self) {
-        if let Some(prev) = self
-            .selected
-            .checked_sub(1)
-            .and_then(|from| self.prev_visible(from))
-        {
-            self.selected = prev;
-            self.preview.reset();
-        }
-        // Moving off the tail pins the view.
-        self.follow = false;
+        self.select_backward(Step::Line);
     }
 
     pub fn select_first(&mut self) {
-        if let Some(first) = self.next_visible(0) {
+        if let Some(first) = self.seek_forward(0, Step::Line) {
             self.selected = first;
             self.preview.reset();
         }
-        self.follow = !self.entries.is_empty() && self.next_visible(self.selected + 1).is_none();
+        self.follow =
+            !self.entries.is_empty() && self.seek_forward(self.selected + 1, Step::Line).is_none();
     }
 
     pub fn select_last(&mut self) {
         if self.entries.is_empty() {
             return;
         }
-        if let Some(last) = self.prev_visible(self.entries.len() - 1) {
+        if let Some(last) = self.seek_back(self.entries.len() - 1, Step::Line) {
             self.selected = last;
             self.preview.reset();
         }
