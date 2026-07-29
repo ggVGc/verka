@@ -285,6 +285,19 @@ fn main() -> Result<()> {
                     }
                 }
             }
+            // Switch only this client's view. In particular, a running
+            // interaction for the Session being left remains server-owned.
+            RunOutcome::OpenSession(session_id) => {
+                match session::open_session(&client, &session_id) {
+                    Ok((new_app, new_live)) => {
+                        app = new_app;
+                        live = new_live;
+                    }
+                    Err(error) => app.push_log(LogEntry::error(format!(
+                        "could not open Session {session_id}: {error:#}"
+                    ))),
+                }
+            }
             // Attach to another live interaction. The outgoing one is left running on
             // the server (interactions outlive a client); we just stop viewing it.
             RunOutcome::Attach(interaction) => {
@@ -393,13 +406,20 @@ mod cli_tests {
     }
 
     #[test]
-    fn quitting_detaches_but_reset_stops_the_running_interaction() {
+    fn quitting_and_switching_detach_but_reset_stops_the_running_interaction() {
         let live = Live::Running {
             session_id: "styra-live".into(),
             cursor: 7,
         };
 
         assert_eq!(event_loop::interaction_stopped_by(&RunOutcome::Quit, &live), None);
+        assert_eq!(
+            event_loop::interaction_stopped_by(
+                &RunOutcome::OpenSession("styra-other".into()),
+                &live,
+            ),
+            None
+        );
         assert_eq!(
             event_loop::interaction_stopped_by(&RunOutcome::Reset, &live),
             Some("styra-live")

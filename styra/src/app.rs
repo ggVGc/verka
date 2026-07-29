@@ -426,6 +426,9 @@ pub struct App {
     pub should_quit: bool,
     /// Set when the operator asks to choose a Workspace.
     pub workspace_requested: bool,
+    /// Set when the operator asks to choose another Session in the current
+    /// Workspace.
+    pub sessions_requested: bool,
     /// Set when the operator asks to list the server's live interactions; the event
     /// loop observes it and opens the interactions picker to attach to one.
     pub interactions_requested: bool,
@@ -476,6 +479,7 @@ impl App {
             transcript_scroll: 0,
             should_quit: false,
             workspace_requested: false,
+            sessions_requested: false,
             interactions_requested: false,
             reset_requested: false,
         }
@@ -1267,6 +1271,12 @@ impl App {
         self.workspace_requested = true;
     }
 
+    /// Ask the event loop to choose another Session from the current Workspace.
+    /// This only changes the client view; it does not stop either Session.
+    pub fn request_sessions(&mut self) {
+        self.sessions_requested = true;
+    }
+
     /// Ask the event loop to list the server's live interactions and, if the operator
     /// picks one, attach to it. The current interaction is left running on the server,
     /// not stopped: attaching only changes what this client views.
@@ -1981,8 +1991,11 @@ mod tests {
     fn request_workspace_sets_a_flag_for_the_event_loop_to_observe() {
         let mut app = app();
         assert!(!app.workspace_requested);
+        assert!(!app.sessions_requested);
         app.request_workspace();
+        app.request_sessions();
         assert!(app.workspace_requested);
+        assert!(app.sessions_requested);
     }
 
     #[test]

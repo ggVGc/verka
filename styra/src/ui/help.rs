@@ -29,7 +29,10 @@ pub(crate) fn render_keybinds(frame: &mut Frame, area: Rect) {
         bindings("i / Esc", "focus message / return to list"),
         bindings("q", "quit"),
         bindings("s", "stop interaction"),
-        bindings("A / V / S", "interactions / Workspaces / reset"),
+        bindings(
+            "a / A / V / S",
+            "current sessions / interactions / Workspaces / reset",
+        ),
         bindings(
             "r / l / t / d",
             "raw / log / transcript / driva; press again for events",
@@ -108,6 +111,7 @@ mod tests {
             "Raw, log, and transcript",
             "Message editor",
             "Launch and selection screens",
+            "current sessions",
             "Ctrl+L",
             "z R / z M",
         ] {

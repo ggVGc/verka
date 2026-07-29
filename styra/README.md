@@ -150,8 +150,9 @@ Two focuses, like vim modes: list focus navigates and folds the event list,
 input focus types into the message box. `i` or `Tab` enters input focus; `Esc`
 or `Tab` returns to list focus.
 
-`V` first chooses a Workspace, then a Session within it. This only changes what
-the client views; it never stops an outgoing Interaction. `A` lists all live
+`V` first chooses a Workspace, then a Session within it. `a` goes directly to
+the Session picker for the current Workspace. These only change what the client
+views; they never stop an outgoing Interaction. `A` lists all live
 Interactions with their Workspace and Session identities. `s` stops the current
 Interaction while retaining its Session. Sending a new message to a stopped,
 ended, or merely-viewed Session resumes it automatically with the provider's

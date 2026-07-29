@@ -59,6 +59,7 @@ pub fn handle_list_key(
         KeyCode::Char('d') => return app.toggle_driva(),
         KeyCode::Char('P') => return app.toggle_fullscreen_preview(),
         KeyCode::Char('L') => return app.open_launcher(),
+        KeyCode::Char('a') => return app.request_sessions(),
         KeyCode::Char('V') => return app.request_workspace(),
         KeyCode::Char('A') => return app.request_interactions(),
         KeyCode::Char('S') => return app.request_reset(),

@@ -21,6 +21,7 @@ pub enum RunOutcome {
         workspace: WorkspaceSummary,
         session_id: Option<String>,
     },
+    OpenSession(String),
     Attach(InteractionSummary),
     Reset,
 }
@@ -172,6 +173,19 @@ pub fn run(
                     workspace,
                     session_id: Some(id),
                 });
+            }
+        }
+
+        if std::mem::take(&mut app.sessions_requested) {
+            let sessions = client.list_sessions(workspace_id)?;
+            if sessions.is_empty() {
+                app.push_log(LogEntry::warn(
+                    "no sessions found in the current Workspace",
+                ));
+                continue;
+            }
+            if let Some(id) = picker::run_session_picker(terminal, client, &sessions)? {
+                return Ok(RunOutcome::OpenSession(id));
             }
         }
 

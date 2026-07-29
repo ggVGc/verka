@@ -476,6 +476,7 @@ current focus is shown in the status line and by which region draws the cursor.
 | `L`             | Choose the agent, model, and effort for the next session (start screen only; see *Choosing what to launch*) |
 | `s`             | Stop the Interaction (keeps the Session and journal)        |
 | `F`             | Seed an explicit new Session from this Session's transcript |
+| `a`             | Browse Sessions in the current Workspace with a preview     |
 | `A`             | Show live Interactions with a preview                       |
 | `S`             | Stop the Interaction and return to a blank Session screen   |
 | `V`             | Choose a Workspace, then browse its Sessions                |
