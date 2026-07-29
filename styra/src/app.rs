@@ -8,6 +8,7 @@
 use std::cell::Cell;
 use std::collections::VecDeque;
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 use styra_server::agent::{Provider, Selection, PROVIDERS};
 use styra_server::event::PresentationMode;
 use styra_server::event::{AgentEvent, DetailBlock, TokenUsage};
@@ -91,6 +92,14 @@ pub struct Entry {
     /// before instead of its own.
     pub raw_index: Option<usize>,
 }
+
+/// A short-lived notice about something Styra did on the operator's behalf.
+pub struct ActionMessage {
+    pub text: String,
+    shown_at: Instant,
+}
+
+const ACTION_MESSAGE_LIFETIME: Duration = Duration::from_secs(5);
 
 impl Entry {
     /// Whether this entry has anything to show beyond its one-line summary —
@@ -339,6 +348,9 @@ pub struct App {
     /// visible until sent or the interaction is stopped.
     queued_messages: VecDeque<String>,
     pub status: Status,
+    /// Recent actions Styra performed without a direct operator command.
+    /// Each is displayed for five seconds in the message panel.
+    pub action_messages: VecDeque<ActionMessage>,
     /// When true, the selection tracks the newest entry as events arrive.
     pub follow: bool,
     /// First visible item in the event list. Rendering updates this after it
@@ -436,6 +448,7 @@ impl App {
             history_draft: String::new(),
             queued_messages: VecDeque::new(),
             status: Status::Running,
+            action_messages: VecDeque::new(),
             follow: true,
             list_offset: Cell::new(0),
             show_minor: false,
@@ -545,6 +558,26 @@ impl App {
     /// Record the launch choice so the status line names what an `Enter` would start.
     pub fn set_selection(&mut self, selection: Selection) {
         self.selection = selection;
+    }
+
+    /// Tell the operator about an action Styra took on their behalf.
+    pub fn show_action_message(&mut self, message: impl Into<String>) {
+        self.action_messages.push_back(ActionMessage {
+            text: message.into(),
+            shown_at: Instant::now(),
+        });
+    }
+
+    /// Remove notices whose independent five-second display window has elapsed.
+    pub fn expire_action_messages(&mut self) {
+        let now = Instant::now();
+        while self
+            .action_messages
+            .front()
+            .is_some_and(|message| now.duration_since(message.shown_at) >= ACTION_MESSAGE_LIFETIME)
+        {
+            self.action_messages.pop_front();
+        }
     }
 
     /// Replace the message box's contents outright, used to restore a message
@@ -1438,6 +1471,29 @@ mod tests {
         app.queue_message("keep until Esc".into());
         assert_eq!(app.clear_queued_messages(), 1);
         assert_eq!(app.queued_message_count(), 0);
+    }
+
+    #[test]
+    fn automatic_action_messages_accumulate() {
+        let mut app = app();
+        assert!(app.action_messages.is_empty());
+
+        app.show_action_message("first action");
+        app.show_action_message("second action");
+        assert_eq!(app.action_messages.len(), 2);
+        assert_eq!(app.action_messages[0].text, "first action");
+        assert_eq!(app.action_messages[1].text, "second action");
+    }
+
+    #[test]
+    fn automatic_action_messages_expire_after_five_seconds() {
+        let mut app = app();
+        app.show_action_message("old action");
+        app.action_messages[0].shown_at = Instant::now() - Duration::from_secs(5);
+
+        app.expire_action_messages();
+
+        assert!(app.action_messages.is_empty());
     }
 
     #[test]

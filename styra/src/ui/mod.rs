@@ -12,6 +12,7 @@ mod launcher;
 mod list;
 mod log;
 mod markdown;
+mod messages;
 mod picker;
 mod preview;
 mod raw;
@@ -27,6 +28,7 @@ pub(crate) use list::summary_line;
 use list::render_list;
 use log::render_log;
 pub(crate) use log::log_line;
+use messages::{message_area_height, render_messages};
 pub use picker::{render_interactions_picker, render_picker, render_workspace_picker};
 use preview::{render_fullscreen_preview, render_preview};
 pub(crate) use preview::preview_scroll_limit;
@@ -161,10 +163,18 @@ pub fn render(frame: &mut Frame, app: &App) {
     } else {
         0
     };
+    let message_height = message_area_height(app).min(
+        frame
+            .area()
+            .height
+            .saturating_sub(input_height)
+            .saturating_sub(2),
+    );
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(1),
+            Constraint::Length(message_height),
             Constraint::Length(input_height),
             Constraint::Length(1),
         ])
@@ -178,10 +188,13 @@ pub fn render(frame: &mut Frame, app: &App) {
         View::Driva => render_driva(frame, app, chunks[0]),
         View::Preview => unreachable!("handled above"),
     }
-    if input_active {
-        render_input(frame, app, chunks[1]);
+    if message_height > 0 {
+        render_messages(frame, app, chunks[1]);
     }
-    render_footer(frame, app, chunks[2]);
+    if input_active {
+        render_input(frame, app, chunks[2]);
+    }
+    render_footer(frame, app, chunks[3]);
 }
 
 #[cfg(test)]

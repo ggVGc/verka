@@ -46,6 +46,7 @@ pub fn run(
 ) -> Result<RunOutcome> {
     let mut pending_fold = false;
     loop {
+        app.expire_action_messages();
         let mut disconnected = false;
         if let Live::Running { session_id, cursor } = live {
             match client.updates(session_id, *cursor) {
@@ -75,6 +76,14 @@ pub fn run(
                     match client.send_message(session_id, &message) {
                         Ok(()) => {
                             app.status = Status::Running;
+                            let waiting = app.queued_message_count();
+                            app.show_action_message(if waiting == 0 {
+                                "sent queued message automatically".into()
+                            } else {
+                                format!(
+                                    "sent queued message automatically ({waiting} still waiting)"
+                                )
+                            });
                             if let Err(error) = client.take_queued_message(session_id) {
                                 app.push_log(LogEntry::error(format!(
                                     "could not clear sent message from the durable queue: {error:#}"
