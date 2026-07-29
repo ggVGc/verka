@@ -1,7 +1,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::path::Path;
 
-use crate::app::{App, Status, View};
+use crate::app::{App, Request, Status, View};
 use crate::cli::Cli;
 use crate::preferences;
 use crate::session::{self, Live};
@@ -50,7 +50,7 @@ pub fn handle_list_key(
         return;
     }
     match key.code {
-        KeyCode::Char('q') => return app.request_quit(),
+        KeyCode::Char('q') => return app.ask(Request::Quit),
         KeyCode::Char('s') => return session::pause_interaction(app, client, live),
         KeyCode::Char('i') if app.view != View::Preview => return app.enter_input(),
         KeyCode::Char('r') => return app.toggle_raw(),
@@ -59,10 +59,10 @@ pub fn handle_list_key(
         KeyCode::Char('d') => return app.toggle_view(View::Driva),
         KeyCode::Char('P') => return app.toggle_view(View::Preview),
         KeyCode::Char('L') => return app.open_launcher(),
-        KeyCode::Char('a') => return app.request_sessions(),
-        KeyCode::Char('V') => return app.request_workspace(),
-        KeyCode::Char('A') => return app.request_interactions(),
-        KeyCode::Char('S') => return app.request_reset(),
+        KeyCode::Char('a') => return app.ask(Request::Sessions),
+        KeyCode::Char('V') => return app.ask(Request::Workspace),
+        KeyCode::Char('A') => return app.ask(Request::Interactions),
+        KeyCode::Char('S') => return app.ask(Request::Reset),
         _ => {}
     }
     match app.view {

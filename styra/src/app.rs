@@ -452,19 +452,27 @@ pub struct App {
     /// shows its start. Unlike the raw/log views, the transcript reads as a
     /// document from the beginning rather than anchoring to the tail.
     pub transcript_scroll: u16,
-    /// Set when the operator asks to quit; the event loop observes it.
-    pub should_quit: bool,
-    /// Set when the operator asks to choose a Workspace.
-    pub workspace_requested: bool,
-    /// Set when the operator asks to choose another Session in the current
-    /// Workspace.
-    pub sessions_requested: bool,
-    /// Set when the operator asks to list the server's live interactions; the event
-    /// loop observes it and opens the interactions picker to attach to one.
-    pub interactions_requested: bool,
-    /// Set when the operator asks to stop the current interaction and return to the
-    /// blank start screen; the event loop observes it.
-    pub reset_requested: bool,
+    /// Set when the operator asks for something only the event loop can do;
+    /// it takes the request and acts on it.
+    pub request: Option<Request>,
+}
+
+/// Something the operator asked for that [`App`] cannot carry out itself,
+/// because it means leaving this screen or this process.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Request {
+    Quit,
+    /// Choose a Workspace, then one of its Sessions.
+    Workspace,
+    /// Choose another Session in the current Workspace. This only changes the
+    /// client view; it stops neither Session.
+    Sessions,
+    /// List the server's live interactions and, if the operator picks one,
+    /// attach to it. The current interaction is left running, not stopped:
+    /// attaching only changes what this client views.
+    Interactions,
+    /// Stop the current interaction and return to the blank start screen.
+    Reset,
 }
 
 impl App {
@@ -505,11 +513,7 @@ impl App {
             log: Vec::new(),
             log_scroll_back: 0,
             transcript_scroll: 0,
-            should_quit: false,
-            workspace_requested: false,
-            sessions_requested: false,
-            interactions_requested: false,
-            reset_requested: false,
+            request: None,
         }
     }
 
@@ -1224,32 +1228,15 @@ impl App {
         }
     }
 
-    pub fn request_quit(&mut self) {
-        self.should_quit = true;
+    /// Ask the event loop for something this screen cannot do itself; see
+    /// [`Request`].
+    pub fn ask(&mut self, request: Request) {
+        self.request = Some(request);
     }
 
-    /// Ask the event loop to choose a Workspace and then one of its Sessions.
-    pub fn request_workspace(&mut self) {
-        self.workspace_requested = true;
-    }
-
-    /// Ask the event loop to choose another Session from the current Workspace.
-    /// This only changes the client view; it does not stop either Session.
-    pub fn request_sessions(&mut self) {
-        self.sessions_requested = true;
-    }
-
-    /// Ask the event loop to list the server's live interactions and, if the operator
-    /// picks one, attach to it. The current interaction is left running on the server,
-    /// not stopped: attaching only changes what this client views.
-    pub fn request_interactions(&mut self) {
-        self.interactions_requested = true;
-    }
-
-    /// Ask the event loop to stop the current interaction and return to the blank
-    /// start screen, with no interaction viewed.
-    pub fn request_reset(&mut self) {
-        self.reset_requested = true;
+    /// Take the operator's pending request, if any, for the event loop to act on.
+    pub fn take_request(&mut self) -> Option<Request> {
+        self.request.take()
     }
 }
 
@@ -1951,25 +1938,22 @@ mod tests {
     }
 
     #[test]
-    fn request_workspace_sets_a_flag_for_the_event_loop_to_observe() {
-        let mut app = app();
-        assert!(!app.workspace_requested);
-        assert!(!app.sessions_requested);
-        app.request_workspace();
-        app.request_sessions();
-        assert!(app.workspace_requested);
-        assert!(app.sessions_requested);
-    }
-
-    #[test]
-    fn request_interactions_and_reset_set_flags_for_the_event_loop_to_observe() {
-        let mut app = app();
-        assert!(!app.interactions_requested);
-        assert!(!app.reset_requested);
-        app.request_interactions();
-        app.request_reset();
-        assert!(app.interactions_requested);
-        assert!(app.reset_requested);
+    fn a_request_is_recorded_for_the_event_loop_and_taken_exactly_once() {
+        for request in [
+            Request::Quit,
+            Request::Workspace,
+            Request::Sessions,
+            Request::Interactions,
+            Request::Reset,
+        ] {
+            let mut app = app();
+            assert_eq!(app.take_request(), None);
+            app.ask(request);
+            assert_eq!(app.take_request(), Some(request));
+            // Taking it clears it, so the loop acts on a request once rather
+            // than reopening the same picker on the next frame.
+            assert_eq!(app.take_request(), None);
+        }
     }
 
     #[test]

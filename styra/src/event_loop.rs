@@ -6,7 +6,7 @@ use std::io::Stdout;
 use std::path::Path;
 use std::time::Duration;
 
-use crate::app::{App, Focus, Status};
+use crate::app::{App, Focus, Request, Status};
 use crate::cli::Cli;
 use crate::keys;
 use crate::picker;
@@ -139,71 +139,68 @@ pub fn run(
             Focus::Input => keys::handle_input_key(app, client, cli, workspace_id, live, key),
         }
 
-        if app.should_quit {
-            return Ok(RunOutcome::Quit);
-        }
-
-        if std::mem::take(&mut app.workspace_requested) {
-            let workspaces = client.list_workspaces()?;
-            let Some(choice) = picker::run_workspace_picker(terminal, &workspaces)? else {
-                continue;
-            };
-            let workspace = match choice {
-                // The picker already has a complete summary. Looking it up
-                // again records an access and changes the ordering the next
-                // time this same view is opened.
-                picker::WorkspaceChoice::Existing(workspace) => workspace,
-                picker::WorkspaceChoice::CreateCurrentDirectory => {
-                    let host_path = session::resolve_workspace(None)?;
-                    client.create_workspace(&styra_server::protocol::CreateWorkspace {
-                        host_path,
-                        name: None,
-                    })?
+        // A picker that the operator backs out of leaves the session as it was,
+        // so those arms fall through to the next frame rather than returning.
+        match app.take_request() {
+            None => {}
+            Some(Request::Quit) => return Ok(RunOutcome::Quit),
+            Some(Request::Workspace) => {
+                let workspaces = client.list_workspaces()?;
+                let Some(choice) = picker::run_workspace_picker(terminal, &workspaces)? else {
+                    continue;
+                };
+                let workspace = match choice {
+                    // The picker already has a complete summary. Looking it up
+                    // again records an access and changes the ordering the next
+                    // time this same view is opened.
+                    picker::WorkspaceChoice::Existing(workspace) => workspace,
+                    picker::WorkspaceChoice::CreateCurrentDirectory => {
+                        let host_path = session::resolve_workspace(None)?;
+                        client.create_workspace(&styra_server::protocol::CreateWorkspace {
+                            host_path,
+                            name: None,
+                        })?
+                    }
+                };
+                let sessions = client.list_sessions(&workspace.id)?;
+                if sessions.is_empty() {
+                    return Ok(RunOutcome::OpenWorkspace {
+                        workspace,
+                        session_id: None,
+                    });
                 }
-            };
-            let sessions = client.list_sessions(&workspace.id)?;
-            if sessions.is_empty() {
-                return Ok(RunOutcome::OpenWorkspace {
-                    workspace,
-                    session_id: None,
-                });
+                if let Some(id) = picker::run_session_picker(terminal, client, &sessions)? {
+                    return Ok(RunOutcome::OpenWorkspace {
+                        workspace,
+                        session_id: Some(id),
+                    });
+                }
             }
-            if let Some(id) = picker::run_session_picker(terminal, client, &sessions)? {
-                return Ok(RunOutcome::OpenWorkspace {
-                    workspace,
-                    session_id: Some(id),
-                });
+            Some(Request::Sessions) => {
+                let sessions = client.list_sessions(workspace_id)?;
+                if sessions.is_empty() {
+                    app.push_log(LogEntry::warn(
+                        "no sessions found in the current Workspace",
+                    ));
+                    continue;
+                }
+                if let Some(id) = picker::run_session_picker(terminal, client, &sessions)? {
+                    return Ok(RunOutcome::OpenSession(id));
+                }
             }
-        }
-
-        if std::mem::take(&mut app.sessions_requested) {
-            let sessions = client.list_sessions(workspace_id)?;
-            if sessions.is_empty() {
-                app.push_log(LogEntry::warn(
-                    "no sessions found in the current Workspace",
-                ));
-                continue;
+            Some(Request::Interactions) => {
+                let interactions = client.list_interactions()?;
+                if interactions.is_empty() {
+                    app.push_log(LogEntry::warn("no live interactions on the server"));
+                    continue;
+                }
+                if let Some(interaction) =
+                    picker::run_interactions_picker(terminal, client, &interactions)?
+                {
+                    return Ok(RunOutcome::Attach(interaction));
+                }
             }
-            if let Some(id) = picker::run_session_picker(terminal, client, &sessions)? {
-                return Ok(RunOutcome::OpenSession(id));
-            }
-        }
-
-        if std::mem::take(&mut app.interactions_requested) {
-            let interactions = client.list_interactions()?;
-            if interactions.is_empty() {
-                app.push_log(LogEntry::warn("no live interactions on the server"));
-                continue;
-            }
-            if let Some(interaction) =
-                picker::run_interactions_picker(terminal, client, &interactions)?
-            {
-                return Ok(RunOutcome::Attach(interaction));
-            }
-        }
-
-        if std::mem::take(&mut app.reset_requested) {
-            return Ok(RunOutcome::Reset);
+            Some(Request::Reset) => return Ok(RunOutcome::Reset),
         }
     }
 }
