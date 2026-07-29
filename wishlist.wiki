@@ -1,3 +1,10 @@
+- We need a RAG:
+  - Use something existing, for example https://github.com/Neverdecel/CodeRAG
+  - Or from-scratch attempt. Indexing should be language-specific, and edges should be specific to source code
+  - Look at Roocode
+  - https://huggingface.co/blog/ngxson/make-your-own-rag
+  - https://towardsdatascience.com/how-cursor-actually-indexes-your-codebase/
+  - https://github.com/Shar-pei/Codex-RAG
 - I would like the main workflow to be through a text editor (vim):
   - For example, a new test:
     - The file I work in should be a description of the validation I am implementing. High-level, maybe using some kindo of structured language.
