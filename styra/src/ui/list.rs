@@ -195,6 +195,15 @@ fn entry_item(entry: &Entry, width: usize, protocol: Protocol) -> ListItem<'stat
         if !detail.is_empty() {
             detail.remove(0);
         }
+        if suspicious_shell_success(&entry.event) {
+            detail.insert(
+                0,
+                Line::from(Span::styled(
+                    format!("{DETAIL_INDENT}reported success; output contains an error diagnostic"),
+                    Style::default().fg(Color::Yellow),
+                )),
+            );
+        }
         if detail.len() > MAX_DETAIL_LINES {
             let hidden = detail.len() - MAX_DETAIL_LINES;
             detail.truncate(MAX_DETAIL_LINES);
@@ -362,14 +371,27 @@ pub(crate) fn summary_line(
     // Shell rows use one color across their whole summary, matching the old
     // Codex command presentation. A running shell has no result marker; its
     // completed replacement gains a checkmark/cross like every other tool.
+    // Some providers only report the final shell expression's status. An
+    // unguarded pipeline can therefore return zero while an earlier command
+    // printed a clear failure; keep that distinct from both success and a
+    // provider-reported failure with an amber warning.
     let (summary_style, prefix, prefix_style) = match &entry.event {
-        AgentEvent::ToolCompleted { status, .. } | AgentEvent::CommandCompleted { status, .. }
-            if tag == "shell" && status == "error" =>
+        AgentEvent::ToolCompleted { .. } | AgentEvent::CommandCompleted { .. }
+            if tag == "shell" && failed_shell_result(&entry.event) =>
         {
             (
                 Style::default().fg(tag_color(tag)),
                 "✗ ",
                 Style::default().fg(Color::Red),
+            )
+        }
+        AgentEvent::ToolCompleted { .. } | AgentEvent::CommandCompleted { .. }
+            if tag == "shell" && suspicious_shell_success(&entry.event) =>
+        {
+            (
+                Style::default().fg(tag_color(tag)),
+                "⚠ ",
+                Style::default().fg(Color::Yellow),
             )
         }
         AgentEvent::ToolCompleted { .. } | AgentEvent::CommandCompleted { .. }
@@ -455,6 +477,46 @@ pub(crate) fn summary_line(
     Line::from(spans)
 }
 
+fn failed_shell_result(event: &AgentEvent) -> bool {
+    match event {
+        AgentEvent::ToolCompleted { status, .. } => {
+            matches!(status.as_str(), "error" | "failed")
+        }
+        AgentEvent::CommandCompleted {
+            status, exit_code, ..
+        } => {
+            matches!(status.as_str(), "error" | "failed") || exit_code.is_some_and(|code| code != 0)
+        }
+        _ => false,
+    }
+}
+
+/// A successful shell result whose own output strongly suggests that a nested
+/// command failed. This is deliberately conservative: arbitrary mentions of
+/// "error" (test names, grep results, documentation) remain green.
+fn suspicious_shell_success(event: &AgentEvent) -> bool {
+    if failed_shell_result(event) {
+        return false;
+    }
+    let output = match event {
+        AgentEvent::ToolCompleted { name, output, .. } if name == "Bash" => output,
+        AgentEvent::CommandCompleted { output, .. } => output,
+        _ => return false,
+    };
+    output.lines().any(is_error_diagnostic)
+}
+
+fn is_error_diagnostic(line: &str) -> bool {
+    let line = line.trim_start().to_ascii_lowercase();
+    line.starts_with("error:")
+        || line.starts_with("error[")
+        || line.starts_with("fatal:")
+        || line.contains(": no such file or directory")
+        || line.contains(": permission denied")
+        || line.contains(": read-only file system")
+        || line.ends_with(": command not found")
+}
+
 /// File-event summaries should say what happened, not merely repeat paths
 /// under an opaque `files` tag. Providers do not always report a change kind,
 /// so unified-diff creation/deletion markers are used when present and the
@@ -500,6 +562,7 @@ pub(crate) fn detail_lines(
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let text_color = message_text_color(event.tag());
+    let suspicious_shell = suspicious_shell_success(event);
     for block in protocol.presented_detail(event, PresentationMode::Pretty) {
         match block {
             DetailBlock::Text(text) => {
@@ -512,9 +575,14 @@ pub(crate) fn detail_lines(
             }
             DetailBlock::Code { text, .. } => {
                 for line in text.lines() {
+                    let color = if suspicious_shell && is_error_diagnostic(line) {
+                        Color::Red
+                    } else {
+                        Color::White
+                    };
                     lines.push(Line::from(vec![Span::styled(
                         format!("{DETAIL_INDENT}{line}"),
-                        Style::default().fg(Color::White),
+                        Style::default().fg(color),
                     )]));
                 }
             }
@@ -842,6 +910,89 @@ mod tests {
         let screen = rendered(&app);
         assert!(screen.contains('✗'));
         assert!(!screen.contains('✓'));
+    }
+
+    #[test]
+    fn a_successful_shell_tool_with_an_error_diagnostic_gets_an_amber_warning() {
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("claude").unwrap(),
+            "s1",
+        );
+        app.push_event(AgentEvent::ToolStarted {
+            id: "toolu_1".into(),
+            name: "Bash".into(),
+            detail: r#"{"command":"ls -la /missing 2>&1 | head"}"#.into(),
+        });
+        app.push_event(AgentEvent::ToolCompleted {
+            id: "toolu_1".into(),
+            name: "toolu_1".into(),
+            detail: String::new(),
+            status: "completed".into(),
+            output: "ls: cannot access '/missing': No such file or directory".into(),
+        });
+
+        let line = summary_line(
+            &app.entries[0],
+            app.entries[0].has_detail(),
+            true,
+            app.selection.provider.protocol(),
+        );
+        let warning = line
+            .spans
+            .iter()
+            .find(|span| span.content.contains('⚠'))
+            .expect("warning marker");
+        assert_eq!(warning.style.fg, Some(Color::Yellow));
+        assert!(!rendered(&app).contains('✓'));
+
+        app.expand_all();
+        let screen = rendered(&app);
+        assert!(screen.contains("reported success; output contains an error diagnostic"));
+    }
+
+    #[test]
+    fn cargo_errors_masked_by_a_pipeline_get_an_amber_warning() {
+        let event = AgentEvent::ToolCompleted {
+            id: "toolu_1".into(),
+            name: "Bash".into(),
+            detail: r#"{"command":"cargo test 2>&1 | tail -20"}"#.into(),
+            status: "completed".into(),
+            output: "error: failed to open `/tmp/fastrand.crate`\n\nCaused by:\n  Read-only file system (os error 30)".into(),
+        };
+
+        assert!(suspicious_shell_success(&event));
+        let detail = detail_lines(&event, Protocol::ClaudeJsonl, None);
+        let diagnostic = detail
+            .iter()
+            .flat_map(|line| &line.spans)
+            .find(|span| span.content.contains("error: failed to open"))
+            .expect("diagnostic output line");
+        assert_eq!(diagnostic.style.fg, Some(Color::Red));
+    }
+
+    #[test]
+    fn harmless_mentions_of_errors_remain_successful() {
+        let event = AgentEvent::CommandCompleted {
+            command: "cargo test".into(),
+            status: "completed".into(),
+            exit_code: Some(0),
+            output: "test error_handling ... ok\nall error cases passed".into(),
+        };
+
+        assert!(!suspicious_shell_success(&event));
+    }
+
+    #[test]
+    fn a_nonzero_exit_is_a_failure_even_if_the_provider_says_completed() {
+        let event = AgentEvent::CommandCompleted {
+            command: "false".into(),
+            status: "completed".into(),
+            exit_code: Some(1),
+            output: "error: expected failure".into(),
+        };
+
+        assert!(failed_shell_result(&event));
+        assert!(!suspicious_shell_success(&event));
     }
 
     #[test]
