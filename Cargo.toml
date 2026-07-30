@@ -1,0 +1,41 @@
+[workspace]
+resolver = "2"
+members = [
+    "driva",
+    "genta",
+    "linka",
+    "linka-tui",
+    "nota",
+    "orka",
+    "orka-tui",
+    "orka-web",
+    "styra",
+    "styra-server",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+
+[workspace.dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+crossterm = "0.28"
+inotify = { version = "0.9", default-features = false }
+libc = "0.2"
+ratatui = "0.29"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha1 = "0.10"
+tempfile = "3"
+toml = "0.8"
+ulid = "1"
+unicode-width = "0.2"
+
+driva = { path = "driva" }
+genta = { path = "genta" }
+linka = { path = "linka" }
+linka-tui = { path = "linka-tui" }
+orka = { path = "orka" }
+nota = { path = "nota" }
+styra-server = { path = "styra-server" }

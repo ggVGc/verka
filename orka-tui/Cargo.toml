@@ -1,7 +1,7 @@
 [package]
 name = "orka-tui"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
 description = "Terminal control panel for an Orka workbench"
 
 [[bin]]
@@ -9,10 +9,10 @@ name = "orka-tui"
 path = "src/main.rs"
 
 [dependencies]
-anyhow = "1"
-clap = { version = "4", features = ["derive", "env"] }
-crossterm = "0.28"
-linka = { path = "../linka" }
-linka-tui = { path = "../linka-tui" }
-orka = { path = "../orka" }
-ratatui = "0.29"
+anyhow.workspace = true
+clap = { workspace = true, features = ["env"] }
+crossterm.workspace = true
+linka.workspace = true
+linka-tui.workspace = true
+orka.workspace = true
+ratatui.workspace = true

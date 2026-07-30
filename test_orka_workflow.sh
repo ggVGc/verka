@@ -30,13 +30,12 @@ if [[ -n "$(find "$target_dir" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
     exit 1
 fi
 
-linka_bin="${LINKA_BIN:-$repo_root/linka/target/debug/linka}"
-orka_bin="${ORKA_BIN:-$repo_root/orka/target/debug/orka}"
+linka_bin="${LINKA_BIN:-$repo_root/target/debug/linka}"
+orka_bin="${ORKA_BIN:-$repo_root/target/debug/orka}"
 
 if [[ "${SKIP_BUILD:-0}" != 1 ]]; then
     echo "==> Building Linka and Orka"
-    cargo build --quiet --manifest-path "$repo_root/linka/Cargo.toml"
-    cargo build --quiet --manifest-path "$repo_root/orka/Cargo.toml"
+    cargo build --quiet --manifest-path "$repo_root/Cargo.toml" -p linka -p orka
 fi
 
 for binary in "$linka_bin" "$orka_bin"; do

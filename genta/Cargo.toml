@@ -1,19 +1,19 @@
 [package]
 name = "genta"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
 description = "Coding-agent knowledge: launch profiles, wire protocols, and event decoding"
 
 [lib]
 name = "genta"
 path = "src/lib.rs"
 
-[dependencies]
-anyhow = "1"
-clap = { version = "4", features = ["derive"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-
 [[bin]]
 name = "genta"
 path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true

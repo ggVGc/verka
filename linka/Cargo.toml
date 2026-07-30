@@ -1,7 +1,7 @@
 [package]
 name = "linka"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
 description = "A git-versioned graph of LLM-development nodes: library and CLI"
 
 [lib]
@@ -13,10 +13,10 @@ name = "linka"
 path = "src/main.rs"
 
 [dependencies]
-anyhow = "1"
-clap = { version = "4", features = ["derive", "env"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-sha1 = "0.10"
-toml = "0.8"
-ulid = "1"
+anyhow.workspace = true
+clap = { workspace = true, features = ["env"] }
+serde.workspace = true
+serde_json.workspace = true
+sha1.workspace = true
+toml.workspace = true
+ulid.workspace = true
