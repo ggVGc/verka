@@ -1,3 +1,15 @@
+2026-08-01
+There's often talk about humans not being able to keep up with all the code produced by LLMs, because things can move so fast now,
+hence we need to shift our focus and work differently. To some degree, that is true, we now have the possibility to focus more on
+ideation, iteration, verification etc. but the statement is also flawed in a fundamental way.
+It is true we can produce enormous amounts of output in a short time using LLMs. However, I believe the old truths still old.
+Keep it small and focused, avoid accidental complexity, when something has stabilized, make sure it is well-tested and avoid churn.
+I believe that it takes more work to produce smaller and more focused output, just as in writing prose. I also believe that is why LLMs default
+to more rather than less output. It's simply more work to achieve the same result using less words.
+So, I think we should strive to keep up with the LLM output and understand what is being built, and we should use the LLMs to drive us towards
+that clean and clear implementation faster, since we can iterate and refactor many times quicker now than before.
+The result is not only good for human understanding, but also for LLM understanding, and by extension, token usage and context quality.
+
 2026-07-27
 Subagents are the wrong approach.
 Instead, I would like linka nodes to be created for the side-quest, and further work on the main node depend on the output of the sub-work.
