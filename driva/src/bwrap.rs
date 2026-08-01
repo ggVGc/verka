@@ -143,11 +143,21 @@ impl BwrapIsolation {
             else {
                 continue;
             };
-            command
-                .arg("--overlay-src")
-                .arg(source)
-                .arg("--tmp-overlay")
-                .arg(destination);
+            if is_regular_file(source) {
+                // Overlayfs stacks only on directories, so a file source gets a
+                // private copy bound in its place. `run` materialises the copy
+                // before the invocation starts and removes it afterwards.
+                command
+                    .arg("--bind")
+                    .arg(private_copy_path(destination))
+                    .arg(destination);
+            } else {
+                command
+                    .arg("--overlay-src")
+                    .arg(source)
+                    .arg("--tmp-overlay")
+                    .arg(destination);
+            }
         }
         command
             .arg("--chdir")
@@ -264,6 +274,98 @@ fn append_runtime_path(command: &mut Command, path: &Path) -> Result<()> {
     Ok(())
 }
 
+fn is_regular_file(path: &Path) -> bool {
+    std::fs::metadata(path)
+        .map(|metadata| metadata.is_file())
+        .unwrap_or(false)
+}
+
+/// Host directory holding the private copies of overlaid files for this
+/// process. One directory per process keeps concurrent runs independent.
+fn private_copy_root() -> PathBuf {
+    std::env::temp_dir().join(format!("driva-overlay-{}", std::process::id()))
+}
+
+/// Map an isolated destination to its private copy on the host. The escaping
+/// keeps the mapping injective, so two overlaid files never share a copy.
+fn private_copy_path(destination: &Path) -> PathBuf {
+    let name: String = destination
+        .to_string_lossy()
+        .chars()
+        .map(|character| match character {
+            '%' => "%%".to_string(),
+            '/' => "%".to_string(),
+            other => other.to_string(),
+        })
+        .collect();
+    private_copy_root().join(name)
+}
+
+/// Copy every overlaid file into this process's private directory, so the
+/// sandbox writes to the copy and the host source is never mutated. Returns the
+/// directory to remove once the invocation finishes.
+fn materialize_private_copies(request: &ExecutionRequest) -> Result<Option<PathBuf>> {
+    let sources: Vec<_> = request
+        .mounts
+        .iter()
+        .filter_map(|mount| match mount {
+            Mount::Overlay {
+                source,
+                destination,
+            } if is_regular_file(source) => Some((source, destination)),
+            _ => None,
+        })
+        .collect();
+    if sources.is_empty() {
+        return Ok(None);
+    }
+    let root = private_copy_root();
+    std::fs::create_dir_all(&root)
+        .with_context(|| format!("failed to create overlay directory {}", root.display()))?;
+    restrict_to_owner(&root)?;
+    for (source, destination) in sources {
+        let copy = private_copy_path(destination);
+        std::fs::copy(source, &copy).with_context(|| {
+            format!(
+                "failed to copy {} for a discarded-write overlay",
+                source.display()
+            )
+        })?;
+        make_owner_writable(&copy)?;
+    }
+    Ok(Some(root))
+}
+
+#[cfg(unix)]
+fn restrict_to_owner(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+        .with_context(|| format!("failed to restrict {}", path.display()))
+}
+
+#[cfg(not(unix))]
+fn restrict_to_owner(_path: &Path) -> Result<()> {
+    Ok(())
+}
+
+/// A read-only source copies to a read-only file, which the sandbox could not
+/// write to; the copy is private, so widening the owner bits is safe.
+#[cfg(unix)]
+fn make_owner_writable(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = std::fs::metadata(path)
+        .with_context(|| format!("failed to inspect {}", path.display()))?
+        .permissions()
+        .mode();
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode | 0o600))
+        .with_context(|| format!("failed to make {} writable", path.display()))
+}
+
+#[cfg(not(unix))]
+fn make_owner_writable(_path: &Path) -> Result<()> {
+    Ok(())
+}
+
 fn is_nested_beneath(path: &Path, base: &Path) -> bool {
     let Ok(relative) = path.strip_prefix(base) else {
         return false;
@@ -286,13 +388,18 @@ fn expand_home(path: &Path) -> Result<PathBuf> {
 impl Isolation for BwrapIsolation {
     fn run(&self, request: &ExecutionRequest, io: ExecutionIo) -> Result<ExecutionOutcome> {
         let started_at = SystemTime::now();
+        let private_copies = materialize_private_copies(request)?;
         let status = self
             .command(request)?
             .stdin(Stdio::from(io.stdin))
             .stdout(Stdio::from(io.stdout))
             .stderr(Stdio::from(io.stderr))
             .status()
-            .with_context(|| format!("failed to start {}", self.executable.display()))?;
+            .with_context(|| format!("failed to start {}", self.executable.display()));
+        if let Some(root) = private_copies {
+            let _ = std::fs::remove_dir_all(root);
+        }
+        let status = status?;
         Ok(ExecutionOutcome {
             exit: ProcessExit::from(status),
             evidence: ExecutionEvidence {

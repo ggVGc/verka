@@ -111,7 +111,7 @@ Policy options (shared by `run` and `shell`):
 | `--template <NAME>` | Apply a built-in or project-defined execution template; repeat it to combine templates in option order. |
 | `--read <MOUNT>` | Bind-mount a host path read-only. Repeatable. |
 | `--write <MOUNT>` | Bind-mount a host path read-write. Repeatable. |
-| `--overlay <MOUNT>` | Mount a host path read-write through a discarded tmpfs upper layer; the sandbox sees the host content and can write to it, but writes never reach the host. Repeatable. |
+| `--overlay <MOUNT>` | Mount a host path read-write through a discarded tmpfs upper layer; the sandbox sees the host content and can write to it, but writes never reach the host. A file source, which overlayfs cannot stack on, is bound as a private copy that is removed after execution. Repeatable. |
 | `--no-write` | Make every host bind mount read-only, overriding project configuration, templates, and `--write`. |
 | `--overlay-writes` | Turn a template's writable mounts (including its workspace mount) into overlays: readable host content, writable in the sandbox, discarded instead of reaching the host. Does not affect `--write` or project-configured mounts. |
 | `--path <DIRECTORY>` | Bind-mount a host directory read-only and prepend it to the isolated `PATH`. Repeatable. |

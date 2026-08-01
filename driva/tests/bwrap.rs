@@ -358,3 +358,50 @@ fn shell_dry_run_works_without_configuration() {
     assert!(stdout.contains("\"--setenv\" \"HOME\" \"/tmp\""));
     assert!(!stdout.contains("\"--ro-bind\" \"/\" \"/\""));
 }
+
+#[test]
+fn overlay_of_a_file_binds_a_private_copy_instead_of_stacking_overlayfs() {
+    let directory = TestRootfs::new();
+    let source = directory.0.join("config.json");
+    std::fs::write(&source, "{}").unwrap();
+    let backend = BwrapIsolation {
+        executable: "bwrap".into(),
+        rootfs: None,
+    };
+    let request = ExecutionRequest {
+        command: vec!["true".into()],
+        working_directory: "/work".into(),
+        mounts: vec![Mount::Overlay {
+            source: source.clone(),
+            destination: "/home/user/config.json".into(),
+        }],
+        environment: BTreeMap::new(),
+        network: false,
+        interactive: false,
+        new_session: true,
+    };
+
+    let command = backend.command(&request).unwrap();
+    let args: Vec<_> = command
+        .get_args()
+        .map(|value| value.to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        !args.iter().any(|argument| argument == "--tmp-overlay"),
+        "overlayfs cannot stack on a file: {args:?}"
+    );
+    let bound = args
+        .windows(3)
+        .find(|window| window[0] == "--bind" && window[2] == "/home/user/config.json")
+        .expect("the private copy is bound at the destination");
+    assert!(
+        bound[1].contains(&format!("driva-overlay-{}", std::process::id()))
+            && bound[1].ends_with("%home%user%config.json"),
+        "unexpected private copy path: {}",
+        bound[1]
+    );
+    assert!(
+        !bound[1].starts_with(source.to_str().unwrap()),
+        "the sandbox must not write through to the host source"
+    );
+}

@@ -54,6 +54,10 @@ pub enum Mount {
     /// invisible tmpfs upper layer. Writes are visible for the life of the
     /// process and discarded when it exits; the host source is never
     /// mutated.
+    ///
+    /// Overlayfs stacks only on directories, so a backend given a file source
+    /// reproduces the same semantics another way — Bubblewrap binds a private
+    /// copy of the file and removes it after execution.
     Overlay {
         source: PathBuf,
         destination: PathBuf,
