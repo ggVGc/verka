@@ -7,7 +7,7 @@ use super::{log_line, message_text_color, render_placeholder, tag_color, SELECTI
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 use styra_server::{InteractionSummary, InteractionUpdate, SessionSummary, WorkspaceSummary};
 
@@ -29,7 +29,7 @@ pub fn render_picker(
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
-        .title(" styra · choose a session · Enter open · q cancel ");
+        .title(" styra · choose a session · Enter open · r rename · q cancel ");
 
     if sessions.is_empty() {
         render_placeholder(frame, block, panes[0], "  no sessions found");
@@ -54,6 +54,27 @@ pub fn render_picker(
         session.map(|session| session.selection.provider.protocol()),
         updates,
         panes[1],
+    );
+}
+
+pub fn render_name_prompt(frame: &mut Frame, value: &str) {
+    let area = frame.area();
+    let width = area.width.saturating_sub(8).min(72);
+    let popup = Rect::new(
+        area.x + (area.width.saturating_sub(width)) / 2,
+        area.y + area.height.saturating_sub(3) / 2,
+        width,
+        3,
+    );
+    frame.render_widget(Clear, popup);
+    frame.render_widget(
+        Paragraph::new(value.to_owned()).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan))
+                .title(" Session name · Enter save · Esc cancel "),
+        ),
+        popup,
     );
 }
 
@@ -288,25 +309,46 @@ fn interaction_item(
             format!("{workspace_name} · "),
             Style::default().fg(Color::Gray),
         ),
-        Span::styled(interaction.id.clone(), Style::default().fg(Color::White)),
+        Span::styled(
+            interaction.name.clone().unwrap_or_else(|| interaction.id.clone()),
+            Style::default().fg(Color::White),
+        ),
+        Span::styled(
+            interaction
+                .name
+                .as_ref()
+                .map(|_| format!(" · {}", short_id(&interaction.id)))
+                .unwrap_or_default(),
+            Style::default().fg(Color::DarkGray),
+        ),
     ]))
 }
 
 fn session_item(session: &SessionSummary) -> ListItem<'static> {
     let provider = session.selection.provider.as_str();
-    ListItem::new(Line::from(vec![
-        Span::styled(
-            format!("{provider:<14} "),
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!("{:<10} ", session.age),
-            Style::default().fg(Color::Gray),
-        ),
-        Span::styled(session.id.clone(), Style::default().fg(Color::White)),
-    ]))
+    let display_name = session.name.as_deref().unwrap_or(&session.id);
+    ListItem::new(vec![
+        Line::from(Span::styled(
+            display_name.to_owned(),
+            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(vec![
+            Span::styled(format!("{provider:<14} "), Style::default().fg(Color::Cyan)),
+            Span::styled(session.age.clone(), Style::default().fg(Color::Gray)),
+            Span::styled(
+                session
+                    .name
+                    .as_ref()
+                    .map(|_| format!(" · {}", short_id(&session.id)))
+                    .unwrap_or_default(),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]),
+    ])
+}
+
+fn short_id(id: &str) -> &str {
+    id.get(id.len().saturating_sub(12)..).unwrap_or(id)
 }
 
 #[cfg(test)]
@@ -320,6 +362,7 @@ mod tests {
     fn picker_summary(id: &str, selection: &str, age: &str) -> SessionSummary {
         SessionSummary {
             id: id.into(),
+            name: None,
             workspace_id: "w-1".into(),
             path: std::path::PathBuf::from(id),
             selection: styra_server::agent::Selection::parse(selection).unwrap(),
@@ -357,6 +400,15 @@ mod tests {
         assert!(screen.contains("claude"));
         assert!(screen.contains("3h ago"));
         assert!(screen.contains("s-2"));
+    }
+
+    #[test]
+    fn picker_prefers_a_session_name_but_retains_a_short_identity() {
+        let mut session = picker_summary("0000000123456-42-7", "codex", "2m ago");
+        session.name = Some("Fix session picker".into());
+        let screen = rendered_picker(&[session], 0);
+        assert!(screen.contains("Fix session picker"), "{screen}");
+        assert!(screen.contains("123456-42-7"), "{screen}");
     }
 
     #[test]
@@ -427,6 +479,7 @@ mod tests {
     fn interaction_summary(id: &str, selection: &str, accepting: bool) -> InteractionSummary {
         InteractionSummary {
             id: id.into(),
+            name: None,
             workspace_id: "w-1".into(),
             selection: styra_server::agent::Selection::parse(selection).unwrap(),
             workspace: std::path::PathBuf::from("/home/op/project"),

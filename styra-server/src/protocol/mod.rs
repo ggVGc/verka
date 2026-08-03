@@ -50,6 +50,18 @@ pub struct CreateSession {
     pub templates: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+    /// Optional operator-facing name. When absent, the server derives one
+    /// from `message` when possible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RenameSession {
+    pub id: String,
+    /// `None` (or whitespace-only text) clears the name.
+    pub name: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,6 +77,8 @@ pub struct ResumeSession {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionInfo {
     pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     pub workspace_id: String,
     pub selection: Selection,
     pub workspace: PathBuf,
@@ -132,6 +146,7 @@ pub enum Request {
     },
     CreateSession(CreateSession),
     ResumeSession(ResumeSession),
+    RenameSession(RenameSession),
     SendMessage {
         id: String,
         message: SendMessage,
@@ -192,6 +207,7 @@ pub enum Response {
     Workspace(WorkspaceSummary),
     SessionCreated(SessionInfo),
     SessionResumed(SessionInfo),
+    SessionRenamed(SessionSummary),
     Accepted,
     Queued(usize),
     TakenQueuedMessage(Option<String>),
@@ -261,6 +277,7 @@ mod tests {
             network: false,
             templates: Vec::new(),
             message: None,
+            name: None,
         });
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(json["data"]["selection"]["provider"], "claude");
@@ -280,6 +297,19 @@ mod tests {
         assert_eq!(json["operation"], "resume_session");
         assert_eq!(json["data"]["id"], "styra-1");
         assert_eq!(json["data"]["templates"][0], "rust");
+        assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
+    }
+
+    #[test]
+    fn rename_session_carries_a_nullable_display_name() {
+        let request = Request::RenameSession(RenameSession {
+            id: "styra-1".into(),
+            name: Some("Fix session picker".into()),
+        });
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["operation"], "rename_session");
+        assert_eq!(json["data"]["id"], "styra-1");
+        assert_eq!(json["data"]["name"], "Fix session picker");
         assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
     }
 }

@@ -92,6 +92,7 @@ pub fn create_session(
         network: cli.network,
         templates: cli.template.clone(),
         message: seed.map(str::to_owned),
+        name: None,
     })
 }
 
@@ -107,6 +108,7 @@ pub fn launch_live_session(
 ) -> Result<(App, SessionInfo)> {
     let info = create_session(client, cli, workspace_id, selection, seed)?;
     let mut app = App::new(info.selection.clone(), info.id.clone());
+    app.session_name = info.name.clone();
     app.workspace_id = Some(info.workspace_id.clone());
     app.set_workspace_root(info.workspace.clone());
     app.set_driva_options(info.driva.clone());
@@ -128,6 +130,7 @@ pub fn attach_live_interaction(
     interaction: InteractionSummary,
 ) -> Result<(App, Live)> {
     let mut app = App::new(interaction.selection.clone(), interaction.id.clone());
+    app.session_name = interaction.name.clone();
     app.workspace_id = Some(interaction.workspace_id.clone());
     app.set_workspace_root(interaction.workspace.clone());
     app.set_driva_options(interaction.driva.clone());
@@ -159,6 +162,7 @@ pub fn attach_live_interaction(
 pub fn open_stored(client: &Client, session_id: &str) -> Result<(App, Live)> {
     let stored = client.stored_session(session_id)?;
     let mut app = App::new(stored.summary.selection, stored.summary.id);
+    app.session_name = stored.summary.name;
     app.workspace_id = Some(stored.summary.workspace_id);
     // `stored.events[i]` and `stored.raw[i]` are decoded from the same journal
     // record (see `journal::replay`/`replay_raw`), so pushing them in lockstep
@@ -220,6 +224,7 @@ pub fn resume_and_send(
         templates: cli.template.clone(),
     }) {
         Ok(info) => {
+            app.session_name = info.name.clone();
             app.set_workspace_root(info.workspace);
             app.set_driva_options(info.driva);
             app.push_log(LogEntry::info("resumed with provider-native context"));

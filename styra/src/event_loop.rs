@@ -163,14 +163,14 @@ pub fn run(
                         })?
                     }
                 };
-                let sessions = client.list_sessions(&workspace.id)?;
+                let mut sessions = client.list_sessions(&workspace.id)?;
                 if sessions.is_empty() {
                     return Ok(RunOutcome::OpenWorkspace {
                         workspace,
                         session_id: None,
                     });
                 }
-                if let Some(id) = picker::run_session_picker(terminal, client, &sessions)? {
+                if let Some(id) = picker::run_session_picker(terminal, client, &mut sessions)? {
                     return Ok(RunOutcome::OpenWorkspace {
                         workspace,
                         session_id: Some(id),
@@ -178,14 +178,14 @@ pub fn run(
                 }
             }
             Some(Request::Sessions) => {
-                let sessions = client.list_sessions(workspace_id)?;
+                let mut sessions = client.list_sessions(workspace_id)?;
                 if sessions.is_empty() {
                     app.push_log(LogEntry::warn(
                         "no sessions found in the current Workspace",
                     ));
                     continue;
                 }
-                if let Some(id) = picker::run_session_picker(terminal, client, &sessions)? {
+                if let Some(id) = picker::run_session_picker(terminal, client, &mut sessions)? {
                     return Ok(RunOutcome::OpenSession(id));
                 }
             }

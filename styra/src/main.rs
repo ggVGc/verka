@@ -89,13 +89,13 @@ fn main() -> Result<()> {
     let view_target: Option<PathBuf> = match &cli.view {
         Some(Some(path)) => Some(path.clone()),
         Some(None) => {
-            let sessions = session::all_sessions(&client)?;
+            let mut sessions = session::all_sessions(&client)?;
             if sessions.is_empty() {
                 println!("No sessions found by the Styra server");
                 return Ok(());
             }
             let mut term = terminal::setup()?;
-            match picker::run_session_picker(&mut term, &client, &sessions) {
+            match picker::run_session_picker(&mut term, &client, &mut sessions) {
                 Ok(Some(id)) => {
                     terminal = Some(term);
                     Some(PathBuf::from(id))
@@ -331,7 +331,7 @@ fn browse_shells(client: &Client) -> Result<()> {
         .into_iter()
         .map(|interaction| interaction.id)
         .collect::<std::collections::HashSet<_>>();
-    let sessions = session::all_sessions(client)?
+    let mut sessions = session::all_sessions(client)?
         .into_iter()
         .filter(|session| live_ids.contains(&session.id))
         .collect::<Vec<_>>();
@@ -341,7 +341,7 @@ fn browse_shells(client: &Client) -> Result<()> {
     }
 
     let mut terminal = terminal::setup()?;
-    let choice = picker::run_session_picker(&mut terminal, client, &sessions);
+    let choice = picker::run_session_picker(&mut terminal, client, &mut sessions);
     terminal::restore(&mut terminal)?;
     match choice? {
         Some(session) => attach_shell(client, &session),

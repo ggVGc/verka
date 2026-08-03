@@ -427,6 +427,8 @@ pub struct App {
     /// the client, since Sessions only carry the durable Workspace id.
     pub workspace_name: Option<String>,
     pub session_id: String,
+    /// Optional operator-facing name of the current durable Session.
+    pub session_name: Option<String>,
     /// The host directory backing the agent's sandboxed workspace, when
     /// known (a live session; a replayed journal has no live workspace).
     /// Lets the preview panel read a changed file's current content.
@@ -505,6 +507,7 @@ impl App {
             workspace_id: None,
             workspace_name: None,
             session_id: session_id.into(),
+            session_name: None,
             workspace_root: None,
             driva_options: None,
             latest_usage: None,

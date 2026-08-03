@@ -146,6 +146,9 @@ pub enum InteractionActivity {
 pub struct InteractionSummary {
     /// The session id, as used everywhere else on the wire.
     pub id: String,
+    /// Optional operator-facing Session name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     /// The Workspace containing the Session served by this Interaction.
     pub workspace_id: String,
     /// The provider, model, and effort the interaction is running.
@@ -168,6 +171,9 @@ pub struct InteractionSummary {
 pub struct SessionSummary {
     /// The session's directory name, and the id `--view` expects.
     pub id: String,
+    /// Optional operator-facing name; the stable id remains the identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     /// The owning Workspace.
     pub workspace_id: String,
     /// Its directory, ready to pass straight to `--view`.

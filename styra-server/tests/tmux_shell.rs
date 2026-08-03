@@ -129,6 +129,7 @@ done
             network: false,
             templates: Vec::new(),
             message: None,
+            name: None,
         })
         .unwrap();
     let shell = client.shell(&session.id).unwrap();

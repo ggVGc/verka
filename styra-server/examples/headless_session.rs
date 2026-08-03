@@ -34,6 +34,7 @@ fn main() -> anyhow::Result<()> {
         network: false,
         templates: Vec::new(),
         message: Some(prompt),
+        name: None,
     })?;
     println!("session {}", session.id);
 

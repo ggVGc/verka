@@ -20,7 +20,7 @@ pub enum WorkspaceChoice {
 pub fn run_session_picker(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     client: &Client,
-    sessions: &[styra_server::SessionSummary],
+    sessions: &mut [styra_server::SessionSummary],
 ) -> Result<Option<String>> {
     let mut selected = 0usize;
     let mut preview_id = String::new();
@@ -103,6 +103,43 @@ pub fn run_session_picker(
             KeyCode::Enter if !sessions.is_empty() => {
                 return Ok(Some(sessions[selected].id.clone()));
             }
+            KeyCode::Char('r') if !sessions.is_empty() => {
+                if let Some(name) = read_session_name(
+                    terminal,
+                    sessions,
+                    selected,
+                    sessions[selected].name.as_deref().unwrap_or(""),
+                )? {
+                    sessions[selected] = client.rename_session(
+                        &sessions[selected].id,
+                        (!name.trim().is_empty()).then_some(name.as_str()),
+                    )?;
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn read_session_name(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    sessions: &[styra_server::SessionSummary],
+    selected: usize,
+    initial: &str,
+) -> Result<Option<String>> {
+    let mut value = initial.to_owned();
+    loop {
+        terminal.draw(|frame| {
+            ui::render_picker(frame, sessions, selected, &[]);
+            ui::render_name_prompt(frame, &value);
+        })?;
+        let Event::Key(key) = event::read()? else { continue };
+        if key.kind != KeyEventKind::Press { continue; }
+        match key.code {
+            KeyCode::Esc => return Ok(None),
+            KeyCode::Enter => return Ok(Some(value)),
+            KeyCode::Backspace => { value.pop(); }
+            KeyCode::Char(ch) if value.chars().count() < 80 && !ch.is_control() => value.push(ch),
             _ => {}
         }
     }

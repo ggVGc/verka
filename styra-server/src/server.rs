@@ -45,6 +45,7 @@ struct ManagedInteraction {
     /// Captured at spawn so the interaction can be listed and reattached to without
     /// re-deriving them: the agent selection, host workspace, and launch policy.
     workspace_id: String,
+    name: Mutex<Option<String>>,
     selection: Selection,
     workspace: PathBuf,
     driva: DrivaOptions,
@@ -60,6 +61,7 @@ impl ManagedInteraction {
     fn summary(&self) -> InteractionSummary {
         InteractionSummary {
             id: self.interaction.session_id().to_owned(),
+            name: self.name.lock().expect("session name lock poisoned").clone(),
             workspace_id: self.workspace_id.clone(),
             selection: self.selection.clone(),
             workspace: self.workspace.clone(),
@@ -161,6 +163,8 @@ impl ServerState {
             crate::workspace::get(&self.inner.store_root, &request.workspace_id)?;
         let workspace = owning_workspace.host_path;
         let selection = request.selection;
+        let name = journal::normalize_session_name(request.name.as_deref())?
+            .or_else(|| journal::name_from_message(request.message.as_deref()));
         let mut profile = crate::agent::resolve_profile(&selection, &self.inner.layout)?;
         profile.network = profile.network || request.network;
         let template = resolve_templates(&workspace, &request.templates)?;
@@ -175,6 +179,7 @@ impl ServerState {
             &request.workspace_id,
             &profile,
             &selection,
+            name.clone(),
         )?;
         let journal_path = journal.path().to_path_buf();
         let diagnostics = journal_path
@@ -223,6 +228,7 @@ impl ServerState {
             accepting_messages: Arc::clone(&accepting_messages),
             activity: Arc::clone(&activity),
             workspace_id: request.workspace_id.clone(),
+            name: Mutex::new(name.clone()),
             selection: selection.clone(),
             workspace: workspace.clone(),
             driva: driva.clone(),
@@ -286,6 +292,7 @@ impl ServerState {
 
         Ok(SessionInfo {
             id,
+            name,
             workspace_id: request.workspace_id,
             selection,
             workspace,
@@ -378,6 +385,7 @@ impl ServerState {
             accepting_messages: Arc::clone(&accepting_messages),
             activity: Arc::clone(&activity),
             workspace_id: summary.workspace_id.clone(),
+            name: Mutex::new(summary.name.clone()),
             selection: selection.clone(),
             workspace: workspace.clone(),
             driva: driva.clone(),
@@ -423,6 +431,7 @@ impl ServerState {
 
         Ok(SessionInfo {
             id: request.id,
+            name: summary.name,
             workspace_id: summary.workspace_id,
             selection,
             workspace,
@@ -532,6 +541,20 @@ impl ServerState {
             }
             Request::ResumeSession(request) => {
                 Ok(Response::SessionResumed(self.resume_session(request)?))
+            }
+            Request::RenameSession(request) => {
+                let summary = self.stored_summary(&request.id)?;
+                let name = journal::store_session_name(&summary.path, request.name.as_deref())?;
+                if let Some(interaction) = self
+                    .inner
+                    .interactions
+                    .lock()
+                    .expect("server interaction lock poisoned")
+                    .get(&request.id)
+                {
+                    *interaction.name.lock().expect("session name lock poisoned") = name;
+                }
+                Ok(Response::SessionRenamed(self.stored_summary(&request.id)?))
             }
             Request::SendMessage { id, message } => {
                 self.interaction(&id)?.send(&message.text)?;

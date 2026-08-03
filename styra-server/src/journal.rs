@@ -27,6 +27,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 struct StoredSessionMeta {
     workspace_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     provider_session_id: Option<String>,
     #[serde(flatten)]
     agent: SessionMeta,
@@ -84,6 +86,7 @@ impl Journal {
         workspace_id: &str,
         profile: &Profile,
         selection: &Selection,
+        name: Option<String>,
     ) -> Result<(Self, String)> {
         crate::workspace::get(store_root, workspace_id)?;
         let id = new_session_id();
@@ -93,6 +96,7 @@ impl Journal {
             &directory,
             &SessionMeta::new(selection.clone(), profile.protocol),
             workspace_id,
+            name,
         )?;
         Ok((journal, id))
     }
@@ -155,10 +159,16 @@ pub fn write_queued_messages(directory: &Path, messages: &[String]) -> Result<()
     std::fs::write(&path, json).with_context(|| format!("writing {}", path.display()))
 }
 
-fn write_session_meta(directory: &Path, meta: &SessionMeta, workspace_id: &str) -> Result<()> {
+fn write_session_meta(
+    directory: &Path,
+    meta: &SessionMeta,
+    workspace_id: &str,
+    name: Option<String>,
+) -> Result<()> {
     let path = directory.join(SESSION_META_FILE);
     let stored = StoredSessionMeta {
         workspace_id: workspace_id.to_owned(),
+        name,
         provider_session_id: None,
         agent: meta.clone(),
     };
@@ -191,10 +201,12 @@ fn list_sessions_at(dir: &Path, workspace_id: &str) -> Result<Vec<SessionSummary
         }
         let path = entry.path();
         let id = entry.file_name().to_string_lossy().into_owned();
-        let selection = read_session_meta(&path)?.selection;
+        let meta = read_stored_session_meta(&path)?;
+        let selection = meta.agent.selection;
         let created_at_ms = session_created_at_ms(&id);
         sessions.push(SessionSummary {
             id,
+            name: meta.name,
             workspace_id: workspace_id.to_owned(),
             path,
             selection,
@@ -267,9 +279,57 @@ pub fn store_provider_session_id(path: &Path, provider_session_id: &str) -> Resu
         ),
         None => stored.provider_session_id = Some(provider_session_id.to_owned()),
     }
+    write_stored_session_meta(&directory, &stored)
+}
+
+/// Set or clear a Session's operator-facing name and return its normalized value.
+pub fn store_session_name(path: &Path, name: Option<&str>) -> Result<Option<String>> {
+    let directory = if path.is_dir() {
+        path.to_path_buf()
+    } else {
+        path.parent().map(Path::to_path_buf).unwrap_or_default()
+    };
+    let name = normalize_session_name(name)?;
+    let mut stored = read_stored_session_meta(&directory)?;
+    stored.name.clone_from(&name);
+    write_stored_session_meta(&directory, &stored)?;
+    Ok(name)
+}
+
+pub fn normalize_session_name(name: Option<&str>) -> Result<Option<String>> {
+    let Some(name) = name.map(str::trim).filter(|name| !name.is_empty()) else {
+        return Ok(None);
+    };
+    if name.chars().any(char::is_control) {
+        anyhow::bail!("session name must not contain control characters");
+    }
+    if name.chars().count() > 80 {
+        anyhow::bail!("session name must be at most 80 characters");
+    }
+    Ok(Some(name.to_owned()))
+}
+
+/// A deterministic initial name made from the first non-empty prompt line.
+pub fn name_from_message(message: Option<&str>) -> Option<String> {
+    let words = message?.split_whitespace().collect::<Vec<_>>().join(" ");
+    if words.is_empty() {
+        return None;
+    }
+    let mut name: String = words.chars().take(60).collect();
+    if words.chars().count() > 60 {
+        name.push('…');
+    }
+    Some(name)
+}
+
+fn write_stored_session_meta(directory: &Path, stored: &StoredSessionMeta) -> Result<()> {
     let meta_path = directory.join(SESSION_META_FILE);
-    let json = serde_json::to_string_pretty(&stored).context("serializing session metadata")?;
-    std::fs::write(&meta_path, json).with_context(|| format!("writing {}", meta_path.display()))
+    let temporary = directory.join("session.json.tmp");
+    let json = serde_json::to_string_pretty(stored).context("serializing session metadata")?;
+    std::fs::write(&temporary, json)
+        .with_context(|| format!("writing {}", temporary.display()))?;
+    std::fs::rename(&temporary, &meta_path)
+        .with_context(|| format!("replacing {}", meta_path.display()))
 }
 
 fn read_stored_session_meta(path: &Path) -> Result<StoredSessionMeta> {
@@ -442,7 +502,7 @@ mod tests {
 
         let selection = crate::agent::Selection::new(crate::agent::Provider::Codex);
         let (journal, id) =
-            Journal::create_in_workspace(&root, &workspace.id, &profile, &selection).unwrap();
+            Journal::create_in_workspace(&root, &workspace.id, &profile, &selection, None).unwrap();
         let directory = journal.path().parent().unwrap();
         assert_eq!(
             directory,
@@ -489,6 +549,7 @@ mod tests {
     fn sessions_sort_newest_first_with_unknown_age_last() {
         let summary = |created_at_ms: Option<u64>| SessionSummary {
             id: format!("{created_at_ms:?}"),
+            name: None,
             workspace_id: "w-1".into(),
             path: PathBuf::new(),
             selection: crate::agent::Selection::new(crate::agent::Provider::Codex),
@@ -511,6 +572,61 @@ mod tests {
         assert_eq!(session_created_at_ms("0000000123456-42-7"), Some(123456));
         assert_eq!(session_created_at_ms("not-an-id"), None);
         assert_eq!(session_created_at_ms(""), None);
+    }
+
+    #[test]
+    fn names_are_normalized_and_first_messages_make_bounded_defaults() {
+        assert_eq!(
+            normalize_session_name(Some("  Fix the picker  ")).unwrap(),
+            Some("Fix the picker".into())
+        );
+        assert_eq!(normalize_session_name(Some("   ")).unwrap(), None);
+        assert!(normalize_session_name(Some("bad\nname")).is_err());
+
+        assert_eq!(
+            name_from_message(Some("\n  Fix   the picker\nwithout regressions ")),
+            Some("Fix the picker without regressions".into())
+        );
+        let long = "x".repeat(100);
+        let derived = name_from_message(Some(&long)).unwrap();
+        assert_eq!(derived.chars().count(), 61);
+        assert!(derived.ends_with('…'));
+    }
+
+    #[test]
+    fn session_name_updates_preserve_other_metadata() {
+        let root = temp_dir("session-name");
+        let host = temp_dir("session-name-host");
+        let workspace = crate::workspace::create(&root, &host, None).unwrap();
+        let profile = test_profile("codex", Protocol::CodexJsonl);
+        let selection = crate::agent::Selection::new(crate::agent::Provider::Codex);
+        let (journal, _) = Journal::create_in_workspace(
+            &root,
+            &workspace.id,
+            &profile,
+            &selection,
+            Some("Initial".into()),
+        )
+        .unwrap();
+        let directory = journal.path().parent().unwrap();
+        store_provider_session_id(directory, "provider-1").unwrap();
+        assert_eq!(
+            store_session_name(directory, Some(" Renamed ")).unwrap(),
+            Some("Renamed".into())
+        );
+        let listed = list_workspace_sessions(&root, &workspace.id).unwrap();
+        assert_eq!(listed[0].name.as_deref(), Some("Renamed"));
+        assert_eq!(
+            read_provider_session_id(directory).unwrap().as_deref(),
+            Some("provider-1")
+        );
+        assert_eq!(store_session_name(directory, None).unwrap(), None);
+        assert_eq!(
+            list_workspace_sessions(&root, &workspace.id).unwrap()[0].name,
+            None
+        );
+        std::fs::remove_dir_all(root).ok();
+        std::fs::remove_dir_all(host).ok();
     }
 
     #[test]

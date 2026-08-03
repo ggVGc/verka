@@ -189,6 +189,7 @@ pub fn handle_input_key(
                                 app.selection = info.selection;
                                 app.workspace_id = Some(info.workspace_id);
                                 app.session_id = info.id.clone();
+                                app.session_name = info.name;
                                 app.set_workspace_root(info.workspace);
                                 app.set_driva_options(info.driva);
                                 app.push_log(LogEntry::info(format!(

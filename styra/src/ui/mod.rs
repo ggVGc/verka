@@ -30,7 +30,9 @@ use list::render_list;
 use log::render_log;
 pub(crate) use log::log_line;
 use messages::{message_area_height, render_messages};
-pub use picker::{render_interactions_picker, render_picker, render_workspace_picker};
+pub use picker::{
+    render_interactions_picker, render_name_prompt, render_picker, render_workspace_picker,
+};
 use preview::{render_fullscreen_preview, render_preview};
 pub(crate) use preview::preview_scroll_limit;
 use raw::render_raw;
@@ -169,7 +171,10 @@ fn conversation_only_title(block: Block<'static>) -> Block<'static> {
 
 /// Right-aligned title for the primary panel's top border.
 fn workspace_title(app: &App) -> Option<Line<'static>> {
-    app.workspace_name.as_ref().map(|name| {
+    app.session_name
+        .as_ref()
+        .or(app.workspace_name.as_ref())
+        .map(|name| {
         Line::from(Span::styled(
             format!(" {name} "),
             Style::default()
@@ -325,6 +330,18 @@ mod tests {
         let (x, y) = find_column(buffer, "payments");
         assert_eq!(y, 0);
         assert_eq!(x, 80 - "payments".len() as u16 - 2);
+    }
+
+    #[test]
+    fn header_prefers_the_session_name_to_the_workspace_name() {
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
+        app.workspace_name = Some("payments".into());
+        app.session_name = Some("Fix retries".into());
+        let screen = rendered(&app);
+        assert!(screen.contains("Fix retries"));
     }
 
     #[test]

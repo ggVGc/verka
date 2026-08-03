@@ -1,7 +1,8 @@
 //! Blocking client for Styra's JSON protocol over a Unix domain socket.
 
 use crate::protocol::{
-    CreateSession, CreateWorkspace, Health, Request, Response, ResumeSession, SendMessage,
+    CreateSession, CreateWorkspace, Health, RenameSession, Request, Response, ResumeSession,
+    SendMessage,
     SessionInfo, ShellInfo, StoredSession, Updates, WireResponse,
 };
 use crate::protocol::{InteractionSummary, SessionSummary, WorkspaceSummary};
@@ -44,6 +45,16 @@ impl Client {
         match self.request(Request::ResumeSession(request.clone()))? {
             Response::SessionResumed(value) => Ok(value),
             other => unexpected("session_resumed", other),
+        }
+    }
+
+    pub fn rename_session(&self, id: &str, name: Option<&str>) -> Result<SessionSummary> {
+        match self.request(Request::RenameSession(RenameSession {
+            id: id.to_owned(),
+            name: name.map(str::to_owned),
+        }))? {
+            Response::SessionRenamed(value) => Ok(value),
+            other => unexpected("session_renamed", other),
         }
     }
 

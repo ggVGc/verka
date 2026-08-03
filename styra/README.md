@@ -83,6 +83,7 @@ Operations:
 | `workspace` | Workspace id | `workspace` |
 | `create_session` | Workspace id, provider/model/effort selection, network, optional message | `session_created` |
 | `resume_session` | Session id, network, templates | `session_resumed` |
+| `rename_session` | Session id and optional name | `session_renamed` |
 | `list_sessions` | Workspace id | `stored_sessions` |
 | `send_message` | session id and message | `accepted` |
 | `updates` | session id and `after` cursor | `updates` |
@@ -166,3 +167,8 @@ with `--resume`. Styra preserves the provider's own state directory for this
 purpose. If the provider has removed its session—or an older Styra journal
 predates native-id capture—the raw journal remains viewable, but resume
 returns an error and the message is not lost, ready to retry.
+
+Sessions receive a display name from their first prompt (normalized and
+truncated locally; no extra model call is made). In a Session picker, press
+`r` to edit that name; saving an empty value clears it. Names need not be
+unique and never replace the immutable Session id used by the API and store.
