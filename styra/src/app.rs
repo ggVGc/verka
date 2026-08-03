@@ -79,6 +79,15 @@ impl Status {
     }
 }
 
+impl From<styra_server::InteractionActivity> for Status {
+    fn from(activity: styra_server::InteractionActivity) -> Self {
+        match activity {
+            styra_server::InteractionActivity::Pending => Self::Idle,
+            styra_server::InteractionActivity::Running => Self::Running,
+        }
+    }
+}
+
 /// One event in the list, with its fold state.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Entry {

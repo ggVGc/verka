@@ -281,14 +281,18 @@ fn interaction_item(
     interaction: &InteractionSummary,
     workspaces: &[WorkspaceSummary],
 ) -> ListItem<'static> {
-    let (state, color) = if interaction.accepting {
-        match interaction.activity {
-            styra_server::InteractionActivity::Pending => ("pending", Color::Yellow),
-            styra_server::InteractionActivity::Running => ("running", Color::Green),
-        }
+    let (status, color) = if interaction.accepting {
+        (crate::app::Status::from(interaction.activity), Color::Green)
     } else {
-        ("ended", Color::DarkGray)
+        (
+            crate::app::Status::Ended {
+                exit_code: None,
+                error: None,
+            },
+            Color::DarkGray,
+        )
     };
+    let state = status.label();
     let workspace_name = workspaces
         .iter()
         .find(|workspace| workspace.id == interaction.workspace_id)
@@ -549,7 +553,7 @@ mod tests {
             0,
             &[],
         );
-        assert!(pending.contains("pending"));
+        assert!(pending.contains("idle"));
     }
 
     #[test]
