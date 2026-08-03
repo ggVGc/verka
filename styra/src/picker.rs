@@ -88,12 +88,8 @@ pub fn run_session_picker(
         if !event::poll(Duration::from_millis(100))? {
             continue;
         }
-        let Event::Key(key) = event::read()? else {
-            continue;
-        };
-        if key.kind != KeyEventKind::Press {
-            continue;
-        }
+        let Event::Key(key) = event::read()? else { continue };
+        if key.kind != KeyEventKind::Press { continue; }
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => return Ok(None),
             KeyCode::Char('j') | KeyCode::Down => {
@@ -133,8 +129,12 @@ fn read_session_name(
             ui::render_picker(frame, sessions, selected, &[]);
             ui::render_name_prompt(frame, &value);
         })?;
-        let Event::Key(key) = event::read()? else { continue };
-        if key.kind != KeyEventKind::Press { continue; }
+        let Event::Key(key) = event::read()? else {
+            continue;
+        };
+        if key.kind != KeyEventKind::Press {
+            continue;
+        }
         match key.code {
             KeyCode::Esc => return Ok(None),
             KeyCode::Enter => return Ok(Some(value)),
@@ -184,9 +184,10 @@ pub fn run_workspace_picker(
 pub fn run_interactions_picker(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     client: &Client,
-    interactions: &[InteractionSummary],
+    interactions: &mut [InteractionSummary],
     workspaces: &[WorkspaceSummary],
 ) -> Result<Option<InteractionSummary>> {
+    sort_interactions(interactions);
     let mut selected = 0usize;
     let mut preview_id = String::new();
     let mut preview_cursor = 0u64;
@@ -250,5 +251,76 @@ pub fn run_interactions_picker(
             KeyCode::Enter => return Ok(Some(interactions[selected].clone())),
             _ => {}
         }
+    }
+}
+
+/// Put interactions that are processing work first, idle interactions next,
+/// and stopped interactions last. `sort_by_key` is stable, so the server's
+/// ordering is retained within each status group.
+fn sort_interactions(interactions: &mut [InteractionSummary]) {
+    interactions.sort_by_key(|interaction| {
+        if !interaction.accepting {
+            2
+        } else {
+            match interaction.activity {
+                styra_server::InteractionActivity::Running => 0,
+                styra_server::InteractionActivity::Pending => 1,
+            }
+        }
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use styra_server::{agent::Selection, DrivaOptions, InteractionActivity};
+
+    fn interaction(id: &str, accepting: bool, activity: InteractionActivity) -> InteractionSummary {
+        InteractionSummary {
+            id: id.into(),
+            name: None,
+            workspace_id: "workspace".into(),
+            selection: Selection::parse("codex").unwrap(),
+            workspace: PathBuf::from("/workspace"),
+            driva: DrivaOptions {
+                isolation_backend: "none".into(),
+                command: vec![],
+                working_directory: PathBuf::from("/workspace"),
+                network: false,
+                mounts: vec![],
+            },
+            accepting,
+            activity,
+        }
+    }
+
+    #[test]
+    fn interactions_sort_pending_then_idle_then_stopped_stably() {
+        let mut interactions = vec![
+            interaction("stopped-1", false, InteractionActivity::Running),
+            interaction("idle-1", true, InteractionActivity::Pending),
+            interaction("pending-1", true, InteractionActivity::Running),
+            interaction("stopped-2", false, InteractionActivity::Pending),
+            interaction("pending-2", true, InteractionActivity::Running),
+            interaction("idle-2", true, InteractionActivity::Pending),
+        ];
+
+        sort_interactions(&mut interactions);
+
+        assert_eq!(
+            interactions
+                .iter()
+                .map(|interaction| interaction.id.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "pending-1",
+                "pending-2",
+                "idle-1",
+                "idle-2",
+                "stopped-1",
+                "stopped-2",
+            ]
+        );
     }
 }

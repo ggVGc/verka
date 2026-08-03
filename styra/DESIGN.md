@@ -526,7 +526,9 @@ the selected Interaction's live log: decoded agent
 activity, Styra diagnostics and stderr, and the final process outcome. Moving
 the selection with `j`/`k` immediately loads its history and continues
 polling for new entries. `Enter` attaches to the selected Interaction; `Esc`/`q`
-returns without affecting any running process.
+returns without affecting any running process. Entries are grouped with pending
+work first, idle Interactions next, and stopped Interactions last; server order
+is retained within each group.
 
 ### Starting sends nothing on its own
 

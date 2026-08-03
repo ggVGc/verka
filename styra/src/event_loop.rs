@@ -190,20 +190,18 @@ pub fn run(
                 }
             }
             Some(Request::Interactions) => {
-                let interactions = client.list_interactions()?;
+                let mut interactions = client.list_interactions()?;
                 if interactions.is_empty() {
                     app.push_log(LogEntry::warn("no live interactions on the server"));
                     continue;
                 }
                 let workspaces = client.list_workspaces()?;
-                if let Some(interaction) =
-                    picker::run_interactions_picker(
-                        terminal,
-                        client,
-                        &interactions,
-                        &workspaces,
-                    )?
-                {
+                if let Some(interaction) = picker::run_interactions_picker(
+                    terminal,
+                    client,
+                    &mut interactions,
+                    &workspaces,
+                )? {
                     return Ok(RunOutcome::Attach(interaction));
                 }
             }
