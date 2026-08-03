@@ -14,8 +14,8 @@ mod types;
 
 pub use transport::{read_message, read_message_limited, write_message, MAX_REQUEST_BYTES};
 pub use types::{
-    Direction, DrivaOptions, InteractionEnd, InteractionSummary, InteractionUpdate, LogEntry,
-    LogLevel, RawLine, SessionSummary, WorkspaceSummary,
+    Direction, DrivaOptions, InteractionActivity, InteractionEnd, InteractionSummary,
+    InteractionUpdate, LogEntry, LogLevel, RawLine, SessionSummary, WorkspaceSummary,
 };
 
 // These external vocabularies are serialized inside protocol payloads. Re-export

@@ -260,8 +260,11 @@ fn interaction_item(
     interaction: &InteractionSummary,
     workspaces: &[WorkspaceSummary],
 ) -> ListItem<'static> {
-    let (label, color) = if interaction.accepting {
-        ("live", Color::Green)
+    let (state, color) = if interaction.accepting {
+        match interaction.activity {
+            styra_server::InteractionActivity::Pending => ("pending", Color::Yellow),
+            styra_server::InteractionActivity::Running => ("running", Color::Green),
+        }
     } else {
         ("ended", Color::DarkGray)
     };
@@ -278,7 +281,7 @@ fn interaction_item(
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            format!("{label:<6} "),
+            format!("{state:<8} "),
             Style::default().fg(color).add_modifier(Modifier::BOLD),
         ),
         Span::styled(
@@ -435,6 +438,7 @@ mod tests {
                 mounts: Vec::new(),
             },
             accepting,
+            activity: styra_server::InteractionActivity::Pending,
         }
     }
 
@@ -461,11 +465,10 @@ mod tests {
     }
 
     #[test]
-    fn interactions_picker_lists_interactions_with_provider_and_live_state() {
-        let interactions = vec![
-            interaction_summary("s-1", "codex", true),
-            interaction_summary("s-2", "claude", false),
-        ];
+    fn interactions_picker_lists_interactions_with_liveness_and_activity() {
+        let mut running = interaction_summary("s-1", "codex", true);
+        running.activity = styra_server::InteractionActivity::Running;
+        let interactions = vec![running, interaction_summary("s-2", "claude", false)];
         let workspaces = vec![WorkspaceSummary {
             id: "w-1".into(),
             name: Some("payments".into()),
@@ -480,12 +483,20 @@ mod tests {
         assert!(screen.contains("current interactions"));
         assert!(screen.contains("current log"));
         assert!(screen.contains("codex"));
-        assert!(screen.contains("live"));
+        assert!(screen.contains("running"));
         assert!(screen.contains("s-1"));
         assert!(screen.contains("payments"));
         assert!(screen.contains("claude"));
         assert!(screen.contains("ended"));
         assert!(screen.contains("s-2"));
+
+        let pending = rendered_interactions_picker(
+            &[interaction_summary("s-3", "codex", true)],
+            &workspaces,
+            0,
+            &[],
+        );
+        assert!(pending.contains("pending"));
     }
 
     #[test]

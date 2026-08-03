@@ -7,7 +7,9 @@ use crate::protocol::{
     CreateSession, CreateWorkspace, Health, Request, Response, ResumeSession, SequencedUpdate,
     SessionInfo, ShellInfo, StoredSession, Updates, WireResponse, MAX_REQUEST_BYTES,
 };
-use crate::protocol::{DrivaOptions, InteractionSummary, InteractionUpdate, SessionSummary};
+use crate::protocol::{
+    DrivaOptions, InteractionActivity, InteractionSummary, InteractionUpdate, SessionSummary,
+};
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::io::BufReader;
@@ -39,6 +41,7 @@ struct ManagedInteraction {
     interaction: Interaction,
     updates: Arc<Mutex<Vec<SequencedUpdate>>>,
     accepting_messages: Arc<AtomicBool>,
+    activity: Arc<Mutex<InteractionActivity>>,
     /// Captured at spawn so the interaction can be listed and reattached to without
     /// re-deriving them: the agent selection, host workspace, and launch policy.
     workspace_id: String,
@@ -62,6 +65,10 @@ impl ManagedInteraction {
             workspace: self.workspace.clone(),
             driva: self.driva.clone(),
             accepting: self.accepting_messages.load(Ordering::Acquire),
+            activity: *self
+                .activity
+                .lock()
+                .expect("interaction activity lock poisoned"),
         }
     }
 }
@@ -209,10 +216,12 @@ impl ServerState {
             };
         let updates = Arc::new(Mutex::new(Vec::new()));
         let accepting_messages = Arc::new(AtomicBool::new(true));
+        let activity = Arc::new(Mutex::new(InteractionActivity::Pending));
         let managed = Arc::new(ManagedInteraction {
             interaction,
             updates: Arc::clone(&updates),
             accepting_messages: Arc::clone(&accepting_messages),
+            activity: Arc::clone(&activity),
             workspace_id: request.workspace_id.clone(),
             selection: selection.clone(),
             workspace: workspace.clone(),
@@ -228,6 +237,21 @@ impl ServerState {
             .name(format!("styra-updates-{id}"))
             .spawn(move || {
                 while let Ok(update) = receiver.recv() {
+                    match &update {
+                        InteractionUpdate::Event(crate::event::AgentEvent::UserMessage {
+                            ..
+                        }) => {
+                            *activity.lock().expect("interaction activity lock poisoned") =
+                                InteractionActivity::Running;
+                        }
+                        InteractionUpdate::Event(crate::event::AgentEvent::TurnCompleted {
+                            ..
+                        }) => {
+                            *activity.lock().expect("interaction activity lock poisoned") =
+                                InteractionActivity::Pending;
+                        }
+                        _ => {}
+                    }
                     if matches!(update, InteractionUpdate::Ended(_)) {
                         accepting_messages.store(false, Ordering::Release);
                     }
@@ -343,6 +367,7 @@ impl ServerState {
             Interaction::spawn(spec, backend, journal, request.id.clone(), diagnostics)?;
         let updates = Arc::new(Mutex::new(seeded_updates));
         let accepting_messages = Arc::new(AtomicBool::new(true));
+        let activity = Arc::new(Mutex::new(InteractionActivity::Pending));
         // A resumed Session may carry over messages that were durably queued
         // on a previous attachment (one stopped before the interaction went
         // idle enough to send them), so reload them rather than starting empty.
@@ -351,6 +376,7 @@ impl ServerState {
             interaction,
             updates: Arc::clone(&updates),
             accepting_messages: Arc::clone(&accepting_messages),
+            activity: Arc::clone(&activity),
             workspace_id: summary.workspace_id.clone(),
             selection: selection.clone(),
             workspace: workspace.clone(),
@@ -364,6 +390,21 @@ impl ServerState {
             .name(format!("styra-updates-{id}"))
             .spawn(move || {
                 while let Ok(update) = receiver.recv() {
+                    match &update {
+                        InteractionUpdate::Event(crate::event::AgentEvent::UserMessage {
+                            ..
+                        }) => {
+                            *activity.lock().expect("interaction activity lock poisoned") =
+                                InteractionActivity::Running;
+                        }
+                        InteractionUpdate::Event(crate::event::AgentEvent::TurnCompleted {
+                            ..
+                        }) => {
+                            *activity.lock().expect("interaction activity lock poisoned") =
+                                InteractionActivity::Pending;
+                        }
+                        _ => {}
+                    }
                     if matches!(update, InteractionUpdate::Ended(_)) {
                         accepting_messages.store(false, Ordering::Release);
                     }

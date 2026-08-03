@@ -88,8 +88,8 @@ pub mod spawn;
 pub use client::Client;
 pub use daemon::{run, serve_if_requested, ServerConfig};
 pub use protocol::{
-    Direction, DrivaOptions, InteractionEnd, InteractionSummary, InteractionUpdate, LogEntry,
-    LogLevel, RawLine, SessionSummary, WorkspaceSummary,
+    Direction, DrivaOptions, InteractionActivity, InteractionEnd, InteractionSummary,
+    InteractionUpdate, LogEntry, LogLevel, RawLine, SessionSummary, WorkspaceSummary,
 };
 pub use spawn::ensure_server;
 

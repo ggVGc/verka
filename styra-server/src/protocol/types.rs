@@ -127,6 +127,17 @@ pub struct DrivaOptions {
     pub mounts: Vec<Mount>,
 }
 
+/// What a live interaction is currently waiting on.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InteractionActivity {
+    /// The agent is idle and waiting for the operator's next message.
+    #[default]
+    Pending,
+    /// The agent is working on an operator message.
+    Running,
+}
+
 /// An interaction the server is currently running (this process's live sessions),
 /// enough to list it and to reattach a client to it. Distinct from
 /// [`SessionSummary`], which describes a session persisted in the store
@@ -146,6 +157,9 @@ pub struct InteractionSummary {
     pub driva: DrivaOptions,
     /// Whether the interaction's agent process is alive and still takes messages.
     pub accepting: bool,
+    /// Whether the live interaction is working or waiting for user input.
+    #[serde(default)]
+    pub activity: InteractionActivity,
 }
 
 /// A stored session, enough to display and select it from a list — see
