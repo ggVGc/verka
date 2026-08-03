@@ -1,3 +1,10 @@
+- If in git repo, run each session in new branch and worktree:
+  - Git commit at start and after every file operation or other tool call if any files were modified:
+    - Should allow resetting context+changes to some earlier state.
+    - Issue: If edits are made outside of the tracked worktree.
+        We could prevent it by making sure all writable paths are tracked, however it may not even be what we want.
+        For example, cargo registry being updated is not necessarily something that needs to or should be reverted.
+        We could detect writes outside the tracked workspace, and at least inform the user.
 - Introduce Styra tool for list responses:
   - Useful for things like: "Tell me which improvements we can make"
   - Styra then understands the response in a structured way, and can launch a new session to work on each one (or selected)
