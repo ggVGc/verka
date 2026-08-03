@@ -172,8 +172,6 @@ impl ServerState {
         // missing tmux or broker executable cannot leave an empty journal.
         let tmux = genta::agent::resolve_executable(Path::new("tmux"))
             .context("tmux is required for Styra session shells")?;
-        let broker_executable =
-            std::env::current_exe().context("locating the Styra sandbox broker")?;
         let (journal, id) = Journal::create_in_workspace(
             &self.inner.store_root,
             &request.workspace_id,
@@ -197,7 +195,7 @@ impl ServerState {
             },
             temporary_mounts: Vec::new(),
             template,
-            broker: Some(self.prepare_broker(&id, broker_executable, tmux)?),
+            broker: Some(self.prepare_broker(&id, tmux)?),
         };
         let driva = DrivaOptions::capture(&spec, "bwrap");
         let prepared_broker = spec.broker.as_ref().expect("broker was prepared");
@@ -335,8 +333,6 @@ impl ServerState {
 
         let tmux = genta::agent::resolve_executable(Path::new("tmux"))
             .context("tmux is required for Styra session shells")?;
-        let broker_executable =
-            std::env::current_exe().context("locating the Styra sandbox broker")?;
         // Seed the live update stream before the provider starts. Clients
         // attaching from cursor zero then receive the stored conversation and
         // all subsequent native-resume traffic as one sequence. The client
@@ -358,7 +354,7 @@ impl ServerState {
             },
             temporary_mounts: Vec::new(),
             template,
-            broker: Some(self.prepare_broker(&request.id, broker_executable, tmux)?),
+            broker: Some(self.prepare_broker(&request.id, tmux)?),
         };
         let driva = DrivaOptions::capture(&spec, "bwrap");
         let prepared_broker = spec.broker.as_ref().expect("broker was prepared");
@@ -452,12 +448,7 @@ impl ServerState {
             .with_context(|| format!("no live interaction for session {id:?}"))
     }
 
-    fn prepare_broker(
-        &self,
-        id: &str,
-        executable: PathBuf,
-        tmux: PathBuf,
-    ) -> Result<SandboxBroker> {
+    fn prepare_broker(&self, id: &str, tmux: PathBuf) -> Result<SandboxBroker> {
         let control_root = self
             .inner
             .socket
@@ -475,8 +466,29 @@ impl ServerState {
                 )
             },
         )?;
+        // The server is deliberately long-lived, while its installed binary
+        // may be replaced by a rebuild or upgrade. Do not hand Driva that
+        // potentially stale pathname: keep an executable copy owned by this
+        // interaction. On Linux `/proc/self/exe` remains readable even after
+        // the original directory entry has been unlinked.
+        let executable = control.join("styra-broker");
+        let running_executable = std::env::current_exe()
+            .ok()
+            .filter(|path| path.is_file())
+            .unwrap_or_else(|| PathBuf::from("/proc/self/exe"));
+        std::fs::copy(&running_executable, &executable).with_context(|| {
+            format!(
+                "staging the Styra sandbox broker from {} to {}",
+                running_executable.display(),
+                executable.display()
+            )
+        })?;
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700))
+            .with_context(|| {
+                format!("making sandbox broker {} executable", executable.display())
+            })?;
         Ok(SandboxBroker {
-            executable,
+            executable: PathBuf::from("/tmp/styra/control/styra-broker"),
             tmux,
             control: MountSpec {
                 source: control,
@@ -810,6 +822,29 @@ mod tests {
         let error = state.stored_summary("../../etc").unwrap_err();
         assert!(error.to_string().contains("was not found"));
         std::fs::remove_dir_all(store).ok();
+    }
+
+    #[test]
+    fn broker_is_staged_in_the_sandbox_control_mount() {
+        let root =
+            std::env::temp_dir().join(format!("styra-server-broker-test-{}", std::process::id()));
+        std::fs::remove_dir_all(&root).ok();
+        let socket = root.join("styra.sock");
+        let state = ServerState::new(root.join("store"), socket);
+
+        let broker = state
+            .prepare_broker("session-1", PathBuf::from("/usr/bin/tmux"))
+            .unwrap();
+
+        assert_eq!(
+            broker.executable,
+            PathBuf::from("/tmp/styra/control/styra-broker")
+        );
+        let staged = broker.control.source.join("styra-broker");
+        let metadata = std::fs::metadata(&staged).unwrap();
+        assert!(metadata.len() > 0);
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o700);
+        std::fs::remove_dir_all(root).ok();
     }
 
     #[test]
