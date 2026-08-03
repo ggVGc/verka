@@ -86,6 +86,7 @@ Operations:
 | `list_sessions` | Workspace id | `stored_sessions` |
 | `send_message` | session id and message | `accepted` |
 | `updates` | session id and `after` cursor | `updates` |
+| `interrupt_interaction` | session id | `accepted` |
 | `stop_interaction` | session id | `accepted` |
 | `stored_session` | session id | `stored_session` |
 | `shell` | live session id | `shell` (tmux executable and socket) |

@@ -473,6 +473,8 @@ pub enum Request {
     Interactions,
     /// Stop the current interaction and return to the blank start screen.
     Reset,
+    /// Return to the blank start screen without stopping the current interaction.
+    NewSession,
 }
 
 impl App {
@@ -1945,6 +1947,7 @@ mod tests {
             Request::Sessions,
             Request::Interactions,
             Request::Reset,
+            Request::NewSession,
         ] {
             let mut app = app();
             assert_eq!(app.take_request(), None);

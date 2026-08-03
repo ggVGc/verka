@@ -272,6 +272,16 @@ pub fn pause_interaction(app: &mut App, client: &Client, live: &mut Live) {
     }
 }
 
+pub fn interrupt_interaction(app: &mut App, client: &Client, live: &Live) {
+    let Live::Running { session_id, .. } = live else {
+        return app.push_log(LogEntry::warn("no live interaction to interrupt"));
+    };
+    match client.interrupt_interaction(session_id) {
+        Ok(()) => app.push_log(LogEntry::info("interrupt requested")),
+        Err(error) => app.push_log(LogEntry::error(format!("interrupt failed: {error:#}"))),
+    }
+}
+
 /// Apply one session update to the app. Shared by the live event loop and by
 /// [`attach_live_interaction`], which replays an interaction's accumulated updates the same way.
 pub fn apply_update(app: &mut App, update: InteractionUpdate) {

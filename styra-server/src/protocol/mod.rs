@@ -155,6 +155,9 @@ pub enum Request {
     ClearQueuedMessages {
         id: String,
     },
+    InterruptInteraction {
+        id: String,
+    },
     StopInteraction {
         id: String,
     },

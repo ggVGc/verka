@@ -24,6 +24,7 @@ pub enum RunOutcome {
     OpenSession(String),
     Attach(InteractionSummary),
     Reset,
+    NewSession,
 }
 
 /// Return the running interaction an in-client transition explicitly stops.
@@ -207,6 +208,7 @@ pub fn run(
                 }
             }
             Some(Request::Reset) => return Ok(RunOutcome::Reset),
+            Some(Request::NewSession) => return Ok(RunOutcome::NewSession),
         }
     }
 }

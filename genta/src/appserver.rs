@@ -39,8 +39,9 @@ pub enum Action {
 
 struct State {
     thread_id: Option<String>,
+    active_turn_id: Option<String>,
     ready: bool,
-    next_turn_id: i64,
+    next_request_id: i64,
     /// Messages sent before the thread was ready, replayed once it is.
     pending: Vec<String>,
 }
@@ -73,8 +74,9 @@ impl AppServer {
             resume_thread_id,
             state: Mutex::new(State {
                 thread_id: None,
+                active_turn_id: None,
                 ready: false,
-                next_turn_id: THREAD_START_ID + 1,
+                next_request_id: THREAD_START_ID + 1,
                 pending: Vec::new(),
             }),
         }
@@ -158,7 +160,15 @@ impl AppServer {
                     None => Vec::new(),
                 }
             }
-            (None, _) => Vec::new(), // response to a turn/start or later request
+            (None, _) => {
+                if let Some(turn_id) = turn_id(&value) {
+                    self.state
+                        .lock()
+                        .expect("app-server state poisoned")
+                        .active_turn_id = Some(turn_id.to_owned());
+                }
+                Vec::new()
+            }
             // A server-to-client request needs a reply. With approvalPolicy
             // "never" and danger-full-access we expect none; log any that
             // appear so they are visible rather than a silent stall.
@@ -169,6 +179,19 @@ impl AppServer {
             (Some(notification), None) => {
                 let mut actions = Vec::new();
                 let mut already_started = false;
+                if notification == "turn/started" {
+                    if let Some(turn_id) = turn_id(&value) {
+                        self.state
+                            .lock()
+                            .expect("app-server state poisoned")
+                            .active_turn_id = Some(turn_id.to_owned());
+                    }
+                } else if notification == "turn/completed" {
+                    self.state
+                        .lock()
+                        .expect("app-server state poisoned")
+                        .active_turn_id = None;
+                }
                 if notification == "thread/started" {
                     if let Some(thread_id) = value
                         .get("params")
@@ -208,8 +231,8 @@ impl AppServer {
                     "queued message until the app-server session is ready".into(),
                 )];
             };
-            let id = state.next_turn_id;
-            state.next_turn_id += 1;
+            let id = state.next_request_id;
+            state.next_request_id += 1;
             (thread_id, id)
         };
         vec![send(&json!({
@@ -217,6 +240,30 @@ impl AppServer {
             "method": "turn/start",
             "params": { "threadId": thread_id, "input": [{ "type": "text", "text": text }] }
         }))]
+    }
+
+    /// Interrupt the in-flight turn without closing the app-server process or
+    /// its thread. A later operator message can start another turn normally.
+    pub fn interrupt(&self) -> Result<Vec<Action>, &'static str> {
+        let (thread_id, turn_id, id) = {
+            let mut state = self.state.lock().expect("app-server state poisoned");
+            let thread_id = state
+                .thread_id
+                .clone()
+                .ok_or("the app-server session is not ready")?;
+            let turn_id = state
+                .active_turn_id
+                .clone()
+                .ok_or("there is no active turn to interrupt")?;
+            let id = state.next_request_id;
+            state.next_request_id += 1;
+            (thread_id, turn_id, id)
+        };
+        Ok(vec![send(&json!({
+            "id": id,
+            "method": "turn/interrupt",
+            "params": { "threadId": thread_id, "turnId": turn_id }
+        }))])
     }
 
     fn become_ready(&self, thread_id: String) -> Vec<Action> {
@@ -237,6 +284,15 @@ impl AppServer {
         }
         actions
     }
+}
+
+fn turn_id(value: &Value) -> Option<&str> {
+    value
+        .get("params")
+        .and_then(|params| params.get("turn"))
+        .or_else(|| value.get("result").and_then(|result| result.get("turn")))
+        .and_then(|turn| turn.get("id"))
+        .and_then(Value::as_str)
 }
 
 fn send(message: &Value) -> Action {
@@ -305,6 +361,29 @@ mod tests {
         assert_eq!(turn[0]["method"], "turn/start");
         assert_eq!(turn[0]["params"]["threadId"], "thread-xyz");
         assert_eq!(turn[0]["params"]["input"][0]["text"], "do the thing");
+    }
+
+    #[test]
+    fn interrupt_targets_the_active_turn_and_keeps_the_thread_ready() {
+        let client = AppServer::new("/tmp/styra/workspace".into());
+        client.handle_line(r#"{"id":2,"result":{"thread":{"id":"thread-xyz"}}}"#);
+        client.handle_line(
+            r#"{"method":"turn/started","params":{"threadId":"thread-xyz","turn":{"id":"turn-7"}}}"#,
+        );
+
+        let interrupt = sent(&client.interrupt().unwrap());
+        assert_eq!(interrupt[0]["method"], "turn/interrupt");
+        assert_eq!(interrupt[0]["params"]["threadId"], "thread-xyz");
+        assert_eq!(interrupt[0]["params"]["turnId"], "turn-7");
+
+        client.handle_line(
+            r#"{"method":"turn/completed","params":{"threadId":"thread-xyz","turn":{"id":"turn-7","status":"interrupted"}}}"#,
+        );
+        assert_eq!(
+            client.interrupt().unwrap_err(),
+            "there is no active turn to interrupt"
+        );
+        assert_eq!(sent(&client.send("continue"))[0]["method"], "turn/start");
     }
 
     /// A live session must learn the model and effort it is running on from the

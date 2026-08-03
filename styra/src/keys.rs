@@ -52,7 +52,8 @@ pub fn handle_list_key(
     }
     match key.code {
         KeyCode::Char('q') => return app.ask(Request::Quit),
-        KeyCode::Char('s') => return session::pause_interaction(app, client, live),
+        KeyCode::Char('s') => return session::interrupt_interaction(app, client, live),
+        KeyCode::Char('S') => return session::pause_interaction(app, client, live),
         KeyCode::Char('!') => {
             let Live::Running { session_id, .. } = live else {
                 return app.show_action_message("no live interaction to open a shell for");
@@ -75,7 +76,8 @@ pub fn handle_list_key(
         KeyCode::Char('a') => return app.ask(Request::Sessions),
         KeyCode::Char('V') => return app.ask(Request::Workspace),
         KeyCode::Char('A') => return app.ask(Request::Interactions),
-        KeyCode::Char('S') => return app.ask(Request::Reset),
+        KeyCode::Char('N') => return app.ask(Request::Reset),
+        KeyCode::Char('n') => return app.ask(Request::NewSession),
         _ => {}
     }
     match app.view {

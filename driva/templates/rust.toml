@@ -12,3 +12,7 @@ CARGO_HOME = "~/.cargo"
 [[mount]]
 source = "~/.cargo"
 access = "read"
+
+[[mount]]
+source = "~/.cargo/registry"
+access = "write"

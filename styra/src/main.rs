@@ -290,8 +290,9 @@ fn main() -> Result<()> {
                     }
                 }
             }
-            // Stop the current interaction and return to the blank start screen.
-            RunOutcome::Reset => {
+            // Return to the blank start screen. Reset has already stopped the
+            // current interaction; NewSession deliberately leaves it running.
+            RunOutcome::Reset | RunOutcome::NewSession => {
                 live = Live::Pending;
                 // A reset returns to the standing launch default, independent
                 // of the selection recorded by the Session just left.
@@ -433,6 +434,10 @@ mod cli_tests {
         assert_eq!(
             event_loop::interaction_stopped_by(&RunOutcome::Reset, &live),
             Some("styra-live")
+        );
+        assert_eq!(
+            event_loop::interaction_stopped_by(&RunOutcome::NewSession, &live),
+            None
         );
     }
 

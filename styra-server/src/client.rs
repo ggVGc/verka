@@ -127,6 +127,13 @@ impl Client {
         }
     }
 
+    pub fn interrupt_interaction(&self, id: &str) -> Result<()> {
+        match self.request(Request::InterruptInteraction { id: id.to_owned() })? {
+            Response::Accepted => Ok(()),
+            other => unexpected("accepted", other),
+        }
+    }
+
     pub fn updates(&self, id: &str, after: u64) -> Result<Updates> {
         match self.request(Request::Updates {
             id: id.to_owned(),

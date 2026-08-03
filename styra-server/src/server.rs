@@ -549,6 +549,10 @@ impl ServerState {
             Request::ClearQueuedMessages { id } => {
                 Ok(Response::Queued(self.interaction(&id)?.clear_queue()?))
             }
+            Request::InterruptInteraction { id } => {
+                self.interaction(&id)?.interaction.interrupt()?;
+                Ok(Response::Accepted)
+            }
             Request::StopInteraction { id } => {
                 self.interaction(&id)?.stop();
                 Ok(Response::Accepted)

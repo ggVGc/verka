@@ -28,11 +28,13 @@ pub(crate) fn render_keybinds(frame: &mut Frame, area: Rect) {
         bindings("?", "show/close this reference"),
         bindings("i / Esc", "focus message / return to list"),
         bindings("q", "quit"),
-        bindings("s", "stop interaction"),
+        bindings("s", "interrupt active turn"),
+        bindings("S", "stop interaction"),
+        bindings("n / N", "new session / stop and start new session"),
         bindings("!", "open session shell in a new terminal"),
         bindings(
-            "a / A / V / S",
-            "current sessions / interactions / Workspaces / reset",
+            "a / A / V",
+            "current sessions / interactions / Workspaces",
         ),
         bindings(
             "r / l / t / d",
