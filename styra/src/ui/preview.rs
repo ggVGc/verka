@@ -5,13 +5,11 @@
 use super::{message_text_color, summary_line, DETAIL_INDENT};
 use crate::app::App;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Frame;
-use std::path::{Path, PathBuf};
-use styra_server::agent::SandboxLayout;
-use styra_server::event::{AgentEvent, DetailBlock, PresentationMode};
+use styra_server::event::{DetailBlock, PresentationMode};
 
 pub(crate) fn render_preview(frame: &mut Frame, app: &App, area: Rect) {
     let title = match app.preview_mode {
@@ -66,8 +64,7 @@ pub(crate) fn preview_scroll_limit(lines: &[Line<'_>], width: u16, height: u16) 
 }
 
 /// Shared body for the side-panel and full-screen preview: the selected
-/// entry's uncapped summary, detail, and (for a `FileChanged` entry) current
-/// file content.
+/// entry's uncapped summary and detail.
 pub(crate) fn preview_lines(app: &App) -> Vec<Line<'static>> {
     let Some(entry) = app.selected_entry() else {
         return vec![Line::from(Span::styled(
@@ -83,9 +80,6 @@ pub(crate) fn preview_lines(app: &App) -> Vec<Line<'static>> {
             block,
             message_text_color(entry.event.tag()),
         ));
-    }
-    if let AgentEvent::FileChanged { paths, .. } = &entry.event {
-        lines.extend(file_content_lines(paths, app.workspace_root.as_deref()));
     }
     lines
 }
@@ -175,59 +169,6 @@ fn bash_spans(line: &str) -> Vec<Span<'static>> {
     spans
 }
 
-/// Read back the current content of files a `FileChanged` event touched, so
-/// the preview shows what changed rather than just the bare path list.
-fn file_content_lines(paths: &[String], workspace_root: Option<&Path>) -> Vec<Line<'static>> {
-    let Some(root) = workspace_root else {
-        return vec![Line::from(Span::styled(
-            format!("{DETAIL_INDENT}(workspace path unknown; file content unavailable)"),
-            Style::default().fg(Color::Gray),
-        ))];
-    };
-
-    let mut lines = Vec::new();
-    for path in paths {
-        lines.push(Line::from(Span::styled(
-            format!("{DETAIL_INDENT}── {path} ──"),
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        )));
-        match std::fs::read_to_string(resolve_workspace_path(root, path)) {
-            Ok(content) => {
-                for line in content.lines() {
-                    lines.push(Line::from(Span::styled(
-                        format!("{DETAIL_INDENT}{line}"),
-                        Style::default().fg(Color::White),
-                    )));
-                }
-            }
-            Err(error) => {
-                lines.push(Line::from(Span::styled(
-                    format!("{DETAIL_INDENT}could not read file: {error}"),
-                    Style::default().fg(Color::Red),
-                )));
-            }
-        }
-    }
-    lines
-}
-
-/// Map a path as the agent reported it onto the host filesystem. A relative
-/// path joins directly onto the host workspace root (the sandbox's working
-/// directory mirrors it 1:1 through a bind mount); an absolute path inside
-/// the sandbox's mount destination is rewritten onto that same host root.
-fn resolve_workspace_path(root: &Path, reported: &str) -> PathBuf {
-    let reported_path = Path::new(reported);
-    if reported_path.is_absolute() {
-        return match reported_path.strip_prefix(&SandboxLayout::default().workspace) {
-            Ok(relative) => root.join(relative),
-            Err(_) => reported_path.to_path_buf(),
-        };
-    }
-    root.join(reported_path)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -235,6 +176,7 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
     use ratatui::Terminal;
+    use styra_server::event::AgentEvent;
 
     fn rendered(app: &App) -> String {
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
@@ -531,7 +473,7 @@ mod tests {
     }
 
     #[test]
-    fn preview_shows_the_current_content_of_a_changed_file() {
+    fn preview_does_not_duplicate_the_current_content_of_a_changed_file() {
         let dir =
             std::env::temp_dir().join(format!("styra-preview-file-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -553,8 +495,8 @@ mod tests {
 
         let screen = rendered(&app);
         assert!(screen.contains("notes.txt"));
-        assert!(screen.contains("line one"));
-        assert!(screen.contains("line two"));
+        assert!(!screen.contains("line one"));
+        assert!(!screen.contains("line two"));
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -573,8 +515,7 @@ mod tests {
             "s1",
         );
         app.set_workspace_root(dir.clone());
-        // A FileChanged entry exercises both the ordinary detail body and the
-        // file-content lines, the two sources of preview text.
+        // A FileChanged entry exercises the ordinary preview detail body.
         app.push_event(AgentEvent::FileChanged {
             id: "f1".into(),
             paths: vec!["notes.txt".into()],
@@ -631,22 +572,5 @@ mod tests {
         let (x, y) = find_column(&buffer, "preview");
         let cell = buffer.cell((x, y)).unwrap();
         assert_ne!(cell.style().fg, Some(Color::DarkGray));
-    }
-
-    #[test]
-    fn preview_notes_an_unknown_workspace_instead_of_failing_to_read_a_file() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
-        app.push_event(AgentEvent::FileChanged {
-            id: "f1".into(),
-            paths: vec!["notes.txt".into()],
-            diff: None,
-            checkpoint: None,
-            checkpoint_error: None,
-        });
-        app.toggle_preview();
-        assert!(rendered(&app).contains("workspace path unknown"));
     }
 }

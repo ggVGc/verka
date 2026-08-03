@@ -32,14 +32,12 @@ pub(crate) fn render_keybinds(frame: &mut Frame, area: Rect) {
         bindings("S", "stop interaction"),
         bindings("n / N", "new session / stop and start new session"),
         bindings("!", "open session shell in a new terminal"),
-        bindings(
-            "a / A / V",
-            "current sessions / interactions / Workspaces",
-        ),
+        bindings("a / A / V", "current sessions / interactions / Workspaces"),
         bindings(
             "r / l / t / d",
             "raw / log / transcript / driva; press again for events",
         ),
+        bindings("f", "files mentioned by the focused entry"),
         Line::default(),
         section("Events and previews"),
         bindings("j/k or ↓/↑", "next/previous entry"),
@@ -58,6 +56,12 @@ pub(crate) fn render_keybinds(frame: &mut Frame, area: Rect) {
         bindings("j/k or ↓/↑", "move or scroll"),
         bindings("g/G", "first/top or last/bottom"),
         bindings("PgUp/PgDn", "scroll raw-line preview"),
+        Line::default(),
+        section("Files"),
+        bindings("j/k or ↓/↑", "next/previous file"),
+        bindings("J/K", "next/previous interaction-log entry"),
+        bindings("p", "toggle interaction preview"),
+        bindings("a", "toggle focused-entry/all-session files"),
         Line::default(),
         section("Message editor"),
         bindings("Enter", "send message"),
@@ -96,7 +100,7 @@ mod tests {
 
     #[test]
     fn reference_groups_the_available_keybinds() {
-        let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(100, 46)).unwrap();
         terminal
             .draw(|frame| render_keybinds(frame, frame.area()))
             .unwrap();

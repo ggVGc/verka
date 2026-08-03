@@ -71,9 +71,10 @@ pub fn handle_list_key(
         KeyCode::Char('l') => return app.toggle_view(View::Log),
         KeyCode::Char('t') => return app.toggle_view(View::Transcript),
         KeyCode::Char('d') => return app.toggle_view(View::Driva),
+        KeyCode::Char('f') => return app.toggle_files(),
         KeyCode::Char('P') => return app.toggle_view(View::Preview),
         KeyCode::Char('L') => return app.open_launcher(),
-        KeyCode::Char('a') => return app.ask(Request::Sessions),
+        KeyCode::Char('a') if app.view != View::Files => return app.ask(Request::Sessions),
         KeyCode::Char('V') => return app.ask(Request::Workspace),
         KeyCode::Char('A') => return app.ask(Request::Interactions),
         KeyCode::Char('N') => return app.ask(Request::Reset),
@@ -126,6 +127,23 @@ pub fn handle_list_key(
             _ => {}
         },
         View::Driva => {}
+        View::Files => match key.code {
+            KeyCode::Char('j') | KeyCode::Down => app.file_select_next(),
+            KeyCode::Char('k') | KeyCode::Up => app.file_select_prev(),
+            KeyCode::Char('J') => {
+                app.select_next_line();
+                app.file_selected = 0;
+            }
+            KeyCode::Char('K') => {
+                app.select_prev_line();
+                app.file_selected = 0;
+            }
+            KeyCode::Char('g') => app.file_selected = 0,
+            KeyCode::Char('G') => app.file_selected = app.file_paths().len().saturating_sub(1),
+            KeyCode::Char('a') => app.toggle_file_scope(),
+            KeyCode::Char('p') => app.toggle_preview(),
+            _ => {}
+        },
         View::Preview => match key.code {
             KeyCode::Char('v') => app.toggle_preview_mode(),
             KeyCode::PageDown => app.preview.page_down(),

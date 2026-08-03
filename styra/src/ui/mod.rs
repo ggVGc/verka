@@ -6,6 +6,7 @@
 //! Rendering is a pure function of `App`; all state lives in [`crate::app`].
 
 mod driva;
+mod files;
 mod footer;
 mod help;
 mod input;
@@ -22,6 +23,7 @@ mod transcript;
 use driva::render_driva;
 pub(crate) use footer::{message_text_color, tag_color};
 use footer::render_footer;
+use files::render_files;
 use help::render_keybinds;
 use input::{input_area_height, render_input};
 use launcher::render_launcher;
@@ -229,6 +231,7 @@ pub fn render(frame: &mut Frame, app: &App) {
         View::Log => render_log(frame, app, chunks[0]),
         View::Transcript => render_transcript_view(frame, app, chunks[0]),
         View::Driva => render_driva(frame, app, chunks[0]),
+        View::Files => render_files(frame, app, chunks[0]),
         View::Preview => unreachable!("handled above"),
     }
     if message_height > 0 {

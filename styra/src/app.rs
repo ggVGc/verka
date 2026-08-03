@@ -9,6 +9,7 @@ use std::cell::Cell;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
+use styra_server::agent::SandboxLayout;
 use styra_server::agent::{Provider, Selection, PROVIDERS};
 use styra_server::event::PresentationMode;
 use styra_server::event::{AgentEvent, DetailBlock, TokenUsage};
@@ -33,6 +34,7 @@ pub enum View {
     Log,
     Transcript,
     Driva,
+    Files,
     Preview,
 }
 
@@ -463,6 +465,9 @@ pub struct App {
     /// shows its start. Unlike the raw/log views, the transcript reads as a
     /// document from the beginning rather than anchoring to the tail.
     pub transcript_scroll: u16,
+    /// Selected file in the Files view and whether it aggregates the session.
+    pub file_selected: usize,
+    pub file_show_all: bool,
     /// Set when the operator asks for something only the event loop can do;
     /// it takes the request and acts on it.
     pub request: Option<Request>,
@@ -527,6 +532,8 @@ impl App {
             log: Vec::new(),
             log_scroll_back: 0,
             transcript_scroll: 0,
+            file_selected: 0,
+            file_show_all: false,
             request: None,
         }
     }
@@ -826,10 +833,7 @@ impl App {
         // row's real ones (e.g. `Bash` and its command), so the finished row
         // still shows what actually ran rather than just the bare tool name.
         if let AgentEvent::ToolCompleted {
-            id,
-            status,
-            output,
-            ..
+            id, status, output, ..
         } = &event
         {
             if let Some(entry) = self.entries.iter_mut().rev().find(|entry| {
@@ -1019,6 +1023,89 @@ impl App {
     /// Toggle the side panel that previews the selected entry's full content.
     pub fn toggle_preview(&mut self) {
         self.show_preview = !self.show_preview;
+    }
+
+    /// Open the combined interaction/files layout with its entry preview
+    /// visible, or return to the ordinary event list when already open.
+    pub fn toggle_files(&mut self) {
+        if self.view == View::Files {
+            self.view = View::Events;
+        } else {
+            self.view = View::Files;
+            self.show_preview = true;
+        }
+    }
+
+    pub fn file_select_next(&mut self) {
+        let last = self.file_paths().len().saturating_sub(1);
+        self.file_selected = self.file_selected.saturating_add(1).min(last);
+    }
+
+    pub fn file_select_prev(&mut self) {
+        self.file_selected = self.file_selected.saturating_sub(1);
+    }
+
+    pub fn toggle_file_scope(&mut self) {
+        self.file_show_all = !self.file_show_all;
+        self.file_selected = 0;
+    }
+
+    /// Files explicitly touched by an event, plus path-like text mentions that
+    /// currently resolve to files. Paths retain their reported spelling so the
+    /// Files renderer can distinguish workspace-relative and external roots.
+    pub fn file_paths(&self) -> Vec<String> {
+        let entries: Box<dyn Iterator<Item = &Entry> + '_> = if self.file_show_all {
+            Box::new(self.entries.iter())
+        } else {
+            Box::new(self.selected_entry().into_iter())
+        };
+        let mut paths = Vec::new();
+        for entry in entries {
+            if let AgentEvent::FileChanged { paths: changed, .. } = &entry.event {
+                paths.extend(changed.iter().cloned());
+            }
+            let mut text = entry.event.summary();
+            for block in entry.event.detail() {
+                text.push('\n');
+                match block {
+                    DetailBlock::Text(part) | DetailBlock::Code { text: part, .. } => {
+                        text.push_str(&part)
+                    }
+                }
+            }
+            for token in text.split_whitespace() {
+                let candidate = token.trim_matches(|ch: char| {
+                    matches!(
+                        ch,
+                        '`' | '\'' | '"' | '(' | ')' | '[' | ']' | '{' | '}' | ',' | ':' | ';'
+                    )
+                });
+                if candidate.is_empty() || (!candidate.contains('/') && !candidate.contains('.')) {
+                    continue;
+                }
+                let path = PathBuf::from(candidate);
+                let resolved = if path.is_absolute() {
+                    match path.strip_prefix(&SandboxLayout::default().workspace) {
+                        Ok(relative) => self
+                            .workspace_root
+                            .as_ref()
+                            .map(|root| root.join(relative))
+                            .unwrap_or(path),
+                        Err(_) => path,
+                    }
+                } else if let Some(root) = &self.workspace_root {
+                    root.join(path)
+                } else {
+                    continue;
+                };
+                if resolved.is_file() {
+                    paths.push(candidate.to_owned());
+                }
+            }
+        }
+        paths.sort();
+        paths.dedup();
+        paths
     }
 
     pub fn toggle_preview_mode(&mut self) {
@@ -1295,7 +1382,9 @@ mod tests {
     #[test]
     fn following_transfers_expansion_to_a_new_visible_entry() {
         let mut app = app();
-        app.push_event(AgentEvent::AgentMessage { text: "first".into() });
+        app.push_event(AgentEvent::AgentMessage {
+            text: "first".into(),
+        });
         app.entries[0].expanded = true;
 
         app.push_event(AgentEvent::AgentMessage {
@@ -1572,7 +1661,10 @@ mod tests {
         });
 
         assert_eq!(app.entries.len(), 1);
-        assert!(matches!(app.entries[0].event, AgentEvent::FileChanged { .. }));
+        assert!(matches!(
+            app.entries[0].event,
+            AgentEvent::FileChanged { .. }
+        ));
     }
 
     #[test]
@@ -2302,6 +2394,32 @@ mod tests {
     }
 
     #[test]
+    fn file_view_collects_focused_and_session_paths() {
+        let root = std::env::temp_dir().join(format!("styra-file-view-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/lib.rs"), "pub fn lib() {}\n").unwrap();
+        std::fs::write(root.join("README.md"), "read me\n").unwrap();
+        let mut app = app();
+        app.set_workspace_root(root.clone());
+        app.push_event(AgentEvent::AgentMessage {
+            text: "see README.md".into(),
+        });
+        app.follow = false;
+        app.push_event(AgentEvent::FileChanged {
+            id: "1".into(),
+            paths: vec!["src/lib.rs".into()],
+            diff: None,
+            checkpoint: None,
+            checkpoint_error: None,
+        });
+
+        assert_eq!(app.file_paths(), vec!["README.md"]);
+        app.toggle_file_scope();
+        assert_eq!(app.file_paths(), vec!["README.md", "src/lib.rs"]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn driva_options_are_unset_until_the_host_records_them_and_the_view_toggles() {
         use styra_server::DrivaOptions;
         use styra_server::{Mount, MountAccess};
@@ -2351,6 +2469,21 @@ mod tests {
         // the full-screen shortcut (`P`) does not touch it.
         assert!(!app.show_preview);
         app.toggle_view(View::Preview);
+        assert_eq!(app.view, View::Events);
+    }
+
+    #[test]
+    fn files_view_opens_with_a_togglable_entry_preview() {
+        let mut app = app();
+        assert!(!app.show_preview);
+
+        app.toggle_files();
+        assert_eq!(app.view, View::Files);
+        assert!(app.show_preview);
+
+        app.toggle_preview();
+        assert!(!app.show_preview);
+        app.toggle_files();
         assert_eq!(app.view, View::Events);
     }
 

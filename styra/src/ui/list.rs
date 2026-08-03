@@ -6,7 +6,7 @@ use super::{
     conversation_only_title, message_text_color, render_placeholder, render_preview, tag_color,
     view_block, DETAIL_INDENT, MAX_DETAIL_LINES, SELECTION_BG,
 };
-use crate::app::{App, Entry, Status};
+use crate::app::{App, Entry, Status, View};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -15,7 +15,7 @@ use ratatui::Frame;
 use styra_server::event::{AgentEvent, DetailBlock, PresentationMode, Protocol};
 
 pub(crate) fn render_list(frame: &mut Frame, app: &App, area: Rect) {
-    let area = if app.show_preview {
+    let area = if app.show_preview && app.view == View::Events {
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
