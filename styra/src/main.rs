@@ -42,6 +42,31 @@ fn refresh_workspace_name(app: &mut App, client: &Client, active: &WorkspaceSumm
     app.workspace_name = workspace.as_ref().map(session::workspace_display_name);
 }
 
+fn workspace_for_new_session(
+    app: &App,
+    active: &WorkspaceSummary,
+    workspaces: &[WorkspaceSummary],
+) -> WorkspaceSummary {
+    let Some(workspace_id) = app.workspace_id.as_deref() else {
+        return active.clone();
+    };
+    if workspace_id == active.id {
+        return active.clone();
+    }
+    workspaces
+        .iter()
+        .find(|workspace| workspace.id == workspace_id)
+        .cloned()
+        .unwrap_or_else(|| active.clone())
+}
+
+fn pending_app(selection: styra_server::agent::Selection, workspace: &WorkspaceSummary) -> App {
+    let mut app = App::pending(selection);
+    app.workspace_id = Some(workspace.id.clone());
+    app.set_workspace_root(workspace.host_path.clone());
+    app
+}
+
 fn main() -> Result<()> {
     if let Some(result) = styra_server::broker::exit_if_requested() {
         return result;
@@ -205,8 +230,7 @@ fn main() -> Result<()> {
             // moment the operator submits their first message — on whatever
             // the launch picker holds by then.
             None => {
-                app = App::pending(selection);
-                app.workspace_id = Some(active_workspace.id.clone());
+                app = pending_app(selection, &active_workspace);
                 live = Live::Pending;
             }
         }
@@ -255,8 +279,7 @@ fn main() -> Result<()> {
                     },
                     None => {
                         let selection = preferences::load_or_default(&preferences_path)?;
-                        app = App::pending(selection);
-                        app.workspace_id = Some(active_workspace.id.clone());
+                        app = pending_app(selection, &active_workspace);
                         live = Live::Pending;
                     }
                 }
@@ -291,14 +314,22 @@ fn main() -> Result<()> {
                 }
             }
             // Return to the blank start screen. Reset has already stopped the
-            // current interaction; NewSession deliberately leaves it running.
-            RunOutcome::Reset | RunOutcome::NewSession => {
+            // current interaction and returns to the standing launch default.
+            RunOutcome::Reset => {
                 live = Live::Pending;
-                // A reset returns to the standing launch default, independent
-                // of the selection recorded by the Session just left.
                 let selection = preferences::load_or_default(&preferences_path)?;
-                app = App::pending(selection);
-                app.workspace_id = Some(active_workspace.id.clone());
+                app = pending_app(selection, &active_workspace);
+            }
+            // A new interaction inherits the context currently being viewed,
+            // even when it was reached through the global Session or
+            // Interaction picker and therefore belongs to another Workspace.
+            // The outgoing interaction remains server-owned and keeps running.
+            RunOutcome::NewSession => {
+                live = Live::Pending;
+                let selection = app.selection.clone();
+                active_workspace =
+                    workspace_for_new_session(&app, &active_workspace, &client.list_workspaces()?);
+                app = pending_app(selection, &active_workspace);
             }
         }
         refresh_workspace_name(&mut app, &client, &active_workspace);
@@ -386,6 +417,19 @@ mod cli_tests {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use styra_server::agent::Selection;
 
+    fn workspace(id: &str, host_path: &str) -> WorkspaceSummary {
+        WorkspaceSummary {
+            id: id.into(),
+            name: None,
+            host_path: host_path.into(),
+            path: format!("/store/{id}").into(),
+            session_count: 0,
+            age: "now".into(),
+            created_at_ms: 0,
+            last_accessed_at_ms: 0,
+        }
+    }
+
     #[test]
     fn shell_subcommand_captures_an_explicit_session() {
         let cli = Cli::try_parse_from(["styra", "shell", "--session", "styra-123"]).unwrap();
@@ -439,6 +483,23 @@ mod cli_tests {
             event_loop::interaction_stopped_by(&RunOutcome::NewSession, &live),
             None
         );
+    }
+
+    #[test]
+    fn new_session_uses_the_workspace_of_the_interaction_being_viewed() {
+        let active = workspace("first", "/work/first");
+        let viewed = workspace("viewed", "/work/viewed");
+        let selection = Selection::parse("codex:gpt-5.6-sol/high").unwrap();
+        let mut app = App::pending(selection.clone());
+        app.workspace_id = Some(viewed.id.clone());
+
+        let inherited = workspace_for_new_session(&app, &active, &[active.clone(), viewed.clone()]);
+        let pending = pending_app(selection.clone(), &inherited);
+
+        assert_eq!(inherited, viewed);
+        assert_eq!(pending.workspace_id.as_deref(), Some("viewed"));
+        assert_eq!(pending.workspace_root, Some(PathBuf::from("/work/viewed")));
+        assert_eq!(pending.selection, selection);
     }
 
     #[test]
