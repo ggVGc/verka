@@ -314,7 +314,10 @@ fn interaction_item(
             Style::default().fg(Color::Gray),
         ),
         Span::styled(
-            interaction.name.clone().unwrap_or_else(|| interaction.id.clone()),
+            interaction
+                .name
+                .clone()
+                .unwrap_or_else(|| interaction.id.clone()),
             Style::default().fg(Color::White),
         ),
         Span::styled(
@@ -334,7 +337,9 @@ fn session_item(session: &SessionSummary) -> ListItem<'static> {
     ListItem::new(vec![
         Line::from(Span::styled(
             display_name.to_owned(),
-            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(vec![
             Span::styled(format!("{provider:<14} "), Style::default().fg(Color::Cyan)),

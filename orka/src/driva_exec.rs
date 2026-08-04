@@ -12,7 +12,7 @@ use crate::executor::{ExecutionArtifacts, ExecutionReport, ExecutionSpec, Isolat
 use crate::file_changes::FileChangeRecorder;
 use crate::workspace::PreparedWorkspace;
 use anyhow::{Context, Result};
-use driva::{ExecutionIo, Isolation, Mount, MountAccess};
+use driva::{ExecutionIo, Isolation, Mount, MountAccess, WritableMountMode};
 use std::ffi::OsString;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
@@ -70,6 +70,7 @@ impl DrivaExecutor {
                     },
                 }))
                 .collect(),
+            writable_mounts: WritableMountMode::Direct,
             environment: spec
                 .environment
                 .iter()

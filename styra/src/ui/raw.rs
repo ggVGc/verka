@@ -100,8 +100,16 @@ fn raw_line(line: &styra_server::RawLine, selected: bool) -> Line<'static> {
         WireDirection::ToAgent => ("» ", Color::Cyan),
         WireDirection::FromAgent => ("« ", Color::Green),
     };
-    let text_color = if selected { Color::Yellow } else { Color::White };
-    let marker_color = if selected { Color::Yellow } else { marker_color };
+    let text_color = if selected {
+        Color::Yellow
+    } else {
+        Color::White
+    };
+    let marker_color = if selected {
+        Color::Yellow
+    } else {
+        marker_color
+    };
     Line::from(vec![
         Span::styled(marker, Style::default().fg(marker_color)),
         Span::styled(line.text.clone(), Style::default().fg(text_color)),
@@ -137,7 +145,8 @@ impl JsonWriter {
     }
 
     fn newline(&mut self) {
-        self.lines.push(Line::from(std::mem::take(&mut self.current)));
+        self.lines
+            .push(Line::from(std::mem::take(&mut self.current)));
     }
 
     fn finish(mut self) -> Vec<Line<'static>> {
@@ -153,18 +162,26 @@ impl JsonWriter {
             serde_json::Value::Bool(b) => self.push(b.to_string(), JSON_LITERAL),
             serde_json::Value::Number(n) => self.push(n.to_string(), JSON_NUMBER),
             serde_json::Value::String(s) => self.push(format!("{s:?}"), JSON_STRING),
-            serde_json::Value::Array(items) => {
-                self.write_seq(items.iter(), items.len(), indent, '[', ']', |w, item, indent| {
-                    w.write_value(item, indent)
-                })
-            }
-            serde_json::Value::Object(map) => {
-                self.write_seq(map.iter(), map.len(), indent, '{', '}', |w, (key, val), indent| {
+            serde_json::Value::Array(items) => self.write_seq(
+                items.iter(),
+                items.len(),
+                indent,
+                '[',
+                ']',
+                |w, item, indent| w.write_value(item, indent),
+            ),
+            serde_json::Value::Object(map) => self.write_seq(
+                map.iter(),
+                map.len(),
+                indent,
+                '{',
+                '}',
+                |w, (key, val), indent| {
                     w.push(format!("{key:?}"), JSON_KEY);
                     w.push(": ", JSON_PUNCT);
                     w.write_value(val, indent);
-                })
-            }
+                },
+            ),
         }
     }
 
@@ -208,7 +225,9 @@ mod tests {
 
     fn rendered(app: &App) -> String {
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
-        terminal.draw(|frame| super::super::render(frame, app)).unwrap();
+        terminal
+            .draw(|frame| super::super::render(frame, app))
+            .unwrap();
         terminal
             .backend()
             .buffer()

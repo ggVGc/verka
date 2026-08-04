@@ -14,6 +14,11 @@ use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 use styra_server::event::{AgentEvent, DetailBlock, PresentationMode, Protocol};
 
+/// Keep conversational prose readable on wide terminals. This includes the
+/// human/agent marker and hanging indent; narrower panes still use all of the
+/// space available to them.
+const MAX_CONVERSATION_WIDTH: usize = 120;
+
 pub(crate) fn render_list(frame: &mut Frame, app: &App, area: Rect) {
     let area = if app.show_preview && app.view == View::Events {
         let chunks = Layout::default()
@@ -181,13 +186,15 @@ fn status_tail(app: &App) -> Line<'static> {
 }
 
 fn entry_item(entry: &Entry, width: usize, protocol: Protocol) -> ListItem<'static> {
-    let summary_indent = if matches!(
+    let is_conversation = matches!(
         entry.event,
         AgentEvent::UserMessage { .. } | AgentEvent::AgentMessage { .. }
-    ) {
-        2
+    );
+    let summary_indent = if is_conversation { 2 } else { 0 };
+    let width = if is_conversation {
+        width.min(MAX_CONVERSATION_WIDTH)
     } else {
-        0
+        width
     };
     let mut lines = vec![summary_line(entry, entry.has_detail(), true, protocol)];
     if entry.expanded {
@@ -1140,6 +1147,28 @@ mod tests {
             message_rows.iter().skip(1).all(|row| row.starts_with("  ")),
             "{message_rows:?}"
         );
+    }
+
+    #[test]
+    fn conversation_messages_are_capped_at_120_columns() {
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
+        let long_word = "x".repeat(MAX_CONVERSATION_WIDTH + 10);
+        app.push_event(AgentEvent::UserMessage {
+            text: long_word.clone(),
+        });
+        app.push_event(AgentEvent::AgentMessage { text: long_word });
+
+        let protocol = app.selection.provider.protocol();
+        for entry in &app.entries {
+            assert_eq!(
+                entry_item(entry, 200, protocol).height(),
+                2,
+                "both human and agent messages should wrap at the conversation cap"
+            );
+        }
     }
 
     /// Before anything is launched, the empty list must name the launch and

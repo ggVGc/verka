@@ -21,22 +21,22 @@ mod raw;
 mod transcript;
 
 use driva::render_driva;
-pub(crate) use footer::{message_text_color, tag_color};
-use footer::render_footer;
 use files::render_files;
+use footer::render_footer;
+pub(crate) use footer::{message_text_color, tag_color};
 use help::render_keybinds;
 use input::{input_area_height, render_input};
 use launcher::render_launcher;
-pub(crate) use list::summary_line;
 use list::render_list;
-use log::render_log;
+pub(crate) use list::summary_line;
 pub(crate) use log::log_line;
+use log::render_log;
 use messages::{message_area_height, render_messages};
 pub use picker::{
     render_interactions_picker, render_name_prompt, render_picker, render_workspace_picker,
 };
-use preview::{render_fullscreen_preview, render_preview};
 pub(crate) use preview::preview_scroll_limit;
+use preview::{render_fullscreen_preview, render_preview};
 use raw::render_raw;
 use transcript::render_transcript_view;
 
@@ -177,14 +177,14 @@ fn workspace_title(app: &App) -> Option<Line<'static>> {
         .as_ref()
         .or(app.workspace_name.as_ref())
         .map(|name| {
-        Line::from(Span::styled(
-            format!(" {name} "),
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ))
-        .right_aligned()
-    })
+            Line::from(Span::styled(
+                format!(" {name} "),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ))
+            .right_aligned()
+        })
 }
 
 pub fn render(frame: &mut Frame, app: &App) {
@@ -210,12 +210,7 @@ pub fn render(frame: &mut Frame, app: &App) {
     }
 
     let input_active = app.focus == Focus::Input;
-    let message_height = message_area_height(app).min(
-        frame
-            .area()
-            .height
-            .saturating_sub(2),
-    );
+    let message_height = message_area_height(app).min(frame.area().height.saturating_sub(2));
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -374,28 +369,16 @@ mod tests {
     }
 
     #[test]
-    fn header_text_stays_legible_when_the_panel_is_unfocused() {
-        // An unstyled span only patches over whatever the block's border
-        // already painted underneath it, so title text left unstyled would
-        // inherit the border's `DarkGray` the moment the panel loses focus.
-        let mut app = App::new(
+    fn header_text_has_a_style_independent_of_the_panel_border() {
+        // Explicit span styles keep the title independent of the block border.
+        // The rendered view is intentionally dimmed later when the modal input
+        // box opens, so inspect the title before that overlay is applied.
+        let app = App::new(
             styra_server::agent::Selection::parse("codex").unwrap(),
             "s1",
         );
-        app.enter_input();
-        assert_eq!(app.focus, Focus::Input);
-
-        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
-        terminal.draw(|frame| render(frame, &app)).unwrap();
-        let buffer = terminal.backend().buffer().clone();
-
-        let (x, y) = find_column(&buffer, "styra");
-        let cell = buffer.cell((x, y)).unwrap();
-        assert_ne!(
-            cell.style().fg,
-            Some(Color::DarkGray),
-            "title text must not inherit the dimmed unfocused border color"
-        );
+        let title = title_line(&app.launch_label(), &app.status, None);
+        assert_eq!(title.spans[0].style.fg, Some(Color::Gray));
     }
 
     #[test]

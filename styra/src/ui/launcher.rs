@@ -141,7 +141,9 @@ mod tests {
 
     fn rendered(app: &App) -> String {
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
-        terminal.draw(|frame| super::super::render(frame, app)).unwrap();
+        terminal
+            .draw(|frame| super::super::render(frame, app))
+            .unwrap();
         terminal
             .backend()
             .buffer()

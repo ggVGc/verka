@@ -132,7 +132,9 @@ mod tests {
 
     fn rendered(app: &App) -> String {
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
-        terminal.draw(|frame| super::super::render(frame, app)).unwrap();
+        terminal
+            .draw(|frame| super::super::render(frame, app))
+            .unwrap();
         terminal
             .backend()
             .buffer()
@@ -187,7 +189,9 @@ mod tests {
         app.set_input(format!("{}TAIL", "x".repeat(200)));
 
         let mut terminal = Terminal::new(TestBackend::new(20, 12)).unwrap();
-        terminal.draw(|frame| super::super::render(frame, &app)).unwrap();
+        terminal
+            .draw(|frame| super::super::render(frame, &app))
+            .unwrap();
         let buffer = terminal.backend().buffer().clone();
         let rendered = buffer
             .content()

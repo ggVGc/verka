@@ -16,7 +16,12 @@ pub(crate) fn render_driva(frame: &mut Frame, app: &App, area: Rect) {
     let block = view_block(app, Some("driva"));
 
     let Some(options) = &app.driva_options else {
-        render_placeholder(frame, block, area, "  no live session yet; nothing to describe");
+        render_placeholder(
+            frame,
+            block,
+            area,
+            "  no live session yet; nothing to describe",
+        );
         return;
     };
 
@@ -115,7 +120,9 @@ mod tests {
 
     fn rendered(app: &App) -> String {
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
-        terminal.draw(|frame| super::super::render(frame, app)).unwrap();
+        terminal
+            .draw(|frame| super::super::render(frame, app))
+            .unwrap();
         terminal
             .backend()
             .buffer()

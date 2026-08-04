@@ -370,10 +370,9 @@ mod tests {
         );
         assert_eq!(policy.io_destination, PathBuf::from("/tmp/orka/exchange"));
         assert!(policy.network);
-        assert!(policy
-            .extra_mounts
-            .iter()
-            .any(|mount| mount.destination == Path::new("/tmp/agent-home/.codex/auth.json")));
+        assert!(policy.extra_mounts.iter().any(|mount| mount.destination
+            == Path::new("/tmp/agent-home/.codex")
+            && mount.writable));
         assert_eq!(policy.environment["HOME"], "/tmp/agent-home");
         assert!(matches!(
             config.resolve().unwrap().backend,
@@ -391,10 +390,9 @@ mod tests {
         let defaulted: Config =
             toml::from_str(&format!("[agent]\nkind = \"codex\"\n{base}")).unwrap();
         let command = defaulted.policy().unwrap().command;
-        assert!(command
-            .iter()
-            .any(|argument| argument
-                == &format!("model={:?}", Provider::CodexExec.default_model())));
+        assert!(command.iter().any(
+            |argument| argument == &format!("model={:?}", Provider::CodexExec.default_model())
+        ));
         assert!(command
             .iter()
             .any(|argument| argument == r#"model_reasoning_effort="high""#));
@@ -417,9 +415,10 @@ mod tests {
         let base = "[isolation]\nbackend = \"bwrap\"\nrootfs = \"/\"\n";
 
         // Not a level at all.
-        let unknown: Config =
-            toml::from_str(&format!("[agent]\nkind = \"codex\"\neffort = \"turbo\"\n{base}"))
-                .unwrap();
+        let unknown: Config = toml::from_str(&format!(
+            "[agent]\nkind = \"codex\"\neffort = \"turbo\"\n{base}"
+        ))
+        .unwrap();
         assert!(unknown
             .policy()
             .unwrap_err()
@@ -427,9 +426,10 @@ mod tests {
             .contains("unknown reasoning effort"));
 
         // A level Genta names but codex does not accept.
-        let unaccepted: Config =
-            toml::from_str(&format!("[agent]\nkind = \"codex\"\neffort = \"max\"\n{base}"))
-                .unwrap();
+        let unaccepted: Config = toml::from_str(&format!(
+            "[agent]\nkind = \"codex\"\neffort = \"max\"\n{base}"
+        ))
+        .unwrap();
         assert!(unaccepted
             .policy()
             .unwrap_err()

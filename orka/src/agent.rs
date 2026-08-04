@@ -215,8 +215,7 @@ mod tests {
     /// path instead of whatever the machine running the tests has on its `PATH`.
     fn stub_codex() -> PathBuf {
         use std::os::unix::fs::PermissionsExt;
-        let directory =
-            std::env::temp_dir().join(format!("orka-agent-bin-{}", std::process::id()));
+        let directory = std::env::temp_dir().join(format!("orka-agent-bin-{}", std::process::id()));
         std::fs::create_dir_all(&directory).unwrap();
         let path = directory.join("codex");
         std::fs::write(&path, "#!/bin/sh\n").unwrap();
@@ -253,10 +252,9 @@ mod tests {
             .iter()
             .any(|argument| argument == r#"model_reasoning_effort="high""#));
         assert!(invocation.network);
-        assert!(invocation
-            .mounts
-            .iter()
-            .any(|mount| mount.destination == Path::new("/tmp/agent-home/.codex/auth.json")));
+        assert!(invocation.mounts.iter().any(|mount| mount.destination
+            == Path::new("/tmp/agent-home/.codex")
+            && mount.writable));
         assert_eq!(invocation.environment["HOME"], "/tmp/agent-home");
     }
 
@@ -295,6 +293,7 @@ mod tests {
             command: invocation.command.into_iter().map(OsString::from).collect(),
             working_directory: layout.workspace,
             mounts,
+            writable_mounts: driva::WritableMountMode::Direct,
             environment: BTreeMap::new(),
             network: invocation.network,
             interactive: false,

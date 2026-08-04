@@ -20,7 +20,7 @@ use crate::protocol::{
     Direction, DrivaOptions, InteractionEnd, InteractionUpdate, LogEntry, RawLine,
 };
 use anyhow::{Context, Result};
-use driva::{ExecutionIo, ExecutionRequest, Isolation, Mount, MountAccess};
+use driva::{ExecutionIo, ExecutionRequest, Isolation, Mount, MountAccess, WritableMountMode};
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fs::File;
@@ -539,6 +539,7 @@ fn build_request(spec: &InteractionSpec) -> ExecutionRequest {
         command,
         working_directory: spec.working_directory.clone(),
         mounts,
+        writable_mounts: WritableMountMode::Direct,
         environment,
         network,
         interactive: false,
