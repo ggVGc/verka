@@ -45,7 +45,7 @@ pub(crate) fn render_keybinds(frame: &mut Frame, area: Rect) {
         bindings("J/K", "next/previous line"),
         bindings("g/G", "first/last entry"),
         bindings("Space, Enter, o", "toggle selected entry"),
-        bindings("O / C", "expand selected / conversation"),
+        bindings("O / C", "expand selected / show expanded conversation"),
         bindings("z R / z M", "expand all / collapse all"),
         bindings("m / p", "toggle minor events / preview panel"),
         bindings("c", "toggle conversation-only events"),
