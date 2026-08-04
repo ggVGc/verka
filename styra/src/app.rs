@@ -557,12 +557,12 @@ impl App {
         app
     }
 
-    /// Whether the launch picker is reachable: only before anything has been
-    /// launched. A live or replayed session's agent, model, and effort are
-    /// settled facts about a process that already ran; changing them is a
-    /// property of the *next* session, reached by resetting (`S`) first.
+    /// Whether the picker is reachable. Before launch all providers are
+    /// configurable; an idle Codex app-server thread also accepts model and
+    /// effort overrides on its next turn.
     pub fn can_configure_launch(&self) -> bool {
         self.status == Status::Pending
+            || (self.status == Status::Idle && self.selection.provider == Provider::Codex)
     }
 
     /// Open the launch picker on the current selection, if anything can still
@@ -578,7 +578,13 @@ impl App {
     /// starts the agent.
     pub fn confirm_launcher(&mut self) {
         if let Some(launcher) = self.launcher.take() {
-            self.set_selection(launcher.selection());
+            let selection = launcher.selection();
+            if self.status != Status::Pending && selection.provider != self.selection.provider {
+                self.show_action_message("changing agent requires a new session");
+            } else {
+                self.set_selection(selection);
+                self.reported_model = None;
+            }
         }
     }
 
@@ -1961,6 +1967,24 @@ mod tests {
     fn the_launcher_is_unreachable_once_something_has_been_launched() {
         let mut app = app();
         assert_eq!(app.status, Status::Running);
+        assert!(!app.can_configure_launch());
+        app.open_launcher();
+        assert!(app.launcher.is_none());
+    }
+
+    #[test]
+    fn an_idle_codex_thread_can_change_its_next_turn_model() {
+        let mut app = App::new(Selection::new(Provider::Codex), "session-1");
+        app.status = Status::Idle;
+        assert!(app.can_configure_launch());
+        app.open_launcher();
+        assert!(app.launcher.is_some());
+    }
+
+    #[test]
+    fn a_running_turn_cannot_change_model() {
+        let mut app = App::new(Selection::new(Provider::Codex), "session-1");
+        app.status = Status::Running;
         assert!(!app.can_configure_launch());
         app.open_launcher();
         assert!(app.launcher.is_none());

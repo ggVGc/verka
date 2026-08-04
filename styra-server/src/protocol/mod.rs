@@ -107,6 +107,10 @@ pub struct ShellInfo {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SendMessage {
     pub text: String,
+    /// Per-turn Codex selection. Older clients omit this and retain the
+    /// interaction's current defaults.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection: Option<Selection>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

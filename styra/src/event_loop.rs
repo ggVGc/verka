@@ -77,7 +77,7 @@ pub fn run(
         if let Live::Running { session_id, .. } = live {
             if app.status == Status::Idle {
                 if let Some(message) = app.take_queued_message() {
-                    match client.send_message(session_id, &message) {
+                    match client.send_message_with_selection(session_id, &message, &app.selection) {
                         Ok(()) => {
                             app.status = Status::Running;
                             let waiting = app.queued_message_count();

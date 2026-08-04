@@ -31,6 +31,7 @@ pub(crate) fn render_keybinds(frame: &mut Frame, area: Rect) {
         bindings("s", "interrupt active turn"),
         bindings("S", "stop interaction"),
         bindings("n / N", "new session / stop and start new session"),
+        bindings("L", "choose model for an idle Codex turn"),
         bindings("!", "open session shell in a new terminal"),
         bindings("a / A / V", "current sessions / interactions / Workspaces"),
         bindings(
@@ -69,7 +70,10 @@ pub(crate) fn render_keybinds(frame: &mut Frame, area: Rect) {
         bindings("Alt+Enter", "insert newline"),
         bindings("↑/↓", "older/newer message history"),
         bindings("Ctrl+W", "delete previous word"),
-        bindings("Ctrl+L", "choose launch settings before first message"),
+        bindings(
+            "Ctrl+L",
+            "choose model before first message or idle Codex turn",
+        ),
         Line::default(),
         section("Launch and selection screens"),
         bindings("j/k or ↓/↑", "move selection"),

@@ -238,7 +238,9 @@ pub fn resume_and_send(
                 session_id: session_id.clone(),
                 cursor: info.updates_after,
             };
-            if let Err(error) = client.send_message(&session_id, &message) {
+            if let Err(error) =
+                client.send_message_with_selection(&session_id, &message, &app.selection)
+            {
                 app.push_log(LogEntry::error(format!("send failed: {error:#}")));
             }
         }

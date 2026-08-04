@@ -474,7 +474,7 @@ current focus is shown in the status line and by which region draws the cursor.
 | `l`             | Toggle the diagnostic log view (same scrolling as the raw view) |
 | `t`             | Toggle the rendered transcript view (`j`/`k`/`g`/`G` scroll from the start) |
 | `i`             | Enter input focus                                           |
-| `L`             | Choose the agent, model, and effort for the next session (start screen only; see *Choosing what to launch*) |
+| `L`             | Choose the agent/model/effort before launch, or model/effort for the next idle Codex turn |
 | `s`             | Stop the Interaction (keeps the Session and journal)        |
 | `F`             | Seed an explicit new Session from this Session's transcript |
 | `a`             | Browse Sessions in the current Workspace with a preview     |
@@ -489,7 +489,7 @@ current focus is shown in the status line and by which region draws the cursor.
 | -------------- | ------------------------------------------------------------ |
 | `Enter`        | Send the message (configurable: `Enter` sends vs. newline)   |
 | `Alt+Enter`    | Insert a newline (when `Enter` sends)                        |
-| `Ctrl+L`       | Choose the agent, model, and effort (start screen only)       |
+| `Ctrl+L`       | Choose launch settings, or the next idle Codex turn's model and effort |
 | `Esc`          | Return to list focus without sending                         |
 
 Expansion is per-entry and inline: an expanded entry grows to show its detail
@@ -571,11 +571,10 @@ exact model a session ran on. A model outside that list can survive in stored
 state, and the picker carries it as a final row so confirming cannot silently
 swap it for a catalogued model; it can carry such an id, never author one.
 
-The picker is reachable only in `Status::Pending`. A live or replayed session's
-agent, model, and effort are settled facts about a process that already ran;
-changing them is a property of the *next* session, reached by resetting (`S`)
-first — which carries the stopped Interaction's selection over, so the usual
-next step is the same agent again and a deliberate change is one keypress away.
+The picker is reachable in `Status::Pending`, and also while a Codex app-server
+interaction is idle. In the latter case, changing the model or effort supplies
+per-turn overrides on the next `turn/start`; changing provider still requires a
+new Session. A running turn cannot be changed in place.
 Opening another Session (`V`) adopts that Session's recorded launch selection.
 
 ## Concurrency model

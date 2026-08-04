@@ -2,8 +2,7 @@
 
 use crate::protocol::{
     CreateSession, CreateWorkspace, Health, RenameSession, Request, Response, ResumeSession,
-    SendMessage,
-    SessionInfo, ShellInfo, StoredSession, Updates, WireResponse,
+    SendMessage, SessionInfo, ShellInfo, StoredSession, Updates, WireResponse,
 };
 use crate::protocol::{InteractionSummary, SessionSummary, WorkspaceSummary};
 use anyhow::{bail, Context, Result};
@@ -84,6 +83,25 @@ impl Client {
             id: id.to_owned(),
             message: SendMessage {
                 text: text.to_owned(),
+                selection: None,
+            },
+        })? {
+            Response::Accepted => Ok(()),
+            other => unexpected("accepted", other),
+        }
+    }
+
+    pub fn send_message_with_selection(
+        &self,
+        id: &str,
+        text: &str,
+        selection: &crate::agent::Selection,
+    ) -> Result<()> {
+        match self.request(Request::SendMessage {
+            id: id.to_owned(),
+            message: SendMessage {
+                text: text.to_owned(),
+                selection: Some(selection.clone()),
             },
         })? {
             Response::Accepted => Ok(()),
@@ -99,6 +117,7 @@ impl Client {
             id: id.to_owned(),
             message: SendMessage {
                 text: text.to_owned(),
+                selection: None,
             },
         })? {
             Response::Queued(count) => Ok(count),

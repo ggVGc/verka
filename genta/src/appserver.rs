@@ -223,6 +223,17 @@ impl AppServer {
     /// Send an operator message as a new turn, or queue it until the thread is
     /// ready.
     pub fn send(&self, text: &str) -> Vec<Action> {
+        self.send_with_options(text, None, None)
+    }
+
+    /// Send an operator message with per-turn model settings. App-server makes
+    /// these the defaults for later turns on the same thread.
+    pub fn send_with_options(
+        &self,
+        text: &str,
+        model: Option<&str>,
+        effort: Option<&str>,
+    ) -> Vec<Action> {
         let (thread_id, id) = {
             let mut state = self.state.lock().expect("app-server state poisoned");
             let Some(thread_id) = state.thread_id.clone() else {
@@ -235,10 +246,20 @@ impl AppServer {
             state.next_request_id += 1;
             (thread_id, id)
         };
+        let mut params = json!({
+            "threadId": thread_id,
+            "input": [{ "type": "text", "text": text }]
+        });
+        if let Some(model) = model {
+            params["model"] = json!(model);
+        }
+        if let Some(effort) = effort {
+            params["effort"] = json!(effort);
+        }
         vec![send(&json!({
             "id": id,
             "method": "turn/start",
-            "params": { "threadId": thread_id, "input": [{ "type": "text", "text": text }] }
+            "params": params
         }))]
     }
 
@@ -361,6 +382,16 @@ mod tests {
         assert_eq!(turn[0]["method"], "turn/start");
         assert_eq!(turn[0]["params"]["threadId"], "thread-xyz");
         assert_eq!(turn[0]["params"]["input"][0]["text"], "do the thing");
+    }
+
+    #[test]
+    fn a_turn_can_override_the_model_and_effort() {
+        let client = AppServer::new("/tmp/styra/workspace".into());
+        client.handle_line(r#"{"id":2,"result":{"thread":{"id":"thread-xyz"}}}"#);
+
+        let turn = sent(&client.send_with_options("continue", Some("gpt-5.6-luna"), Some("low")));
+        assert_eq!(turn[0]["params"]["model"], "gpt-5.6-luna");
+        assert_eq!(turn[0]["params"]["effort"], "low");
     }
 
     #[test]

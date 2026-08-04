@@ -569,7 +569,15 @@ impl ServerState {
                 Ok(Response::SessionRenamed(self.stored_summary(&request.id)?))
             }
             Request::SendMessage { id, message } => {
-                self.interaction(&id)?.send(&message.text)?;
+                let interaction = self.interaction(&id)?;
+                if let Some(selection) = &message.selection {
+                    if selection.provider != interaction.selection.provider {
+                        anyhow::bail!("changing agent provider requires a new session");
+                    }
+                }
+                interaction
+                    .interaction
+                    .send_with_selection(&message.text, message.selection.as_ref())?;
                 Ok(Response::Accepted)
             }
             Request::QueueMessage { id, message } => Ok(Response::Queued(

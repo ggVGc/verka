@@ -13,7 +13,7 @@
 //! - a reader thread decodes newline-delimited events from the stdout-read end;
 //! - the UI thread writes operator messages to the stdin-write end.
 
-use crate::agent::{MountSpec, Profile};
+use crate::agent::{MountSpec, Profile, Selection};
 use crate::event::{decode_line, AgentEvent};
 use crate::journal::Journal;
 use crate::protocol::{
@@ -345,6 +345,10 @@ impl Interaction {
     /// as a [`AgentEvent::UserMessage`], then written as one protocol input line
     /// (or dispatched as an app-server turn).
     pub fn send(&self, text: &str) -> Result<()> {
+        self.send_with_selection(text, None)
+    }
+
+    pub fn send_with_selection(&self, text: &str, selection: Option<&Selection>) -> Result<()> {
         if let Ok(mut journal) = self.journal.lock() {
             let _ = journal.record_user_message(text);
         }
@@ -357,7 +361,19 @@ impl Interaction {
         // The app-server client owns turn dispatch (and emits its own raw
         // update for the exact wire line).
         if let Some(client) = &self.appserver {
-            apply_appserver_actions(client.send(text), &self.stdin, &self.updates);
+            let (model, effort) = selection
+                .map(|selection| {
+                    (
+                        Some(selection.model.as_str()),
+                        Some(selection.effort.as_str()),
+                    )
+                })
+                .unwrap_or((None, None));
+            apply_appserver_actions(
+                client.send_with_options(text, model, effort),
+                &self.stdin,
+                &self.updates,
+            );
             return Ok(());
         }
 
