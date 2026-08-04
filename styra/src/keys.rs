@@ -3,6 +3,7 @@ use std::path::Path;
 
 use crate::app::{App, Request, Status, View};
 use crate::cli::Cli;
+use crate::notes;
 use crate::preferences;
 use crate::session::{self, Live};
 use crate::terminal;
@@ -74,6 +75,7 @@ pub fn handle_list_key(
         KeyCode::Char('f') => return app.toggle_files(),
         KeyCode::Char('P') => return app.toggle_view(View::Preview),
         KeyCode::Char('L') => return app.open_launcher(),
+        KeyCode::Char('E') => return notes::open(app),
         KeyCode::Char('a') if app.view != View::Files => return app.ask(Request::Sessions),
         KeyCode::Char('V') => return app.ask(Request::Workspace),
         KeyCode::Char('A') => return app.ask(Request::Interactions),

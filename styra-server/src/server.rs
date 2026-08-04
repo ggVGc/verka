@@ -61,7 +61,11 @@ impl ManagedInteraction {
     fn summary(&self) -> InteractionSummary {
         InteractionSummary {
             id: self.interaction.session_id().to_owned(),
-            name: self.name.lock().expect("session name lock poisoned").clone(),
+            name: self
+                .name
+                .lock()
+                .expect("session name lock poisoned")
+                .clone(),
             workspace_id: self.workspace_id.clone(),
             selection: self.selection.clone(),
             workspace: self.workspace.clone(),
@@ -568,6 +572,16 @@ impl ServerState {
                 }
                 Ok(Response::SessionRenamed(self.stored_summary(&request.id)?))
             }
+            Request::UpdateSessionNotes(request) => {
+                let summary = self.stored_summary(&request.id)?;
+                journal::store_session_notes(&summary.path, request.notes)?;
+                Ok(Response::SessionNotesUpdated(
+                    self.stored_summary(&request.id)?,
+                ))
+            }
+            Request::UpdateWorkspaceNotes(request) => Ok(Response::WorkspaceNotesUpdated(
+                crate::workspace::store_notes(&self.inner.store_root, &request.id, request.notes)?,
+            )),
             Request::SendMessage { id, message } => {
                 let interaction = self.interaction(&id)?;
                 if let Some(selection) = &message.selection {

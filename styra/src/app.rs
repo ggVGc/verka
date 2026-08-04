@@ -15,6 +15,8 @@ use styra_server::event::PresentationMode;
 use styra_server::event::{AgentEvent, DetailBlock, TokenUsage};
 use styra_server::{DrivaOptions, InteractionEnd, LogEntry, RawLine};
 
+use crate::notes::Notes;
+
 /// Which region receives keys, like vim's normal/insert split.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Focus {
@@ -471,6 +473,8 @@ pub struct App {
     /// Set when the operator asks for something only the event loop can do;
     /// it takes the request and acts on it.
     pub request: Option<Request>,
+    /// This Session's and Workspace's notes; see [`crate::notes`].
+    pub notes: Notes,
 }
 
 /// Something the operator asked for that [`App`] cannot carry out itself,
@@ -537,6 +541,7 @@ impl App {
             file_selected: 0,
             file_show_all: false,
             request: None,
+            notes: Notes::default(),
         }
     }
 

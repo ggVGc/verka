@@ -17,6 +17,8 @@ struct WorkspaceMeta {
     id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     name: Option<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    notes: String,
     host_path: PathBuf,
     created_at_ms: u64,
     #[serde(default)]
@@ -55,6 +57,7 @@ pub fn create(
     let meta = WorkspaceMeta {
         id: id.clone(),
         name,
+        notes: String::new(),
         host_path: host_path.clone(),
         created_at_ms,
         last_accessed_at_ms: Some(created_at_ms),
@@ -63,6 +66,7 @@ pub fn create(
     Ok(WorkspaceSummary {
         id,
         name: meta.name,
+        notes: meta.notes,
         host_path,
         path,
         session_count: 0,
@@ -137,6 +141,7 @@ fn summary_from_meta(path: &Path, meta: WorkspaceMeta, now: u64) -> Result<Works
     Ok(WorkspaceSummary {
         id: meta.id,
         name: meta.name,
+        notes: meta.notes,
         host_path: meta.host_path,
         path: path.to_path_buf(),
         session_count,
@@ -144,6 +149,18 @@ fn summary_from_meta(path: &Path, meta: WorkspaceMeta, now: u64) -> Result<Works
         created_at_ms: meta.created_at_ms,
         last_accessed_at_ms,
     })
+}
+
+/// Replace a Workspace's notes. Notes are plain UTF-8 text and may be empty.
+pub fn store_notes(store_root: &Path, id: &str, notes: String) -> Result<WorkspaceSummary> {
+    let path = workspace_dir(store_root, id);
+    if !path.is_dir() {
+        anyhow::bail!("Workspace {id:?} was not found");
+    }
+    let mut meta = read_meta(&path)?;
+    meta.notes = notes;
+    write_meta(&path, &meta)?;
+    summary_from_meta(&path, meta, now_ms())
 }
 
 fn write_meta(directory: &Path, meta: &WorkspaceMeta) -> Result<()> {

@@ -66,6 +66,13 @@ pub struct RenameSession {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct UpdateNotes {
+    pub id: String,
+    pub notes: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ResumeSession {
     pub id: String,
     #[serde(default)]
@@ -151,6 +158,8 @@ pub enum Request {
     CreateSession(CreateSession),
     ResumeSession(ResumeSession),
     RenameSession(RenameSession),
+    UpdateSessionNotes(UpdateNotes),
+    UpdateWorkspaceNotes(UpdateNotes),
     SendMessage {
         id: String,
         message: SendMessage,
@@ -212,6 +221,8 @@ pub enum Response {
     SessionCreated(SessionInfo),
     SessionResumed(SessionInfo),
     SessionRenamed(SessionSummary),
+    SessionNotesUpdated(SessionSummary),
+    WorkspaceNotesUpdated(WorkspaceSummary),
     Accepted,
     Queued(usize),
     TakenQueuedMessage(Option<String>),

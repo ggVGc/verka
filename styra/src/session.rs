@@ -326,6 +326,7 @@ mod tests {
         WorkspaceSummary {
             id: id.into(),
             name: None,
+            notes: String::new(),
             host_path: host_path.into(),
             path: format!("/state/workspaces/{id}").into(),
             session_count: 0,
@@ -363,10 +364,7 @@ mod tests {
 
     #[test]
     fn stopped_server_interaction_is_opened_as_resumable_history() {
-        assert_eq!(
-            attached_live("session-1".into(), 7, false),
-            Live::Viewing
-        );
+        assert_eq!(attached_live("session-1".into(), 7, false), Live::Viewing);
         assert_eq!(
             attached_live("session-1".into(), 7, true),
             Live::Running {

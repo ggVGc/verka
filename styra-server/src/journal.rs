@@ -28,6 +28,8 @@ struct StoredSessionMeta {
     workspace_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     name: Option<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    notes: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     provider_session_id: Option<String>,
     #[serde(flatten)]
@@ -169,6 +171,7 @@ fn write_session_meta(
     let stored = StoredSessionMeta {
         workspace_id: workspace_id.to_owned(),
         name,
+        notes: String::new(),
         provider_session_id: None,
         agent: meta.clone(),
     };
@@ -207,6 +210,7 @@ fn list_sessions_at(dir: &Path, workspace_id: &str) -> Result<Vec<SessionSummary
         sessions.push(SessionSummary {
             id,
             name: meta.name,
+            notes: meta.notes,
             workspace_id: workspace_id.to_owned(),
             path,
             selection,
@@ -296,6 +300,18 @@ pub fn store_session_name(path: &Path, name: Option<&str>) -> Result<Option<Stri
     Ok(name)
 }
 
+/// Replace a Session's operator-authored notes.
+pub fn store_session_notes(path: &Path, notes: String) -> Result<()> {
+    let directory = if path.is_dir() {
+        path.to_path_buf()
+    } else {
+        path.parent().map(Path::to_path_buf).unwrap_or_default()
+    };
+    let mut stored = read_stored_session_meta(&directory)?;
+    stored.notes = notes;
+    write_stored_session_meta(&directory, &stored)
+}
+
 pub fn normalize_session_name(name: Option<&str>) -> Result<Option<String>> {
     let Some(name) = name.map(str::trim).filter(|name| !name.is_empty()) else {
         return Ok(None);
@@ -326,8 +342,7 @@ fn write_stored_session_meta(directory: &Path, stored: &StoredSessionMeta) -> Re
     let meta_path = directory.join(SESSION_META_FILE);
     let temporary = directory.join("session.json.tmp");
     let json = serde_json::to_string_pretty(stored).context("serializing session metadata")?;
-    std::fs::write(&temporary, json)
-        .with_context(|| format!("writing {}", temporary.display()))?;
+    std::fs::write(&temporary, json).with_context(|| format!("writing {}", temporary.display()))?;
     std::fs::rename(&temporary, &meta_path)
         .with_context(|| format!("replacing {}", meta_path.display()))
 }
@@ -550,6 +565,7 @@ mod tests {
         let summary = |created_at_ms: Option<u64>| SessionSummary {
             id: format!("{created_at_ms:?}"),
             name: None,
+            notes: String::new(),
             workspace_id: "w-1".into(),
             path: PathBuf::new(),
             selection: crate::agent::Selection::new(crate::agent::Provider::Codex),

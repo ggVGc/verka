@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use styra_server::{Client, InteractionSummary, InteractionUpdate, LogEntry, WorkspaceSummary};
 
+use crate::notes;
 use crate::ui;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -16,7 +17,7 @@ pub enum WorkspaceChoice {
 }
 
 /// The session picker loop: j/k or arrows to move, Enter to choose a
-/// session, Esc or q to back out without picking one.
+/// session, `e` to edit its Session notes, Esc or q to back out.
 pub fn run_session_picker(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     client: &Client,
@@ -88,8 +89,12 @@ pub fn run_session_picker(
         if !event::poll(Duration::from_millis(100))? {
             continue;
         }
-        let Event::Key(key) = event::read()? else { continue };
-        if key.kind != KeyEventKind::Press { continue; }
+        let Event::Key(key) = event::read()? else {
+            continue;
+        };
+        if key.kind != KeyEventKind::Press {
+            continue;
+        }
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => return Ok(None),
             KeyCode::Char('j') | KeyCode::Down => {
@@ -111,6 +116,9 @@ pub fn run_session_picker(
                         (!name.trim().is_empty()).then_some(name.as_str()),
                     )?;
                 }
+            }
+            KeyCode::Char('e') if !sessions.is_empty() => {
+                notes::edit_session_notes(terminal, client, sessions, selected, &preview_updates)?;
             }
             _ => {}
         }
@@ -138,7 +146,9 @@ fn read_session_name(
         match key.code {
             KeyCode::Esc => return Ok(None),
             KeyCode::Enter => return Ok(Some(value)),
-            KeyCode::Backspace => { value.pop(); }
+            KeyCode::Backspace => {
+                value.pop();
+            }
             KeyCode::Char(ch) if value.chars().count() < 80 && !ch.is_control() => value.push(ch),
             _ => {}
         }
@@ -147,7 +157,8 @@ fn read_session_name(
 
 pub fn run_workspace_picker(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
-    workspaces: &[WorkspaceSummary],
+    client: &Client,
+    workspaces: &mut [WorkspaceSummary],
 ) -> Result<Option<WorkspaceChoice>> {
     let mut selected = 0usize;
     loop {
@@ -173,6 +184,9 @@ pub fn run_workspace_picker(
                 )));
             }
             KeyCode::Char('c') => return Ok(Some(WorkspaceChoice::CreateCurrentDirectory)),
+            KeyCode::Char('e') if !workspaces.is_empty() => {
+                notes::edit_workspace_notes(terminal, client, workspaces, selected)?;
+            }
             _ => {}
         }
     }

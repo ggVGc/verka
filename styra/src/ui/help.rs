@@ -33,7 +33,10 @@ pub(crate) fn render_keybinds(frame: &mut Frame, area: Rect) {
         bindings("n / N", "new session / stop and start new session"),
         bindings("L", "choose model for an idle agent turn"),
         bindings("!", "open session shell in a new terminal"),
-        bindings("a / A / V", "current sessions / interactions / Workspaces"),
+        bindings(
+            "a / A / V; E",
+            "current sessions/interactions/Workspaces; notes",
+        ),
         bindings(
             "r / l / t / d",
             "raw / log / transcript / driva; press again for events",

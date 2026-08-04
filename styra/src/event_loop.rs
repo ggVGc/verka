@@ -10,6 +10,7 @@ use crate::app::{App, Focus, Request, Status};
 use crate::cli::Cli;
 use crate::config::Config;
 use crate::keys;
+use crate::notes;
 use crate::picker;
 use crate::session::{self, Live};
 use crate::ui;
@@ -51,6 +52,7 @@ pub fn run(
     let mut pending_fold = false;
     loop {
         app.expire_action_messages();
+        notes::ensure_loaded(app, client, workspace_id);
         let mut disconnected = false;
         if let Live::Running { session_id, cursor } = live {
             match client.updates(session_id, *cursor) {
@@ -126,6 +128,12 @@ pub fn run(
             }
             continue;
         }
+        // The notes editor is modal, and everything printable typed into it is
+        // note text — including `?`, so it is handled ahead of the reference.
+        if app.notes.is_open() {
+            notes::handle_key(app, client, key);
+            continue;
+        }
         // In input focus, `?` is message text rather than a shortcut.
         if app.focus == Focus::List && key.code == KeyCode::Char('?') {
             app.show_keybinds = true;
@@ -148,8 +156,9 @@ pub fn run(
             None => {}
             Some(Request::Quit) => return Ok(RunOutcome::Quit),
             Some(Request::Workspace) => {
-                let workspaces = client.list_workspaces()?;
-                let Some(choice) = picker::run_workspace_picker(terminal, &workspaces)? else {
+                let mut workspaces = client.list_workspaces()?;
+                let Some(choice) = picker::run_workspace_picker(terminal, client, &mut workspaces)?
+                else {
                     continue;
                 };
                 let workspace = match choice {
@@ -182,9 +191,7 @@ pub fn run(
             Some(Request::Sessions) => {
                 let mut sessions = client.list_sessions(workspace_id)?;
                 if sessions.is_empty() {
-                    app.push_log(LogEntry::warn(
-                        "no sessions found in the current Workspace",
-                    ));
+                    app.push_log(LogEntry::warn("no sessions found in the current Workspace"));
                     continue;
                 }
                 if let Some(id) = picker::run_session_picker(terminal, client, &mut sessions)? {

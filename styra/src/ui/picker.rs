@@ -3,12 +3,15 @@
 //! instead of) any loaded session, so they render from their own borrowed
 //! data rather than app state.
 
+use super::notes::render_notes_pane;
 use super::{log_line, message_text_color, render_placeholder, tag_color, SELECTION_BG};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
+
+use crate::notes;
 use styra_server::{InteractionSummary, InteractionUpdate, SessionSummary, WorkspaceSummary};
 
 /// Render the session picker screen: every stored session, newest first,
@@ -29,11 +32,11 @@ pub fn render_picker(
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
-        .title(" styra · choose a session · Enter open · r rename · q cancel ");
+        .title(" styra · choose a session · Enter open · r rename · e Session notes · q cancel ");
 
     if sessions.is_empty() {
         render_placeholder(frame, block, panes[0], "  no sessions found");
-        render_log_preview(frame, None, None, updates, panes[1]);
+        render_session_preview(frame, None, updates, panes[1]);
         return;
     }
 
@@ -48,10 +51,29 @@ pub fn render_picker(
     state.select(Some(selected));
     frame.render_stateful_widget(list, panes[0], &mut state);
     let session = sessions.get(selected);
+    render_session_preview(frame, session, updates, panes[1]);
+}
+
+fn render_session_preview(
+    frame: &mut Frame,
+    session: Option<&SessionSummary>,
+    updates: &[InteractionUpdate],
+    area: Rect,
+) {
+    let panes = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(32), Constraint::Percentage(68)])
+        .split(area);
+    render_notes_pane(
+        frame,
+        notes::Scope::Session,
+        session.map(|item| item.notes.as_str()),
+        panes[0],
+    );
     render_log_preview(
         frame,
-        session.map(|session| session.id.as_str()),
-        session.map(|session| session.selection.provider.protocol()),
+        session.map(|item| item.id.as_str()),
+        session.map(|item| item.selection.provider.protocol()),
         updates,
         panes[1],
     );
@@ -86,17 +108,24 @@ pub fn render_workspace_picker(
     selected: usize,
 ) {
     let area = frame.area();
+    let panes = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
+        .split(area);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
-        .title(" styra · choose a Workspace · Enter open · c create in current dir · q cancel ");
+        .title(
+            " styra · choose a Workspace · Enter open · e Workspace notes · c create · q cancel ",
+        );
     if workspaces.is_empty() {
         render_placeholder(
             frame,
             block,
-            area,
+            panes[0],
             "  no Workspaces found · press c to create one in the current directory",
         );
+        render_notes_pane(frame, notes::Scope::Workspace, None, panes[1]);
         return;
     }
     let items: Vec<ListItem> = workspaces
@@ -131,7 +160,13 @@ pub fn render_workspace_picker(
     );
     let mut state = ListState::default();
     state.select(Some(selected.min(workspaces.len() - 1)));
-    frame.render_stateful_widget(list, area, &mut state);
+    frame.render_stateful_widget(list, panes[0], &mut state);
+    render_notes_pane(
+        frame,
+        notes::Scope::Workspace,
+        workspaces.get(selected).map(|item| item.notes.as_str()),
+        panes[1],
+    );
 }
 
 /// Render the current-interactions picker: interactions on the left and the selected
@@ -372,6 +407,7 @@ mod tests {
         SessionSummary {
             id: id.into(),
             name: None,
+            notes: String::new(),
             workspace_id: "w-1".into(),
             path: std::path::PathBuf::from(id),
             selection: styra_server::agent::Selection::parse(selection).unwrap(),
@@ -460,6 +496,7 @@ mod tests {
         let workspaces = vec![WorkspaceSummary {
             id: "w-1".into(),
             name: Some("retry work".into()),
+            notes: String::new(),
             host_path: PathBuf::from("/home/op/retry"),
             path: PathBuf::from("/state/workspaces/w-1"),
             session_count: 3,
@@ -534,6 +571,7 @@ mod tests {
         let workspaces = vec![WorkspaceSummary {
             id: "w-1".into(),
             name: Some("payments".into()),
+            notes: String::new(),
             host_path: PathBuf::from("/home/op/project"),
             path: PathBuf::from("/state/workspaces/w-1"),
             session_count: 2,

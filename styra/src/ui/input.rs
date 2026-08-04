@@ -97,7 +97,10 @@ fn input_display(app: &App, width: u16) -> InputDisplay {
     }
 }
 
-fn wrapped_input_lines(text: &str, width: usize, style: Style) -> Vec<Line<'static>> {
+/// Wrap `text` to `width` columns, breaking on explicit newlines and then on
+/// the last column that fits. Shared with the notes editor, which wraps and
+/// trails a cursor the same way.
+pub(super) fn wrapped_input_lines(text: &str, width: usize, style: Style) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     for logical_line in text.split('\n') {
         let mut current = String::new();

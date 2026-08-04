@@ -14,6 +14,7 @@ mod cli;
 mod config;
 mod event_loop;
 mod keys;
+mod notes;
 mod picker;
 mod preferences;
 mod session;
@@ -149,7 +150,7 @@ fn main() -> Result<()> {
         && cli.command.is_none()
     {
         let current_directory = session::resolve_workspace(None)?;
-        let workspaces = client.list_workspaces()?;
+        let mut workspaces = client.list_workspaces()?;
         if let Some(workspace) = session::find_workspace_for_host(&workspaces, &current_directory) {
             workspace
         } else {
@@ -157,7 +158,7 @@ fn main() -> Result<()> {
                 Some(term) => term,
                 None => terminal::setup()?,
             };
-            let choice = match picker::run_workspace_picker(&mut term, &workspaces) {
+            let choice = match picker::run_workspace_picker(&mut term, &client, &mut workspaces) {
                 Ok(Some(choice)) => choice,
                 Ok(None) => {
                     terminal::restore(&mut term)?;
@@ -410,11 +411,6 @@ fn stop_daemon(socket: &Path) -> Result<()> {
     Ok(())
 }
 
-
-
-
-
-
 #[cfg(test)]
 mod cli_tests {
     use super::*;
@@ -425,6 +421,7 @@ mod cli_tests {
         WorkspaceSummary {
             id: id.into(),
             name: None,
+            notes: String::new(),
             host_path: host_path.into(),
             path: format!("/store/{id}").into(),
             session_count: 0,
@@ -471,7 +468,10 @@ mod cli_tests {
             cursor: 7,
         };
 
-        assert_eq!(event_loop::interaction_stopped_by(&RunOutcome::Quit, &live), None);
+        assert_eq!(
+            event_loop::interaction_stopped_by(&RunOutcome::Quit, &live),
+            None
+        );
         assert_eq!(
             event_loop::interaction_stopped_by(
                 &RunOutcome::OpenSession("styra-other".into()),
