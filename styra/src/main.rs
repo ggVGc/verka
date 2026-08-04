@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 mod app;
 mod cli;
+mod config;
 mod event_loop;
 mod keys;
 mod picker;
@@ -21,6 +22,7 @@ mod ui;
 
 use app::App;
 use cli::{Cli, CliCommand};
+use config::Config;
 use event_loop::RunOutcome;
 use session::Live;
 use styra_server::{Client, LogEntry, WorkspaceSummary};
@@ -79,6 +81,7 @@ fn main() -> Result<()> {
         return result;
     }
     let cli = Cli::parse();
+    let config = Config::default();
     let socket = match &cli.socket {
         Some(path) => path.clone(),
         None => styra_server::paths::default_socket()?,
@@ -253,6 +256,7 @@ fn main() -> Result<()> {
             &active_workspace.id,
             &mut live,
             &preferences_path,
+            &config,
         ) {
             Ok(outcome) => outcome,
             Err(error) => break Err(error),

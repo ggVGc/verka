@@ -60,6 +60,7 @@ pub(crate) fn render_keybinds(frame: &mut Frame, area: Rect) {
         section("Files"),
         bindings("j/k or ↓/↑", "next/previous file"),
         bindings("J/K", "next/previous interaction-log entry"),
+        bindings("e", "open selected file in editor"),
         bindings("p", "toggle interaction preview"),
         bindings("a", "toggle focused-entry/all-session files"),
         Line::default(),
@@ -100,7 +101,7 @@ mod tests {
 
     #[test]
     fn reference_groups_the_available_keybinds() {
-        let mut terminal = Terminal::new(TestBackend::new(100, 46)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(100, 48)).unwrap();
         terminal
             .draw(|frame| render_keybinds(frame, frame.area()))
             .unwrap();

@@ -7,7 +7,7 @@
 
 use std::cell::Cell;
 use std::collections::VecDeque;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use styra_server::agent::SandboxLayout;
 use styra_server::agent::{Provider, Selection, PROVIDERS};
@@ -491,6 +491,8 @@ pub enum Request {
     Reset,
     /// Return to the blank start screen without stopping the current interaction.
     NewSession,
+    /// Open the selected entry in the Files view in the configured editor.
+    EditFile,
 }
 
 impl App {
@@ -1106,6 +1108,46 @@ impl App {
         paths.sort();
         paths.dedup();
         paths
+    }
+
+    /// Resolve the selected Files-view entry to the corresponding host path.
+    pub fn selected_file_path(&self) -> Option<PathBuf> {
+        let root = self
+            .workspace_root
+            .clone()
+            .or_else(|| std::env::current_dir().ok())?;
+        let sandbox_workspace = SandboxLayout::default().workspace;
+        let mut paths = self
+            .file_paths()
+            .into_iter()
+            .map(|reported| {
+                let path = PathBuf::from(reported);
+                let resolved = if path.is_absolute() {
+                    path.strip_prefix(&sandbox_workspace)
+                        .map(|relative| root.join(relative))
+                        .unwrap_or(path)
+                } else {
+                    root.join(path)
+                };
+                let (display_root, relative) = match resolved.strip_prefix(&root) {
+                    Ok(relative) => (root.clone(), relative.to_path_buf()),
+                    Err(_) => {
+                        let display_root =
+                            resolved.parent().unwrap_or(Path::new("/")).to_path_buf();
+                        let relative = resolved
+                            .strip_prefix(&display_root)
+                            .unwrap_or(&resolved)
+                            .to_path_buf();
+                        (display_root, relative)
+                    }
+                };
+                ((display_root, relative), resolved)
+            })
+            .collect::<Vec<_>>();
+        paths.sort_by(|a, b| a.0.cmp(&b.0));
+        paths
+            .get(self.file_selected)
+            .map(|(_, resolved)| resolved.clone())
     }
 
     pub fn toggle_preview_mode(&mut self) {
@@ -2052,6 +2094,7 @@ mod tests {
             Request::Interactions,
             Request::Reset,
             Request::NewSession,
+            Request::EditFile,
         ] {
             let mut app = app();
             assert_eq!(app.take_request(), None);

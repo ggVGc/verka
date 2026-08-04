@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use crate::app::{App, Focus, Request, Status};
 use crate::cli::Cli;
+use crate::config::Config;
 use crate::keys;
 use crate::picker;
 use crate::session::{self, Live};
@@ -45,6 +46,7 @@ pub fn run(
     workspace_id: &str,
     live: &mut Live,
     preferences_path: &Path,
+    config: &Config,
 ) -> Result<RunOutcome> {
     let mut pending_fold = false;
     loop {
@@ -207,6 +209,25 @@ pub fn run(
             }
             Some(Request::Reset) => return Ok(RunOutcome::Reset),
             Some(Request::NewSession) => return Ok(RunOutcome::NewSession),
+            Some(Request::EditFile) => {
+                let Some(path) = app.selected_file_path() else {
+                    continue;
+                };
+                match crate::terminal::open_editor(&config.terminal, &config.editor, &path) {
+                    Ok(()) => app.show_action_message(format!(
+                        "opened {} in {} ({})",
+                        path.display(),
+                        config.editor,
+                        config.terminal
+                    )),
+                    Err(error) => app.push_log(LogEntry::error(format!(
+                        "could not open {} in {} using {}: {error:#}",
+                        path.display(),
+                        config.editor,
+                        config.terminal
+                    ))),
+                }
+            }
         }
     }
 }

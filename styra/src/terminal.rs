@@ -26,6 +26,18 @@ pub fn restore(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> 
     Ok(())
 }
 
+/// Open a file in the configured editor in a new terminal window.
+pub fn open_editor(terminal: &str, editor: &str, path: &Path) -> Result<()> {
+    let mut command = editor_terminal_command(OsStr::new(terminal), editor, path);
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .with_context(|| format!("starting terminal {terminal}"))?;
+    Ok(())
+}
+
 /// Open a live session's persistent sandbox shell in a new terminal window.
 ///
 /// `$TERM` describes capabilities rather than the emulator executable, so the
@@ -138,6 +150,26 @@ fn terminal_command(program: &OsStr, tmux: &Path, socket: &Path) -> Command {
     command
 }
 
+fn editor_terminal_command(program: &OsStr, editor: &str, path: &Path) -> Command {
+    let mut command = Command::new(program);
+    let name = Path::new(program)
+        .file_name()
+        .unwrap_or(program)
+        .to_string_lossy()
+        .to_ascii_lowercase();
+    if name == "open" {
+        command.args(["-a", "Terminal", "--args"]);
+    } else if name == "wezterm" {
+        command.args(["start", "--"]);
+    } else if matches!(name.as_str(), "gnome-terminal" | "kitty" | "foot") {
+        command.arg("--");
+    } else {
+        command.arg("-e");
+    }
+    command.arg(editor).arg(path);
+    command
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,6 +213,24 @@ mod tests {
                 "attach-session",
                 "-t",
                 "shell"
+            ]
+        );
+    }
+
+    #[test]
+    fn editor_is_launched_in_a_new_terminal() {
+        let command = editor_terminal_command(
+            OsStr::new("urxvt"),
+            "nvim",
+            Path::new("/workspace/src/main.rs"),
+        );
+        let args: Vec<_> = command.get_args().collect();
+        assert_eq!(
+            args,
+            [
+                OsStr::new("-e"),
+                OsStr::new("nvim"),
+                OsStr::new("/workspace/src/main.rs"),
             ]
         );
     }

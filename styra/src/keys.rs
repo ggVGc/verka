@@ -128,6 +128,7 @@ pub fn handle_list_key(
         },
         View::Driva => {}
         View::Files => match key.code {
+            KeyCode::Char('e') if app.selected_file_path().is_some() => app.ask(Request::EditFile),
             KeyCode::Char('j') | KeyCode::Down => app.file_select_next(),
             KeyCode::Char('k') | KeyCode::Up => app.file_select_prev(),
             KeyCode::Char('J') => {
