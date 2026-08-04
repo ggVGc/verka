@@ -1494,7 +1494,7 @@ mod tests {
     #[test]
     fn moving_up_by_line_pins_the_view_and_reaching_the_tail_resumes_follow() {
         // Same follow/pin contract as select_next/select_prev, but for
-        // select_next_line/select_prev_line (J/K), which move one visible
+        // select_next_line/select_prev_line (j/k), which move one visible
         // entry at a time regardless of whether it has detail.
         let mut app = app();
         for _ in 0..3 {
@@ -2373,7 +2373,7 @@ mod tests {
     fn select_next_and_prev_skip_entries_with_no_detail_beyond_their_summary() {
         let mut app = app();
         // A single line of text is entirely a restatement of the summary, so
-        // this entry has no arrow and should not be a stop for j/k.
+        // this entry has no arrow and should not be a stop for J/K.
         app.push_event(AgentEvent::AgentMessage {
             text: "no detail here".into(),
         });
@@ -2402,7 +2402,7 @@ mod tests {
         app.select_prev();
         assert_eq!(app.selected, 1);
 
-        // J/K ignore the has-detail restriction and move one line at a time.
+        // j/k ignore the has-detail restriction and move one line at a time.
         app.select_next_line();
         assert_eq!(app.selected, 2);
         app.select_next_line();
