@@ -79,12 +79,33 @@ pub(crate) fn preview_lines(app: &App) -> Vec<Line<'static>> {
         lines.extend(presented_block_lines(
             block,
             message_text_color(entry.event.tag()),
+            app.preview_mode,
         ));
     }
     lines
 }
 
-fn presented_block_lines(block: DetailBlock, text_color: Color) -> Vec<Line<'static>> {
+fn presented_block_lines(
+    block: DetailBlock,
+    text_color: Color,
+    mode: PresentationMode,
+) -> Vec<Line<'static>> {
+    // Prose blocks carry the agent's markdown, so the pretty preview styles it
+    // the same way the expanded list entry does. Code blocks (commands,
+    // output, diffs) stay verbatim, and raw mode stays raw by definition.
+    if mode == PresentationMode::Pretty {
+        if let DetailBlock::Text(text) = &block {
+            let base_style = Style::default().fg(text_color);
+            return text
+                .lines()
+                .map(|line| {
+                    let mut spans = vec![Span::styled(DETAIL_INDENT.to_owned(), base_style)];
+                    spans.extend(super::markdown::markdown_line_spans(line, base_style));
+                    Line::from(spans)
+                })
+                .collect();
+        }
+    }
     let (text, language) = match block {
         DetailBlock::Text(text) => (text, None),
         DetailBlock::Code { language, text } => (text, language),
@@ -229,6 +250,42 @@ mod tests {
             .map(|span| span.content.chars().filter(|&c| c == 'z').count())
             .sum();
         assert_eq!(zs, 500);
+    }
+
+    #[test]
+    fn pretty_preview_styles_message_markdown_and_raw_preview_keeps_it_literal() {
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
+        app.push_event(AgentEvent::AgentMessage {
+            text: "# Title\n- use `cargo test` for **all**".into(),
+        });
+
+        let pretty = preview_lines(&app);
+        let text: String = pretty
+            .iter()
+            .flat_map(|line| &line.spans)
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert!(text.contains("Title"));
+        assert!(!text.contains('#'));
+        assert!(!text.contains("**"));
+        assert!(!text.contains('`'));
+        assert!(text.contains("• use cargo test for all"));
+        assert!(pretty
+            .iter()
+            .flat_map(|line| &line.spans)
+            .any(|span| span.style.fg == Some(Color::Yellow)));
+
+        app.toggle_preview_mode();
+        let raw: String = preview_lines(&app)
+            .iter()
+            .flat_map(|line| &line.spans)
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert!(raw.contains("# Title"));
+        assert!(raw.contains("`cargo test`"));
     }
 
     #[test]
