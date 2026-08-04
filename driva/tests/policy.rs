@@ -1,4 +1,4 @@
-use driva::{validate_request, ExecutionRequest, Mount, MountAccess};
+use driva::{validate_request, ExecutionRequest, Mount, MountAccess, WritableMountMode};
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -8,6 +8,7 @@ fn request() -> ExecutionRequest {
         command: vec![OsString::from("true")],
         working_directory: PathBuf::from("/workspace"),
         mounts: vec![],
+        writable_mounts: WritableMountMode::Direct,
         environment: BTreeMap::new(),
         network: false,
         interactive: false,

@@ -2,7 +2,7 @@ use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
 use driva::{
     execute, validate_request, BwrapIsolation, Config, ExecutionIo, ExecutionRequest, Mount,
-    MountAccess,
+    MountAccess, WritableMountMode,
 };
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -85,9 +85,9 @@ struct PolicyArgs {
     /// Make every host mount read-only, overriding configuration and templates.
     #[arg(long)]
     no_write: bool,
-    /// Turn a template's writable mounts into overlays: the sandbox reads the
-    /// host content and can write to it, but writes are discarded and never
-    /// reach the host.
+    /// Turn writable host mounts into overlays: the sandbox reads the host
+    /// content and can write to it, but writes are discarded and never reach
+    /// the host.
     #[arg(long)]
     overlay_writes: bool,
     /// Add a host directory read-only and prepend it to the isolated PATH.
@@ -240,23 +240,15 @@ fn real_main() -> Result<()> {
         .map(driva::MountConfig::resolve)
         .collect::<Result<_>>()?;
     if let Some(template) = &template {
-        let mut template_mounts = template
+        let template_mounts = template
             .mounts
             .iter()
             .cloned()
             .map(driva::MountConfig::resolve)
             .collect::<Result<Vec<_>>>()?;
-        if policy.overlay_writes {
-            template_mounts = template_mounts.into_iter().map(overlay_writable).collect();
-        }
         mounts.extend(template_mounts);
     }
     if let Some(workspace_mount) = workspace_mount {
-        let workspace_mount = if policy.overlay_writes {
-            overlay_writable(workspace_mount)
-        } else {
-            workspace_mount
-        };
         mounts.push(workspace_mount);
     }
     for spec in &policy.reads {
@@ -327,6 +319,11 @@ fn real_main() -> Result<()> {
         command,
         working_directory: workdir,
         mounts,
+        writable_mounts: if policy.overlay_writes {
+            WritableMountMode::Overlay
+        } else {
+            WritableMountMode::Direct
+        },
         environment,
         network: if policy.no_network {
             false
@@ -488,23 +485,6 @@ fn parse_environment(value: &str) -> Result<(OsString, OsString), String> {
     Ok((key.into(), value.into()))
 }
 
-/// Replace a writable bind mount with an overlay reading the same host
-/// content, so writes are discarded instead of reaching the host. Other
-/// mount kinds are unaffected.
-fn overlay_writable(mount: Mount) -> Mount {
-    match mount {
-        Mount::Bind {
-            source,
-            destination,
-            access: MountAccess::ReadWrite,
-        } => Mount::Overlay {
-            source,
-            destination,
-        },
-        other => other,
-    }
-}
-
 fn parse_mount(spec: &str, access: MountAccess, workdir: &Path) -> Result<Mount> {
     let (source, destination) = parse_mount_spec(spec, workdir)?;
     Ok(Mount::Bind {
@@ -569,6 +549,8 @@ fn print_dry_run(name: &str, command: Command, request: &ExecutionRequest) {
                 destination.display(),
                 if *access == MountAccess::ReadOnly {
                     "read-only"
+                } else if request.writable_mounts == WritableMountMode::Overlay {
+                    "overlay, writes discarded"
                 } else {
                     "read-write"
                 }

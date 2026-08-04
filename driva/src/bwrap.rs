@@ -1,11 +1,50 @@
 use crate::{
     effective_policy, ExecutionEvidence, ExecutionIo, ExecutionOutcome, ExecutionRequest,
-    Isolation, Mount, MountAccess, ProcessExit, DEFAULT_PATH,
+    Isolation, Mount, MountAccess, ProcessExit, WritableMountMode, DEFAULT_PATH,
 };
 use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::SystemTime;
+
+/// Concrete filesystem operations used to construct one Bubblewrap sandbox.
+/// This is the single translation point from portable mount intent to
+/// Bubblewrap's bind and overlay primitives.
+struct BwrapMountPlan(Vec<Mount>);
+
+impl BwrapMountPlan {
+    fn new(request: &ExecutionRequest) -> Self {
+        Self(
+            request
+                .mounts
+                .iter()
+                .cloned()
+                .map(|mount| match (request.writable_mounts, mount) {
+                    (
+                        WritableMountMode::Overlay,
+                        Mount::Bind {
+                            source,
+                            destination,
+                            access: MountAccess::ReadWrite,
+                        },
+                    ) => Mount::Overlay {
+                        source,
+                        destination,
+                    },
+                    (_, mount) => mount,
+                })
+                .collect(),
+        )
+    }
+
+    fn mounts(&self) -> &[Mount] {
+        &self.0
+    }
+
+    fn into_mounts(self) -> Vec<Mount> {
+        self.0
+    }
+}
 
 /// A synchronous Bubblewrap backend using either a prepared filesystem tree
 /// or a private root containing the host's system runtime.
@@ -24,6 +63,15 @@ impl BwrapIsolation {
     /// destinations below it, so the working directory, `/proc`, `/dev`, and
     /// every mount destination must already exist there.
     pub fn command(&self, request: &ExecutionRequest) -> Result<Command> {
+        let mounts = BwrapMountPlan::new(request);
+        self.command_with_mounts(request, &mounts)
+    }
+
+    fn command_with_mounts(
+        &self,
+        request: &ExecutionRequest,
+        mounts: &BwrapMountPlan,
+    ) -> Result<Command> {
         let rootfs = self
             .rootfs
             .as_deref()
@@ -45,7 +93,7 @@ impl BwrapIsolation {
             self.require_rootfs_directory(rootfs, Path::new("/tmp"), "temporary directory")?;
         }
         let mut temporary_mounts = Vec::new();
-        for mount in &request.mounts {
+        for mount in mounts.mounts() {
             let Mount::Temporary { destination } = mount else {
                 continue;
             };
@@ -67,7 +115,7 @@ impl BwrapIsolation {
                 &request.working_directory,
                 "working directory",
             )?;
-            for mount in &request.mounts {
+            for mount in mounts.mounts() {
                 let destination = match mount {
                     Mount::Bind { destination, .. } | Mount::Overlay { destination, .. } => {
                         destination
@@ -120,7 +168,7 @@ impl BwrapIsolation {
         if rootfs.is_none() {
             command.arg("--dir").arg(&request.working_directory);
         }
-        for mount in &request.mounts {
+        for mount in mounts.mounts() {
             let Mount::Bind {
                 source,
                 destination,
@@ -135,7 +183,7 @@ impl BwrapIsolation {
             });
             command.arg(source).arg(destination);
         }
-        for mount in &request.mounts {
+        for mount in mounts.mounts() {
             let Mount::Overlay {
                 source,
                 destination,
@@ -304,9 +352,8 @@ fn private_copy_path(destination: &Path) -> PathBuf {
 /// Copy every overlaid file into this process's private directory, so the
 /// sandbox writes to the copy and the host source is never mutated. Returns the
 /// directory to remove once the invocation finishes.
-fn materialize_private_copies(request: &ExecutionRequest) -> Result<Option<PathBuf>> {
-    let sources: Vec<_> = request
-        .mounts
+fn materialize_private_copies(mounts: &[Mount]) -> Result<Option<PathBuf>> {
+    let sources: Vec<_> = mounts
         .iter()
         .filter_map(|mount| match mount {
             Mount::Overlay {
@@ -388,9 +435,10 @@ fn expand_home(path: &Path) -> Result<PathBuf> {
 impl Isolation for BwrapIsolation {
     fn run(&self, request: &ExecutionRequest, io: ExecutionIo) -> Result<ExecutionOutcome> {
         let started_at = SystemTime::now();
-        let private_copies = materialize_private_copies(request)?;
+        let mounts = BwrapMountPlan::new(request);
+        let private_copies = materialize_private_copies(mounts.mounts())?;
         let status = self
-            .command(request)?
+            .command_with_mounts(request, &mounts)?
             .stdin(Stdio::from(io.stdin))
             .stdout(Stdio::from(io.stdout))
             .stderr(Stdio::from(io.stderr))
@@ -404,7 +452,11 @@ impl Isolation for BwrapIsolation {
             exit: ProcessExit::from(status),
             evidence: ExecutionEvidence {
                 isolation_backend: "bwrap".into(),
-                effective_policy: effective_policy(request),
+                effective_policy: {
+                    let mut policy = effective_policy(request);
+                    policy.mounts = mounts.into_mounts();
+                    policy
+                },
                 started_at,
                 finished_at: SystemTime::now(),
             },

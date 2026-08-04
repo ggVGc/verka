@@ -737,10 +737,31 @@ fn overlay_writes_turns_template_writable_mounts_into_overlays() {
         template.display()
     )));
     assert!(output.contains(&format!(
-        "mount: {} -> /configured (read-write)",
+        "mount: {} -> /configured (overlay, writes discarded)",
         configured.display()
     )));
-    assert!(output.contains(&format!("mount: {} -> /cli (read-write)", cli.display())));
+    assert!(output.contains(&format!(
+        "mount: {} -> /cli (overlay, writes discarded)",
+        cli.display()
+    )));
+}
+
+#[test]
+fn overlay_writes_overlays_the_default_current_directory_workspace() {
+    let directory = TestDirectory::new("overlay-writes-default-workspace");
+    let output = stdout(directory.run(&["run", "--dry-run", "--overlay-writes", "--", "true"]));
+    let workspace = directory.0.canonicalize().unwrap();
+
+    assert!(output.contains(&format!(
+        "mount: {} -> {} (overlay, writes discarded)",
+        workspace.display(),
+        workspace.display()
+    )));
+    assert!(!output.contains(&format!(
+        "mount: {} -> {} (read-write)",
+        workspace.display(),
+        workspace.display()
+    )));
 }
 
 /// A template's mounts land at their host paths, so a template pointing a tool

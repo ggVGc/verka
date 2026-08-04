@@ -28,6 +28,8 @@ pub struct ExecutionRequest {
     pub command: Vec<OsString>,
     pub working_directory: PathBuf,
     pub mounts: Vec<Mount>,
+    /// How writable host bind mounts are exposed by the isolation backend.
+    pub writable_mounts: WritableMountMode,
     pub environment: BTreeMap<OsString, OsString>,
     pub network: bool,
     pub interactive: bool,
@@ -36,6 +38,14 @@ pub struct ExecutionRequest {
     /// `--new-session`) enable this by default to block TIOCSTI input
     /// injection; disabling it keeps the caller's session.
     pub new_session: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WritableMountMode {
+    #[default]
+    Direct,
+    Overlay,
 }
 
 /// A filesystem made available inside an isolated execution.
@@ -94,6 +104,7 @@ pub enum MountAccess {
 pub struct EffectivePolicy {
     pub working_directory: PathBuf,
     pub mounts: Vec<Mount>,
+    pub writable_mounts: WritableMountMode,
     pub network: bool,
     pub interactive: bool,
 }
@@ -281,6 +292,7 @@ pub fn effective_policy(request: &ExecutionRequest) -> EffectivePolicy {
     EffectivePolicy {
         working_directory: request.working_directory.clone(),
         mounts: request.mounts.clone(),
+        writable_mounts: request.writable_mounts,
         network: request.network,
         interactive: request.interactive,
     }

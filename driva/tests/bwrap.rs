@@ -1,4 +1,4 @@
-use driva::{BwrapIsolation, Config, ExecutionRequest, Mount, MountAccess};
+use driva::{BwrapIsolation, Config, ExecutionRequest, Mount, MountAccess, WritableMountMode};
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -41,6 +41,7 @@ fn translates_request_without_implicit_host_access() {
             destination: "/work".into(),
             access: MountAccess::ReadWrite,
         }],
+        writable_mounts: WritableMountMode::Direct,
         environment: BTreeMap::from([(OsString::from("A"), OsString::from("B"))]),
         network: false,
         interactive: true,
@@ -100,6 +101,7 @@ fn overlay_mount_reads_host_source_with_a_discarded_tmpfs_upper_layer() {
             source: "/host".into(),
             destination: "/work".into(),
         }],
+        writable_mounts: WritableMountMode::Direct,
         environment: BTreeMap::new(),
         network: false,
         interactive: true,
@@ -120,6 +122,56 @@ fn overlay_mount_reads_host_source_with_a_discarded_tmpfs_upper_layer() {
 }
 
 #[test]
+fn overlay_write_mode_is_rendered_by_the_bubblewrap_mount_plan() {
+    let rootfs = TestRootfs::new();
+    std::fs::create_dir(rootfs.0.join("config")).unwrap();
+    let backend = BwrapIsolation {
+        executable: "bwrap".into(),
+        rootfs: Some(rootfs.0.clone()),
+    };
+    let request = ExecutionRequest {
+        command: vec!["true".into()],
+        working_directory: "/work".into(),
+        mounts: vec![
+            Mount::Bind {
+                source: "/host/work".into(),
+                destination: "/work".into(),
+                access: MountAccess::ReadWrite,
+            },
+            Mount::Bind {
+                source: "/host/config".into(),
+                destination: "/config".into(),
+                access: MountAccess::ReadOnly,
+            },
+        ],
+        writable_mounts: WritableMountMode::Overlay,
+        environment: BTreeMap::new(),
+        network: false,
+        interactive: false,
+        new_session: true,
+    };
+
+    let command = backend.command(&request).unwrap();
+    let args: Vec<_> = command
+        .get_args()
+        .map(|value| value.to_string_lossy().into_owned())
+        .collect();
+
+    assert!(args
+        .windows(2)
+        .any(|pair| pair == ["--overlay-src", "/host/work"]));
+    assert!(args
+        .windows(2)
+        .any(|pair| pair == ["--tmp-overlay", "/work"]));
+    assert!(args
+        .windows(3)
+        .any(|arguments| arguments == ["--ro-bind", "/host/config", "/config"]));
+    assert!(!args
+        .windows(3)
+        .any(|arguments| arguments == ["--bind", "/host/work", "/work"]));
+}
+
+#[test]
 fn omits_new_session_when_disabled() {
     let rootfs = TestRootfs::new();
     let backend = BwrapIsolation {
@@ -130,6 +182,7 @@ fn omits_new_session_when_disabled() {
         command: vec!["true".into()],
         working_directory: "/work".into(),
         mounts: vec![],
+        writable_mounts: WritableMountMode::Direct,
         environment: BTreeMap::new(),
         network: false,
         interactive: false,
@@ -153,6 +206,7 @@ fn shares_network_only_when_granted() {
         command: vec!["true".into()],
         working_directory: "/work".into(),
         mounts: vec![],
+        writable_mounts: WritableMountMode::Direct,
         environment: BTreeMap::new(),
         network: true,
         interactive: false,
@@ -185,6 +239,7 @@ fn creates_private_tmpfs_before_nested_file_mounts() {
                 access: MountAccess::ReadWrite,
             },
         ],
+        writable_mounts: WritableMountMode::Direct,
         environment: BTreeMap::new(),
         network: false,
         interactive: false,
@@ -231,6 +286,7 @@ fn permits_paths_created_beneath_private_tmpfs() {
                 access: MountAccess::ReadWrite,
             },
         ],
+        writable_mounts: WritableMountMode::Direct,
         environment: BTreeMap::new(),
         network: false,
         interactive: false,
@@ -259,6 +315,7 @@ fn rejects_destinations_missing_from_read_only_rootfs() {
         command: vec!["true".into()],
         working_directory: "/missing".into(),
         mounts: vec![],
+        writable_mounts: WritableMountMode::Direct,
         environment: BTreeMap::new(),
         network: false,
         interactive: false,
@@ -320,6 +377,7 @@ fn missing_rootfs_uses_a_private_host_runtime_instead_of_the_host_root() {
         command: vec!["/bin/sh".into()],
         working_directory: "/tmp".into(),
         mounts: vec![],
+        writable_mounts: WritableMountMode::Direct,
         environment: BTreeMap::new(),
         network: false,
         interactive: true,
@@ -375,6 +433,7 @@ fn overlay_of_a_file_binds_a_private_copy_instead_of_stacking_overlayfs() {
             source: source.clone(),
             destination: "/home/user/config.json".into(),
         }],
+        writable_mounts: WritableMountMode::Direct,
         environment: BTreeMap::new(),
         network: false,
         interactive: false,
