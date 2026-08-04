@@ -122,6 +122,9 @@ pub struct Interaction {
     /// Present when the profile speaks the stateful app-server protocol; owns
     /// the JSON-RPC handshake and turn dispatch.
     appserver: Option<Arc<crate::appserver::AppServer>>,
+    /// Present for Claude Code's bidirectional stream protocol; coordinates
+    /// acknowledged model changes with the following user turn.
+    claude_stream: Option<Arc<crate::claude_stream::ClaudeStream>>,
     exec: Option<JoinHandle<()>>,
     reader: Option<JoinHandle<()>>,
     stderr: Option<JoinHandle<()>>,
@@ -173,6 +176,17 @@ impl Interaction {
             }
             crate::event::Protocol::CodexJsonl | crate::event::Protocol::ClaudeJsonl => None,
         };
+        let claude_stream = (protocol == crate::event::Protocol::ClaudeJsonl).then(|| {
+            Arc::new(crate::claude_stream::ClaudeStream::new(
+                spec.profile
+                    .name
+                    .split_once(':')
+                    .and_then(|(_, rest)| rest.split_once('/'))
+                    .map(|(model, _)| model)
+                    .unwrap_or_default()
+                    .to_owned(),
+            ))
+        });
 
         let _ = updates.send(InteractionUpdate::Log(LogEntry::info(format!(
             "launching {} (network {})",
@@ -220,6 +234,7 @@ impl Interaction {
         let reader_journal = Arc::clone(&journal);
         let reader_stdin = Arc::clone(&stdin);
         let reader_client = appserver.clone();
+        let reader_claude = claude_stream.clone();
         let reader = std::thread::Builder::new()
             .name("styra-reader".into())
             .spawn(move || {
@@ -267,6 +282,17 @@ impl Interaction {
                                     &reader_stdin,
                                     &reader_updates,
                                 ),
+                                None if reader_claude
+                                    .as_ref()
+                                    .and_then(|client| client.handle_line(raw))
+                                    .map(|actions| {
+                                        apply_appserver_actions(
+                                            actions,
+                                            &reader_stdin,
+                                            &reader_updates,
+                                        )
+                                    })
+                                    .is_some() => {}
                                 None => {
                                     let event = decode_line(protocol, raw);
                                     if reader_updates
@@ -330,6 +356,7 @@ impl Interaction {
             journal,
             updates,
             appserver,
+            claude_stream,
             exec: Some(exec),
             reader: Some(reader),
             stderr: Some(stderr),
@@ -374,6 +401,11 @@ impl Interaction {
                 &self.stdin,
                 &self.updates,
             );
+            return Ok(());
+        }
+        if let Some(client) = &self.claude_stream {
+            let model = selection.map(|selection| selection.model.as_str());
+            apply_appserver_actions(client.send(text, model), &self.stdin, &self.updates);
             return Ok(());
         }
 

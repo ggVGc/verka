@@ -474,7 +474,7 @@ current focus is shown in the status line and by which region draws the cursor.
 | `l`             | Toggle the diagnostic log view (same scrolling as the raw view) |
 | `t`             | Toggle the rendered transcript view (`j`/`k`/`g`/`G` scroll from the start) |
 | `i`             | Enter input focus                                           |
-| `L`             | Choose the agent/model/effort before launch, or model/effort for the next idle Codex turn |
+| `L`             | Choose launch settings, or the model for the next idle agent turn (and Codex effort) |
 | `s`             | Stop the Interaction (keeps the Session and journal)        |
 | `F`             | Seed an explicit new Session from this Session's transcript |
 | `a`             | Browse Sessions in the current Workspace with a preview     |
@@ -489,7 +489,7 @@ current focus is shown in the status line and by which region draws the cursor.
 | -------------- | ------------------------------------------------------------ |
 | `Enter`        | Send the message (configurable: `Enter` sends vs. newline)   |
 | `Alt+Enter`    | Insert a newline (when `Enter` sends)                        |
-| `Ctrl+L`       | Choose launch settings, or the next idle Codex turn's model and effort |
+| `Ctrl+L`       | Choose launch settings, or the next idle turn's model (and Codex effort) |
 | `Esc`          | Return to list focus without sending                         |
 
 Expansion is per-entry and inline: an expanded entry grows to show its detail
@@ -572,9 +572,12 @@ state, and the picker carries it as a final row so confirming cannot silently
 swap it for a catalogued model; it can carry such an id, never author one.
 
 The picker is reachable in `Status::Pending`, and also while a Codex app-server
-interaction is idle. In the latter case, changing the model or effort supplies
-per-turn overrides on the next `turn/start`; changing provider still requires a
-new Session. A running turn cannot be changed in place.
+or Claude Code interaction is idle. Codex receives model and effort overrides
+on the next `turn/start`. Claude receives an acknowledged `set_model` control
+request before Styra releases the next user message; its effort remains fixed
+because Claude's streaming control protocol exposes no corresponding setter.
+Changing provider still requires a new Session. A running turn cannot be
+changed in place.
 Opening another Session (`V`) adopts that Session's recorded launch selection.
 
 ## Concurrency model

@@ -558,11 +558,12 @@ impl App {
     }
 
     /// Whether the picker is reachable. Before launch all providers are
-    /// configurable; an idle Codex app-server thread also accepts model and
-    /// effort overrides on its next turn.
+    /// configurable; idle Codex and Claude threads also accept a model change
+    /// before their next turn (Codex additionally accepts an effort change).
     pub fn can_configure_launch(&self) -> bool {
         self.status == Status::Pending
-            || (self.status == Status::Idle && self.selection.provider == Provider::Codex)
+            || (self.status == Status::Idle
+                && matches!(self.selection.provider, Provider::Codex | Provider::Claude))
     }
 
     /// Open the launch picker on the current selection, if anything can still
@@ -582,6 +583,16 @@ impl App {
             if self.status != Status::Pending && selection.provider != self.selection.provider {
                 self.show_action_message("changing agent requires a new session");
             } else {
+                let mut selection = selection;
+                if self.status != Status::Pending
+                    && selection.provider == Provider::Claude
+                    && selection.effort != self.selection.effort
+                {
+                    selection.effort = self.selection.effort;
+                    self.show_action_message(
+                        "Claude Code can change model between turns; effort remains session-wide",
+                    );
+                }
                 self.set_selection(selection);
                 self.reported_model = None;
             }
@@ -1979,6 +1990,25 @@ mod tests {
         assert!(app.can_configure_launch());
         app.open_launcher();
         assert!(app.launcher.is_some());
+    }
+
+    #[test]
+    fn an_idle_claude_thread_can_change_model_but_not_effort() {
+        let original = Selection::parse("claude:claude-sonnet-5/high").unwrap();
+        let mut app = App::new(original.clone(), "session-1");
+        app.status = Status::Idle;
+        app.open_launcher();
+        let launcher = app.launcher.as_mut().unwrap();
+        while launcher.selection().model == original.model {
+            launcher.next_column();
+            launcher.next();
+        }
+        launcher.next_column();
+        launcher.next();
+        app.confirm_launcher();
+
+        assert_ne!(app.selection.model, original.model);
+        assert_eq!(app.selection.effort, original.effort);
     }
 
     #[test]

@@ -71,6 +71,7 @@ pub mod agent {
     }
 }
 pub use genta::appserver;
+pub use genta::claude_stream;
 pub use genta::event;
 pub use genta::render;
 

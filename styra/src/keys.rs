@@ -188,10 +188,15 @@ pub fn handle_input_key(
                         )));
                     }
                     Live::Running { session_id, .. } if app.status == Status::Idle => {
-                        if let Err(error) =
-                            client.send_message_with_selection(session_id, &message, &app.selection)
-                        {
-                            app.push_log(LogEntry::error(format!("send failed: {error:#}")));
+                        match client.send_message_with_selection(
+                            session_id,
+                            &message,
+                            &app.selection,
+                        ) {
+                            Ok(()) => app.status = Status::Running,
+                            Err(error) => {
+                                app.push_log(LogEntry::error(format!("send failed: {error:#}")))
+                            }
                         }
                     }
                     Live::Running { .. } | Live::Viewing => {

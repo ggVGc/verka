@@ -716,7 +716,7 @@ pub fn claude(_layout: &SandboxLayout, executable: &Path, model: &str, effort: E
 /// The text becomes the `content` of one user turn. Because it is a JSON string
 /// value, embedded newlines are escaped rather than split, so the envelope
 /// remains exactly one input line.
-fn claude_submission(text: &str) -> String {
+pub(crate) fn claude_submission(text: &str) -> String {
     let submission = serde_json::json!({
         "type": "user",
         "message": { "role": "user", "content": text },

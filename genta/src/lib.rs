@@ -12,6 +12,7 @@
 
 pub mod agent;
 pub mod appserver;
+pub mod claude_stream;
 pub mod event;
 pub mod presentation;
 pub mod render;
