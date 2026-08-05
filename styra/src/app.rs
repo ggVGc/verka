@@ -50,6 +50,8 @@ pub enum Status {
     Running,
     /// A turn completed; the agent is idle, awaiting input.
     Idle,
+    /// The agent is idle, but a Claude background task is still running.
+    Background,
     /// The operator stopped the session; the process may still be winding down.
     Stopped,
     /// The agent process ended.
@@ -65,6 +67,7 @@ impl Status {
             Status::Pending => "not started".into(),
             Status::Running => "running".into(),
             Status::Idle => "idle".into(),
+            Status::Background => "idle · background work running".into(),
             Status::Stopped => "stopped".into(),
             Status::Ended { error: Some(_), .. } => "failed".into(),
             Status::Ended {
@@ -78,7 +81,7 @@ impl Status {
     pub fn is_active(&self) -> bool {
         matches!(
             self,
-            Status::Pending | Status::Running | Status::Idle | Status::Stopped
+            Status::Pending | Status::Running | Status::Idle | Status::Background | Status::Stopped
         )
     }
 }
@@ -88,6 +91,7 @@ impl From<styra_server::InteractionActivity> for Status {
         match activity {
             styra_server::InteractionActivity::Pending => Self::Idle,
             styra_server::InteractionActivity::Running => Self::Running,
+            styra_server::InteractionActivity::Background => Self::Background,
         }
     }
 }
@@ -451,6 +455,7 @@ pub struct App {
     /// a replayed journal, which has no live sandbox to describe.
     pub driva_options: Option<DrivaOptions>,
     pub latest_usage: Option<TokenUsage>,
+    background_work: bool,
     /// The verbatim wire interaction, in occurrence order.
     pub raw: Vec<RawLine>,
     /// Which wire line the raw view has selected.
@@ -531,6 +536,7 @@ impl App {
             workspace_root: None,
             driva_options: None,
             latest_usage: None,
+            background_work: false,
             raw: Vec::new(),
             raw_selected: 0,
             raw_follow: true,
@@ -863,6 +869,12 @@ impl App {
             if let Some(entry) = self.entries.iter_mut().rev().find(|entry| {
                 matches!(&entry.event, AgentEvent::ToolStarted { id: started, .. } if started == id)
             }) {
+                let finishes_background = matches!(
+                    &entry.event,
+                    AgentEvent::ToolStarted { name, .. }
+                        if matches!(name.as_str(), "TaskOutput" | "TaskGet" | "task_output" | "task_get")
+                            && event.finishes_background_task()
+                );
                 if let AgentEvent::ToolStarted { id, name, detail } = &entry.event {
                     entry.event = AgentEvent::ToolCompleted {
                         id: id.clone(),
@@ -871,6 +883,10 @@ impl App {
                         status: status.clone(),
                         output: output.clone(),
                     };
+                }
+                if finishes_background {
+                    self.background_work = false;
+                    self.status = Status::Idle;
                 }
                 if self.follow {
                     self.selected = self.entries.len() - 1;
@@ -912,7 +928,11 @@ impl App {
                     self.latest_usage = Some(usage.clone());
                 }
                 if self.status.is_active() {
-                    self.status = Status::Idle;
+                    self.status = if self.background_work {
+                        Status::Background
+                    } else {
+                        Status::Idle
+                    };
                 }
             }
             AgentEvent::UsageUpdated { usage } => {
@@ -945,6 +965,9 @@ impl App {
                 }
             }
             _ => {}
+        }
+        if event.starts_background_task() {
+            self.background_work = true;
         }
         let transfer_expansion = self.follow
             && self.event_is_visible(&event)
@@ -1585,6 +1608,35 @@ mod tests {
             text: "more".into(),
         });
         assert_eq!(app.status, Status::Running);
+    }
+
+    #[test]
+    fn background_task_keeps_idle_status_explicitly_active() {
+        let mut app = app();
+        app.push_event(AgentEvent::ToolStarted {
+            id: "bash-1".into(),
+            name: "Bash".into(),
+            detail: r#"{"command":"cargo test","run_in_background":true}"#.into(),
+        });
+        app.push_event(AgentEvent::TurnCompleted {
+            usage: TokenUsage::default(),
+        });
+        assert_eq!(app.status, Status::Background);
+        assert_eq!(app.status.label(), "idle · background work running");
+
+        app.push_event(AgentEvent::ToolStarted {
+            id: "poll-1".into(),
+            name: "TaskOutput".into(),
+            detail: r#"{"task_id":"bash-1"}"#.into(),
+        });
+        app.push_event(AgentEvent::ToolCompleted {
+            id: "poll-1".into(),
+            name: "poll-1".into(),
+            detail: String::new(),
+            status: "completed".into(),
+            output: "Task completed successfully".into(),
+        });
+        assert_eq!(app.status, Status::Idle);
     }
 
     #[test]

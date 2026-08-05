@@ -11,7 +11,7 @@ use crate::protocol::{
     DrivaOptions, InteractionActivity, InteractionSummary, InteractionUpdate, SessionSummary,
 };
 use anyhow::{Context, Result};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::BufReader;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -55,6 +55,10 @@ struct ManagedInteraction {
     /// closing the Styra UI (or the daemon restarting) before it drains.
     queue: Mutex<std::collections::VecDeque<String>>,
     queue_path: PathBuf,
+}
+
+fn update_finishes_background(update: &InteractionUpdate) -> bool {
+    matches!(update, InteractionUpdate::Event(event) if event.finishes_background_task())
 }
 
 impl ManagedInteraction {
@@ -244,8 +248,26 @@ impl ServerState {
         std::thread::Builder::new()
             .name(format!("styra-updates-{id}"))
             .spawn(move || {
+                let mut background_work = false;
+                let mut background_polls = HashSet::new();
                 while let Ok(update) = receiver.recv() {
                     match &update {
+                        InteractionUpdate::Event(event) if event.starts_background_task() => {
+                            background_work = true;
+                            *activity.lock().expect("interaction activity lock poisoned") =
+                                InteractionActivity::Running;
+                        }
+                        InteractionUpdate::Event(crate::event::AgentEvent::ToolStarted {
+                            id,
+                            name,
+                            ..
+                        }) if matches!(
+                            name.as_str(),
+                            "TaskOutput" | "TaskGet" | "task_output" | "task_get"
+                        ) =>
+                        {
+                            background_polls.insert(id.clone());
+                        }
                         InteractionUpdate::Event(crate::event::AgentEvent::UserMessage {
                             ..
                         }) => {
@@ -256,7 +278,21 @@ impl ServerState {
                             ..
                         }) => {
                             *activity.lock().expect("interaction activity lock poisoned") =
-                                InteractionActivity::Pending;
+                                if background_work {
+                                    InteractionActivity::Background
+                                } else {
+                                    InteractionActivity::Pending
+                                };
+                        }
+                        InteractionUpdate::Event(crate::event::AgentEvent::ToolCompleted {
+                            id,
+                            ..
+                        }) if background_polls.remove(id) => {
+                            if update_finishes_background(&update) {
+                                background_work = false;
+                                *activity.lock().expect("interaction activity lock poisoned") =
+                                    InteractionActivity::Pending;
+                            }
                         }
                         _ => {}
                     }
@@ -397,8 +433,26 @@ impl ServerState {
         std::thread::Builder::new()
             .name(format!("styra-updates-{id}"))
             .spawn(move || {
+                let mut background_work = false;
+                let mut background_polls = HashSet::new();
                 while let Ok(update) = receiver.recv() {
                     match &update {
+                        InteractionUpdate::Event(event) if event.starts_background_task() => {
+                            background_work = true;
+                            *activity.lock().expect("interaction activity lock poisoned") =
+                                InteractionActivity::Running;
+                        }
+                        InteractionUpdate::Event(crate::event::AgentEvent::ToolStarted {
+                            id,
+                            name,
+                            ..
+                        }) if matches!(
+                            name.as_str(),
+                            "TaskOutput" | "TaskGet" | "task_output" | "task_get"
+                        ) =>
+                        {
+                            background_polls.insert(id.clone());
+                        }
                         InteractionUpdate::Event(crate::event::AgentEvent::UserMessage {
                             ..
                         }) => {
@@ -409,7 +463,21 @@ impl ServerState {
                             ..
                         }) => {
                             *activity.lock().expect("interaction activity lock poisoned") =
-                                InteractionActivity::Pending;
+                                if background_work {
+                                    InteractionActivity::Background
+                                } else {
+                                    InteractionActivity::Pending
+                                };
+                        }
+                        InteractionUpdate::Event(crate::event::AgentEvent::ToolCompleted {
+                            id,
+                            ..
+                        }) if background_polls.remove(id) => {
+                            if update_finishes_background(&update) {
+                                background_work = false;
+                                *activity.lock().expect("interaction activity lock poisoned") =
+                                    InteractionActivity::Pending;
+                            }
                         }
                         _ => {}
                     }

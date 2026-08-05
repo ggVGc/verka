@@ -176,6 +176,10 @@ fn status_tail(app: &App) -> Line<'static> {
     let (text, color) = match app.status {
         Status::Pending => ("  … waiting for your first message", Color::DarkGray),
         Status::Idle => ("  ── idle · waiting for your message ──", Color::Green),
+        Status::Background => (
+            "  ── idle · background work still running ──",
+            Color::Yellow,
+        ),
         Status::Stopped => (
             "  ── paused · waiting for your next message ──",
             Color::DarkGray,

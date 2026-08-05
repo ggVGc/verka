@@ -139,6 +139,8 @@ pub enum InteractionActivity {
     Pending,
     /// The agent is working on an operator message.
     Running,
+    /// The agent is waiting for input while a background task is active.
+    Background,
 }
 
 /// An interaction the server is currently running (this process's live sessions),

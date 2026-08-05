@@ -278,6 +278,7 @@ fn sort_interactions(interactions: &mut [InteractionSummary]) {
         } else {
             match interaction.activity {
                 styra_server::InteractionActivity::Running => 0,
+                styra_server::InteractionActivity::Background => 1,
                 styra_server::InteractionActivity::Pending => 1,
             }
         }

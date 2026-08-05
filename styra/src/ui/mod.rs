@@ -69,6 +69,7 @@ fn status_color(status: &Status) -> Color {
         Status::Pending => Color::Blue,
         Status::Running => Color::Yellow,
         Status::Idle => Color::Green,
+        Status::Background => Color::Yellow,
         Status::Stopped => Color::DarkGray,
         Status::Ended { error: Some(_), .. } => Color::Red,
         Status::Ended { .. } => Color::DarkGray,

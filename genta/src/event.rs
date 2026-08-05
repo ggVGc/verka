@@ -182,6 +182,41 @@ pub enum PresentationMode {
 }
 
 impl AgentEvent {
+    /// Whether this event starts or finishes a Claude Code background shell
+    /// task. Claude reports `run_in_background` in the Bash tool input, while
+    /// the later TaskOutput/TaskGet result reports whether that task is done.
+    /// Keeping this interpretation here lets all Styra clients use the same
+    /// lifecycle without exposing provider wire details at the UI boundary.
+    pub fn starts_background_task(&self) -> bool {
+        let AgentEvent::ToolStarted { name, detail, .. } = self else {
+            return false;
+        };
+        name == "Bash"
+            && serde_json::from_str::<serde_json::Value>(detail)
+                .ok()
+                .and_then(|input| input.get("run_in_background").and_then(|v| v.as_bool()))
+                == Some(true)
+    }
+
+    /// Whether this event is a completed poll of a background task. Claude's
+    /// task tools use slightly different names across releases, so accept both
+    /// spellings and inspect the result text rather than relying on one exact
+    /// response format.
+    pub fn finishes_background_task(&self) -> bool {
+        let AgentEvent::ToolCompleted { name, output, .. } = self else {
+            return false;
+        };
+        let _ = name; // Claude's tool_result replaces the name with its id.
+        let output = output.to_ascii_lowercase();
+        !output.contains("still running")
+            && !output.contains("running")
+            && (output.contains("completed")
+                || output.contains("finished")
+                || output.contains("exit code")
+                || output.contains("succeeded")
+                || output.contains("success"))
+    }
+
     /// The short tag shown at the head of the collapsed list line.
     pub fn tag(&self) -> &'static str {
         match self {
@@ -1499,6 +1534,25 @@ mod tests {
             }
         );
         assert_eq!(event.summary(), "Bash: {\"command\":\"cargo test\"}");
+    }
+
+    #[test]
+    fn claude_background_bash_is_detected_until_task_poll_finishes() {
+        let started = decode_line(
+            Protocol::ClaudeJsonl,
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"bash-1","name":"Bash","input":{"command":"cargo test","run_in_background":true}}]}}"#,
+        );
+        assert!(started.starts_background_task());
+        assert!(!started.finishes_background_task());
+
+        let completed = AgentEvent::ToolCompleted {
+            id: "poll-1".into(),
+            name: "poll-1".into(),
+            detail: String::new(),
+            status: "completed".into(),
+            output: "Task completed successfully".into(),
+        };
+        assert!(completed.finishes_background_task());
     }
 
     #[test]

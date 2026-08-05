@@ -189,7 +189,9 @@ pub fn handle_input_key(
                             app.queued_message_count()
                         )));
                     }
-                    Live::Running { session_id, .. } if app.status == Status::Idle => {
+                    Live::Running { session_id, .. }
+                        if matches!(app.status, Status::Idle | Status::Background) =>
+                    {
                         match client.send_message_with_selection(
                             session_id,
                             &message,
