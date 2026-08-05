@@ -435,13 +435,18 @@ impl Interaction {
     /// Interrupt the active provider turn while keeping the interaction and
     /// provider conversation alive for the next message.
     pub fn interrupt(&self) -> Result<()> {
-        let client = self
-            .appserver
-            .as_ref()
-            .context("this provider does not support in-process interruption")?;
-        let actions = client.interrupt().map_err(anyhow::Error::msg)?;
-        apply_appserver_actions(actions, &self.stdin, &self.updates);
-        Ok(())
+        if let Some(client) = &self.appserver {
+            let actions = client.interrupt().map_err(anyhow::Error::msg)?;
+            apply_appserver_actions(actions, &self.stdin, &self.updates);
+            return Ok(());
+        }
+        if let Some(client) = &self.claude_stream {
+            apply_appserver_actions(client.interrupt(), &self.stdin, &self.updates);
+            return Ok(());
+        }
+        Err(anyhow::anyhow!(
+            "this provider does not support in-process interruption"
+        ))
     }
 
     /// Close the agent's stdin, signalling end-of-input. Most protocol agents

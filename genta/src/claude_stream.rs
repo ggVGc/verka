@@ -4,7 +4,7 @@ use crate::agent::claude_submission;
 use crate::appserver::Action;
 use crate::event::{AgentEvent, TokenUsage};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
 struct PendingTurn {
@@ -16,6 +16,7 @@ struct State {
     model: String,
     next_request_id: u64,
     pending: HashMap<String, PendingTurn>,
+    pending_interrupts: HashSet<String>,
 }
 
 /// A live Claude Code streaming client. It serializes model changes ahead of
@@ -32,6 +33,7 @@ impl ClaudeStream {
                 model,
                 next_request_id: 1,
                 pending: HashMap::new(),
+                pending_interrupts: HashSet::new(),
             }),
         }
     }
@@ -60,6 +62,23 @@ impl ClaudeStream {
         )]
     }
 
+    /// Ask Claude to abandon the turn it is running. The conversation stays
+    /// alive, so the next message continues where the interrupt left off.
+    pub fn interrupt(&self) -> Vec<Action> {
+        let mut state = self.state.lock().expect("Claude stream state poisoned");
+        let request_id = format!("styra_interrupt_{}", state.next_request_id);
+        state.next_request_id += 1;
+        state.pending_interrupts.insert(request_id.clone());
+        vec![Action::Send(
+            json!({
+                "type": "control_request",
+                "request_id": request_id,
+                "request": { "subtype": "interrupt" }
+            })
+            .to_string(),
+        )]
+    }
+
     /// Consume control responses. Non-control lines remain owned by the normal
     /// Claude event decoder.
     pub fn handle_line(&self, line: &str) -> Option<Vec<Action>> {
@@ -70,16 +89,33 @@ impl ClaudeStream {
         let response = value.get("response")?;
         let request_id = response.get("request_id").and_then(Value::as_str)?;
         let mut state = self.state.lock().expect("Claude stream state poisoned");
-        let pending = state.pending.remove(request_id)?;
-        if response.get("subtype").and_then(Value::as_str) == Some("error") {
-            let error = response
+        let errored = response.get("subtype").and_then(Value::as_str) == Some("error");
+        let error = || {
+            response
                 .get("error")
                 .and_then(Value::as_str)
-                .unwrap_or("unknown error");
+                .unwrap_or("unknown error")
+                .to_owned()
+        };
+        if state.pending_interrupts.remove(request_id) {
+            return Some(if errored {
+                vec![Action::Warn(format!("Claude interrupt failed: {}", error()))]
+            } else {
+                vec![
+                    Action::Info("Claude interrupted the active turn".to_owned()),
+                    Action::Event(AgentEvent::TurnCompleted {
+                        usage: TokenUsage::default(),
+                    }),
+                ]
+            });
+        }
+        let pending = state.pending.remove(request_id)?;
+        if errored {
             return Some(vec![
                 Action::Warn(format!(
-                    "Claude rejected model change to {}: {error}; message was not sent",
-                    pending.model
+                    "Claude rejected model change to {}: {}; message was not sent",
+                    pending.model,
+                    error()
                 )),
                 Action::Event(AgentEvent::TurnCompleted {
                     usage: TokenUsage::default(),
@@ -123,6 +159,24 @@ mod tests {
         let turn = sent(&actions);
         assert_eq!(turn[0]["type"], "user");
         assert_eq!(turn[0]["message"]["content"], "use the stronger model");
+    }
+
+    #[test]
+    fn interrupting_asks_claude_to_abandon_the_turn_and_completes_it() {
+        let client = ClaudeStream::new("claude-sonnet-5".into());
+        let request = sent(&client.interrupt());
+        assert_eq!(request[0]["type"], "control_request");
+        assert_eq!(request[0]["request"]["subtype"], "interrupt");
+
+        let actions = client
+            .handle_line(
+                r#"{"type":"control_response","response":{"subtype":"success","request_id":"styra_interrupt_1","response":{}}}"#,
+            )
+            .unwrap();
+        assert!(matches!(
+            actions.as_slice(),
+            [Action::Info(_), Action::Event(AgentEvent::TurnCompleted { .. })]
+        ));
     }
 
     #[test]
