@@ -1,3 +1,9 @@
+- Driva should provide some way of constructing a runtime through the use of the local package manager:
+    This is something similar to Nix or Homebrew, but slightly different. Similarily, we put installed files in some location,
+    and mount them within a driva session, similarily to what nix-shell does, or how brew manages "current" installations.
+    However, we don't provide any package repository, and simply rely on what is available in the local system.
+    The goal is to be able to construct combinations of environments without having those environments installed in the user scope.
+
 - Orka: Some protection mechanism which stops work on a node and raises a new node for human attention:
   - Example: React to reading/writing of specific files, such as introducing new dependencies in mix.exs
 - We need a RAG:
