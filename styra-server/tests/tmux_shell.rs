@@ -37,6 +37,42 @@ fn integration_tools_available() -> bool {
             .is_ok_and(|status| status.success())
 }
 
+/// Whether a host path is still readable from inside a sandbox shaped like the
+/// one Driva builds. The agent command is an absolute host path handed to the
+/// sandboxed process, and Driva replaces `/tmp` with a private tmpfs — so a
+/// fixture living under `/tmp` (as it does when the checkout itself is inside a
+/// sandboxed workspace) is invisible to the agent and could never start.
+fn reachable_inside_sandbox(path: &Path) -> bool {
+    Command::new("bwrap")
+        .args(["--ro-bind", "/", "/", "--proc", "/proc", "--dev", "/dev"])
+        .args(["--tmpfs", "/tmp", "--unshare-all", "--die-with-parent", "--"])
+        .arg("/bin/sh")
+        .arg("-c")
+        .arg(format!("test -x {}", path.display()))
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+/// Owns everything the test creates outside its own process, so a failed
+/// assertion tears the server and its fixtures down instead of leaving an
+/// orphaned daemon and a `styra-tmux-integration-*` directory behind.
+struct Fixture {
+    server: Child,
+    root: std::path::PathBuf,
+    runtime: std::path::PathBuf,
+}
+
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        self.server.kill().ok();
+        self.server.wait().ok();
+        std::fs::remove_dir_all(&self.root).ok();
+        std::fs::remove_dir_all(&self.runtime).ok();
+    }
+}
+
 fn wait_for(path: &Path) {
     let deadline = Instant::now() + Duration::from_secs(5);
     while !path.exists() && Instant::now() < deadline {
@@ -93,6 +129,15 @@ done
     )
     .unwrap();
     std::fs::set_permissions(&codex, std::fs::Permissions::from_mode(0o755)).unwrap();
+    if !reachable_inside_sandbox(&codex) {
+        eprintln!(
+            "skipping: {} is not visible inside a Driva-shaped sandbox, so the fake agent \
+             cannot be launched (this happens when the checkout lives under /tmp)",
+            codex.display()
+        );
+        std::fs::remove_dir_all(&root).ok();
+        return;
+    }
 
     let runtime = std::env::temp_dir().join(format!("styra-tmux-runtime-{}", std::process::id()));
     let socket = runtime.join("styra.sock");
@@ -101,7 +146,7 @@ done
         &std::env::var_os("PATH").unwrap_or_default(),
     )))
     .unwrap();
-    let mut server = Command::new(env!("CARGO_BIN_EXE_styra-server"))
+    let server = Command::new(env!("CARGO_BIN_EXE_styra-server"))
         .args([
             "--socket",
             &socket.to_string_lossy(),
@@ -113,8 +158,13 @@ done
         .stderr(Stdio::inherit())
         .spawn()
         .unwrap();
+    let mut fixture = Fixture {
+        server,
+        root: root.clone(),
+        runtime: runtime.clone(),
+    };
     let client = Client::new(&socket);
-    wait_for_server(&client, &mut server);
+    wait_for_server(&client, &mut fixture.server);
 
     let owning_workspace = client
         .create_workspace(&CreateWorkspace {
@@ -201,8 +251,8 @@ done
         "tmux should end with the live interaction"
     );
 
+    // The graceful path: the daemon removes its own socket and exits. `Fixture`
+    // only has to clean up when an assertion above jumped over this.
     client.shutdown().ok();
-    let _ = server.wait();
-    std::fs::remove_dir_all(root).ok();
-    std::fs::remove_dir_all(runtime).ok();
+    let _ = fixture.server.wait();
 }
