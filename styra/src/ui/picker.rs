@@ -4,7 +4,9 @@
 //! data rather than app state.
 
 use super::notes::render_notes_pane;
-use super::{log_line, message_text_color, render_placeholder, tag_color, SELECTION_BG};
+use super::{
+    log_line, message_text_color, render_placeholder, status_color, tag_color, SELECTION_BG,
+};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -316,17 +318,17 @@ fn interaction_item(
     interaction: &InteractionSummary,
     workspaces: &[WorkspaceSummary],
 ) -> ListItem<'static> {
-    let (status, color) = if interaction.accepting {
-        (crate::app::Status::from(interaction.activity), Color::Green)
+    // Status colors come from the same table the main interaction view uses,
+    // so a given state reads identically in both places.
+    let status = if interaction.accepting {
+        crate::app::Status::from(interaction.activity)
     } else {
-        (
-            crate::app::Status::Ended {
-                exit_code: None,
-                error: None,
-            },
-            Color::DarkGray,
-        )
+        crate::app::Status::Ended {
+            exit_code: None,
+            error: None,
+        }
     };
+    let color = status_color(&status);
     let state = status.label();
     let workspace_name = workspaces
         .iter()

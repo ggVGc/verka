@@ -268,18 +268,19 @@ pub fn run_interactions_picker(
     }
 }
 
-/// Put interactions that are processing work first, idle interactions next,
-/// and stopped interactions last. `sort_by_key` is stable, so the server's
-/// ordering is retained within each status group.
+/// Put idle interactions first — they are the ones waiting on the operator —
+/// then interactions still processing work, and stopped interactions last.
+/// `sort_by_key` is stable, so the server's ordering is retained within each
+/// status group.
 fn sort_interactions(interactions: &mut [InteractionSummary]) {
     interactions.sort_by_key(|interaction| {
         if !interaction.accepting {
             2
         } else {
             match interaction.activity {
-                styra_server::InteractionActivity::Running => 0,
+                styra_server::InteractionActivity::Pending => 0,
+                styra_server::InteractionActivity::Running => 1,
                 styra_server::InteractionActivity::Background => 1,
-                styra_server::InteractionActivity::Pending => 1,
             }
         }
     });
@@ -311,7 +312,7 @@ mod tests {
     }
 
     #[test]
-    fn interactions_sort_pending_then_idle_then_stopped_stably() {
+    fn interactions_sort_idle_then_running_then_stopped_stably() {
         let mut interactions = vec![
             interaction("stopped-1", false, InteractionActivity::Running),
             interaction("idle-1", true, InteractionActivity::Pending),
@@ -329,10 +330,10 @@ mod tests {
                 .map(|interaction| interaction.id.as_str())
                 .collect::<Vec<_>>(),
             [
-                "pending-1",
-                "pending-2",
                 "idle-1",
                 "idle-2",
+                "pending-1",
+                "pending-2",
                 "stopped-1",
                 "stopped-2",
             ]
