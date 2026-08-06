@@ -236,28 +236,44 @@ fn render_log_preview(
     area: Rect,
 ) {
     let title = id
-        .map(|id| format!(" current log · {id} "))
-        .unwrap_or_else(|| " current log ".into());
+        .map(|id| format!(" conversation · {id} "))
+        .unwrap_or_else(|| " conversation ".into());
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::DarkGray))
         .title(title);
 
-    if updates.is_empty() {
-        render_placeholder(frame, block, area, "  no log entries yet");
+    // The preview follows the tail of the conversation only — the same filter
+    // the main list applies in conversation-only mode — so a glance down the
+    // picker reads as an exchange rather than as tool traffic.
+    let entries: Vec<&InteractionUpdate> = updates
+        .iter()
+        .filter(|update| is_interaction_entry(update))
+        .collect();
+    if entries.is_empty() {
+        render_placeholder(frame, block, area, "  no messages yet");
         return;
     }
-
-    // The preview follows the tail, combining decoded activity with Styra's
-    // diagnostic/stderr log. Raw wire lines are filtered by the picker loop
-    // because they duplicate decoded events in this compact view.
     let viewport = area.height.saturating_sub(2) as usize;
-    let start = updates.len().saturating_sub(viewport);
-    let lines: Vec<Line<'static>> = updates[start..]
+    let start = entries.len().saturating_sub(viewport);
+    let lines: Vec<Line<'static>> = entries[start..]
         .iter()
         .map(|update| interaction_preview_line(update, protocol))
         .collect();
     frame.render_widget(Paragraph::new(lines).block(block), area);
+}
+
+/// Whether an update is a conversational entry of the interaction: the same
+/// filter the main list applies in conversation-only mode. Tool activity,
+/// Styra-side diagnostics, and raw wire lines are left out of the previews.
+fn is_interaction_entry(update: &InteractionUpdate) -> bool {
+    matches!(
+        update,
+        InteractionUpdate::Event(
+            styra_server::event::AgentEvent::UserMessage { .. }
+                | styra_server::event::AgentEvent::AgentMessage { .. }
+        )
+    )
 }
 
 fn interaction_preview_line(
@@ -488,9 +504,10 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect::<String>();
 
-        assert!(screen.contains("current log · s-1"), "{screen}");
-        assert!(screen.contains("cargo test"), "{screen}");
+        assert!(screen.contains("conversation · s-1"), "{screen}");
         assert!(screen.contains("Tests pass."), "{screen}");
+        // Tool activity is not part of the conversation.
+        assert!(!screen.contains("cargo test"), "{screen}");
     }
 
     #[test]
@@ -583,7 +600,7 @@ mod tests {
         }];
         let screen = rendered_interactions_picker(&interactions, &workspaces, 0, &[]);
         assert!(screen.contains("current interactions"));
-        assert!(screen.contains("current log"));
+        assert!(screen.contains("conversation"));
         assert!(screen.contains("codex"));
         assert!(screen.contains("running"));
         assert!(screen.contains("s-1"));
@@ -608,6 +625,20 @@ mod tests {
     }
 
     #[test]
+    fn preview_shows_a_placeholder_when_there_are_no_messages_yet() {
+        let interactions = vec![interaction_summary("s-1", "codex", true)];
+        let updates = vec![
+            InteractionUpdate::Event(AgentEvent::CommandStarted {
+                command: "cargo test".into(),
+            }),
+            InteractionUpdate::Log(styra_server::LogEntry::error("could not load current log")),
+        ];
+        let screen = rendered_interactions_picker(&interactions, &[], 0, &updates);
+        assert!(screen.contains("no messages yet"), "{screen}");
+        assert!(!screen.contains("could not load current log"), "{screen}");
+    }
+
+    #[test]
     fn interactions_picker_previews_the_selected_interactions_log() {
         let interactions = vec![
             interaction_summary("s-1", "codex", true),
@@ -624,10 +655,11 @@ mod tests {
         ];
 
         let screen = rendered_interactions_picker(&interactions, &[], 1, &updates);
-        assert!(screen.contains("current log · s-2"));
-        assert!(screen.contains("cargo test"));
-        assert!(screen.contains("waiting for response"));
+        assert!(screen.contains("conversation · s-2"));
         assert!(screen.contains("Tests pass."));
+        // Tool activity and Styra's own log entries are not conversation.
+        assert!(!screen.contains("cargo test"));
+        assert!(!screen.contains("waiting for response"));
     }
 
     #[test]

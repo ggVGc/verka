@@ -1,3 +1,5 @@
+- Reviewing code changes is less useful than reviewing architectural changes:
+  - Design for a workflow where I can easily get an overview of which files changed, and which interfaces and other boundaries were modified.
 - Driva should provide some way of constructing a runtime through the use of the local package manager:
     This is something similar to Nix or Homebrew, but slightly different. Similarily, we put installed files in some location,
     and mount them within a driva session, similarily to what nix-shell does, or how brew manages "current" installations.
