@@ -192,7 +192,7 @@ pub fn render_interactions_picker(
     let interactions_block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
-        .title(" styra · current interactions · Enter attach · q cancel ");
+        .title(" styra · current interactions · Enter attach · k close · q cancel ");
 
     if interactions.is_empty() {
         render_placeholder(

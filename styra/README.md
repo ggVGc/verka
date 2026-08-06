@@ -91,6 +91,7 @@ Operations:
 | `updates` | session id and `after` cursor | `updates` |
 | `interrupt_interaction` | session id | `accepted` |
 | `stop_interaction` | session id | `accepted` |
+| `close_interaction` | session id | `accepted` |
 | `stored_session` | session id | `stored_session` |
 | `shell` | live session id | `shell` (tmux executable and socket) |
 | `list_interactions` | none | `interactions` |
@@ -161,7 +162,10 @@ or `Tab` returns to list focus.
 `V` first chooses a Workspace, then a Session within it. `a` goes directly to
 the Session picker for the current Workspace. These only change what the client
 views; they never stop an outgoing Interaction. `A` lists all live
-Interactions with their Workspace and Session identities. `s` stops the current
+Interactions with their Workspace and Session identities; in that list `k`
+closes the selected Interaction — the server stops it and forgets it, leaving
+the Session as stored history like any other one on disk (navigate up with `K`
+or the arrow keys there). `s` stops the current
 Interaction while retaining its Session. Sending a new message to a stopped,
 ended, or merely-viewed Session resumes it automatically with the provider's
 native conversation id: Codex uses `thread/resume`, while Claude Code starts

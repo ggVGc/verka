@@ -189,6 +189,12 @@ pub enum Request {
     StopInteraction {
         id: String,
     },
+    /// Stop an interaction and drop the server's record of it, so the Session
+    /// is only what is stored on disk: it no longer appears in the
+    /// current-interactions list and can be resumed like any other history.
+    CloseInteraction {
+        id: String,
+    },
     Updates {
         id: String,
         after: u64,

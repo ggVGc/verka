@@ -682,6 +682,19 @@ impl ServerState {
                 self.interaction(&id)?.stop();
                 Ok(Response::Accepted)
             }
+            Request::CloseInteraction { id } => {
+                let interaction = self.interaction(&id)?;
+                interaction.stop();
+                // Queued messages would otherwise be waiting for an interaction
+                // that no longer exists, exactly as pausing discards them.
+                interaction.clear_queue()?;
+                self.inner
+                    .interactions
+                    .lock()
+                    .expect("server interaction lock poisoned")
+                    .remove(&id);
+                Ok(Response::Accepted)
+            }
             Request::Updates { id, after } => {
                 let interaction = self.interaction(&id)?;
                 let all = interaction

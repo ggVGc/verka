@@ -177,6 +177,15 @@ impl Client {
         }
     }
 
+    /// Stop an interaction and remove it from the server's list, leaving the
+    /// Session as stored history like any other one on disk.
+    pub fn close_interaction(&self, id: &str) -> Result<()> {
+        match self.request(Request::CloseInteraction { id: id.to_owned() })? {
+            Response::Accepted => Ok(()),
+            other => unexpected("accepted", other),
+        }
+    }
+
     pub fn interrupt_interaction(&self, id: &str) -> Result<()> {
         match self.request(Request::InterruptInteraction { id: id.to_owned() })? {
             Response::Accepted => Ok(()),
