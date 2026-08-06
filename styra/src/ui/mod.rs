@@ -191,20 +191,36 @@ fn conversation_only_title(block: Block<'static>) -> Block<'static> {
     )))
 }
 
-/// Right-aligned title for the primary panel's top border.
+/// Right-aligned title for the primary panel's top border: the Workspace name,
+/// and the Session name after it once the Session has earned one. The Workspace
+/// stays visible either way — a named Session used to replace it, which left no
+/// way to tell which Workspace the Session was running in.
 fn workspace_title(app: &App) -> Option<Line<'static>> {
-    app.session_name
-        .as_ref()
-        .or(app.workspace_name.as_ref())
-        .map(|name| {
-            Line::from(Span::styled(
-                format!(" {name} "),
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ))
-            .right_aligned()
-        })
+    let workspace = app.workspace_name.as_deref();
+    let session = app.session_name.as_deref();
+    if workspace.is_none() && session.is_none() {
+        return None;
+    }
+    let mut spans = vec![Span::raw(" ")];
+    if let Some(workspace) = workspace {
+        spans.push(Span::styled(
+            workspace.to_owned(),
+            Style::default().fg(Color::Cyan),
+        ));
+    }
+    if let Some(session) = session {
+        if workspace.is_some() {
+            spans.push(Span::styled(" · ", Style::default().fg(Color::DarkGray)));
+        }
+        spans.push(Span::styled(
+            session.to_owned(),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    spans.push(Span::raw(" "));
+    Some(Line::from(spans).right_aligned())
 }
 
 pub fn render(frame: &mut Frame, app: &App) {
@@ -363,7 +379,7 @@ mod tests {
     }
 
     #[test]
-    fn header_prefers_the_session_name_to_the_workspace_name() {
+    fn header_shows_the_workspace_name_alongside_the_session_name() {
         let mut app = App::new(
             styra_server::agent::Selection::parse("codex").unwrap(),
             "s1",
@@ -372,6 +388,7 @@ mod tests {
         app.session_name = Some("Fix retries".into());
         let screen = rendered(&app);
         assert!(screen.contains("Fix retries"));
+        assert!(screen.contains("payments"));
     }
 
     #[test]
