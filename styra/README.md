@@ -162,9 +162,9 @@ or `Tab` returns to list focus.
 `V` first chooses a Workspace, then a Session within it. `a` goes directly to
 the Session picker for the current Workspace. These only change what the client
 views; they never stop an outgoing Interaction. `A` lists all live
-Interactions with their Workspace and Session identities; in that list `k`
+Interactions with their Workspace and Session identities; in that list `d`
 closes the selected Interaction — the server stops it and forgets it, leaving
-the Session as stored history like any other one on disk (navigate up with `K`
+the Session as stored history like any other one on disk (navigate with `j`/`k`
 or the arrow keys there). `s` stops the current
 Interaction while retaining its Session. Sending a new message to a stopped,
 ended, or merely-viewed Session resumes it automatically with the provider's

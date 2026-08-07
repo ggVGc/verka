@@ -192,8 +192,8 @@ pub fn run_workspace_picker(
     }
 }
 
-/// The current-interactions picker loop: j/K or arrows to move, Enter to attach to a
-/// live interaction, `k` to close the selected one, Esc or q to back out. Mirrors
+/// The current-interactions picker loop: j/k or arrows to move, Enter to attach to a
+/// live interaction, `d` to close the selected one, Esc or q to back out. Mirrors
 /// [`run_session_picker`] but over the server's live interactions rather than the
 /// stored-session store.
 pub fn run_interactions_picker(
@@ -262,12 +262,12 @@ pub fn run_interactions_picker(
             KeyCode::Char('j') | KeyCode::Down => {
                 selected = (selected + 1).min(interactions.len() - 1);
             }
-            KeyCode::Char('K') | KeyCode::Up => selected = selected.saturating_sub(1),
+            KeyCode::Char('k') | KeyCode::Up => selected = selected.saturating_sub(1),
             KeyCode::Enter => return Ok(Some(interactions[selected].clone())),
             // Close the interaction: the server stops it and forgets it, so the
             // Session drops out of this list and becomes stored history like
             // every other session on disk.
-            KeyCode::Char('k') => {
+            KeyCode::Char('d') => {
                 // A failure here means the server no longer knows the
                 // interaction, which is the state this key asks for anyway, so
                 // the row leaves the list either way.
