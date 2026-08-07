@@ -200,31 +200,36 @@ fn entry_item(entry: &Entry, width: usize, protocol: Protocol) -> ListItem<'stat
     } else {
         width
     };
-    let mut lines = vec![summary_line(entry, entry.has_detail(), true, protocol)];
-    if entry.expanded {
-        let mut detail = detail_lines(&entry.event, protocol, None);
-        if !detail.is_empty() {
-            detail.remove(0);
-        }
-        if suspicious_shell_success(&entry.event) {
-            detail.insert(
-                0,
-                Line::from(Span::styled(
-                    format!("{DETAIL_INDENT}reported success; output contains an error diagnostic"),
-                    Style::default().fg(Color::Yellow),
-                )),
-            );
-        }
-        if detail.len() > MAX_DETAIL_LINES {
-            let hidden = detail.len() - MAX_DETAIL_LINES;
-            detail.truncate(MAX_DETAIL_LINES);
-            detail.push(Line::from(Span::styled(
-                format!("{DETAIL_INDENT}… {hidden} more lines"),
-                Style::default().fg(Color::Gray),
-            )));
-        }
-        lines.extend(detail);
+    let summary = summary_line(entry, entry.has_detail(), true, protocol);
+    if !entry.expanded {
+        // A collapsed entry is always exactly one row: wrapping it would make
+        // one long message push the rest of the session off screen, and the
+        // available width shrinks whenever the preview pane opens.
+        return ListItem::new(vec![truncate_line(summary, width, entry.has_detail())]);
     }
+    let mut lines = vec![summary];
+    let mut detail = detail_lines(&entry.event, protocol, None);
+    if !detail.is_empty() {
+        detail.remove(0);
+    }
+    if suspicious_shell_success(&entry.event) {
+        detail.insert(
+            0,
+            Line::from(Span::styled(
+                format!("{DETAIL_INDENT}reported success; output contains an error diagnostic"),
+                Style::default().fg(Color::Yellow),
+            )),
+        );
+    }
+    if detail.len() > MAX_DETAIL_LINES {
+        let hidden = detail.len() - MAX_DETAIL_LINES;
+        detail.truncate(MAX_DETAIL_LINES);
+        detail.push(Line::from(Span::styled(
+            format!("{DETAIL_INDENT}… {hidden} more lines"),
+            Style::default().fg(Color::Gray),
+        )));
+    }
+    lines.extend(detail);
     let wrapped: Vec<Line<'static>> = lines
         .into_iter()
         .enumerate()
@@ -238,6 +243,57 @@ fn entry_item(entry: &Entry, width: usize, protocol: Protocol) -> ListItem<'stat
         })
         .collect();
     ListItem::new(wrapped)
+}
+
+/// Clip one logical line to `width` columns, marking the cut with `…`. When
+/// the line carries a trailing fold marker it is kept at the right edge, so a
+/// clipped row still shows that there is more to expand into.
+fn truncate_line(line: Line<'static>, width: usize, has_marker: bool) -> Line<'static> {
+    if width == 0 {
+        return line;
+    }
+    let mut spans = line.spans;
+    let marker = if has_marker && spans.len() > 1 {
+        spans.pop()
+    } else {
+        None
+    };
+    let marker_width = marker
+        .as_ref()
+        .map(|span| span.content.chars().count())
+        .unwrap_or(0);
+    let total: usize = spans.iter().map(|span| span.content.chars().count()).sum();
+    if total + marker_width <= width {
+        spans.extend(marker);
+        return Line::from(spans);
+    }
+
+    // Room for the ellipsis and the marker, both of which sit outside the text.
+    let budget = width.saturating_sub(marker_width + 1);
+    let mut kept: Vec<Span<'static>> = Vec::new();
+    let mut used = 0usize;
+    for span in spans {
+        let span_width = span.content.chars().count();
+        if used + span_width <= budget {
+            used += span_width;
+            kept.push(span);
+            continue;
+        }
+        let take = budget - used;
+        if take > 0 {
+            let end = span
+                .content
+                .char_indices()
+                .nth(take)
+                .map(|(i, _)| i)
+                .unwrap_or(span.content.len());
+            kept.push(Span::styled(span.content[..end].to_owned(), span.style));
+        }
+        break;
+    }
+    kept.push(Span::styled("…", Style::default().fg(Color::DarkGray)));
+    kept.extend(marker);
+    Line::from(kept)
 }
 
 /// Word-wrap one logical line to `width` columns, preserving each span's
@@ -1106,7 +1162,7 @@ mod tests {
     }
 
     #[test]
-    fn long_summary_lines_wrap_instead_of_being_clipped() {
+    fn long_summary_lines_are_clipped_while_collapsed_and_wrap_once_expanded() {
         let mut app = App::new(
             styra_server::agent::Selection::parse("codex").unwrap(),
             "s1",
@@ -1114,6 +1170,17 @@ mod tests {
         app.push_event(AgentEvent::AgentMessage {
             text: "word ".repeat(40),
         });
+        let protocol = app.selection.provider.protocol();
+        assert_eq!(
+            entry_item(&app.entries[0], 40, protocol).height(),
+            1,
+            "a collapsed entry must stay on a single row"
+        );
+
+        let screen = rendered(&app);
+        assert!(screen.contains('…'), "{screen:?}");
+
+        app.expand_all();
         let screen = rendered(&app);
         assert!(
             screen.matches("word").count() > 20,
@@ -1130,6 +1197,7 @@ mod tests {
         app.push_event(AgentEvent::AgentMessage {
             text: "one two three four five six seven eight nine ten eleven twelve".into(),
         });
+        app.expand_all();
 
         let mut terminal = Terminal::new(TestBackend::new(24, 10)).unwrap();
         terminal
@@ -1164,6 +1232,7 @@ mod tests {
             text: long_word.clone(),
         });
         app.push_event(AgentEvent::AgentMessage { text: long_word });
+        app.expand_all();
 
         let protocol = app.selection.provider.protocol();
         for entry in &app.entries {
