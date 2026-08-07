@@ -122,6 +122,57 @@ fn overlay_mount_reads_host_source_with_a_discarded_tmpfs_upper_layer() {
 }
 
 #[test]
+fn a_writable_mount_nested_in_a_read_only_one_is_mounted_last() {
+    let rootfs = TestRootfs::new();
+    std::fs::create_dir_all(rootfs.0.join("home/foo/bar")).unwrap();
+    let backend = BwrapIsolation {
+        executable: "bwrap".into(),
+        rootfs: Some(rootfs.0.clone()),
+    };
+    let request = ExecutionRequest {
+        command: vec!["true".into()],
+        working_directory: "/work".into(),
+        // The writable destination is nested in the read-only one and is
+        // requested first, as a template's mounts precede a user's `--read`.
+        mounts: vec![
+            Mount::Bind {
+                source: "/host/bar".into(),
+                destination: "/home/foo/bar".into(),
+                access: MountAccess::ReadWrite,
+            },
+            Mount::Bind {
+                source: "/host/foo".into(),
+                destination: "/home/foo".into(),
+                access: MountAccess::ReadOnly,
+            },
+        ],
+        writable_mounts: WritableMountMode::Direct,
+        environment: BTreeMap::new(),
+        network: false,
+        interactive: true,
+        new_session: true,
+    };
+
+    let command = backend.command(&request).unwrap();
+    let args: Vec<_> = command
+        .get_args()
+        .map(|value| value.to_string_lossy().into_owned())
+        .collect();
+    let read_only = args
+        .windows(3)
+        .position(|arguments| arguments == ["--ro-bind", "/host/foo", "/home/foo"])
+        .expect("the read-only mount is rendered");
+    let writable = args
+        .windows(3)
+        .position(|arguments| arguments == ["--bind", "/host/bar", "/home/foo/bar"])
+        .expect("the writable mount is rendered");
+    assert!(
+        read_only < writable,
+        "the read-only parent must not hide the writable subdirectory"
+    );
+}
+
+#[test]
 fn overlay_write_mode_is_rendered_by_the_bubblewrap_mount_plan() {
     let rootfs = TestRootfs::new();
     std::fs::create_dir(rootfs.0.join("config")).unwrap();

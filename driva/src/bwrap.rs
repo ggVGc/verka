@@ -35,6 +35,18 @@ impl BwrapMountPlan {
                 })
                 .collect(),
         )
+        .with_nested_mounts_last()
+    }
+
+    /// Bubblewrap applies mounts in argument order, so a mount whose
+    /// destination contains another's must come first or it hides it. A
+    /// broad `--read` therefore has to be laid down before the narrower
+    /// writable destinations nested inside it. The sort is stable, so
+    /// mounts at the same depth keep their configured precedence.
+    fn with_nested_mounts_last(mut self) -> Self {
+        self.0
+            .sort_by_key(|mount| mount.destination().components().count());
+        self
     }
 
     fn mounts(&self) -> &[Mount] {
@@ -169,42 +181,41 @@ impl BwrapIsolation {
             command.arg("--dir").arg(&request.working_directory);
         }
         for mount in mounts.mounts() {
-            let Mount::Bind {
-                source,
-                destination,
-                access,
-            } = mount
-            else {
-                continue;
-            };
-            command.arg(match access {
-                MountAccess::ReadOnly => "--ro-bind",
-                MountAccess::ReadWrite => "--bind",
-            });
-            command.arg(source).arg(destination);
-        }
-        for mount in mounts.mounts() {
-            let Mount::Overlay {
-                source,
-                destination,
-            } = mount
-            else {
-                continue;
-            };
-            if is_regular_file(source) {
-                // Overlayfs stacks only on directories, so a file source gets a
-                // private copy bound in its place. `run` materialises the copy
-                // before the invocation starts and removes it afterwards.
-                command
-                    .arg("--bind")
-                    .arg(private_copy_path(destination))
-                    .arg(destination);
-            } else {
-                command
-                    .arg("--overlay-src")
-                    .arg(source)
-                    .arg("--tmp-overlay")
-                    .arg(destination);
+            match mount {
+                Mount::Bind {
+                    source,
+                    destination,
+                    access,
+                } => {
+                    command.arg(match access {
+                        MountAccess::ReadOnly => "--ro-bind",
+                        MountAccess::ReadWrite => "--bind",
+                    });
+                    command.arg(source).arg(destination);
+                }
+                Mount::Overlay {
+                    source,
+                    destination,
+                } if is_regular_file(source) => {
+                    // Overlayfs stacks only on directories, so a file source gets a
+                    // private copy bound in its place. `run` materialises the copy
+                    // before the invocation starts and removes it afterwards.
+                    command
+                        .arg("--bind")
+                        .arg(private_copy_path(destination))
+                        .arg(destination);
+                }
+                Mount::Overlay {
+                    source,
+                    destination,
+                } => {
+                    command
+                        .arg("--overlay-src")
+                        .arg(source)
+                        .arg("--tmp-overlay")
+                        .arg(destination);
+                }
+                Mount::Temporary { .. } => continue,
             }
         }
         command
