@@ -99,7 +99,10 @@ impl ClaudeStream {
         };
         if state.pending_interrupts.remove(request_id) {
             return Some(if errored {
-                vec![Action::Warn(format!("Claude interrupt failed: {}", error()))]
+                vec![Action::Warn(format!(
+                    "Claude interrupt failed: {}",
+                    error()
+                ))]
             } else {
                 vec![
                     Action::Info("Claude interrupted the active turn".to_owned()),
@@ -175,7 +178,10 @@ mod tests {
             .unwrap();
         assert!(matches!(
             actions.as_slice(),
-            [Action::Info(_), Action::Event(AgentEvent::TurnCompleted { .. })]
+            [
+                Action::Info(_),
+                Action::Event(AgentEvent::TurnCompleted { .. })
+            ]
         ));
     }
 
