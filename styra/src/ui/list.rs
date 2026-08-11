@@ -92,9 +92,17 @@ pub(crate) fn render_list(frame: &mut Frame, app: &App, area: Rect) {
     }
 
     let width = area.width.saturating_sub(2) as usize;
+    let viewport_height = area.height.saturating_sub(2) as usize;
     let mut items: Vec<ListItem> = visible
         .iter()
-        .map(|(_, entry)| entry_item(entry, width, app.selection.provider.protocol()))
+        .map(|(_, entry)| {
+            entry_item(
+                entry,
+                width,
+                viewport_height,
+                app.selection.provider.protocol(),
+            )
+        })
         .collect();
     let item_heights: Vec<usize> = items.iter().map(ListItem::height).collect();
     items.push(ListItem::new(status_tail(app)));
@@ -113,7 +121,6 @@ pub(crate) fn render_list(frame: &mut Frame, app: &App, area: Rect) {
         .iter()
         .position(|(idx, _)| *idx == app.selected)
         .or_else(|| visible.iter().rposition(|(idx, _)| *idx < app.selected));
-    let viewport_height = area.height.saturating_sub(2) as usize;
     let offset = list_offset_with_scrolloff(
         app.list_offset.get(),
         position,
@@ -189,7 +196,18 @@ fn status_tail(app: &App) -> Line<'static> {
     Line::from(Span::styled(text, Style::default().fg(color)))
 }
 
-fn entry_item(entry: &Entry, width: usize, protocol: Protocol) -> ListItem<'static> {
+/// `viewport_height` is the list's own visible row count. An expanded entry is
+/// clamped to fit inside it: `List` refuses to draw an item taller than the
+/// viewport at all, and — because it also evicts everything around it while
+/// making room — one over-long message would blank the whole list rather than
+/// merely overflow it. The clipped tail is not lost; the preview panel (`p`)
+/// shows the entry in full and scrolls.
+fn entry_item(
+    entry: &Entry,
+    width: usize,
+    viewport_height: usize,
+    protocol: Protocol,
+) -> ListItem<'static> {
     let is_conversation = matches!(
         entry.event,
         AgentEvent::UserMessage { .. } | AgentEvent::AgentMessage { .. }
@@ -230,7 +248,7 @@ fn entry_item(entry: &Entry, width: usize, protocol: Protocol) -> ListItem<'stat
         )));
     }
     lines.extend(detail);
-    let wrapped: Vec<Line<'static>> = lines
+    let mut wrapped: Vec<Line<'static>> = lines
         .into_iter()
         .enumerate()
         .flat_map(|(index, line)| {
@@ -242,6 +260,18 @@ fn entry_item(entry: &Entry, width: usize, protocol: Protocol) -> ListItem<'stat
             wrap_line(line, width, continuation_indent)
         })
         .collect();
+    // The cap above bounds logical detail lines, which say nothing about how
+    // many rows they occupy once wrapped, so the height has to be bounded
+    // again here. One row is left spare for the status tail.
+    let max_rows = viewport_height.saturating_sub(1).max(1);
+    if wrapped.len() > max_rows {
+        let hidden = wrapped.len() - (max_rows - 1);
+        wrapped.truncate(max_rows - 1);
+        wrapped.push(Line::from(Span::styled(
+            format!("{DETAIL_INDENT}… {hidden} more rows — press p for the full entry"),
+            Style::default().fg(Color::Gray),
+        )));
+    }
     ListItem::new(wrapped)
 }
 
@@ -1123,6 +1153,31 @@ mod tests {
         assert!(screen.contains("24 passed"));
     }
 
+    /// `List` draws nothing at all — not even the neighbouring entries — when
+    /// the selected item is taller than the viewport, so an expanded long
+    /// message used to blank the entire log. It must stay clipped instead.
+    #[test]
+    fn an_expanded_entry_taller_than_the_viewport_is_clipped_not_dropped() {
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
+        app.push_event(AgentEvent::AgentMessage {
+            text: "an earlier message".into(),
+        });
+        app.push_event(AgentEvent::AgentMessage {
+            text: (0..60).map(|i| format!("line number {i}\n")).collect(),
+        });
+        app.expand_all();
+
+        let protocol = app.selection.provider.protocol();
+        assert!(entry_item(&app.entries[1], 78, 18, protocol).height() <= 18);
+
+        let screen = rendered(&app);
+        assert!(screen.contains("line number 0"), "{screen}");
+        assert!(screen.contains("press p for the full entry"), "{screen}");
+    }
+
     #[test]
     fn usage_is_shown_once_recorded() {
         let mut app = App::new(
@@ -1172,7 +1227,7 @@ mod tests {
         });
         let protocol = app.selection.provider.protocol();
         assert_eq!(
-            entry_item(&app.entries[0], 40, protocol).height(),
+            entry_item(&app.entries[0], 40, 18, protocol).height(),
             1,
             "a collapsed entry must stay on a single row"
         );
@@ -1237,7 +1292,7 @@ mod tests {
         let protocol = app.selection.provider.protocol();
         for entry in &app.entries {
             assert_eq!(
-                entry_item(entry, 200, protocol).height(),
+                entry_item(entry, 200, 18, protocol).height(),
                 2,
                 "both human and agent messages should wrap at the conversation cap"
             );
