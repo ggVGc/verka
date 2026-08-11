@@ -502,6 +502,9 @@ pub enum Request {
     NewSession,
     /// Open the selected entry in the Files view in the configured editor.
     EditFile,
+    /// Tell the server the live interaction has been switched onto
+    /// [`App::selection`], so the change lands now and outlives this client.
+    ApplySelection,
 }
 
 impl App {
@@ -584,9 +587,12 @@ impl App {
         }
     }
 
-    /// Adopt what the picker describes as the next session's launch, and close
-    /// it. Nothing is launched or sent: the operator's first message still
-    /// starts the agent.
+    /// Adopt what the picker describes, and close it.
+    ///
+    /// Before launch nothing is sent: the operator's first message still starts
+    /// the agent. On a live session the change is asked of the server right
+    /// away ([`Request::ApplySelection`]) rather than riding on the next
+    /// message, so the model the status line names is the model that is loaded.
     pub fn confirm_launcher(&mut self) {
         if let Some(launcher) = self.launcher.take() {
             let selection = launcher.selection();
@@ -603,8 +609,12 @@ impl App {
                         "Claude Code can change model between turns; effort remains session-wide",
                     );
                 }
+                let live = self.status != Status::Pending && selection != self.selection;
                 self.set_selection(selection);
                 self.reported_model = None;
+                if live {
+                    self.ask(Request::ApplySelection);
+                }
             }
         }
     }
@@ -2107,6 +2117,45 @@ mod tests {
 
         assert_ne!(app.selection.model, original.model);
         assert_eq!(app.selection.effort, original.effort);
+    }
+
+    /// The operator's switch has to reach the agent when they make it, not
+    /// whenever they next happen to type something.
+    #[test]
+    fn switching_a_live_sessions_model_asks_the_server_to_apply_it_now() {
+        let mut app = App::new(Selection::new(Provider::Codex), "session-1");
+        app.status = Status::Idle;
+        app.open_launcher();
+        let launcher = app.launcher.as_mut().unwrap();
+        launcher.next_column();
+        launcher.next();
+        app.confirm_launcher();
+
+        assert_eq!(app.take_request(), Some(Request::ApplySelection));
+    }
+
+    #[test]
+    fn confirming_the_same_selection_asks_the_server_for_nothing() {
+        let mut app = App::new(Selection::new(Provider::Codex), "session-1");
+        app.status = Status::Idle;
+        app.open_launcher();
+        app.confirm_launcher();
+
+        assert_eq!(app.take_request(), None);
+    }
+
+    /// Before launch there is no interaction to tell; the first message
+    /// carries the selection.
+    #[test]
+    fn choosing_a_model_before_launch_asks_the_server_for_nothing() {
+        let mut app = App::pending(Selection::new(Provider::Codex));
+        app.open_launcher();
+        let launcher = app.launcher.as_mut().unwrap();
+        launcher.next_column();
+        launcher.next();
+        app.confirm_launcher();
+
+        assert_eq!(app.take_request(), None);
     }
 
     #[test]

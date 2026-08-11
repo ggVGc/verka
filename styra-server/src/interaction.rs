@@ -375,6 +375,23 @@ impl Interaction {
         self.send_with_selection(text, None)
     }
 
+    /// Switch the interaction onto `selection` right away, ahead of any turn.
+    ///
+    /// Claude Code changes model through an acknowledged control request, so
+    /// it is issued here; the app-server carries model and effort as options
+    /// on each turn, so for it the caller's stored selection is the whole
+    /// change and there is nothing to send.
+    pub fn set_selection(&self, selection: &Selection) -> Result<()> {
+        if let Some(client) = &self.claude_stream {
+            apply_appserver_actions(
+                client.set_model(&selection.model),
+                &self.stdin,
+                &self.updates,
+            );
+        }
+        Ok(())
+    }
+
     pub fn send_with_selection(&self, text: &str, selection: Option<&Selection>) -> Result<()> {
         if let Ok(mut journal) = self.journal.lock() {
             let _ = journal.record_user_message(text);

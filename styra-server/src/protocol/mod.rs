@@ -164,6 +164,13 @@ pub enum Request {
         id: String,
         message: SendMessage,
     },
+    /// Switch a live interaction onto another model, applied now and recorded
+    /// with the session so reopening it keeps the switch. The provider cannot
+    /// change; that needs a new session.
+    SetSessionSelection {
+        id: String,
+        selection: Selection,
+    },
     /// Persist an operator message in the session's durable input queue
     /// without sending it yet, so it survives the client disconnecting before
     /// the interaction is idle enough to accept it.

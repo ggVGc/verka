@@ -129,6 +129,23 @@ impl Client {
         }
     }
 
+    /// Switch a live interaction onto another model straight away, rather than
+    /// leaving it for the next message to carry. The server records it with the
+    /// session, so reopening the session keeps the switch.
+    pub fn set_session_selection(
+        &self,
+        id: &str,
+        selection: &crate::agent::Selection,
+    ) -> Result<()> {
+        match self.request(Request::SetSessionSelection {
+            id: id.to_owned(),
+            selection: selection.clone(),
+        })? {
+            Response::Accepted => Ok(()),
+            other => unexpected("accepted", other),
+        }
+    }
+
     /// Durably queue an operator message on the server without sending it,
     /// so it survives the client disconnecting before the interaction is idle
     /// enough to accept it. Returns the new queue length.

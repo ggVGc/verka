@@ -140,14 +140,16 @@ pub fn run(
             continue;
         }
 
+        // The picker raises requests of its own (applying a model change to the
+        // live session), so it falls through to the request match below rather
+        // than skipping straight to the next frame.
         if app.launcher.is_some() {
             keys::handle_launcher_key(app, key, preferences_path);
-            continue;
-        }
-
-        match app.focus {
-            Focus::List => keys::handle_list_key(app, client, live, key, &mut pending_fold),
-            Focus::Input => keys::handle_input_key(app, client, cli, workspace_id, live, key),
+        } else {
+            match app.focus {
+                Focus::List => keys::handle_list_key(app, client, live, key, &mut pending_fold),
+                Focus::Input => keys::handle_input_key(app, client, cli, workspace_id, live, key),
+            }
         }
 
         // A picker that the operator backs out of leaves the session as it was,
@@ -216,6 +218,19 @@ pub fn run(
             }
             Some(Request::Reset) => return Ok(RunOutcome::Reset),
             Some(Request::NewSession) => return Ok(RunOutcome::NewSession),
+            Some(Request::ApplySelection) => {
+                let Live::Running { session_id, .. } = live else {
+                    continue;
+                };
+                let selection = app.selection.clone();
+                match client.set_session_selection(session_id, &selection) {
+                    Ok(()) => app.show_action_message(format!("model set to {}", selection.model)),
+                    Err(error) => app.push_log(LogEntry::error(format!(
+                        "could not switch to {}: {error:#}",
+                        selection.model
+                    ))),
+                }
+            }
             Some(Request::EditFile) => {
                 let Some(path) = app.selected_file_path() else {
                     continue;

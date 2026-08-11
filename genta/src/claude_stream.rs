@@ -8,7 +8,10 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
 struct PendingTurn {
-    text: String,
+    /// The turn held back until Claude acknowledges the model change, if the
+    /// change was requested alongside one. A model change made on its own —
+    /// the operator switching models between turns — has nothing to release.
+    text: Option<String>,
     model: String,
 }
 
@@ -43,12 +46,38 @@ impl ClaudeStream {
         let Some(model) = model.filter(|model| *model != state.model) else {
             return vec![Action::Send(claude_submission(text))];
         };
+        // A bare model change may already be in flight for exactly this model
+        // (the operator switched, then typed). Ride along with it rather than
+        // asking Claude to change to the same model twice.
+        if let Some(pending) = state
+            .pending
+            .values_mut()
+            .find(|pending| pending.model == model && pending.text.is_none())
+        {
+            pending.text = Some(text.to_owned());
+            return Vec::new();
+        }
+        Self::request_model(&mut state, model, Some(text.to_owned()))
+    }
+
+    /// Switch models now, without a turn waiting on it, so the operator's
+    /// choice takes effect when they make it rather than whenever they next
+    /// happen to send something. No actions when Claude is already on it.
+    pub fn set_model(&self, model: &str) -> Vec<Action> {
+        let mut state = self.state.lock().expect("Claude stream state poisoned");
+        if model == state.model {
+            return Vec::new();
+        }
+        Self::request_model(&mut state, model, None)
+    }
+
+    fn request_model(state: &mut State, model: &str, text: Option<String>) -> Vec<Action> {
         let request_id = format!("styra_model_{}", state.next_request_id);
         state.next_request_id += 1;
         state.pending.insert(
             request_id.clone(),
             PendingTurn {
-                text: text.to_owned(),
+                text,
                 model: model.to_owned(),
             },
         );
@@ -114,22 +143,36 @@ impl ClaudeStream {
         }
         let pending = state.pending.remove(request_id)?;
         if errored {
-            return Some(vec![
-                Action::Warn(format!(
+            // Only a held-back turn leaves the UI waiting on a turn that will
+            // now never run; a bare model change has nothing to release.
+            let mut actions = vec![Action::Warn(match &pending.text {
+                Some(_) => format!(
                     "Claude rejected model change to {}: {}; message was not sent",
                     pending.model,
                     error()
-                )),
-                Action::Event(AgentEvent::TurnCompleted {
+                ),
+                None => format!(
+                    "Claude rejected model change to {}: {}",
+                    pending.model,
+                    error()
+                ),
+            })];
+            if pending.text.is_some() {
+                actions.push(Action::Event(AgentEvent::TurnCompleted {
                     usage: TokenUsage::default(),
-                }),
-            ]);
+                }));
+            }
+            return Some(actions);
         }
         state.model = pending.model.clone();
-        Some(vec![
-            Action::Info(format!("Claude model changed to {}", pending.model)),
-            Action::Send(claude_submission(&pending.text)),
-        ])
+        let mut actions = vec![Action::Info(format!(
+            "Claude model changed to {}",
+            pending.model
+        ))];
+        if let Some(text) = &pending.text {
+            actions.push(Action::Send(claude_submission(text)));
+        }
+        Some(actions)
     }
 }
 
@@ -183,6 +226,58 @@ mod tests {
                 Action::Event(AgentEvent::TurnCompleted { .. })
             ]
         ));
+    }
+
+    #[test]
+    fn switching_model_between_turns_changes_it_without_a_turn_to_release() {
+        let client = ClaudeStream::new("claude-sonnet-5".into());
+        let control = sent(&client.set_model("claude-opus-5"));
+        assert_eq!(control[0]["request"]["subtype"], "set_model");
+
+        let actions = client
+            .handle_line(
+                r#"{"type":"control_response","response":{"subtype":"success","request_id":"styra_model_1","response":{}}}"#,
+            )
+            .unwrap();
+        assert!(matches!(actions.as_slice(), [Action::Info(_)]));
+        // The change stuck, so a later turn needs no control traffic at all.
+        let turn = sent(&client.send("continue", Some("claude-opus-5")));
+        assert_eq!(turn[0]["type"], "user");
+    }
+
+    #[test]
+    fn a_turn_typed_during_a_pending_switch_rides_along_with_it() {
+        let client = ClaudeStream::new("claude-sonnet-5".into());
+        client.set_model("claude-opus-5");
+        // No second set_model: the turn attaches to the change already in flight.
+        assert!(sent(&client.send("go", Some("claude-opus-5"))).is_empty());
+
+        let actions = client
+            .handle_line(
+                r#"{"type":"control_response","response":{"subtype":"success","request_id":"styra_model_1","response":{}}}"#,
+            )
+            .unwrap();
+        let turn = sent(&actions);
+        assert_eq!(turn[0]["message"]["content"], "go");
+    }
+
+    #[test]
+    fn a_rejected_bare_switch_warns_without_completing_a_turn() {
+        let client = ClaudeStream::new("claude-sonnet-5".into());
+        client.set_model("claude-opus-5");
+
+        let actions = client
+            .handle_line(
+                r#"{"type":"control_response","response":{"subtype":"error","request_id":"styra_model_1","error":"no such model"}}"#,
+            )
+            .unwrap();
+        assert!(matches!(actions.as_slice(), [Action::Warn(_)]));
+    }
+
+    #[test]
+    fn switching_to_the_current_model_asks_claude_for_nothing() {
+        let client = ClaudeStream::new("claude-sonnet-5".into());
+        assert!(client.set_model("claude-sonnet-5").is_empty());
     }
 
     #[test]

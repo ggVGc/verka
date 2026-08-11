@@ -46,15 +46,19 @@ struct ManagedInteraction {
     /// re-deriving them: the agent selection, host workspace, and launch policy.
     workspace_id: String,
     name: Mutex<Option<String>>,
-    selection: Selection,
+    /// What the interaction is running under *now*: the operator can switch
+    /// model mid-session, and every such switch is mirrored to `session.json`
+    /// so reattaching or resuming picks up the switch rather than the launch.
+    selection: Mutex<Selection>,
     workspace: PathBuf,
     driva: DrivaOptions,
     shell: ShellInfo,
-    /// Operator messages not yet sent to the agent, durably mirrored to
-    /// `queue_path` on every mutation so the queue survives the operator
+    /// Operator messages not yet sent to the agent, durably mirrored into
+    /// `session_path` on every mutation so the queue survives the operator
     /// closing the Styra UI (or the daemon restarting) before it drains.
     queue: Mutex<std::collections::VecDeque<String>>,
-    queue_path: PathBuf,
+    /// The session's durable directory: its journal, metadata and queue.
+    session_path: PathBuf,
 }
 
 fn update_finishes_background(update: &InteractionUpdate) -> bool {
@@ -71,7 +75,7 @@ impl ManagedInteraction {
                 .expect("session name lock poisoned")
                 .clone(),
             workspace_id: self.workspace_id.clone(),
-            selection: self.selection.clone(),
+            selection: self.selection(),
             workspace: self.workspace.clone(),
             driva: self.driva.clone(),
             accepting: self.accepting_messages.load(Ordering::Acquire),
@@ -84,6 +88,42 @@ impl ManagedInteraction {
 }
 
 impl ManagedInteraction {
+    fn selection(&self) -> Selection {
+        self.selection
+            .lock()
+            .expect("interaction selection lock poisoned")
+            .clone()
+    }
+
+    /// Move the interaction onto `selection`: apply it to the running agent,
+    /// then record it, so both this attachment and the next one agree on what
+    /// the session is running.
+    ///
+    /// Only the model can change. The provider defines the process itself, and
+    /// Claude Code fixes reasoning effort for the life of the session, so those
+    /// are rejected rather than silently dropped.
+    fn set_selection(&self, selection: Selection) -> Result<()> {
+        let mut current = self
+            .selection
+            .lock()
+            .expect("interaction selection lock poisoned");
+        if selection == *current {
+            return Ok(());
+        }
+        if selection.provider != current.provider {
+            anyhow::bail!("changing agent provider requires a new session");
+        }
+        if selection.provider == crate::agent::Provider::Claude
+            && selection.effort != current.effort
+        {
+            anyhow::bail!("Claude Code fixes reasoning effort for the life of a session");
+        }
+        self.interaction.set_selection(&selection)?;
+        journal::store_session_selection(&self.session_path, &selection)?;
+        *current = selection;
+        Ok(())
+    }
+
     fn send(&self, text: &str) -> Result<()> {
         if !self.accepting_messages.load(Ordering::Acquire) {
             anyhow::bail!(
@@ -102,7 +142,7 @@ impl ManagedInteraction {
 
     fn persist_queue(&self, queue: &std::collections::VecDeque<String>) -> Result<()> {
         let messages: Vec<String> = queue.iter().cloned().collect();
-        journal::write_queued_messages(&self.queue_path, &messages)
+        journal::write_queued_messages(&self.session_path, &messages)
     }
 
     fn queue_message(&self, text: &str) -> Result<usize> {
@@ -235,12 +275,12 @@ impl ServerState {
             activity: Arc::clone(&activity),
             workspace_id: request.workspace_id.clone(),
             name: Mutex::new(name.clone()),
-            selection: selection.clone(),
+            selection: Mutex::new(selection.clone()),
             workspace: workspace.clone(),
             driva: driva.clone(),
             shell,
             queue: Mutex::new(std::collections::VecDeque::new()),
-            queue_path: journal_path
+            session_path: journal_path
                 .parent()
                 .unwrap_or(&self.inner.store_root)
                 .to_path_buf(),
@@ -422,12 +462,12 @@ impl ServerState {
             activity: Arc::clone(&activity),
             workspace_id: summary.workspace_id.clone(),
             name: Mutex::new(summary.name.clone()),
-            selection: selection.clone(),
+            selection: Mutex::new(selection.clone()),
             workspace: workspace.clone(),
             driva: driva.clone(),
             shell,
             queue: Mutex::new(queued.into_iter().collect()),
-            queue_path: summary.path.clone(),
+            session_path: summary.path.clone(),
         });
         let id = request.id.clone();
         std::thread::Builder::new()
@@ -652,14 +692,20 @@ impl ServerState {
             )),
             Request::SendMessage { id, message } => {
                 let interaction = self.interaction(&id)?;
-                if let Some(selection) = &message.selection {
-                    if selection.provider != interaction.selection.provider {
-                        anyhow::bail!("changing agent provider requires a new session");
-                    }
+                // A client that names a selection on the turn is switching the
+                // session onto it, not just this message: adopt it durably and
+                // then send under whatever the session now runs.
+                if let Some(selection) = message.selection {
+                    interaction.set_selection(selection)?;
                 }
                 interaction
                     .interaction
-                    .send_with_selection(&message.text, message.selection.as_ref())?;
+                    .send_with_selection(&message.text, Some(&interaction.selection()))?;
+                Ok(Response::Accepted)
+            }
+            Request::SetSessionSelection { id, selection } => {
+                crate::agent::validate_selection(&selection)?;
+                self.interaction(&id)?.set_selection(selection)?;
                 Ok(Response::Accepted)
             }
             Request::QueueMessage { id, message } => Ok(Response::Queued(

@@ -286,6 +286,23 @@ pub fn store_provider_session_id(path: &Path, provider_session_id: &str) -> Resu
     write_stored_session_meta(&directory, &stored)
 }
 
+/// Record the selection a Session is now running under, so an operator who
+/// switched models mid-session and later reopens it resumes on the model they
+/// chose rather than the one it launched with.
+pub fn store_session_selection(path: &Path, selection: &crate::agent::Selection) -> Result<()> {
+    let directory = if path.is_dir() {
+        path.to_path_buf()
+    } else {
+        path.parent().map(Path::to_path_buf).unwrap_or_default()
+    };
+    let mut stored = read_stored_session_meta(&directory)?;
+    if stored.agent.selection == *selection {
+        return Ok(());
+    }
+    stored.agent.selection = selection.clone();
+    write_stored_session_meta(&directory, &stored)
+}
+
 /// Set or clear a Session's operator-facing name and return its normalized value.
 pub fn store_session_name(path: &Path, name: Option<&str>) -> Result<Option<String>> {
     let directory = if path.is_dir() {
@@ -607,6 +624,35 @@ mod tests {
         let derived = name_from_message(Some(&long)).unwrap();
         assert_eq!(derived.chars().count(), 61);
         assert!(derived.ends_with('…'));
+    }
+
+    #[test]
+    fn a_switched_model_is_what_the_session_is_later_listed_and_resumed_with() {
+        let root = temp_dir("session-selection");
+        let host = temp_dir("session-selection-host");
+        let workspace = crate::workspace::create(&root, &host, None).unwrap();
+        let profile = test_profile("codex", Protocol::CodexJsonl);
+        let selection = crate::agent::Selection::new(crate::agent::Provider::Codex);
+        let (journal, _) =
+            Journal::create_in_workspace(&root, &workspace.id, &profile, &selection, None).unwrap();
+        let directory = journal.path().parent().unwrap();
+        store_provider_session_id(directory, "provider-1").unwrap();
+
+        let switched = crate::agent::Selection::parse("codex:gpt-5.6-terra/high").unwrap();
+        store_session_selection(directory, &switched).unwrap();
+
+        assert_eq!(read_session_meta(directory).unwrap().selection, switched);
+        assert_eq!(
+            list_workspace_sessions(&root, &workspace.id).unwrap()[0].selection,
+            switched
+        );
+        // The switch is metadata like any other: it leaves the rest intact.
+        assert_eq!(
+            read_provider_session_id(directory).unwrap().as_deref(),
+            Some("provider-1")
+        );
+        std::fs::remove_dir_all(root).ok();
+        std::fs::remove_dir_all(host).ok();
     }
 
     #[test]

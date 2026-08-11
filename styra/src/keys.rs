@@ -11,8 +11,11 @@ use styra_server::{Client, LogEntry};
 
 /// Keys for the launch picker: `j`/`k` within a column, `Tab`/`h`/`l` between
 /// them, `Enter` to apply the choice to this workspace, `D` to also save it as
-/// the standing default (neither launches — the operator's first message still
-/// does that), `Esc`/`q` to leave it as it was.
+/// the standing default, `Esc`/`q` to leave it as it was.
+///
+/// Neither launches: before launch the operator's first message still starts
+/// the agent. On a live session, confirming switches its model there and then
+/// (see [`App::confirm_launcher`]).
 pub fn handle_launcher_key(app: &mut App, key: KeyEvent, preferences_path: &Path) {
     let Some(launcher) = app.launcher.as_mut() else {
         return;
