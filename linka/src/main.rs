@@ -279,6 +279,14 @@ enum Cmd {
     },
 }
 
+/// Open the store at `root` and wire up the real [`GitVcs`] against it — the
+/// pairing every command except `init` needs.
+fn open_store(root: PathBuf) -> Result<(Store, GitVcs)> {
+    let store = Store::open(root)?;
+    let vcs = GitVcs::for_store(&store);
+    Ok((store, vcs))
+}
+
 fn main() -> Result<()> {
     let Cli { store, cmd } = Cli::parse();
     match cmd {
@@ -319,8 +327,7 @@ fn main() -> Result<()> {
             depends_on,
             derived_from,
         } => {
-            let store = Store::open(store)?;
-            let vcs = GitVcs::for_store(&store);
+            let (store, vcs) = open_store(store)?;
             let id = ops::add(
                 &store,
                 &vcs,
@@ -342,8 +349,7 @@ fn main() -> Result<()> {
             author,
             assignee,
         } => {
-            let store = Store::open(store)?;
-            let vcs = GitVcs::for_store(&store);
+            let (store, vcs) = open_store(store)?;
             let candidate = CandidateId(candidate);
             let mut description = read_description(description, file)?;
             if description.trim().is_empty() {
@@ -371,8 +377,7 @@ fn main() -> Result<()> {
             notes_file,
             author,
         } => {
-            let store = Store::open(store)?;
-            let vcs = GitVcs::for_store(&store);
+            let (store, vcs) = open_store(store)?;
             let snapshot = ops::snapshot_work(&store, &vcs, id.as_str(), &[])?;
             let notes = resolve_notes(
                 notes,
@@ -397,8 +402,7 @@ fn main() -> Result<()> {
         }
 
         Cmd::Link { from, to, rel } => {
-            let store = Store::open(store)?;
-            let vcs = GitVcs::for_store(&store);
+            let (store, vcs) = open_store(store)?;
             ops::link(&store, &vcs, &from, &to, rel)?;
             println!("{from}  +{} -> {to}", rel.as_str());
         }
@@ -408,8 +412,7 @@ fn main() -> Result<()> {
             description,
             file,
         } => {
-            let store = Store::open(store)?;
-            let vcs = GitVcs::for_store(&store);
+            let (store, vcs) = open_store(store)?;
             let outcome = ops::edit(&store, &vcs, &id, read_description(description, file)?)?;
             let version = ops::short_definition(&store.node_version(&id)?);
             match outcome {
@@ -427,8 +430,7 @@ fn main() -> Result<()> {
             notes_file,
             author,
         } => {
-            let store = Store::open(store)?;
-            let vcs = GitVcs::for_store(&store);
+            let (store, vcs) = open_store(store)?;
             let notes = resolve_notes(notes, notes_file, &store, &id, "what happened?")?;
             let commit = ops::complete(
                 &store,
@@ -452,22 +454,19 @@ fn main() -> Result<()> {
             notes_file,
             author,
         } => {
-            let store = Store::open(store)?;
-            let vcs = GitVcs::for_store(&store);
+            let (store, vcs) = open_store(store)?;
             let notes = resolve_notes(notes, notes_file, &store, &id, "what went wrong?")?;
             ops::fail(&store, &vcs, &id, &notes, author)?;
             println!("{id}  failed");
         }
 
         Cmd::Show { id } => {
-            let store = Store::open(store)?;
-            let vcs = GitVcs::for_store(&store);
+            let (store, vcs) = open_store(store)?;
             print!("{}", show_node(&store, &vcs, &id)?);
         }
 
         Cmd::Candidates { node } => {
-            let store = Store::open(store)?;
-            let vcs = GitVcs::for_store(&store);
+            let (store, vcs) = open_store(store)?;
             let candidates = CandidateStore::new(&store);
             let views = match node {
                 Some(node) => candidates.for_node(&node)?,
@@ -493,8 +492,7 @@ fn main() -> Result<()> {
         }
 
         Cmd::Candidate { id } => {
-            let store = Store::open(store)?;
-            let vcs = GitVcs::for_store(&store);
+            let (store, vcs) = open_store(store)?;
             let candidate = CandidateStore::new(&store).load(&CandidateId(id))?;
             println!("candidate {}", candidate.id);
             println!("node      {}", candidate.node);
@@ -554,8 +552,7 @@ fn main() -> Result<()> {
             notes,
             author,
         } => {
-            let store = Store::open(store)?;
-            let vcs = GitVcs::for_store(&store);
+            let (store, vcs) = open_store(store)?;
             CandidateStore::new(&store).accept(
                 &vcs,
                 &CandidateId(id.clone()),
@@ -572,8 +569,7 @@ fn main() -> Result<()> {
             notes,
             author,
         } => {
-            let store = Store::open(store)?;
-            let vcs = GitVcs::for_store(&store);
+            let (store, vcs) = open_store(store)?;
             CandidateStore::new(&store).reject(
                 &vcs,
                 &CandidateId(id.clone()),
@@ -585,15 +581,13 @@ fn main() -> Result<()> {
         }
 
         Cmd::Publish { id } => {
-            let store = Store::open(store)?;
-            let vcs = GitVcs::for_store(&store);
+            let (store, vcs) = open_store(store)?;
             CandidateStore::new(&store).publish(&vcs, &CandidateId(id.clone()))?;
             println!("published {id}");
         }
 
         Cmd::List => {
-            let store = Store::open(store)?;
-            let vcs = GitVcs::for_store(&store);
+            let (store, vcs) = open_store(store)?;
             let mut errors = 0;
             for id in store.list_ids()? {
                 let (_, description) = match store.read_node(&id) {
@@ -648,8 +642,7 @@ fn main() -> Result<()> {
             file,
             media_type,
         } => {
-            let store = Store::open(store)?;
-            let vcs = GitVcs::for_store(&store);
+            let (store, vcs) = open_store(store)?;
             let attachment = ops::record_node_attachment(
                 &store,
                 &vcs,
@@ -695,8 +688,7 @@ fn main() -> Result<()> {
         }
 
         Cmd::Stale => {
-            let store = Store::open(store)?;
-            let vcs = GitVcs::for_store(&store);
+            let (store, vcs) = open_store(store)?;
             let mut found = false;
             let mut errors = 0;
             for id in store.list_ids()? {
@@ -723,8 +715,7 @@ fn main() -> Result<()> {
         }
 
         Cmd::Ready { assignee } => {
-            let store = Store::open(store)?;
-            let vcs = GitVcs::for_store(&store);
+            let (store, vcs) = open_store(store)?;
             let mut errors = 0;
             for id in store.list_ids()? {
                 let (meta, description) = match store.read_node(&id) {
@@ -758,8 +749,7 @@ fn main() -> Result<()> {
         }
 
         Cmd::Blocked => {
-            let store = Store::open(store)?;
-            let vcs = GitVcs::for_store(&store);
+            let (store, vcs) = open_store(store)?;
             let mut any = false;
             let mut errors = 0;
             for id in store.list_ids()? {
@@ -822,8 +812,7 @@ fn main() -> Result<()> {
         }
 
         Cmd::Settled { id } => {
-            let store = Store::open(store)?;
-            let vcs = GitVcs::for_store(&store);
+            let (store, vcs) = open_store(store)?;
             let reasons = ops::unsettled(&store, &vcs, &id)?;
             if reasons.is_empty() {
                 println!("{id}: settled");
@@ -842,8 +831,7 @@ fn main() -> Result<()> {
             force,
             name,
         } => {
-            let store = Store::open(store)?;
-            let vcs = GitVcs::for_store(&store);
+            let (store, vcs) = open_store(store)?;
             if verify {
                 let (recorded, problems) = ops::verify_pairing(&store, &vcs, deep)?;
                 match recorded {
