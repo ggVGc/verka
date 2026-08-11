@@ -554,8 +554,8 @@ impl App {
     /// A fresh App with no agent process launched yet: no journal or session
     /// id exists until the operator submits a first message, at which point
     /// the event loop spawns the session and fills those in.
-    /// Opens directly in input focus, since typing there is the only thing
-    /// that moves the session forward.
+    /// Opens in list focus, not input focus, so landing on this screen never
+    /// drops the operator straight into typing; `i` still reaches it.
     ///
     /// `selection` is what the session will launch with; it is also the only
     /// state in this screen the operator can still change (see
@@ -564,7 +564,6 @@ impl App {
     pub fn pending(selection: Selection) -> Self {
         let mut app = Self::new(selection, String::new());
         app.status = Status::Pending;
-        app.focus = Focus::Input;
         app
     }
 
@@ -1839,10 +1838,10 @@ mod tests {
     }
 
     #[test]
-    fn pending_opens_in_input_focus_with_no_session_yet_and_allows_sending() {
+    fn pending_opens_in_list_focus_with_no_session_yet_and_allows_sending() {
         let app = App::pending(Selection::new(Provider::Codex));
         assert_eq!(app.status, Status::Pending);
-        assert_eq!(app.focus, Focus::Input);
+        assert_eq!(app.focus, Focus::List);
         assert!(app.session_id.is_empty());
         assert!(app.input.is_empty());
         // The message box must not read "session ended" before anything ran.

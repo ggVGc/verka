@@ -70,6 +70,49 @@ fn pending_app(selection: styra_server::agent::Selection, workspace: &WorkspaceS
     app
 }
 
+/// What an ordinary interactive launch (no CLI prompt, no `--view`) opens
+/// into: if the active Workspace already has live interactions, let the
+/// operator pick one to attach to rather than burying it behind a blank
+/// screen; otherwise fall back to the blank pending screen, without forcing
+/// input focus (see `App::pending`).
+fn open_start_screen(
+    client: &Client,
+    terminal: &mut Option<Terminal<CrosstermBackend<Stdout>>>,
+    selection: styra_server::agent::Selection,
+    active_workspace: &WorkspaceSummary,
+) -> Result<(App, Live)> {
+    let mut interactions: Vec<_> = client
+        .list_interactions()?
+        .into_iter()
+        .filter(|interaction| interaction.workspace_id == active_workspace.id)
+        .collect();
+    if interactions.is_empty() {
+        return Ok((pending_app(selection, active_workspace), Live::Pending));
+    }
+
+    let mut term = match terminal.take() {
+        Some(term) => term,
+        None => terminal::setup()?,
+    };
+    let workspaces = client.list_workspaces()?;
+    let choice = picker::run_interactions_picker(&mut term, client, &mut interactions, &workspaces);
+    let outcome = match choice {
+        Ok(Some(interaction)) => session::attach_live_interaction(client, interaction),
+        Ok(None) => Ok((pending_app(selection, active_workspace), Live::Pending)),
+        Err(error) => Err(error),
+    };
+    match outcome {
+        Ok(pair) => {
+            *terminal = Some(term);
+            Ok(pair)
+        }
+        Err(error) => {
+            terminal::restore(&mut term)?;
+            Err(error)
+        }
+    }
+}
+
 fn main() -> Result<()> {
     if let Some(result) = styra_server::broker::exit_if_requested() {
         return result;
@@ -232,10 +275,11 @@ fn main() -> Result<()> {
             // No seed: nothing has been said to an agent yet, so nothing is
             // launched yet either. The event loop spawns the session the
             // moment the operator submits their first message — on whatever
-            // the launch picker holds by then.
+            // the launch picker holds by then. If the Workspace already has
+            // live interactions, offer to attach to one instead of opening
+            // straight onto the blank screen.
             None => {
-                app = pending_app(selection, &active_workspace);
-                live = Live::Pending;
+                (app, live) = open_start_screen(&client, &mut terminal, selection, &active_workspace)?;
             }
         }
     }
