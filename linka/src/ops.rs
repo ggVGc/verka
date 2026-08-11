@@ -569,19 +569,13 @@ fn write_node_attachments(
 /// Derive all graph state through one fallible evaluation.
 pub fn node_state(store: &Store, vcs: &dyn Vcs, id: &str) -> Result<NodeState> {
     let mut visiting = std::collections::HashSet::new();
-    node_state_inner(store, vcs, id, None, &mut visiting)
-}
-
-pub fn node_state_at(store: &Store, vcs: &dyn Vcs, id: &str, revision: &str) -> Result<NodeState> {
-    let mut visiting = std::collections::HashSet::new();
-    node_state_inner(store, vcs, id, Some(revision), &mut visiting)
+    node_state_inner(store, vcs, id, &mut visiting)
 }
 
 fn node_state_inner(
     store: &Store,
     vcs: &dyn Vcs,
     id: &str,
-    revision: Option<&str>,
     visiting: &mut std::collections::HashSet<String>,
 ) -> Result<NodeState> {
     let (meta, _) = store
@@ -629,7 +623,7 @@ fn node_state_inner(
                         .map(|candidate| candidate.integration(vcs))
                         .transpose()?
                         .unwrap_or(IntegrationStatus::NotRequired),
-                    staleness_for_result(store, vcs, id, result, revision, candidate.as_ref())?,
+                    staleness_for_result(store, vcs, id, result, candidate.as_ref())?,
                 )
             }
         };
@@ -647,7 +641,7 @@ fn node_state_inner(
                 });
                 continue;
             }
-            let dependency_state = node_state_inner(store, vcs, dependency, revision, visiting)?;
+            let dependency_state = node_state_inner(store, vcs, dependency, visiting)?;
             if !dependency_state.is_complete()
                 || matches!(
                     dependency_state.outcome,
@@ -689,7 +683,6 @@ fn staleness_for_result(
     vcs: &dyn Vcs,
     id: &str,
     result: &ResultMeta,
-    revision: Option<&str>,
     candidate: Option<&CandidateRecord>,
 ) -> Result<Vec<StalenessReason>> {
     let mut reasons = Vec::new();
@@ -737,10 +730,7 @@ fn staleness_for_result(
         .filter(|observation| observation.result == result_version)
         .flat_map(|observation| observation.context.iter());
     for pin in result.context.iter().chain(observed_context) {
-        let current = match revision {
-            Some(revision) => vcs.file_blob_at(revision, pin.path.as_str())?,
-            None => project_file_blob(&root, &pin.path)?,
-        };
+        let current = project_file_blob(&root, &pin.path)?;
         match current {
             Some(now) if now != pin.identity => reasons.push(StalenessReason::ContextChanged {
                 path: pin.path.to_string(),
@@ -813,10 +803,6 @@ pub fn ready_nodes(store: &Store, vcs: &dyn Vcs, worker: Option<Author>) -> Resu
         ready.push(id);
     }
     Ok(ready)
-}
-
-pub fn first_ready_for(store: &Store, vcs: &dyn Vcs, worker: Author) -> Result<Option<String>> {
-    Ok(ready_nodes(store, vcs, Some(worker))?.into_iter().next())
 }
 
 /// Freeze the exact graph, context, and project inputs for ready work.
@@ -1188,87 +1174,6 @@ pub fn capture_submission(
         vcs.retain_output(&id, commit)?;
     }
     Ok(output_commit)
-}
-
-/// Capture a coding agent's complete work from an isolated execution worktree
-/// and submit it as a successful result against its frozen snapshot.
-///
-/// Unlike [`capture_submission`], the agent declares no output paths. The
-/// worktree is its own sandbox, so the produced change is defined as whatever
-/// differs between the frozen input commit (`snapshot.project.revision`, the
-/// commit the work started from) and the final worktree — committed by the
-/// agent or left uncommitted. That diff is the single source of truth, so no
-/// path list is asserted, stored, or trusted: the output commit itself carries
-/// the exact set (recoverable later via the artifact's files).
-///
-/// The same ordering guarantee as [`capture_submission`] holds: the output
-/// commit is synthesized before the version check, but its ref is retained only
-/// after the submission is accepted, so a conflict mutates no graph state.
-#[allow(clippy::too_many_arguments)]
-pub fn capture_execution_submission(
-    store: &Store,
-    vcs: &dyn Vcs,
-    snapshot: WorkSnapshot,
-    message: Option<String>,
-    notes: String,
-    author: Author,
-    producer: Option<ProducerEvidence>,
-) -> std::result::Result<Option<String>, SubmissionError> {
-    let id = snapshot.node.as_str().to_string();
-    if store.read_node(&id)?.0.verifies.is_some() {
-        return Err(SubmissionError::Evaluation(anyhow::anyhow!(
-            "verification node `{id}` requires an accepted, rejected, or abandoned review result"
-        )));
-    }
-    let origin = snapshot.project.revision.clone();
-    let message = match message {
-        Some(message) => message,
-        None => {
-            let (_, description) = store.read_node(&id)?;
-            crate::model::title_of(&description).to_string()
-        }
-    };
-    let mut commit_message = format!("{message}\n\nLinka-Node: {id}");
-    if !origin.is_empty() {
-        commit_message.push_str(&format!("\nLinka-Input: {origin}"));
-    }
-    let output_commit = vcs.capture_worktree(&origin, &commit_message)?;
-
-    submit_captured_execution(
-        store,
-        vcs,
-        snapshot,
-        output_commit.as_deref(),
-        notes,
-        author,
-        producer,
-    )?;
-    Ok(output_commit)
-}
-
-/// Submit an execution output that an orchestrator has already captured and
-/// promoted into `vcs`. This split lets isolated runners keep attempt Git
-/// metadata private and import no object or ref into the project until their
-/// own postflight integrity checks have passed.
-pub fn submit_captured_execution(
-    store: &Store,
-    vcs: &dyn Vcs,
-    snapshot: WorkSnapshot,
-    output_commit: Option<&str>,
-    notes: String,
-    author: Author,
-    producer: Option<ProducerEvidence>,
-) -> std::result::Result<(), SubmissionError> {
-    submit_captured_execution_with_attachments(
-        store,
-        vcs,
-        snapshot,
-        output_commit,
-        notes,
-        author,
-        producer,
-        Vec::new(),
-    )
 }
 
 /// Submit an already captured execution and its producer evidence attachments
@@ -2658,54 +2563,6 @@ mod tests {
     }
 
     #[test]
-    fn revision_based_context_ignores_worktree_dirt_and_tracks_revision_blobs() {
-        let (_t, store) = temp_store();
-        let mut fake = FakeVcs {
-            root: Some("rev-a".into()),
-            revision_blobs: [
-                (
-                    ("rev-a".into(), "input".into()),
-                    crate::store::blob_id(b"one"),
-                ),
-                (
-                    ("rev-b".into(), "input".into()),
-                    crate::store::blob_id(b"one"),
-                ),
-            ]
-            .into_iter()
-            .collect(),
-            ..Default::default()
-        };
-        let id = add(&store, &fake, new_node("revision context", vec![])).unwrap();
-        std::fs::write(store.project_root().join("input"), "one").unwrap();
-        complete(
-            &store,
-            &fake,
-            &id,
-            &[],
-            &["input".into()],
-            None,
-            "",
-            Author::Human,
-        )
-        .unwrap();
-
-        std::fs::write(store.project_root().join("input"), "dirty worktree").unwrap();
-        assert!(node_state_at(&store, &fake, &id, "rev-a")
-            .unwrap()
-            .is_complete());
-        assert!(node_state_at(&store, &fake, &id, "rev-b")
-            .unwrap()
-            .is_complete());
-        fake.revision_blobs
-            .remove(&("rev-b".into(), "input".into()));
-        assert_eq!(
-            node_state_at(&store, &fake, &id, "rev-b").unwrap().currency,
-            Currency::Stale
-        );
-    }
-
-    #[test]
     fn own_output_drift_uses_the_vcs() {
         let (_t, store) = temp_store();
         let mut fake = FakeVcs {
@@ -3800,67 +3657,6 @@ mod tests {
             fake.captured.borrow().is_empty(),
             "no project commit for graph-only work"
         );
-        assert!(node_state(&store, &fake, &id).unwrap().is_complete());
-    }
-
-    #[test]
-    fn execution_submission_captures_the_worktree_without_a_declaration() {
-        let (_t, store) = temp_store();
-        // The worktree's produced files are modeled by `dirty`; no output
-        // paths are passed — the agent declares nothing.
-        let fake = FakeVcs {
-            next_id: "out-commit".into(),
-            dirty: vec!["src/x.rs".into(), "src/y.rs".into()],
-            ..Default::default()
-        };
-        let id = add(&store, &fake, new_node("a", vec![])).unwrap();
-        let snapshot = snapshot_work(&store, &fake, &id, &[]).unwrap();
-
-        let commit = capture_execution_submission(
-            &store,
-            &fake,
-            snapshot,
-            Some("do it".into()),
-            "did it".into(),
-            Author::Machine,
-            None,
-        )
-        .unwrap();
-        assert_eq!(commit.as_deref(), Some("out-commit"));
-
-        let (result, _) = store.read_result(&id).unwrap().unwrap();
-        assert_eq!(
-            result.output.as_ref().map(|a| a.id.as_str()),
-            Some("out-commit")
-        );
-        // The whole worktree change set was captured, and its ref retained.
-        assert_eq!(
-            fake.captured.borrow().as_slice(),
-            &[vec!["src/x.rs".to_string(), "src/y.rs".to_string()]]
-        );
-        assert!(fake.commits.borrow().contains("out-commit"));
-    }
-
-    #[test]
-    fn execution_submission_with_an_unchanged_worktree_is_graph_only() {
-        let (_t, store) = temp_store();
-        // No dirty paths models a worktree identical to the input commit.
-        let fake = FakeVcs::default();
-        let id = add(&store, &fake, new_node("a", vec![])).unwrap();
-        let snapshot = snapshot_work(&store, &fake, &id, &[]).unwrap();
-
-        let commit = capture_execution_submission(
-            &store,
-            &fake,
-            snapshot,
-            None,
-            "nothing produced".into(),
-            Author::Machine,
-            None,
-        )
-        .unwrap();
-        assert_eq!(commit, None);
-        assert!(fake.captured.borrow().is_empty());
         assert!(node_state(&store, &fake, &id).unwrap().is_complete());
     }
 
