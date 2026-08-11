@@ -51,9 +51,7 @@ fn nota_review_completes_a_linka_verification_without_nota_knowing_linka() {
         candidate.artifact.id
     );
 
-    let (meta, _) = store
-        .read_node(started.record.verification.as_str())
-        .unwrap();
+    let (meta, _) = store.read_node(&started.record.verification).unwrap();
     assert_eq!(meta.verifies.as_ref(), Some(&candidate.id));
     assert_eq!(meta.derived_from, vec![candidate.node.clone()]);
 
@@ -81,7 +79,7 @@ fn nota_review_completes_a_linka_verification_without_nota_knowing_linka() {
         FinishOutcome::Submitted
     );
     let (result, notes) = store
-        .read_result(started.record.verification.as_str())
+        .read_result(&started.record.verification)
         .unwrap()
         .unwrap();
     assert_eq!(
@@ -106,7 +104,7 @@ fn nota_review_completes_a_linka_verification_without_nota_knowing_linka() {
         linka::IntegrationStatus::Published
     );
     assert!(
-        linka::ops::node_state(&store, &vcs, started.record.verification.as_str())
+        linka::ops::node_state(&store, &vcs, &started.record.verification)
             .unwrap()
             .is_complete()
     );
@@ -149,11 +147,9 @@ fn rejected_review_rejects_the_exact_candidate_and_reopens_its_source() {
         candidate.integration(&vcs).unwrap(),
         linka::IntegrationStatus::Rejected
     );
-    assert!(
-        linka::ops::node_state(&store, &vcs, candidate.node.as_str())
-            .unwrap()
-            .is_ready()
-    );
+    assert!(linka::ops::node_state(&store, &vcs, &candidate.node)
+        .unwrap()
+        .is_ready());
 }
 
 #[test]
@@ -253,7 +249,7 @@ fn finishing_a_review_rejects_an_invalid_git_suggestion() {
         .unwrap_err();
     assert!(format!("{error:#}").contains("may not contain Nota files"));
     assert!(store
-        .read_result(started.record.verification.as_str())
+        .read_result(&started.record.verification)
         .unwrap()
         .is_none());
 }
@@ -274,7 +270,7 @@ fn starting_a_review_twice_resumes_the_only_review_for_the_candidate() {
     assert_eq!(second.review.subject, first.review.subject);
     assert_eq!(
         linka::ops::verifications_for(&store, &candidate.id).unwrap(),
-        vec![first.record.verification.to_string()]
+        vec![first.record.verification.clone()]
     );
 }
 
@@ -477,7 +473,7 @@ fn active_reviews_can_be_listed_and_abandoned_without_removing_nota_evidence() {
     );
     assert!(reviews.list().unwrap().is_empty());
     let (result, notes) = store
-        .read_result(started.record.verification.as_str())
+        .read_result(&started.record.verification)
         .unwrap()
         .unwrap();
     assert_eq!(
@@ -649,7 +645,7 @@ fn a_source_change_during_review_is_a_submission_conflict() {
     linka::ops::edit(
         &store,
         &vcs,
-        candidate.node.as_str(),
+        &candidate.node,
         "Implement the reviewed change differently".into(),
     )
     .unwrap();
@@ -668,7 +664,7 @@ fn a_source_change_during_review_is_a_submission_conflict() {
             if conflicts.contains(&linka::SubmissionConflict::LineageChanged)
     ));
     assert!(store
-        .read_result(started.record.verification.as_str())
+        .read_result(&started.record.verification)
         .unwrap()
         .is_none());
 

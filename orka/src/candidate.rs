@@ -156,7 +156,7 @@ impl<'a> Candidates<'a> {
         )?
         .parse()
         .map_err(anyhow::Error::msg)?;
-        let snapshot = ops::snapshot_work(self.store, &vcs, verification.as_str(), &[])?;
+        let snapshot = ops::snapshot_work(self.store, &vcs, &verification, &[])?;
         ops::submit_verification(
             self.store,
             &vcs,
@@ -190,7 +190,7 @@ impl<'a> Candidates<'a> {
                 let key = format!("{attempt}/attempt");
                 if let Some((_, data)) =
                     self.store
-                        .read_node_attachment(record.node.as_str(), "orka", &key)?
+                        .read_node_attachment(&record.node, "orka", &key)?
                 {
                     let text = std::str::from_utf8(&data)
                         .context("Orka attempt attachment is not UTF-8")?;

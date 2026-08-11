@@ -6,7 +6,7 @@
 mod common;
 
 use common::*;
-use linka::{Author, SubmissionConflict};
+use linka::{Author, NodeId, SubmissionConflict};
 use orka::linka_work::{LinkaWork, Settled};
 use orka::workspace::{GitWorkspaces, WorkspaceManager};
 use std::path::Path;
@@ -35,11 +35,11 @@ fn selection_is_machine_only_and_in_linka_order() {
 
     let store = store_at(&root);
     let linka = LinkaWork::new(&store);
-    let ready: Vec<String> = linka
+    let ready: Vec<NodeId> = linka
         .ready_for_machine()
         .unwrap()
         .into_iter()
-        .map(|w| w.node.to_string())
+        .map(|w| w.node)
         .collect();
     assert!(ready.contains(&a));
     assert!(ready.contains(&b));
@@ -75,7 +75,7 @@ fn prepare_input_carries_the_snapshot_and_related_prose() {
     let input = linka.prepare_input(&work.parse().unwrap()).unwrap();
 
     // The snapshot is Linka's authoritative freeze.
-    assert_eq!(input.snapshot.node.as_str(), work);
+    assert_eq!(input.snapshot.node, work);
     assert_eq!(
         input.snapshot.project.revision,
         git(&project, &["rev-parse", "HEAD"])

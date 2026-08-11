@@ -94,7 +94,7 @@ impl<'a> Reviews<'a> {
         )?
         .parse()
         .map_err(anyhow::Error::msg)?;
-        let snapshot = ops::snapshot_work(self.linka, &vcs, verification.as_str(), &[])?;
+        let snapshot = ops::snapshot_work(self.linka, &vcs, &verification, &[])?;
         require_candidate_snapshot(&candidate_record, &snapshot)?;
         let record = ReviewRecord {
             schema: REVIEW_SCHEMA,
@@ -156,11 +156,7 @@ impl<'a> Reviews<'a> {
     pub fn list(&self) -> Result<Vec<ReviewRecord>> {
         let mut active = Vec::new();
         for record in self.records()? {
-            if self
-                .linka
-                .read_result(record.verification.as_str())?
-                .is_none()
-            {
+            if self.linka.read_result(&record.verification)?.is_none() {
                 active.push(record);
             }
         }
@@ -273,7 +269,7 @@ impl<'a> Reviews<'a> {
             .map(|entry| entry.commit.as_str())
             .unwrap_or(&review.marker)
             .to_string();
-        if let Some((result, notes)) = self.linka.read_result(verification.as_str())? {
+        if let Some((result, notes)) = self.linka.read_result(&verification)? {
             if result.outcome == linka::ResultOutcome::Verification(outcome)
                 && matching_result(&result.producer, &record, outcome, &head)
             {
@@ -316,7 +312,7 @@ impl<'a> Reviews<'a> {
     ) -> Result<AbandonOutcome> {
         let record = self.load(verification)?;
         self.validate_binding(&record)?;
-        if let Some((result, _)) = self.linka.read_result(verification.as_str())? {
+        if let Some((result, _)) = self.linka.read_result(&verification)? {
             if result.outcome == linka::ResultOutcome::Verification(VerificationOutcome::Abandoned)
                 && matching_abandonment(&result.producer, &record)
             {
@@ -390,7 +386,7 @@ impl<'a> Reviews<'a> {
         if record.snapshot.node != record.verification {
             bail!("review snapshot names a different verification node");
         }
-        let (meta, _) = self.linka.read_node(record.verification.as_str())?;
+        let (meta, _) = self.linka.read_node(&record.verification)?;
         if meta.verifies.as_ref() != Some(&record.candidate) {
             bail!("verification node no longer names the recorded candidate");
         }

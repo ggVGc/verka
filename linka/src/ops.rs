@@ -89,13 +89,13 @@ pub struct NewNode {
     /// Who the work is for (e.g. `human` for a question node); `None` = anyone.
     pub assignee: Option<Author>,
     /// Ids this node depends on (must exist).
-    pub depends_on: Vec<String>,
+    pub depends_on: Vec<NodeId>,
     /// Ids this node is derived from (must exist).
-    pub derived_from: Vec<String>,
+    pub derived_from: Vec<NodeId>,
 }
 
 /// Create a new node. Returns its id.
-pub fn add(store: &Store, vcs: &dyn Vcs, new: NewNode) -> Result<String> {
+pub fn add(store: &Store, vcs: &dyn Vcs, new: NewNode) -> Result<NodeId> {
     add_node(store, vcs, new, None)
 }
 
@@ -107,7 +107,7 @@ pub fn add_verification(
     vcs: &dyn Vcs,
     candidate: &CandidateId,
     new: NewNode,
-) -> Result<String> {
+) -> Result<NodeId> {
     add_node(store, vcs, new, Some(candidate.clone()))
 }
 
@@ -116,19 +116,15 @@ fn add_node(
     vcs: &dyn Vcs,
     mut new: NewNode,
     verifies: Option<CandidateId>,
-) -> Result<String> {
+) -> Result<NodeId> {
     if new.description.trim().is_empty() {
         bail!("a node needs a description");
     }
     let mutation = store.mutation_lock(vcs)?;
     if let Some(candidate_id) = &verifies {
         let candidate = CandidateStore::new(store).load(candidate_id)?;
-        if !new
-            .derived_from
-            .iter()
-            .any(|id| id == candidate.node.as_str())
-        {
-            new.derived_from.push(candidate.node.to_string());
+        if !new.derived_from.contains(&candidate.node) {
+            new.derived_from.push(candidate.node);
         }
     }
     for dep in new.depends_on.iter().chain(&new.derived_from) {
@@ -136,23 +132,17 @@ fn add_node(
             bail!("unknown related node `{dep}`");
         }
     }
-    let id = format!("node-{}", Ulid::new());
+    // A minted id is well-formed by construction; parsing it back is the only
+    // way to build the validated type, and cannot fail.
+    let id: NodeId = format!("node-{}", Ulid::new())
+        .parse()
+        .map_err(anyhow::Error::msg)?;
     let meta = NodeMeta {
         schema: DEFINITION_SCHEMA,
         author: new.author,
         assignee: new.assignee,
-        depends_on: new
-            .depends_on
-            .into_iter()
-            .map(|id| id.parse())
-            .collect::<std::result::Result<_, String>>()
-            .map_err(anyhow::Error::msg)?,
-        derived_from: new
-            .derived_from
-            .into_iter()
-            .map(|id| id.parse())
-            .collect::<std::result::Result<_, String>>()
-            .map_err(anyhow::Error::msg)?,
+        depends_on: new.depends_on,
+        derived_from: new.derived_from,
         verifies,
         extensions: Default::default(),
     };
@@ -163,7 +153,7 @@ fn add_node(
 
 /// Add `to` to one of `from`'s dependency lists. A definition change: it moves
 /// `from`'s version.
-pub fn link(store: &Store, vcs: &dyn Vcs, from: &str, to: &str, kind: DepKind) -> Result<()> {
+pub fn link(store: &Store, vcs: &dyn Vcs, from: &NodeId, to: &NodeId, kind: DepKind) -> Result<()> {
     if from == to {
         bail!("cannot link a node to itself");
     }
@@ -176,10 +166,10 @@ pub fn link(store: &Store, vcs: &dyn Vcs, from: &str, to: &str, kind: DepKind) -
         DepKind::DependsOn => &mut meta.depends_on,
         DepKind::DerivedFrom => &mut meta.derived_from,
     };
-    if edges.iter().any(|id| id.as_str() == to) {
+    if edges.contains(to) {
         bail!("duplicate edge");
     }
-    edges.push(to.parse().map_err(anyhow::Error::msg)?);
+    edges.push(to.clone());
     store.write_node(from, &meta, &description)?;
     mutation.commit(vcs, &format!("linka: link {from} -> {to}"))?;
     Ok(())
@@ -198,7 +188,7 @@ pub enum EditOutcome {
 /// version, so a prior `done` no longer covers it and dependents' pins go
 /// stale. Submitting the description a node already has is a successful no-op
 /// (retries and sync-style callers converge instead of erroring).
-pub fn edit(store: &Store, vcs: &dyn Vcs, id: &str, description: String) -> Result<EditOutcome> {
+pub fn edit(store: &Store, vcs: &dyn Vcs, id: &NodeId, description: String) -> Result<EditOutcome> {
     if description.trim().is_empty() {
         bail!("a node needs a description");
     }
@@ -221,7 +211,7 @@ pub fn edit(store: &Store, vcs: &dyn Vcs, id: &str, description: String) -> Resu
 pub fn complete(
     store: &Store,
     vcs: &dyn Vcs,
-    id: &str,
+    id: &NodeId,
     outputs: &[String],
     context: &[String],
     message: Option<String>,
@@ -302,7 +292,7 @@ pub fn require_consistent_project_head(store: &Store, vcs: &dyn Vcs) -> Result<(
         return Ok(());
     };
     match origin(store, &head)? {
-        Some(recorded_node) if recorded_node == declared_node => return Ok(()),
+        Some(recorded_node) if recorded_node.as_str() == declared_node => return Ok(()),
         Some(recorded_node) => bail!(
             "inconsistent Linka state: project HEAD {} declares node `{declared_node}`, but the \
              store records it as output of `{recorded_node}`",
@@ -336,7 +326,13 @@ pub fn require_consistent_project_head(store: &Store, vcs: &dyn Vcs) -> Result<(
 /// question node is typically answered mid-work, while the tree is dirty with
 /// whatever prompted the question. Dependency versions are still pinned, so
 /// the answer participates in staleness like any other result.
-pub fn respond(store: &Store, vcs: &dyn Vcs, id: &str, notes: &str, author: Author) -> Result<()> {
+pub fn respond(
+    store: &Store,
+    vcs: &dyn Vcs,
+    id: &NodeId,
+    notes: &str,
+    author: Author,
+) -> Result<()> {
     if notes.trim().is_empty() {
         bail!("a response needs some text");
     }
@@ -360,7 +356,7 @@ pub fn respond(store: &Store, vcs: &dyn Vcs, id: &str, notes: &str, author: Auth
 /// what the attempt was built against, so the failure is reproducible evidence.
 /// It does not gate on project-tree cleanliness: a failed attempt may well have
 /// left a mess, and recording the failure must not be blocked by it.
-pub fn fail(store: &Store, vcs: &dyn Vcs, id: &str, notes: &str, author: Author) -> Result<()> {
+pub fn fail(store: &Store, vcs: &dyn Vcs, id: &NodeId, notes: &str, author: Author) -> Result<()> {
     let mutation = store.mutation_lock(vcs)?;
     let (meta, _) = store.read_node(id)?;
     require_ordinary_node(&meta, id)?;
@@ -394,7 +390,7 @@ pub fn fail(store: &Store, vcs: &dyn Vcs, id: &str, notes: &str, author: Author)
 pub fn record_context_observation(
     store: &Store,
     vcs: &dyn Vcs,
-    id: &str,
+    id: &NodeId,
     expected_result: &ResultVersion,
     paths: &[String],
 ) -> Result<usize> {
@@ -475,7 +471,7 @@ pub fn record_context_observation(
 pub fn record_node_attachment(
     store: &Store,
     vcs: &dyn Vcs,
-    id: &str,
+    id: &NodeId,
     new: NewNodeAttachment,
 ) -> Result<NodeAttachment> {
     Ok(record_node_attachments(store, vcs, id, vec![new])?
@@ -490,7 +486,7 @@ pub fn record_node_attachment(
 pub fn record_node_attachments(
     store: &Store,
     vcs: &dyn Vcs,
-    id: &str,
+    id: &NodeId,
     new: Vec<NewNodeAttachment>,
 ) -> Result<Vec<NodeAttachment>> {
     if new.is_empty() {
@@ -515,7 +511,7 @@ pub fn record_node_attachments(
 
 fn prepare_node_attachments(
     store: &Store,
-    id: &str,
+    id: &NodeId,
     new: Vec<NewNodeAttachment>,
 ) -> Result<(Vec<NodeAttachment>, Vec<(NodeAttachment, Vec<u8>)>)> {
     let mut identities = std::collections::HashSet::new();
@@ -554,7 +550,7 @@ fn prepare_node_attachments(
 
 fn write_node_attachments(
     store: &Store,
-    id: &str,
+    id: &NodeId,
     pending: &[(NodeAttachment, Vec<u8>)],
 ) -> Result<()> {
     for (attachment, data) in pending {
@@ -564,7 +560,7 @@ fn write_node_attachments(
 }
 
 /// Derive all graph state through one fallible evaluation.
-pub fn node_state(store: &Store, vcs: &dyn Vcs, id: &str) -> Result<NodeState> {
+pub fn node_state(store: &Store, vcs: &dyn Vcs, id: &NodeId) -> Result<NodeState> {
     let mut visiting = std::collections::HashSet::new();
     node_state_inner(store, vcs, id, &mut visiting)
 }
@@ -572,13 +568,13 @@ pub fn node_state(store: &Store, vcs: &dyn Vcs, id: &str) -> Result<NodeState> {
 fn node_state_inner(
     store: &Store,
     vcs: &dyn Vcs,
-    id: &str,
-    visiting: &mut std::collections::HashSet<String>,
+    id: &NodeId,
+    visiting: &mut std::collections::HashSet<NodeId>,
 ) -> Result<NodeState> {
     let (meta, _) = store
         .read_node(id)
         .with_context(|| format!("reading definition for `{id}`"))?;
-    if !visiting.insert(id.to_string()) {
+    if !visiting.insert(id.clone()) {
         bail!("dependency cycle while deriving state at `{id}`");
     }
     let result = (|| {
@@ -618,7 +614,7 @@ fn node_state_inner(
         for dependency in &meta.depends_on {
             if !store.exists(dependency) {
                 blockers.push(Blocker {
-                    id: dependency.to_string(),
+                    id: dependency.clone(),
                     reason: BlockerReason::Missing,
                 });
                 continue;
@@ -643,7 +639,7 @@ fn node_state_inner(
                     }
                 };
                 blockers.push(Blocker {
-                    id: dependency.to_string(),
+                    id: dependency.clone(),
                     reason,
                 });
             }
@@ -663,7 +659,7 @@ fn node_state_inner(
 fn staleness_for_result(
     store: &Store,
     vcs: &dyn Vcs,
-    id: &str,
+    id: &NodeId,
     result: &ResultMeta,
     candidate: Option<&CandidateRecord>,
 ) -> Result<Vec<StalenessReason>> {
@@ -678,13 +674,13 @@ fn staleness_for_result(
     for consumed in &result.consumed {
         if !store.exists(&consumed.id) {
             reasons.push(StalenessReason::ConsumedNodeMissing {
-                id: consumed.id.to_string(),
+                id: consumed.id.clone(),
             });
             continue;
         }
         if store.node_version(&consumed.id)? != consumed.definition {
             reasons.push(StalenessReason::ConsumedDefinitionChanged {
-                id: consumed.id.to_string(),
+                id: consumed.id.clone(),
             });
         }
         let current_result = store.read_result(&consumed.id)?;
@@ -694,13 +690,13 @@ fn staleness_for_result(
             .transpose()?;
         if current_version != consumed.result {
             reasons.push(StalenessReason::ConsumedResultChanged {
-                id: consumed.id.to_string(),
+                id: consumed.id.clone(),
             });
         }
         let current_output = current_result.and_then(|(r, _)| r.output);
         if current_output != consumed.output {
             reasons.push(StalenessReason::ConsumedOutputChanged {
-                id: consumed.id.to_string(),
+                id: consumed.id.clone(),
             });
         }
     }
@@ -715,10 +711,10 @@ fn staleness_for_result(
         let current = project_file_blob(&root, &pin.path)?;
         match current {
             Some(now) if now != pin.identity => reasons.push(StalenessReason::ContextChanged {
-                path: pin.path.to_string(),
+                path: pin.path.clone(),
             }),
             None => reasons.push(StalenessReason::ContextMissing {
-                path: pin.path.to_string(),
+                path: pin.path.clone(),
             }),
             _ => {}
         }
@@ -749,30 +745,29 @@ fn staleness_for_result(
 
 fn candidate_for_result(
     store: &Store,
-    id: &str,
+    id: &NodeId,
     result: &ResultMeta,
 ) -> Result<Option<CandidateRecord>> {
     let Some(artifact) = &result.output else {
         return Ok(None);
     };
-    let node: NodeId = id.parse().map_err(anyhow::Error::msg)?;
     let version = store.result_version(id)?;
-    CandidateStore::new(store).for_result(&node, &version, artifact)
+    CandidateStore::new(store).for_result(id, &version, artifact)
 }
 
-pub fn staleness(store: &Store, vcs: &dyn Vcs, id: &str) -> Result<Vec<StalenessReason>> {
+pub fn staleness(store: &Store, vcs: &dyn Vcs, id: &NodeId) -> Result<Vec<StalenessReason>> {
     Ok(node_state(store, vcs, id)?.staleness)
 }
 
-pub fn blockers(store: &Store, vcs: &dyn Vcs, id: &str) -> Result<Vec<Blocker>> {
+pub fn blockers(store: &Store, vcs: &dyn Vcs, id: &NodeId) -> Result<Vec<Blocker>> {
     Ok(node_state(store, vcs, id)?.blockers)
 }
 
-pub fn is_ready(store: &Store, vcs: &dyn Vcs, id: &str) -> Result<bool> {
+pub fn is_ready(store: &Store, vcs: &dyn Vcs, id: &NodeId) -> Result<bool> {
     Ok(node_state(store, vcs, id)?.is_ready())
 }
 
-pub fn ready_nodes(store: &Store, vcs: &dyn Vcs, worker: Option<Author>) -> Result<Vec<String>> {
+pub fn ready_nodes(store: &Store, vcs: &dyn Vcs, worker: Option<Author>) -> Result<Vec<NodeId>> {
     let mut ready = Vec::new();
     for id in store.list_ids()? {
         if !node_state(store, vcs, &id)?.is_ready() {
@@ -791,7 +786,7 @@ pub fn ready_nodes(store: &Store, vcs: &dyn Vcs, worker: Option<Author>) -> Resu
 pub fn snapshot_work(
     store: &Store,
     vcs: &dyn Vcs,
-    id: &str,
+    id: &NodeId,
     context: &[String],
 ) -> Result<WorkSnapshot> {
     let state = node_state(store, vcs, id)?;
@@ -810,7 +805,7 @@ pub fn snapshot_work(
     )?;
     Ok(WorkSnapshot {
         schema: SNAPSHOT_SCHEMA,
-        node: id.parse().map_err(anyhow::Error::msg)?,
+        node: id.clone(),
         definition: store.node_version(id)?,
         dependencies,
         lineage,
@@ -915,7 +910,7 @@ fn submit_result_locked(
     mutation: MutationLock,
 ) -> std::result::Result<(), SubmissionError> {
     let snapshot = &submission.snapshot;
-    let id = snapshot.node.as_str();
+    let id = &snapshot.node;
     if snapshot.schema != SNAPSHOT_SCHEMA {
         return Err(SubmissionError::Evaluation(anyhow::anyhow!(
             "work snapshot uses unsupported schema {}",
@@ -1073,7 +1068,7 @@ pub fn capture_submission(
     author: Author,
     producer: Option<ProducerEvidence>,
 ) -> std::result::Result<Option<String>, SubmissionError> {
-    let id = snapshot.node.as_str().to_string();
+    let id = snapshot.node.clone();
     let (meta, _) = store.read_node(&id)?;
     require_ordinary_node(&meta, &id)?;
     let output_paths: Vec<String> = outputs.iter().map(ToString::to_string).collect();
@@ -1137,7 +1132,7 @@ pub fn submit_captured_execution_with_attachments(
     producer: Option<ProducerEvidence>,
     attachments: Vec<NewNodeAttachment>,
 ) -> std::result::Result<(), SubmissionError> {
-    let id = snapshot.node.as_str().to_string();
+    let id = snapshot.node.clone();
     let (meta, _) = store.read_node(&id)?;
     require_ordinary_node(&meta, &id)?;
     if let Some(commit) = output_commit {
@@ -1172,7 +1167,7 @@ pub fn submit_captured_execution_with_attachments(
 /// The node whose work produced `commit`, if any — the inverse of the output
 /// artifact on each result, derived by scanning rather than persisted as a
 /// second index. Unique because each completion mints one commit for one node.
-pub fn origin(store: &Store, commit: &str) -> Result<Option<String>> {
+pub fn origin(store: &Store, commit: &str) -> Result<Option<NodeId>> {
     for id in store.list_ids()? {
         if let Some((result, _)) = store.read_result(&id)? {
             if result.output.as_ref().map(|a| a.id.as_str()) == Some(commit) {
@@ -1185,7 +1180,7 @@ pub fn origin(store: &Store, commit: &str) -> Result<Option<String>> {
 
 /// A node's current output commit: what its recorded work produced. `None` if it
 /// has no result or the work produced no files.
-pub fn output_of(store: &Store, id: &str) -> Result<Option<String>> {
+pub fn output_of(store: &Store, id: &NodeId) -> Result<Option<String>> {
     if !store.exists(id) {
         bail!("unknown node `{id}`");
     }
@@ -1195,13 +1190,13 @@ pub fn output_of(store: &Store, id: &str) -> Result<Option<String>> {
 }
 
 /// Ids of nodes that name `id` in either dependency list.
-pub fn dependents(store: &Store, id: &str) -> Result<Vec<String>> {
+pub fn dependents(store: &Store, id: &NodeId) -> Result<Vec<NodeId>> {
     if !store.exists(id) {
         bail!("unknown node `{id}`");
     }
     let mut out = Vec::new();
     for other in store.list_ids()? {
-        if other == id {
+        if &other == id {
             continue;
         }
         let (meta, _) = store.read_node(&other)?;
@@ -1209,7 +1204,7 @@ pub fn dependents(store: &Store, id: &str) -> Result<Vec<String>> {
             .depends_on
             .iter()
             .chain(&meta.derived_from)
-            .any(|d| d.as_str() == id)
+            .any(|d| d == id)
         {
             out.push(other);
         }
@@ -1218,7 +1213,7 @@ pub fn dependents(store: &Store, id: &str) -> Result<Vec<String>> {
 }
 
 /// Ids of ordinary nodes that verify `candidate`.
-pub fn verifications_for(store: &Store, candidate: &CandidateId) -> Result<Vec<String>> {
+pub fn verifications_for(store: &Store, candidate: &CandidateId) -> Result<Vec<NodeId>> {
     CandidateStore::new(store).load(candidate)?;
     let mut out = Vec::new();
     for id in store.list_ids()? {
@@ -1238,22 +1233,22 @@ pub fn verifications_for(store: &Store, candidate: &CandidateId) -> Result<Vec<S
 /// This answers "is this actually finished?" for a node whose own `done` only
 /// certifies its own unit of work — e.g. a task that closed at spec time while
 /// its implementations were still open.
-pub fn unsettled(store: &Store, vcs: &dyn Vcs, id: &str) -> Result<Vec<String>> {
+pub fn unsettled(store: &Store, vcs: &dyn Vcs, id: &NodeId) -> Result<Vec<String>> {
     if !store.exists(id) {
         bail!("unknown node `{id}`");
     }
     // Reverse adjacency over both edge kinds, built in one scan.
-    let mut rev: std::collections::BTreeMap<String, Vec<String>> = Default::default();
+    let mut rev: std::collections::BTreeMap<NodeId, Vec<NodeId>> = Default::default();
     for other in store.list_ids()? {
         let (meta, _) = store.read_node(&other)?;
         for dep in meta.depends_on.iter().chain(&meta.derived_from) {
-            rev.entry(dep.to_string()).or_default().push(other.clone());
+            rev.entry(dep.clone()).or_default().push(other.clone());
         }
     }
 
     let mut reasons = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    let mut queue = std::collections::VecDeque::from([id.to_string()]);
+    let mut queue = std::collections::VecDeque::from([id.clone()]);
     while let Some(node) = queue.pop_front() {
         if !seen.insert(node.clone()) {
             continue;
@@ -1295,7 +1290,7 @@ pub fn unsettled(store: &Store, vcs: &dyn Vcs, id: &str) -> Result<Vec<String>> 
 pub fn check(store: &Store) -> Result<Vec<String>> {
     let mut problems = Vec::new();
     let repository = Pairing::load(store.root())?.map(|pairing| pairing.root_commit);
-    let mut depends_on: std::collections::BTreeMap<String, Vec<String>> = Default::default();
+    let mut depends_on: std::collections::BTreeMap<NodeId, Vec<NodeId>> = Default::default();
 
     for id in store.list_ids()? {
         let meta = match store.read_node(&id) {
@@ -1352,7 +1347,7 @@ pub fn check(store: &Store) -> Result<Vec<String>> {
                 if !seen.insert(dep.as_str()) {
                     problems.push(format!("{id}: duplicate {kind} entry `{dep}`"));
                 }
-                if dep.as_str() == id {
+                if *dep == id {
                     problems.push(format!("{id}: {kind} refers to the node itself"));
                     continue;
                 }
@@ -1376,7 +1371,7 @@ pub fn check(store: &Store) -> Result<Vec<String>> {
                 }
             }
         }
-        depends_on.insert(id, meta.depends_on.into_iter().map(Into::into).collect());
+        depends_on.insert(id, meta.depends_on);
     }
 
     problems.extend(find_cycles(&depends_on));
@@ -1384,7 +1379,7 @@ pub fn check(store: &Store) -> Result<Vec<String>> {
 }
 
 fn validate_result_semantics(
-    id: &str,
+    id: &NodeId,
     meta: &NodeMeta,
     result: &ResultMeta,
     repository: Option<&str>,
@@ -1451,7 +1446,7 @@ fn validate_result_semantics(
 
 fn validate_verification_decision(
     store: &Store,
-    id: &str,
+    id: &NodeId,
     meta: &NodeMeta,
     result: &ResultMeta,
     problems: &mut Vec<String>,
@@ -1464,17 +1459,17 @@ fn validate_verification_decision(
     };
     let decided_by_this = match &candidate.state {
         CandidateState::Accepted { verification, .. }
-        | CandidateState::Rejected { verification, .. } => verification.as_str() == id,
+        | CandidateState::Rejected { verification, .. } => verification == id,
         CandidateState::Pending => false,
     };
     let matches = match result.outcome {
         ResultOutcome::Verification(VerificationOutcome::Accepted) => matches!(
             &candidate.state,
-            CandidateState::Accepted { verification, .. } if verification.as_str() == id
+            CandidateState::Accepted { verification, .. } if verification == id
         ),
         ResultOutcome::Verification(VerificationOutcome::Rejected) => matches!(
             &candidate.state,
-            CandidateState::Rejected { verification, .. } if verification.as_str() == id
+            CandidateState::Rejected { verification, .. } if verification == id
         ),
         ResultOutcome::Verification(VerificationOutcome::Abandoned) => !decided_by_this,
         ResultOutcome::Work(_) => true,
@@ -1490,7 +1485,7 @@ fn validate_verification_decision(
 /// Build an output commit's message: the caller's message (or the node's
 /// title as a fallback) plus the `Linka-Node` trailer and, when the work had
 /// an input commit, the `Linka-Input` trailer recording what it was built from.
-fn output_commit_message(id: &str, message: String, input: Option<&str>) -> String {
+fn output_commit_message(id: &NodeId, message: String, input: Option<&str>) -> String {
     let mut commit_message = format!("{message}\n\nLinka-Node: {id}");
     if let Some(input) = input {
         commit_message.push_str(&format!("\nLinka-Input: {input}"));
@@ -1507,18 +1502,18 @@ fn outcome_kind_matches(verifies: bool, outcome: ResultOutcome) -> bool {
     )
 }
 
-fn verification_requires_review_result(id: &str) -> String {
+fn verification_requires_review_result(id: &NodeId) -> String {
     format!("verification node `{id}` requires an accepted, rejected, or abandoned review result")
 }
 
-fn ordinary_requires_work_result(id: &str) -> String {
+fn ordinary_requires_work_result(id: &NodeId) -> String {
     format!("ordinary node `{id}` requires a done or failed work result")
 }
 
 /// Bail if `id` (identified by `meta`) is a verification node: [`complete`] and
 /// [`fail`] only ever record a work outcome, which a verification node never
 /// accepts.
-fn require_ordinary_node(meta: &NodeMeta, id: &str) -> Result<()> {
+fn require_ordinary_node(meta: &NodeMeta, id: &NodeId) -> Result<()> {
     if meta.verifies.is_some() {
         bail!(verification_requires_review_result(id));
     }
@@ -1543,7 +1538,7 @@ fn outcome_requires_full_pins(outcome: ResultOutcome) -> bool {
 }
 
 fn validate_artifact(
-    id: &str,
+    id: &NodeId,
     artifact: &ArtifactRef,
     repository: Option<&str>,
     problems: &mut Vec<String>,
@@ -1618,17 +1613,17 @@ pub fn check_workbench(store: &Store, vcs: &dyn Vcs) -> Result<Vec<String>> {
 }
 
 /// Report each `depends_on` cycle once, as an explicit `a -> b -> a` path.
-fn find_cycles(graph: &std::collections::BTreeMap<String, Vec<String>>) -> Vec<String> {
+fn find_cycles(graph: &std::collections::BTreeMap<NodeId, Vec<NodeId>>) -> Vec<String> {
     #[derive(Clone, Copy, PartialEq)]
     enum State {
         Visiting,
         Done,
     }
     fn visit(
-        node: &str,
-        graph: &std::collections::BTreeMap<String, Vec<String>>,
-        state: &mut std::collections::HashMap<String, State>,
-        stack: &mut Vec<String>,
+        node: &NodeId,
+        graph: &std::collections::BTreeMap<NodeId, Vec<NodeId>>,
+        state: &mut std::collections::HashMap<NodeId, State>,
+        stack: &mut Vec<NodeId>,
         out: &mut Vec<String>,
     ) {
         match state.get(node) {
@@ -1636,15 +1631,15 @@ fn find_cycles(graph: &std::collections::BTreeMap<String, Vec<String>>) -> Vec<S
             Some(State::Visiting) => {
                 // Back-edge: the cycle is the stack from the first occurrence on.
                 let start = stack.iter().position(|n| n == node).unwrap_or(0);
-                let mut path: Vec<&str> = stack[start..].iter().map(String::as_str).collect();
-                path.push(node);
+                let mut path: Vec<&str> = stack[start..].iter().map(NodeId::as_str).collect();
+                path.push(&node);
                 out.push(format!("dependency cycle: {}", path.join(" -> ")));
                 return;
             }
             None => {}
         }
-        state.insert(node.to_string(), State::Visiting);
-        stack.push(node.to_string());
+        state.insert(node.clone(), State::Visiting);
+        stack.push(node.clone());
         for dep in graph.get(node).into_iter().flatten() {
             // Missing targets are reported separately; only follow known nodes.
             if graph.contains_key(dep) {
@@ -1652,7 +1647,7 @@ fn find_cycles(graph: &std::collections::BTreeMap<String, Vec<String>>) -> Vec<S
             }
         }
         stack.pop();
-        state.insert(node.to_string(), State::Done);
+        state.insert(node.clone(), State::Done);
     }
 
     let mut state = std::collections::HashMap::new();
@@ -1957,7 +1952,7 @@ mod tests {
         (TempDir(root), store)
     }
 
-    fn new_node(description: &str, depends_on: Vec<String>) -> NewNode {
+    fn new_node(description: &str, depends_on: Vec<NodeId>) -> NewNode {
         NewNode {
             description: description.into(),
             author: Author::Human,
@@ -1967,15 +1962,20 @@ mod tests {
         }
     }
 
-    fn done(store: &Store, vcs: &dyn Vcs, id: &str) {
+    /// A node id for the "this node does not exist" cases.
+    fn missing() -> NodeId {
+        "node-missing".parse().unwrap()
+    }
+
+    fn done(store: &Store, vcs: &dyn Vcs, id: &NodeId) {
         complete(store, vcs, id, &[], &[], None, "done", Author::Human).unwrap();
     }
 
     #[test]
     fn output_and_dependent_queries_reject_unknown_nodes() {
         let (_t, store) = temp_store();
-        assert!(output_of(&store, "missing").is_err());
-        assert!(dependents(&store, "missing").is_err());
+        assert!(output_of(&store, &missing()).is_err());
+        assert!(dependents(&store, &missing()).is_err());
     }
 
     #[test]
@@ -2266,7 +2266,12 @@ mod tests {
         let (_t, store) = temp_store();
         let fake = FakeVcs::default();
 
-        assert!(add(&store, &fake, new_node("a", vec!["node-nope".into()])).is_err());
+        assert!(add(
+            &store,
+            &fake,
+            new_node("a", vec!["node-nope".parse().unwrap()])
+        )
+        .is_err());
 
         let id = add(&store, &fake, new_node("a", vec![])).unwrap();
         assert!(store.exists(&id));
@@ -2504,7 +2509,7 @@ mod tests {
         assert_eq!(
             reasons,
             vec![StalenessReason::ContextChanged {
-                path: "helper.rs".into()
+                path: "helper.rs".parse().unwrap()
             }]
         );
         assert!(node_state(&store, &fake, &id).unwrap().is_ready());
@@ -2514,7 +2519,7 @@ mod tests {
         assert_eq!(
             reasons,
             vec![StalenessReason::ContextMissing {
-                path: "helper.rs".into()
+                path: "helper.rs".parse().unwrap()
             }]
         );
     }
@@ -2771,14 +2776,14 @@ mod tests {
         std::fs::write(store.project_root().join("input"), "content").unwrap();
 
         let snapshot = snapshot_work(&store, &fake, &work, &["input".into()]).unwrap();
-        assert_eq!(snapshot.node.as_str(), work);
+        assert_eq!(snapshot.node, work);
         assert_eq!(snapshot.definition, store.node_version(&work).unwrap());
-        assert_eq!(snapshot.dependencies[0].id.as_str(), dependency);
+        assert_eq!(snapshot.dependencies[0].id, dependency);
         assert_eq!(
             snapshot.dependencies[0].outcome,
             Some(ResultOutcome::Work(Outcome::Done))
         );
-        assert_eq!(snapshot.lineage[0].id.as_str(), lineage);
+        assert_eq!(snapshot.lineage[0].id, lineage);
         assert_eq!(snapshot.context[0].path.as_str(), "input");
         assert_eq!(snapshot.project.revision, "project-revision");
         assert_eq!(snapshot.project.tree, "tree-project-revision");
@@ -2824,7 +2829,7 @@ mod tests {
             output: Some(ArtifactRef {
                 scheme: "git-commit".into(),
                 repository: "foreign-repository".into(),
-                id: "output".into(),
+                id: "output".parse().unwrap(),
             }),
             ..submission.clone()
         };
@@ -2985,7 +2990,14 @@ mod tests {
         let a = add(&store, &fake, new_node("a", vec![])).unwrap();
         let b = add(&store, &fake, new_node("b", vec![])).unwrap();
 
-        assert!(link(&store, &fake, &a, "node-nope", DepKind::DependsOn).is_err());
+        assert!(link(
+            &store,
+            &fake,
+            &a,
+            &"node-nope".parse().unwrap(),
+            DepKind::DependsOn
+        )
+        .is_err());
         link(&store, &fake, &a, &b, DepKind::DependsOn).unwrap();
         assert!(link(&store, &fake, &a, &b, DepKind::DependsOn).is_err());
 
@@ -3117,7 +3129,7 @@ mod tests {
             output: Some(ArtifactRef {
                 scheme: "unknown".into(),
                 repository: String::new(),
-                id: "artifact".into(),
+                id: "artifact".parse().unwrap(),
             }),
         });
         result.context.push(crate::model::ContextPin {
@@ -3212,7 +3224,7 @@ mod tests {
             problems[0].starts_with("dependency cycle: "),
             "{problems:?}"
         );
-        assert!(problems[0].contains(&a) && problems[0].contains(&b));
+        assert!(problems[0].contains(a.as_str()) && problems[0].contains(b.as_str()));
     }
 
     #[test]
@@ -3535,10 +3547,10 @@ mod tests {
         assert_eq!(problems.len(), 2, "{problems:?}");
         assert!(problems
             .iter()
-            .any(|p| p.starts_with(&a) && p.contains("output commit")));
+            .any(|p| p.starts_with(a.as_str()) && p.contains("output commit")));
         assert!(problems
             .iter()
-            .any(|p| p.starts_with(&b) && p.contains("built-against")));
+            .any(|p| p.starts_with(b.as_str()) && p.contains("built-against")));
     }
 
     fn path(p: &str) -> ProjectPath {
@@ -3717,7 +3729,7 @@ mod tests {
         let id = add(&store, &setup, new_node("a", vec![])).unwrap();
         let fake = FakeVcs {
             root: Some("dangling-output".into()),
-            linka_nodes: [("dangling-output".into(), id.clone())].into(),
+            linka_nodes: [("dangling-output".into(), id.to_string())].into(),
             ..Default::default()
         };
 
@@ -3727,7 +3739,7 @@ mod tests {
             error.to_string().contains("has never recorded"),
             "{error:#}"
         );
-        assert!(error.to_string().contains(&id), "{error:#}");
+        assert!(error.to_string().contains(id.as_str()), "{error:#}");
     }
 
     #[test]
@@ -3737,8 +3749,8 @@ mod tests {
         let id = add(&store, &setup, new_node("a", vec![])).unwrap();
         let fake = FakeVcs {
             root: Some("historical-output".into()),
-            linka_nodes: [("historical-output".into(), id.clone())].into(),
-            recorded_outputs: [(id, "historical-output".into())].into(),
+            linka_nodes: [("historical-output".into(), id.to_string())].into(),
+            recorded_outputs: [(id.to_string(), "historical-output".into())].into(),
             ..Default::default()
         };
 
@@ -3780,7 +3792,7 @@ mod tests {
         let fake = FakeVcs {
             root: Some("unrecorded-output".into()),
             next_id: "must-not-be-captured".into(),
-            linka_nodes: [("unrecorded-output".into(), id.clone())].into(),
+            linka_nodes: [("unrecorded-output".into(), id.to_string())].into(),
             ..Default::default()
         };
 

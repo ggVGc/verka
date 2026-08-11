@@ -149,43 +149,39 @@ impl Store {
         &self.root
     }
 
-    pub fn node_dir(&self, id: &str) -> PathBuf {
-        match id.parse::<NodeId>() {
-            Ok(id) => self.root.join("nodes").join(id.as_str()),
-            Err(_) => self.root.join("nodes").join(".invalid-node-id"),
-        }
+    pub fn node_dir(&self, id: &NodeId) -> PathBuf {
+        self.root.join("nodes").join(id.as_str())
     }
-    fn node_path(&self, id: &str) -> PathBuf {
+    fn node_path(&self, id: &NodeId) -> PathBuf {
         self.node_dir(id).join("node.toml")
     }
-    fn description_path(&self, id: &str) -> PathBuf {
+    fn description_path(&self, id: &NodeId) -> PathBuf {
         self.node_dir(id).join("description.md")
     }
-    fn result_meta_path(&self, id: &str) -> PathBuf {
+    fn result_meta_path(&self, id: &NodeId) -> PathBuf {
         self.node_dir(id).join("result.toml")
     }
-    fn result_path(&self, id: &str) -> PathBuf {
+    fn result_path(&self, id: &NodeId) -> PathBuf {
         self.node_dir(id).join("result.md")
     }
 
-    fn attachments_path(&self, id: &str) -> PathBuf {
+    fn attachments_path(&self, id: &NodeId) -> PathBuf {
         self.node_dir(id).join("attachments")
     }
 
-    fn attachment_path(&self, id: &str, namespace: &str, key: &str) -> Result<PathBuf> {
+    fn attachment_path(&self, id: &NodeId, namespace: &str, key: &str) -> Result<PathBuf> {
         validate_attachment_identity(namespace, key)?;
         let identity = attachment_identity(namespace, key);
         Ok(self.attachments_path(id).join(identity))
     }
 
-    pub fn exists(&self, id: &str) -> bool {
+    pub fn exists(&self, id: &NodeId) -> bool {
         self.node_path(id).is_file()
     }
 
     // --- definition ------------------------------------------------------------
 
-    pub fn write_node(&self, id: &str, meta: &NodeMeta, description: &str) -> Result<()> {
-        validate_node_id(id)?;
+    pub fn write_node(&self, id: &NodeId, meta: &NodeMeta, description: &str) -> Result<()> {
         if meta.schema != DEFINITION_SCHEMA {
             bail!("cannot write unsupported definition schema {}", meta.schema);
         }
@@ -197,8 +193,7 @@ impl Store {
         Ok(())
     }
 
-    pub fn read_node(&self, id: &str) -> Result<(NodeMeta, String)> {
-        validate_node_id(id)?;
+    pub fn read_node(&self, id: &NodeId) -> Result<(NodeMeta, String)> {
         let data = fs::read_to_string(self.node_path(id))
             .with_context(|| format!("unknown node `{id}`"))?;
         let meta: NodeMeta =
@@ -212,8 +207,7 @@ impl Store {
     }
 
     /// The node's version: Git blob ids of its structured metadata and prose.
-    pub fn node_version(&self, id: &str) -> Result<DefinitionVersion> {
-        validate_node_id(id)?;
+    pub fn node_version(&self, id: &NodeId) -> Result<DefinitionVersion> {
         let metadata =
             fs::read(self.node_path(id)).with_context(|| format!("unknown node `{id}`"))?;
         let description = fs::read(self.description_path(id))
@@ -226,8 +220,7 @@ impl Store {
 
     // --- result (structured record plus optional prose) -------------------------
 
-    pub fn write_result(&self, id: &str, meta: &ResultMeta, notes: &str) -> Result<()> {
-        validate_node_id(id)?;
+    pub fn write_result(&self, id: &NodeId, meta: &ResultMeta, notes: &str) -> Result<()> {
         if meta.schema != RESULT_SCHEMA {
             bail!("cannot write unsupported result schema {}", meta.schema);
         }
@@ -254,8 +247,7 @@ impl Store {
     }
 
     /// The node's completion record, or `None` if it has not been worked yet.
-    pub fn read_result(&self, id: &str) -> Result<Option<(ResultMeta, String)>> {
-        validate_node_id(id)?;
+    pub fn read_result(&self, id: &NodeId) -> Result<Option<(ResultMeta, String)>> {
         let data = match fs::read_to_string(self.result_meta_path(id)) {
             Ok(t) => t,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -282,16 +274,14 @@ impl Store {
     /// The node's result version, or `None` if it has no result — the pairing
     /// of [`Self::read_result`] and [`Self::result_version`] that pinning and
     /// version checks need, in one pass over the files.
-    pub fn current_result_version(&self, id: &str) -> Result<Option<ResultVersion>> {
-        validate_node_id(id)?;
+    pub fn current_result_version(&self, id: &NodeId) -> Result<Option<ResultVersion>> {
         if !self.result_meta_path(id).exists() {
             return Ok(None);
         }
         self.result_version(id).map(Some)
     }
 
-    pub fn result_version(&self, id: &str) -> Result<ResultVersion> {
-        validate_node_id(id)?;
+    pub fn result_version(&self, id: &NodeId) -> Result<ResultVersion> {
         let metadata = fs::read(self.result_meta_path(id))
             .with_context(|| format!("node `{id}` has no result"))?;
         let notes = match fs::read(self.result_path(id)) {
@@ -310,11 +300,10 @@ impl Store {
     /// Read one immutable node attachment and its exact payload bytes.
     pub fn read_node_attachment(
         &self,
-        id: &str,
+        id: &NodeId,
         namespace: &str,
         key: &str,
     ) -> Result<Option<(NodeAttachment, Vec<u8>)>> {
-        validate_node_id(id)?;
         if !self.exists(id) {
             bail!("unknown node `{id}`");
         }
@@ -336,8 +325,7 @@ impl Store {
     }
 
     /// List attachment metadata in stable namespace/key order.
-    pub fn list_node_attachments(&self, id: &str) -> Result<Vec<NodeAttachment>> {
-        validate_node_id(id)?;
+    pub fn list_node_attachments(&self, id: &NodeId) -> Result<Vec<NodeAttachment>> {
         if !self.exists(id) {
             bail!("unknown node `{id}`");
         }
@@ -376,11 +364,10 @@ impl Store {
 
     pub(crate) fn write_node_attachment(
         &self,
-        id: &str,
+        id: &NodeId,
         attachment: &NodeAttachment,
         data: &[u8],
     ) -> Result<()> {
-        validate_node_id(id)?;
         if !self.exists(id) {
             bail!("unknown node `{id}`");
         }
@@ -401,10 +388,9 @@ impl Store {
 
     pub fn write_context_observation(
         &self,
-        id: &str,
+        id: &NodeId,
         observation: &ContextObservation,
     ) -> Result<()> {
-        validate_node_id(id)?;
         if observation.schema != OBSERVATION_SCHEMA {
             bail!(
                 "cannot write unsupported context observation schema {}",
@@ -432,8 +418,7 @@ impl Store {
         Ok(())
     }
 
-    pub fn read_context_observations(&self, id: &str) -> Result<Vec<ContextObservation>> {
-        validate_node_id(id)?;
+    pub fn read_context_observations(&self, id: &NodeId) -> Result<Vec<ContextObservation>> {
         let dir = self.node_dir(id).join("observations");
         let entries = match fs::read_dir(&dir) {
             Ok(entries) => entries,
@@ -460,7 +445,7 @@ impl Store {
 
     // --- listing -----------------------------------------------------------------
 
-    pub fn list_ids(&self) -> Result<Vec<String>> {
+    pub fn list_ids(&self) -> Result<Vec<NodeId>> {
         let mut ids = Vec::new();
         for entry in fs::read_dir(self.root.join("nodes"))? {
             let entry = entry?;
@@ -469,9 +454,11 @@ impl Store {
                     .file_name()
                     .into_string()
                     .map_err(|_| anyhow::anyhow!("node directory name is not UTF-8"))?;
-                validate_node_id(&name)
-                    .with_context(|| format!("invalid node directory `{name}`"))?;
-                ids.push(name);
+                ids.push(
+                    name.parse()
+                        .map_err(anyhow::Error::msg)
+                        .with_context(|| format!("invalid node directory `{name}`"))?,
+                );
             }
         }
         ids.sort();
@@ -558,10 +545,6 @@ fn validate_attachment_data(attachment: &NodeAttachment, data: &[u8]) -> Result<
     Ok(())
 }
 
-fn validate_node_id(id: &str) -> Result<NodeId> {
-    id.parse().map_err(anyhow::Error::msg)
-}
-
 /// The blob id of a file on disk, or `None` only when it is proven absent.
 pub fn file_blob(path: &Path) -> Result<Option<String>> {
     match fs::read(path) {
@@ -592,6 +575,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("linka-store-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let store = Store::init(dir.join(".linka")).unwrap();
+        let node: NodeId = "node-1".parse().unwrap();
 
         let meta = NodeMeta {
             schema: 1,
@@ -603,23 +587,21 @@ mod tests {
             extensions: Default::default(),
         };
         store
-            .write_node("node-1", &meta, "hello\n\nthe details")
+            .write_node(&node, &meta, "hello\n\nthe details")
             .unwrap();
-        let (got, description) = store.read_node("node-1").unwrap();
+        let (got, description) = store.read_node(&node).unwrap();
         assert_eq!(got.depends_on, vec!["node-a".parse().unwrap()]);
         assert_eq!(description, "hello\n\nthe details");
         assert_eq!(crate::model::title_of(&description), "hello");
 
         // The version changes exactly when the definition changes.
-        let v1 = store.node_version("node-1").unwrap();
-        store
-            .write_node("node-1", &meta, "other description")
-            .unwrap();
-        assert_ne!(v1, store.node_version("node-1").unwrap());
+        let v1 = store.node_version(&node).unwrap();
+        store.write_node(&node, &meta, "other description").unwrap();
+        assert_ne!(v1, store.node_version(&node).unwrap());
 
         // No result yet; then one round-trips, without touching the version.
-        assert!(store.read_result("node-1").unwrap().is_none());
-        let v2 = store.node_version("node-1").unwrap();
+        assert!(store.read_result(&node).unwrap().is_none());
+        let v2 = store.node_version(&node).unwrap();
         let result = ResultMeta {
             schema: 1,
             at: 0,
@@ -641,14 +623,12 @@ mod tests {
             }),
             producer: None,
         };
-        store
-            .write_result("node-1", &result, "did the thing")
-            .unwrap();
-        let (r, notes) = store.read_result("node-1").unwrap().unwrap();
+        store.write_result(&node, &result, "did the thing").unwrap();
+        let (r, notes) = store.read_result(&node).unwrap().unwrap();
         assert_eq!(r.output.as_ref().map(|a| a.id.as_str()), Some("abc"));
         assert_eq!(r.outcome, Outcome::Done.into());
         assert_eq!(notes, "did the thing");
-        assert_eq!(store.node_version("node-1").unwrap(), v2);
+        assert_eq!(store.node_version(&node).unwrap(), v2);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -659,6 +639,7 @@ mod tests {
             std::env::temp_dir().join(format!("linka-attachment-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let store = Store::init(dir.join(".linka")).unwrap();
+        let node: NodeId = "node-1".parse().unwrap();
         let meta = NodeMeta {
             schema: 1,
             author: Author::Human,
@@ -668,8 +649,8 @@ mod tests {
             verifies: None,
             extensions: Default::default(),
         };
-        store.write_node("node-1", &meta, "attached").unwrap();
-        let version = store.node_version("node-1").unwrap();
+        store.write_node(&node, &meta, "attached").unwrap();
+        let version = store.node_version(&node).unwrap();
         let data = [0, 1, 2, 255];
         let attachment = NodeAttachment {
             schema: ATTACHMENT_SCHEMA,
@@ -682,20 +663,20 @@ mod tests {
         };
 
         store
-            .write_node_attachment("node-1", &attachment, &data)
+            .write_node_attachment(&node, &attachment, &data)
             .unwrap();
 
         assert_eq!(
             store
-                .read_node_attachment("node-1", "test.tool", "arbitrary report")
+                .read_node_attachment(&node, "test.tool", "arbitrary report")
                 .unwrap(),
             Some((attachment.clone(), data.to_vec()))
         );
         assert_eq!(
-            store.list_node_attachments("node-1").unwrap(),
+            store.list_node_attachments(&node).unwrap(),
             vec![attachment]
         );
-        assert_eq!(store.node_version("node-1").unwrap(), version);
+        assert_eq!(store.node_version(&node).unwrap(), version);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

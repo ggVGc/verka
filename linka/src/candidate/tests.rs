@@ -50,7 +50,7 @@ fn successful_output() -> (TempDir, Store, FakeVcs, NodeId, String) {
     ops::complete(
         &store,
         &vcs,
-        node.as_str(),
+        &node,
         &["out.txt".into()],
         &[],
         None,
@@ -78,7 +78,7 @@ fn register(store: &Store, vcs: &FakeVcs, node: &NodeId) -> CandidateRecord {
                 target: "main".into(),
                 external: Some(ExternalIdentity {
                     namespace: "test-runner".into(),
-                    id: "run-1".into(),
+                    id: "run-1".parse().unwrap(),
                 }),
             },
         )
@@ -106,7 +106,7 @@ fn conclude(
     .unwrap()
     .parse()
     .unwrap();
-    let snapshot = ops::snapshot_work(store, vcs, verification.as_str(), &[]).unwrap();
+    let snapshot = ops::snapshot_work(store, vcs, &verification, &[]).unwrap();
     ops::submit_verification(
         store,
         vcs,
@@ -126,15 +126,13 @@ fn conclude(
 fn candidate_acceptance_and_publication_are_first_class_node_state() {
     let (_temp, store, vcs, node, output) = successful_output();
     assert_eq!(
-        ops::node_state(&store, &vcs, node.as_str())
-            .unwrap()
-            .currency,
+        ops::node_state(&store, &vcs, &node).unwrap().currency,
         crate::Currency::Stale,
         "without a candidate this is a direct output drift"
     );
 
     let candidate = register(&store, &vcs, &node);
-    let state = ops::node_state(&store, &vcs, node.as_str()).unwrap();
+    let state = ops::node_state(&store, &vcs, &node).unwrap();
     assert_eq!(state.currency, crate::Currency::Current);
     assert_eq!(state.integration, IntegrationStatus::Pending);
     assert!(!state.is_ready());
@@ -148,14 +146,12 @@ fn candidate_acceptance_and_publication_are_first_class_node_state() {
         crate::VerificationOutcome::Accepted,
     );
     assert_eq!(
-        ops::node_state(&store, &vcs, node.as_str())
-            .unwrap()
-            .integration,
+        ops::node_state(&store, &vcs, &node).unwrap().integration,
         IntegrationStatus::Accepted
     );
     candidates.publish(&vcs, &candidate.id).unwrap();
     assert_eq!(vcs.refs.borrow().get("refs/heads/main"), Some(&output));
-    let state = ops::node_state(&store, &vcs, node.as_str()).unwrap();
+    let state = ops::node_state(&store, &vcs, &node).unwrap();
     assert_eq!(state.integration, IntegrationStatus::Published);
     assert!(state.is_complete());
 
@@ -173,7 +169,7 @@ fn rejection_returns_the_source_node_to_ready_without_losing_the_candidate() {
         &candidate,
         crate::VerificationOutcome::Rejected,
     );
-    let state = ops::node_state(&store, &vcs, node.as_str()).unwrap();
+    let state = ops::node_state(&store, &vcs, &node).unwrap();
     assert_eq!(state.integration, IntegrationStatus::Rejected);
     assert!(state.is_ready());
     assert_eq!(
@@ -216,7 +212,7 @@ fn abandoned_verification_is_terminal_but_cannot_decide_the_candidate() {
         &candidate,
         crate::VerificationOutcome::Abandoned,
     );
-    let state = ops::node_state(&store, &vcs, abandoned.as_str()).unwrap();
+    let state = ops::node_state(&store, &vcs, &abandoned).unwrap();
     assert_eq!(state.outcome, crate::RecordedOutcome::Abandoned);
     assert!(state.is_complete());
 
@@ -276,8 +272,8 @@ fn a_moved_source_cannot_accept_an_obsolete_candidate() {
     .unwrap()
     .parse()
     .unwrap();
-    let snapshot = ops::snapshot_work(&store, &vcs, verification.as_str(), &[]).unwrap();
-    ops::edit(&store, &vcs, node.as_str(), "candidate work changed".into()).unwrap();
+    let snapshot = ops::snapshot_work(&store, &vcs, &verification, &[]).unwrap();
+    ops::edit(&store, &vcs, &node, "candidate work changed".into()).unwrap();
     let error = ops::submit_verification(
         &store,
         &vcs,
@@ -482,18 +478,12 @@ fn completed_verification_becomes_stale_when_its_source_is_reworked() {
         .unwrap()
         .is_empty());
 
-    ops::edit(
-        &store,
-        &vcs,
-        source.as_str(),
-        "candidate work revised".into(),
-    )
-    .unwrap();
+    ops::edit(&store, &vcs, &source, "candidate work revised".into()).unwrap();
     vcs.next_id = "replacement-output".into();
     ops::complete(
         &store,
         &vcs,
-        source.as_str(),
+        &source,
         &["out.txt".into()],
         &[],
         None,
@@ -503,11 +493,7 @@ fn completed_verification_becomes_stale_when_its_source_is_reworked() {
     .unwrap();
 
     let reasons = ops::staleness(&store, &vcs, &verification).unwrap();
-    assert!(
-        reasons.contains(&crate::StalenessReason::ConsumedOutputChanged {
-            id: source.to_string()
-        })
-    );
+    assert!(reasons.contains(&crate::StalenessReason::ConsumedOutputChanged { id: source.clone() }));
     let state = ops::node_state(&store, &vcs, &verification).unwrap();
     assert_eq!(state.currency, crate::Currency::Stale);
     assert!(!state.is_complete());

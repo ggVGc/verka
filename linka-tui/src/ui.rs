@@ -121,7 +121,7 @@ fn draw_items(frame: &mut Frame, app: &App, area: Rect) {
                         Span::raw(" "),
                         Span::styled(state.clone(), status_style(&state)),
                         Span::raw("  "),
-                        Span::styled(&node.id, Style::default().fg(ACCENT)),
+                        Span::styled(node.id.as_str(), Style::default().fg(ACCENT)),
                     ]),
                     Line::styled(
                         format!("  {}", node.title),
@@ -163,7 +163,7 @@ fn draw_detail(frame: &mut Frame, app: &App, area: Rect) {
         .split(area);
     let content = if let Some(node) = app.selected_node() {
         let mut lines = vec![
-            kv("id", &node.id),
+            kv("id", node.id.as_str()),
             kv(
                 "kind",
                 format!("{} {}", node.kind().glyph(), node.kind().label()),

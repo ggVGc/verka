@@ -154,7 +154,11 @@ fn handle(mut stream: TcpStream, app: &App) -> Result<()> {
         },
         ("POST", p) if p.starts_with("/api/respond/") => {
             let id = &p["/api/respond/".len()..];
-            match respond(&app.store, &app.vcs, id, &request_body) {
+            match id
+                .parse()
+                .map_err(anyhow::Error::msg)
+                .and_then(|id: NodeId| respond(&app.store, &app.vcs, &id, &request_body))
+            {
                 Ok(()) => (
                     "200 OK",
                     "application/json",
@@ -197,7 +201,7 @@ fn handle(mut stream: TcpStream, app: &App) -> Result<()> {
 /// result notes — the one write the page offers. Refuses nodes not assigned
 /// to a human, so the browser cannot close machine work. Goes through
 /// [`ops::respond`], which does not gate on project-tree cleanliness.
-fn respond(store: &Store, vcs: &dyn Vcs, id: &str, body: &[u8]) -> Result<()> {
+fn respond(store: &Store, vcs: &dyn Vcs, id: &NodeId, body: &[u8]) -> Result<()> {
     let payload: Value = serde_json::from_slice(body).context("request body is not JSON")?;
     let notes = payload["notes"].as_str().unwrap_or_default();
     let (meta, _) = store.read_node(id)?;
@@ -220,7 +224,7 @@ fn state_json(app: &App) -> Result<Value> {
     let ready = LinkaWork::new(store).ready_for_machine()?;
     let ready_ids = ready
         .iter()
-        .map(|item| item.node.as_str())
+        .map(|item| &item.node)
         .collect::<std::collections::HashSet<_>>();
     let mut nodes = Vec::new();
     for id in store.list_ids()? {
@@ -299,7 +303,7 @@ fn state_json(app: &App) -> Result<Value> {
             "derived_from": meta.derived_from,
             "status": status,
             "ready": state.is_ready(),
-            "orka_ready": ready_ids.contains(id.as_str()),
+            "orka_ready": ready_ids.contains(&id),
             "outcome": state.outcome,
             "currency": state.currency,
             "integration": state.integration,
@@ -455,7 +459,7 @@ fn work_log_from_linka(
     let key = format!("{id}/agent-output");
     let (attachment, data) = app
         .store
-        .read_node_attachment(node.as_str(), "orka", &key)?
+        .read_node_attachment(&node, "orka", &key)?
         .with_context(|| {
             format!("attempt `{id}` has no local work log and none stored in Linka")
         })?;
@@ -471,7 +475,7 @@ fn work_log_from_linka(
         })?;
     let file_changes = app
         .store
-        .read_node_attachment(node.as_str(), "orka", &format!("{id}/file-changes"))?
+        .read_node_attachment(&node, "orka", &format!("{id}/file-changes"))?
         .map(|(_, data)| data);
     work_log_from_raw(protocol, &data, file_changes.as_deref())
 }
@@ -598,15 +602,14 @@ fn workability(state: &linka::NodeState) -> &'static str {
 fn current_candidate_json(
     store: &Store,
     vcs: &dyn Vcs,
-    id: &str,
+    id: &NodeId,
     result: &ResultMeta,
 ) -> Result<Option<Value>> {
     let Some(artifact) = &result.output else {
         return Ok(None);
     };
-    let node: NodeId = id.parse().map_err(anyhow::Error::msg)?;
     let version = store.result_version(id)?;
-    let Some(candidate) = CandidateStore::new(store).for_result(&node, &version, artifact)? else {
+    let Some(candidate) = CandidateStore::new(store).for_result(id, &version, artifact)? else {
         return Ok(None);
     };
     let integration = candidate.integration(vcs)?;
@@ -687,7 +690,7 @@ mod tests {
         let mut blocked = state(
             IntegrationStatus::NotRequired,
             vec![Blocker {
-                id: "node-dependency".into(),
+                id: "node-dependency".parse().unwrap(),
                 reason: BlockerReason::Open,
             }],
         );
@@ -702,20 +705,20 @@ mod tests {
     fn formats_structured_reasons_for_the_page() {
         assert_eq!(
             format_staleness(&StalenessReason::ContextChanged {
-                path: "src/lib.rs".into(),
+                path: "src/lib.rs".parse().unwrap(),
             }),
             "context src/lib.rs: content changed"
         );
         assert_eq!(
             format_blocker(&Blocker {
-                id: "node-dependency".into(),
+                id: "node-dependency".parse().unwrap(),
                 reason: BlockerReason::Stale,
             }),
             "node-dependency: not complete (stale)"
         );
         assert_eq!(
             format_blocker(&Blocker {
-                id: "node-candidate".into(),
+                id: "node-candidate".parse().unwrap(),
                 reason: BlockerReason::AwaitingIntegration,
             }),
             "node-candidate: awaiting candidate integration"

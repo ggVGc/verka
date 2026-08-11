@@ -45,15 +45,15 @@ impl View {
 
 #[derive(Clone)]
 pub struct NodeRow {
-    pub id: String,
+    pub id: NodeId,
     pub title: String,
     pub meta: NodeMeta,
     pub state: NodeState,
     pub notes: String,
     pub output: Option<String>,
     pub attachments: Vec<linka::NodeAttachment>,
-    pub candidates: Vec<String>,
-    pub dependents: Vec<String>,
+    pub candidates: Vec<CandidateId>,
+    pub dependents: Vec<NodeId>,
 }
 
 impl NodeRow {
@@ -95,7 +95,7 @@ impl NodeKind {
 pub struct CandidateRow {
     pub record: CandidateRecord,
     pub integration: IntegrationStatus,
-    pub verifications: Vec<String>,
+    pub verifications: Vec<NodeId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -214,7 +214,7 @@ pub struct Form {
 /// for reading. Payloads are read on selection so the browser always shows the
 /// bytes Linka currently stores.
 pub struct AttachmentBrowser {
-    pub node: String,
+    pub node: NodeId,
     pub items: Vec<linka::NodeAttachment>,
     pub selected: usize,
     pub body: String,
@@ -327,7 +327,7 @@ impl App {
         );
     }
 
-    fn load_node(&self, id: &str) -> Result<NodeRow> {
+    fn load_node(&self, id: &NodeId) -> Result<NodeRow> {
         let (meta, description) = self.store.read_node(id)?;
         let state = ops::node_state(&self.store, &self.vcs, id)?;
         let result = self.store.read_result(id)?;
@@ -335,14 +335,13 @@ impl App {
             .map(|(result, notes)| (notes, result.output.map(|output| output.id)))
             .unwrap_or_default();
         let attachments = self.store.list_node_attachments(id)?;
-        let node_id: NodeId = id.parse().map_err(anyhow::Error::msg)?;
         let candidates = CandidateStore::new(&self.store)
-            .for_node(&node_id)?
+            .for_node(id)?
             .into_iter()
-            .map(|candidate| candidate.id.into())
+            .map(|candidate| candidate.id)
             .collect();
         Ok(NodeRow {
-            id: id.into(),
+            id: id.clone(),
             title: linka::title_of(&description).into(),
             meta,
             state,
@@ -401,7 +400,7 @@ impl App {
             for id in &node.dependents {
                 links.push(Association {
                     label: format!("dependent   {id}"),
-                    target: Target::Node(id.clone()),
+                    target: Target::Node(id.to_string()),
                 });
             }
             if let Some(candidate) = &node.meta.verifies {
@@ -413,7 +412,7 @@ impl App {
             for id in &node.candidates {
                 links.push(Association {
                     label: format!("candidate   {id}"),
-                    target: Target::Candidate(id.clone()),
+                    target: Target::Candidate(id.to_string()),
                 });
             }
             return links;
@@ -426,7 +425,7 @@ impl App {
             for id in &candidate.verifications {
                 links.push(Association {
                     label: format!("verification {id}"),
-                    target: Target::Node(id.clone()),
+                    target: Target::Node(id.to_string()),
                 });
             }
             match &candidate.record.state {
@@ -622,7 +621,7 @@ impl App {
     fn form_for(&self, action: Action) -> Form {
         let node = self
             .selected_node()
-            .map(|node| node.id.clone())
+            .map(|node| node.id.to_string())
             .unwrap_or_default();
         let candidate = self
             .selected_candidate()
@@ -748,8 +747,8 @@ impl App {
                         description: value(0).into(),
                         author: author(value(1))?,
                         assignee: optional_author(value(2))?,
-                        depends_on: csv(value(3)),
-                        derived_from: csv(value(4)),
+                        depends_on: node_csv(value(3))?,
+                        derived_from: node_csv(value(4))?,
                     },
                 )?;
                 format!("Added {id}")
@@ -776,15 +775,20 @@ impl App {
                 format!("Added verification {id}")
             }
             Action::EditNode => {
-                ops::edit(&self.store, &self.vcs, value(0), value(1).into())?;
+                ops::edit(
+                    &self.store,
+                    &self.vcs,
+                    &node_arg(value(0))?,
+                    value(1).into(),
+                )?;
                 format!("Updated {}", value(0))
             }
             Action::LinkNodes => {
                 ops::link(
                     &self.store,
                     &self.vcs,
-                    value(0),
-                    value(1),
+                    &node_arg(value(0))?,
+                    &node_arg(value(1))?,
                     dep_kind(value(2))?,
                 )?;
                 format!("Linked {} to {}", value(0), value(1))
@@ -793,7 +797,7 @@ impl App {
                 let output = ops::complete(
                     &self.store,
                     &self.vcs,
-                    value(0),
+                    &node_arg(value(0))?,
                     &csv(value(1)),
                     &csv(value(2)),
                     optional(value(3)),
@@ -809,7 +813,7 @@ impl App {
                 ops::respond(
                     &self.store,
                     &self.vcs,
-                    value(0),
+                    &node_arg(value(0))?,
                     value(1),
                     author(value(2))?,
                 )?;
@@ -819,14 +823,15 @@ impl App {
                 ops::fail(
                     &self.store,
                     &self.vcs,
-                    value(0),
+                    &node_arg(value(0))?,
                     value(1),
                     author(value(2))?,
                 )?;
                 format!("Failed {}", value(0))
             }
             Action::Verify => {
-                let snapshot = ops::snapshot_work(&self.store, &self.vcs, value(0), &[])?;
+                let snapshot =
+                    ops::snapshot_work(&self.store, &self.vcs, &node_arg(value(0))?, &[])?;
                 let outcome = verification_outcome(value(1))?;
                 ops::submit_verification(
                     &self.store,
@@ -894,7 +899,7 @@ impl App {
                 let attachment = ops::record_node_attachment(
                     &self.store,
                     &self.vcs,
-                    value(0),
+                    &node_arg(value(0))?,
                     NewNodeAttachment {
                         namespace: value(1).into(),
                         key: value(2).into(),
@@ -911,7 +916,7 @@ impl App {
             Action::ReadAttachment => {
                 let (meta, data) = self
                     .store
-                    .read_node_attachment(value(0), value(1), value(2))?
+                    .read_node_attachment(&node_arg(value(0))?, value(1), value(2))?
                     .with_context(|| {
                         format!("no attachment `{}/{}` on {}", value(1), value(2), value(0))
                     })?;
@@ -932,11 +937,11 @@ impl App {
                 return Ok(String::new());
             }
             Action::ObserveContext => {
-                let version = self.store.result_version(value(0))?;
+                let version = self.store.result_version(&node_arg(value(0))?)?;
                 let count = ops::record_context_observation(
                     &self.store,
                     &self.vcs,
-                    value(0),
+                    &node_arg(value(0))?,
                     &version,
                     &csv(value(1)),
                 )?;
@@ -944,6 +949,7 @@ impl App {
             }
             Action::Origin => {
                 let body = ops::origin(&self.store, value(0))?
+                    .map(|id| id.to_string())
                     .unwrap_or_else(|| "No node produced this commit".into());
                 self.overlay = Some(Overlay::Text {
                     title: "Output origin".into(),
@@ -953,7 +959,7 @@ impl App {
                 return Ok(String::new());
             }
             Action::History => {
-                if !self.store.exists(value(0)) {
+                if !self.store.exists(&node_arg(value(0))?) {
                     bail!("unknown node `{}`", value(0));
                 }
                 let pathspec = format!("{}/nodes/{}", self.store.store_name(), value(0));
@@ -974,7 +980,7 @@ impl App {
                 return Ok(String::new());
             }
             Action::Settled => {
-                let reasons = ops::unsettled(&self.store, &self.vcs, value(0))?;
+                let reasons = ops::unsettled(&self.store, &self.vcs, &node_arg(value(0))?)?;
                 let body = if reasons.is_empty() {
                     format!("{} is settled.", value(0))
                 } else {
@@ -1052,7 +1058,7 @@ impl App {
             .map(|node| node.id.clone())
             .or_else(|| {
                 self.selected_candidate()
-                    .map(|candidate| candidate.record.node.to_string())
+                    .map(|candidate| candidate.record.node.clone())
             });
         let Some(node_id) = node_id else {
             self.status = "No node selected".into();
@@ -1080,7 +1086,7 @@ impl App {
 
     /// Render one attachment for reading: its metadata, then the payload as
     /// text when it is valid UTF-8 and as a hex dump when it is not.
-    fn attachment_body(&self, node: &str, item: &linka::NodeAttachment) -> String {
+    fn attachment_body(&self, node: &NodeId, item: &linka::NodeAttachment) -> String {
         let mut body = format!(
             "namespace   {}\nkey         {}\nsize        {} bytes\nmedia type  {}\ncontent     {}\n\n",
             item.namespace,
@@ -1154,7 +1160,7 @@ impl App {
                 self.selected = self
                     .nodes
                     .iter()
-                    .position(|node| node.id == id)
+                    .position(|node| node.id.as_str() == id)
                     .unwrap_or(0);
             }
             Target::Candidate(id) => {
@@ -1184,7 +1190,7 @@ impl App {
             self.selected_candidate()
                 .map(|candidate| candidate.record.id.to_string())
         } else {
-            self.selected_node().map(|node| node.id.clone())
+            self.selected_node().map(|node| node.id.to_string())
         }
     }
 
@@ -1200,8 +1206,12 @@ impl App {
             View::Errors => self.selected.min(self.errors.len().saturating_sub(1)),
             _ => {
                 let visible = self.visible_node_indices();
-                id.and_then(|id| visible.iter().position(|index| self.nodes[*index].id == id))
-                    .unwrap_or(0)
+                id.and_then(|id| {
+                    visible
+                        .iter()
+                        .position(|index| self.nodes[*index].id.as_str() == id)
+                })
+                .unwrap_or(0)
             }
         };
         self.association_selected = 0;
@@ -1279,6 +1289,19 @@ fn hex_dump(data: &[u8]) -> String {
         text.push_str(&format!("\n… {} more byte(s)\n", data.len() - shown));
     }
     text
+}
+
+/// One form field as a validated node id.
+fn node_arg(value: &str) -> Result<NodeId> {
+    value.parse().map_err(anyhow::Error::msg)
+}
+
+/// The `csv` list as validated node ids.
+fn node_csv(value: &str) -> Result<Vec<NodeId>> {
+    csv(value)
+        .into_iter()
+        .map(|id| id.parse().map_err(anyhow::Error::msg))
+        .collect()
 }
 
 fn csv(value: &str) -> Vec<String> {

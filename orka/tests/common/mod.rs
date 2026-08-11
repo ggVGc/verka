@@ -6,7 +6,7 @@
 //! subset of it, so unused helpers are expected per binary.
 #![allow(dead_code)]
 
-use linka::{Author, GitVcs, Store};
+use linka::{Author, GitVcs, NodeId, Store};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -52,16 +52,16 @@ pub fn store_at(root: &Path) -> Store {
     Store::open(root.join(".linka")).unwrap()
 }
 
-pub fn add_node(root: &Path, description: &str, depends_on: Vec<String>) -> String {
+pub fn add_node(root: &Path, description: &str, depends_on: Vec<NodeId>) -> NodeId {
     add_related(root, description, depends_on, vec![])
 }
 
 pub fn add_related(
     root: &Path,
     description: &str,
-    depends_on: Vec<String>,
-    derived_from: Vec<String>,
-) -> String {
+    depends_on: Vec<NodeId>,
+    derived_from: Vec<NodeId>,
+) -> NodeId {
     let store = store_at(root);
     let vcs = GitVcs::for_store(&store);
     linka::ops::add(
@@ -79,7 +79,7 @@ pub fn add_related(
 }
 
 /// Add a node assigned to a human, so machine selection must skip it.
-pub fn add_human_node(root: &Path, description: &str) -> String {
+pub fn add_human_node(root: &Path, description: &str) -> NodeId {
     let store = store_at(root);
     let vcs = GitVcs::for_store(&store);
     linka::ops::add(
@@ -96,13 +96,13 @@ pub fn add_human_node(root: &Path, description: &str) -> String {
     .unwrap()
 }
 
-pub fn complete_node(root: &Path, id: &str, outputs: &[String], notes: &str) {
+pub fn complete_node(root: &Path, id: &NodeId, outputs: &[String], notes: &str) {
     let store = store_at(root);
     let vcs = GitVcs::for_store(&store);
     linka::ops::complete(&store, &vcs, id, outputs, &[], None, notes, Author::Human).unwrap();
 }
 
-pub fn edit_node(root: &Path, id: &str, description: &str) {
+pub fn edit_node(root: &Path, id: &NodeId, description: &str) {
     let store = store_at(root);
     let vcs = GitVcs::for_store(&store);
     linka::ops::edit(&store, &vcs, id, description.into()).unwrap();

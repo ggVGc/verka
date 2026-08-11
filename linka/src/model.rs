@@ -436,12 +436,12 @@ pub enum Currency {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum StalenessReason {
     DefinitionChanged { metadata: bool, description: bool },
-    ConsumedDefinitionChanged { id: String },
-    ConsumedNodeMissing { id: String },
-    ConsumedResultChanged { id: String },
-    ConsumedOutputChanged { id: String },
-    ContextChanged { path: String },
-    ContextMissing { path: String },
+    ConsumedDefinitionChanged { id: NodeId },
+    ConsumedNodeMissing { id: NodeId },
+    ConsumedResultChanged { id: NodeId },
+    ConsumedOutputChanged { id: NodeId },
+    ContextChanged { path: ProjectPath },
+    ContextMissing { path: ProjectPath },
     OutputDrifted { artifact: String, detail: String },
 }
 
@@ -460,7 +460,7 @@ pub enum BlockerReason {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Blocker {
-    pub id: String,
+    pub id: NodeId,
     pub reason: BlockerReason,
 }
 

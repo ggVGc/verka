@@ -522,7 +522,7 @@ fn run(cli: Cli) -> Result<()> {
                     let verification = parse_node(verification)?;
                     let (record, review) = reviews.review(&verification)?;
                     let vcs = linka::GitVcs::for_store(&store);
-                    let state = linka::ops::node_state(&store, &vcs, verification.as_str())?;
+                    let state = linka::ops::node_state(&store, &vcs, &verification)?;
                     println!("verification {}", record.verification);
                     println!("candidate    {}", record.candidate);
                     println!("branch       {}", review.branch);

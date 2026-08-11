@@ -64,7 +64,7 @@ impl CandidateStore<'_> {
 
         let (result, _) = self
             .store
-            .read_result(new.node.as_str())?
+            .read_result(&new.node)?
             .with_context(|| format!("node `{}` has no successful result to register", new.node))?;
         if result.outcome != crate::ResultOutcome::Work(crate::Outcome::Done) {
             bail!("node `{}` does not have a successful result", new.node);
@@ -73,7 +73,7 @@ impl CandidateStore<'_> {
             .output
             .clone()
             .with_context(|| format!("node `{}` result has no project output", new.node))?;
-        let result_version = self.store.result_version(new.node.as_str())?;
+        let result_version = self.store.result_version(&new.node)?;
         if let Some(existing) = self.for_result(&new.node, &result_version, &artifact)? {
             if existing.branch == new.branch
                 && existing.target == new.target
@@ -224,10 +224,10 @@ impl CandidateStore<'_> {
         candidate: &CandidateRecord,
         expected: IntegrationStatus,
     ) -> Result<()> {
-        let Some((result, _)) = self.store.read_result(candidate.node.as_str())? else {
+        let Some((result, _)) = self.store.read_result(&candidate.node)? else {
             bail!("candidate `{}` source result disappeared", candidate.id);
         };
-        if self.store.result_version(candidate.node.as_str())? != candidate.result
+        if self.store.result_version(&candidate.node)? != candidate.result
             || result.output.as_ref() != Some(&candidate.artifact)
         {
             bail!(
@@ -236,7 +236,7 @@ impl CandidateStore<'_> {
                 candidate.node
             );
         }
-        let state = crate::ops::node_state(self.store, vcs, candidate.node.as_str())?;
+        let state = crate::ops::node_state(self.store, vcs, &candidate.node)?;
         if state.integration != expected || state.currency != crate::Currency::Current {
             bail!(
                 "candidate `{}` is not the current {:?} candidate for node `{}`",
@@ -255,7 +255,7 @@ impl CandidateStore<'_> {
         verification: &crate::NodeId,
         expected: crate::VerificationOutcome,
     ) -> Result<()> {
-        let (meta, _) = self.store.read_node(verification.as_str())?;
+        let (meta, _) = self.store.read_node(verification)?;
         if meta.verifies.as_ref() != Some(&candidate.id) {
             bail!(
                 "verification `{verification}` does not verify candidate `{}`",
@@ -264,11 +264,11 @@ impl CandidateStore<'_> {
         }
         let (result, _) = self
             .store
-            .read_result(verification.as_str())?
+            .read_result(verification)?
             .with_context(|| format!("verification `{verification}` has no result"))?;
         // `require_exact_candidate_pin` checks the outcome itself.
         require_exact_candidate_pin(candidate, verification, &result, expected)?;
-        let state = crate::ops::node_state(self.store, vcs, verification.as_str())?;
+        let state = crate::ops::node_state(self.store, vcs, verification)?;
         if state.currency != crate::Currency::Current {
             bail!("verification `{verification}` is stale");
         }

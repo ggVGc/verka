@@ -137,7 +137,7 @@ impl<'a> LinkaWork<'a> {
                 let key = format!("{}/{}", external.id, part);
                 let attachment =
                     self.store
-                        .read_node_attachment(candidate.node.as_str(), "orka", &key)?;
+                        .read_node_attachment(&candidate.node, "orka", &key)?;
                 if attachment.is_none() {
                     problems.push(format!(
                         "{}: missing node attachment orka/{key}",
@@ -145,7 +145,7 @@ impl<'a> LinkaWork<'a> {
                     ));
                 }
             }
-            let result = self.store.read_result(candidate.node.as_str())?;
+            let result = self.store.read_result(&candidate.node)?;
             let tracking = result
                 .as_ref()
                 .and_then(|(result, _)| result.producer.as_ref())
@@ -169,7 +169,7 @@ impl<'a> LinkaWork<'a> {
             let accesses_key = format!("{}/accesses", external.id);
             if let Some((_, data)) =
                 self.store
-                    .read_node_attachment(candidate.node.as_str(), "orka", &accesses_key)?
+                    .read_node_attachment(&candidate.node, "orka", &accesses_key)?
             {
                 match read_access_summary_bytes(&data) {
                     Ok(summary) => {
@@ -214,7 +214,7 @@ impl<'a> LinkaWork<'a> {
             let key = format!("{}/attempt", external.id);
             if let Some((_, data)) =
                 self.store
-                    .read_node_attachment(candidate.node.as_str(), "orka", &key)?
+                    .read_node_attachment(&candidate.node, "orka", &key)?
             {
                 let text = std::str::from_utf8(&data).with_context(|| {
                     format!("{}: attempt attachment is not UTF-8", candidate.id)
@@ -252,12 +252,12 @@ impl<'a> LinkaWork<'a> {
     /// not ready — snapshotting is Linka's readiness gate.
     pub fn prepare_input(&self, node: &NodeId) -> Result<AttemptInput> {
         let vcs = self.vcs();
-        let snapshot = ops::snapshot_work(self.store, &vcs, node.as_str(), &[])
+        let snapshot = ops::snapshot_work(self.store, &vcs, &node, &[])
             .with_context(|| format!("snapshotting `{node}`"))?;
         let target_branch = vcs
             .current_branch()?
             .context("project HEAD is detached; check out a target branch before running Orka")?;
-        let (_, description) = self.store.read_node(node.as_str())?;
+        let (_, description) = self.store.read_node(&node)?;
         let dependency_context = self.context_for(&snapshot.dependencies)?;
         let lineage_context = self.context_for(&snapshot.lineage)?;
         Ok(AttemptInput {
@@ -278,7 +278,7 @@ impl<'a> LinkaWork<'a> {
         node: &NodeId,
         attempt_id: &str,
     ) -> Result<Option<RecordedResult>> {
-        let Some((result, _)) = self.store.read_result(node.as_str())? else {
+        let Some((result, _)) = self.store.read_result(&node)? else {
             return Ok(None);
         };
         let Some(producer) = &result.producer else {
@@ -297,7 +297,7 @@ impl<'a> LinkaWork<'a> {
         Ok(Some(RecordedResult {
             outcome,
             output_commit: result.output.map(|artifact| artifact.id),
-            version: self.store.result_version(node.as_str())?,
+            version: self.store.result_version(&node)?,
         }))
     }
 
@@ -305,10 +305,10 @@ impl<'a> LinkaWork<'a> {
     fn context_for(&self, pins: &[ConsumedNode]) -> Result<Vec<DependencyContext>> {
         pins.iter()
             .map(|pin| {
-                let (_, description) = self.store.read_node(pin.id.as_str())?;
+                let (_, description) = self.store.read_node(&pin.id)?;
                 let result_notes = self
                     .store
-                    .read_result(pin.id.as_str())?
+                    .read_result(&pin.id)?
                     .map(|(_, notes)| notes)
                     .unwrap_or_default();
                 Ok(DependencyContext {
@@ -519,7 +519,7 @@ impl<'a> LinkaWork<'a> {
         ops::record_context_observation(
             self.store,
             &self.vcs_at(workspace),
-            input.node().as_str(),
+            input.node(),
             expected_result,
             paths,
         )

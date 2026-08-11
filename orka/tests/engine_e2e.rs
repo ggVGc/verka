@@ -121,7 +121,7 @@ fn a_full_attempt_lands_a_version_checked_result_from_an_isolated_worktree() {
             RunProgress::Sealed { .. },
         ]
     ));
-    assert_eq!(report.node.as_str(), node);
+    assert_eq!(report.node, node);
     let SealedState::Submitted { output_commit } = &report.sealed else {
         panic!("expected submission, got {:?}", report.sealed);
     };
@@ -198,7 +198,7 @@ fn a_full_attempt_lands_a_version_checked_result_from_an_isolated_worktree() {
     let listed = candidates.list().unwrap();
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].attempt.as_ref(), Some(&report.attempt));
-    assert_eq!(listed[0].node.as_str(), node);
+    assert_eq!(listed[0].node, node);
     assert_eq!(listed[0].integration, linka::IntegrationStatus::Pending);
     assert_eq!(report.candidate.as_ref(), Some(&listed[0].id));
     assert!(candidates
@@ -223,7 +223,7 @@ fn a_full_attempt_lands_a_version_checked_result_from_an_isolated_worktree() {
     .unwrap()
     .parse()
     .unwrap();
-    let snapshot = linka::ops::snapshot_work(&store, &vcs, verification.as_str(), &[]).unwrap();
+    let snapshot = linka::ops::snapshot_work(&store, &vcs, &verification, &[]).unwrap();
     linka::ops::submit_verification(
         &store,
         &vcs,
@@ -311,7 +311,7 @@ fn successful_work_can_be_automatically_verified_and_published() {
     assert_eq!(published.integration, linka::IntegrationStatus::Published);
     assert_eq!(git(&project, &["rev-parse", "HEAD"]), published.head_commit);
     let (result, notes) = store
-        .read_result(verification.as_str())
+        .read_result(&verification)
         .unwrap()
         .expect("automatic verification result");
     assert_eq!(
@@ -320,7 +320,7 @@ fn successful_work_can_be_automatically_verified_and_published() {
     );
     assert_eq!(result.author, Author::Machine);
     assert!(notes.contains("orka run --auto-accept"));
-    let (meta, _) = store.read_node(verification.as_str()).unwrap();
+    let (meta, _) = store.read_node(&verification).unwrap();
     assert_eq!(meta.verifies.as_ref(), Some(&candidate));
     assert_eq!(meta.assignee, Some(Author::Machine));
     assert!(
@@ -954,7 +954,7 @@ fn recovery_after_linka_accepted_but_before_seal_recognizes_its_own_result() {
         reports[0].sealed
     );
     let candidate = Candidates::new(&store).get(&id.0).unwrap();
-    assert_eq!(candidate.node.as_str(), node);
+    assert_eq!(candidate.node, node);
     assert_eq!(candidate.integration, linka::IntegrationStatus::Pending);
     let version = store.result_version(&node).unwrap();
     let observations = store.read_context_observations(&node).unwrap();

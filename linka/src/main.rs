@@ -377,7 +377,7 @@ fn main() -> Result<()> {
             author,
         } => {
             let (store, vcs) = open_store(store)?;
-            let snapshot = ops::snapshot_work(&store, &vcs, id.as_str(), &[])?;
+            let snapshot = ops::snapshot_work(&store, &vcs, &id, &[])?;
             let notes = resolve_notes(
                 notes,
                 notes_file,
@@ -824,7 +824,7 @@ fn pairing_line(pairing: &linka::Pairing) -> String {
 /// the end if anything was unreadable. `visit` reports whether it printed
 /// something, and the total comes back so a caller can say "nothing found"
 /// only when the walk was both empty and clean.
-fn for_each_node(store: &Store, mut visit: impl FnMut(&str) -> Result<bool>) -> Result<bool> {
+fn for_each_node(store: &Store, mut visit: impl FnMut(&NodeId) -> Result<bool>) -> Result<bool> {
     let mut errors = 0;
     let mut printed = false;
     for id in store.list_ids()? {
@@ -927,7 +927,7 @@ fn format_staleness(reason: &StalenessReason) -> String {
 }
 
 /// The `show` view.
-fn show_node(store: &Store, vcs: &GitVcs, id: &str) -> Result<String> {
+fn show_node(store: &Store, vcs: &GitVcs, id: &NodeId) -> Result<String> {
     let (meta, description) = store.read_node(id)?;
     let mut out = String::new();
     use std::fmt::Write;
@@ -1039,7 +1039,7 @@ fn resolve_notes(
     notes: Option<String>,
     file: Option<PathBuf>,
     store: &Store,
-    id: &str,
+    id: &NodeId,
     ask: &str,
 ) -> Result<String> {
     use std::io::IsTerminal;
@@ -1128,7 +1128,7 @@ mod tests {
             currency: Currency::Stale,
             integration: IntegrationStatus::NotRequired,
             staleness: vec![StalenessReason::ContextMissing {
-                path: "input".into(),
+                path: "input".parse().unwrap(),
             }],
             blockers: vec![],
         };
@@ -1143,7 +1143,7 @@ mod tests {
         assert_eq!(state_summary(&failed), "ready (previous attempt failed)");
         let blocked = NodeState {
             blockers: vec![Blocker {
-                id: "dependency".into(),
+                id: "dependency".parse().unwrap(),
                 reason: BlockerReason::Stale,
             }],
             ..failed
