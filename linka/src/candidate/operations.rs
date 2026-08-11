@@ -33,28 +33,7 @@ impl CandidateStore<'_> {
         }
         self.require_current(vcs, &candidate, IntegrationStatus::Pending)?;
         require_exact_candidate_pin(&candidate, verification, result, outcome)?;
-        candidate.state = match outcome {
-            crate::VerificationOutcome::Accepted => {
-                let target_ref = branch_ref(&candidate.target);
-                let target_previous = vcs.ref_commit(&target_ref)?.with_context(|| {
-                    format!("target branch `{}` does not exist", candidate.target)
-                })?;
-                CandidateState::Accepted {
-                    decided_at_ms: now_millis(),
-                    author,
-                    notes,
-                    verification: verification.clone(),
-                    target_previous,
-                }
-            }
-            crate::VerificationOutcome::Rejected => CandidateState::Rejected {
-                decided_at_ms: now_millis(),
-                author,
-                notes,
-                verification: verification.clone(),
-            },
-            crate::VerificationOutcome::Abandoned => unreachable!(),
-        };
+        candidate.state = decided_state(vcs, &candidate, verification, outcome, author, notes)?;
         Ok(candidate)
     }
 
@@ -152,17 +131,14 @@ impl CandidateStore<'_> {
             verification,
             crate::VerificationOutcome::Accepted,
         )?;
-        let target_ref = branch_ref(&candidate.target);
-        let target_previous = vcs
-            .ref_commit(&target_ref)?
-            .with_context(|| format!("target branch `{}` does not exist", candidate.target))?;
-        candidate.state = CandidateState::Accepted {
-            decided_at_ms: now_millis(),
+        candidate.state = decided_state(
+            vcs,
+            &candidate,
+            verification,
+            crate::VerificationOutcome::Accepted,
             author,
             notes,
-            verification: verification.clone(),
-            target_previous,
-        };
+        )?;
         storage::write_toml(&self.record_path(id), &candidate)?;
         mutation.commit(vcs, &format!("linka: accept candidate {id}"))?;
         Ok(candidate)
@@ -205,12 +181,14 @@ impl CandidateStore<'_> {
             verification,
             crate::VerificationOutcome::Rejected,
         )?;
-        candidate.state = CandidateState::Rejected {
-            decided_at_ms: now_millis(),
+        candidate.state = decided_state(
+            vcs,
+            &candidate,
+            verification,
+            crate::VerificationOutcome::Rejected,
             author,
             notes,
-            verification: verification.clone(),
-        };
+        )?;
         storage::write_toml(&self.record_path(id), &candidate)?;
         mutation.commit(vcs, &format!("linka: reject candidate {id}"))?;
         Ok(candidate)
@@ -296,6 +274,49 @@ impl CandidateStore<'_> {
         }
         Ok(())
     }
+}
+
+/// The state a candidate takes once `verification` decides it. Both routes to
+/// a decision build it here — the submission path, which holds the deciding
+/// result in hand before it is written, and the standalone accept/reject entry
+/// points, which read a recorded result back — so one place owns the rule that
+/// an acceptance freezes the target's pre-publication commit.
+///
+/// Entry conditions (idempotency, staleness, pin and notes requirements) stay
+/// with the callers: they differ per route.
+fn decided_state(
+    vcs: &dyn Vcs,
+    candidate: &CandidateRecord,
+    verification: &crate::NodeId,
+    outcome: crate::VerificationOutcome,
+    author: Author,
+    notes: String,
+) -> Result<CandidateState> {
+    Ok(match outcome {
+        crate::VerificationOutcome::Accepted => {
+            let target_ref = branch_ref(&candidate.target);
+            let target_previous = vcs
+                .ref_commit(&target_ref)?
+                .with_context(|| format!("target branch `{}` does not exist", candidate.target))?;
+            CandidateState::Accepted {
+                decided_at_ms: now_millis(),
+                author,
+                notes,
+                verification: verification.clone(),
+                target_previous,
+            }
+        }
+        crate::VerificationOutcome::Rejected => CandidateState::Rejected {
+            decided_at_ms: now_millis(),
+            author,
+            notes,
+            verification: verification.clone(),
+        },
+        crate::VerificationOutcome::Abandoned => bail!(
+            "an abandoned verification cannot decide candidate `{}`",
+            candidate.id
+        ),
+    })
 }
 
 fn require_exact_candidate_pin(
