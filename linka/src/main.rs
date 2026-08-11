@@ -574,32 +574,17 @@ fn main() -> Result<()> {
 
         Cmd::List => {
             let (store, vcs) = open_store(store)?;
-            let mut errors = 0;
-            for id in store.list_ids()? {
-                let (_, description) = match store.read_node(&id) {
-                    Ok(node) => node,
-                    Err(error) => {
-                        report_node_error(&id, &error);
-                        errors += 1;
-                        continue;
-                    }
-                };
-                let state = match ops::node_state(&store, &vcs, &id) {
-                    Ok(state) => state,
-                    Err(error) => {
-                        report_node_error(&id, &error);
-                        errors += 1;
-                        continue;
-                    }
-                };
+            for_each_node(&store, |id| {
+                let (_, description) = store.read_node(id)?;
+                let state = ops::node_state(&store, &vcs, id)?;
                 println!(
                     "{:<32} {:<8} {}",
                     id,
                     state_summary(&state),
                     linka::title_of(&description)
                 );
-            }
-            finish_node_queries(errors)?;
+                Ok(true)
+            })?;
         }
 
         Cmd::Log { id } => {
@@ -675,90 +660,58 @@ fn main() -> Result<()> {
 
         Cmd::Stale => {
             let (store, vcs) = open_store(store)?;
-            let mut found = false;
-            let mut errors = 0;
-            for id in store.list_ids()? {
-                let reasons = match ops::staleness(&store, &vcs, &id) {
-                    Ok(reasons) => reasons,
-                    Err(error) => {
-                        report_node_error(&id, &error);
-                        errors += 1;
-                        continue;
-                    }
-                };
-                if !reasons.is_empty() {
-                    found = true;
-                    println!("{id}:");
-                    for r in &reasons {
-                        println!("  {}", format_staleness(r));
-                    }
+            let found = for_each_node(&store, |id| {
+                let reasons = ops::staleness(&store, &vcs, id)?;
+                if reasons.is_empty() {
+                    return Ok(false);
                 }
-            }
-            if !found && errors == 0 {
+                println!("{id}:");
+                for r in &reasons {
+                    println!("  {}", format_staleness(r));
+                }
+                Ok(true)
+            })?;
+            if !found {
                 println!("all nodes up to date");
             }
-            finish_node_queries(errors)?;
         }
 
         Cmd::Ready { assignee } => {
             let (store, vcs) = open_store(store)?;
-            let mut errors = 0;
-            for id in store.list_ids()? {
-                let (meta, description) = match store.read_node(&id) {
-                    Ok(node) => node,
-                    Err(error) => {
-                        report_node_error(&id, &error);
-                        errors += 1;
-                        continue;
-                    }
-                };
-                match ops::node_state(&store, &vcs, &id) {
-                    Ok(state)
-                        if state.is_ready()
-                            && !matches!((assignee, meta.assignee), (Some(want), Some(has)) if want != has) =>
-                    {
-                        println!(
-                            "{:<32} {}  {}",
-                            id,
-                            state_summary(&state),
-                            linka::title_of(&description)
-                        );
-                    }
-                    Ok(_) => {}
-                    Err(error) => {
-                        report_node_error(&id, &error);
-                        errors += 1;
-                    }
+            for_each_node(&store, |id| {
+                let (meta, description) = store.read_node(id)?;
+                let state = ops::node_state(&store, &vcs, id)?;
+                if !state.is_ready()
+                    || matches!((assignee, meta.assignee), (Some(want), Some(has)) if want != has)
+                {
+                    return Ok(false);
                 }
-            }
-            finish_node_queries(errors)?;
+                println!(
+                    "{:<32} {}  {}",
+                    id,
+                    state_summary(&state),
+                    linka::title_of(&description)
+                );
+                Ok(true)
+            })?;
         }
 
         Cmd::Blocked => {
             let (store, vcs) = open_store(store)?;
-            let mut any = false;
-            let mut errors = 0;
-            for id in store.list_ids()? {
-                let blockers = match ops::blockers(&store, &vcs, &id) {
-                    Ok(blockers) => blockers,
-                    Err(error) => {
-                        report_node_error(&id, &error);
-                        errors += 1;
-                        continue;
-                    }
-                };
-                if !blockers.is_empty() {
-                    any = true;
-                    println!("{id}:");
-                    for b in &blockers {
-                        println!("  blocked by {}", format_blocker(b));
-                    }
+            let any = for_each_node(&store, |id| {
+                let blockers = ops::blockers(&store, &vcs, id)?;
+                if blockers.is_empty() {
+                    return Ok(false);
                 }
-            }
-            if !any && errors == 0 {
+                println!("{id}:");
+                for b in &blockers {
+                    println!("  blocked by {}", format_blocker(b));
+                }
+                Ok(true)
+            })?;
+            if !any {
                 println!("nothing blocked");
             }
-            finish_node_queries(errors)?;
         }
 
         Cmd::Origin { commit } => {
@@ -865,15 +818,28 @@ fn pairing_line(pairing: &linka::Pairing) -> String {
     line
 }
 
-fn report_node_error(id: &str, error: &anyhow::Error) {
-    eprintln!("{id}: error: {error:#}");
-}
-
-fn finish_node_queries(errors: usize) -> Result<()> {
+/// Walk every node for the listing queries (`list`, `stale`, `ready`,
+/// `blocked`). One node that cannot be evaluated must not hide the rest, so
+/// its error goes to stderr and the walk continues; the command still fails at
+/// the end if anything was unreadable. `visit` reports whether it printed
+/// something, and the total comes back so a caller can say "nothing found"
+/// only when the walk was both empty and clean.
+fn for_each_node(store: &Store, mut visit: impl FnMut(&str) -> Result<bool>) -> Result<bool> {
+    let mut errors = 0;
+    let mut printed = false;
+    for id in store.list_ids()? {
+        match visit(&id) {
+            Ok(hit) => printed |= hit,
+            Err(error) => {
+                eprintln!("{id}: error: {error:#}");
+                errors += 1;
+            }
+        }
+    }
     if errors > 0 {
         anyhow::bail!("could not evaluate {errors} node(s)");
     }
-    Ok(())
+    Ok(printed)
 }
 
 fn state_summary(state: &NodeState) -> String {
