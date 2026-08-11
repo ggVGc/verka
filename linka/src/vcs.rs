@@ -42,11 +42,9 @@ pub trait ArtifactStore {
 
     /// If the outputs captured under `id` have changed since, return a short,
     /// human-readable reason (for git, a `diff --name-status`); else `None`.
-    fn drift(&self, id: &str) -> Result<Option<String>>;
-
-    /// As `drift`, but compare the artifact with a named revision rather than
-    /// the currently checked-out project tree.
-    fn drift_at(&self, id: &str, revision: &str) -> Result<Option<String>>;
+    /// `against` names the revision to compare with; `None` compares with the
+    /// currently checked-out project tree.
+    fn drift(&self, id: &str, against: Option<&str>) -> Result<Option<String>>;
 
     /// The paths captured under `id` (for git, the files the commit touches).
     fn files_in(&self, id: &str) -> Result<Vec<String>>;
@@ -160,19 +158,14 @@ impl ArtifactStore for FakeVcs {
         Ok(())
     }
 
-    fn drift(&self, id: &str) -> Result<Option<String>> {
+    fn drift(&self, id: &str, against: Option<&str>) -> Result<Option<String>> {
+        if against == Some(id) {
+            return Ok(None);
+        }
         if let Some(error) = &self.drift_error {
             anyhow::bail!("{error}");
         }
         Ok(self.drift_for.get(id).cloned())
-    }
-
-    fn drift_at(&self, id: &str, revision: &str) -> Result<Option<String>> {
-        if id == revision {
-            Ok(None)
-        } else {
-            self.drift(id)
-        }
     }
 
     fn dirty_paths(&self) -> Result<Vec<String>> {

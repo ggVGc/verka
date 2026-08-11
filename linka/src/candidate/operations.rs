@@ -288,13 +288,7 @@ impl CandidateStore<'_> {
             .store
             .read_result(verification.as_str())?
             .with_context(|| format!("verification `{verification}` has no result"))?;
-        if result.outcome != crate::ResultOutcome::Verification(expected) {
-            bail!(
-                "verification `{verification}` is {}, not {}",
-                result.outcome.as_str(),
-                expected.as_str()
-            );
-        }
+        // `require_exact_candidate_pin` checks the outcome itself.
         require_exact_candidate_pin(candidate, verification, &result, expected)?;
         let state = crate::ops::node_state(self.store, vcs, verification.as_str())?;
         if state.currency != crate::Currency::Current {

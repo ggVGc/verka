@@ -4,10 +4,10 @@
 //! Producer metadata is opaque, keeping execution drivers outside Linka's domain.
 
 use crate::model::{ArtifactRef, Author, CandidateId, IntegrationStatus, NodeId, ResultVersion};
+use crate::ops::now_millis;
 use crate::{Store, Vcs};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 mod operations;
 mod storage;
@@ -110,11 +110,4 @@ impl<'a> CandidateStore<'a> {
 
 fn branch_ref(branch: &str) -> String {
     format!("refs/heads/{branch}")
-}
-
-fn now_millis() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as i64)
-        .unwrap_or(0)
 }

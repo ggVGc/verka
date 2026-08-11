@@ -279,6 +279,17 @@ impl Store {
         Ok(Some((meta, notes)))
     }
 
+    /// The node's result version, or `None` if it has no result — the pairing
+    /// of [`Self::read_result`] and [`Self::result_version`] that pinning and
+    /// version checks need, in one pass over the files.
+    pub fn current_result_version(&self, id: &str) -> Result<Option<ResultVersion>> {
+        validate_node_id(id)?;
+        if !self.result_meta_path(id).exists() {
+            return Ok(None);
+        }
+        self.result_version(id).map(Some)
+    }
+
     pub fn result_version(&self, id: &str) -> Result<ResultVersion> {
         validate_node_id(id)?;
         let metadata = fs::read(self.result_meta_path(id))

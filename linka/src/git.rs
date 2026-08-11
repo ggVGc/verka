@@ -50,12 +50,8 @@ impl ArtifactStore for GitVcs {
         checked(&self.project, &["update-ref", &refname, commit])?;
         Ok(())
     }
-    fn drift(&self, id: &str) -> Result<Option<String>> {
-        output_drift(&self.project, id)
-    }
-
-    fn drift_at(&self, id: &str, revision: &str) -> Result<Option<String>> {
-        output_drift_at(&self.project, id, revision)
+    fn drift(&self, id: &str, against: Option<&str>) -> Result<Option<String>> {
+        output_drift(&self.project, id, against)
     }
 
     fn dirty_paths(&self) -> Result<Vec<String>> {
@@ -97,13 +93,7 @@ impl ArtifactStore for GitVcs {
 
 impl ContextIdentity for GitVcs {
     fn head_commit(&self) -> Result<Option<String>> {
-        if !git(&self.project, &["rev-parse", "--verify", "--quiet", "HEAD"])?
-            .status
-            .success()
-        {
-            return Ok(None);
-        }
-        Ok(Some(checked(&self.project, &["rev-parse", "HEAD"])?))
+        optional(&self.project, &["rev-parse", "--verify", "--quiet", "HEAD"])
     }
     fn linka_node(&self, commit: &str) -> Result<Option<String>> {
         let format = "%(trailers:key=Linka-Node,valueonly)";
@@ -127,16 +117,10 @@ impl ContextIdentity for GitVcs {
         crate::store::file_blob(&self.project.join(path))
     }
     fn file_blob_at(&self, revision: &str, path: &str) -> Result<Option<String>> {
-        let output = git(
+        optional(
             &self.project,
             &["rev-parse", "--verify", &format!("{revision}:{path}")],
-        )?;
-        if !output.status.success() {
-            return Ok(None);
-        }
-        Ok(Some(
-            String::from_utf8_lossy(&output.stdout).trim().to_string(),
-        ))
+        )
     }
 }
 
@@ -191,31 +175,20 @@ impl RepositoryIdentity for GitVcs {
     }
     fn remote_url(&self) -> Result<Option<String>> {
         // Non-zero means "no such remote" — an answer, not an error.
-        let out = git(&self.project, &["remote", "get-url", "origin"])?;
-        if !out.status.success() {
-            return Ok(None);
-        }
-        let url = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        Ok((!url.is_empty()).then_some(url))
+        optional(&self.project, &["remote", "get-url", "origin"])
     }
 }
 
 impl BranchStore for GitVcs {
     fn current_branch(&self) -> Result<Option<String>> {
-        let out = git(
+        optional(
             &self.project,
             &["symbolic-ref", "--quiet", "--short", "HEAD"],
-        )?;
-        if !out.status.success() {
-            return Ok(None);
-        }
-        Ok(Some(
-            String::from_utf8_lossy(&out.stdout).trim().to_string(),
-        ))
+        )
     }
 
     fn ref_commit(&self, reference: &str) -> Result<Option<String>> {
-        let out = git(
+        optional(
             &self.project,
             &[
                 "rev-parse",
@@ -223,13 +196,7 @@ impl BranchStore for GitVcs {
                 "--quiet",
                 &format!("{reference}^{{commit}}"),
             ],
-        )?;
-        if !out.status.success() {
-            return Ok(None);
-        }
-        Ok(Some(
-            String::from_utf8_lossy(&out.stdout).trim().to_string(),
-        ))
+        )
     }
 
     fn is_ancestor(&self, ancestor: &str, descendant: &str) -> Result<bool> {
@@ -299,10 +266,7 @@ pub fn ensure_repo(dir: &Path) -> Result<bool> {
 /// First-parent keeps the answer single and deterministic even after merges
 /// of unrelated histories.
 pub fn root_commit(base: &Path) -> Result<Option<String>> {
-    if !git(base, &["rev-parse", "--verify", "--quiet", "HEAD"])?
-        .status
-        .success()
-    {
+    if optional(base, &["rev-parse", "--verify", "--quiet", "HEAD"])?.is_none() {
         return Ok(None); // no commits yet
     }
     let out = checked(
@@ -331,6 +295,18 @@ fn git(base: &Path, args: &[&str]) -> Result<std::process::Output> {
         .args(args)
         .output()
         .with_context(|| format!("failed to run `git {}`", args.join(" ")))
+}
+
+/// Run a git command whose failure is an answer rather than an error (no such
+/// ref, remote, object, or branch): trimmed stdout on success, `None` on a
+/// non-zero exit or empty output.
+fn optional(base: &Path, args: &[&str]) -> Result<Option<String>> {
+    let out = git(base, args)?;
+    if !out.status.success() {
+        return Ok(None);
+    }
+    let value = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    Ok((!value.is_empty()).then_some(value))
 }
 
 /// Run a git command, returning trimmed stdout or an error carrying stderr.
@@ -445,24 +421,15 @@ fn commit_files(base: &Path, commit: &str) -> Result<Vec<String>> {
 
 /// If any file introduced by `commit` differs from its state at that commit,
 /// return a short `git diff --name-status` description; otherwise `None`.
-fn output_drift(base: &Path, commit: &str) -> Result<Option<String>> {
+/// `against` names the revision to compare with, defaulting to the working tree.
+fn output_drift(base: &Path, commit: &str, against: Option<&str>) -> Result<Option<String>> {
     let paths = commit_files(base, commit)?;
     if paths.is_empty() {
         return Ok(None);
     }
-
-    let mut args = vec!["diff", "--name-status", commit, "--"];
-    args.extend(paths.iter().map(String::as_str));
-    let drift = checked(base, &args)?;
-    Ok((!drift.is_empty()).then_some(drift))
-}
-
-fn output_drift_at(base: &Path, commit: &str, revision: &str) -> Result<Option<String>> {
-    let paths = commit_files(base, commit)?;
-    if paths.is_empty() {
-        return Ok(None);
-    }
-    let mut args = vec!["diff", "--name-status", commit, revision, "--"];
+    let mut args = vec!["diff", "--name-status", commit];
+    args.extend(against);
+    args.push("--");
     args.extend(paths.iter().map(String::as_str));
     let drift = checked(base, &args)?;
     Ok((!drift.is_empty()).then_some(drift))

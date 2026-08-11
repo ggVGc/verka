@@ -364,7 +364,15 @@ pub fn fail(store: &Store, vcs: &dyn Vcs, id: &str, notes: &str, author: Author)
     let mutation = store.mutation_lock(vcs)?;
     let (meta, _) = store.read_node(id)?;
     require_ordinary_node(&meta, id)?;
-    let consumed = pin_deps(store, &meta)?;
+    let consumed = pin_node_list(
+        store,
+        &meta
+            .depends_on
+            .iter()
+            .chain(&meta.derived_from)
+            .cloned()
+            .collect::<Vec<_>>(),
+    )?;
     let result = ResultMeta {
         schema: RESULT_SCHEMA,
         at: now_millis(),
@@ -588,19 +596,7 @@ fn node_state_inner(
                     }
                     bail!("ordinary node `{id}` has a verification outcome");
                 }
-                let outcome = match result.outcome {
-                    ResultOutcome::Work(Outcome::Done) => RecordedOutcome::Succeeded,
-                    ResultOutcome::Work(Outcome::Failed) => RecordedOutcome::Failed,
-                    ResultOutcome::Verification(VerificationOutcome::Accepted) => {
-                        RecordedOutcome::Accepted
-                    }
-                    ResultOutcome::Verification(VerificationOutcome::Rejected) => {
-                        RecordedOutcome::Rejected
-                    }
-                    ResultOutcome::Verification(VerificationOutcome::Abandoned) => {
-                        RecordedOutcome::Abandoned
-                    }
-                };
+                let outcome = RecordedOutcome::from(result.outcome);
                 let candidate = candidate_for_result(store, id, result)?;
                 (
                     outcome,
@@ -734,12 +730,12 @@ fn staleness_for_result(
                 let target = vcs
                     .ref_commit(&target_ref)?
                     .with_context(|| format!("published target `{target_ref}` is missing"))?;
-                vcs.drift_at(&output.id, &target)?
+                vcs.drift(&output.id, Some(&target))?
             } else {
                 None
             }
         } else {
-            vcs.drift(&output.id)?
+            vcs.drift(&output.id, None)?
         };
         if let Some(detail) = detail {
             reasons.push(StalenessReason::OutputDrifted {
@@ -805,26 +801,13 @@ pub fn snapshot_work(
     let (meta, _) = store.read_node(id)?;
     let dependencies = pin_node_list(store, &meta.depends_on)?;
     let lineage = pin_node_list(store, &meta.derived_from)?;
-    let revision = vcs.head_commit()?.unwrap_or_default();
+    let project = current_project_snapshot(store, vcs)?;
     let context = pin_context(
         store,
         vcs,
-        (!revision.is_empty()).then_some(revision.as_str()),
+        (!project.revision.is_empty()).then_some(project.revision.as_str()),
         context,
     )?;
-    let tree = if revision.is_empty() {
-        String::new()
-    } else {
-        vcs.tree_id(&revision)?
-    };
-    let repository = Pairing::load(store.root())?
-        .map(|pairing| pairing.root_commit)
-        .unwrap_or_default();
-    let previous_result = store
-        .read_result(id)?
-        .is_some()
-        .then(|| store.result_version(id))
-        .transpose()?;
     Ok(WorkSnapshot {
         schema: SNAPSHOT_SCHEMA,
         node: id.parse().map_err(anyhow::Error::msg)?,
@@ -832,13 +815,8 @@ pub fn snapshot_work(
         dependencies,
         lineage,
         context,
-        project: ProjectSnapshot {
-            scheme: "git".into(),
-            repository,
-            revision,
-            tree,
-        },
-        previous_result,
+        project,
+        previous_result: store.current_result_version(id)?,
     })
 }
 
@@ -1011,11 +989,7 @@ fn submit_result_locked(
             }
         }
     }
-    let previous = store
-        .read_result(id)?
-        .is_some()
-        .then(|| store.result_version(id))
-        .transpose()?;
+    let previous = store.current_result_version(id)?;
     if previous != snapshot.previous_result {
         conflicts.push(SubmissionConflict::PreviousResultChanged);
     }
@@ -1854,48 +1828,19 @@ pub fn short_result(version: &ResultVersion) -> String {
     )
 }
 
-/// Pin the current version and output of every node in `meta`'s dependency lists.
-fn pin_deps(store: &Store, meta: &NodeMeta) -> Result<Vec<ConsumedNode>> {
-    meta.depends_on
-        .iter()
-        .chain(&meta.derived_from)
-        .map(|dep| {
-            let definition = store
-                .node_version(dep)
-                .with_context(|| format!("cannot pin unknown dependency `{dep}`"))?;
-            let result = store
-                .read_result(dep)?
-                .is_some()
-                .then(|| store.result_version(dep))
-                .transpose()?;
-            Ok(ConsumedNode {
-                id: dep.clone(),
-                definition,
-                result,
-                outcome: store.read_result(dep)?.map(|(result, _)| result.outcome),
-                output: output_of(store, dep)?
-                    .as_deref()
-                    .map(|commit| git_artifact(store, commit))
-                    .transpose()?,
-            })
-        })
-        .collect()
-}
-
+/// Pin the current version, result, and output of each node in `nodes`.
 fn pin_node_list(store: &Store, nodes: &[crate::model::NodeId]) -> Result<Vec<ConsumedNode>> {
     nodes
         .iter()
         .map(|dep| {
-            let definition = store.node_version(dep)?;
+            let definition = store
+                .node_version(dep)
+                .with_context(|| format!("cannot pin unknown dependency `{dep}`"))?;
             let current = store.read_result(dep)?;
-            let result = current
-                .is_some()
-                .then(|| store.result_version(dep))
-                .transpose()?;
             Ok(ConsumedNode {
                 id: dep.clone(),
                 definition,
-                result,
+                result: store.current_result_version(dep)?,
                 outcome: current.as_ref().map(|(result, _)| result.outcome),
                 output: current.and_then(|(result, _)| result.output),
             })
@@ -1949,11 +1894,16 @@ fn project_file_blob(
     }
 }
 
+/// The paired project repository's identity (its root commit), or an empty
+/// string for an unpaired store — stores predating pairing exist.
+fn paired_repository(store: &Store) -> Result<String> {
+    Ok(Pairing::load(store.root())?
+        .map(|pairing| pairing.root_commit)
+        .unwrap_or_default())
+}
+
 fn current_project_snapshot(store: &Store, vcs: &dyn Vcs) -> Result<ProjectSnapshot> {
     let revision = vcs.head_commit()?.unwrap_or_default();
-    let repository = Pairing::load(store.root())?
-        .map(|pairing| pairing.root_commit)
-        .unwrap_or_default();
     let tree = if revision.is_empty() {
         String::new()
     } else {
@@ -1961,24 +1911,21 @@ fn current_project_snapshot(store: &Store, vcs: &dyn Vcs) -> Result<ProjectSnaps
     };
     Ok(ProjectSnapshot {
         scheme: "git".into(),
-        repository,
+        repository: paired_repository(store)?,
         tree,
         revision,
     })
 }
 
 fn git_artifact(store: &Store, commit: &str) -> Result<ArtifactRef> {
-    let repository = Pairing::load(store.root())?
-        .map(|pairing| pairing.root_commit)
-        .unwrap_or_default();
     Ok(ArtifactRef {
         scheme: "git-commit".into(),
-        repository,
+        repository: paired_repository(store)?,
         id: commit.into(),
     })
 }
 
-fn now_millis() -> i64 {
+pub(crate) fn now_millis() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)

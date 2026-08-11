@@ -792,12 +792,10 @@ fn main() -> Result<()> {
         }
 
         Cmd::Check { artifacts } => {
-            let store = Store::open(store)?;
+            let (store, vcs) = open_store(store)?;
             let problems = if artifacts {
-                let vcs = GitVcs::for_store(&store);
                 ops::check_artifacts(&store, &vcs)?
             } else {
-                let vcs = GitVcs::for_store(&store);
                 ops::check_workbench(&store, &vcs)?
             };
             if problems.is_empty() {

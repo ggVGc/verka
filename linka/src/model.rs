@@ -420,6 +420,18 @@ pub enum RecordedOutcome {
     Abandoned,
 }
 
+impl From<ResultOutcome> for RecordedOutcome {
+    fn from(outcome: ResultOutcome) -> Self {
+        match outcome {
+            ResultOutcome::Work(Outcome::Done) => Self::Succeeded,
+            ResultOutcome::Work(Outcome::Failed) => Self::Failed,
+            ResultOutcome::Verification(VerificationOutcome::Accepted) => Self::Accepted,
+            ResultOutcome::Verification(VerificationOutcome::Rejected) => Self::Rejected,
+            ResultOutcome::Verification(VerificationOutcome::Abandoned) => Self::Abandoned,
+        }
+    }
+}
+
 /// Whether recorded evidence still covers the current graph and project facts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
