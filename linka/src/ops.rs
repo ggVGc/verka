@@ -255,10 +255,7 @@ pub fn complete(
         None
     } else {
         let message = message.unwrap_or_else(|| crate::model::title_of(&description).to_string());
-        let mut commit_message = format!("{message}\n\nLinka-Node: {id}");
-        if let Some(input) = &input_commit {
-            commit_message.push_str(&format!("\nLinka-Input: {input}"));
-        }
+        let commit_message = output_commit_message(id, message, input_commit.as_deref());
         let commit = vcs.capture(&outputs, &commit_message)?;
         vcs.retain_output(id, &commit)?;
         Some(commit)
@@ -1125,10 +1122,9 @@ pub fn capture_submission(
                 crate::model::title_of(&description).to_string()
             }
         };
-        let mut commit_message = format!("{message}\n\nLinka-Node: {id}");
-        if !snapshot.project.revision.is_empty() {
-            commit_message.push_str(&format!("\nLinka-Input: {}", snapshot.project.revision));
-        }
+        let input =
+            (!snapshot.project.revision.is_empty()).then_some(snapshot.project.revision.as_str());
+        let commit_message = output_commit_message(&id, message, input);
         Some(vcs.capture(&output_paths, &commit_message)?)
     } else {
         None
@@ -1524,6 +1520,17 @@ fn validate_verification_decision(
             result.outcome.as_str()
         ));
     }
+}
+
+/// Build an output commit's message: the caller's message (or the node's
+/// title as a fallback) plus the `Linka-Node` trailer and, when the work had
+/// an input commit, the `Linka-Input` trailer recording what it was built from.
+fn output_commit_message(id: &str, message: String, input: Option<&str>) -> String {
+    let mut commit_message = format!("{message}\n\nLinka-Node: {id}");
+    if let Some(input) = input {
+        commit_message.push_str(&format!("\nLinka-Input: {input}"));
+    }
+    commit_message
 }
 
 /// Whether `outcome`'s kind (work vs. verification) is the kind a node that
