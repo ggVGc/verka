@@ -55,11 +55,13 @@ pub(crate) fn render_keybinds(frame: &mut Frame, area: Rect) {
         bindings("P", "toggle full-screen preview"),
         bindings("v", "toggle pretty/diff preview"),
         bindings("PgUp/PgDn", "scroll preview"),
+        bindings("y", "copy selected entry to clipboard"),
         Line::default(),
         section("Raw, log, and transcript"),
         bindings("j/k or ↓/↑", "move or scroll"),
         bindings("g/G", "first/top or last/bottom"),
         bindings("PgUp/PgDn", "scroll raw-line preview"),
+        bindings("y", "copy selected line to clipboard (raw view)"),
         Line::default(),
         section("Files"),
         bindings("j/k or ↓/↑", "next/previous file"),
@@ -67,6 +69,7 @@ pub(crate) fn render_keybinds(frame: &mut Frame, area: Rect) {
         bindings("e", "open selected file in editor"),
         bindings("p", "toggle interaction preview"),
         bindings("a", "toggle focused-entry/all-session files"),
+        bindings("y", "copy selected file's path to clipboard"),
         Line::default(),
         section("Message editor"),
         bindings("Enter", "send message"),
@@ -108,7 +111,7 @@ mod tests {
 
     #[test]
     fn reference_groups_the_available_keybinds() {
-        let mut terminal = Terminal::new(TestBackend::new(100, 48)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(100, 51)).unwrap();
         terminal
             .draw(|frame| render_keybinds(frame, frame.area()))
             .unwrap();

@@ -19,6 +19,7 @@ edition = "2021"
 
 [workspace.dependencies]
 anyhow = "1"
+base64 = "0.22"
 clap = { version = "4", features = ["derive"] }
 crossterm = "0.28"
 inotify = { version = "0.9", default-features = false }

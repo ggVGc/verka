@@ -10,6 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
+base64.workspace = true
 clap.workspace = true
 ratatui = { workspace = true, features = ["unstable-rendered-line-info"] }
 pulldown-cmark.workspace = true

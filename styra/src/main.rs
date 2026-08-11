@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 mod app;
 mod cli;
+mod clipboard;
 mod config;
 mod event_loop;
 mod keys;

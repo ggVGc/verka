@@ -102,6 +102,7 @@ pub fn handle_list_key(
             KeyCode::Char('m') => app.toggle_minor(),
             KeyCode::Char('p') => app.toggle_preview(),
             KeyCode::Char('C') => app.expand_conversation(),
+            KeyCode::Char('y') => copy_selection(app),
             _ => {}
         },
         View::Raw => match key.code {
@@ -111,6 +112,7 @@ pub fn handle_list_key(
             KeyCode::Char('k') | KeyCode::Up => app.raw_select_prev(),
             KeyCode::Char('g') => app.raw_select_first(),
             KeyCode::Char('G') => app.raw_select_last(),
+            KeyCode::Char('y') => copy_selection(app),
             _ => {}
         },
         View::Log => match key.code {
@@ -145,6 +147,7 @@ pub fn handle_list_key(
             KeyCode::Char('G') => app.file_selected = app.file_paths().len().saturating_sub(1),
             KeyCode::Char('a') => app.toggle_file_scope(),
             KeyCode::Char('p') => app.toggle_preview(),
+            KeyCode::Char('y') => copy_selection(app),
             _ => {}
         },
         View::Preview => match key.code {
@@ -157,8 +160,24 @@ pub fn handle_list_key(
             KeyCode::Char('k') => app.select_prev_line(),
             KeyCode::Char('g') => app.select_first(),
             KeyCode::Char('G') => app.select_last(),
+            KeyCode::Char('y') => copy_selection(app),
             _ => {}
         },
+    }
+}
+
+/// Copy whatever the current view treats as the selected entry to the
+/// clipboard (see `App::copy_text`), reporting the outcome the same way
+/// [`terminal::open_shell`](crate::terminal::open_shell) does.
+fn copy_selection(app: &mut App) {
+    let Some(text) = app.copy_text() else {
+        return app.show_action_message("nothing selected to copy");
+    };
+    match crate::clipboard::copy(&text) {
+        Ok(()) => app.show_action_message("copied to clipboard"),
+        Err(error) => app.push_log(LogEntry::error(format!(
+            "could not copy to clipboard: {error:#}"
+        ))),
     }
 }
 

@@ -1325,6 +1325,44 @@ impl App {
         self.entries.get(self.selected)
     }
 
+    /// Plain text for whatever the current view treats as "the selected
+    /// entry", for the `y` shortcut to send to the clipboard. `None` where the
+    /// view has no single selected thing to copy (the log and transcript read
+    /// as a continuous stream rather than discrete entries, and Driva shows
+    /// static session-wide fields).
+    pub fn copy_text(&self) -> Option<String> {
+        match self.view {
+            // The same uncapped, presented detail the preview panel shows —
+            // its own doc comment already calls out being copy-friendly, so
+            // `y` here just automates the selection an operator would
+            // otherwise make by hand.
+            View::Events | View::Preview => {
+                let entry = self.selected_entry()?;
+                let protocol = self.selection.provider.protocol();
+                let mut text = String::new();
+                for block in protocol.presented_detail(&entry.event, self.preview_mode) {
+                    if !text.is_empty() {
+                        text.push('\n');
+                    }
+                    match block {
+                        DetailBlock::Text(part) | DetailBlock::Code { text: part, .. } => {
+                            text.push_str(&part)
+                        }
+                    }
+                }
+                if text.is_empty() {
+                    text = protocol.presented_summary(&entry.event, self.preview_mode);
+                }
+                Some(text)
+            }
+            View::Raw => self.raw.get(self.raw_selected).map(|line| line.text.clone()),
+            View::Files => self
+                .selected_file_path()
+                .map(|path| path.display().to_string()),
+            View::Log | View::Transcript | View::Driva => None,
+        }
+    }
+
     // --- Focus ---------------------------------------------------------------
 
     pub fn enter_input(&mut self) {
@@ -2720,5 +2758,54 @@ mod tests {
         app.input_char('!');
         app.input_history_next();
         assert_eq!(app.input, "original!");
+    }
+
+    #[test]
+    fn copy_text_is_the_selected_entrys_full_presented_detail() {
+        let mut app = app();
+        app.push_event(AgentEvent::CommandCompleted {
+            command: "cargo test".into(),
+            status: "completed".into(),
+            exit_code: Some(0),
+            output: "24 passed".into(),
+        });
+        let text = app.copy_text().expect("an entry is selected");
+        assert!(text.contains("cargo test"));
+        assert!(text.contains("24 passed"));
+    }
+
+    #[test]
+    fn copy_text_falls_back_to_the_summary_when_there_is_no_detail() {
+        let mut app = app();
+        app.show_minor = true;
+        app.push_event(AgentEvent::TurnStarted);
+        app.select_first();
+        let text = app.copy_text().expect("a minor entry is selected");
+        assert_eq!(text, AgentEvent::TurnStarted.summary());
+    }
+
+    #[test]
+    fn copy_text_is_none_for_views_with_no_discrete_entry() {
+        let mut app = app();
+        app.push_event(AgentEvent::AgentMessage { text: "hi".into() });
+        for view in [View::Log, View::Transcript, View::Driva] {
+            app.view = view;
+            assert!(app.copy_text().is_none(), "{view:?}");
+        }
+    }
+
+    #[test]
+    fn copy_text_in_the_raw_view_is_the_selected_wire_line() {
+        use styra_server::{Direction, RawLine};
+        let mut app = app();
+        app.push_raw(RawLine {
+            direction: Direction::FromAgent,
+            text: r#"{"type":"turn.started"}"#.into(),
+        });
+        app.view = View::Raw;
+        assert_eq!(
+            app.copy_text().as_deref(),
+            Some(r#"{"type":"turn.started"}"#)
+        );
     }
 }
