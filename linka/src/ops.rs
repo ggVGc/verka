@@ -997,10 +997,7 @@ fn submit_result_locked(
     if !node_state(store, vcs, id)?.is_ready() {
         conflicts.push(SubmissionConflict::ReadinessChanged);
     }
-    if matches!(
-        submission.outcome,
-        ResultOutcome::Work(Outcome::Done) | ResultOutcome::Verification(_)
-    ) {
+    if outcome_requires_full_pins(submission.outcome) {
         for dependency in &snapshot.dependencies {
             let state = node_state(store, vcs, &dependency.id)?;
             if !state.is_complete()
@@ -1446,10 +1443,7 @@ fn validate_result_semantics(
             ));
         }
         if required
-            && matches!(
-                result.outcome,
-                ResultOutcome::Work(Outcome::Done) | ResultOutcome::Verification(_)
-            )
+            && outcome_requires_full_pins(result.outcome)
             && (pin.result.is_none() || !pin.outcome.is_some_and(result_satisfies_dependency))
         {
             problems.push(format!(
@@ -1461,10 +1455,7 @@ fn validate_result_semantics(
             validate_artifact(id, output, repository, problems);
         }
     }
-    if matches!(
-        result.outcome,
-        ResultOutcome::Work(Outcome::Done) | ResultOutcome::Verification(_)
-    ) {
+    if outcome_requires_full_pins(result.outcome) {
         for edge in meta.depends_on.iter().chain(&meta.derived_from) {
             if !result.consumed.iter().any(|pin| &pin.id == edge) {
                 problems.push(format!(
@@ -1565,6 +1556,15 @@ fn result_satisfies_dependency(outcome: ResultOutcome) -> bool {
         outcome,
         ResultOutcome::Work(Outcome::Done)
             | ResultOutcome::Verification(VerificationOutcome::Accepted)
+    )
+}
+
+/// Whether a result with this outcome must carry a full pin for every declared
+/// edge (a done work result, or any verification decision).
+fn outcome_requires_full_pins(outcome: ResultOutcome) -> bool {
+    matches!(
+        outcome,
+        ResultOutcome::Work(Outcome::Done) | ResultOutcome::Verification(_)
     )
 }
 
