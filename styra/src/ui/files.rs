@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use styra_server::agent::SandboxLayout;
 
-use super::{render_list, render_placeholder, render_preview};
+use super::{render_list, render_placeholder, render_preview, SELECTION_BG, SELECTION_MARKER};
 
 struct FileItem {
     reported: String,
@@ -175,20 +175,26 @@ fn render_tree(
             .to_string_lossy();
         let style = if index == selected {
             Style::default()
-                .fg(Color::Black)
-                .bg(Color::Cyan)
+                .fg(Color::White)
+                .bg(SELECTION_BG)
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::White)
         };
-        lines.push(Line::from(Span::styled(
-            format!(
-                "{}{} {name}",
-                "  ".repeat(components.len()),
-                if index == selected { "›" } else { " " }
+        let indent = "  ".repeat(components.len());
+        let marker = if index == selected { "›" } else { " " };
+        lines.push(Line::from(vec![
+            Span::styled(indent, style),
+            Span::styled(
+                marker,
+                if index == selected {
+                    Style::default().fg(SELECTION_MARKER).bg(SELECTION_BG)
+                } else {
+                    style
+                },
             ),
-            style,
-        )));
+            Span::styled(format!(" {name}"), style),
+        ]));
         if index == selected {
             selected_line = lines.len().saturating_sub(1);
         }
@@ -290,6 +296,11 @@ mod tests {
         assert!(
             content_x >= 54 && content_y >= 8,
             "file content belongs in lower-right pane"
+        );
+        assert_eq!(
+            buffer.cell((tree_x, tree_y)).unwrap().style().bg,
+            Some(SELECTION_BG),
+            "the selected file uses the shared current-line highlight"
         );
         let (_, preview_y) = find("preview · pretty", 54, 90, 0).unwrap();
         assert!(preview_y < 8, "entry preview belongs in upper-right pane");

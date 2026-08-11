@@ -6,6 +6,7 @@
 use super::notes::render_notes_pane;
 use super::{
     log_line, message_text_color, render_placeholder, status_color, tag_color, SELECTION_BG,
+    SELECTION_MARKER,
 };
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -42,14 +43,18 @@ pub fn render_picker(
         return;
     }
 
-    let items: Vec<ListItem> = sessions.iter().map(session_item).collect();
+    let selected = selected.min(sessions.len() - 1);
+    let items: Vec<ListItem> = sessions
+        .iter()
+        .enumerate()
+        .map(|(index, session)| session_item(session, index == selected))
+        .collect();
     let list = List::new(items).block(block).highlight_style(
         Style::default()
             .bg(SELECTION_BG)
             .add_modifier(Modifier::BOLD),
     );
     let mut state = ListState::default();
-    let selected = selected.min(sessions.len() - 1);
     state.select(Some(selected));
     frame.render_stateful_widget(list, panes[0], &mut state);
     let session = sessions.get(selected);
@@ -132,11 +137,24 @@ pub fn render_workspace_picker(
     }
     let items: Vec<ListItem> = workspaces
         .iter()
-        .map(|workspace| {
+        .enumerate()
+        .map(|(index, workspace)| {
             let name = crate::session::workspace_display_name(workspace);
             ListItem::new(Line::from(vec![
                 Span::styled(
-                    format!("{name:<20} "),
+                    if index == selected.min(workspaces.len() - 1) {
+                        "• "
+                    } else {
+                        "  "
+                    },
+                    Style::default().fg(if index == selected.min(workspaces.len() - 1) {
+                        SELECTION_MARKER
+                    } else {
+                        Color::Cyan
+                    }),
+                ),
+                Span::styled(
+                    format!("{name:<19} "),
                     Style::default()
                         .fg(Color::Cyan)
                         .add_modifier(Modifier::BOLD),
@@ -207,7 +225,14 @@ pub fn render_interactions_picker(
 
     let items: Vec<ListItem> = interactions
         .iter()
-        .map(|interaction| interaction_item(interaction, workspaces))
+        .enumerate()
+        .map(|(index, interaction)| {
+            interaction_item(
+                interaction,
+                workspaces,
+                index == selected.min(interactions.len() - 1),
+            )
+        })
         .collect();
     let list = List::new(items).block(interactions_block).highlight_style(
         Style::default()
@@ -333,6 +358,7 @@ fn interaction_preview_line(
 fn interaction_item(
     interaction: &InteractionSummary,
     workspaces: &[WorkspaceSummary],
+    selected: bool,
 ) -> ListItem<'static> {
     // Status colors come from the same table the main interaction view uses,
     // so a given state reads identically in both places.
@@ -353,7 +379,15 @@ fn interaction_item(
         .unwrap_or_else(|| interaction.workspace_id.clone());
     ListItem::new(Line::from(vec![
         Span::styled(
-            format!("{:<7} ", interaction.selection.provider.as_str()),
+            if selected { "•" } else { " " },
+            Style::default().fg(if selected {
+                SELECTION_MARKER
+            } else {
+                Color::Cyan
+            }),
+        ),
+        Span::styled(
+            format!("{:<6} ", interaction.selection.provider.as_str()),
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
@@ -384,16 +418,26 @@ fn interaction_item(
     ]))
 }
 
-fn session_item(session: &SessionSummary) -> ListItem<'static> {
+fn session_item(session: &SessionSummary, selected: bool) -> ListItem<'static> {
     let provider = session.selection.provider.as_str();
     let display_name = session.name.as_deref().unwrap_or(&session.id);
     ListItem::new(vec![
-        Line::from(Span::styled(
-            display_name.to_owned(),
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        )),
+        Line::from(vec![
+            Span::styled(
+                if selected { "• " } else { "  " },
+                Style::default().fg(if selected {
+                    SELECTION_MARKER
+                } else {
+                    Color::White
+                }),
+            ),
+            Span::styled(
+                display_name.to_owned(),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
         Line::from(vec![
             Span::styled(format!("{provider:<14} "), Style::default().fg(Color::Cyan)),
             Span::styled(session.age.clone(), Style::default().fg(Color::Gray)),
@@ -689,12 +733,12 @@ mod tests {
                 })
                 .unwrap_or_else(|| panic!("no row contains {text:?}"))
         };
-        let row_has_gray_backdrop = |y: u16| {
+        let row_has_selection_backdrop = |y: u16| {
             (0..buffer.area.width)
                 .any(|x| buffer.cell((x, y)).unwrap().style().bg == Some(SELECTION_BG))
         };
 
-        assert!(!row_has_gray_backdrop(row_containing("s-1")));
-        assert!(row_has_gray_backdrop(row_containing("s-2")));
+        assert!(!row_has_selection_backdrop(row_containing("s-1")));
+        assert!(row_has_selection_backdrop(row_containing("s-2")));
     }
 }

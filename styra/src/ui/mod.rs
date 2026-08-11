@@ -55,12 +55,12 @@ use ratatui::Frame;
 const MAX_DETAIL_LINES: usize = 40;
 const DETAIL_INDENT: &str = "    ";
 /// Backdrop painted behind a selected list row (including its expanded detail
-/// lines, if any), via the list's `highlight_style`. Deliberately not white —
-/// with `Modifier::REVERSED`, a `White` foreground would reverse onto the
-/// background and flip the whole selected row to a glaring full-white fill.
-/// A custom RGB rather than `Color::DarkGray`: the latter reads as too light
-/// a highlight against the app's otherwise dark palette.
-const SELECTION_BG: Color = Color::Rgb(38, 38, 38);
+/// lines, if any). Its muted yellow tint keeps the current line easy to find
+/// without competing with the content or status colors.
+const SELECTION_BG: Color = Color::Rgb(44, 42, 30);
+/// Foreground used for the small current-line marker at the left edge of a
+/// selectable row.
+const SELECTION_MARKER: Color = Color::Yellow;
 
 /// Color coding for the status dot, so running vs. idle for input reads at
 /// a glance instead of requiring the operator to read the label text.

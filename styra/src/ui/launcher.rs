@@ -2,7 +2,7 @@
 //! the resulting selection spelled out along the bottom border so the
 //! operator sees exactly what it is selecting.
 
-use super::SELECTION_BG;
+use super::{SELECTION_BG, SELECTION_MARKER};
 use crate::app::{LaunchColumn, Launcher};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -113,11 +113,19 @@ fn render_launcher_column(
         ));
     let items: Vec<ListItem> = rows
         .iter()
-        .map(|row| {
-            ListItem::new(Line::from(Span::styled(
-                format!(" {row}"),
-                Style::default().fg(Color::White),
-            )))
+        .enumerate()
+        .map(|(index, row)| {
+            ListItem::new(Line::from(vec![
+                Span::styled(
+                    if index == selected { "• " } else { "  " },
+                    Style::default().fg(if index == selected {
+                        SELECTION_MARKER
+                    } else {
+                        Color::White
+                    }),
+                ),
+                Span::styled(row.clone(), Style::default().fg(Color::White)),
+            ]))
         })
         .collect();
     let list = List::new(items).block(block).highlight_style(

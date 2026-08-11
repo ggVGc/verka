@@ -4,7 +4,7 @@
 use super::markdown::markdown_line_spans;
 use super::{
     conversation_only_title, message_text_color, render_placeholder, render_preview, tag_color,
-    view_block, DETAIL_INDENT, MAX_DETAIL_LINES, SELECTION_BG,
+    view_block, DETAIL_INDENT, MAX_DETAIL_LINES, SELECTION_BG, SELECTION_MARKER,
 };
 use crate::app::{App, Entry, Status, View};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -95,12 +95,13 @@ pub(crate) fn render_list(frame: &mut Frame, app: &App, area: Rect) {
     let viewport_height = area.height.saturating_sub(2) as usize;
     let mut items: Vec<ListItem> = visible
         .iter()
-        .map(|(_, entry)| {
+        .map(|(idx, entry)| {
             entry_item(
                 entry,
                 width,
                 viewport_height,
                 app.selection.provider.protocol(),
+                *idx == app.selected,
             )
         })
         .collect();
@@ -207,6 +208,7 @@ fn entry_item(
     width: usize,
     viewport_height: usize,
     protocol: Protocol,
+    selected: bool,
 ) -> ListItem<'static> {
     let is_conversation = matches!(
         entry.event,
@@ -218,7 +220,11 @@ fn entry_item(
     } else {
         width
     };
-    let summary = summary_line(entry, entry.has_detail(), true, protocol);
+    let summary = selected_summary_line(
+        summary_line(entry, entry.has_detail(), true, protocol),
+        is_conversation,
+        selected,
+    );
     if !entry.expanded {
         // A collapsed entry is always exactly one row: wrapping it would make
         // one long message push the rest of the session off screen, and the
@@ -273,6 +279,27 @@ fn entry_item(
         )));
     }
     ListItem::new(wrapped)
+}
+
+/// A conversation already starts with a direction glyph, so tint that glyph
+/// rather than inserting another marker. Other events reserve the same first
+/// column for a small yellow dot when selected.
+fn selected_summary_line(
+    mut line: Line<'static>,
+    is_conversation: bool,
+    selected: bool,
+) -> Line<'static> {
+    if !selected {
+        return line;
+    }
+    if is_conversation {
+        if let Some(glyph) = line.spans.get_mut(1) {
+            glyph.style = glyph.style.fg(SELECTION_MARKER);
+        }
+    } else if let Some(lead) = line.spans.get_mut(0) {
+        *lead = Span::styled("• ", Style::default().fg(SELECTION_MARKER));
+    }
+    line
 }
 
 /// Clip one logical line to `width` columns, marking the cut with `…`. When
@@ -737,7 +764,7 @@ mod tests {
     }
 
     #[test]
-    fn expanded_and_selected_content_uses_a_gray_backdrop_not_white() {
+    fn expanded_and_selected_content_uses_the_selection_backdrop_not_white() {
         let mut app = App::new(
             styra_server::agent::Selection::parse("codex").unwrap(),
             "s1",
@@ -805,7 +832,7 @@ mod tests {
     }
 
     #[test]
-    fn only_the_selected_entrys_expanded_content_gets_a_gray_backdrop() {
+    fn only_the_selected_entrys_expanded_content_gets_the_selection_backdrop() {
         let mut app = App::new(
             styra_server::agent::Selection::parse("codex").unwrap(),
             "s1",
@@ -836,15 +863,15 @@ mod tests {
                 })
                 .unwrap_or_else(|| panic!("no row contains {text:?}"))
         };
-        let row_has_gray_backdrop = |y: u16| {
+        let row_has_selection_backdrop = |y: u16| {
             (0..buffer.area.width)
                 .any(|x| buffer.cell((x, y)).unwrap().style().bg == Some(SELECTION_BG))
         };
 
         let unselected_detail_row = row_containing("two");
         let selected_detail_row = row_containing("four");
-        assert!(!row_has_gray_backdrop(unselected_detail_row));
-        assert!(row_has_gray_backdrop(selected_detail_row));
+        assert!(!row_has_selection_backdrop(unselected_detail_row));
+        assert!(row_has_selection_backdrop(selected_detail_row));
     }
 
     #[test]
@@ -1227,7 +1254,7 @@ mod tests {
         });
         let protocol = app.selection.provider.protocol();
         assert_eq!(
-            entry_item(&app.entries[0], 40, 18, protocol).height(),
+            entry_item(&app.entries[0], 40, 18, protocol, false).height(),
             1,
             "a collapsed entry must stay on a single row"
         );
@@ -1292,7 +1319,7 @@ mod tests {
         let protocol = app.selection.provider.protocol();
         for entry in &app.entries {
             assert_eq!(
-                entry_item(entry, 200, 18, protocol).height(),
+                entry_item(entry, 200, 18, protocol, false).height(),
                 2,
                 "both human and agent messages should wrap at the conversation cap"
             );
