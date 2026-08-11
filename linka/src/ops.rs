@@ -243,11 +243,7 @@ pub fn complete(
     let mutation = store.mutation_lock(vcs)?;
     require_consistent_project_head(store, vcs)?;
     let (meta, description) = store.read_node(id)?;
-    if meta.verifies.is_some() {
-        bail!(
-            "verification node `{id}` requires an accepted, rejected, or abandoned review result"
-        );
-    }
+    require_ordinary_node(&meta, id)?;
     // The only uncommitted project changes allowed are the outputs we are about
     // to commit — completion is where output provenance is asserted.
     require_clean_except(vcs, &outputs)?;
@@ -370,11 +366,7 @@ pub fn respond(store: &Store, vcs: &dyn Vcs, id: &str, notes: &str, author: Auth
 pub fn fail(store: &Store, vcs: &dyn Vcs, id: &str, notes: &str, author: Author) -> Result<()> {
     let mutation = store.mutation_lock(vcs)?;
     let (meta, _) = store.read_node(id)?;
-    if meta.verifies.is_some() {
-        bail!(
-            "verification node `{id}` requires an accepted, rejected, or abandoned review result"
-        );
-    }
+    require_ordinary_node(&meta, id)?;
     let consumed = pin_deps(store, &meta)?;
     let result = ResultMeta {
         schema: RESULT_SCHEMA,
@@ -593,14 +585,11 @@ fn node_state_inner(
                 Vec::new(),
             ),
             Some((result, _)) => {
-                match (meta.verifies.is_some(), result.outcome) {
-                    (false, ResultOutcome::Work(_)) | (true, ResultOutcome::Verification(_)) => {}
-                    (false, ResultOutcome::Verification(_)) => {
-                        bail!("ordinary node `{id}` has a verification outcome")
+                if !outcome_kind_matches(meta.verifies.is_some(), result.outcome) {
+                    if meta.verifies.is_some() {
+                        bail!("verification node `{id}` has a work outcome");
                     }
-                    (true, ResultOutcome::Work(_)) => {
-                        bail!("verification node `{id}` has a work outcome")
-                    }
+                    bail!("ordinary node `{id}` has a verification outcome");
                 }
                 let outcome = match result.outcome {
                     ResultOutcome::Work(Outcome::Done) => RecordedOutcome::Succeeded,
@@ -967,18 +956,13 @@ fn submit_result_locked(
         }
     }
     let (meta, _) = store.read_node(id)?;
-    match (meta.verifies.is_some(), submission.outcome) {
-        (false, ResultOutcome::Work(_)) | (true, ResultOutcome::Verification(_)) => {}
-        (false, ResultOutcome::Verification(_)) => {
-            return Err(SubmissionError::Evaluation(anyhow::anyhow!(
-                "ordinary node `{id}` requires a done or failed work result"
-            )))
-        }
-        (true, ResultOutcome::Work(_)) => {
-            return Err(SubmissionError::Evaluation(anyhow::anyhow!(
-                "verification node `{id}` requires an accepted, rejected, or abandoned review result"
-            )))
-        }
+    if !outcome_kind_matches(meta.verifies.is_some(), submission.outcome) {
+        let message = if meta.verifies.is_some() {
+            verification_requires_review_result(id)
+        } else {
+            ordinary_requires_work_result(id)
+        };
+        return Err(SubmissionError::Evaluation(anyhow::anyhow!(message)));
     }
     if store.node_version(id)? != snapshot.definition {
         conflicts.push(SubmissionConflict::DefinitionChanged);
@@ -1122,11 +1106,8 @@ pub fn capture_submission(
     producer: Option<ProducerEvidence>,
 ) -> std::result::Result<Option<String>, SubmissionError> {
     let id = snapshot.node.as_str().to_string();
-    if store.read_node(&id)?.0.verifies.is_some() {
-        return Err(SubmissionError::Evaluation(anyhow::anyhow!(
-            "verification node `{id}` requires an accepted, rejected, or abandoned review result"
-        )));
-    }
+    let (meta, _) = store.read_node(&id)?;
+    require_ordinary_node(&meta, &id)?;
     let output_paths: Vec<String> = outputs.iter().map(ToString::to_string).collect();
     if outcome == Outcome::Done {
         // The only uncommitted project changes allowed are the declared
@@ -1190,11 +1171,8 @@ pub fn submit_captured_execution_with_attachments(
     attachments: Vec<NewNodeAttachment>,
 ) -> std::result::Result<(), SubmissionError> {
     let id = snapshot.node.as_str().to_string();
-    if store.read_node(&id)?.0.verifies.is_some() {
-        return Err(SubmissionError::Evaluation(anyhow::anyhow!(
-            "verification node `{id}` requires an accepted, rejected, or abandoned review result"
-        )));
-    }
+    let (meta, _) = store.read_node(&id)?;
+    require_ordinary_node(&meta, &id)?;
     if let Some(commit) = output_commit {
         if !vcs.commit_exists(commit)? {
             return Err(SubmissionError::Evaluation(anyhow::anyhow!(
@@ -1448,13 +1426,11 @@ fn validate_result_semantics(
     if result.schema != RESULT_SCHEMA {
         problems.push(format!("{id}: unsupported result schema {}", result.schema));
     }
-    match (meta.verifies.is_some(), result.outcome) {
-        (false, ResultOutcome::Work(_)) | (true, ResultOutcome::Verification(_)) => {}
-        (false, ResultOutcome::Verification(_)) => {
-            problems.push(format!("{id}: ordinary node has a verification outcome"))
-        }
-        (true, ResultOutcome::Work(_)) => {
-            problems.push(format!("{id}: verification node has a work outcome"))
+    if !outcome_kind_matches(meta.verifies.is_some(), result.outcome) {
+        if meta.verifies.is_some() {
+            problems.push(format!("{id}: verification node has a work outcome"));
+        } else {
+            problems.push(format!("{id}: ordinary node has a verification outcome"));
         }
     }
     if meta.verifies.is_some() && result.output.is_some() {
@@ -1548,6 +1524,33 @@ fn validate_verification_decision(
             result.outcome.as_str()
         ));
     }
+}
+
+/// Whether `outcome`'s kind (work vs. verification) is the kind a node that
+/// does (`verifies == true`) or does not itself verify a candidate may record.
+fn outcome_kind_matches(verifies: bool, outcome: ResultOutcome) -> bool {
+    matches!(
+        (verifies, outcome),
+        (false, ResultOutcome::Work(_)) | (true, ResultOutcome::Verification(_))
+    )
+}
+
+fn verification_requires_review_result(id: &str) -> String {
+    format!("verification node `{id}` requires an accepted, rejected, or abandoned review result")
+}
+
+fn ordinary_requires_work_result(id: &str) -> String {
+    format!("ordinary node `{id}` requires a done or failed work result")
+}
+
+/// Bail if `id` (identified by `meta`) is a verification node: [`complete`] and
+/// [`fail`] only ever record a work outcome, which a verification node never
+/// accepts.
+fn require_ordinary_node(meta: &NodeMeta, id: &str) -> Result<()> {
+    if meta.verifies.is_some() {
+        bail!(verification_requires_review_result(id));
+    }
+    Ok(())
 }
 
 fn result_satisfies_dependency(outcome: ResultOutcome) -> bool {
