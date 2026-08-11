@@ -17,17 +17,16 @@ impl CandidateStore<'_> {
             let entry = entry?;
             if entry.file_type()?.is_dir() {
                 let text = entry.file_name().to_string_lossy().into_owned();
-                if text.starts_with("candidate-") {
-                    ids.push(CandidateId(text));
+                if let Ok(id) = text.parse() {
+                    ids.push(id);
                 }
             }
         }
-        ids.sort_by(|a, b| a.0.cmp(&b.0));
+        ids.sort();
         Ok(ids)
     }
 
     pub fn load(&self, id: &CandidateId) -> Result<CandidateRecord> {
-        validate_candidate_id(id)?;
         let candidate: CandidateRecord = read_toml(&self.record_path(id))
             .with_context(|| format!("unknown or unreadable candidate `{id}`"))?;
         if candidate.schema != CANDIDATE_SCHEMA {
@@ -87,7 +86,7 @@ impl CandidateStore<'_> {
     }
 
     fn dir(&self, id: &CandidateId) -> PathBuf {
-        self.root().join(&id.0)
+        self.root().join(id.as_str())
     }
 }
 
@@ -107,15 +106,4 @@ pub(super) fn write_toml<T: Serialize>(path: &Path, value: &T) -> Result<()> {
 fn read_toml<T: DeserializeOwned>(path: &Path) -> Result<T> {
     let text = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))
-}
-
-fn validate_candidate_id(id: &CandidateId) -> Result<()> {
-    if !id.0.starts_with("candidate-")
-        || id.0.contains('/')
-        || id.0.contains('\\')
-        || id.0.chars().any(char::is_control)
-    {
-        bail!("invalid candidate id `{id}`");
-    }
-    Ok(())
 }

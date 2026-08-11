@@ -87,9 +87,18 @@ impl std::ops::Deref for NodeId {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct CandidateId(pub String);
+validated_string!(CandidateId, validate_candidate_id);
+
+fn validate_candidate_id(value: &str) -> Result<String, String> {
+    if !value.starts_with("candidate-")
+        || value.contains('/')
+        || value.contains('\\')
+        || value.chars().any(char::is_control)
+    {
+        return Err(format!("invalid candidate id `{value}`"));
+    }
+    Ok(value.into())
+}
 
 impl CandidateId {
     pub fn new() -> Self {
@@ -100,12 +109,6 @@ impl CandidateId {
 impl Default for CandidateId {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl fmt::Display for CandidateId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
     }
 }
 

@@ -343,7 +343,10 @@ fn an_exact_result_has_only_one_candidate() {
             },
         )
         .unwrap_err();
-    assert!(error.to_string().contains(&candidate.id.0), "{error:#}");
+    assert!(
+        error.to_string().contains(candidate.id.as_str()),
+        "{error:#}"
+    );
 }
 
 #[test]

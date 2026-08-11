@@ -537,7 +537,7 @@ fn review_evidence(
     ProducerEvidence {
         namespace: "orka.nota".into(),
         data: serde_json::json!({
-            "candidate": record.candidate.0,
+            "candidate": record.candidate.as_str(),
             "verification": record.verification.as_str(),
             "branch": review.branch,
             "marker": review.marker,
@@ -551,7 +551,7 @@ fn abandonment_evidence(record: &ReviewRecord) -> ProducerEvidence {
     ProducerEvidence {
         namespace: "orka.nota".into(),
         data: serde_json::json!({
-            "candidate": record.candidate.0,
+            "candidate": record.candidate.as_str(),
             "verification": record.verification.as_str(),
             "branch": record.branch,
             "status": "abandoned",

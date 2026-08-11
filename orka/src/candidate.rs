@@ -60,7 +60,7 @@ impl<'a> Candidates<'a> {
     pub fn get(&self, reference: &str) -> Result<Candidate> {
         let candidates = CandidateStore::new(self.store);
         let record = if reference.starts_with("candidate-") {
-            candidates.load(&CandidateId(reference.to_string()))?
+            candidates.load(&reference.parse().map_err(anyhow::Error::msg)?)?
         } else {
             let external = linka::ExternalIdentity {
                 namespace: "orka".into(),
@@ -105,7 +105,7 @@ impl<'a> Candidates<'a> {
             Author::Human,
             notes,
         )?;
-        self.get(&candidate.id.0)
+        self.get(candidate.id.as_str())
     }
 
     pub fn reject(
@@ -122,13 +122,13 @@ impl<'a> Candidates<'a> {
             Author::Human,
             notes,
         )?;
-        self.get(&candidate.id.0)
+        self.get(candidate.id.as_str())
     }
 
     pub fn publish(&self, reference: &str) -> Result<Candidate> {
         let candidate = self.get(reference)?;
         CandidateStore::new(self.store).publish(&GitVcs::for_store(self.store), &candidate.id)?;
-        self.get(&candidate.id.0)
+        self.get(candidate.id.as_str())
     }
 
     /// Record an automated accepted verification and publish its exact candidate.
@@ -174,7 +174,7 @@ impl<'a> Candidates<'a> {
             }
             ops::SubmissionError::Evaluation(error) => error,
         })?;
-        let published = self.publish(&candidate.id.0)?;
+        let published = self.publish(candidate.id.as_str())?;
         Ok((verification, published))
     }
 

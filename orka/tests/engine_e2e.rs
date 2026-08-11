@@ -237,20 +237,23 @@ fn a_full_attempt_lands_a_version_checked_result_from_an_isolated_worktree() {
     )
     .unwrap();
     let accepted = candidates
-        .accept(&listed[0].id.0, &verification, "looks good".into())
+        .accept(listed[0].id.as_str(), &verification, "looks good".into())
         .unwrap();
     assert_eq!(accepted.integration, linka::IntegrationStatus::Accepted);
-    let error = candidates.publish(&listed[0].id.0).unwrap_err();
+    let error = candidates.publish(listed[0].id.as_str()).unwrap_err();
     assert!(error.to_string().contains("checkout is dirty"), "{error:#}");
 
     // A human accepts through Orka. The node is then complete and no machine
     // work is ready; repeating publication is harmless.
     std::fs::remove_file(project.join("wip.txt")).unwrap();
-    let published = candidates.publish(&listed[0].id.0).unwrap();
+    let published = candidates.publish(listed[0].id.as_str()).unwrap();
     assert_eq!(published.integration, linka::IntegrationStatus::Published);
     assert_eq!(published.head_commit, output);
     assert_eq!(
-        candidates.publish(&listed[0].id.0).unwrap().integration,
+        candidates
+            .publish(listed[0].id.as_str())
+            .unwrap()
+            .integration,
         linka::IntegrationStatus::Published
     );
     assert!(linka::ops::node_state(&store, &vcs, &node)
@@ -302,7 +305,7 @@ fn successful_work_can_be_automatically_verified_and_published() {
     let candidate = report.candidate.expect("successful work candidate");
 
     let (verification, published) = Candidates::new(&store)
-        .auto_accept_and_publish(&candidate.0)
+        .auto_accept_and_publish(candidate.as_str())
         .unwrap();
 
     assert_eq!(published.integration, linka::IntegrationStatus::Published);

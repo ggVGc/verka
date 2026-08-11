@@ -92,7 +92,7 @@ fn nota_review_completes_a_linka_verification_without_nota_knowing_linka() {
     assert!(notes.contains("Review outcome: accepted"));
     let producer = result.producer.unwrap();
     assert_eq!(producer.namespace, "orka.nota");
-    assert_eq!(producer.data["candidate"], candidate.id.0);
+    assert_eq!(producer.data["candidate"], candidate.id.as_str());
     assert_eq!(producer.data["head"], note.commit);
     assert_eq!(producer.data["outcome"], "accepted");
 
@@ -167,7 +167,7 @@ fn verification_submission_atomically_decides_the_candidate() {
     let producer = linka::ProducerEvidence {
         namespace: "orka.nota".into(),
         data: serde_json::json!({
-            "candidate": candidate.id.0,
+            "candidate": candidate.id.as_str(),
             "verification": started.record.verification.as_str(),
             "branch": review.branch,
             "marker": review.marker,
@@ -359,7 +359,7 @@ fn cli_enter_prepares_the_managed_tree_and_prints_its_path() {
             root.to_str().unwrap(),
             "review",
             "start",
-            &candidate.id.0,
+            candidate.id.as_str(),
             "--enter",
         ])
         // A deliberately invalid shell proves that `--enter` does not launch
@@ -488,7 +488,7 @@ fn active_reviews_can_be_listed_and_abandoned_without_removing_nota_evidence() {
     let producer = result.producer.unwrap();
     assert_eq!(producer.namespace, "orka.nota");
     assert_eq!(producer.data["status"], "abandoned");
-    assert_eq!(producer.data["candidate"], candidate.id.0);
+    assert_eq!(producer.data["candidate"], candidate.id.as_str());
     assert_eq!(
         CandidateStore::new(&store)
             .load(&candidate.id)
@@ -574,7 +574,7 @@ fn cli_lists_active_reviews_and_abandons_one() {
     assert!(listed.status.success());
     let stdout = String::from_utf8_lossy(&listed.stdout);
     assert!(stdout.contains(started.record.verification.as_str()));
-    assert!(stdout.contains(candidate.id.0.as_str()));
+    assert!(stdout.contains(candidate.id.as_str()));
     assert!(stdout.contains(&started.record.branch));
 
     let abandoned = Command::new(binary)

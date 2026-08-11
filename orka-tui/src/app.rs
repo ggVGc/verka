@@ -1,6 +1,6 @@
 use anyhow::{bail, Context, Result};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use linka::{Author, CandidateId, NodeId, Store, VerificationOutcome};
+use linka::{Author, NodeId, Store, VerificationOutcome};
 use linka_tui::app::App as LinkaApp;
 use orka::{
     attempt::{AttemptId, FsAttemptStore, SealedState},
@@ -326,7 +326,7 @@ impl App {
                                         .unwrap_or_else(|| "-".into())
                                 );
                                 Row {
-                                    id: item.id.0,
+                                    id: item.id.into(),
                                     summary: format!("{}  {}  {}", item.node, status, item.target),
                                     detail,
                                 }
@@ -1248,7 +1248,7 @@ fn execute_action(
             let store = Store::open(root.join(".linka"))?;
             let assignee = parse_author(values.first().map(String::as_str).unwrap_or("human"))?;
             let started = Reviews::new(&store, root.join(".orka"))
-                .start(&CandidateId(target.into()), assignee)?;
+                .start(&target.parse().map_err(anyhow::Error::msg)?, assignee)?;
             Ok(ActionCompletion::normal(format!(
                 "Started verification {}\nbranch: {}\nsubject: {}",
                 started.record.verification, started.review.branch, started.review.subject
@@ -1369,7 +1369,7 @@ fn run_completion(report: orka::engine::RunReport) -> ActionCompletion {
         seal_text(&report.sealed),
         report
             .candidate
-            .map(|id| id.0)
+            .map(String::from)
             .unwrap_or_else(|| "-".into()),
         report.cleanup
     );

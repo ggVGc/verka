@@ -65,7 +65,7 @@ enum Cmd {
     /// Add a review node that verifies an exact candidate. Prints its id.
     AddVerification {
         /// Candidate to verify.
-        candidate: String,
+        candidate: CandidateId,
         /// The verification task's description. Defaults to a short generated title.
         #[arg(long, conflicts_with = "file")]
         description: Option<String>,
@@ -158,14 +158,14 @@ enum Cmd {
     Candidates { node: Option<NodeId> },
 
     /// Show one candidate and its source node and decision.
-    Candidate { id: String },
+    Candidate { id: CandidateId },
 
     /// List the nodes that verify an exact candidate.
-    Verifications { candidate: String },
+    Verifications { candidate: CandidateId },
 
     /// Accept an exact candidate for its recorded target branch.
     Accept {
-        id: String,
+        id: CandidateId,
         /// Accepted verification authorizing this exact candidate.
         verification: NodeId,
         #[arg(long, default_value = "")]
@@ -176,7 +176,7 @@ enum Cmd {
 
     /// Reject a candidate; rejection notes are required.
     Reject {
-        id: String,
+        id: CandidateId,
         /// Rejected verification deciding this exact candidate.
         verification: NodeId,
         #[arg(long)]
@@ -186,7 +186,7 @@ enum Cmd {
     },
 
     /// Publish an accepted candidate by idempotent fast-forward.
-    Publish { id: String },
+    Publish { id: CandidateId },
 
     /// List every node with its derived status.
     List,
@@ -350,7 +350,6 @@ fn main() -> Result<()> {
             assignee,
         } => {
             let (store, vcs) = open_store(store)?;
-            let candidate = CandidateId(candidate);
             let mut description = read_description(description, file)?;
             if description.trim().is_empty() {
                 description = format!("Verify candidate {candidate}");
@@ -493,7 +492,7 @@ fn main() -> Result<()> {
 
         Cmd::Candidate { id } => {
             let (store, vcs) = open_store(store)?;
-            let candidate = CandidateStore::new(&store).load(&CandidateId(id))?;
+            let candidate = CandidateStore::new(&store).load(&id)?;
             println!("candidate {}", candidate.id);
             println!("node      {}", candidate.node);
             println!("status    {:?}", candidate.integration(&vcs)?);
@@ -536,7 +535,6 @@ fn main() -> Result<()> {
 
         Cmd::Verifications { candidate } => {
             let store = Store::open(store)?;
-            let candidate = CandidateId(candidate);
             let verifications = ops::verifications_for(&store, &candidate)?;
             if verifications.is_empty() {
                 println!("no verifications");
@@ -553,13 +551,7 @@ fn main() -> Result<()> {
             author,
         } => {
             let (store, vcs) = open_store(store)?;
-            CandidateStore::new(&store).accept(
-                &vcs,
-                &CandidateId(id.clone()),
-                &verification,
-                author,
-                notes,
-            )?;
+            CandidateStore::new(&store).accept(&vcs, &id, &verification, author, notes)?;
             println!("accepted {id}");
         }
 
@@ -570,19 +562,13 @@ fn main() -> Result<()> {
             author,
         } => {
             let (store, vcs) = open_store(store)?;
-            CandidateStore::new(&store).reject(
-                &vcs,
-                &CandidateId(id.clone()),
-                &verification,
-                author,
-                notes,
-            )?;
+            CandidateStore::new(&store).reject(&vcs, &id, &verification, author, notes)?;
             println!("rejected {id}");
         }
 
         Cmd::Publish { id } => {
             let (store, vcs) = open_store(store)?;
-            CandidateStore::new(&store).publish(&vcs, &CandidateId(id.clone()))?;
+            CandidateStore::new(&store).publish(&vcs, &id)?;
             println!("published {id}");
         }
 

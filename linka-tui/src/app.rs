@@ -339,7 +339,7 @@ impl App {
         let candidates = CandidateStore::new(&self.store)
             .for_node(&node_id)?
             .into_iter()
-            .map(|candidate| candidate.id.0)
+            .map(|candidate| candidate.id.into())
             .collect();
         Ok(NodeRow {
             id: id.into(),
@@ -407,7 +407,7 @@ impl App {
             if let Some(candidate) = &node.meta.verifies {
                 links.push(Association {
                     label: format!("verifies    {candidate}"),
-                    target: Target::Candidate(candidate.0.clone()),
+                    target: Target::Candidate(candidate.to_string()),
                 });
             }
             for id in &node.candidates {
@@ -626,11 +626,11 @@ impl App {
             .unwrap_or_default();
         let candidate = self
             .selected_candidate()
-            .map(|candidate| candidate.record.id.0.clone())
+            .map(|candidate| candidate.record.id.to_string())
             .or_else(|| {
                 self.selected_node()
                     .and_then(|node| node.meta.verifies.as_ref())
-                    .map(|id| id.0.clone())
+                    .map(|id| id.to_string())
             })
             .unwrap_or_default();
         let first_attachment = self
@@ -755,7 +755,7 @@ impl App {
                 format!("Added {id}")
             }
             Action::AddVerification => {
-                let candidate = CandidateId(value(0).into());
+                let candidate: CandidateId = value(0).parse().map_err(anyhow::Error::msg)?;
                 let description = if value(1).trim().is_empty() {
                     format!("Verify candidate {candidate}")
                 } else {
@@ -867,7 +867,7 @@ impl App {
             Action::AcceptCandidate => {
                 CandidateStore::new(&self.store).accept(
                     &self.vcs,
-                    &CandidateId(value(0).into()),
+                    &value(0).parse().map_err(anyhow::Error::msg)?,
                     &value(1).parse().map_err(anyhow::Error::msg)?,
                     author(value(3))?,
                     value(2).into(),
@@ -877,7 +877,7 @@ impl App {
             Action::RejectCandidate => {
                 CandidateStore::new(&self.store).reject(
                     &self.vcs,
-                    &CandidateId(value(0).into()),
+                    &value(0).parse().map_err(anyhow::Error::msg)?,
                     &value(1).parse().map_err(anyhow::Error::msg)?,
                     author(value(3))?,
                     value(2).into(),
@@ -886,7 +886,7 @@ impl App {
             }
             Action::PublishCandidate => {
                 CandidateStore::new(&self.store)
-                    .publish(&self.vcs, &CandidateId(value(0).into()))?;
+                    .publish(&self.vcs, &value(0).parse().map_err(anyhow::Error::msg)?)?;
                 format!("Published {}", value(0))
             }
             Action::Attach => {
@@ -1162,7 +1162,7 @@ impl App {
                 self.selected = self
                     .candidates
                     .iter()
-                    .position(|candidate| candidate.record.id.0 == id)
+                    .position(|candidate| candidate.record.id.as_str() == id)
                     .unwrap_or(0);
             }
         }
@@ -1182,7 +1182,7 @@ impl App {
     fn selected_identity(&self) -> Option<String> {
         if self.view == View::Candidates {
             self.selected_candidate()
-                .map(|candidate| candidate.record.id.0.clone())
+                .map(|candidate| candidate.record.id.to_string())
         } else {
             self.selected_node().map(|node| node.id.clone())
         }
@@ -1194,7 +1194,7 @@ impl App {
                 .and_then(|id| {
                     self.candidates
                         .iter()
-                        .position(|candidate| candidate.record.id.0 == id)
+                        .position(|candidate| candidate.record.id.as_str() == id)
                 })
                 .unwrap_or(0),
             View::Errors => self.selected.min(self.errors.len().saturating_sub(1)),

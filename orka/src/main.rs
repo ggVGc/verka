@@ -99,7 +99,7 @@ enum ReviewCommand {
     List,
     /// Create a verification node and start a Nota branch at the candidate artifact.
     Start {
-        candidate: String,
+        candidate: CandidateId,
         #[arg(long, value_enum, default_value = "human")]
         assignee: Author,
         /// Prepare the managed review worktree and print its path.
@@ -280,8 +280,8 @@ fn run(cli: Cli) -> Result<()> {
                     }
                     if auto_accept {
                         if let Some(candidate) = &report.candidate {
-                            let (verification, published) =
-                                Candidates::new(&store).auto_accept_and_publish(&candidate.0)?;
+                            let (verification, published) = Candidates::new(&store)
+                                .auto_accept_and_publish(candidate.as_str())?;
                             println!("accepted via {verification}");
                             println!("published {} at {}", published.id, published.head_commit);
                         }
@@ -389,7 +389,7 @@ fn run(cli: Cli) -> Result<()> {
             if let Some(attempt) = &candidate.attempt {
                 println!("attempt   {attempt}");
             }
-            let patch = candidates.patch(&candidate.id.0)?;
+            let patch = candidates.patch(candidate.id.as_str())?;
             if patch.is_empty() {
                 println!("\n(no diff)");
             } else {
@@ -442,7 +442,7 @@ fn run(cli: Cli) -> Result<()> {
                     assignee,
                     enter,
                 } => {
-                    let started = reviews.start(&CandidateId(candidate), assignee)?;
+                    let started = reviews.start(&candidate, assignee)?;
                     print_started_review(&started);
                     if enter {
                         let worktree = workbench
