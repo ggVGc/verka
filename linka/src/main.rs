@@ -335,8 +335,8 @@ fn main() -> Result<()> {
                     description: read_description(description, file)?,
                     author,
                     assignee,
-                    depends_on: depends_on.into_iter().map(Into::into).collect(),
-                    derived_from: derived_from.into_iter().map(Into::into).collect(),
+                    depends_on,
+                    derived_from,
                 },
             )?;
             println!("{id}");
