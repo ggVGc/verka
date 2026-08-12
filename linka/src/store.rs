@@ -191,7 +191,7 @@ impl Store {
         }
         fs::create_dir_all(self.node_dir(id))?;
         write_toml(&self.node_path(id), meta)?;
-        fs::write(self.description_path(id), description)
+        write_atomically(&self.description_path(id), description.as_bytes())
             .with_context(|| format!("writing description for `{id}`"))?;
         Ok(())
     }
@@ -232,7 +232,7 @@ impl Store {
         if notes.is_empty() {
             remove_if_present(&self.result_notes_path(id))?;
         } else {
-            fs::write(self.result_notes_path(id), notes)
+            write_atomically(&self.result_notes_path(id), notes.as_bytes())
                 .with_context(|| format!("writing result notes for `{id}`"))?;
         }
         // Post-hoc context belongs to the result it was observed for; a new
@@ -366,7 +366,7 @@ impl Store {
         validate_attachment(attachment, &attachment.namespace, &attachment.key, data)?;
         let dir = self.attachment_dir(id, &attachment.namespace, &attachment.key);
         fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-        fs::write(dir.join("data"), data)
+        write_atomically(&dir.join("data"), data)
             .with_context(|| format!("writing attachment data for `{id}`"))?;
         write_toml(&dir.join("meta.toml"), attachment)
     }
@@ -569,7 +569,28 @@ fn read_dir_names(dir: &Path) -> Result<Vec<String>> {
 fn write_toml<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     let text =
         toml::to_string_pretty(value).with_context(|| format!("serialising {}", path.display()))?;
-    fs::write(path, text).with_context(|| format!("writing {}", path.display()))
+    write_atomically(path, text.as_bytes())
+}
+
+/// Write `bytes` to `path` by writing a neighbouring temporary file and
+/// renaming it over the target.
+///
+/// A record is either its old contents or its new ones, never half of either:
+/// a write interrupted by a full disk or a killed process would otherwise
+/// leave a truncated file, which every later read evaluates as a corrupt
+/// record rather than as the good record that was there a moment ago. The
+/// temporary file is deliberately left behind on failure — the store is then
+/// dirty, which is exactly what blocks the next mutation until someone looks.
+pub(crate) fn write_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
+    let directory = path
+        .parent()
+        .with_context(|| format!("{} has no parent directory", path.display()))?;
+    let name = path
+        .file_name()
+        .with_context(|| format!("{} names no file", path.display()))?;
+    let temporary = directory.join(format!(".{}.tmp", name.to_string_lossy()));
+    fs::write(&temporary, bytes).with_context(|| format!("writing {}", temporary.display()))?;
+    fs::rename(&temporary, path).with_context(|| format!("committing {}", path.display()))
 }
 
 fn read_toml<T: DeserializeOwned>(path: &Path) -> Result<T> {
@@ -751,6 +772,31 @@ mod tests {
         assert!(store
             .read_attachment(&node, &attachment.namespace, &attachment.key)
             .is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_record_is_replaced_whole_and_leaves_no_scratch_file_behind() {
+        let (dir, store) = temp_store("atomic");
+        let node: NodeId = "node-1".parse().unwrap();
+        store.write_node(&node, &node_meta(), "first").unwrap();
+        store.write_node(&node, &node_meta(), "second").unwrap();
+
+        let entries: Vec<String> = fs::read_dir(store.node_dir(&node))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            !entries.iter().any(|name| name.ends_with(".tmp")),
+            "{entries:?}"
+        );
+        assert_eq!(store.read_node(&node).unwrap().1, "second");
+
+        // A scratch file left by an interrupted write is evidence, not a
+        // record: readers and discovery both ignore it.
+        fs::write(store.node_dir(&node).join(".node.toml.tmp"), "half a fi").unwrap();
+        assert_eq!(store.read_node(&node).unwrap().0, node_meta());
+        assert_eq!(store.list_nodes().unwrap(), (vec![node], Vec::new()));
         let _ = fs::remove_dir_all(&dir);
     }
 

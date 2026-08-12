@@ -81,7 +81,7 @@ impl Pairing {
         }
         let path = store_root.join(PAIRING_FILE);
         let data = toml::to_string_pretty(self).context("serialising pairing")?;
-        std::fs::write(&path, data).with_context(|| format!("writing {}", path.display()))
+        crate::store::write_atomically(&path, data.as_bytes())
     }
 }
 
