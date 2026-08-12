@@ -186,6 +186,15 @@ enum NodeState {
 | any | any | any | incomplete or error | blocked |
 | unreadable | — | — | — | error |
 
+The rules above are the normative ones and the table summarises them, so the
+rules decide where the two could be read differently. The case that matters is
+a node that is itself complete whose dependency later regresses: rule 1 makes
+completion a fact about a node's own result, so it stays complete and its
+dependents stay complete with it. Reading the table's last-but-one row as
+overriding rule 1 would instead cascade "blocked" back through settled work,
+which answers a question nobody asked — whether the branch of work is still
+sound is what `settled` is for, and it reports exactly that.
+
 ### Integration is derived from git
 
 A result that declares an artifact and has a candidate takes its integration
@@ -564,6 +573,10 @@ trait Vcs {
 }
 ```
 
+Three implementations sit behind it: the `git` subprocess one, an in-memory
+fake for tests, and the offline one `check` evaluates against. The memoizing
+wrapper is not a fourth — it decorates whichever of them a pass was given.
+
 Output commits carry a `Linka-Node` trailer naming the node, and a `Linka-Input`
 trailer naming the revision the work started from.
 
@@ -606,6 +619,14 @@ No code path reachable from on-disk data may panic. Hand-edited files produce
 `check` is read-only, git-free, and reports every problem write-time validation
 cannot see because it entered sideways — hand edits, merges of individually
 valid branches, or unsupported writers. It never stops at the first problem.
+
+Git-free is a property of the check, not a second evaluator: the conditions it
+reports include ones only the graph knows, such as two current verifications
+deciding one candidate differently. It therefore runs the same evaluation pass
+against an *offline* `Vcs` whose reads answer "nothing known" — no drift, no
+ancestry, no refs — and whose writes refuse. That is the honest answer without
+a repository, and it keeps one implementation of currency rather than a second
+that could disagree with the first.
 
 Checked per node: definition and result files parse and use supported schemas;
 the result's outcome family matches the node's kind; verification results
