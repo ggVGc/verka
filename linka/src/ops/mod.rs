@@ -66,8 +66,15 @@ fn covers(declared: &str, dirty: &str) -> bool {
 }
 
 /// First 12 characters of a hash, for compact display.
+///
+/// Hashes are ASCII, but this is handed strings that came off disk — a
+/// hand-edited artifact id is still something to display, not something to
+/// panic on — so it cuts on a character boundary rather than a byte index.
 pub fn short(hash: &str) -> &str {
-    &hash[..hash.len().min(12)]
+    match hash.char_indices().nth(12) {
+        Some((boundary, _)) => &hash[..boundary],
+        None => hash,
+    }
 }
 
 pub fn short_definition(version: &DefinitionVersion) -> String {

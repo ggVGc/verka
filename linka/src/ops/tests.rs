@@ -816,6 +816,16 @@ fn ready_work_can_be_restricted_to_who_it_is_for() {
 }
 
 #[test]
+fn shortening_a_hand_edited_hash_cuts_on_a_character_boundary() {
+    assert_eq!(short("6c3fd7d79e588fbcc0ad3f2ddd959f76"), "6c3fd7d79e58");
+    assert_eq!(short("abc"), "abc");
+    assert_eq!(short(""), "");
+    // Not a hash at all, because a hand edit put something else there.
+    assert_eq!(short("𝄞𝄞𝄞"), "𝄞𝄞𝄞");
+    assert_eq!(short("𝄞").len(), "𝄞".len());
+}
+
+#[test]
 fn declared_outputs_cover_the_files_beneath_them() {
     let vcs = FakeVcs {
         dirty: vec!["out/nested/file.txt".into(), "elsewhere.txt".into()],

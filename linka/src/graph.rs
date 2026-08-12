@@ -94,7 +94,7 @@ impl<'a> Graph<'a> {
             problems,
             states: HashMap::new(),
             unknown: NodeState::Error {
-                message: "no such node".into(),
+                message: "this store holds no such node".into(),
             },
         };
         graph.evaluate_all();
@@ -102,9 +102,16 @@ impl<'a> Graph<'a> {
     }
 
     /// The derived state of one node. An id the store does not hold is an
-    /// error state like any other unreadable record.
+    /// error state like any other unreadable record, so a caller holding a
+    /// stale id gets an answer rather than a failure.
     pub fn state(&self, id: &NodeId) -> &NodeState {
         self.states.get(id).unwrap_or(&self.unknown)
+    }
+
+    /// The derived state of one node, or `None` if this store has no such
+    /// node — for callers that must tell "absent" from "unreadable".
+    pub fn try_state(&self, id: &NodeId) -> Option<&NodeState> {
+        self.states.get(id)
     }
 
     pub fn contains(&self, id: &NodeId) -> bool {

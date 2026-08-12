@@ -49,17 +49,24 @@ pub fn component(value: &str) -> Result<&str, String> {
     Ok(value)
 }
 
+/// Whether a name is one of the DOS device names Windows still refuses to
+/// create a file for, with or without an extension.
+///
+/// Every comparison here is on bytes rather than string slices: this runs on
+/// names read off disk, and slicing a stem at a fixed index would panic the
+/// moment one of them held a multi-byte character.
 fn is_windows_reserved(value: &str) -> bool {
-    let stem = value.split('.').next().unwrap_or(value);
-    const NAMES: [&str; 4] = ["CON", "PRN", "AUX", "NUL"];
+    let stem = value.split('.').next().unwrap_or(value).as_bytes();
+    const NAMES: [&[u8]; 4] = [b"CON", b"PRN", b"AUX", b"NUL"];
     if NAMES.iter().any(|name| stem.eq_ignore_ascii_case(name)) {
         return true;
     }
-    let bytes = stem.as_bytes();
-    matches!(bytes.len(), 4)
-        && (stem[..3].eq_ignore_ascii_case("COM") || stem[..3].eq_ignore_ascii_case("LPT"))
-        && bytes[3].is_ascii_digit()
-        && bytes[3] != b'0'
+    let [prefix @ .., digit] = stem else {
+        return false;
+    };
+    (prefix.eq_ignore_ascii_case(b"COM") || prefix.eq_ignore_ascii_case(b"LPT"))
+        && digit.is_ascii_digit()
+        && *digit != b'0'
 }
 
 /// A validated string identifier: a tuple struct over `String` with the usual
@@ -880,6 +887,19 @@ mod tests {
         for valid in ["node-1", "orka", "a report", "com0", "com10", "file.txt"] {
             assert!(component(valid).is_ok(), "rejected `{valid}`");
         }
+    }
+
+    #[test]
+    fn multi_byte_names_are_judged_rather_than_panicked_on() {
+        // Validation runs on names read off disk, so every one of these is a
+        // question to answer, not a slice to take: "𝄞" is four *bytes* and one
+        // character, which used to be sliced apart inside the device-name check.
+        for name in ["𝄞", "𝄞.md", "ré1", "çom1", "…", "COM𝄞"] {
+            assert!(component(name).is_ok(), "rejected `{name}`");
+        }
+        assert!(component("com1.𝄞").is_err(), "accepted a device name");
+        assert!("𝄞".parse::<NodeId>().is_ok());
+        assert!("src/𝄞.rs".parse::<ProjectPath>().is_ok());
     }
 
     #[test]
