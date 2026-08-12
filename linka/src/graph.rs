@@ -12,6 +12,7 @@
 //! [`NodeState::Error`]. The rest of the graph stays queryable.
 
 use anyhow::Result;
+use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use crate::model::{
@@ -44,6 +45,8 @@ pub struct Graph<'a> {
     /// Problems found while discovering records, for `check` to report.
     problems: Vec<String>,
     states: HashMap<NodeId, NodeState>,
+    /// What the current verifications concluded, decided once per pass.
+    decisions: RefCell<HashMap<CandidateId, std::result::Result<CandidateDecision, String>>>,
     unknown: NodeState,
 }
 
@@ -93,6 +96,7 @@ impl<'a> Graph<'a> {
             cycles,
             problems,
             states: HashMap::new(),
+            decisions: RefCell::default(),
             unknown: NodeState::Error {
                 message: "this store holds no such node".into(),
             },
@@ -516,11 +520,29 @@ impl<'a> Graph<'a> {
     }
 
     /// The conclusion of whichever current, non-abandoned verification decided
-    /// the candidate. Two current verifications disagreeing is a corrupt graph.
+    /// the candidate, computed once per pass.
+    ///
+    /// Every source node asks for its own candidate's decision, `check` asks
+    /// again for each candidate, and the CLI asks a third time while
+    /// rendering. Deciding means re-reading every naming review and
+    /// recomputing its staleness, so the answer is cached exactly like a node
+    /// state.
     fn candidate_decision(
         &self,
         candidate: &CandidateId,
     ) -> std::result::Result<CandidateDecision, String> {
+        if let Some(decided) = self.decisions.borrow().get(candidate) {
+            return decided.clone();
+        }
+        let decided = self.decide(candidate);
+        self.decisions
+            .borrow_mut()
+            .insert(candidate.clone(), decided.clone());
+        decided
+    }
+
+    /// Two current verifications disagreeing is a corrupt graph.
+    fn decide(&self, candidate: &CandidateId) -> std::result::Result<CandidateDecision, String> {
         let mut decision = CandidateDecision::Pending;
         for verification in self.verifications_of(candidate) {
             let Some(Ok(records)) = self.nodes.get(verification) else {
