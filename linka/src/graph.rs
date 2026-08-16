@@ -18,7 +18,8 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use crate::model::{
     Author, Blocker, BlockerReason, Candidate, CandidateDecision, CandidateId, Currency,
     DefinitionVersion, IntegrationStatus, NodeId, NodeMeta, NodeState, ObservedContext, Outcome,
-    ProjectPath, RecordedOutcome, ResultMeta, ResultVersion, StalenessReason, Workability,
+    ProjectPath, RecordedOutcome, ResultMeta, ResultVersion, StalenessReason, Unsettled,
+    UnsettledReason, Workability,
 };
 use crate::store::{file_blob, Store};
 use crate::vcs::{MemoizingVcs, Vcs};
@@ -259,7 +260,7 @@ impl<'a> Graph<'a> {
     /// This answers "is this actually finished?" for a node whose own `done`
     /// only certifies its own unit of work — a task that closed at spec time
     /// while its implementations were still open, say.
-    pub fn settled(&self, id: &NodeId) -> Vec<String> {
+    pub fn settled(&self, id: &NodeId) -> Vec<Unsettled> {
         let mut reverse: BTreeMap<&NodeId, Vec<&NodeId>> = BTreeMap::new();
         for (other, records) in &self.nodes {
             let Ok(records) = records else { continue };
@@ -281,33 +282,25 @@ impl<'a> Graph<'a> {
                 continue;
             }
             let state = self.state(node);
-            match state.workability() {
-                Workability::Complete => {}
-                Workability::Error => reasons.push(format!(
-                    "{node}: error ({})",
-                    state.error().unwrap_or("unreadable")
-                )),
-                Workability::AwaitingIntegration => {
-                    reasons.push(format!("{node}: awaiting candidate integration"))
-                }
-                Workability::Blocked => reasons.push(format!(
-                    "{node}: blocked by {}",
-                    state
-                        .blockers()
-                        .iter()
-                        .map(|blocker| format!("{} ({})", blocker.id, blocker.reason.as_str()))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )),
-                Workability::Ready => {
-                    let outcome = state.outcome().map_or("open", RecordedOutcome::as_str);
-                    let stale = state.currency() == Some(Currency::Stale);
-                    reasons.push(if stale {
-                        format!("{node}: {outcome} but stale")
-                    } else {
-                        format!("{node}: not done ({outcome})")
-                    });
-                }
+            let reason = match state.workability() {
+                Workability::Complete => None,
+                Workability::Error => Some(UnsettledReason::Error {
+                    message: state.error().unwrap_or("unreadable").to_owned(),
+                }),
+                Workability::AwaitingIntegration => Some(UnsettledReason::AwaitingIntegration),
+                Workability::Blocked => Some(UnsettledReason::Blocked {
+                    blockers: state.blockers().to_vec(),
+                }),
+                Workability::Ready => Some(UnsettledReason::Open {
+                    outcome: state.outcome(),
+                    stale: state.currency() == Some(Currency::Stale),
+                }),
+            };
+            if let Some(reason) = reason {
+                reasons.push(Unsettled {
+                    id: node.clone(),
+                    reason,
+                });
             }
             for dependent in reverse.get(node).into_iter().flatten() {
                 queue.push_back(dependent);

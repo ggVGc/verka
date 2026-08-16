@@ -406,7 +406,7 @@ impl Graph<'_> {
     fn ready(&self, worker: Option<Author>) -> Vec<&NodeId>;
     fn blocked(&self) -> Vec<(&NodeId, &[Blocker])>;
     fn stale(&self) -> Vec<(&NodeId, &[StalenessReason])>;
-    fn settled(&self, id: &NodeId) -> Vec<String>;
+    fn settled(&self, id: &NodeId) -> Vec<Unsettled>;
     fn dependents(&self, id: &NodeId) -> Vec<&NodeId>;
     fn origin(&self, commit: &str) -> Option<&NodeId>;
 }
@@ -678,6 +678,29 @@ all human formatting in a separate rendering module. An agent-facing protocol
 may adapt these operations, but protocol-specific concepts do not enter the
 graph model.
 
+**The two are separate crates, and that is what keeps the boundary honest.**
+`linka` is the library: the model, the store, the version-control seam, the
+evaluation pass, the operations, and the checks. `linka-cli` is the binary: it
+depends on `linka` and nothing in `linka` depends on it. The rule the split
+enforces is that *no presentation decision may be made inside the library*.
+
+Concretely, the library:
+
+- returns records and derived values, never sentences about them — `NodeState`,
+  `StalenessReason`, `Blocker`, `Unsettled`. The word for each is the caller's;
+  two front ends may choose differently without arguing;
+- names nothing for a person. There is no `as_str` giving a display word, no
+  hash abbreviation, no listing format. `Outcome::as_str` survives because it is
+  the token stored in `result.toml`, not a caption;
+- does not know what a command line is. It has no `clap` dependency, so no
+  record type derives an argument parser and no field is shaped by how it would
+  read as a flag.
+
+The strings the library does produce are error and integrity-problem messages:
+what is wrong with a record, which is a fact about the record and belongs with
+the code that found it. Those are the library's, and `check` returning them is
+deliberate.
+
 An orchestrator such as Orka consumes a narrow interface: read ready work,
 freeze versioned input with `snapshot`, submit version-checked results and
 verification conclusions with `submit`, and register candidate outputs. A review
@@ -688,6 +711,8 @@ Linka never interprets producer namespaces.
 
 ## Module layout
 
+The `linka` crate — the library:
+
 | module | ~LOC | contents |
 | --- | --- | --- |
 | `model` | 400 | records, validated ids, derived-state types, state predicates |
@@ -697,7 +722,13 @@ Linka never interprets producer namespaces.
 | `graph` | 400 | single-pass memoized evaluation and its projections |
 | `ops` | 500 | the fact writers, `snapshot`, `complete`, `publish` |
 | `check` | 250 | fsck, artifact retention, pairing verification |
-| `cli` + `render` | 800 | dispatch and human formatting |
+
+The `linka-cli` crate — the `linka` binary:
+
+| module | ~LOC | contents |
+| --- | --- | --- |
+| `main` | 550 | argument definitions, the command-line spelling of model enums, dispatch |
+| `render` | 450 | every word, abbreviation, and layout the CLI prints |
 
 Modules export named items. No glob re-exports: the public surface is written
 down, not implied.

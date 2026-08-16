@@ -14,6 +14,14 @@
 //! * [`check`] — integrity checking and pairing verification.
 //!
 //! Modules export named items: the public surface is written down, not implied.
+//!
+//! Nothing here formats anything for a person. Every answer is a record or a
+//! derived value — [`NodeState`], [`StalenessReason`], [`Blocker`],
+//! [`Unsettled`] — and the wording that turns one into a line of output is the
+//! caller's. The `linka-cli` crate holds the wording for the command line; a
+//! second front end picks its own without arguing with this one. The strings
+//! this crate does produce are error and integrity-problem messages: what went
+//! wrong with a record, not how to display a good one.
 
 pub mod check;
 pub mod git;
@@ -33,8 +41,9 @@ pub use model::{
     DefinitionVersion, DepKind, ExternalIdentity, IntegrationStatus, Namespace, Namespaced,
     NewAttachment, NewCandidate, NodeId, NodeMeta, NodeState, ObservedContext, Outcome,
     OutcomeFamily, ProjectPath, ProjectSnapshot, RecordedOutcome, ResultMeta, ResultVersion,
-    StalenessReason, Submission, SubmissionConflict, WorkSnapshot, Workability, ATTACHMENT_SCHEMA,
-    CANDIDATE_SCHEMA, DEFINITION_SCHEMA, OBSERVATION_SCHEMA, RESULT_SCHEMA, SNAPSHOT_SCHEMA,
+    StalenessReason, Submission, SubmissionConflict, Unsettled, UnsettledReason, WorkSnapshot,
+    Workability, ATTACHMENT_SCHEMA, CANDIDATE_SCHEMA, DEFINITION_SCHEMA, OBSERVATION_SCHEMA,
+    RESULT_SCHEMA, SNAPSHOT_SCHEMA,
 };
 pub use ops::{NewNode, SubmissionError};
 pub use pairing::Pairing;

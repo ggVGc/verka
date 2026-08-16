@@ -15,8 +15,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::graph::project_file_blob;
 use crate::model::{
-    ArtifactRef, Author, ConsumedNode, ContextPin, DefinitionVersion, NodeId, Outcome, ProjectPath,
-    ProjectSnapshot, ResultVersion,
+    ArtifactRef, Author, ConsumedNode, ContextPin, NodeId, Outcome, ProjectPath, ProjectSnapshot,
 };
 use crate::pairing::Pairing;
 use crate::store::Store;
@@ -65,32 +64,19 @@ fn covers(declared: &str, dirty: &str) -> bool {
             .is_some_and(|rest| rest.starts_with('/'))
 }
 
-/// First 12 characters of a hash, for compact display.
+/// First 12 characters of a hash, for the error messages this crate raises.
+/// It is not a display API — a caller showing hashes to people picks its own
+/// abbreviation.
 ///
 /// Hashes are ASCII, but this is handed strings that came off disk — a
-/// hand-edited artifact id is still something to display, not something to
-/// panic on — so it cuts on a character boundary rather than a byte index.
-pub fn short(hash: &str) -> &str {
+/// hand-edited artifact id is still something to mention in an error, not
+/// something to panic on — so it cuts on a character boundary rather than a
+/// byte index.
+pub(crate) fn short(hash: &str) -> &str {
     match hash.char_indices().nth(12) {
         Some((boundary, _)) => &hash[..boundary],
         None => hash,
     }
-}
-
-pub fn short_definition(version: &DefinitionVersion) -> String {
-    format!(
-        "{}/{}",
-        short(&version.metadata),
-        short(&version.description)
-    )
-}
-
-pub fn short_result(version: &ResultVersion) -> String {
-    format!(
-        "{}/{}",
-        short(&version.metadata),
-        version.notes.as_deref().map_or("none", short)
-    )
 }
 
 /// Pin the current definition, result, and output of each node in `nodes`.

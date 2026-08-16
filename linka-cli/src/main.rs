@@ -2,7 +2,9 @@
 //!
 //! This binary is a thin shell: it parses arguments, opens the store, wires up
 //! the real [`GitVcs`], and delegates every operation to the library. All human
-//! formatting lives in [`render`]. See DESIGN.md for the model.
+//! formatting lives in [`render`], and the command-line spelling of the model's
+//! enums lives here — the library knows nothing about either. See DESIGN.md for
+//! the model.
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -49,11 +51,11 @@ enum Cmd {
         #[arg(long, conflicts_with = "description")]
         file: Option<PathBuf>,
         #[arg(long, value_enum, default_value = "human")]
-        author: Author,
+        author: AuthorArg,
         /// Who the work is for (e.g. `human` for a question). Unset means
         /// anyone may work it.
         #[arg(long, value_enum)]
-        assignee: Option<Author>,
+        assignee: Option<AuthorArg>,
         /// A node this one depends on (repeatable).
         #[arg(long = "depends-on")]
         depends_on: Vec<NodeId>,
@@ -72,7 +74,7 @@ enum Cmd {
         from: NodeId,
         to: NodeId,
         #[arg(long, value_enum, default_value = "depends-on")]
-        rel: DepKind,
+        rel: RelArg,
     },
 
     /// Edit a node's description (a definition change: it reopens a done node
@@ -106,7 +108,7 @@ enum Cmd {
         #[arg(long, conflicts_with = "notes")]
         notes_file: Option<PathBuf>,
         #[arg(long, value_enum, default_value = "human")]
-        author: Author,
+        author: AuthorArg,
     },
 
     /// Record a node's work as failed, with notes on what went wrong.
@@ -117,7 +119,7 @@ enum Cmd {
         #[arg(long, conflicts_with = "notes")]
         notes_file: Option<PathBuf>,
         #[arg(long, value_enum, default_value = "human")]
-        author: Author,
+        author: AuthorArg,
     },
 
     /// Conclude a review node: accepted, rejected, or abandoned.
@@ -130,7 +132,7 @@ enum Cmd {
         #[arg(long, conflicts_with = "notes")]
         notes_file: Option<PathBuf>,
         #[arg(long, value_enum, default_value = "human")]
-        author: Author,
+        author: AuthorArg,
     },
 
     /// Propose a node's recorded output as a candidate for a target branch.
@@ -204,7 +206,7 @@ enum Cmd {
         /// Only nodes assigned to this worker kind (e.g. `human`: the inbox of
         /// pending questions). Unassigned nodes match either.
         #[arg(long = "for", value_enum)]
-        assignee: Option<Author>,
+        assignee: Option<AuthorArg>,
     },
 
     /// List nodes blocked by an unsatisfied dependency, with reasons.
@@ -267,6 +269,40 @@ impl ReviewOutcome {
     }
 }
 
+/// Who did, or is to do, the work — as a command-line value. The model's
+/// [`Author`] is a stored fact and derives nothing for clap; how it is spelled
+/// on a command line is this crate's business.
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum AuthorArg {
+    Human,
+    Machine,
+}
+
+impl AuthorArg {
+    fn author(self) -> Author {
+        match self {
+            Self::Human => Author::Human,
+            Self::Machine => Author::Machine,
+        }
+    }
+}
+
+/// Which edge list `link` adds to, as a command-line value.
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum RelArg {
+    DependsOn,
+    DerivedFrom,
+}
+
+impl RelArg {
+    fn kind(self) -> DepKind {
+        match self {
+            Self::DependsOn => DepKind::DependsOn,
+            Self::DerivedFrom => DepKind::DerivedFrom,
+        }
+    }
+}
+
 /// Open the store at `root` and wire up the real [`GitVcs`] against it.
 fn open_store(root: PathBuf) -> Result<(Store, GitVcs)> {
     let store = Store::open(root)?;
@@ -324,8 +360,8 @@ fn main() -> Result<()> {
                 &vcs,
                 NewNode {
                     description,
-                    author,
-                    assignee,
+                    author: author.author(),
+                    assignee: assignee.map(AuthorArg::author),
                     depends_on,
                     derived_from,
                 },
@@ -336,8 +372,9 @@ fn main() -> Result<()> {
 
         Cmd::Link { from, to, rel } => {
             let (store, vcs) = open_store(store)?;
+            let rel = rel.kind();
             ops::link(&store, &vcs, &from, &to, rel)?;
-            println!("{from}  +{} -> {to}", rel.as_str());
+            println!("{from}  +{} -> {to}", render::rel_word(rel));
         }
 
         Cmd::Edit {
@@ -347,7 +384,7 @@ fn main() -> Result<()> {
         } => {
             let (store, vcs) = open_store(store)?;
             let outcome = ops::edit(&store, &vcs, &id, read_description(description, file)?)?;
-            let version = ops::short_definition(&store.node_version(&id)?);
+            let version = render::short_definition(&store.node_version(&id)?);
             match outcome {
                 ops::EditOutcome::Edited => println!("{id}  {version}"),
                 ops::EditOutcome::Unchanged => println!("{id}  {version}  (unchanged)"),
@@ -373,10 +410,10 @@ fn main() -> Result<()> {
                 &to_strings(&context),
                 message,
                 &notes,
-                author,
+                author.author(),
             )?;
             match commit {
-                Some(commit) => println!("{id}  done  (output {})", ops::short(&commit)),
+                Some(commit) => println!("{id}  done  (output {})", render::short(&commit)),
                 None => println!("{id}  done  (no output files)"),
             }
         }
@@ -389,7 +426,7 @@ fn main() -> Result<()> {
         } => {
             let (store, vcs) = open_store(store)?;
             let notes = resolve_notes(notes, notes_file, &store, &id, "what went wrong?")?;
-            conclude(&store, &vcs, &id, Conclusion::Failed, notes, author)?;
+            conclude(&store, &vcs, &id, Conclusion::Failed, notes, author.author())?;
             println!("{id}  failed");
         }
 
@@ -410,7 +447,7 @@ fn main() -> Result<()> {
             )?;
             let conclusion = outcome.conclusion();
             let word = conclusion.outcome().as_str();
-            conclude(&store, &vcs, &id, conclusion, notes, author)?;
+            conclude(&store, &vcs, &id, conclusion, notes, author.author())?;
             println!("{id}  {word}");
         }
 
@@ -429,7 +466,7 @@ fn main() -> Result<()> {
             println!(
                 "{}  artifact {}  -> {}",
                 candidate.id,
-                ops::short(&candidate.artifact.id),
+                render::short(&candidate.artifact.id),
                 candidate.target
             );
         }
@@ -597,7 +634,7 @@ fn main() -> Result<()> {
         Cmd::Ready { assignee } => {
             let (store, vcs) = open_store(store)?;
             let graph = Graph::load(&store, &vcs)?;
-            for id in graph.ready(assignee) {
+            for id in graph.ready(assignee.map(AuthorArg::author)) {
                 println!("{}", render::node_line(&store, &graph, id));
             }
         }
@@ -622,7 +659,7 @@ fn main() -> Result<()> {
             let graph = Graph::load(&store, &vcs)?;
             match graph.origin(&commit) {
                 Some(id) => println!("{id}"),
-                None => println!("no node produced {}", ops::short(&commit)),
+                None => println!("no node produced {}", render::short(&commit)),
             }
         }
 
@@ -673,7 +710,7 @@ fn main() -> Result<()> {
             } else {
                 println!("{id}: not settled");
                 for reason in &reasons {
-                    println!("  {reason}");
+                    println!("  {}", render::format_unsettled(reason));
                 }
                 std::process::exit(1);
             }

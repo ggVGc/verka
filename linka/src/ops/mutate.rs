@@ -7,8 +7,8 @@
 use super::*;
 use crate::model::{
     Attachment, Candidate, CandidateId, DepKind, NewAttachment, NewCandidate, NodeMeta,
-    ObservedContext, Outcome, ATTACHMENT_SCHEMA, CANDIDATE_SCHEMA, DEFINITION_SCHEMA,
-    OBSERVATION_SCHEMA,
+    ObservedContext, Outcome, ResultVersion, ATTACHMENT_SCHEMA, CANDIDATE_SCHEMA,
+    DEFINITION_SCHEMA, OBSERVATION_SCHEMA,
 };
 use crate::store::blob_id;
 

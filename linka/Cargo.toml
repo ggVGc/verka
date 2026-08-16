@@ -2,11 +2,7 @@
 name = "linka"
 version.workspace = true
 edition.workspace = true
-description = "A git-versioned graph of LLM-development nodes: library and CLI"
-
-[[bin]]
-name = "linka"
-path = "src/main.rs"
+description = "A git-versioned graph of LLM-development nodes: the model, the store, and the operations"
 
 [lib]
 name = "linka"
@@ -14,9 +10,7 @@ path = "src/lib.rs"
 
 [dependencies]
 anyhow.workspace = true
-clap = { workspace = true, features = ["env"] }
 serde.workspace = true
-serde_json.workspace = true
 sha1.workspace = true
 toml.workspace = true
 ulid.workspace = true

@@ -501,12 +501,19 @@ name = "linka"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "clap",
  "serde",
- "serde_json",
  "sha1",
  "toml",
  "ulid",
+]
+
+[[package]]
+name = "linka-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "linka",
 ]
 
 [[package]]

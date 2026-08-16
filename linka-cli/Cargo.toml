@@ -1,0 +1,14 @@
+[package]
+name = "linka-cli"
+version.workspace = true
+edition.workspace = true
+description = "The `linka` command line interface: argument dispatch and human formatting"
+
+[[bin]]
+name = "linka"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap = { workspace = true, features = ["env"] }
+linka.workspace = true

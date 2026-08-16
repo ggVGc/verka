@@ -4,6 +4,7 @@ members = [
     "driva",
     "genta",
     "linka",
+    "linka-cli",
     "linka-tui",
     "nota",
     "orka",
@@ -37,6 +38,7 @@ unicode-width = "0.2"
 driva = { path = "driva" }
 genta = { path = "genta" }
 linka = { path = "linka" }
+linka-cli = { path = "linka-cli" }
 linka-tui = { path = "linka-tui" }
 orka = { path = "orka" }
 nota = { path = "nota" }

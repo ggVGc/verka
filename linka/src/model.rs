@@ -203,34 +203,18 @@ impl AsRef<std::path::Path> for ProjectPath {
 
 // --- definitions ---------------------------------------------------------------
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Author {
     Human,
     Machine,
 }
-impl Author {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Human => "human",
-            Self::Machine => "machine",
-        }
-    }
-}
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DepKind {
     DependsOn,
     DerivedFrom,
-}
-impl DepKind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::DependsOn => "depends_on",
-            Self::DerivedFrom => "derived_from",
-        }
-    }
 }
 
 /// Contents of `node.toml`. Edges are *ids only*: which versions the work was
@@ -288,7 +272,7 @@ pub struct ArtifactRef {
 /// The five recordable outcomes, in two families. Which family a node accepts
 /// is fixed by its definition, so a mismatch is a corrupt record rather than a
 /// state.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Outcome {
     Done,
@@ -305,6 +289,9 @@ pub enum OutcomeFamily {
 }
 
 impl Outcome {
+    /// The token this outcome is stored as — the same string serde writes to
+    /// `result.toml`, not a display word. Callers that want to *show* an
+    /// outcome choose their own wording.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Done => "done",
@@ -582,19 +569,6 @@ pub enum RecordedOutcome {
     Abandoned,
 }
 
-impl RecordedOutcome {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Open => "open",
-            Self::Succeeded => "succeeded",
-            Self::Failed => "failed",
-            Self::Accepted => "accepted",
-            Self::Rejected => "rejected",
-            Self::Abandoned => "abandoned",
-        }
-    }
-}
-
 impl From<Outcome> for RecordedOutcome {
     fn from(outcome: Outcome) -> Self {
         match outcome {
@@ -633,16 +607,6 @@ impl IntegrationStatus {
     pub fn is_done(self) -> bool {
         matches!(self, Self::NotRequired | Self::Published | Self::Rejected)
     }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::NotRequired => "not-required",
-            Self::Pending => "pending",
-            Self::Accepted => "accepted",
-            Self::Published => "published",
-            Self::Rejected => "rejected",
-        }
-    }
 }
 
 /// A machine-readable reason that recorded evidence is stale.
@@ -673,25 +637,37 @@ pub enum BlockerReason {
     Error,
 }
 
-impl BlockerReason {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Missing => "missing",
-            Self::Open => "open",
-            Self::Failed => "failed",
-            Self::Rejected => "rejected",
-            Self::Abandoned => "abandoned",
-            Self::Stale => "stale",
-            Self::AwaitingIntegration => "awaiting integration",
-            Self::Error => "error",
-        }
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Blocker {
     pub id: NodeId,
     pub reason: BlockerReason,
+}
+
+/// Why one node in a branch of work is not finished. Every variant carries the
+/// facts behind it rather than a sentence, so a caller can act on it as well as
+/// print it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum UnsettledReason {
+    /// The node's own records cannot be read or reconciled.
+    Error { message: String },
+    /// The work succeeded and waits on a candidate decision or publication.
+    AwaitingIntegration,
+    Blocked { blockers: Vec<Blocker> },
+    /// The work is still to do: no result, a failed one, or one gone stale.
+    /// `outcome` is the evidence recorded so far, if the state carries any —
+    /// a node with none of its own reports `Error` instead.
+    Open {
+        outcome: Option<RecordedOutcome>,
+        stale: bool,
+    },
+}
+
+/// One node standing between a branch of work and being settled.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Unsettled {
+    pub id: NodeId,
+    pub reason: UnsettledReason,
 }
 
 /// The complete derived state of one node.
@@ -723,18 +699,6 @@ pub enum Workability {
     AwaitingIntegration,
     Blocked,
     Error,
-}
-
-impl Workability {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Complete => "complete",
-            Self::Ready => "ready",
-            Self::AwaitingIntegration => "awaiting-integration",
-            Self::Blocked => "blocked",
-            Self::Error => "error",
-        }
-    }
 }
 
 impl NodeState {

@@ -1,18 +1,99 @@
 //! Human formatting for the `linka` CLI.
 //!
 //! Everything the CLI prints is built here, so the dispatch in `main.rs` stays
-//! a thin shell over the library and the wording lives in one place.
+//! a thin shell over the library and the wording lives in one place. The
+//! library hands back records and derived values only; every word below —
+//! including the one-word names for the model's own enums and the abbreviation
+//! of a hash — is this crate's choice, not the graph's.
 
 use anyhow::Result;
 use std::fmt::Write;
 
 use linka::graph::Graph;
 use linka::model::{
-    Blocker, BlockerReason, Candidate, CandidateDecision, Currency, IntegrationStatus, NodeState,
-    RecordedOutcome, StalenessReason, Workability,
+    Author, Blocker, BlockerReason, Candidate, CandidateDecision, Currency, DefinitionVersion,
+    DepKind, IntegrationStatus, NodeState, RecordedOutcome, ResultVersion, StalenessReason,
+    Unsettled, UnsettledReason, Workability,
 };
-use linka::ops::{short, short_definition, short_result};
 use linka::{title_of, NodeId, Pairing, Store};
+
+// --- words and abbreviations -------------------------------------------------
+
+/// First 12 characters of a hash, for compact display.
+///
+/// Hashes are ASCII, but this is handed strings that came off disk — a
+/// hand-edited artifact id is still something to display, not something to
+/// panic on — so it cuts on a character boundary rather than a byte index.
+pub fn short(hash: &str) -> &str {
+    match hash.char_indices().nth(12) {
+        Some((boundary, _)) => &hash[..boundary],
+        None => hash,
+    }
+}
+
+pub fn short_definition(version: &DefinitionVersion) -> String {
+    format!(
+        "{}/{}",
+        short(&version.metadata),
+        short(&version.description)
+    )
+}
+
+pub fn short_result(version: &ResultVersion) -> String {
+    format!(
+        "{}/{}",
+        short(&version.metadata),
+        version.notes.as_deref().map_or("none", short)
+    )
+}
+
+pub fn author_word(author: Author) -> &'static str {
+    match author {
+        Author::Human => "human",
+        Author::Machine => "machine",
+    }
+}
+
+pub fn rel_word(rel: DepKind) -> &'static str {
+    match rel {
+        DepKind::DependsOn => "depends_on",
+        DepKind::DerivedFrom => "derived_from",
+    }
+}
+
+pub fn integration_word(integration: IntegrationStatus) -> &'static str {
+    match integration {
+        IntegrationStatus::NotRequired => "not-required",
+        IntegrationStatus::Pending => "pending",
+        IntegrationStatus::Accepted => "accepted",
+        IntegrationStatus::Published => "published",
+        IntegrationStatus::Rejected => "rejected",
+    }
+}
+
+pub fn recorded_outcome_word(outcome: RecordedOutcome) -> &'static str {
+    match outcome {
+        RecordedOutcome::Open => "open",
+        RecordedOutcome::Succeeded => "succeeded",
+        RecordedOutcome::Failed => "failed",
+        RecordedOutcome::Accepted => "accepted",
+        RecordedOutcome::Rejected => "rejected",
+        RecordedOutcome::Abandoned => "abandoned",
+    }
+}
+
+fn blocker_reason_word(reason: BlockerReason) -> &'static str {
+    match reason {
+        BlockerReason::Missing => "missing",
+        BlockerReason::Open => "open",
+        BlockerReason::Failed => "failed",
+        BlockerReason::Rejected => "rejected",
+        BlockerReason::Abandoned => "abandoned",
+        BlockerReason::Stale => "stale",
+        BlockerReason::AwaitingIntegration => "awaiting integration",
+        BlockerReason::Error => "error",
+    }
+}
 
 /// One short phrase for a node's state: what it is, and why.
 pub fn state_summary(state: &NodeState) -> String {
@@ -60,6 +141,8 @@ pub fn state_summary(state: &NodeState) -> String {
     }
 }
 
+/// A blocker in a listing, where there is room to say why it blocks rather
+/// than just name the reason.
 pub fn format_blocker(blocker: &Blocker) -> String {
     let reason = match blocker.reason {
         BlockerReason::Missing => "missing",
@@ -103,6 +186,35 @@ pub fn format_staleness(reason: &StalenessReason) -> String {
             "output changed since {artifact}:\n      {}",
             detail.replace('\n', "\n      ")
         ),
+    }
+}
+
+/// One reason a branch of work is not settled: which node, and what about it.
+pub fn format_unsettled(unsettled: &Unsettled) -> String {
+    let id = &unsettled.id;
+    match &unsettled.reason {
+        UnsettledReason::Error { message } => format!("{id}: error ({message})"),
+        UnsettledReason::AwaitingIntegration => format!("{id}: awaiting candidate integration"),
+        UnsettledReason::Blocked { blockers } => format!(
+            "{id}: blocked by {}",
+            blockers
+                .iter()
+                .map(|blocker| format!(
+                    "{} ({})",
+                    blocker.id,
+                    blocker_reason_word(blocker.reason)
+                ))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        UnsettledReason::Open { outcome, stale } => {
+            let outcome = outcome.map_or("open", recorded_outcome_word);
+            if *stale {
+                format!("{id}: {outcome} but stale")
+            } else {
+                format!("{id}: not done ({outcome})")
+            }
+        }
     }
 }
 
@@ -155,7 +267,7 @@ pub fn candidate(graph: &Graph, candidate: &Candidate) -> Result<String> {
         writeln!(out, "external  {}/{}", external.namespace, external.id)?;
     }
     if let Some(integration) = graph.state(&candidate.node).integration() {
-        writeln!(out, "source    {}", integration.as_str())?;
+        writeln!(out, "source    {}", integration_word(integration))?;
     }
     for verification in graph.verifications_of(&candidate.id) {
         writeln!(
@@ -175,9 +287,9 @@ pub fn show(store: &Store, graph: &Graph, id: &NodeId) -> Result<String> {
 
     writeln!(out, "id:      {id}")?;
     writeln!(out, "status:  {}", state_summary(state))?;
-    writeln!(out, "author:  {}", meta.author.as_str())?;
+    writeln!(out, "author:  {}", author_word(meta.author))?;
     if let Some(assignee) = meta.assignee {
-        writeln!(out, "assignee: {}", assignee.as_str())?;
+        writeln!(out, "assignee: {}", author_word(assignee))?;
     }
     writeln!(
         out,
@@ -207,7 +319,7 @@ pub fn show(store: &Store, graph: &Graph, id: &NodeId) -> Result<String> {
     if let Some((result, notes)) = store.read_result(id)? {
         writeln!(out, "result:")?;
         writeln!(out, "  outcome: {}", result.outcome.as_str())?;
-        writeln!(out, "  author:  {}", result.author.as_str())?;
+        writeln!(out, "  author:  {}", author_word(result.author))?;
         if let Some(producer) = &result.producer {
             writeln!(out, "  producer: {} {}", producer.namespace, producer.data)?;
         }
@@ -361,6 +473,68 @@ mod tests {
         assert_eq!(
             state_summary(&blocked),
             "blocked by node-dependency: not complete (stale)"
+        );
+    }
+
+    #[test]
+    fn shortening_a_hand_edited_hash_cuts_on_a_character_boundary() {
+        assert_eq!(short("6c3fd7d79e588fbcc0ad3f2ddd959f76"), "6c3fd7d79e58");
+        assert_eq!(short("abc"), "abc");
+        assert_eq!(short(""), "");
+        // Not a hash at all, because a hand edit put something else there.
+        assert_eq!(short("𝄞𝄞𝄞"), "𝄞𝄞𝄞");
+        assert_eq!(short("𝄞").len(), "𝄞".len());
+    }
+
+    #[test]
+    fn every_unsettled_reason_says_which_node_and_why() {
+        let id: NodeId = "node-1".parse().unwrap();
+        let unsettled = |reason| format_unsettled(&Unsettled { id: id.clone(), reason });
+        assert_eq!(
+            unsettled(UnsettledReason::Error {
+                message: "unparseable node.toml".into()
+            }),
+            "node-1: error (unparseable node.toml)"
+        );
+        assert_eq!(
+            unsettled(UnsettledReason::AwaitingIntegration),
+            "node-1: awaiting candidate integration"
+        );
+        assert_eq!(
+            unsettled(UnsettledReason::Blocked {
+                blockers: vec![
+                    Blocker {
+                        id: "node-2".parse().unwrap(),
+                        reason: BlockerReason::Open,
+                    },
+                    Blocker {
+                        id: "node-3".parse().unwrap(),
+                        reason: BlockerReason::AwaitingIntegration,
+                    },
+                ],
+            }),
+            "node-1: blocked by node-2 (open), node-3 (awaiting integration)"
+        );
+        assert_eq!(
+            unsettled(UnsettledReason::Open {
+                outcome: Some(RecordedOutcome::Failed),
+                stale: false,
+            }),
+            "node-1: not done (failed)"
+        );
+        assert_eq!(
+            unsettled(UnsettledReason::Open {
+                outcome: Some(RecordedOutcome::Succeeded),
+                stale: true,
+            }),
+            "node-1: succeeded but stale"
+        );
+        assert_eq!(
+            unsettled(UnsettledReason::Open {
+                outcome: None,
+                stale: false,
+            }),
+            "node-1: not done (open)"
         );
     }
 }
