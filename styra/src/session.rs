@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 use crate::app::{App, Status};
 use crate::cli::Cli;
 use styra_server::agent::Selection;
-use styra_server::protocol::{CreateSession, CreateWorkspace, ResumeSession, SessionInfo};
+use styra_server::protocol::{
+    CreateSession, CreateWorkspace, PlanSession, ResumeSession, SessionInfo,
+};
 use styra_server::{
     Client, InteractionSummary, InteractionUpdate, LogEntry, SessionSummary, WorkspaceSummary,
 };
@@ -94,6 +96,38 @@ pub fn create_session(
         message: seed.map(str::to_owned),
         name: None,
     })
+}
+
+/// Before anything has launched there is no sandbox to describe, but there is
+/// one decided: ask the server what a new interaction under the current
+/// selection would run in, so the Driva view answers "what will this agent be
+/// able to touch" rather than waiting for the first message.
+pub fn ensure_driva_plan(
+    app: &mut App,
+    client: &Client,
+    cli: &Cli,
+    workspace_id: &str,
+    live: &Live,
+) {
+    if !matches!(live, Live::Pending) || !app.needs_driva_plan() {
+        return;
+    }
+    let selection = app.selection.clone();
+    let planned = client.plan_session(&PlanSession {
+        workspace_id: workspace_id.to_owned(),
+        selection: selection.clone(),
+        network: cli.network,
+        templates: cli.template.clone(),
+    });
+    match planned {
+        Ok(options) => app.set_planned_driva_options(selection, Some(options)),
+        Err(error) => {
+            app.set_planned_driva_options(selection, None);
+            app.push_log(LogEntry::warn(format!(
+                "could not describe the sandbox a new interaction would launch in: {error:#}"
+            )));
+        }
+    }
 }
 
 /// Spawn a session and wrap it in a fresh `App`. Used for the CLI's trailing

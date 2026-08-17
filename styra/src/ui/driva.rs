@@ -1,7 +1,10 @@
-//! What the session was actually launched with: the isolation backend, the
-//! command it runs, and the mount/network policy enforced around it — an
-//! answer to "what can this agent touch" without having to go dig through
-//! `main.rs`.
+//! What the session was launched with — the isolation backend, the command it
+//! runs, and the mount/network policy enforced around it — an answer to "what
+//! can this agent touch" without having to go dig through `main.rs`.
+//!
+//! Before anything has launched the same fields describe the policy the next
+//! interaction would start under, marked as planned so the two are not read as
+//! the same claim.
 
 use super::{render_placeholder, view_block};
 use crate::app::App;
@@ -16,16 +19,21 @@ pub(crate) fn render_driva(frame: &mut Frame, app: &App, area: Rect) {
     let block = view_block(app, Some("driva"));
 
     let Some(options) = &app.driva_options else {
-        render_placeholder(
-            frame,
-            block,
-            area,
-            "  no live session yet; nothing to describe",
-        );
+        render_placeholder(frame, block, area, "  no launch policy to describe");
         return;
     };
 
-    let mut lines = vec![
+    let mut lines = Vec::new();
+    // Before launch this is a plan, not a record: say so, so an operator does
+    // not read it as the sandbox some agent is already running in.
+    if app.driva_planned {
+        lines.push(Line::from(Span::styled(
+            "  planned — applied when the next interaction starts",
+            Style::default().fg(Color::Yellow),
+        )));
+        lines.push(Line::from(""));
+    }
+    lines.extend([
         driva_field_line("backend", &options.isolation_backend),
         driva_field_line("command", &options.command.join(" ")),
         driva_field_line("workdir", &options.working_directory.display().to_string()),
@@ -37,7 +45,7 @@ pub(crate) fn render_driva(frame: &mut Frame, app: &App, area: Rect) {
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         )),
-    ];
+    ]);
     lines.extend(options.mounts.iter().map(mount_line));
 
     let paragraph = Paragraph::new(lines)
@@ -144,7 +152,7 @@ mod tests {
         );
         app.toggle_view(View::Driva);
         let placeholder = rendered(&app);
-        assert!(placeholder.contains("no live session"));
+        assert!(placeholder.contains("no launch policy"));
 
         app.set_driva_options(DrivaOptions {
             isolation_backend: "bwrap".into(),
@@ -164,5 +172,29 @@ mod tests {
         assert!(screen.contains("off"));
         assert!(screen.contains("/home/op/project"));
         assert!(screen.contains("/tmp/styra/workspace"));
+        assert!(!screen.contains("planned"));
+    }
+
+    #[test]
+    fn driva_view_marks_the_policy_a_not_yet_started_interaction_would_launch_under() {
+        use styra_server::DrivaOptions;
+
+        let selection = styra_server::agent::Selection::parse("codex").unwrap();
+        let mut app = App::new(selection.clone(), "s1");
+        app.toggle_view(View::Driva);
+        app.set_planned_driva_options(
+            selection,
+            Some(DrivaOptions {
+                isolation_backend: "bwrap".into(),
+                command: vec!["codex".into(), "app-server".into()],
+                working_directory: PathBuf::from("/tmp/styra/workspace"),
+                network: true,
+                mounts: Vec::new(),
+            }),
+        );
+        let screen = rendered(&app);
+        assert!(screen.contains("planned — applied when the next interaction starts"));
+        assert!(screen.contains("codex app-server"));
+        assert!(screen.contains("network  on"));
     }
 }

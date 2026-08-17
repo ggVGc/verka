@@ -1,8 +1,9 @@
 //! Blocking client for Styra's JSON protocol over a Unix domain socket.
 
 use crate::protocol::{
-    CreateSession, CreateWorkspace, Health, RenameSession, Request, Response, ResumeSession,
-    SendMessage, SessionInfo, ShellInfo, StoredSession, UpdateNotes, Updates, WireResponse,
+    CreateSession, CreateWorkspace, DrivaOptions, Health, PlanSession, RenameSession, Request,
+    Response, ResumeSession, SendMessage, SessionInfo, ShellInfo, StoredSession, UpdateNotes,
+    Updates, WireResponse,
 };
 use crate::protocol::{InteractionSummary, SessionSummary, WorkspaceSummary};
 use anyhow::{bail, Context, Result};
@@ -37,6 +38,16 @@ impl Client {
         match self.request(Request::CreateSession(request.clone()))? {
             Response::SessionCreated(value) => Ok(value),
             other => unexpected("session_created", other),
+        }
+    }
+
+    /// The Driva policy a `create_session` with these inputs would launch
+    /// under. Creates nothing, so a client can show it before the operator's
+    /// first message has started anything.
+    pub fn plan_session(&self, request: &PlanSession) -> Result<DrivaOptions> {
+        match self.request(Request::PlanSession(request.clone()))? {
+            Response::SessionPlan(value) => Ok(value),
+            other => unexpected("session_plan", other),
         }
     }
 

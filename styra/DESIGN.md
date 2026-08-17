@@ -580,6 +580,22 @@ Changing provider still requires a new Session. A running turn cannot be
 changed in place.
 Opening another Session (`V`) adopts that Session's recorded launch selection.
 
+### The sandbox is shown before it exists
+
+The driva view (`d`) answers "what can this agent touch": isolation backend,
+command, working directory, network policy, and every mount. On a live
+interaction that is a record, captured at spawn from the same `ExecutionRequest`
+Driva executes. On the blank start screen there is nothing running to record,
+but the policy is already decided — by the selection, the `--network` flag and
+any `--template` names — so the client asks the server for it with
+`plan_session` and shows that instead, marked as planned. The server resolves it
+through the same profile, template and mount resolution `create_session` uses,
+creating no session, journal or control directory: the one thing a plan cannot
+name is the session id, so the broker control mount carries a placeholder for
+the directory the launch will make. Switching model before launch re-asks, since
+the profile a selection resolves to carries its own mounts. The moment something
+launches, its own policy replaces the plan.
+
 ## Concurrency model
 
 A live interaction runs entirely inside `styra-server`, on threads the interaction owns, each

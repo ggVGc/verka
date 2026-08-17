@@ -450,10 +450,20 @@ pub struct App {
     /// known (a live session; a replayed journal has no live workspace).
     /// Lets the preview panel read a changed file's current content.
     pub workspace_root: Option<PathBuf>,
-    /// The Driva policy the live session was launched under (mounts, network,
-    /// isolation backend). `None` for a session that has not launched yet, or
-    /// a replayed journal, which has no live sandbox to describe.
+    /// The Driva policy (mounts, network, isolation backend) of the live
+    /// session, or — before one has launched — the policy the next interaction
+    /// would be launched under. `None` until either is known, as on a replayed
+    /// journal, which has no sandbox to describe and none to plan.
     pub driva_options: Option<DrivaOptions>,
+    /// Whether `driva_options` describes a launch that has not happened yet.
+    /// The two are worth telling apart on screen: one is what the agent runs
+    /// under, the other is what it would run under.
+    pub driva_planned: bool,
+    /// The selection `driva_options` was planned for, recorded even when the
+    /// plan could not be fetched. Switching model before launch changes the
+    /// policy, so the plan is re-asked for; a failing server is asked once per
+    /// selection rather than on every frame.
+    driva_plan_selection: Option<Selection>,
     pub latest_usage: Option<TokenUsage>,
     background_work: bool,
     /// The verbatim wire interaction, in occurrence order.
@@ -538,6 +548,8 @@ impl App {
             session_name: None,
             workspace_root: None,
             driva_options: None,
+            driva_planned: false,
+            driva_plan_selection: None,
             latest_usage: None,
             background_work: false,
             raw: Vec::new(),
@@ -1219,9 +1231,36 @@ impl App {
         self.workspace_root = Some(path);
     }
 
-    /// Record the Driva policy the live session was launched under.
+    /// Record the Driva policy the live session was launched under. This is the
+    /// real thing, so it replaces any plan made before the launch.
     pub fn set_driva_options(&mut self, options: DrivaOptions) {
         self.driva_options = Some(options);
+        self.driva_planned = false;
+        self.driva_plan_selection = None;
+    }
+
+    /// Record the policy a new interaction under `selection` would launch with,
+    /// or that the server could not say (`None`). Either way the selection is
+    /// remembered as asked about.
+    pub fn set_planned_driva_options(
+        &mut self,
+        selection: Selection,
+        options: Option<DrivaOptions>,
+    ) {
+        self.driva_plan_selection = Some(selection);
+        if let Some(options) = options {
+            self.driva_options = Some(options);
+            self.driva_planned = true;
+        }
+    }
+
+    /// Whether the launch policy for a not-yet-started interaction still has to
+    /// be asked for: a live session's own policy is never superseded by a plan.
+    pub fn needs_driva_plan(&self) -> bool {
+        if self.driva_options.is_some() && !self.driva_planned {
+            return false;
+        }
+        self.driva_plan_selection.as_ref() != Some(&self.selection)
     }
 
     /// Toggle whether minor lifecycle events (thread/turn/usage) are shown.
@@ -2691,6 +2730,47 @@ mod tests {
         assert_eq!(app.view, View::Driva);
         app.toggle_view(View::Driva);
         assert_eq!(app.view, View::Events);
+    }
+
+    #[test]
+    fn a_planned_launch_policy_is_asked_for_once_per_selection_and_yields_to_a_live_one() {
+        use styra_server::DrivaOptions;
+
+        fn options(backend: &str) -> DrivaOptions {
+            DrivaOptions {
+                isolation_backend: backend.into(),
+                command: vec!["codex".into()],
+                working_directory: PathBuf::from("/tmp/styra/workspace"),
+                network: false,
+                mounts: Vec::new(),
+            }
+        }
+
+        let mut app = app();
+        assert!(app.needs_driva_plan());
+        app.set_planned_driva_options(app.selection.clone(), Some(options("planned")));
+        assert!(app.driva_planned);
+        assert!(!app.needs_driva_plan());
+
+        // Switching model before launch changes the policy, so it is re-asked.
+        app.selection = styra_server::agent::Selection::parse("claude").unwrap();
+        assert!(app.needs_driva_plan());
+        // A failed plan still counts as asked: the server is not polled per frame.
+        app.set_planned_driva_options(app.selection.clone(), None);
+        assert!(!app.needs_driva_plan());
+        assert_eq!(
+            app.driva_options.as_ref().unwrap().isolation_backend,
+            "planned"
+        );
+
+        // Once something is running, what it runs under replaces the plan and
+        // no further planning happens.
+        app.set_driva_options(options("live"));
+        assert!(!app.driva_planned);
+        assert!(!app.needs_driva_plan());
+        app.selection = styra_server::agent::Selection::parse("codex").unwrap();
+        assert!(!app.needs_driva_plan());
+        assert_eq!(app.driva_options.as_ref().unwrap().isolation_backend, "live");
     }
 
     #[test]

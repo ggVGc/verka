@@ -20,6 +20,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+/// Stands in for the session id in a planned launch: the directory it names is
+/// only created once the session exists.
+const PENDING_SESSION_ID: &str = "<pending>";
+
 #[derive(Clone)]
 pub struct ServerState {
     inner: Arc<ServerInner>,
@@ -381,6 +385,38 @@ impl ServerState {
         })
     }
 
+    /// Describe the sandbox a [`Self::create_session`] with these inputs would
+    /// launch, without creating a session, a journal, or a control directory.
+    /// It resolves the profile, template overlay and mounts the same way the
+    /// real launch does, so what the operator is shown before their first
+    /// message is what they will get. The one thing it cannot name is the
+    /// session id, so the broker control mount carries a placeholder for the
+    /// directory the launch will make.
+    fn plan_session(&self, request: crate::protocol::PlanSession) -> Result<DrivaOptions> {
+        let owning_workspace =
+            crate::workspace::get(&self.inner.store_root, &request.workspace_id)?;
+        let workspace = owning_workspace.host_path;
+        let mut profile = crate::agent::resolve_profile(&request.selection, &self.inner.layout)?;
+        profile.network = profile.network || request.network;
+        let template = resolve_templates(&workspace, &request.templates)?;
+        let tmux = genta::agent::resolve_executable(Path::new("tmux"))
+            .context("tmux is required for Styra session shells")?;
+        let spec = InteractionSpec {
+            profile,
+            resume_provider_session_id: None,
+            working_directory: self.inner.layout.workspace.clone(),
+            workspace: MountSpec {
+                source: workspace,
+                destination: self.inner.layout.workspace.clone(),
+                writable: true,
+            },
+            temporary_mounts: Vec::new(),
+            template,
+            broker: Some(self.describe_broker(PENDING_SESSION_ID, tmux)),
+        };
+        Ok(DrivaOptions::capture(&spec, "bwrap"))
+    }
+
     fn resume_session(&self, request: ResumeSession) -> Result<SessionInfo> {
         if self
             .inner
@@ -560,14 +596,32 @@ impl ServerState {
             .with_context(|| format!("no live interaction for session {id:?}"))
     }
 
-    fn prepare_broker(&self, id: &str, tmux: PathBuf) -> Result<SandboxBroker> {
+    /// Where a session's broker lives and how it is mounted, named but not yet
+    /// created. Splitting this from [`Self::prepare_broker`] lets the launch
+    /// policy be described — for a session that does not exist yet — without
+    /// staging anything on disk for it.
+    fn describe_broker(&self, id: &str, tmux: PathBuf) -> SandboxBroker {
         let control_root = self
             .inner
             .socket
             .parent()
             .unwrap_or_else(|| Path::new("."))
             .join("sandboxes");
-        let control = control_root.join(id);
+        SandboxBroker {
+            executable: PathBuf::from("/tmp/styra/control/styra-broker"),
+            tmux,
+            control: MountSpec {
+                source: control_root.join(id),
+                destination: PathBuf::from("/tmp/styra/control"),
+                writable: true,
+            },
+            socket: PathBuf::from("/tmp/styra/control/tmux.sock"),
+        }
+    }
+
+    fn prepare_broker(&self, id: &str, tmux: PathBuf) -> Result<SandboxBroker> {
+        let broker = self.describe_broker(id, tmux);
+        let control = broker.control.source.clone();
         std::fs::create_dir_all(&control)
             .with_context(|| format!("creating sandbox control directory {}", control.display()))?;
         std::fs::set_permissions(&control, std::fs::Permissions::from_mode(0o700)).with_context(
@@ -599,16 +653,7 @@ impl ServerState {
             .with_context(|| {
                 format!("making sandbox broker {} executable", executable.display())
             })?;
-        Ok(SandboxBroker {
-            executable: PathBuf::from("/tmp/styra/control/styra-broker"),
-            tmux,
-            control: MountSpec {
-                source: control,
-                destination: PathBuf::from("/tmp/styra/control"),
-                writable: true,
-            },
-            socket: PathBuf::from("/tmp/styra/control/tmux.sock"),
-        })
+        Ok(broker)
     }
 
     fn shell(&self, id: &str) -> Result<ShellInfo> {
@@ -662,6 +707,9 @@ impl ServerState {
             )?)),
             Request::CreateSession(request) => {
                 Ok(Response::SessionCreated(self.create_session(request)?))
+            }
+            Request::PlanSession(request) => {
+                Ok(Response::SessionPlan(self.plan_session(request)?))
             }
             Request::ResumeSession(request) => {
                 Ok(Response::SessionResumed(self.resume_session(request)?))
@@ -993,6 +1041,27 @@ mod tests {
         let metadata = std::fs::metadata(&staged).unwrap();
         assert!(metadata.len() > 0);
         assert_eq!(metadata.permissions().mode() & 0o777, 0o700);
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn describing_a_broker_names_the_same_mount_without_staging_anything() {
+        let root =
+            std::env::temp_dir().join(format!("styra-server-plan-test-{}", std::process::id()));
+        std::fs::remove_dir_all(&root).ok();
+        let state = ServerState::new(root.join("store"), root.join("styra.sock"));
+
+        let planned = state.describe_broker(PENDING_SESSION_ID, PathBuf::from("/usr/bin/tmux"));
+        let real = state.describe_broker("session-1", PathBuf::from("/usr/bin/tmux"));
+
+        assert_eq!(planned.control.destination, real.control.destination);
+        assert_eq!(planned.executable, real.executable);
+        assert_eq!(
+            planned.control.source,
+            root.join("sandboxes").join(PENDING_SESSION_ID)
+        );
+        assert!(!planned.control.source.exists());
+        assert!(!root.join("sandboxes").exists());
         std::fs::remove_dir_all(root).ok();
     }
 

@@ -56,6 +56,20 @@ pub struct CreateSession {
     pub name: Option<String>,
 }
 
+/// Ask what a new session in this Workspace *would* be launched under, without
+/// creating one. Carries exactly the launch inputs of [`CreateSession`] that
+/// shape the sandbox, so the answer is the policy that session would get.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlanSession {
+    pub workspace_id: String,
+    pub selection: Selection,
+    #[serde(default)]
+    pub network: bool,
+    #[serde(default)]
+    pub templates: Vec<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RenameSession {
@@ -156,6 +170,9 @@ pub enum Request {
         id: String,
     },
     CreateSession(CreateSession),
+    /// Report the Driva policy a `CreateSession` with these inputs would run
+    /// under. Creates nothing and touches no session state.
+    PlanSession(PlanSession),
     ResumeSession(ResumeSession),
     RenameSession(RenameSession),
     UpdateSessionNotes(UpdateNotes),
@@ -232,6 +249,7 @@ pub enum Response {
     Workspaces(Vec<WorkspaceSummary>),
     Workspace(WorkspaceSummary),
     SessionCreated(SessionInfo),
+    SessionPlan(DrivaOptions),
     SessionResumed(SessionInfo),
     SessionRenamed(SessionSummary),
     SessionNotesUpdated(SessionSummary),
@@ -312,6 +330,33 @@ mod tests {
         assert_eq!(json["data"]["selection"]["model"], "claude-opus-5");
         assert_eq!(json["data"]["selection"]["effort"], "xhigh");
         assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
+    }
+
+    #[test]
+    fn planning_carries_the_launch_inputs_without_naming_a_session() {
+        let request = Request::PlanSession(PlanSession {
+            workspace_id: "w-1".into(),
+            selection: crate::agent::Selection::new(crate::agent::Provider::Codex),
+            network: true,
+            templates: vec!["browser".into()],
+        });
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["operation"], "plan_session");
+        assert_eq!(json["data"]["workspace_id"], "w-1");
+        assert_eq!(json["data"]["network"], true);
+        assert_eq!(json["data"]["templates"][0], "browser");
+        assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
+
+        let response = Response::SessionPlan(DrivaOptions {
+            isolation_backend: "bwrap".into(),
+            command: vec!["codex".into()],
+            working_directory: PathBuf::from("/tmp/styra/workspace"),
+            network: true,
+            mounts: Vec::new(),
+        });
+        let json = serde_json::to_value(&response).unwrap();
+        assert_eq!(json["type"], "session_plan");
+        assert_eq!(serde_json::from_value::<Response>(json).unwrap(), response);
     }
 
     #[test]
