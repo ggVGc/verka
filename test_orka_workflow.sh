@@ -35,7 +35,7 @@ orka_bin="${ORKA_BIN:-$repo_root/target/debug/orka}"
 
 if [[ "${SKIP_BUILD:-0}" != 1 ]]; then
     echo "==> Building Linka and Orka"
-    cargo build --quiet --manifest-path "$repo_root/Cargo.toml" -p linka -p orka
+    cargo build --quiet --manifest-path "$repo_root/Cargo.toml" -p linka-cli -p orka
 fi
 
 for binary in "$linka_bin" "$orka_bin"; do
