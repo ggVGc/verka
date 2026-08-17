@@ -975,6 +975,7 @@ dependencies = [
  "crossterm",
  "pulldown-cmark",
  "ratatui",
+ "serde",
  "serde_json",
  "styra-server",
  "unicode-width 0.2.0",

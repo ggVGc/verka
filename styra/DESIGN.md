@@ -586,15 +586,44 @@ The driva view (`d`) answers "what can this agent touch": isolation backend,
 command, working directory, network policy, and every mount. On a live
 interaction that is a record, captured at spawn from the same `ExecutionRequest`
 Driva executes. On the blank start screen there is nothing running to record,
-but the policy is already decided — by the selection, the `--network` flag and
-any `--template` names — so the client asks the server for it with
-`plan_session` and shows that instead, marked as planned. The server resolves it
-through the same profile, template and mount resolution `create_session` uses,
-creating no session, journal or control directory: the one thing a plan cannot
-name is the session id, so the broker control mount carries a placeholder for
-the directory the launch will make. Switching model before launch re-asks, since
-the profile a selection resolves to carries its own mounts. The moment something
-launches, its own policy replaces the plan.
+but the policy is already decided — by the selection and the launch inputs — so
+the client asks the server for it with `plan_session` and shows that instead,
+marked as planned. The server resolves it through the same profile, template and
+mount resolution `create_session` uses, creating no session, journal or control
+directory: the one thing a plan cannot name is the session id, so the broker
+control mount carries a placeholder for the directory the launch will make.
+Switching model before launch re-asks, since the profile a selection resolves to
+carries its own mounts. The moment something launches, its own policy replaces
+the plan.
+
+### The sandbox is chosen where it is shown
+
+While nothing has launched, the driva view is also where the policy is decided.
+Networking (`w`), the Driva templates to layer (`T`), and extra host mounts (`m`
+to add, `x` to remove) are all editable there, and `D` saves the result as the
+standing default alongside the launch selection.
+
+Those three inputs live on `App::launch` as [`LaunchInputs`], seeded from the
+saved defaults with this invocation's flags over them, rather than being read
+from the CLI at each call site. That is what makes the view editable at all:
+every launch path — `create_session`, `plan_session`, `resume_session` — is fed
+from that one value, so an edit is automatically re-planned (the plan is keyed
+on the selection *and* the inputs) and automatically applied when the operator's
+first message finally starts the agent.
+
+The client never resolves policy itself. It sends what the operator asked for —
+template *names*, mount *requests* — and the server resolves both against the
+Workspace's `driva.toml` and the host filesystem, so a bad path or an unknown
+template is rejected at plan time, from the same code the launch would use. An
+extra mount reaches Driva as an ordinary bind mount alongside the profile's own,
+and the captured `DrivaOptions` therefore shows it without any special case. The
+view still lists the operator's own mounts separately from the effective set,
+because only those can be removed: the workspace, the profile's credential
+mounts and the broker's control mount are not the operator's to drop.
+
+Editing stops the moment an interaction exists. From then on the view is a
+record of the sandbox an agent is confined to, and changing that means a new
+session.
 
 ## Concurrency model
 

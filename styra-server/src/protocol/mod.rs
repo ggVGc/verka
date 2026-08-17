@@ -15,7 +15,8 @@ mod types;
 pub use transport::{read_message, read_message_limited, write_message, MAX_REQUEST_BYTES};
 pub use types::{
     Direction, DrivaOptions, InteractionActivity, InteractionEnd, InteractionSummary,
-    InteractionUpdate, LogEntry, LogLevel, RawLine, SessionSummary, WorkspaceSummary,
+    InteractionUpdate, LaunchMount, LogEntry, LogLevel, RawLine, SessionSummary, TemplateSummary,
+    WorkspaceSummary,
 };
 
 // These external vocabularies are serialized inside protocol payloads. Re-export
@@ -48,6 +49,10 @@ pub struct CreateSession {
     /// network policy. Later names in the list take precedence on conflict.
     #[serde(default)]
     pub templates: Vec<String>,
+    /// Extra host directories to bind into the sandbox, on top of the
+    /// workspace and whatever the profile and templates already grant.
+    #[serde(default)]
+    pub mounts: Vec<LaunchMount>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
     /// Optional operator-facing name. When absent, the server derives one
@@ -68,6 +73,8 @@ pub struct PlanSession {
     pub network: bool,
     #[serde(default)]
     pub templates: Vec<String>,
+    #[serde(default)]
+    pub mounts: Vec<LaunchMount>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -93,6 +100,8 @@ pub struct ResumeSession {
     pub network: bool,
     #[serde(default)]
     pub templates: Vec<String>,
+    #[serde(default)]
+    pub mounts: Vec<LaunchMount>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -173,6 +182,13 @@ pub enum Request {
     /// Report the Driva policy a `CreateSession` with these inputs would run
     /// under. Creates nothing and touches no session state.
     PlanSession(PlanSession),
+    /// Name the Driva templates a session in this Workspace could be launched
+    /// with: Driva's built-ins, overridden by any `driva.toml` the Workspace
+    /// carries. Resolves the same set `templates` on a launch request is
+    /// looked up in, so a client can offer exactly what would be accepted.
+    ListTemplates {
+        workspace_id: String,
+    },
     ResumeSession(ResumeSession),
     RenameSession(RenameSession),
     UpdateSessionNotes(UpdateNotes),
@@ -250,6 +266,7 @@ pub enum Response {
     Workspace(WorkspaceSummary),
     SessionCreated(SessionInfo),
     SessionPlan(DrivaOptions),
+    Templates(Vec<TemplateSummary>),
     SessionResumed(SessionInfo),
     SessionRenamed(SessionSummary),
     SessionNotesUpdated(SessionSummary),
@@ -322,6 +339,7 @@ mod tests {
             },
             network: false,
             templates: Vec::new(),
+            mounts: Vec::new(),
             message: None,
             name: None,
         });
@@ -339,12 +357,20 @@ mod tests {
             selection: crate::agent::Selection::new(crate::agent::Provider::Codex),
             network: true,
             templates: vec!["browser".into()],
+            mounts: vec![LaunchMount {
+                source: PathBuf::from("/srv/data"),
+                destination: None,
+                writable: true,
+            }],
         });
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(json["operation"], "plan_session");
         assert_eq!(json["data"]["workspace_id"], "w-1");
         assert_eq!(json["data"]["network"], true);
         assert_eq!(json["data"]["templates"][0], "browser");
+        assert_eq!(json["data"]["mounts"][0]["source"], "/srv/data");
+        assert_eq!(json["data"]["mounts"][0]["writable"], true);
+        assert!(json["data"]["mounts"][0].get("destination").is_none());
         assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
 
         let response = Response::SessionPlan(DrivaOptions {
@@ -365,12 +391,50 @@ mod tests {
             id: "styra-1".into(),
             network: true,
             templates: vec!["rust".into()],
+            mounts: Vec::new(),
         });
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(json["operation"], "resume_session");
         assert_eq!(json["data"]["id"], "styra-1");
         assert_eq!(json["data"]["templates"][0], "rust");
         assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
+    }
+
+    /// Launch inputs are additive on the wire: a client that predates extra
+    /// mounts omits the field entirely, and must still be understood.
+    #[test]
+    fn launch_requests_default_their_extra_mounts_to_none() {
+        let request: Request = serde_json::from_str(
+            r#"{"operation":"plan_session","data":{"workspace_id":"w-1",
+                 "selection":{"provider":"codex","model":"gpt-5.6-sol","effort":"high"}}}"#,
+        )
+        .unwrap();
+        let Request::PlanSession(plan) = request else {
+            panic!("expected a plan request");
+        };
+        assert!(plan.mounts.is_empty());
+        assert!(plan.templates.is_empty());
+        assert!(!plan.network);
+    }
+
+    #[test]
+    fn templates_are_listed_per_workspace_with_their_descriptions() {
+        let request = Request::ListTemplates {
+            workspace_id: "w-1".into(),
+        };
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["operation"], "list_templates");
+        assert_eq!(json["data"]["workspace_id"], "w-1");
+        assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
+
+        let response = Response::Templates(vec![TemplateSummary {
+            name: "rust".into(),
+            description: "Rust toolchain".into(),
+        }]);
+        let json = serde_json::to_value(&response).unwrap();
+        assert_eq!(json["type"], "templates");
+        assert_eq!(json["data"][0]["name"], "rust");
+        assert_eq!(serde_json::from_value::<Response>(json).unwrap(), response);
     }
 
     #[test]

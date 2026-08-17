@@ -43,6 +43,11 @@ pub struct InteractionSpec {
     pub workspace: MountSpec,
     /// Empty writable filesystems discarded after the run (e.g. `/root`).
     pub temporary_mounts: Vec<PathBuf>,
+    /// Host directories the operator asked for by hand, already canonicalized
+    /// (see `server::resolve_launch_mounts`). They are ordinary bind mounts
+    /// carrying no policy of their own, so they join the profile's own mounts
+    /// rather than forming a separate layer the way a template does.
+    pub extra_mounts: Vec<MountSpec>,
     /// Named Driva template(s) the operator selected, merged and resolved
     /// against the host filesystem, layered additively on top of the
     /// profile's own mounts, environment, and network policy.
@@ -542,7 +547,10 @@ fn build_request(spec: &InteractionSpec) -> ExecutionRequest {
         .cloned()
         .map(|destination| Mount::Temporary { destination })
         .collect();
-    for mount in std::iter::once(&spec.workspace).chain(spec.profile.mounts.iter()) {
+    for mount in std::iter::once(&spec.workspace)
+        .chain(spec.profile.mounts.iter())
+        .chain(spec.extra_mounts.iter())
+    {
         mounts.push(Mount::Bind {
             source: mount.source.clone(),
             destination: mount.destination.clone(),
@@ -690,6 +698,7 @@ mod tests {
                 writable: true,
             },
             temporary_mounts: Vec::new(),
+            extra_mounts: Vec::new(),
             template: None,
             broker: None,
         }
@@ -907,6 +916,41 @@ mod tests {
             request.environment.get(&OsString::from("HOME")),
             Some(&OsString::from("/root"))
         );
+    }
+
+    /// An operator-added mount is enforced, not merely displayed: it has to
+    /// reach the `ExecutionRequest` Driva runs, carrying the access it was
+    /// asked for.
+    #[test]
+    fn build_request_binds_the_operators_extra_mounts_with_their_access() {
+        let dir = PathBuf::from("/tmp/styra/workspace");
+        let mut spec = workspace_spec(&dir);
+        spec.extra_mounts = vec![
+            MountSpec {
+                source: PathBuf::from("/srv/data"),
+                destination: PathBuf::from("/srv/data"),
+                writable: false,
+            },
+            MountSpec {
+                source: PathBuf::from("/srv/out"),
+                destination: PathBuf::from("/mnt/out"),
+                writable: true,
+            },
+        ];
+        let request = build_request(&spec);
+
+        assert!(request.mounts.iter().any(|mount| matches!(
+            mount,
+            Mount::Bind { source, destination, access: MountAccess::ReadOnly }
+                if source == std::path::Path::new("/srv/data")
+                    && destination == std::path::Path::new("/srv/data")
+        )));
+        assert!(request.mounts.iter().any(|mount| matches!(
+            mount,
+            Mount::Bind { source, destination, access: MountAccess::ReadWrite }
+                if source == std::path::Path::new("/srv/out")
+                    && destination == std::path::Path::new("/mnt/out")
+        )));
     }
 
     #[test]

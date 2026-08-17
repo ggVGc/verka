@@ -34,6 +34,8 @@ styra shell [--session <ID>]
   --socket <PATH>      Server socket (default: $XDG_RUNTIME_DIR/styra/styra.sock)
   --workspace <DIR>    Host directory mounted writable as the agent workspace
   --network            Permit agent networking (providers may default this on)
+  --template <NAME>    Layer a Driva execution template onto the sandbox;
+                       repeatable, later names win on conflict
   --view [<SESSION>]   Open a captured journal read-only instead of launching;
                        bare, browse sessions in the server's store and pick one
 ```
@@ -81,8 +83,10 @@ Operations:
 | `create_workspace` | host path and optional name | `workspace_created` |
 | `list_workspaces` | none | `workspaces` |
 | `workspace` | Workspace id | `workspace` |
-| `create_session` | Workspace id, provider/model/effort selection, network, optional message | `session_created` |
-| `resume_session` | Session id, network, templates | `session_resumed` |
+| `create_session` | Workspace id, provider/model/effort selection, network, templates, extra mounts, optional message | `session_created` |
+| `plan_session` | Workspace id and the same launch inputs, creating nothing | `session_plan` |
+| `list_templates` | Workspace id | `templates` |
+| `resume_session` | Session id, network, templates, extra mounts | `session_resumed` |
 | `rename_session` | Session id and optional name | `session_renamed` |
 | `update_session_notes` | Session id and plain-text notes | `session_notes_updated` |
 | `update_workspace_notes` | Workspace id and plain-text notes | `workspace_notes_updated` |

@@ -2,8 +2,8 @@
 
 use crate::protocol::{
     CreateSession, CreateWorkspace, DrivaOptions, Health, PlanSession, RenameSession, Request,
-    Response, ResumeSession, SendMessage, SessionInfo, ShellInfo, StoredSession, UpdateNotes,
-    Updates, WireResponse,
+    Response, ResumeSession, SendMessage, SessionInfo, ShellInfo, StoredSession, TemplateSummary,
+    UpdateNotes, Updates, WireResponse,
 };
 use crate::protocol::{InteractionSummary, SessionSummary, WorkspaceSummary};
 use anyhow::{bail, Context, Result};
@@ -48,6 +48,17 @@ impl Client {
         match self.request(Request::PlanSession(request.clone()))? {
             Response::SessionPlan(value) => Ok(value),
             other => unexpected("session_plan", other),
+        }
+    }
+
+    /// The Driva templates a launch in this Workspace could name, so a client
+    /// can offer the real set instead of asking for a remembered name.
+    pub fn list_templates(&self, workspace_id: &str) -> Result<Vec<TemplateSummary>> {
+        match self.request(Request::ListTemplates {
+            workspace_id: workspace_id.to_owned(),
+        })? {
+            Response::Templates(value) => Ok(value),
+            other => unexpected("templates", other),
         }
     }
 

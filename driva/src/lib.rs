@@ -206,7 +206,11 @@ pub fn validate_request(request: &ExecutionRequest) -> Result<ExecutionRequest> 
     Ok(validated)
 }
 
-pub(crate) fn canonicalize_mount(path: &Path) -> Result<PathBuf> {
+/// Expand a leading `~` against the host home and resolve the result, so a
+/// mount source is stored as the path it actually names. Public so a caller
+/// building mounts of its own (Styra's operator-added mounts) resolves them
+/// exactly the way a configured mount is resolved.
+pub fn canonicalize_mount(path: &Path) -> Result<PathBuf> {
     let expanded = expand_home(path, "mount source")?;
     Ok(expanded.canonicalize()?)
 }

@@ -19,11 +19,14 @@ pub struct Cli {
     /// Host directory mounted writable as the agent workspace (default: cwd).
     #[arg(long)]
     pub workspace: Option<PathBuf>,
-    /// Permit agent networking (providers may default this on).
+    /// Permit agent networking (providers may default this on). Adds to the
+    /// saved default policy; the driva view (`d`) can still change it before
+    /// an interaction starts.
     #[arg(long)]
     pub network: bool,
     /// Apply a Driva execution template to the agent sandbox (see `driva
     /// templates`); may be repeated to layer several, e.g. a `rust` toolchain.
+    /// Replaces the saved default list, since the order given is the layering.
     #[arg(long = "template", value_name = "NAME")]
     pub template: Vec<String>,
     /// Open a captured journal read-only instead of launching an agent: with

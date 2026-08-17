@@ -189,6 +189,87 @@ pub fn render_workspace_picker(
     );
 }
 
+/// Render the Driva template picker: every template the Workspace could name,
+/// with the chosen ones marked by the position they hold in the layering.
+///
+/// The number, rather than a plain check, is the point: templates are applied
+/// in order and a later one wins on conflict, so which template is third
+/// changes the resulting policy.
+pub fn render_template_picker(
+    frame: &mut Frame,
+    templates: &[styra_server::TemplateSummary],
+    chosen: &[String],
+    cursor: usize,
+) {
+    let area = frame.area();
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .title(" styra · Driva templates · Space toggle · Enter apply · q cancel ")
+        .title_bottom(Line::from(Span::styled(
+            " layered in the order chosen; a later template wins on conflict ",
+            Style::default().fg(Color::Gray),
+        )));
+    if templates.is_empty() {
+        render_placeholder(frame, block, area, "  no Driva templates are available");
+        return;
+    }
+    let cursor = cursor.min(templates.len() - 1);
+    let items: Vec<ListItem> = templates
+        .iter()
+        .enumerate()
+        .map(|(index, template)| {
+            let position = chosen.iter().position(|name| name == &template.name);
+            let marker = match position {
+                Some(order) => format!("{:>2} ", order + 1),
+                None => "   ".to_owned(),
+            };
+            ListItem::new(Line::from(vec![
+                Span::styled(
+                    if index == cursor { "• " } else { "  " },
+                    Style::default().fg(if index == cursor {
+                        SELECTION_MARKER
+                    } else {
+                        Color::Cyan
+                    }),
+                ),
+                Span::styled(
+                    marker,
+                    Style::default()
+                        .fg(if position.is_some() {
+                            Color::Yellow
+                        } else {
+                            Color::DarkGray
+                        })
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("{:<16} ", template.name),
+                    Style::default()
+                        .fg(if position.is_some() {
+                            Color::Cyan
+                        } else {
+                            Color::Gray
+                        })
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    template.description.clone(),
+                    Style::default().fg(Color::White),
+                ),
+            ]))
+        })
+        .collect();
+    let list = List::new(items).block(block).highlight_style(
+        Style::default()
+            .bg(SELECTION_BG)
+            .add_modifier(Modifier::BOLD),
+    );
+    let mut state = ListState::default();
+    state.select(Some(cursor));
+    frame.render_stateful_widget(list, area, &mut state);
+}
+
 /// Render the current-interactions picker: interactions on the left and the selected
 /// interaction's live diagnostic/stderr log on the right.
 ///

@@ -1,8 +1,7 @@
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
-use crate::app::{App, Status};
-use crate::cli::Cli;
+use crate::app::{App, LaunchInputs, Status};
 use styra_server::agent::Selection;
 use styra_server::protocol::{
     CreateSession, CreateWorkspace, PlanSession, ResumeSession, SessionInfo,
@@ -83,7 +82,7 @@ pub fn all_sessions(client: &Client) -> Result<Vec<SessionSummary>> {
 
 pub fn create_session(
     client: &Client,
-    cli: &Cli,
+    launch: &LaunchInputs,
     workspace_id: &str,
     selection: &Selection,
     seed: Option<&str>,
@@ -91,8 +90,9 @@ pub fn create_session(
     client.create_session(&CreateSession {
         workspace_id: workspace_id.to_owned(),
         selection: selection.clone(),
-        network: cli.network,
-        templates: cli.template.clone(),
+        network: launch.network,
+        templates: launch.templates.clone(),
+        mounts: launch.mounts.clone(),
         message: seed.map(str::to_owned),
         name: None,
     })
@@ -102,27 +102,29 @@ pub fn create_session(
 /// one decided: ask the server what a new interaction under the current
 /// selection would run in, so the Driva view answers "what will this agent be
 /// able to touch" rather than waiting for the first message.
-pub fn ensure_driva_plan(
-    app: &mut App,
-    client: &Client,
-    cli: &Cli,
-    workspace_id: &str,
-    live: &Live,
-) {
+pub fn ensure_driva_plan(app: &mut App, client: &Client, workspace_id: &str, live: &Live) {
     if !matches!(live, Live::Pending) || !app.needs_driva_plan() {
         return;
     }
     let selection = app.selection.clone();
+    let launch = app.launch.clone();
     let planned = client.plan_session(&PlanSession {
         workspace_id: workspace_id.to_owned(),
         selection: selection.clone(),
-        network: cli.network,
-        templates: cli.template.clone(),
+        network: launch.network,
+        templates: launch.templates.clone(),
+        mounts: launch.mounts.clone(),
     });
     match planned {
-        Ok(options) => app.set_planned_driva_options(selection, Some(options)),
+        Ok(options) => app.set_planned_driva_options(selection, launch, Some(options)),
         Err(error) => {
-            app.set_planned_driva_options(selection, None);
+            app.set_planned_driva_options(selection, launch, None);
+            // An edit the server rejects (an unknown template, a path that is
+            // not there) lands here. The retained plan is the last one that
+            // did resolve, so say so where the operator is looking rather than
+            // only in the log, otherwise a rejected edit reads as an accepted
+            // one that simply changed nothing.
+            app.show_action_message(format!("launch policy not applied: {error}"));
             app.push_log(LogEntry::warn(format!(
                 "could not describe the sandbox a new interaction would launch in: {error:#}"
             )));
@@ -135,13 +137,14 @@ pub fn ensure_driva_plan(
 /// event loop takes over.
 pub fn launch_live_session(
     client: &Client,
-    cli: &Cli,
+    launch: &LaunchInputs,
     workspace_id: &str,
     selection: &Selection,
     seed: Option<&str>,
 ) -> Result<(App, SessionInfo)> {
-    let info = create_session(client, cli, workspace_id, selection, seed)?;
+    let info = create_session(client, launch, workspace_id, selection, seed)?;
     let mut app = App::new(info.selection.clone(), info.id.clone());
+    app.launch = launch.clone();
     app.session_name = info.name.clone();
     app.workspace_id = Some(info.workspace_id.clone());
     app.set_workspace_root(info.workspace.clone());
@@ -241,21 +244,16 @@ pub fn session_id_from_target(target: &Path) -> Result<String> {
 
 /// Resume `app.session_id` through its provider's native mechanism, then
 /// deliver `message` to the freshly revived agent.
-pub fn resume_and_send(
-    app: &mut App,
-    client: &Client,
-    cli: &Cli,
-    live: &mut Live,
-    message: String,
-) {
+pub fn resume_and_send(app: &mut App, client: &Client, live: &mut Live, message: String) {
     if app.session_id.is_empty() {
         app.push_log(LogEntry::warn("not sent: no Session to resume"));
         return;
     }
     match client.resume_session(&ResumeSession {
         id: app.session_id.clone(),
-        network: cli.network,
-        templates: cli.template.clone(),
+        network: app.launch.network,
+        templates: app.launch.templates.clone(),
+        mounts: app.launch.mounts.clone(),
     }) {
         Ok(info) => {
             app.session_name = info.name.clone();

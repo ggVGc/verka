@@ -8,7 +8,8 @@ use crate::protocol::{
     SessionInfo, ShellInfo, StoredSession, Updates, WireResponse, MAX_REQUEST_BYTES,
 };
 use crate::protocol::{
-    DrivaOptions, InteractionActivity, InteractionSummary, InteractionUpdate, SessionSummary,
+    DrivaOptions, InteractionActivity, InteractionSummary, InteractionUpdate, LaunchMount,
+    SessionSummary, TemplateSummary,
 };
 use anyhow::{Context, Result};
 use std::collections::{HashMap, HashSet};
@@ -220,6 +221,7 @@ impl ServerState {
         let mut profile = crate::agent::resolve_profile(&selection, &self.inner.layout)?;
         profile.network = profile.network || request.network;
         let template = resolve_templates(&workspace, &request.templates)?;
+        let extra_mounts = resolve_launch_mounts(&request.mounts)?;
         // Resolve host tooling before creating durable session state, so a
         // missing tmux or broker executable cannot leave an empty journal.
         let tmux = genta::agent::resolve_executable(Path::new("tmux"))
@@ -246,6 +248,7 @@ impl ServerState {
                 writable: true,
             },
             temporary_mounts: Vec::new(),
+            extra_mounts,
             template,
             broker: Some(self.prepare_broker(&id, tmux)?),
         };
@@ -255,6 +258,15 @@ impl ServerState {
             tmux: prepared_broker.tmux.clone(),
             socket: prepared_broker.control.source.join("tmux.sock"),
         };
+        // A policy Driva would refuse is rejected here, before anything is
+        // spawned, and takes the same control-directory cleanup a failed spawn
+        // does so a rejected launch leaves nothing behind.
+        if let Err(error) = ensure_distinct_destinations(&driva) {
+            if let Some(control) = shell.socket.parent() {
+                std::fs::remove_dir_all(control).ok();
+            }
+            return Err(error);
+        }
         let backend = Box::new(driva::BwrapIsolation {
             executable: "bwrap".into(),
             rootfs: Some(PathBuf::from("/")),
@@ -399,6 +411,7 @@ impl ServerState {
         let mut profile = crate::agent::resolve_profile(&request.selection, &self.inner.layout)?;
         profile.network = profile.network || request.network;
         let template = resolve_templates(&workspace, &request.templates)?;
+        let extra_mounts = resolve_launch_mounts(&request.mounts)?;
         let tmux = genta::agent::resolve_executable(Path::new("tmux"))
             .context("tmux is required for Styra session shells")?;
         let spec = InteractionSpec {
@@ -411,10 +424,29 @@ impl ServerState {
                 writable: true,
             },
             temporary_mounts: Vec::new(),
+            extra_mounts,
             template,
             broker: Some(self.describe_broker(PENDING_SESSION_ID, tmux)),
         };
-        Ok(DrivaOptions::capture(&spec, "bwrap"))
+        let options = DrivaOptions::capture(&spec, "bwrap");
+        // Planning is also where a policy gets checked: an operator editing
+        // mounts before launch learns that two of them collide now, from the
+        // view they are editing, rather than from a failed launch later.
+        ensure_distinct_destinations(&options)?;
+        Ok(options)
+    }
+
+    /// The Driva templates a launch in this Workspace could name.
+    fn list_templates(&self, workspace_id: &str) -> Result<Vec<TemplateSummary>> {
+        let owning_workspace = crate::workspace::get(&self.inner.store_root, workspace_id)?;
+        Ok(workspace_driva_config(&owning_workspace.host_path)?
+            .effective_templates()
+            .into_iter()
+            .map(|(name, template)| TemplateSummary {
+                name,
+                description: template.description,
+            })
+            .collect())
     }
 
     fn resume_session(&self, request: ResumeSession) -> Result<SessionInfo> {
@@ -446,6 +478,7 @@ impl ServerState {
         profile.resume(selection.provider, &provider_session_id)?;
         profile.network = profile.network || request.network;
         let template = resolve_templates(&workspace, &request.templates)?;
+        let extra_mounts = resolve_launch_mounts(&request.mounts)?;
 
         let tmux = genta::agent::resolve_executable(Path::new("tmux"))
             .context("tmux is required for Styra session shells")?;
@@ -469,6 +502,7 @@ impl ServerState {
                 writable: true,
             },
             temporary_mounts: Vec::new(),
+            extra_mounts,
             template,
             broker: Some(self.prepare_broker(&request.id, tmux)?),
         };
@@ -478,6 +512,12 @@ impl ServerState {
             tmux: prepared_broker.tmux.clone(),
             socket: prepared_broker.control.source.join("tmux.sock"),
         };
+        if let Err(error) = ensure_distinct_destinations(&driva) {
+            if let Some(control) = shell.socket.parent() {
+                std::fs::remove_dir_all(control).ok();
+            }
+            return Err(error);
+        }
         let backend = Box::new(driva::BwrapIsolation {
             executable: "bwrap".into(),
             rootfs: Some(PathBuf::from("/")),
@@ -708,8 +748,9 @@ impl ServerState {
             Request::CreateSession(request) => {
                 Ok(Response::SessionCreated(self.create_session(request)?))
             }
-            Request::PlanSession(request) => {
-                Ok(Response::SessionPlan(self.plan_session(request)?))
+            Request::PlanSession(request) => Ok(Response::SessionPlan(self.plan_session(request)?)),
+            Request::ListTemplates { workspace_id } => {
+                Ok(Response::Templates(self.list_templates(&workspace_id)?))
             }
             Request::ResumeSession(request) => {
                 Ok(Response::SessionResumed(self.resume_session(request)?))
@@ -925,14 +966,7 @@ fn resolve_templates(workspace: &Path, names: &[String]) -> Result<Option<Resolv
     if names.is_empty() {
         return Ok(None);
     }
-    let driva_config = {
-        let candidate = workspace.join("driva.toml");
-        if candidate.exists() {
-            driva::Config::load(&candidate)?
-        } else {
-            driva::Config::default()
-        }
-    };
+    let driva_config = workspace_driva_config(workspace)?;
     let mut merged: Option<driva::TemplateConfig> = None;
     for name in names {
         let later = driva_config
@@ -944,6 +978,71 @@ fn resolve_templates(workspace: &Path, names: &[String]) -> Result<Option<Resolv
         }
     }
     ResolvedTemplate::resolve(merged.expect("non-empty names produces a merged template")).map(Some)
+}
+
+/// The Driva configuration a launch in this Workspace resolves against: the
+/// Workspace's own `driva.toml` when it has one, otherwise Driva's built-ins.
+fn workspace_driva_config(workspace: &Path) -> Result<driva::Config> {
+    let candidate = workspace.join("driva.toml");
+    if candidate.exists() {
+        driva::Config::load(&candidate)
+    } else {
+        Ok(driva::Config::default())
+    }
+}
+
+/// Turn the operator's mount requests into concrete bind mounts.
+///
+/// The source is canonicalized here rather than at launch, so a path that does
+/// not exist (or a typo) is reported while the operator is still editing the
+/// policy, instead of surfacing later as a bwrap failure with no context. A
+/// destination is optional and defaults to the canonical source, matching
+/// Driva's rule for a bind mount that names no destination.
+fn resolve_launch_mounts(mounts: &[LaunchMount]) -> Result<Vec<MountSpec>> {
+    mounts
+        .iter()
+        .map(|mount| {
+            let source = driva::canonicalize_mount(&mount.source).with_context(|| {
+                format!("invalid extra mount source {}", mount.source.display())
+            })?;
+            let destination = mount.destination.clone().unwrap_or_else(|| source.clone());
+            if !destination.is_absolute() {
+                anyhow::bail!(
+                    "extra mount destination {} must be an absolute path inside the sandbox",
+                    destination.display()
+                );
+            }
+            Ok(MountSpec {
+                source,
+                destination,
+                writable: mount.writable,
+            })
+        })
+        .collect()
+}
+
+/// Reject a policy that binds two things at the same place inside the sandbox.
+///
+/// Driva itself refuses this when it validates the request, but that is at
+/// spawn time. Checking the captured policy means an extra mount that lands on
+/// top of the workspace (or on a template's grant) is reported while it is
+/// still being chosen, rather than as a failed launch afterwards.
+fn ensure_distinct_destinations(options: &DrivaOptions) -> Result<()> {
+    let mut seen = HashSet::new();
+    for mount in &options.mounts {
+        let destination = match mount {
+            driva::Mount::Bind { destination, .. }
+            | driva::Mount::Overlay { destination, .. }
+            | driva::Mount::Temporary { destination } => destination,
+        };
+        if !seen.insert(destination.clone()) {
+            anyhow::bail!(
+                "conflicting mount destination: {} is already bound",
+                destination.display()
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Serve socket connections until the listener fails or the process exits.
@@ -1008,6 +1107,93 @@ mod tests {
         server.join().unwrap();
         std::fs::remove_file(socket).ok();
         std::fs::remove_dir_all(store).ok();
+    }
+
+    /// An operator's mount request is resolved against the host now, so a path
+    /// that is not there is reported while the policy is being chosen.
+    #[test]
+    fn extra_mounts_resolve_their_source_and_default_the_destination_to_it() {
+        let root =
+            std::env::temp_dir().join(format!("styra-server-extra-mounts-{}", std::process::id()));
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::create_dir_all(root.join("data")).unwrap();
+
+        let resolved = resolve_launch_mounts(&[
+            LaunchMount {
+                source: root.join("data"),
+                destination: None,
+                writable: true,
+            },
+            LaunchMount {
+                source: root.join("data"),
+                destination: Some(PathBuf::from("/mnt/data")),
+                writable: false,
+            },
+        ])
+        .unwrap();
+
+        assert_eq!(
+            resolved[0].source,
+            root.join("data").canonicalize().unwrap()
+        );
+        assert_eq!(resolved[0].destination, resolved[0].source);
+        assert!(resolved[0].writable);
+        assert_eq!(resolved[1].destination, PathBuf::from("/mnt/data"));
+        assert!(!resolved[1].writable);
+
+        let missing = resolve_launch_mounts(&[LaunchMount {
+            source: root.join("absent"),
+            destination: None,
+            writable: false,
+        }])
+        .unwrap_err();
+        assert!(
+            missing.to_string().contains("invalid extra mount source"),
+            "{missing}"
+        );
+
+        let relative = resolve_launch_mounts(&[LaunchMount {
+            source: root.join("data"),
+            destination: Some(PathBuf::from("mnt/data")),
+            writable: false,
+        }])
+        .unwrap_err();
+        assert!(relative.to_string().contains("absolute"), "{relative}");
+
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    /// Two mounts landing on the same place inside the sandbox is a policy
+    /// Driva refuses, so it is caught while planning rather than at spawn.
+    #[test]
+    fn a_policy_binding_two_things_at_one_destination_is_rejected() {
+        let options = DrivaOptions {
+            isolation_backend: "bwrap".into(),
+            command: vec!["codex".into()],
+            working_directory: PathBuf::from("/tmp/styra/workspace"),
+            network: false,
+            mounts: vec![
+                driva::Mount::Bind {
+                    source: PathBuf::from("/srv/one"),
+                    destination: PathBuf::from("/tmp/styra/workspace"),
+                    access: driva::MountAccess::ReadWrite,
+                },
+                driva::Mount::Bind {
+                    source: PathBuf::from("/srv/two"),
+                    destination: PathBuf::from("/tmp/styra/workspace"),
+                    access: driva::MountAccess::ReadOnly,
+                },
+            ],
+        };
+        let error = ensure_distinct_destinations(&options).unwrap_err();
+        assert!(
+            error.to_string().contains("conflicting mount destination"),
+            "{error}"
+        );
+
+        let mut fine = options;
+        fine.mounts.pop();
+        assert!(ensure_distinct_destinations(&fine).is_ok());
     }
 
     #[test]
@@ -1137,6 +1323,7 @@ mod tests {
                 id: "0000000000001-1-1".into(),
                 network: false,
                 templates: Vec::new(),
+                mounts: Vec::new(),
             })
             .unwrap_err();
         assert!(error.to_string().contains("can be viewed but not resumed"));

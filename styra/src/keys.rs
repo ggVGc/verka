@@ -2,7 +2,6 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::path::Path;
 
 use crate::app::{App, Request, Status, View};
-use crate::cli::Cli;
 use crate::notes;
 use crate::preferences;
 use crate::session::{self, Live};
@@ -28,7 +27,7 @@ pub fn handle_launcher_key(app: &mut App, key: KeyEvent, preferences_path: &Path
         KeyCode::Enter => app.confirm_launcher(),
         KeyCode::Char('D') => {
             app.confirm_launcher();
-            if let Err(error) = preferences::save(preferences_path, &app.selection) {
+            if let Err(error) = preferences::save_selection(preferences_path, &app.selection) {
                 app.push_log(LogEntry::error(format!(
                     "could not save launch defaults: {error:#}"
                 )));
@@ -39,12 +38,35 @@ pub fn handle_launcher_key(app: &mut App, key: KeyEvent, preferences_path: &Path
     }
 }
 
+/// Keys for the Driva view's "add a mount" prompt. It is modal — every
+/// printable key is part of the path being typed, `?` included — so the event
+/// loop routes keys here ahead of the keybind reference and every view and
+/// global binding, exactly as it does for the notes editor.
+pub fn handle_driva_prompt_key(app: &mut App, key: KeyEvent) {
+    match key.code {
+        KeyCode::Esc => app.cancel_driva_prompt(),
+        KeyCode::Enter => app.confirm_driva_prompt(),
+        KeyCode::Backspace => {
+            if let Some(text) = app.driva_prompt.as_mut() {
+                text.pop();
+            }
+        }
+        KeyCode::Char(ch) if !ch.is_control() => {
+            if let Some(text) = app.driva_prompt.as_mut() {
+                text.push(ch);
+            }
+        }
+        _ => {}
+    }
+}
+
 pub fn handle_list_key(
     app: &mut App,
     client: &Client,
     live: &mut Live,
     key: KeyEvent,
     pending_fold: &mut bool,
+    preferences_path: &Path,
 ) {
     if std::mem::take(pending_fold) {
         match key.code {
@@ -133,7 +155,36 @@ pub fn handle_list_key(
             KeyCode::Char('G') => app.transcript_to_bottom(),
             _ => {}
         },
-        View::Driva => {}
+        // Editing the launch policy. These keys deliberately avoid the letters
+        // the global bindings above already claim (`t`, `n`, `d`, …), since
+        // reaching the transcript or a new session from this view must keep
+        // working while the policy is being edited.
+        View::Driva => match key.code {
+            KeyCode::Char('w') => app.toggle_launch_network(),
+            KeyCode::Char('T') => {
+                if app.allow_launch_edit() {
+                    app.ask(Request::Templates);
+                }
+            }
+            KeyCode::Char('m') => app.open_driva_prompt(),
+            KeyCode::Char('x') => app.remove_selected_launch_mount(),
+            // Mirrors `D` in the launch picker: keep this policy as the one a
+            // brand-new client starts from, rather than only this session's.
+            KeyCode::Char('D') => {
+                if app.allow_launch_edit() {
+                    let launch = app.launch.clone();
+                    match preferences::save_launch(preferences_path, &launch) {
+                        Ok(()) => app.show_action_message("saved as the default launch policy"),
+                        Err(error) => app.push_log(LogEntry::error(format!(
+                            "could not save the default launch policy: {error:#}"
+                        ))),
+                    }
+                }
+            }
+            KeyCode::Char('j') | KeyCode::Down => app.driva_select_next_mount(),
+            KeyCode::Char('k') | KeyCode::Up => app.driva_select_prev_mount(),
+            _ => {}
+        },
         View::Files => match key.code {
             KeyCode::Char('e') if app.selected_file_path().is_some() => app.ask(Request::EditFile),
             KeyCode::Char('j') | KeyCode::Down => app.file_select_next(),
@@ -187,7 +238,6 @@ fn copy_selection(app: &mut App) {
 pub fn handle_input_key(
     app: &mut App,
     client: &Client,
-    cli: &Cli,
     workspace_id: &str,
     live: &mut Live,
     key: KeyEvent,
@@ -226,13 +276,14 @@ pub fn handle_input_key(
                         }
                     }
                     Live::Running { .. } | Live::Viewing => {
-                        session::resume_and_send(app, client, cli, live, message)
+                        session::resume_and_send(app, client, live, message)
                     }
                     Live::Pending => {
                         let selection = app.selection.clone();
+                        let launch = app.launch.clone();
                         match session::create_session(
                             client,
-                            cli,
+                            &launch,
                             workspace_id,
                             &selection,
                             Some(&message),

@@ -7,7 +7,6 @@ use std::path::Path;
 use std::time::Duration;
 
 use crate::app::{App, Focus, Request, Status};
-use crate::cli::Cli;
 use crate::config::Config;
 use crate::keys;
 use crate::notes;
@@ -43,7 +42,6 @@ pub fn run(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     app: &mut App,
     client: &Client,
-    cli: &Cli,
     workspace_id: &str,
     live: &mut Live,
     preferences_path: &Path,
@@ -53,7 +51,7 @@ pub fn run(
     loop {
         app.expire_action_messages();
         notes::ensure_loaded(app, client, workspace_id);
-        session::ensure_driva_plan(app, client, cli, workspace_id, live);
+        session::ensure_driva_plan(app, client, workspace_id, live);
         let mut disconnected = false;
         if let Live::Running { session_id, cursor } = live {
             match client.updates(session_id, *cursor) {
@@ -135,6 +133,12 @@ pub fn run(
             notes::handle_key(app, client, key);
             continue;
         }
+        // So is the Driva view's mount prompt: what is typed into it is part
+        // of a path, including the characters that are shortcuts elsewhere.
+        if app.driva_prompt.is_some() {
+            keys::handle_driva_prompt_key(app, key);
+            continue;
+        }
         // In input focus, `?` is message text rather than a shortcut.
         if app.focus == Focus::List && key.code == KeyCode::Char('?') {
             app.show_keybinds = true;
@@ -148,8 +152,15 @@ pub fn run(
             keys::handle_launcher_key(app, key, preferences_path);
         } else {
             match app.focus {
-                Focus::List => keys::handle_list_key(app, client, live, key, &mut pending_fold),
-                Focus::Input => keys::handle_input_key(app, client, cli, workspace_id, live, key),
+                Focus::List => keys::handle_list_key(
+                    app,
+                    client,
+                    live,
+                    key,
+                    &mut pending_fold,
+                    preferences_path,
+                ),
+                Focus::Input => keys::handle_input_key(app, client, workspace_id, live, key),
             }
         }
 
@@ -230,6 +241,26 @@ pub fn run(
                         "could not switch to {}: {error:#}",
                         selection.model
                     ))),
+                }
+            }
+            Some(Request::Templates) => {
+                let templates = match client.list_templates(workspace_id) {
+                    Ok(templates) => templates,
+                    Err(error) => {
+                        app.push_log(LogEntry::error(format!(
+                            "could not list Driva templates: {error:#}"
+                        )));
+                        continue;
+                    }
+                };
+                if templates.is_empty() {
+                    app.push_log(LogEntry::warn("no Driva templates are available"));
+                    continue;
+                }
+                let current = app.launch.templates.clone();
+                let chosen = picker::run_template_picker(terminal, &templates, &current)?;
+                if let Some(chosen) = chosen {
+                    app.set_launch_templates(chosen);
                 }
             }
             Some(Request::EditFile) => {

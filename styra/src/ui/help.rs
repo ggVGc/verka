@@ -63,6 +63,13 @@ pub(crate) fn render_keybinds(frame: &mut Frame, area: Rect) {
         bindings("PgUp/PgDn", "scroll raw-line preview"),
         bindings("y", "copy selected line to clipboard (raw view)"),
         Line::default(),
+        section("Driva (launch policy, before an interaction starts)"),
+        bindings("w", "permit/forbid agent networking"),
+        bindings("T", "choose Driva templates"),
+        bindings("m / x", "add a mount / remove the selected one"),
+        bindings("j/k or ↓/↑", "move among the mounts you added"),
+        bindings("D", "save this policy as the default"),
+        Line::default(),
         section("Files"),
         bindings("j/k or ↓/↑", "next/previous file"),
         bindings("J/K", "next/previous interaction-log entry"),
@@ -111,7 +118,7 @@ mod tests {
 
     #[test]
     fn reference_groups_the_available_keybinds() {
-        let mut terminal = Terminal::new(TestBackend::new(100, 51)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(100, 60)).unwrap();
         terminal
             .draw(|frame| render_keybinds(frame, frame.area()))
             .unwrap();
@@ -127,6 +134,8 @@ mod tests {
             "Global",
             "Events and previews",
             "Raw, log, and transcript",
+            "Driva (launch policy",
+            "choose Driva templates",
             "Message editor",
             "Launch and selection screens",
             "current sessions",

@@ -36,7 +36,8 @@ use messages::{message_area_height, render_messages};
 use notes::render_notes;
 pub use notes::render_notes_prompt;
 pub use picker::{
-    render_interactions_picker, render_name_prompt, render_picker, render_workspace_picker,
+    render_interactions_picker, render_name_prompt, render_picker, render_template_picker,
+    render_workspace_picker,
 };
 pub(crate) use preview::preview_scroll_limit;
 use preview::{render_fullscreen_preview, render_preview};

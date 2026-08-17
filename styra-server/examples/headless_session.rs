@@ -33,6 +33,7 @@ fn main() -> anyhow::Result<()> {
         selection: styra_server::agent::Selection::new(styra_server::agent::Provider::Codex),
         network: false,
         templates: Vec::new(),
+        mounts: Vec::new(),
         message: Some(prompt),
         name: None,
     })?;

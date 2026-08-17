@@ -130,6 +130,36 @@ pub struct DrivaOptions {
     pub mounts: Vec<Mount>,
 }
 
+/// One extra host directory the operator asked to be bound into the sandbox,
+/// on top of what the profile and the selected templates already grant.
+///
+/// This is a *request*, not a resolved mount: the source is whatever the
+/// operator typed, and the server canonicalizes it (rejecting a path that does
+/// not exist) before it becomes part of a launch. An absent `destination`
+/// means "the same path inside the sandbox", matching Driva's own rule for a
+/// bind mount with no destination.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LaunchMount {
+    pub source: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destination: Option<PathBuf>,
+    /// Read-only unless the operator explicitly asked for write access, so the
+    /// quiet default is the one that grants least.
+    #[serde(default)]
+    pub writable: bool,
+}
+
+/// A Driva execution template the server can offer, named and described, so a
+/// client can present the real set rather than asking the operator to recall
+/// template names.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TemplateSummary {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+}
+
 /// What a live interaction is currently waiting on.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

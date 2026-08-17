@@ -45,7 +45,13 @@ fn integration_tools_available() -> bool {
 fn reachable_inside_sandbox(path: &Path) -> bool {
     Command::new("bwrap")
         .args(["--ro-bind", "/", "/", "--proc", "/proc", "--dev", "/dev"])
-        .args(["--tmpfs", "/tmp", "--unshare-all", "--die-with-parent", "--"])
+        .args([
+            "--tmpfs",
+            "/tmp",
+            "--unshare-all",
+            "--die-with-parent",
+            "--",
+        ])
         .arg("/bin/sh")
         .arg("-c")
         .arg(format!("test -x {}", path.display()))
@@ -178,6 +184,7 @@ done
             selection: styra_server::agent::Selection::new(styra_server::agent::Provider::Codex),
             network: false,
             templates: Vec::new(),
+            mounts: Vec::new(),
             message: None,
             name: None,
         })

@@ -284,6 +284,58 @@ pub fn run_interactions_picker(
     }
 }
 
+/// The Driva template picker. Templates layer rather than replace one another,
+/// so this is a multi-select: j/k or arrows to move, Space to add or drop the
+/// template under the cursor, Enter to accept the whole set, Esc or q to leave
+/// it as it was.
+///
+/// Selection order is preserved because Driva applies templates in order and
+/// later ones win on conflict, so the sequence the operator built is the
+/// policy they get.
+pub fn run_template_picker(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    templates: &[styra_server::TemplateSummary],
+    selected_names: &[String],
+) -> Result<Option<Vec<String>>> {
+    let mut chosen: Vec<String> = selected_names
+        .iter()
+        .filter(|name| templates.iter().any(|template| &template.name == *name))
+        .cloned()
+        .collect();
+    let mut cursor = 0usize;
+    loop {
+        terminal.draw(|frame| ui::render_template_picker(frame, templates, &chosen, cursor))?;
+        if !event::poll(Duration::from_millis(100))? {
+            continue;
+        }
+        let Event::Key(key) = event::read()? else {
+            continue;
+        };
+        if key.kind != KeyEventKind::Press {
+            continue;
+        }
+        match key.code {
+            KeyCode::Char('q') | KeyCode::Esc => return Ok(None),
+            KeyCode::Char('j') | KeyCode::Down => {
+                cursor = (cursor + 1).min(templates.len().saturating_sub(1));
+            }
+            KeyCode::Char('k') | KeyCode::Up => cursor = cursor.saturating_sub(1),
+            KeyCode::Char(' ') => {
+                if let Some(template) = templates.get(cursor) {
+                    match chosen.iter().position(|name| name == &template.name) {
+                        Some(index) => {
+                            chosen.remove(index);
+                        }
+                        None => chosen.push(template.name.clone()),
+                    }
+                }
+            }
+            KeyCode::Enter => return Ok(Some(chosen)),
+            _ => {}
+        }
+    }
+}
+
 /// Put idle interactions first — they are the ones waiting on the operator —
 /// then interactions still processing work, and stopped interactions last.
 /// `sort_by_key` is stable, so the server's ordering is retained within each

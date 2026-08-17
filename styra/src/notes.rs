@@ -430,6 +430,7 @@ mod tests {
             &mut live,
             KeyEvent::new(KeyCode::Char('E'), KeyModifiers::SHIFT),
             &mut pending_fold,
+            std::path::Path::new("/nonexistent/styra-preferences"),
         );
         assert!(app.notes.is_open());
 

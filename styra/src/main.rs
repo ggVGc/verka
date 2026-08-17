@@ -22,7 +22,7 @@ mod session;
 mod terminal;
 mod ui;
 
-use app::App;
+use app::{App, LaunchInputs};
 use cli::{Cli, CliCommand};
 use config::Config;
 use event_loop::RunOutcome;
@@ -64,11 +64,39 @@ fn workspace_for_new_session(
         .unwrap_or_else(|| active.clone())
 }
 
-fn pending_app(selection: styra_server::agent::Selection, workspace: &WorkspaceSummary) -> App {
+fn pending_app(
+    selection: styra_server::agent::Selection,
+    launch: LaunchInputs,
+    workspace: &WorkspaceSummary,
+) -> App {
     let mut app = App::pending(selection);
+    app.launch = launch;
     app.workspace_id = Some(workspace.id.clone());
     app.set_workspace_root(workspace.host_path.clone());
     app
+}
+
+/// What a new interaction starts from: the operator's saved defaults with this
+/// invocation's flags over them.
+///
+/// `--network` only ever grants, matching the way the server ORs it with the
+/// profile's and template's own policy. A `--template` replaces the saved list
+/// rather than adding to it, because the flag names a whole layering and the
+/// order within it is significant.
+///
+/// Re-read rather than cached, so a policy saved with `D` during the session
+/// is what the next blank screen offers.
+fn standing_launch(
+    preferences_path: &Path,
+    cli: &Cli,
+) -> Result<(styra_server::agent::Selection, LaunchInputs)> {
+    let defaults = preferences::load_or_default(preferences_path)?;
+    let mut launch = defaults.launch;
+    launch.network |= cli.network;
+    if !cli.template.is_empty() {
+        launch.templates = cli.template.clone();
+    }
+    Ok((defaults.selection, launch))
 }
 
 /// What an ordinary interactive launch (no CLI prompt, no `--view`) opens
@@ -80,6 +108,7 @@ fn open_start_screen(
     client: &Client,
     terminal: &mut Option<Terminal<CrosstermBackend<Stdout>>>,
     selection: styra_server::agent::Selection,
+    launch: LaunchInputs,
     active_workspace: &WorkspaceSummary,
 ) -> Result<(App, Live)> {
     let mut interactions: Vec<_> = client
@@ -88,7 +117,10 @@ fn open_start_screen(
         .filter(|interaction| interaction.workspace_id == active_workspace.id)
         .collect();
     if interactions.is_empty() {
-        return Ok((pending_app(selection, active_workspace), Live::Pending));
+        return Ok((
+            pending_app(selection, launch, active_workspace),
+            Live::Pending,
+        ));
     }
 
     let mut term = match terminal.take() {
@@ -98,8 +130,19 @@ fn open_start_screen(
     let workspaces = client.list_workspaces()?;
     let choice = picker::run_interactions_picker(&mut term, client, &mut interactions, &workspaces);
     let outcome = match choice {
-        Ok(Some(interaction)) => session::attach_live_interaction(client, interaction),
-        Ok(None) => Ok((pending_app(selection, active_workspace), Live::Pending)),
+        // Attaching adopts the standing launch inputs too: they describe what
+        // *this client* would start next (and what a resume sends), not
+        // anything about the interaction being attached to.
+        Ok(Some(interaction)) => {
+            session::attach_live_interaction(client, interaction).map(|(mut app, live)| {
+                app.launch = launch.clone();
+                (app, live)
+            })
+        }
+        Ok(None) => Ok((
+            pending_app(selection, launch, active_workspace),
+            Live::Pending,
+        )),
         Err(error) => Err(error),
     };
     match outcome {
@@ -245,6 +288,10 @@ fn main() -> Result<()> {
     // plainly before the terminal is taken over.
     let mut app;
     let mut live: Live;
+    // The launch inputs this client works with, kept alongside `app` because
+    // every rebuilt App adopts them: they belong to the operator's session at
+    // the terminal, not to whichever Session is on screen.
+    let (standing_selection, mut launch) = standing_launch(&preferences_path, &cli)?;
 
     if let Some(view) = &view_target {
         // `--view` is explicitly read-only, so this replays the journal rather
@@ -252,8 +299,9 @@ fn main() -> Result<()> {
         // interaction if one happened to be serving the Session.
         let id = session::session_id_from_target(view)?;
         (app, live) = session::open_stored(&client, &id)?;
+        app.launch = launch.clone();
     } else {
-        let selection = preferences::load_or_default(&preferences_path)?;
+        let selection = standing_selection;
         let prompt = cli.prompt.join(" ");
         let seed = (!prompt.trim().is_empty()).then_some(prompt.as_str());
         match seed {
@@ -262,7 +310,7 @@ fn main() -> Result<()> {
             Some(seed) => {
                 let (new_app, info) = session::launch_live_session(
                     &client,
-                    &cli,
+                    &launch,
                     &active_workspace.id,
                     &selection,
                     Some(seed),
@@ -280,7 +328,13 @@ fn main() -> Result<()> {
             // live interactions, offer to attach to one instead of opening
             // straight onto the blank screen.
             None => {
-                (app, live) = open_start_screen(&client, &mut terminal, selection, &active_workspace)?;
+                (app, live) = open_start_screen(
+                    &client,
+                    &mut terminal,
+                    selection,
+                    launch.clone(),
+                    &active_workspace,
+                )?;
             }
         }
     }
@@ -298,7 +352,6 @@ fn main() -> Result<()> {
             &mut terminal,
             &mut app,
             &client,
-            &cli,
             &active_workspace.id,
             &mut live,
             &preferences_path,
@@ -319,7 +372,8 @@ fn main() -> Result<()> {
                 active_workspace = workspace;
                 match session_id {
                     Some(session_id) => match session::open_session(&client, &session_id) {
-                        Ok((new_app, new_live)) => {
+                        Ok((mut new_app, new_live)) => {
+                            new_app.launch = launch.clone();
                             app = new_app;
                             live = new_live;
                         }
@@ -328,8 +382,9 @@ fn main() -> Result<()> {
                         ))),
                     },
                     None => {
-                        let selection = preferences::load_or_default(&preferences_path)?;
-                        app = pending_app(selection, &active_workspace);
+                        let (selection, standing) = standing_launch(&preferences_path, &cli)?;
+                        launch = standing;
+                        app = pending_app(selection, launch.clone(), &active_workspace);
                         live = Live::Pending;
                     }
                 }
@@ -338,7 +393,8 @@ fn main() -> Result<()> {
             // interaction for the Session being left remains server-owned.
             RunOutcome::OpenSession(session_id) => {
                 match session::open_session(&client, &session_id) {
-                    Ok((new_app, new_live)) => {
+                    Ok((mut new_app, new_live)) => {
+                        new_app.launch = launch.clone();
                         app = new_app;
                         live = new_live;
                     }
@@ -352,7 +408,8 @@ fn main() -> Result<()> {
             RunOutcome::Attach(interaction) => {
                 let id = interaction.id.clone();
                 match session::attach_live_interaction(&client, interaction) {
-                    Ok((new_app, new_live)) => {
+                    Ok((mut new_app, new_live)) => {
+                        new_app.launch = launch.clone();
                         app = new_app;
                         live = new_live;
                     }
@@ -367,8 +424,9 @@ fn main() -> Result<()> {
             // current interaction and returns to the standing launch default.
             RunOutcome::Reset => {
                 live = Live::Pending;
-                let selection = preferences::load_or_default(&preferences_path)?;
-                app = pending_app(selection, &active_workspace);
+                let (selection, standing) = standing_launch(&preferences_path, &cli)?;
+                launch = standing;
+                app = pending_app(selection, launch.clone(), &active_workspace);
             }
             // A new interaction inherits the context currently being viewed,
             // even when it was reached through the global Session or
@@ -377,9 +435,13 @@ fn main() -> Result<()> {
             RunOutcome::NewSession => {
                 live = Live::Pending;
                 let selection = app.selection.clone();
+                // The sandbox policy is part of that inherited context: a new
+                // session started from here begins with whatever the operator
+                // had built up, rather than resetting to the saved default.
+                launch = app.launch.clone();
                 active_workspace =
                     workspace_for_new_session(&app, &active_workspace, &client.list_workspaces()?);
-                app = pending_app(selection, &active_workspace);
+                app = pending_app(selection, launch.clone(), &active_workspace);
             }
         }
         refresh_workspace_name(&mut app, &client, &active_workspace);
@@ -543,7 +605,7 @@ mod cli_tests {
         app.workspace_id = Some(viewed.id.clone());
 
         let inherited = workspace_for_new_session(&app, &active, &[active.clone(), viewed.clone()]);
-        let pending = pending_app(selection.clone(), &inherited);
+        let pending = pending_app(selection.clone(), app.launch.clone(), &inherited);
 
         assert_eq!(inherited, viewed);
         assert_eq!(pending.workspace_id.as_deref(), Some("viewed"));
@@ -594,7 +656,10 @@ mod cli_tests {
             &path,
         );
 
-        assert_eq!(preferences::load_or_default(&path).unwrap(), selection);
+        assert_eq!(
+            preferences::load_or_default(&path).unwrap().selection,
+            selection
+        );
         std::fs::remove_dir_all(root).ok();
     }
 }

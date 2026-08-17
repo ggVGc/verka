@@ -1198,7 +1198,7 @@ mod tests {
         app.expand_all();
 
         let protocol = app.selection.provider.protocol();
-        assert!(entry_item(&app.entries[1], 78, 18, protocol).height() <= 18);
+        assert!(entry_item(&app.entries[1], 78, 18, protocol, false).height() <= 18);
 
         let screen = rendered(&app);
         assert!(screen.contains("line number 0"), "{screen}");

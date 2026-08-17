@@ -5,6 +5,7 @@
 //! so the whole interaction model is unit-testable. [`crate::ui`] renders it and
 //! `main` feeds it input and session updates.
 
+use serde::{Deserialize, Serialize};
 use std::cell::Cell;
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -13,6 +14,7 @@ use styra_server::agent::SandboxLayout;
 use styra_server::agent::{Provider, Selection, PROVIDERS};
 use styra_server::event::PresentationMode;
 use styra_server::event::{AgentEvent, DetailBlock, TokenUsage};
+use styra_server::LaunchMount;
 use styra_server::{DrivaOptions, InteractionEnd, LogEntry, RawLine};
 
 use crate::notes::Notes;
@@ -93,6 +95,114 @@ impl From<styra_server::InteractionActivity> for Status {
             styra_server::InteractionActivity::Running => Self::Running,
             styra_server::InteractionActivity::Background => Self::Background,
         }
+    }
+}
+
+/// What a launch is asked for beyond the agent selection: the sandbox policy
+/// inputs the server resolves into a concrete Driva request.
+///
+/// These are the only launch knobs that are not derived from the profile, and
+/// they live here — not read from the CLI at each call site — so that the
+/// Driva view can edit them before an interaction starts and every launch
+/// path (create, plan, resume) is fed from one place.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct LaunchInputs {
+    /// Permit agent networking. A profile or template may still turn it on;
+    /// this only ever adds permission, matching how the server ORs them.
+    pub network: bool,
+    /// Named Driva templates, layered in order (later names win on conflict).
+    pub templates: Vec<String>,
+    /// Host directories to bind in on top of the workspace.
+    pub mounts: Vec<LaunchMount>,
+}
+
+impl LaunchInputs {
+    /// How an extra mount reads in the view and in the prompt that adds one.
+    pub fn mount_label(mount: &LaunchMount) -> String {
+        let access = if mount.writable { "rw" } else { "ro" };
+        match &mount.destination {
+            Some(destination) => format!(
+                "{} → {} ({access})",
+                mount.source.display(),
+                destination.display()
+            ),
+            None => format!("{} ({access})", mount.source.display()),
+        }
+    }
+}
+
+/// Parse the `source[:destination][:ro|rw]` an operator types into a mount
+/// request.
+///
+/// The access suffix is recognized only as a trailing `ro`/`rw`, so a path
+/// component is never mistaken for one. Access defaults to read-only: this
+/// grants an agent reach outside its workspace, so the quiet default is the
+/// one that grants least. Paths are checked for being absolute here rather
+/// than only on the server, because a relative path would otherwise resolve
+/// against the *server's* directory rather than the operator's.
+pub fn parse_launch_mount(text: &str) -> Result<LaunchMount, String> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Err("give a path to mount, e.g. /srv/data:ro".into());
+    }
+    let mut parts: Vec<&str> = text.split(':').map(str::trim).collect();
+    let writable = match parts.last() {
+        Some(&"rw") => {
+            parts.pop();
+            true
+        }
+        Some(&"ro") => {
+            parts.pop();
+            false
+        }
+        _ => false,
+    };
+    let (source, destination) = match parts.as_slice() {
+        [source] => (*source, None),
+        [source, destination] => (*source, Some(*destination)),
+        _ => return Err("expected source[:destination][:ro|rw]".into()),
+    };
+    if source.is_empty() {
+        return Err("give a path to mount, e.g. /srv/data:ro".into());
+    }
+    let source = expand_home(source);
+    if !source.is_absolute() {
+        return Err(format!("{} must be an absolute path", source.display()));
+    }
+    let destination = match destination {
+        Some(destination) if destination.is_empty() => {
+            return Err("the destination cannot be empty".into())
+        }
+        Some(destination) => {
+            let destination = expand_home(destination);
+            if !destination.is_absolute() {
+                return Err(format!(
+                    "the destination {} must be an absolute path",
+                    destination.display()
+                ));
+            }
+            Some(destination)
+        }
+        None => None,
+    };
+    Ok(LaunchMount {
+        source,
+        destination,
+        writable,
+    })
+}
+
+/// Expand a leading `~`, so a typed path behaves the way it does in a shell.
+/// A `~` with no `HOME` to expand is left alone and rejected as non-absolute.
+fn expand_home(text: &str) -> PathBuf {
+    let path = PathBuf::from(text);
+    if path != Path::new("~") && !path.starts_with("~/") {
+        return path;
+    }
+    match std::env::var_os("HOME") {
+        Some(home) => PathBuf::from(home).join(path.strip_prefix("~").expect("prefix checked")),
+        None => path,
     }
 }
 
@@ -459,11 +569,19 @@ pub struct App {
     /// The two are worth telling apart on screen: one is what the agent runs
     /// under, the other is what it would run under.
     pub driva_planned: bool,
-    /// The selection `driva_options` was planned for, recorded even when the
-    /// plan could not be fetched. Switching model before launch changes the
-    /// policy, so the plan is re-asked for; a failing server is asked once per
-    /// selection rather than on every frame.
-    driva_plan_selection: Option<Selection>,
+    /// The launch inputs a new interaction would start under. Editable from
+    /// the Driva view while nothing has launched (see [`Self::can_edit_launch`]).
+    pub launch: LaunchInputs,
+    /// The (selection, launch inputs) `driva_options` was planned for, recorded
+    /// even when the plan could not be fetched. Anything that changes the
+    /// policy — switching model, adding a mount, toggling network — makes this
+    /// differ from the current inputs and the plan is re-asked for; a failing
+    /// server is asked once per distinct input rather than on every frame.
+    driva_plan_key: Option<(Selection, LaunchInputs)>,
+    /// Which of `launch.mounts` the Driva view has selected for removal.
+    pub driva_selected_mount: usize,
+    /// The open "add a mount" prompt, while the operator is typing one.
+    pub driva_prompt: Option<String>,
     pub latest_usage: Option<TokenUsage>,
     background_work: bool,
     /// The verbatim wire interaction, in occurrence order.
@@ -512,6 +630,10 @@ pub enum Request {
     NewSession,
     /// Open the selected entry in the Files view in the configured editor.
     EditFile,
+    /// Choose which Driva templates the next interaction launches with. The
+    /// list of them lives on the server, so the event loop fetches it and runs
+    /// the picker.
+    Templates,
     /// Tell the server the live interaction has been switched onto
     /// [`App::selection`], so the change lands now and outlives this client.
     ApplySelection,
@@ -549,7 +671,10 @@ impl App {
             workspace_root: None,
             driva_options: None,
             driva_planned: false,
-            driva_plan_selection: None,
+            launch: LaunchInputs::default(),
+            driva_plan_key: None,
+            driva_selected_mount: 0,
+            driva_prompt: None,
             latest_usage: None,
             background_work: false,
             raw: Vec::new(),
@@ -1236,18 +1361,19 @@ impl App {
     pub fn set_driva_options(&mut self, options: DrivaOptions) {
         self.driva_options = Some(options);
         self.driva_planned = false;
-        self.driva_plan_selection = None;
+        self.driva_plan_key = None;
     }
 
-    /// Record the policy a new interaction under `selection` would launch with,
-    /// or that the server could not say (`None`). Either way the selection is
-    /// remembered as asked about.
+    /// Record the policy a new interaction under `selection` and these launch
+    /// inputs would start with, or that the server could not say (`None`).
+    /// Either way the inputs are remembered as asked about.
     pub fn set_planned_driva_options(
         &mut self,
         selection: Selection,
+        launch: LaunchInputs,
         options: Option<DrivaOptions>,
     ) {
-        self.driva_plan_selection = Some(selection);
+        self.driva_plan_key = Some((selection, launch));
         if let Some(options) = options {
             self.driva_options = Some(options);
             self.driva_planned = true;
@@ -1260,7 +1386,109 @@ impl App {
         if self.driva_options.is_some() && !self.driva_planned {
             return false;
         }
-        self.driva_plan_selection.as_ref() != Some(&self.selection)
+        match &self.driva_plan_key {
+            Some((selection, launch)) => selection != &self.selection || launch != &self.launch,
+            None => true,
+        }
+    }
+
+    /// Whether the launch policy can still be edited. Only before an
+    /// interaction exists: once one is running, what the Driva view shows is a
+    /// record of the sandbox it is confined to, and changing that would mean a
+    /// new session.
+    pub fn can_edit_launch(&self) -> bool {
+        self.status == Status::Pending
+    }
+
+    /// Refuse an edit to the launch policy when there is nothing to edit,
+    /// saying why. Returns whether the caller may proceed. Public so a key
+    /// that leaves this module to do its work — opening the template picker,
+    /// writing the defaults file — refuses with the same words as the rest.
+    pub fn allow_launch_edit(&mut self) -> bool {
+        if self.can_edit_launch() {
+            return true;
+        }
+        self.show_action_message("the launch policy is fixed once an interaction has started");
+        false
+    }
+
+    /// Permit or forbid agent networking for the next interaction.
+    pub fn toggle_launch_network(&mut self) {
+        if !self.allow_launch_edit() {
+            return;
+        }
+        self.launch.network = !self.launch.network;
+        self.show_action_message(if self.launch.network {
+            "network on for the next interaction"
+        } else {
+            "network off for the next interaction"
+        });
+    }
+
+    /// Adopt the templates chosen in the picker.
+    pub fn set_launch_templates(&mut self, templates: Vec<String>) {
+        if !self.allow_launch_edit() {
+            return;
+        }
+        self.launch.templates = templates;
+    }
+
+    /// Open the prompt that adds an extra mount.
+    pub fn open_driva_prompt(&mut self) {
+        if !self.allow_launch_edit() {
+            return;
+        }
+        self.driva_prompt = Some(String::new());
+    }
+
+    pub fn cancel_driva_prompt(&mut self) {
+        self.driva_prompt = None;
+    }
+
+    /// Accept what the prompt holds as an extra mount, or explain why it is not
+    /// one and leave the prompt open with the text still in it.
+    pub fn confirm_driva_prompt(&mut self) {
+        let Some(text) = self.driva_prompt.clone() else {
+            return;
+        };
+        if !self.allow_launch_edit() {
+            self.driva_prompt = None;
+            return;
+        }
+        match parse_launch_mount(&text) {
+            Ok(mount) => {
+                self.driva_prompt = None;
+                if self.launch.mounts.contains(&mount) {
+                    return self.show_action_message("that mount is already in the launch policy");
+                }
+                self.launch.mounts.push(mount);
+                self.driva_selected_mount = self.launch.mounts.len() - 1;
+            }
+            Err(problem) => self.show_action_message(problem),
+        }
+    }
+
+    /// Drop the selected extra mount from the launch policy.
+    pub fn remove_selected_launch_mount(&mut self) {
+        if !self.allow_launch_edit() {
+            return;
+        }
+        if self.launch.mounts.is_empty() {
+            return self.show_action_message("no added mount to remove");
+        }
+        let index = self.driva_selected_mount.min(self.launch.mounts.len() - 1);
+        let removed = self.launch.mounts.remove(index);
+        self.driva_selected_mount = index.min(self.launch.mounts.len().saturating_sub(1));
+        self.show_action_message(format!("removed {}", LaunchInputs::mount_label(&removed)));
+    }
+
+    pub fn driva_select_next_mount(&mut self) {
+        self.driva_selected_mount =
+            (self.driva_selected_mount + 1).min(self.launch.mounts.len().saturating_sub(1));
+    }
+
+    pub fn driva_select_prev_mount(&mut self) {
+        self.driva_selected_mount = self.driva_selected_mount.saturating_sub(1);
     }
 
     /// Toggle whether minor lifecycle events (thread/turn/usage) are shown.
@@ -1404,7 +1632,10 @@ impl App {
                 }
                 Some(text)
             }
-            View::Raw => self.raw.get(self.raw_selected).map(|line| line.text.clone()),
+            View::Raw => self
+                .raw
+                .get(self.raw_selected)
+                .map(|line| line.text.clone()),
             View::Files => self
                 .selected_file_path()
                 .map(|path| path.display().to_string()),
@@ -2748,7 +2979,11 @@ mod tests {
 
         let mut app = app();
         assert!(app.needs_driva_plan());
-        app.set_planned_driva_options(app.selection.clone(), Some(options("planned")));
+        app.set_planned_driva_options(
+            app.selection.clone(),
+            app.launch.clone(),
+            Some(options("planned")),
+        );
         assert!(app.driva_planned);
         assert!(!app.needs_driva_plan());
 
@@ -2756,7 +2991,7 @@ mod tests {
         app.selection = styra_server::agent::Selection::parse("claude").unwrap();
         assert!(app.needs_driva_plan());
         // A failed plan still counts as asked: the server is not polled per frame.
-        app.set_planned_driva_options(app.selection.clone(), None);
+        app.set_planned_driva_options(app.selection.clone(), app.launch.clone(), None);
         assert!(!app.needs_driva_plan());
         assert_eq!(
             app.driva_options.as_ref().unwrap().isolation_backend,
@@ -2770,7 +3005,177 @@ mod tests {
         assert!(!app.needs_driva_plan());
         app.selection = styra_server::agent::Selection::parse("codex").unwrap();
         assert!(!app.needs_driva_plan());
-        assert_eq!(app.driva_options.as_ref().unwrap().isolation_backend, "live");
+        assert_eq!(
+            app.driva_options.as_ref().unwrap().isolation_backend,
+            "live"
+        );
+    }
+
+    /// Editing the launch inputs changes what would be launched, so the plan
+    /// on screen has to be re-asked for — otherwise the view would keep
+    /// describing a sandbox the operator has just changed.
+    #[test]
+    fn editing_the_launch_inputs_re_asks_for_the_plan() {
+        use styra_server::DrivaOptions;
+
+        let mut app = App::pending(styra_server::agent::Selection::parse("codex").unwrap());
+        app.set_planned_driva_options(
+            app.selection.clone(),
+            app.launch.clone(),
+            Some(DrivaOptions {
+                isolation_backend: "bwrap".into(),
+                command: vec!["codex".into()],
+                working_directory: PathBuf::from("/tmp/styra/workspace"),
+                network: false,
+                mounts: Vec::new(),
+            }),
+        );
+        assert!(!app.needs_driva_plan());
+
+        app.toggle_launch_network();
+        assert!(app.launch.network);
+        assert!(app.needs_driva_plan());
+
+        app.set_planned_driva_options(app.selection.clone(), app.launch.clone(), None);
+        assert!(!app.needs_driva_plan());
+
+        app.set_launch_templates(vec!["rust".into()]);
+        assert!(app.needs_driva_plan());
+        app.set_planned_driva_options(app.selection.clone(), app.launch.clone(), None);
+
+        app.driva_prompt = Some("/srv/data:rw".into());
+        app.confirm_driva_prompt();
+        assert!(app.needs_driva_plan());
+    }
+
+    /// The launch policy is only editable while nothing has started: once an
+    /// interaction is running, the driva view is a record of the sandbox it is
+    /// confined to and changing it would mean a new session.
+    #[test]
+    fn the_launch_policy_cannot_be_edited_once_an_interaction_is_running() {
+        let mut app = app();
+        assert!(!app.can_edit_launch());
+
+        app.toggle_launch_network();
+        assert!(!app.launch.network);
+        app.set_launch_templates(vec!["rust".into()]);
+        assert!(app.launch.templates.is_empty());
+        app.open_driva_prompt();
+        assert!(app.driva_prompt.is_none());
+
+        let mut pending = App::pending(styra_server::agent::Selection::parse("codex").unwrap());
+        assert!(pending.can_edit_launch());
+        pending.toggle_launch_network();
+        assert!(pending.launch.network);
+    }
+
+    #[test]
+    fn added_mounts_are_selected_and_removed_one_at_a_time() {
+        let mut app = App::pending(styra_server::agent::Selection::parse("codex").unwrap());
+        for text in ["/srv/one", "/srv/two:rw", "/srv/three:/mnt/three:ro"] {
+            app.driva_prompt = Some(text.into());
+            app.confirm_driva_prompt();
+        }
+        assert_eq!(app.launch.mounts.len(), 3);
+        // Adding leaves the cursor on what was just added.
+        assert_eq!(app.driva_selected_mount, 2);
+
+        app.driva_select_prev_mount();
+        app.remove_selected_launch_mount();
+        assert_eq!(
+            app.launch
+                .mounts
+                .iter()
+                .map(|mount| mount.source.display().to_string())
+                .collect::<Vec<_>>(),
+            ["/srv/one", "/srv/three"]
+        );
+        // The cursor stays in range as the list shrinks under it.
+        app.driva_select_next_mount();
+        app.driva_select_next_mount();
+        assert_eq!(app.driva_selected_mount, 1);
+        app.remove_selected_launch_mount();
+        app.remove_selected_launch_mount();
+        assert!(app.launch.mounts.is_empty());
+        assert_eq!(app.driva_selected_mount, 0);
+        // Removing from an empty list says so rather than panicking.
+        app.remove_selected_launch_mount();
+    }
+
+    /// A duplicate is refused rather than silently layered twice, since the
+    /// server would then reject the whole policy for a conflicting destination.
+    #[test]
+    fn the_same_mount_is_not_added_twice() {
+        let mut app = App::pending(styra_server::agent::Selection::parse("codex").unwrap());
+        app.driva_prompt = Some("/srv/data".into());
+        app.confirm_driva_prompt();
+        app.driva_prompt = Some("/srv/data:ro".into());
+        app.confirm_driva_prompt();
+        assert_eq!(app.launch.mounts.len(), 1);
+    }
+
+    /// Text that is not a mount leaves the prompt open with what was typed, so
+    /// a typo is corrected rather than retyped.
+    #[test]
+    fn an_unparseable_mount_keeps_the_prompt_open() {
+        let mut app = App::pending(styra_server::agent::Selection::parse("codex").unwrap());
+        app.driva_prompt = Some("relative/path".into());
+        app.confirm_driva_prompt();
+        assert_eq!(app.driva_prompt.as_deref(), Some("relative/path"));
+        assert!(app.launch.mounts.is_empty());
+    }
+
+    #[test]
+    fn a_typed_mount_parses_its_paths_and_access() {
+        assert_eq!(
+            parse_launch_mount("/srv/data").unwrap(),
+            LaunchMount {
+                source: PathBuf::from("/srv/data"),
+                destination: None,
+                writable: false,
+            }
+        );
+        assert_eq!(
+            parse_launch_mount("  /srv/data:rw  ").unwrap(),
+            LaunchMount {
+                source: PathBuf::from("/srv/data"),
+                destination: None,
+                writable: true,
+            }
+        );
+        assert_eq!(
+            parse_launch_mount("/srv/data:/mnt/data").unwrap(),
+            LaunchMount {
+                source: PathBuf::from("/srv/data"),
+                destination: Some(PathBuf::from("/mnt/data")),
+                writable: false,
+            }
+        );
+        assert_eq!(
+            parse_launch_mount("/srv/data:/mnt/data:rw").unwrap(),
+            LaunchMount {
+                source: PathBuf::from("/srv/data"),
+                destination: Some(PathBuf::from("/mnt/data")),
+                writable: true,
+            }
+        );
+
+        // A directory that happens to be named `rw` is still a destination:
+        // only a trailing bare `ro`/`rw` after a path is an access mode.
+        assert_eq!(
+            parse_launch_mount("/srv/rw:/mnt/rw").unwrap(),
+            LaunchMount {
+                source: PathBuf::from("/srv/rw"),
+                destination: Some(PathBuf::from("/mnt/rw")),
+                writable: false,
+            }
+        );
+
+        assert!(parse_launch_mount("").is_err());
+        assert!(parse_launch_mount("data").is_err());
+        assert!(parse_launch_mount("/srv/data:relative").is_err());
+        assert!(parse_launch_mount("/a:/b:/c:rw").is_err());
+        assert!(parse_launch_mount("/srv/data:").is_err());
     }
 
     #[test]
