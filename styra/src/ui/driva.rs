@@ -41,7 +41,7 @@ pub(crate) fn render_driva(frame: &mut Frame, app: &App, area: Rect) {
         driva_field_line("backend", &options.isolation_backend),
         driva_field_line("command", &options.command.join(" ")),
         driva_field_line("workdir", &options.working_directory.display().to_string()),
-        driva_field_line("network", if options.network { "on" } else { "off" }),
+        driva_field_line("network", &network_label(app, options.network)),
     ]);
     // Only meaningful for a launch that has not happened: on a live
     // interaction these are the *client's* inputs for the next one, while
@@ -71,6 +71,23 @@ pub(crate) fn render_driva(frame: &mut Frame, app: &App, area: Rect) {
         .wrap(Wrap { trim: false });
     frame.render_widget(paragraph, area);
     render_prompt(frame, app, area);
+}
+
+/// How the effective network policy reads, together with the operator's own
+/// setting when the two differ.
+///
+/// `w` only ever adds permission — every agent profile Styra can launch already
+/// permits networking, and a template may too, so the resolved policy is "on"
+/// no matter what the operator's input says. Showing only the resolved value
+/// made `w` look like a key that did nothing: the message said "network off for
+/// the next interaction" while the field kept reading `on`. Name where the "on"
+/// comes from instead, so the toggle is visible and its limit is stated.
+fn network_label(app: &App, effective: bool) -> String {
+    let on = if effective { "on" } else { "off" };
+    if !app.can_edit_launch() || effective == app.launch.network {
+        return on.to_owned();
+    }
+    format!("{on} — from the agent profile; your setting: off (w only adds permission)")
 }
 
 /// The templates the next launch would layer, in the order they apply.
@@ -360,6 +377,37 @@ mod tests {
         let screen = tall(&app);
         assert!(screen.contains("rust, browser"), "{screen}");
         assert!(screen.contains("/srv/data → /mnt/data (rw)"), "{screen}");
+    }
+
+    /// Every agent profile already permits networking, so the resolved policy
+    /// reads `on` whatever the operator's input is. The view has to say where
+    /// that "on" comes from, otherwise `w` looks like a key that does nothing.
+    #[test]
+    fn network_names_the_profile_when_it_permits_what_the_operator_did_not() {
+        use styra_server::DrivaOptions;
+
+        let mut app = editable_app();
+        // The server's answer for a profile that permits networking on its own.
+        app.set_planned_driva_options(
+            app.selection.clone(),
+            app.launch.clone(),
+            Some(DrivaOptions {
+                isolation_backend: "bwrap".into(),
+                command: vec!["codex".into()],
+                working_directory: PathBuf::from("/tmp/styra/workspace"),
+                network: true,
+                mounts: Vec::new(),
+            }),
+        );
+        let screen = tall(&app);
+        assert!(screen.contains("from the agent profile"), "{screen}");
+        assert!(screen.contains("your setting: off"), "{screen}");
+
+        // Once the operator asks for it too, the field is just the policy.
+        app.toggle_launch_network();
+        let screen = tall(&app);
+        assert!(!screen.contains("from the agent profile"), "{screen}");
+        assert!(screen.contains("network  on"), "{screen}");
     }
 
     /// A live session's policy is a record, so none of the editing chrome is

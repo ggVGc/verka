@@ -1421,7 +1421,10 @@ impl App {
         self.show_action_message(if self.launch.network {
             "network on for the next interaction"
         } else {
-            "network off for the next interaction"
+            // Only ever a withdrawal of *this* permission: the profile and the
+            // templates have their own, which the server ORs in, so say so
+            // rather than promising a sandbox with no network.
+            "network permission withdrawn — a profile or template may still permit it"
         });
     }
 
