@@ -108,6 +108,7 @@ pub fn run(
             }
         }
 
+        app.note_progress();
         terminal.draw(|frame| ui::render(frame, app))?;
 
         if !event::poll(Duration::from_millis(100))? {

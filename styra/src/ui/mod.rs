@@ -50,6 +50,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
+use std::time::Duration;
 
 /// Cap on detail lines shown for one expanded entry, so a single noisy command
 /// cannot bury the rest of the session.
@@ -62,6 +63,20 @@ const SELECTION_BG: Color = Color::Rgb(44, 42, 30);
 /// Foreground used for the small current-line marker at the left edge of a
 /// selectable row.
 const SELECTION_MARKER: Color = Color::Yellow;
+
+/// A duration in the compact form the status line and tail use: `12s`,
+/// `2m14s`, `1h04m`. Seconds are dropped past an hour, where they no longer
+/// tell the operator anything they are waiting on.
+pub(crate) fn format_duration(duration: Duration) -> String {
+    let seconds = duration.as_secs();
+    if seconds < 60 {
+        format!("{seconds}s")
+    } else if seconds < 3600 {
+        format!("{}m{:02}s", seconds / 60, seconds % 60)
+    } else {
+        format!("{}h{:02}m", seconds / 3600, (seconds % 3600) / 60)
+    }
+}
 
 /// Color coding for the status dot, so running vs. idle for input reads at
 /// a glance instead of requiring the operator to read the label text.
@@ -92,7 +107,12 @@ fn status_color(status: &Status) -> Color {
 /// painted underneath it, so when the border dims to `DarkGray` for an
 /// unfocused panel, unstyled title text would dim right along with it and
 /// become hard to read.
-fn title_line(label: &LaunchLabel, status: &Status, suffix: Option<&str>) -> Line<'static> {
+fn title_line(
+    label: &LaunchLabel,
+    status: &Status,
+    elapsed: Option<String>,
+    suffix: Option<&str>,
+) -> Line<'static> {
     let color = status_color(status);
     let text_style = Style::default().fg(Color::Gray);
     let value_style = |reported: bool| {
@@ -126,11 +146,32 @@ fn title_line(label: &LaunchLabel, status: &Status, suffix: Option<&str>) -> Lin
         status.label(),
         Style::default().fg(color).add_modifier(Modifier::BOLD),
     ));
+    // How long that status has held. The event list's status tail says this at
+    // more length, but only the list has one: in the raw, log, or files view
+    // the title is the only place a long-running turn can show it is alive.
+    if let Some(elapsed) = elapsed {
+        spans.push(Span::styled(
+            format!(" {elapsed}"),
+            Style::default().fg(color),
+        ));
+    }
     spans.push(match suffix {
         Some(suffix) => Span::styled(format!(" · {suffix} "), text_style),
         None => Span::styled(" ", text_style),
     });
     Line::from(spans)
+}
+
+/// How long the current status has held, for the views' shared title — or
+/// `None` where the figure would say nothing: before a launch, and once the
+/// process has ended, since neither is a state the operator is waiting out.
+fn status_elapsed(app: &App) -> Option<String> {
+    match app.status {
+        Status::Running | Status::Idle | Status::Background | Status::Stopped => {
+            Some(format_duration(app.progress().in_status))
+        }
+        Status::Pending | Status::Ended { .. } => None,
+    }
 }
 
 /// The chrome every full-region view wears: a border that brightens when the
@@ -146,7 +187,12 @@ fn view_block(app: &App, suffix: Option<&str>) -> Block<'static> {
     let mut block = Block::default()
         .borders(Borders::ALL)
         .border_style(border_style)
-        .title(title_line(&app.launch_label(), &app.status, suffix));
+        .title(title_line(
+            &app.launch_label(),
+            &app.status,
+            status_elapsed(app),
+            suffix,
+        ));
     if let Some(title) = workspace_title(app) {
         block = block.title(title);
     }
@@ -427,7 +473,7 @@ mod tests {
             styra_server::agent::Selection::parse("codex").unwrap(),
             "s1",
         );
-        let title = title_line(&app.launch_label(), &app.status, None);
+        let title = title_line(&app.launch_label(), &app.status, None, None);
         assert_eq!(title.spans[0].style.fg, Some(Color::Gray));
     }
 

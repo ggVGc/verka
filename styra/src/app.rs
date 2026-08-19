@@ -220,6 +220,21 @@ pub struct Entry {
     pub raw_index: Option<usize>,
 }
 
+/// How long the session has been in its current state, and how long since
+/// anything last arrived from the agent.
+///
+/// A turn can spend minutes inside one tool call, during which nothing on the
+/// screen changes; without these two numbers a working session and a hung one
+/// look identical.
+#[derive(Clone, Copy, Debug)]
+pub struct Progress {
+    /// Time since the status last changed — for a running turn, how long it
+    /// has been running; for an idle one, how long it has been waiting.
+    pub in_status: Duration,
+    /// Time since the last event was received, or `None` if none has been.
+    pub since_event: Option<Duration>,
+}
+
 /// A short-lived notice about something Styra did on the operator's behalf.
 pub struct ActionMessage {
     pub text: String,
@@ -620,6 +635,14 @@ pub struct App {
     /// The open "add a mount" prompt, while the operator is typing one.
     pub driva_prompt: Option<String>,
     pub latest_usage: Option<TokenUsage>,
+    /// When the status last changed, and the status that was current then.
+    /// Status is written from several places (an applied update, a queued send,
+    /// a key handler), so the moment it changed is noticed in one place —
+    /// [`App::note_progress`] — rather than at each assignment.
+    status_since: Instant,
+    noted_status: Status,
+    /// When the last event arrived from the agent. `None` until one has.
+    last_event_at: Option<Instant>,
     background_work: bool,
     /// The verbatim wire interaction, in occurrence order.
     pub raw: Vec<RawLine>,
@@ -715,6 +738,9 @@ impl App {
             driva_selected_mount: 0,
             driva_prompt: None,
             latest_usage: None,
+            status_since: Instant::now(),
+            noted_status: Status::Running,
+            last_event_at: None,
             background_work: false,
             raw: Vec::new(),
             raw_selected: 0,
@@ -854,6 +880,23 @@ impl App {
     }
 
     /// Remove notices whose independent five-second display window has elapsed.
+    /// Notice a status change made since the last frame, so [`Self::progress`]
+    /// can report how long the session has been in its current state. Called
+    /// once per event-loop iteration, just before rendering.
+    pub fn note_progress(&mut self) {
+        if self.noted_status != self.status {
+            self.noted_status = self.status.clone();
+            self.status_since = Instant::now();
+        }
+    }
+
+    pub fn progress(&self) -> Progress {
+        Progress {
+            in_status: self.status_since.elapsed(),
+            since_event: self.last_event_at.map(|at| at.elapsed()),
+        }
+    }
+
     pub fn expire_action_messages(&mut self) {
         let now = Instant::now();
         while self
@@ -1037,6 +1080,9 @@ impl App {
 
     /// Append a decoded event, advancing status and, while following, selection.
     pub fn push_event(&mut self, event: AgentEvent) {
+        // Set before the replacement paths below, all of which return early:
+        // a command or tool finishing is activity like any other.
+        self.last_event_at = Some(Instant::now());
         // A command completion is the final state of the command-start row.
         // Replace the most recent matching start instead of adding a second
         // line, so the list shows one command whose indication changes from

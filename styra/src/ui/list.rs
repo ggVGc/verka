@@ -3,15 +3,17 @@
 
 use super::markdown::markdown_line_spans;
 use super::{
-    conversation_only_title, message_text_color, render_placeholder, render_preview, tag_color,
-    view_block, DETAIL_INDENT, MAX_DETAIL_LINES, SELECTION_BG, SELECTION_MARKER,
+    conversation_only_title, format_duration, message_text_color, render_placeholder,
+    render_preview, tag_color, view_block, DETAIL_INDENT, MAX_DETAIL_LINES, SELECTION_BG,
+    SELECTION_MARKER,
 };
-use crate::app::{App, Entry, Status, View};
+use crate::app::{App, Entry, Progress, Status, View};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
+use std::time::Duration;
 use styra_server::event::{AgentEvent, DetailBlock, PresentationMode, Protocol};
 
 /// Keep conversational prose readable on wide terminals. This includes the
@@ -239,21 +241,57 @@ fn rows_after_selection(
     after
 }
 
+/// Braille spinner frames. This is the one thing on the screen that keeps
+/// moving through a long tool call, which is what distinguishes a session that
+/// is still working from one that has hung.
+const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+const SPINNER_FRAME: Duration = Duration::from_millis(120);
+
+/// Gaps shorter than this are not named: while output is streaming the figure
+/// would flicker between `0s` and `1s` and say nothing. Only a real pause is
+/// worth reporting.
+const QUIET_THRESHOLD: Duration = Duration::from_secs(3);
+
 fn status_tail(app: &App) -> Line<'static> {
+    let progress = app.progress();
+    let elapsed = format_duration(progress.in_status);
     let (text, color) = match app.status {
-        Status::Pending => ("  … waiting for your first message", Color::DarkGray),
-        Status::Idle => ("  ── idle · waiting for your message ──", Color::Green),
+        Status::Pending => (
+            "  … waiting for your first message".to_string(),
+            Color::DarkGray,
+        ),
+        Status::Running => (running_tail(&progress), Color::Yellow),
+        Status::Idle => (
+            format!("  ── idle {elapsed} · waiting for your message ──"),
+            Color::Green,
+        ),
         Status::Background => (
-            "  ── idle · background work still running ──",
+            format!("  ── idle {elapsed} · background work still running ──"),
             Color::Yellow,
         ),
         Status::Stopped => (
-            "  ── paused · waiting for your next message ──",
+            format!("  ── paused {elapsed} · waiting for your next message ──"),
             Color::DarkGray,
         ),
         _ => return Line::default(),
     };
     Line::from(Span::styled(text, Style::default().fg(color)))
+}
+
+/// The tail of a running turn: a spinner, how long the turn has been going,
+/// and — once the agent has been quiet long enough for that to be a question —
+/// how long since anything last came back from it.
+fn running_tail(progress: &Progress) -> String {
+    let frame = (progress.in_status.as_millis() / SPINNER_FRAME.as_millis()) as usize;
+    let mut text = format!(
+        "  {} working {}",
+        SPINNER[frame % SPINNER.len()],
+        format_duration(progress.in_status)
+    );
+    if let Some(gap) = progress.since_event.filter(|gap| *gap >= QUIET_THRESHOLD) {
+        text.push_str(&format!(" · last update {} ago", format_duration(gap)));
+    }
+    text
 }
 
 /// `viewport_height` is the list's own visible row count. An expanded entry is
@@ -816,6 +854,93 @@ mod tests {
         assert_eq!(list_offset_with_scrolloff(0, Some(2), &heights, 17), 1);
     }
     use styra_server::event::TokenUsage;
+
+    fn progress(in_status: Duration, since_event: Option<Duration>) -> Progress {
+        Progress {
+            in_status,
+            since_event,
+        }
+    }
+
+    #[test]
+    fn a_running_turn_reports_how_long_it_has_been_working() {
+        let tail = running_tail(&progress(
+            Duration::from_secs(74),
+            Some(Duration::from_secs(1)),
+        ));
+
+        assert!(tail.contains("working 1m14s"), "{tail}");
+        // A gap of a second is streaming output, not a pause worth naming.
+        assert!(!tail.contains("last update"), "{tail}");
+    }
+
+    #[test]
+    fn a_quiet_running_turn_reports_the_gap_since_the_last_update() {
+        let tail = running_tail(&progress(
+            Duration::from_secs(300),
+            Some(Duration::from_secs(42)),
+        ));
+
+        assert!(tail.contains("working 5m00s"), "{tail}");
+        assert!(tail.contains("last update 42s ago"), "{tail}");
+    }
+
+    #[test]
+    fn the_spinner_advances_with_the_elapsed_time() {
+        let first = running_tail(&progress(Duration::from_millis(0), None));
+        let second = running_tail(&progress(Duration::from_millis(130), None));
+
+        assert_ne!(
+            first.chars().nth(2).unwrap(),
+            second.chars().nth(2).unwrap()
+        );
+    }
+
+    #[test]
+    fn durations_are_formatted_compactly() {
+        assert_eq!(format_duration(Duration::from_secs(0)), "0s");
+        assert_eq!(format_duration(Duration::from_secs(59)), "59s");
+        assert_eq!(format_duration(Duration::from_secs(60)), "1m00s");
+        assert_eq!(format_duration(Duration::from_secs(3599)), "59m59s");
+        assert_eq!(format_duration(Duration::from_secs(3600)), "1h00m");
+        assert_eq!(format_duration(Duration::from_secs(7_500)), "2h05m");
+    }
+
+    #[test]
+    fn a_running_session_shows_a_progress_tail_and_an_elapsed_title() {
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
+        app.push_event(AgentEvent::UserMessage {
+            text: "do the thing".into(),
+        });
+
+        let screen = rendered(&app);
+        assert!(screen.contains("working 0s"), "{screen}");
+        assert!(screen.contains("running 0s"), "{screen}");
+    }
+
+    #[test]
+    fn an_idle_session_shows_how_long_it_has_been_waiting() {
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
+        app.push_event(AgentEvent::AgentMessage {
+            text: "done".into(),
+        });
+        app.push_event(AgentEvent::TurnCompleted {
+            usage: TokenUsage::default(),
+        });
+        app.note_progress();
+
+        let screen = rendered(&app);
+        assert!(
+            screen.contains("idle 0s · waiting for your message"),
+            "{screen}"
+        );
+    }
 
     fn rendered(app: &App) -> String {
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
