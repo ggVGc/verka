@@ -560,6 +560,8 @@ pub struct App {
     /// known (a live session; a replayed journal has no live workspace).
     /// Lets the preview panel read a changed file's current content.
     pub workspace_root: Option<PathBuf>,
+    /// The current directory within `workspace_root` used by a live interaction.
+    pub working_directory: Option<PathBuf>,
     /// The Driva policy (mounts, network, isolation backend) of the live
     /// session, or — before one has launched — the policy the next interaction
     /// would be launched under. `None` until either is known, as on a replayed
@@ -669,6 +671,7 @@ impl App {
             session_id: session_id.into(),
             session_name: None,
             workspace_root: None,
+            working_directory: None,
             driva_options: None,
             driva_planned: false,
             launch: LaunchInputs::default(),
@@ -1353,7 +1356,12 @@ impl App {
     /// preview panel can resolve a changed file's path to its current
     /// content on disk.
     pub fn set_workspace_root(&mut self, path: PathBuf) {
+        self.working_directory = Some(path.clone());
         self.workspace_root = Some(path);
+    }
+
+    pub fn set_working_directory(&mut self, path: PathBuf) {
+        self.working_directory = Some(path);
     }
 
     /// Record the Driva policy the live session was launched under. This is the

@@ -152,6 +152,12 @@ that report is what is shown. A value that is still only what the selection
 asked for (before the agent's report, or Claude Code's effort, which it never
 reports) is dimmed.
 
+While an idle Codex interaction is live, submit `/cd <directory>` in the
+message box to change its directory for subsequent turns. Relative paths are
+resolved from the Workspace root; absolute paths are accepted only when they
+remain inside that Workspace. The Workspace's mount stays unchanged, and
+Claude Code interactions currently require a new/resumed interaction instead.
+
 Each profile's agent binary is located on the server's own `PATH` when the
 session is created, and the session launches that resolved path: the sandbox
 gets a fixed system `PATH`, so a bare name installed under your home (Claude

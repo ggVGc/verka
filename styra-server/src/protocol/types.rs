@@ -51,6 +51,8 @@ pub enum InteractionUpdate {
     Raw(RawLine),
     /// A diagnostic message for the log view.
     Log(LogEntry),
+    /// The host directory used for subsequent agent turns.
+    WorkingDirectoryChanged(PathBuf),
     /// The agent process ended; no further events will arrive.
     Ended(InteractionEnd),
 }

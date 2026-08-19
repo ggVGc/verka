@@ -424,6 +424,10 @@ fn interaction_preview_line(
             ])
         }
         InteractionUpdate::Log(entry) => log_line(entry),
+        InteractionUpdate::WorkingDirectoryChanged(directory) => Line::from(Span::styled(
+            format!("working directory: {}", directory.display()),
+            Style::default().fg(Color::Cyan),
+        )),
         InteractionUpdate::Ended(end) => {
             let (message, color) = match (&end.error, end.exit_code) {
                 (Some(error), _) => (format!("failed: {error}"), Color::Red),

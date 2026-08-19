@@ -397,6 +397,22 @@ impl Interaction {
         Ok(())
     }
 
+    /// Change the provider's directory for later turns without changing the
+    /// sandbox's fixed mount table.
+    pub fn set_working_directory(&self, directory: PathBuf) -> Result<()> {
+        let Some(client) = &self.appserver else {
+            anyhow::bail!("changing the working directory of a live interaction is currently supported only by Codex");
+        };
+        client.set_cwd(directory.to_string_lossy().into_owned());
+        Ok(())
+    }
+
+    pub fn report_working_directory(&self, directory: PathBuf) {
+        let _ = self
+            .updates
+            .send(InteractionUpdate::WorkingDirectoryChanged(directory));
+    }
+
     pub fn send_with_selection(&self, text: &str, selection: Option<&Selection>) -> Result<()> {
         if let Ok(mut journal) = self.journal.lock() {
             let _ = journal.record_user_message(text);
@@ -861,6 +877,7 @@ mod tests {
                 Ok(InteractionUpdate::Event(_)) => {}
                 Ok(InteractionUpdate::Raw(line)) => raw_directions.push(line.direction),
                 Ok(InteractionUpdate::Log(entry)) => logs.push(entry.message),
+                Ok(InteractionUpdate::WorkingDirectoryChanged(_)) => {}
                 Ok(InteractionUpdate::Ended(_)) => ended = true,
                 Err(_) => {}
             }

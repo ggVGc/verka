@@ -204,6 +204,12 @@ pub enum Request {
         id: String,
         selection: Selection,
     },
+    /// Change the directory used by later turns of a live interaction. The
+    /// path is on the host and must stay inside the interaction's Workspace.
+    SetInteractionWorkingDirectory {
+        id: String,
+        directory: PathBuf,
+    },
     /// Persist an operator message in the session's durable input queue
     /// without sending it yet, so it survives the client disconnecting before
     /// the interaction is idle enough to accept it.

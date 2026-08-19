@@ -10,7 +10,7 @@ use unicode_width::UnicodeWidthStr;
 
 pub(crate) fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     let working_directory = app
-        .workspace_root
+        .working_directory
         .clone()
         .or_else(|| std::env::current_dir().ok())
         .map(|path| path.display().to_string())

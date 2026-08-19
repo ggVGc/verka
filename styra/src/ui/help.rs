@@ -80,6 +80,10 @@ pub(crate) fn render_keybinds(frame: &mut Frame, area: Rect) {
         Line::default(),
         section("Message editor"),
         bindings("Enter", "send message"),
+        bindings(
+            "/cd <directory>",
+            "change the live Codex interaction directory",
+        ),
         bindings("Alt+Enter", "insert newline"),
         bindings("↑/↓", "older/newer message history"),
         bindings("Ctrl+W", "delete previous word"),
