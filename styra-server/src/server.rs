@@ -129,6 +129,33 @@ impl ManagedInteraction {
         Ok(())
     }
 
+    fn set_working_directory(&self, requested: PathBuf) -> Result<()> {
+        if *self
+            .activity
+            .lock()
+            .expect("interaction activity lock poisoned")
+            != InteractionActivity::Pending
+        {
+            anyhow::bail!(
+                "wait for the current turn to finish before changing its working directory"
+            );
+        }
+        let host_directory = if requested.is_absolute() {
+            requested
+        } else {
+            self.workspace.join(requested)
+        }
+        .canonicalize()
+        .context("working directory must exist")?;
+        let relative = host_directory.strip_prefix(&self.workspace).map_err(|_| {
+            anyhow::anyhow!("working directory must be inside this interaction's Workspace")
+        })?;
+        let sandbox_directory = self.driva.working_directory.join(relative);
+        self.interaction.set_working_directory(sandbox_directory)?;
+        self.interaction.report_working_directory(host_directory);
+        Ok(())
+    }
+
     fn send(&self, text: &str) -> Result<()> {
         if !self.accepting_messages.load(Ordering::Acquire) {
             anyhow::bail!(
@@ -795,6 +822,10 @@ impl ServerState {
             Request::SetSessionSelection { id, selection } => {
                 crate::agent::validate_selection(&selection)?;
                 self.interaction(&id)?.set_selection(selection)?;
+                Ok(Response::Accepted)
+            }
+            Request::SetInteractionWorkingDirectory { id, directory } => {
+                self.interaction(&id)?.set_working_directory(directory)?;
                 Ok(Response::Accepted)
             }
             Request::QueueMessage { id, message } => Ok(Response::Queued(

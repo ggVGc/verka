@@ -151,6 +151,16 @@ impl Client {
         }
     }
 
+    pub fn set_interaction_working_directory(&self, id: &str, directory: PathBuf) -> Result<()> {
+        match self.request(Request::SetInteractionWorkingDirectory {
+            id: id.to_owned(),
+            directory,
+        })? {
+            Response::Accepted => Ok(()),
+            other => unexpected("accepted", other),
+        }
+    }
+
     /// Switch a live interaction onto another model straight away, rather than
     /// leaving it for the next message to carry. The server records it with the
     /// session, so reopening the session keeps the switch.

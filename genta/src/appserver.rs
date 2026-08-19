@@ -48,7 +48,7 @@ struct State {
 
 /// A live app-server protocol client. One per session.
 pub struct AppServer {
-    cwd: String,
+    cwd: Mutex<String>,
     sandbox: String,
     resume_thread_id: Option<String>,
     state: Mutex<State>,
@@ -69,7 +69,7 @@ impl AppServer {
 
     fn with_resume(cwd: String, resume_thread_id: Option<String>) -> Self {
         Self {
-            cwd,
+            cwd: Mutex::new(cwd),
             sandbox: "danger-full-access".into(),
             resume_thread_id,
             state: Mutex::new(State {
@@ -113,7 +113,7 @@ impl AppServer {
                         "method": "thread/resume",
                         "params": {
                             "threadId": thread_id,
-                            "cwd": self.cwd,
+                            "cwd": self.current_cwd(),
                             "approvalPolicy": "never",
                             "sandbox": self.sandbox
                         }
@@ -122,7 +122,7 @@ impl AppServer {
                         "id": THREAD_START_ID,
                         "method": "thread/start",
                         "params": {
-                            "cwd": self.cwd,
+                            "cwd": self.current_cwd(),
                             "approvalPolicy": "never",
                             "sandbox": self.sandbox
                         }
@@ -234,7 +234,7 @@ impl AppServer {
         model: Option<&str>,
         effort: Option<&str>,
     ) -> Vec<Action> {
-        let (thread_id, id) = {
+        let (thread_id, id, cwd) = {
             let mut state = self.state.lock().expect("app-server state poisoned");
             let Some(thread_id) = state.thread_id.clone() else {
                 state.pending.push(text.to_owned());
@@ -244,11 +244,16 @@ impl AppServer {
             };
             let id = state.next_request_id;
             state.next_request_id += 1;
-            (thread_id, id)
+            (
+                thread_id,
+                id,
+                self.cwd.lock().expect("app-server cwd poisoned").clone(),
+            )
         };
         let mut params = json!({
             "threadId": thread_id,
-            "input": [{ "type": "text", "text": text }]
+            "input": [{ "type": "text", "text": text }],
+            "cwd": cwd,
         });
         if let Some(model) = model {
             params["model"] = json!(model);
@@ -261,6 +266,16 @@ impl AppServer {
             "method": "turn/start",
             "params": params
         }))]
+    }
+
+    /// Change the directory used for the next and later turns. Codex applies a
+    /// `cwd` supplied to `turn/start` as the thread's new default.
+    pub fn set_cwd(&self, cwd: String) {
+        *self.cwd.lock().expect("app-server cwd poisoned") = cwd;
+    }
+
+    fn current_cwd(&self) -> String {
+        self.cwd.lock().expect("app-server cwd poisoned").clone()
     }
 
     /// Interrupt the in-flight turn without closing the app-server process or
@@ -392,6 +407,16 @@ mod tests {
         let turn = sent(&client.send_with_options("continue", Some("gpt-5.6-luna"), Some("low")));
         assert_eq!(turn[0]["params"]["model"], "gpt-5.6-luna");
         assert_eq!(turn[0]["params"]["effort"], "low");
+    }
+
+    #[test]
+    fn a_changed_directory_is_sent_on_the_next_turn() {
+        let client = AppServer::new("/workspace".into());
+        client.handle_line(r#"{"id":2,"result":{"thread":{"id":"thread-xyz"}}}"#);
+        client.set_cwd("/workspace/crates/styra".into());
+
+        let turn = sent(&client.send("continue"));
+        assert_eq!(turn[0]["params"]["cwd"], "/workspace/crates/styra");
     }
 
     #[test]

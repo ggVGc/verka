@@ -248,6 +248,27 @@ pub fn handle_input_key(
         KeyCode::Enter => {
             if let Some(message) = app.take_message() {
                 app.enter_list();
+                if let Some(directory) = message.strip_prefix("/cd ") {
+                    let Live::Running { session_id, .. } = live else {
+                        return app
+                            .push_log(LogEntry::warn("/cd requires a live Codex interaction"));
+                    };
+                    if directory.trim().is_empty() {
+                        return app.push_log(LogEntry::warn("usage: /cd <directory>"));
+                    }
+                    match client
+                        .set_interaction_working_directory(session_id, directory.trim().into())
+                    {
+                        Ok(()) => app.show_action_message(format!(
+                            "working directory: {}",
+                            directory.trim()
+                        )),
+                        Err(error) => app.push_log(LogEntry::error(format!(
+                            "could not change working directory: {error:#}"
+                        ))),
+                    }
+                    return;
+                }
                 match live {
                     Live::Running { session_id, .. } if app.status == Status::Running => {
                         if let Err(error) = client.queue_message(session_id, &message) {

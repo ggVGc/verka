@@ -328,6 +328,9 @@ pub fn apply_update(app: &mut App, update: InteractionUpdate) {
         InteractionUpdate::Event(event) => app.push_event(event),
         InteractionUpdate::Raw(line) => app.push_raw(line),
         InteractionUpdate::Log(entry) => app.push_log(entry),
+        InteractionUpdate::WorkingDirectoryChanged(directory) => {
+            app.set_working_directory(directory);
+        }
         InteractionUpdate::Ended(end) => app.on_ended(end),
     }
 }

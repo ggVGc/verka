@@ -57,6 +57,9 @@ fn main() -> anyhow::Result<()> {
                 InteractionUpdate::Log(entry) => {
                     println!("LOG    {:?}: {}", entry.level, entry.message)
                 }
+                InteractionUpdate::WorkingDirectoryChanged(directory) => {
+                    println!("CWD    {}", directory.display())
+                }
                 InteractionUpdate::Ended(end) => {
                     println!("ENDED  exit={:?} error={:?}", end.exit_code, end.error);
                     return Ok(());
