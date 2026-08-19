@@ -105,8 +105,11 @@ pub(crate) fn render_list(frame: &mut Frame, app: &App, area: Rect) {
             )
         })
         .collect();
-    let item_heights: Vec<usize> = items.iter().map(ListItem::height).collect();
     items.push(ListItem::new(status_tail(app)));
+    // Include the status tail when deciding whether scrolling would reveal
+    // useful content. Otherwise moving past a tall entry can look attractive
+    // merely because the algorithm cannot see the row waiting below it.
+    let item_heights: Vec<usize> = items.iter().map(ListItem::height).collect();
     // An explicit background rather than `Modifier::REVERSED`: reversing
     // would swap a `White` foreground (summary and detail text alike) into
     // the background, flashing the selected row to a glaring full white.
@@ -135,8 +138,9 @@ pub(crate) fn render_list(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 /// Keep the selected item within a small margin of the viewport edges, like
-/// vim's `scrolloff`. Heights are rendered rows rather than item counts so
-/// wrapped summaries and expanded details do not break the margin.
+/// vim's `scrolloff`, without throwing away visible content just to preserve
+/// that margin. Heights are rendered rows rather than item counts so wrapped
+/// summaries and expanded details do not break the calculation.
 fn list_offset_with_scrolloff(
     current: usize,
     selected: Option<usize>,
@@ -153,31 +157,86 @@ fn list_offset_with_scrolloff(
     let margin = 2.min(viewport_height.saturating_sub(1) / 2);
     let mut offset = current.min(selected);
 
-    while offset < selected && heights[offset..selected].iter().sum::<usize>() < margin {
-        offset = offset.saturating_sub(1);
-        if offset == 0 {
-            break;
-        }
-    }
-
-    while offset < selected {
-        let rows_through_selection = heights[offset..=selected].iter().sum::<usize>();
-        if rows_through_selection <= viewport_height.saturating_sub(margin) {
-            break;
-        }
+    // First do only the scrolling required to make the complete selection
+    // visible. In particular, use the whole viewport here rather than
+    // reserving the preferred margin: a tall preceding message and a short
+    // selected entry may fit perfectly together.
+    let mut rows_through_selection = heights[offset..=selected].iter().sum::<usize>();
+    while offset < selected && rows_through_selection > viewport_height {
+        rows_through_selection = rows_through_selection.saturating_sub(heights[offset]);
         offset += 1;
     }
 
-    // Moving upward may have left the selection close to the top edge. Pull
-    // earlier items back into view until the margin is restored.
-    while offset > 0 {
-        let rows_before = heights[offset..selected].iter().sum::<usize>();
-        if rows_before >= margin {
+    // Moving upward may have put the selection against the top. Pull earlier
+    // items back in while they fit and do not reduce the number of occupied
+    // rows (they can displace content at the bottom of the viewport).
+    while offset > 0 && rows_before_selection(offset, selected, heights) < margin {
+        let candidate = offset - 1;
+        if heights[candidate..=selected].iter().sum::<usize>() > viewport_height
+            || visible_rows(candidate, heights, viewport_height)
+                < visible_rows(offset, heights, viewport_height)
+        {
             break;
         }
-        offset -= 1;
+        offset = candidate;
+    }
+
+    // Prefer the same margin below the selection when advancing. It is only
+    // a preference: if dropping the first item would leave fewer rows filled,
+    // keep the denser viewport. This is what prevents a long message from
+    // disappearing as soon as the following one-line event is selected.
+    while offset < selected
+        && rows_after_selection(offset, selected, heights, viewport_height) < margin
+    {
+        let candidate = offset + 1;
+        if visible_rows(candidate, heights, viewport_height)
+            < visible_rows(offset, heights, viewport_height)
+            || rows_after_selection(candidate, selected, heights, viewport_height)
+                <= rows_after_selection(offset, selected, heights, viewport_height)
+        {
+            break;
+        }
+        offset = candidate;
     }
     offset
+}
+
+fn visible_rows(offset: usize, heights: &[usize], viewport_height: usize) -> usize {
+    heights
+        .iter()
+        .skip(offset)
+        .scan(0usize, |used, height| {
+            if used.saturating_add(*height) > viewport_height {
+                return None;
+            }
+            *used += *height;
+            Some(*height)
+        })
+        .sum()
+}
+
+fn rows_before_selection(offset: usize, selected: usize, heights: &[usize]) -> usize {
+    heights[offset..selected].iter().sum()
+}
+
+fn rows_after_selection(
+    offset: usize,
+    selected: usize,
+    heights: &[usize],
+    viewport_height: usize,
+) -> usize {
+    let mut used = 0usize;
+    let mut after = 0usize;
+    for (index, height) in heights.iter().enumerate().skip(offset) {
+        if used.saturating_add(*height) > viewport_height {
+            break;
+        }
+        used += *height;
+        if index > selected {
+            after += *height;
+        }
+    }
+    after
 }
 
 fn status_tail(app: &App) -> Line<'static> {
@@ -744,7 +803,17 @@ mod tests {
     fn list_scrolloff_counts_expanded_rows() {
         let heights = vec![1, 1, 5, 1, 1];
 
-        assert_eq!(list_offset_with_scrolloff(0, Some(3), &heights, 8), 2);
+        assert_eq!(list_offset_with_scrolloff(0, Some(3), &heights, 8), 1);
+    }
+
+    #[test]
+    fn list_scrolloff_keeps_a_full_viewport_before_a_short_selection() {
+        // The long entry and the selected row fit exactly. Sacrificing the
+        // long entry for two rows of scrolloff would leave only the selected
+        // row and the status tail on screen.
+        let heights = vec![1, 16, 1, 1];
+
+        assert_eq!(list_offset_with_scrolloff(0, Some(2), &heights, 17), 1);
     }
     use styra_server::event::TokenUsage;
 
@@ -1203,6 +1272,28 @@ mod tests {
         let screen = rendered(&app);
         assert!(screen.contains("line number 0"), "{screen}");
         assert!(screen.contains("press p for the full entry"), "{screen}");
+    }
+
+    #[test]
+    fn selecting_after_a_long_message_keeps_the_message_visible() {
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
+        app.push_event(AgentEvent::AgentMessage {
+            text: "an earlier message".into(),
+        });
+        app.push_event(AgentEvent::AgentMessage {
+            text: (0..60).map(|i| format!("line number {i}\n")).collect(),
+        });
+        app.push_event(AgentEvent::AgentMessage {
+            text: "the selected message".into(),
+        });
+        app.expand_all();
+
+        let screen = rendered(&app);
+        assert!(screen.contains("line number 0"), "{screen}");
+        assert!(screen.contains("the selected message"), "{screen}");
     }
 
     #[test]
