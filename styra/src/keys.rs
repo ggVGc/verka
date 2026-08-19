@@ -20,13 +20,13 @@ pub fn handle_launcher_key(app: &mut App, key: KeyEvent, preferences_path: &Path
         return;
     };
     match key.code {
-        KeyCode::Char('J') | KeyCode::Down => launcher.next(),
-        KeyCode::Char('K') | KeyCode::Up => launcher.prev(),
+        KeyCode::Char('j' | 'J') | KeyCode::Down => launcher.next(),
+        KeyCode::Char('k' | 'K') | KeyCode::Up => launcher.prev(),
         KeyCode::Char('l') | KeyCode::Right | KeyCode::Tab => launcher.next_column(),
         KeyCode::Char('h') | KeyCode::Left | KeyCode::BackTab => launcher.prev_column(),
-        KeyCode::Enter => app.confirm_launcher(),
+        KeyCode::Enter => confirm(app, preferences_path),
         KeyCode::Char('D') => {
-            app.confirm_launcher();
+            confirm(app, preferences_path);
             if let Err(error) = preferences::save_selection(preferences_path, &app.selection) {
                 app.push_log(LogEntry::error(format!(
                     "could not save launch defaults: {error:#}"
@@ -35,6 +35,18 @@ pub fn handle_launcher_key(app: &mut App, key: KeyEvent, preferences_path: &Path
         }
         KeyCode::Esc | KeyCode::Char('q') => app.cancel_launcher(),
         _ => {}
+    }
+}
+
+/// Adopt the picker's choice, and remember the model it names so the picker
+/// lists it first next time. The ordering is a convenience rather than a
+/// setting, so failing to persist it is logged and no more.
+fn confirm(app: &mut App, preferences_path: &Path) {
+    app.confirm_launcher();
+    if let Err(error) = preferences::save_recent_models(preferences_path, &app.recent_models) {
+        app.push_log(LogEntry::error(format!(
+            "could not save the model ordering: {error:#}"
+        )));
     }
 }
 

@@ -228,6 +228,10 @@ pub struct ActionMessage {
 
 const ACTION_MESSAGE_LIFETIME: Duration = Duration::from_secs(5);
 
+/// How many recently selected models the picker remembers to order its model
+/// column by.
+const RECENT_MODELS: usize = 16;
+
 impl Entry {
     /// Whether this entry has anything to show beyond its one-line summary —
     /// the same test that decides whether the list shows a fold arrow next
@@ -316,6 +320,12 @@ pub struct Launcher {
     /// the operator can leave it selected; the picker cannot type one, only
     /// carry one it was opened on.
     pub carried_model: Option<String>,
+    /// Models the operator has confirmed before, most recent first. They are
+    /// listed ahead of the rest of the catalog, so the handful of models
+    /// actually in use sit at the top of the column instead of wherever the
+    /// catalog happens to put them. Models for other agents are kept in the
+    /// list too and simply never match this provider's rows.
+    pub recent_models: Vec<String>,
 }
 
 impl Launcher {
@@ -323,26 +333,26 @@ impl Launcher {
     /// there is always a row to open on. A model the provider's catalog does not
     /// list is carried as its own final row rather than dropped, so confirming
     /// the picker cannot silently change an existing selection.
-    pub fn from_selection(selection: &Selection) -> Self {
+    pub fn from_selection(selection: &Selection, recent_models: &[String]) -> Self {
         let provider = row_of(&PROVIDERS, &selection.provider);
         let models = selection.provider.models();
-        // Not `row_of`: a model the catalog does not list is carried as an
-        // extra row rather than falling back to the first.
-        let (model, carried_model) = match models
-            .iter()
-            .position(|candidate| *candidate == selection.model)
-        {
-            Some(index) => (index, None),
-            None => (models.len(), Some(selection.model.clone())),
-        };
+        // A model the catalog does not list is carried as an extra row rather
+        // than falling back to the first.
+        let carried_model = (!models.iter().any(|candidate| *candidate == selection.model))
+            .then(|| selection.model.clone());
         let effort = row_of(selection.provider.efforts(), &selection.effort);
-        Self {
+        let mut launcher = Self {
             column: LaunchColumn::Provider,
             provider,
-            model,
+            model: 0,
             effort,
             carried_model,
-        }
+            recent_models: recent_models.to_vec(),
+        };
+        // Only now that the rows are ordered can the opening model be found:
+        // recency decides where it sits.
+        launcher.model = row_of(&launcher.models(), &selection.model);
+        launcher
     }
 
     pub fn provider(&self) -> Provider {
@@ -354,13 +364,10 @@ impl Launcher {
     /// somehow outran its column rather than any "unset" state.
     pub fn selection(&self) -> Selection {
         let provider = self.provider();
-        let models = provider.models();
+        let models = self.models();
         let model = match models.get(self.model) {
-            Some(model) => (*model).to_owned(),
-            None => self
-                .carried_model
-                .clone()
-                .unwrap_or_else(|| provider.default_model().to_owned()),
+            Some(model) => model.clone(),
+            None => provider.default_model().to_owned(),
         };
         let efforts = provider.efforts();
         let effort = efforts
@@ -375,7 +382,30 @@ impl Launcher {
     }
 
     /// The model column's rows: the provider's catalog, plus a carried model if
-    /// the picker was opened on one.
+    /// the picker was opened on one, ordered most recently selected first.
+    ///
+    /// The sort is stable and only ranks models the operator has actually
+    /// confirmed, so everything else keeps the catalog's own order — and a
+    /// carried model, which the catalog does not list at all, stays last
+    /// until it is selected once.
+    pub fn models(&self) -> Vec<String> {
+        let mut rows: Vec<String> = self
+            .provider()
+            .models()
+            .iter()
+            .map(|model| (*model).to_owned())
+            .collect();
+        rows.extend(self.carried_model.clone());
+        rows.sort_by_key(|row| {
+            self.recent_models
+                .iter()
+                .position(|recent| recent == row)
+                .unwrap_or(usize::MAX)
+        });
+        rows
+    }
+
+    /// How many rows the model column has.
     pub fn model_rows(&self) -> usize {
         self.provider().models().len() + usize::from(self.carried_model.is_some())
     }
@@ -418,9 +448,9 @@ impl Launcher {
         // picker was opened on.
         if self.column == LaunchColumn::Provider {
             let provider = self.provider();
-            self.model = row_of(provider.models(), &provider.default_model());
             self.effort = row_of(provider.efforts(), &provider.default_effort());
             self.carried_model = None;
+            self.model = row_of(&self.models(), &provider.default_model().to_owned());
         }
     }
 
@@ -542,6 +572,11 @@ pub struct App {
     pub selection: Selection,
     /// The open launch picker, while the operator is choosing.
     pub launcher: Option<Launcher>,
+    /// Models the operator has confirmed in the launch picker, most recent
+    /// first. Loaded from the saved preferences when the loop starts and
+    /// written back as the picker is used, so the ordering of the model
+    /// column outlives the client.
+    pub recent_models: Vec<String>,
     /// The model and reasoning effort the agent itself reported when it started
     /// the session, which is what is actually running — a launch pins a model,
     /// but only the agent can confirm what it resolved to. `None` until the
@@ -665,6 +700,7 @@ impl App {
             preview_mode: PresentationMode::Pretty,
             selection,
             launcher: None,
+            recent_models: Vec::new(),
             reported_model: None,
             workspace_id: None,
             workspace_name: None,
@@ -723,7 +759,10 @@ impl App {
     /// be chosen.
     pub fn open_launcher(&mut self) {
         if self.can_configure_launch() {
-            self.launcher = Some(Launcher::from_selection(&self.selection));
+            self.launcher = Some(Launcher::from_selection(
+                &self.selection,
+                &self.recent_models,
+            ));
         }
     }
 
@@ -750,6 +789,7 @@ impl App {
                     );
                 }
                 let live = self.status != Status::Pending && selection != self.selection;
+                self.note_recent_model(&selection.model);
                 self.set_selection(selection);
                 self.reported_model = None;
                 if live {
@@ -757,6 +797,15 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Record a model as the most recently selected one, so the picker lists
+    /// it first the next time it opens. The list is capped: past a certain
+    /// depth it stops being a shortlist and starts being the catalog again.
+    fn note_recent_model(&mut self, model: &str) {
+        self.recent_models.retain(|recent| recent != model);
+        self.recent_models.insert(0, model.to_owned());
+        self.recent_models.truncate(RECENT_MODELS);
     }
 
     /// Close the picker, leaving the selection as it was.
@@ -2275,17 +2324,21 @@ mod tests {
         assert_eq!(app.selection.model, selection.model);
         assert_eq!(app.selection.effort, Effort::High);
 
-        // Walking up into the catalog and back down reaches the carried model
-        // again: it is an ordinary row, just not one the picker could write.
+        // Having just been confirmed it is now the most recently selected
+        // model, so reopening lists it first — ahead of the catalog rather
+        // than after it. It is an ordinary row either way, just not one the
+        // picker could write.
         app.open_launcher();
         let launcher = app.launcher.as_mut().unwrap();
         launcher.next_column();
-        launcher.prev();
+        assert_eq!(launcher.model, 0, "carried first, ahead of the catalog");
+        assert_eq!(launcher.selection().model, selection.model);
+        launcher.next();
         assert_eq!(
             launcher.selection().model,
-            *Provider::Claude.models().last().unwrap()
+            *Provider::Claude.models().first().unwrap()
         );
-        launcher.next();
+        launcher.prev();
         assert_eq!(launcher.selection().model, selection.model);
     }
 
@@ -2295,7 +2348,7 @@ mod tests {
     #[test]
     fn the_picker_always_pins_a_model_and_an_effort() {
         for provider in PROVIDERS {
-            let mut launcher = Launcher::from_selection(&Selection::new(provider));
+            let mut launcher = Launcher::from_selection(&Selection::new(provider), &[]);
             // A selection always pins both, and the picker opens on the rows
             // naming them.
             let opened = launcher.selection();
@@ -2321,12 +2374,59 @@ mod tests {
         }
     }
 
+    /// The models the operator actually uses head the column; the rest keep
+    /// the catalog's own order, so the list does not reshuffle wholesale after
+    /// a single pick.
+    #[test]
+    fn the_model_column_lists_recently_selected_models_first() {
+        let catalog = Provider::Claude.models();
+        let recent = vec![
+            catalog[catalog.len() - 1].to_owned(),
+            "gpt-5.6-sol".to_owned(), // another agent's model: never a row here
+            catalog[1].to_owned(),
+        ];
+        let launcher = Launcher::from_selection(&Selection::new(Provider::Claude), &recent);
+
+        let rows = launcher.models();
+        assert_eq!(rows[0], catalog[catalog.len() - 1]);
+        assert_eq!(rows[1], catalog[1]);
+        assert_eq!(
+            rows[2..],
+            catalog[..1]
+                .iter()
+                .chain(&catalog[2..catalog.len() - 1])
+                .map(|model| (*model).to_owned())
+                .collect::<Vec<_>>()[..],
+            "the unused models keep the catalog's order"
+        );
+        // Ordering the rows does not change which one the picker opened on.
+        assert_eq!(launcher.selection().model, Provider::Claude.default_model());
+    }
+
+    /// Confirming a model moves it to the front of the ordering, and the list
+    /// never grows a duplicate of a model chosen twice.
+    #[test]
+    fn confirming_records_the_model_as_the_most_recent_one() {
+        let mut app = App::pending(Selection::parse("claude:claude-sonnet-5").unwrap());
+        app.recent_models = vec!["claude-opus-5".into(), "claude-sonnet-5".into()];
+
+        app.open_launcher();
+        app.confirm_launcher();
+
+        assert_eq!(
+            app.recent_models,
+            vec!["claude-sonnet-5".to_owned(), "claude-opus-5".to_owned()]
+        );
+    }
+
     /// Switching agents drops the carried model with everything else: it named a
     /// model of the agent the picker was opened on.
     #[test]
     fn changing_provider_drops_a_carried_model() {
-        let mut launcher =
-            Launcher::from_selection(&Selection::parse("claude:claude-opus-4-1-20250805").unwrap());
+        let mut launcher = Launcher::from_selection(
+            &Selection::parse("claude:claude-opus-4-1-20250805").unwrap(),
+            &[],
+        );
         assert!(launcher.carried_model.is_some());
 
         launcher.prev(); // in the provider column, back towards codex
@@ -2346,7 +2446,7 @@ mod tests {
     #[test]
     fn changing_provider_falls_back_to_the_new_agents_defaults() {
         let mut launcher =
-            Launcher::from_selection(&Selection::parse("claude:claude-opus-5/max").unwrap());
+            Launcher::from_selection(&Selection::parse("claude:claude-opus-5/max").unwrap(), &[]);
         assert_eq!(launcher.selection().name(), "claude:claude-opus-5/max");
 
         launcher.prev(); // in the provider column, back towards codex

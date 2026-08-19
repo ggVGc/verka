@@ -11,6 +11,7 @@ use crate::config::Config;
 use crate::keys;
 use crate::notes;
 use crate::picker;
+use crate::preferences;
 use crate::session::{self, Live};
 use crate::ui;
 use styra_server::{Client, InteractionSummary, LogEntry, WorkspaceSummary};
@@ -47,6 +48,9 @@ pub fn run(
     preferences_path: &Path,
     config: &Config,
 ) -> Result<RunOutcome> {
+    // The model column's ordering is remembered across runs, so pick it up
+    // before the picker can be opened.
+    app.recent_models = preferences::load_recent_models(preferences_path);
     let mut pending_fold = false;
     loop {
         app.expire_action_messages();

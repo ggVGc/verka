@@ -49,16 +49,9 @@ pub(crate) fn render_launcher(frame: &mut Frame, launcher: &Launcher, area: Rect
         .iter()
         .map(|provider| provider.as_str().to_owned())
         .collect();
-    let mut models: Vec<String> = provider
-        .models()
-        .iter()
-        .map(|model| (*model).to_owned())
-        .collect();
-    // A model the catalog doesn't list, carried from the profile the picker was
-    // opened on, is shown last so it stays selectable — see `Launcher`.
-    if let Some(carried) = &launcher.carried_model {
-        models.push(carried.clone());
-    }
+    // The catalog ordered by recency, and a model the catalog doesn't list
+    // carried from the profile the picker was opened on — see `Launcher`.
+    let models = launcher.models();
     let efforts: Vec<String> = provider
         .efforts()
         .iter()

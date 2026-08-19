@@ -18,6 +18,11 @@ use crate::app::LaunchInputs;
 
 const FILE_NAME: &str = "defaults.json";
 
+/// Models recently confirmed in the launch picker. Kept beside the defaults
+/// rather than in them: `defaults.json` holds what the operator deliberately
+/// saved, and this file is written as a side effect of ordinary use.
+const RECENT_MODELS_FILE_NAME: &str = "recent-models.json";
+
 /// What a brand-new client starts from.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -108,10 +113,45 @@ pub fn save_launch(path: &Path, launch: &LaunchInputs) -> Result<()> {
     save(path, &defaults)
 }
 
+fn recent_models_path(defaults_path: &Path) -> PathBuf {
+    defaults_path.with_file_name(RECENT_MODELS_FILE_NAME)
+}
+
+/// The models the launch picker lists first, most recent first. Nothing here
+/// changes what a launch does, so an unreadable or malformed file simply means
+/// the catalog's own order rather than an error the operator must clear.
+pub fn load_recent_models(defaults_path: &Path) -> Vec<String> {
+    fs::read(recent_models_path(defaults_path))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+
+/// Replace the remembered model ordering. It is written as a side effect of
+/// using the picker rather than on request, so it is kept out of the saved
+/// defaults entirely.
+pub fn save_recent_models(defaults_path: &Path, recent_models: &[String]) -> Result<()> {
+    let path = recent_models_path(defaults_path);
+    let mut bytes = serde_json::to_vec_pretty(recent_models)
+        .context("encoding the recently selected models")?;
+    bytes.push(b'\n');
+    write_atomically(&path, &bytes)
+}
+
 /// Atomically replace the saved defaults.
 pub fn save(path: &Path, defaults: &Defaults) -> Result<()> {
     validate_selection(&defaults.selection)
         .context("refusing to save an invalid launch selection")?;
+    let mut bytes =
+        serde_json::to_vec_pretty(defaults).context("encoding the Styra launch defaults")?;
+    bytes.push(b'\n');
+    write_atomically(path, &bytes)
+}
+
+/// Write `bytes` to `path` through a temporary file in the same directory, so
+/// a crash mid-write leaves the previous contents rather than a half-file.
+/// The preferences directory and everything in it stay owner-only.
+fn write_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
     let parent = path
         .parent()
         .context("Styra defaults path has no parent directory")?;
@@ -120,7 +160,11 @@ pub fn save(path: &Path, defaults: &Defaults) -> Result<()> {
     fs::set_permissions(parent, fs::Permissions::from_mode(0o700))
         .with_context(|| format!("securing Styra preferences directory {}", parent.display()))?;
 
-    let temporary = parent.join(format!(".{FILE_NAME}.{}.tmp", std::process::id()));
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(FILE_NAME);
+    let temporary = parent.join(format!(".{name}.{}.tmp", std::process::id()));
     let write_result = (|| -> Result<()> {
         let mut file = OpenOptions::new()
             .write(true)
@@ -128,15 +172,12 @@ pub fn save(path: &Path, defaults: &Defaults) -> Result<()> {
             .truncate(true)
             .mode(0o600)
             .open(&temporary)
-            .with_context(|| format!("creating temporary defaults file {}", temporary.display()))?;
-        serde_json::to_writer_pretty(&mut file, defaults)
-            .context("encoding the Styra launch defaults")?;
-        file.write_all(b"\n")
-            .context("finishing the Styra launch defaults")?;
+            .with_context(|| format!("creating temporary file {}", temporary.display()))?;
+        file.write_all(bytes)
+            .with_context(|| format!("writing {}", temporary.display()))?;
         file.sync_all()
-            .context("flushing the Styra launch defaults")?;
-        fs::rename(&temporary, path)
-            .with_context(|| format!("installing Styra defaults at {}", path.display()))?;
+            .with_context(|| format!("flushing {}", temporary.display()))?;
+        fs::rename(&temporary, path).with_context(|| format!("installing {}", path.display()))?;
         Ok(())
     })();
     if write_result.is_err() {
