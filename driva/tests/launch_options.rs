@@ -53,6 +53,15 @@ fn cli_defaults_to_the_bubblewrap_backend() {
 }
 
 #[test]
+fn shell_keeps_the_callers_terminal_session_by_default() {
+    let directory = TestDirectory::new("shell-terminal-session");
+    let output = stdout(directory.run(&["shell", "--dry-run"]));
+
+    assert!(output.contains("interactive: true"));
+    assert!(!output.contains("\"--new-session\""));
+}
+
+#[test]
 fn omitted_workdir_mounts_the_current_directory_as_a_writable_workspace() {
     let directory = TestDirectory::new("default-workspace");
     let output = stdout(directory.run(&["run", "--dry-run", "--", "true"]));

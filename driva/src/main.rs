@@ -354,7 +354,12 @@ fn real_main() -> Result<()> {
             template
                 .as_ref()
                 .and_then(|value| value.new_session)
-                .unwrap_or(true)
+                // An interactive shell must remain in the terminal's foreground
+                // session so terminal-generated signals, notably Ctrl-C, reach
+                // the command it is currently running instead of terminating
+                // Driva itself. Other commands retain the safer Bubblewrap
+                // default of a new session unless explicitly overridden.
+                .unwrap_or(!shell)
         },
     };
     let request = validate_request(&request)?;
