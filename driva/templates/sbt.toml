@@ -2,6 +2,11 @@ description = "Scala sbt"
 path = ["~/.local/share/coursier/bin"]
 
 [[mount]]
+source = "/etc/resolv.conf"
+destination = "/etc/resolv.conf"
+access = "read"
+
+[[mount]]
 source = "~/.sbt"
 access = "write"
 

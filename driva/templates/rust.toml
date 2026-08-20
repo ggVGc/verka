@@ -10,6 +10,11 @@ RUSTUP_HOME = "~/.rustup"
 CARGO_HOME = "~/.cargo"
 
 [[mount]]
+source = "/etc/resolv.conf"
+destination = "/etc/resolv.conf"
+access = "read"
+
+[[mount]]
 source = "~/.cargo"
 access = "read"
 
