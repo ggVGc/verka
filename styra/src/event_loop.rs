@@ -181,10 +181,13 @@ pub fn run(
                     continue;
                 };
                 let workspace = match choice {
-                    // The picker already has a complete summary. Looking it up
-                    // again records an access and changes the ordering the next
-                    // time this same view is opened.
-                    picker::WorkspaceChoice::Existing(workspace) => workspace,
+                    // Looking the Workspace up again records the access, which
+                    // is what floats it to the top of the picker next time. The
+                    // summary the picker already holds stands in if the server
+                    // cannot answer.
+                    picker::WorkspaceChoice::Existing(workspace) => {
+                        client.workspace(&workspace.id).unwrap_or(workspace)
+                    }
                     picker::WorkspaceChoice::CreateCurrentDirectory => {
                         let host_path = session::resolve_workspace(None)?;
                         client.create_workspace(&styra_server::protocol::CreateWorkspace {

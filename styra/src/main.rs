@@ -257,10 +257,13 @@ fn main() -> Result<()> {
                 }
             };
             let workspace = match choice {
-                // Keep the summary returned by the list request. Fetching it
-                // again records an access on the server, which makes the same
-                // picker immediately reorder when it is reopened with `V`.
-                picker::WorkspaceChoice::Existing(workspace) => Ok(workspace),
+                // Fetching the Workspace again records the access, which is
+                // what floats it to the top of the picker next time. The
+                // summary the picker already holds stands in if the server
+                // cannot answer.
+                picker::WorkspaceChoice::Existing(workspace) => {
+                    Ok(client.workspace(&workspace.id).unwrap_or(workspace))
+                }
                 picker::WorkspaceChoice::CreateCurrentDirectory => {
                     client.create_workspace(&styra_server::protocol::CreateWorkspace {
                         host_path: current_directory,

@@ -155,11 +155,20 @@ fn read_session_name(
     }
 }
 
+/// The Workspace picker loop: j/k or arrows to move, Enter to open a
+/// Workspace, `e` to edit its Workspace notes, `c` to create one for the
+/// current directory, Esc or q to back out.
+///
+/// The list is ordered once on entry, by [`sort_workspaces`]. A Workspace the
+/// operator opens is not reordered under them while they look at it.
 pub fn run_workspace_picker(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     client: &Client,
     workspaces: &mut [WorkspaceSummary],
 ) -> Result<Option<WorkspaceChoice>> {
+    // A server that cannot answer still leaves a useful list: without live
+    // interactions to consult, the ordering falls back to recent access alone.
+    sort_workspaces(workspaces, &client.list_interactions().unwrap_or_default());
     let mut selected = 0usize;
     loop {
         terminal.draw(|frame| ui::render_workspace_picker(frame, workspaces, selected))?;
@@ -336,6 +345,28 @@ pub fn run_template_picker(
     }
 }
 
+/// Order Workspaces for the picker: those holding a live interaction first,
+/// then the rest, and within each group the most recently accessed first.
+///
+/// A live interaction is one the server is still accepting input for, whether
+/// it is idle and waiting on the operator or busy with a turn. Those are the
+/// Workspaces the operator has work in flight in, so they belong above ones
+/// only recency speaks for.
+fn sort_workspaces(workspaces: &mut [WorkspaceSummary], interactions: &[InteractionSummary]) {
+    workspaces.sort_by(|a, b| {
+        has_live_interaction(b, interactions)
+            .cmp(&has_live_interaction(a, interactions))
+            .then_with(|| b.last_accessed_at_ms.cmp(&a.last_accessed_at_ms))
+            .then_with(|| b.created_at_ms.cmp(&a.created_at_ms))
+    });
+}
+
+fn has_live_interaction(workspace: &WorkspaceSummary, interactions: &[InteractionSummary]) -> bool {
+    interactions
+        .iter()
+        .any(|interaction| interaction.accepting && interaction.workspace_id == workspace.id)
+}
+
 /// Put idle interactions first — they are the ones waiting on the operator —
 /// then interactions still processing work, and stopped interactions last.
 /// `sort_by_key` is stable, so the server's ordering is retained within each
@@ -377,6 +408,78 @@ mod tests {
             accepting,
             activity,
         }
+    }
+
+    fn interaction_in(
+        id: &str,
+        workspace_id: &str,
+        accepting: bool,
+        activity: InteractionActivity,
+    ) -> InteractionSummary {
+        InteractionSummary {
+            workspace_id: workspace_id.into(),
+            ..interaction(id, accepting, activity)
+        }
+    }
+
+    fn workspace(id: &str, last_accessed_at_ms: u64) -> WorkspaceSummary {
+        WorkspaceSummary {
+            id: id.into(),
+            name: None,
+            notes: String::new(),
+            host_path: format!("/home/op/{id}").into(),
+            path: format!("/state/workspaces/{id}").into(),
+            session_count: 0,
+            age: "now".into(),
+            created_at_ms: 1,
+            last_accessed_at_ms,
+        }
+    }
+
+    #[test]
+    fn workspaces_sort_by_recent_access() {
+        let mut workspaces = vec![
+            workspace("older", 10),
+            workspace("newest", 30),
+            workspace("newer", 20),
+        ];
+
+        sort_workspaces(&mut workspaces, &[]);
+
+        assert_eq!(
+            workspaces
+                .iter()
+                .map(|workspace| workspace.id.as_str())
+                .collect::<Vec<_>>(),
+            ["newest", "newer", "older"]
+        );
+    }
+
+    #[test]
+    fn workspaces_with_live_interactions_sort_above_more_recently_accessed_ones() {
+        let mut workspaces = vec![
+            workspace("untouched", 40),
+            workspace("running", 10),
+            workspace("stopped", 30),
+            workspace("idle", 20),
+        ];
+        let interactions = vec![
+            interaction_in("a", "running", true, InteractionActivity::Running),
+            interaction_in("b", "stopped", false, InteractionActivity::Pending),
+            interaction_in("c", "idle", true, InteractionActivity::Pending),
+        ];
+
+        sort_workspaces(&mut workspaces, &interactions);
+
+        // Idle and running lead, ordered by access between themselves; a
+        // Workspace whose only interaction has stopped ranks with the rest.
+        assert_eq!(
+            workspaces
+                .iter()
+                .map(|workspace| workspace.id.as_str())
+                .collect::<Vec<_>>(),
+            ["idle", "running", "untouched", "stopped"]
+        );
     }
 
     #[test]
