@@ -233,6 +233,10 @@ pub struct Progress {
     pub in_status: Duration,
     /// Time since the last event was received, or `None` if none has been.
     pub since_event: Option<Duration>,
+    /// How many events have arrived from the agent. The spinner steps with
+    /// this rather than with the clock, so its motion means "something came
+    /// back" instead of "the frame was redrawn".
+    pub events: usize,
 }
 
 /// A short-lived notice about something Styra did on the operator's behalf.
@@ -643,6 +647,8 @@ pub struct App {
     noted_status: Status,
     /// When the last event arrived from the agent. `None` until one has.
     last_event_at: Option<Instant>,
+    /// How many events have arrived from the agent, for the spinner's phase.
+    events_received: usize,
     background_work: bool,
     /// The verbatim wire interaction, in occurrence order.
     pub raw: Vec<RawLine>,
@@ -741,6 +747,7 @@ impl App {
             status_since: Instant::now(),
             noted_status: Status::Running,
             last_event_at: None,
+            events_received: 0,
             background_work: false,
             raw: Vec::new(),
             raw_selected: 0,
@@ -894,6 +901,7 @@ impl App {
         Progress {
             in_status: self.status_since.elapsed(),
             since_event: self.last_event_at.map(|at| at.elapsed()),
+            events: self.events_received,
         }
     }
 
@@ -1083,6 +1091,7 @@ impl App {
         // Set before the replacement paths below, all of which return early:
         // a command or tool finishing is activity like any other.
         self.last_event_at = Some(Instant::now());
+        self.events_received += 1;
         // A command completion is the final state of the command-start row.
         // Replace the most recent matching start instead of adding a second
         // line, so the list shows one command whose indication changes from

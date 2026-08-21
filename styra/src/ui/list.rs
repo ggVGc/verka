@@ -241,11 +241,10 @@ fn rows_after_selection(
     after
 }
 
-/// Braille spinner frames. This is the one thing on the screen that keeps
-/// moving through a long tool call, which is what distinguishes a session that
-/// is still working from one that has hung.
+/// Braille spinner frames. It steps once per event received rather than on a
+/// timer: a still spinner then means nothing has come back, which is what
+/// distinguishes a session that is still working from one that has hung.
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-const SPINNER_FRAME: Duration = Duration::from_millis(120);
 
 /// Gaps shorter than this are not named: while output is streaming the figure
 /// would flicker between `0s` and `1s` and say nothing. Only a real pause is
@@ -282,10 +281,9 @@ fn status_tail(app: &App) -> Line<'static> {
 /// and — once the agent has been quiet long enough for that to be a question —
 /// how long since anything last came back from it.
 fn running_tail(progress: &Progress) -> String {
-    let frame = (progress.in_status.as_millis() / SPINNER_FRAME.as_millis()) as usize;
     let mut text = format!(
         "  {} working {}",
-        SPINNER[frame % SPINNER.len()],
+        SPINNER[progress.events % SPINNER.len()],
         format_duration(progress.in_status)
     );
     if let Some(gap) = progress.since_event.filter(|gap| *gap >= QUIET_THRESHOLD) {
@@ -859,6 +857,7 @@ mod tests {
         Progress {
             in_status,
             since_event,
+            events: 0,
         }
     }
 
@@ -886,13 +885,22 @@ mod tests {
     }
 
     #[test]
-    fn the_spinner_advances_with_the_elapsed_time() {
-        let first = running_tail(&progress(Duration::from_millis(0), None));
-        let second = running_tail(&progress(Duration::from_millis(130), None));
+    fn the_spinner_advances_only_when_an_event_arrives() {
+        let mut early = progress(Duration::from_millis(0), None);
+        let mut late = progress(Duration::from_millis(5_000), None);
+        early.events = 1;
+        late.events = 1;
 
+        // Time passing on its own leaves the frame where it was.
+        assert_eq!(
+            running_tail(&early).chars().nth(2).unwrap(),
+            running_tail(&late).chars().nth(2).unwrap()
+        );
+
+        late.events = 2;
         assert_ne!(
-            first.chars().nth(2).unwrap(),
-            second.chars().nth(2).unwrap()
+            running_tail(&early).chars().nth(2).unwrap(),
+            running_tail(&late).chars().nth(2).unwrap()
         );
     }
 
