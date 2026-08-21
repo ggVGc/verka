@@ -21,6 +21,10 @@ graph, no orchestration, no isolation mechanism, and no process.
   that protocol requires.
 - **Transcript rendering** (`render`) — turning a decoded event stream into
   readable output.
+- **Native-session conversion** (`session`) — move the model-visible history
+  between Claude Code's resumable JSONL sessions and Codex CLI rollout JSONL
+  files.  Tool interactions are retained as readable context notes because the
+  providers do not share executable tool-call semantics.
 
 ## Boundary
 
@@ -33,3 +37,18 @@ Two hosts use it today. Orka pairs a Genta profile with a Driva execution
 request and decodes the resulting stream into attempt evidence. Styra, through
 `styra-server`, uses the same profiles and decoders for its own sessions.
 Neither dependency is visible to the other, and Genta is aware of neither.
+
+## Convert a native session
+
+`genta convert` operates on persisted sessions, rather than live `stream-json`
+or `codex --json` output. It assigns a fresh UUID by default so the converted
+file can coexist with its source session.
+
+```sh
+genta convert --from claude --to codex ~/.claude/projects/.../SESSION.jsonl converted.jsonl
+genta convert --from codex --to claude rollout-...jsonl converted.jsonl
+```
+
+Use `--session-id` when a caller needs to choose the target id and `--cwd` when
+the target should resume in a different workspace. The generated JSONL is
+intended to be placed in the destination CLI's normal session directory.
