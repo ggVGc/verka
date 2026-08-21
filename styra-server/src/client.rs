@@ -1,9 +1,9 @@
 //! Blocking client for Styra's JSON protocol over a Unix domain socket.
 
 use crate::protocol::{
-    CreateSession, CreateWorkspace, DrivaOptions, Health, PlanSession, RenameSession, Request,
-    Response, ResumeSession, SendMessage, SessionInfo, ShellInfo, StoredSession, TemplateSummary,
-    UpdateNotes, Updates, WireResponse,
+    CreateSession, CreateWorkspace, DrivaOptions, Health, LaunchPolicy, PlanSession, RenameSession,
+    Request, Response, ResumeSession, SendMessage, SessionInfo, ShellInfo, StoredSession,
+    TemplateSummary, UpdateNotes, Updates, WireResponse,
 };
 use crate::protocol::{InteractionSummary, SessionSummary, WorkspaceSummary};
 use anyhow::{bail, Context, Result};
@@ -96,6 +96,22 @@ impl Client {
         }))? {
             Response::WorkspaceNotesUpdated(value) => Ok(value),
             other => unexpected("workspace_notes_updated", other),
+        }
+    }
+
+    /// Replace the Workspace's standing sandbox policy — the templates,
+    /// mounts and network permission every launch in it starts from.
+    pub fn set_workspace_launch(
+        &self,
+        workspace_id: &str,
+        launch: &LaunchPolicy,
+    ) -> Result<WorkspaceSummary> {
+        match self.request(Request::SetWorkspaceLaunch {
+            workspace_id: workspace_id.to_owned(),
+            launch: launch.clone(),
+        })? {
+            Response::WorkspaceLaunchUpdated(value) => Ok(value),
+            other => unexpected("workspace_launch_updated", other),
         }
     }
 

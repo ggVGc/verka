@@ -172,7 +172,10 @@ pub fn handle_list_key(
         // reaching the transcript or a new session from this view must keep
         // working while the policy is being edited.
         View::Driva => match key.code {
-            KeyCode::Char('w') => app.toggle_launch_network(),
+            KeyCode::Char('w') => app.cycle_launch_network(),
+            // `I` for whether this launch inherits: `S` is claimed globally
+            // above (stopping the interaction) and never reaches this match.
+            KeyCode::Char('I') => app.toggle_launch_standalone(),
             KeyCode::Char('T') => {
                 if app.allow_launch_edit() {
                     app.ask(Request::Templates);
@@ -182,6 +185,9 @@ pub fn handle_list_key(
             KeyCode::Char('x') => app.remove_selected_launch_mount(),
             // Mirrors `D` in the launch picker: keep this policy as the one a
             // brand-new client starts from, rather than only this session's.
+            // Only this launch's own half is saved — the Workspace's is already
+            // durable, and saving the merge would make every launch elsewhere
+            // carry grants meant for this Workspace.
             KeyCode::Char('D') => {
                 if app.allow_launch_edit() {
                     let launch = app.launch.clone();
@@ -191,6 +197,14 @@ pub fn handle_list_key(
                             "could not save the default launch policy: {error:#}"
                         ))),
                     }
+                }
+            }
+            // The other place a policy can be kept: with the Workspace, where
+            // every client launching here picks it up. Needs the server, so the
+            // event loop does the asking.
+            KeyCode::Char('W') => {
+                if app.allow_launch_edit() {
+                    app.ask(Request::StoreWorkspaceLaunch);
                 }
             }
             KeyCode::Char('j') | KeyCode::Down => app.driva_select_next_mount(),

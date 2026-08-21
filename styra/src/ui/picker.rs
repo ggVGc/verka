@@ -651,6 +651,7 @@ mod tests {
             age: "2h ago".into(),
             created_at_ms: 1,
             last_accessed_at_ms: 1,
+            launch: Default::default(),
         }];
         let mut terminal = Terminal::new(TestBackend::new(100, 12)).unwrap();
         terminal
@@ -726,6 +727,7 @@ mod tests {
             age: "2m ago".into(),
             created_at_ms: 1,
             last_accessed_at_ms: 1,
+            launch: Default::default(),
         }];
         let screen = rendered_interactions_picker(&interactions, &workspaces, 0, &[]);
         assert!(screen.contains("current interactions"));

@@ -433,6 +433,7 @@ mod tests {
             age: "now".into(),
             created_at_ms: 1,
             last_accessed_at_ms,
+            launch: Default::default(),
         }
     }
 

@@ -8,9 +8,15 @@
 //! the operator's own inputs are listed below the effective policy, separately,
 //! because only those can be edited — the rest come from the profile, the
 //! templates, and the sandbox broker.
+//!
+//! Those inputs are in turn two layers, and the view keeps them apart for the
+//! same reason: the Workspace's standing policy applies to every launch there
+//! and is not this launch's to drop, while the launch's own overlay is exactly
+//! what `m`, `x`, `T` and `w` edit. A row the operator cannot remove should not
+//! look like one they can.
 
 use super::{render_placeholder, view_block};
-use crate::app::{App, LaunchInputs};
+use crate::app::{mount_label, App};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -73,47 +79,103 @@ pub(crate) fn render_driva(frame: &mut Frame, app: &App, area: Rect) {
     render_prompt(frame, app, area);
 }
 
-/// How the effective network policy reads, together with the operator's own
-/// setting when the two differ.
+/// How the effective network policy reads, together with where it comes from
+/// when that is not the operator's own doing.
 ///
-/// `w` only ever adds permission — every agent profile Styra can launch already
-/// permits networking, and a template may too, so the resolved policy is "on"
-/// no matter what the operator's input says. Showing only the resolved value
-/// made `w` look like a key that did nothing: the message said "network off for
-/// the next interaction" while the field kept reading `on`. Name where the "on"
-/// comes from instead, so the toggle is visible and its limit is stated.
+/// `w` cannot force networking off — every agent profile Styra can launch
+/// already permits it, and a template may too, so the resolved policy can read
+/// "on" whatever the operator's input says. Showing only the resolved value made
+/// `w` look like a key that did nothing: the message said "network off for the
+/// next interaction" while the field kept reading `on`. Name the source instead,
+/// so the key is visible and its limit is stated — and, when the answer is
+/// inherited, say which layer it is inherited from.
 fn network_label(app: &App, effective: bool) -> String {
     let on = if effective { "on" } else { "off" };
-    if !app.can_edit_launch() || effective == app.launch.network {
+    if !app.can_edit_launch() {
         return on.to_owned();
     }
-    format!("{on} — from the agent profile; your setting: off (w only adds permission)")
-}
-
-/// The templates the next launch would layer, in the order they apply.
-fn templates_label(app: &App) -> String {
-    if app.launch.templates.is_empty() {
-        "none".to_owned()
-    } else {
-        app.launch.templates.join(", ")
+    let asked = app.effective_launch().grants_network();
+    if effective != asked {
+        return format!("{on} — from the agent profile; your setting: off (w cannot revoke it)");
+    }
+    match (app.launch.network, app.workspace_launch.network) {
+        // Stated by this launch, against what it would otherwise inherit.
+        (Some(_), Some(_)) => format!("{on} — this launch, over the Workspace policy"),
+        (Some(_), None) => on.to_owned(),
+        (None, Some(_)) => format!("{on} — from the Workspace policy"),
+        (None, None) => on.to_owned(),
     }
 }
 
-/// The part of the policy this operator owns: the mounts they added, with a
-/// cursor over them, and the keys that change any of it.
+/// The templates the next launch would layer, in the order they apply, saying
+/// which of them the Workspace contributes: those are not this launch's to
+/// remove without `I`.
+fn templates_label(app: &App) -> String {
+    let effective = app.effective_launch().templates;
+    if effective.is_empty() {
+        return "none".to_owned();
+    }
+    let from_workspace = if app.launch.standalone {
+        &[][..]
+    } else {
+        &app.workspace_launch.templates
+    };
+    effective
+        .iter()
+        .map(|name| {
+            if from_workspace.contains(name) {
+                format!("{name} (Workspace)")
+            } else {
+                name.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The part of the policy this operator owns, in the two layers it is made of:
+/// what the Workspace grants every launch here, and what this launch adds on
+/// top — with a cursor over the second, since that is the half `x` can remove.
 ///
-/// Kept separate from the effective mount list above rather than folded into
-/// it, because those are the only rows `x` can remove — the workspace, the
-/// profile's credential mounts, and the broker's control mount are not the
-/// operator's to drop.
+/// Both are kept separate from the effective mount list above rather than
+/// folded into it, because between them they are the only rows any key here can
+/// change — the workspace mount, the profile's credential mounts, and the
+/// broker's control mount are not the operator's to drop.
 fn editable_section(app: &App) -> Vec<Line<'static>> {
     let heading = Style::default()
         .fg(Color::Cyan)
         .add_modifier(Modifier::BOLD);
-    let mut lines = vec![
-        Line::from(""),
-        Line::from(Span::styled("added by you", heading)),
-    ];
+    let mut lines = Vec::new();
+    if !app.workspace_launch.mounts.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled("from the Workspace", heading),
+            Span::styled(
+                if app.launch.standalone {
+                    " · not applied (standalone)"
+                } else {
+                    " · every launch here"
+                },
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]));
+        // Dimmed, and with no cursor: these are shown so the operator can see
+        // what they already have, not so they can edit it here.
+        let style = if app.launch.standalone {
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::CROSSED_OUT)
+        } else {
+            Style::default().fg(Color::Gray)
+        };
+        lines.extend(
+            app.workspace_launch.mounts.iter().map(|mount| {
+                Line::from(Span::styled(format!("    {}", mount_label(mount)), style))
+            }),
+        );
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled("added by you", heading)));
     if app.launch.mounts.is_empty() {
         lines.push(Line::from(Span::styled(
             "  none — press m to add one",
@@ -131,7 +193,7 @@ fn editable_section(app: &App) -> Vec<Line<'static>> {
                     Style::default().fg(Color::Yellow),
                 ),
                 Span::styled(
-                    LaunchInputs::mount_label(mount),
+                    mount_label(mount),
                     if current {
                         Style::default()
                             .fg(Color::White)
@@ -145,7 +207,15 @@ fn editable_section(app: &App) -> Vec<Line<'static>> {
     }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "  m add mount · x remove · T templates · w network · D save as default",
+        "  m add mount · x remove · T templates · w network",
+        Style::default().fg(Color::DarkGray),
+    )));
+    lines.push(Line::from(Span::styled(
+        if app.launch.standalone {
+            "  I inherit the Workspace policy · D save as default · W save for the Workspace"
+        } else {
+            "  I ignore the Workspace policy · D save as default · W save for the Workspace"
+        },
         Style::default().fg(Color::DarkGray),
     )));
     lines
@@ -310,7 +380,7 @@ mod tests {
         app.toggle_view(View::Driva);
         app.set_planned_driva_options(
             selection,
-            app.launch.clone(),
+            app.effective_launch(),
             Some(DrivaOptions {
                 isolation_backend: "bwrap".into(),
                 command: vec!["codex".into(), "app-server".into()],
@@ -333,7 +403,7 @@ mod tests {
         app.toggle_view(View::Driva);
         app.set_planned_driva_options(
             selection,
-            app.launch.clone(),
+            app.effective_launch(),
             Some(DrivaOptions {
                 isolation_backend: "bwrap".into(),
                 command: vec!["codex".into()],
@@ -379,6 +449,95 @@ mod tests {
         assert!(screen.contains("/srv/data → /mnt/data (rw)"), "{screen}");
     }
 
+    /// The two layers of the policy have to be told apart on screen: what the
+    /// Workspace grants every launch here is not this launch's to remove.
+    #[test]
+    fn the_workspace_policys_grants_are_shown_apart_from_this_launchs() {
+        let mut app = editable_app();
+        app.set_workspace_launch(styra_server::LaunchPolicy {
+            network: Some(true),
+            templates: vec!["rust".into()],
+            mounts: vec![styra_server::LaunchMount {
+                source: PathBuf::from("/srv/corpus"),
+                destination: Some(PathBuf::from("/mnt/corpus")),
+                writable: false,
+            }],
+            standalone: false,
+        });
+        app.set_launch_templates(vec!["rust".into(), "browser".into()]);
+        app.driva_prompt = Some("/srv/scratch:rw".into());
+        app.confirm_driva_prompt();
+
+        let screen = tall(&app);
+        assert!(screen.contains("from the Workspace"), "{screen}");
+        assert!(screen.contains("every launch here"), "{screen}");
+        assert!(
+            screen.contains("/srv/corpus → /mnt/corpus (ro)"),
+            "{screen}"
+        );
+        // The layering, with the Workspace's own contribution named.
+        assert!(screen.contains("rust (Workspace), browser"), "{screen}");
+        // And this launch's own half, which is the half `x` reaches.
+        assert!(screen.contains("/srv/scratch (rw)"), "{screen}");
+        assert!(screen.contains("I ignore the Workspace policy"), "{screen}");
+
+        // Standalone says the Workspace's grants do not apply, and the view has
+        // to say so where they are listed rather than only in a key hint.
+        app.toggle_launch_standalone();
+        let screen = tall(&app);
+        assert!(screen.contains("not applied (standalone)"), "{screen}");
+        assert!(
+            screen.contains("I inherit the Workspace policy"),
+            "{screen}"
+        );
+    }
+
+    /// A network answer the operator did not give themselves has to name the
+    /// layer it came from, or `w` reads as a key with no effect.
+    #[test]
+    fn network_names_the_workspace_policy_when_that_is_where_the_answer_comes_from() {
+        use styra_server::DrivaOptions;
+
+        let mut app = editable_app();
+        app.set_workspace_launch(styra_server::LaunchPolicy {
+            network: Some(true),
+            ..styra_server::LaunchPolicy::default()
+        });
+        app.set_planned_driva_options(
+            app.selection.clone(),
+            app.effective_launch(),
+            Some(DrivaOptions {
+                isolation_backend: "bwrap".into(),
+                command: vec!["codex".into()],
+                working_directory: PathBuf::from("/tmp/styra/workspace"),
+                network: true,
+                mounts: Vec::new(),
+            }),
+        );
+        let screen = tall(&app);
+        assert!(screen.contains("from the Workspace policy"), "{screen}");
+
+        // Withdrawn by this launch: now it is the operator's own answer, over
+        // the Workspace's.
+        app.cycle_launch_network();
+        app.set_planned_driva_options(
+            app.selection.clone(),
+            app.effective_launch(),
+            Some(DrivaOptions {
+                isolation_backend: "bwrap".into(),
+                command: vec!["codex".into()],
+                working_directory: PathBuf::from("/tmp/styra/workspace"),
+                network: false,
+                mounts: Vec::new(),
+            }),
+        );
+        let screen = tall(&app);
+        assert!(
+            screen.contains("off — this launch, over the Workspace policy"),
+            "{screen}"
+        );
+    }
+
     /// Every agent profile already permits networking, so the resolved policy
     /// reads `on` whatever the operator's input is. The view has to say where
     /// that "on" comes from, otherwise `w` looks like a key that does nothing.
@@ -390,7 +549,7 @@ mod tests {
         // The server's answer for a profile that permits networking on its own.
         app.set_planned_driva_options(
             app.selection.clone(),
-            app.launch.clone(),
+            app.effective_launch(),
             Some(DrivaOptions {
                 isolation_backend: "bwrap".into(),
                 command: vec!["codex".into()],
@@ -404,7 +563,7 @@ mod tests {
         assert!(screen.contains("your setting: off"), "{screen}");
 
         // Once the operator asks for it too, the field is just the policy.
-        app.toggle_launch_network();
+        app.cycle_launch_network();
         let screen = tall(&app);
         assert!(!screen.contains("from the agent profile"), "{screen}");
         assert!(screen.contains("network  on"), "{screen}");

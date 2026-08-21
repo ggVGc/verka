@@ -39,6 +39,11 @@ pub struct WorkspaceSummary {
     /// Millisecond timestamp of the most recent explicit access.
     #[serde(default)]
     pub last_accessed_at_ms: u64,
+    /// The Workspace's standing sandbox policy: what every launch here starts
+    /// from before an individual launch adds to it. Empty until an operator
+    /// stores one.
+    #[serde(default, skip_serializing_if = "LaunchPolicy::is_empty")]
+    pub launch: LaunchPolicy,
 }
 
 /// An update delivered from the interaction's threads to the UI.
@@ -152,6 +157,125 @@ pub struct LaunchMount {
     pub writable: bool,
 }
 
+/// The sandbox policy inputs a launch asks for beyond the agent selection.
+///
+/// The same type serves two roles, and the difference is only where it is
+/// stored. A Workspace holds one as its *standing* policy — what every launch
+/// there starts from ([`WorkspaceSummary::launch`]). A launch request carries
+/// one as its own *overlay* — what this interaction adds to, or says instead
+/// of, the Workspace's. [`LaunchPolicy::merge`] is the only place the two are
+/// combined, and the server merges them for `create_session`, `plan_session`
+/// and `resume_session` alike, so a plan cannot disagree with the launch it
+/// describes.
+///
+/// Nothing here is resolved: `templates` are names and `mounts` are requests.
+/// The server resolves both against the Workspace's `driva.toml` and the host
+/// filesystem after merging.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct LaunchPolicy {
+    /// Whether agent networking is permitted. `None` inherits — from the
+    /// Workspace's policy on an overlay, and from nothing at all on the
+    /// Workspace's own, which then leaves the decision to the profile and the
+    /// templates. `Some` states it for this layer and wins over the layer
+    /// below. Even `Some(false)` only withdraws *this* permission: the server
+    /// ORs the profile's and the templates' own network policy in afterwards.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub network: Option<bool>,
+    /// Named Driva templates, layered in the order given (later names win on
+    /// conflict). On an overlay these are appended after the Workspace's,
+    /// so an interaction's template wins over the Workspace's.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub templates: Vec<String>,
+    /// Host directories to bind in on top of the workspace mount. On an
+    /// overlay these are added to the Workspace's, except that one landing on
+    /// the same destination replaces it rather than colliding with it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub mounts: Vec<LaunchMount>,
+    /// On an overlay: ignore the Workspace's standing policy entirely rather
+    /// than adding to it. This is how a single interaction drops a template or
+    /// a mount the Workspace grants, which appending alone cannot express.
+    /// Meaningless on a Workspace's own policy, which has nothing below it.
+    #[serde(skip_serializing_if = "is_false")]
+    pub standalone: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+impl LaunchPolicy {
+    /// Whether this policy asks for anything at all. A Workspace with an empty
+    /// policy is indistinguishable from one that never stored a policy, which
+    /// is why the field is skipped on the wire when it is empty.
+    pub fn is_empty(&self) -> bool {
+        self.network.is_none()
+            && self.templates.is_empty()
+            && self.mounts.is_empty()
+            && !self.standalone
+    }
+
+    /// The single policy a launch runs under: the Workspace's `base` with one
+    /// launch's `overlay` layered over it.
+    ///
+    /// Additive by default, because that is what a standing policy is for: the
+    /// Workspace grants the mounts and templates every launch there needs, and
+    /// an interaction says what is particular to it. An overlay overrides
+    /// rather than adds in exactly three ways — a stated `network`, a template
+    /// name repeating one of the Workspace's (which moves it later in the
+    /// layering, where it wins), and a mount on a destination the Workspace
+    /// already binds. `standalone` is the escape hatch for the case none of
+    /// those cover: dropping something the Workspace grants.
+    ///
+    /// The result is always additive-shaped (`standalone` cleared): it is a
+    /// resolved policy, with nothing left below it to ignore.
+    pub fn merge(base: &Self, overlay: &Self) -> Self {
+        if overlay.standalone {
+            return Self {
+                standalone: false,
+                ..overlay.clone()
+            };
+        }
+        let mut merged = Self {
+            network: overlay.network.or(base.network),
+            templates: base.templates.clone(),
+            mounts: base.mounts.clone(),
+            standalone: false,
+        };
+        for name in &overlay.templates {
+            merged.templates.retain(|existing| existing != name);
+            merged.templates.push(name.clone());
+        }
+        for mount in &overlay.mounts {
+            merged
+                .mounts
+                .retain(|existing| !same_target(existing, mount));
+            merged.mounts.push(mount.clone());
+        }
+        merged
+    }
+
+    /// Whether this policy asks for networking. An absent answer is "no" here:
+    /// the profile and the templates are ORed in by the caller, so this only
+    /// ever reports what the operator asked for.
+    pub fn grants_network(&self) -> bool {
+        self.network.unwrap_or(false)
+    }
+}
+
+/// Whether two mount requests would land in the same place inside the sandbox.
+///
+/// Compared before canonicalization, on the paths as asked for, because that
+/// is what a merge has to work with — an overlay is layered before the server
+/// resolves anything. A mount naming no destination lands on its own source,
+/// matching Driva's rule, so that is what stands in for it. Two requests that
+/// only collide once resolved (via a symlink, say) are not caught here; they
+/// are still refused at plan and launch time by `ensure_distinct_destinations`.
+fn same_target(left: &LaunchMount, right: &LaunchMount) -> bool {
+    left.destination.as_ref().unwrap_or(&left.source)
+        == right.destination.as_ref().unwrap_or(&right.source)
+}
+
 /// A Driva execution template the server can offer, named and described, so a
 /// client can present the real set rather than asking the operator to recall
 /// template names.
@@ -225,4 +349,134 @@ pub struct SessionSummary {
     /// The millisecond timestamp embedded in `id`, used to sort newest
     /// first; `None` for an id that doesn't match the expected shape.
     pub created_at_ms: Option<u64>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mount(source: &str, destination: Option<&str>, writable: bool) -> LaunchMount {
+        LaunchMount {
+            source: PathBuf::from(source),
+            destination: destination.map(PathBuf::from),
+            writable,
+        }
+    }
+
+    /// The ordinary case: the Workspace says what every launch here needs, the
+    /// launch says what is particular to it, and the sandbox gets both.
+    #[test]
+    fn a_launch_adds_to_the_workspace_policy_by_default() {
+        let base = LaunchPolicy {
+            network: Some(true),
+            templates: vec!["rust".into()],
+            mounts: vec![mount("/srv/corpus", None, false)],
+            standalone: false,
+        };
+        let overlay = LaunchPolicy {
+            templates: vec!["browser".into()],
+            mounts: vec![mount("/srv/scratch", None, true)],
+            ..LaunchPolicy::default()
+        };
+
+        let merged = LaunchPolicy::merge(&base, &overlay);
+        assert_eq!(merged.templates, vec!["rust", "browser"]);
+        assert_eq!(
+            merged.mounts,
+            vec![
+                mount("/srv/corpus", None, false),
+                mount("/srv/scratch", None, true)
+            ]
+        );
+        // Inherited, because the overlay said nothing about it.
+        assert_eq!(merged.network, Some(true));
+        assert!(merged.grants_network());
+    }
+
+    /// Overriding, in the three ways an additive overlay can express it: a
+    /// stated network answer, a template name that moves later in the layering,
+    /// and a mount on a destination the Workspace already binds.
+    #[test]
+    fn an_overlay_overrides_the_workspace_on_the_grants_it_names() {
+        let base = LaunchPolicy {
+            network: Some(true),
+            templates: vec!["rust".into(), "browser".into()],
+            mounts: vec![mount("/srv/corpus", Some("/mnt/corpus"), false)],
+            standalone: false,
+        };
+        let overlay = LaunchPolicy {
+            network: Some(false),
+            templates: vec!["rust".into()],
+            mounts: vec![mount("/srv/other", Some("/mnt/corpus"), true)],
+            standalone: false,
+        };
+
+        let merged = LaunchPolicy::merge(&base, &overlay);
+        assert_eq!(merged.network, Some(false));
+        // Naming a template the Workspace already layers moves it last, where
+        // it wins on conflict, rather than duplicating it.
+        assert_eq!(merged.templates, vec!["browser", "rust"]);
+        // One destination, bound to what this launch asked for: the two would
+        // otherwise collide and be refused outright.
+        assert_eq!(
+            merged.mounts,
+            vec![mount("/srv/other", Some("/mnt/corpus"), true)]
+        );
+    }
+
+    /// A mount naming no destination lands on its own source, so that is what
+    /// an overlay has to match to replace it.
+    #[test]
+    fn a_mount_with_no_destination_is_replaced_through_its_source() {
+        let base = LaunchPolicy {
+            mounts: vec![mount("/srv/corpus", None, false)],
+            ..LaunchPolicy::default()
+        };
+        let overlay = LaunchPolicy {
+            mounts: vec![mount("/srv/corpus", None, true)],
+            ..LaunchPolicy::default()
+        };
+
+        let merged = LaunchPolicy::merge(&base, &overlay);
+        assert_eq!(merged.mounts, vec![mount("/srv/corpus", None, true)]);
+    }
+
+    /// Dropping a grant the Workspace makes cannot be said by adding to it, so
+    /// `standalone` is the one way a launch says "not that policy, this one".
+    #[test]
+    fn a_standalone_launch_ignores_the_workspace_policy_entirely() {
+        let base = LaunchPolicy {
+            network: Some(true),
+            templates: vec!["rust".into()],
+            mounts: vec![mount("/srv/corpus", None, false)],
+            standalone: false,
+        };
+        let overlay = LaunchPolicy {
+            templates: vec!["browser".into()],
+            standalone: true,
+            ..LaunchPolicy::default()
+        };
+
+        let merged = LaunchPolicy::merge(&base, &overlay);
+        assert_eq!(merged.templates, vec!["browser"]);
+        assert!(merged.mounts.is_empty());
+        assert_eq!(merged.network, None);
+        assert!(!merged.grants_network());
+        // The result is a resolved policy: there is nothing left below it.
+        assert!(!merged.standalone);
+    }
+
+    /// A launch that asks for nothing runs under exactly the Workspace's
+    /// policy — the property that makes a standing policy worth storing.
+    #[test]
+    fn an_empty_overlay_leaves_the_workspace_policy_as_it_is() {
+        let base = LaunchPolicy {
+            network: Some(true),
+            templates: vec!["rust".into()],
+            mounts: vec![mount("/srv/corpus", None, false)],
+            standalone: false,
+        };
+        assert!(LaunchPolicy::default().is_empty());
+        assert_eq!(LaunchPolicy::merge(&base, &LaunchPolicy::default()), base);
+    }
 }

@@ -5,7 +5,6 @@
 //! so the whole interaction model is unit-testable. [`crate::ui`] renders it and
 //! `main` feeds it input and session updates.
 
-use serde::{Deserialize, Serialize};
 use std::cell::Cell;
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -101,34 +100,24 @@ impl From<styra_server::InteractionActivity> for Status {
 /// What a launch is asked for beyond the agent selection: the sandbox policy
 /// inputs the server resolves into a concrete Driva request.
 ///
-/// These are the only launch knobs that are not derived from the profile, and
-/// they live here — not read from the CLI at each call site — so that the
-/// Driva view can edit them before an interaction starts and every launch
-/// path (create, plan, resume) is fed from one place.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct LaunchInputs {
-    /// Permit agent networking. A profile or template may still turn it on;
-    /// this only ever adds permission, matching how the server ORs them.
-    pub network: bool,
-    /// Named Driva templates, layered in order (later names win on conflict).
-    pub templates: Vec<String>,
-    /// Host directories to bind in on top of the workspace.
-    pub mounts: Vec<LaunchMount>,
-}
+/// Defined on the wire rather than here ([`styra_server::LaunchPolicy`]),
+/// because both layers of it are the server's to resolve: the Workspace's
+/// standing policy and this launch's own overlay are merged there, once, for
+/// every launch path. The client holds the two apart ([`App::workspace_launch`]
+/// and [`App::launch`]) only so the Driva view can say where each grant comes
+/// from and edit the half that is the operator's.
+pub use styra_server::LaunchPolicy;
 
-impl LaunchInputs {
-    /// How an extra mount reads in the view and in the prompt that adds one.
-    pub fn mount_label(mount: &LaunchMount) -> String {
-        let access = if mount.writable { "rw" } else { "ro" };
-        match &mount.destination {
-            Some(destination) => format!(
-                "{} → {} ({access})",
-                mount.source.display(),
-                destination.display()
-            ),
-            None => format!("{} ({access})", mount.source.display()),
-        }
+/// How an extra mount reads in the view and in the prompt that adds one.
+pub fn mount_label(mount: &LaunchMount) -> String {
+    let access = if mount.writable { "rw" } else { "ro" };
+    match &mount.destination {
+        Some(destination) => format!(
+            "{} → {} ({access})",
+            mount.source.display(),
+            destination.display()
+        ),
+        None => format!("{} ({access})", mount.source.display()),
     }
 }
 
@@ -625,15 +614,22 @@ pub struct App {
     /// The two are worth telling apart on screen: one is what the agent runs
     /// under, the other is what it would run under.
     pub driva_planned: bool,
-    /// The launch inputs a new interaction would start under. Editable from
-    /// the Driva view while nothing has launched (see [`Self::can_edit_launch`]).
-    pub launch: LaunchInputs,
-    /// The (selection, launch inputs) `driva_options` was planned for, recorded
-    /// even when the plan could not be fetched. Anything that changes the
-    /// policy — switching model, adding a mount, toggling network — makes this
-    /// differ from the current inputs and the plan is re-asked for; a failing
-    /// server is asked once per distinct input rather than on every frame.
-    driva_plan_key: Option<(Selection, LaunchInputs)>,
+    /// What a new interaction in this Workspace starts from: the standing
+    /// policy stored with the Workspace itself, shared by every client that
+    /// launches there. Not the operator's to edit here — only to promote the
+    /// current policy into (see [`Self::adopt_workspace_launch`]).
+    pub workspace_launch: LaunchPolicy,
+    /// What *this* launch adds to (or says instead of) the Workspace's policy.
+    /// Editable from the Driva view while nothing has launched (see
+    /// [`Self::can_edit_launch`]), and the only half an edit touches.
+    pub launch: LaunchPolicy,
+    /// The (selection, effective policy) `driva_options` was planned for,
+    /// recorded even when the plan could not be fetched. Anything that changes
+    /// the policy — switching model, adding a mount, toggling network, entering
+    /// a Workspace with its own standing policy — makes this differ from the
+    /// current one and the plan is re-asked for; a failing server is asked once
+    /// per distinct input rather than on every frame.
+    driva_plan_key: Option<(Selection, LaunchPolicy)>,
     /// Which of `launch.mounts` the Driva view has selected for removal.
     pub driva_selected_mount: usize,
     /// The open "add a mount" prompt, while the operator is typing one.
@@ -700,6 +696,9 @@ pub enum Request {
     /// list of them lives on the server, so the event loop fetches it and runs
     /// the picker.
     Templates,
+    /// Keep the policy now on screen as the Workspace's standing one, so every
+    /// launch here — from this client or any other — starts from it.
+    StoreWorkspaceLaunch,
     /// Tell the server the live interaction has been switched onto
     /// [`App::selection`], so the change lands now and outlives this client.
     ApplySelection,
@@ -739,7 +738,8 @@ impl App {
             working_directory: None,
             driva_options: None,
             driva_planned: false,
-            launch: LaunchInputs::default(),
+            workspace_launch: LaunchPolicy::default(),
+            launch: LaunchPolicy::default(),
             driva_plan_key: None,
             driva_selected_mount: 0,
             driva_prompt: None,
@@ -1476,13 +1476,17 @@ impl App {
         self.driva_plan_key = None;
     }
 
-    /// Record the policy a new interaction under `selection` and these launch
-    /// inputs would start with, or that the server could not say (`None`).
-    /// Either way the inputs are remembered as asked about.
+    /// Record the policy a new interaction under `selection` and this
+    /// effective launch policy would start with, or that the server could not
+    /// say (`None`). Either way the inputs are remembered as asked about.
+    ///
+    /// `launch` is the merged policy, not the operator's half of it: the server
+    /// answers for the merge, so keying the plan on anything less would leave a
+    /// Workspace's own grants able to change without the plan being re-asked.
     pub fn set_planned_driva_options(
         &mut self,
         selection: Selection,
-        launch: LaunchInputs,
+        launch: LaunchPolicy,
         options: Option<DrivaOptions>,
     ) {
         self.driva_plan_key = Some((selection, launch));
@@ -1499,9 +1503,37 @@ impl App {
             return false;
         }
         match &self.driva_plan_key {
-            Some((selection, launch)) => selection != &self.selection || launch != &self.launch,
+            Some((selection, launch)) => {
+                selection != &self.selection || launch != &self.effective_launch()
+            }
             None => true,
         }
+    }
+
+    /// The single policy a launch from here would run under: the Workspace's
+    /// standing one with this launch's own over it. Merged by the same code the
+    /// server merges with, so what the view shows is what the launch resolves.
+    pub fn effective_launch(&self) -> LaunchPolicy {
+        LaunchPolicy::merge(&self.workspace_launch, &self.launch)
+    }
+
+    /// Adopt the standing policy of the Workspace now being viewed.
+    ///
+    /// The operator's own overlay is deliberately kept: it is what *this*
+    /// client is building for its next interaction, and carrying it across a
+    /// Workspace switch matches how the launch selection already travels.
+    pub fn set_workspace_launch(&mut self, launch: LaunchPolicy) {
+        self.workspace_launch = launch;
+        self.driva_selected_mount = 0;
+    }
+
+    /// Take the current effective policy as the Workspace's own, once the
+    /// server has stored it: the overlay is now redundant, so it is emptied
+    /// rather than left to be layered onto itself.
+    pub fn adopt_workspace_launch(&mut self, launch: LaunchPolicy) {
+        self.workspace_launch = launch;
+        self.launch = LaunchPolicy::default();
+        self.driva_selected_mount = 0;
     }
 
     /// Whether the launch policy can still be edited. Only before an
@@ -1525,27 +1557,80 @@ impl App {
     }
 
     /// Permit or forbid agent networking for the next interaction.
-    pub fn toggle_launch_network(&mut self) {
+    ///
+    /// Two states, not three: either this launch states the opposite of what it
+    /// would otherwise inherit, or it states nothing and inherits. Stating
+    /// agreement with the Workspace is expressible but pointless, so `w` does
+    /// not stop there — the first press always changes the effective answer and
+    /// the second always returns to inheriting. With no Workspace policy in
+    /// play, "inherit" is "off" and this is the plain on/off toggle it was.
+    pub fn cycle_launch_network(&mut self) {
         if !self.allow_launch_edit() {
             return;
         }
-        self.launch.network = !self.launch.network;
-        self.show_action_message(if self.launch.network {
-            "network on for the next interaction"
-        } else {
+        let inherited = self.workspace_launch.grants_network();
+        self.launch.network = match self.launch.network {
+            None => Some(!inherited),
+            Some(_) => None,
+        };
+        let message = match (self.launch.network, inherited) {
+            (Some(true), _) => "network on for the next interaction".to_owned(),
             // Only ever a withdrawal of *this* permission: the profile and the
             // templates have their own, which the server ORs in, so say so
             // rather than promising a sandbox with no network.
-            "network permission withdrawn — a profile or template may still permit it"
+            (Some(false), _) => {
+                "network permission withdrawn — a profile or template may still permit it"
+                    .to_owned()
+            }
+            (None, inherited) => format!(
+                "network follows the Workspace policy again ({})",
+                if inherited { "on" } else { "off" }
+            ),
+        };
+        self.show_action_message(message);
+    }
+
+    /// Say whether this launch inherits the Workspace's templates and mounts or
+    /// carries the whole policy itself. Bound to `I`, for inheriting.
+    pub fn toggle_launch_standalone(&mut self) {
+        if !self.allow_launch_edit() {
+            return;
+        }
+        self.launch.standalone = !self.launch.standalone;
+        self.show_action_message(if self.launch.standalone {
+            "standalone — the Workspace policy does not apply to this launch"
+        } else {
+            "this launch adds to the Workspace policy again"
         });
     }
 
     /// Adopt the templates chosen in the picker.
-    pub fn set_launch_templates(&mut self, templates: Vec<String>) {
+    ///
+    /// The picker shows and returns the *effective* list, so the choice has to
+    /// be turned back into an overlay. Keeping everything the Workspace grants
+    /// means the overlay is just the additions. Dropping one of them cannot be
+    /// said by adding, so the launch stops inheriting and carries the list
+    /// itself — otherwise deselecting a Workspace template would silently do
+    /// nothing.
+    pub fn set_launch_templates(&mut self, chosen: Vec<String>) {
         if !self.allow_launch_edit() {
             return;
         }
-        self.launch.templates = templates;
+        let base = &self.workspace_launch.templates;
+        if !self.launch.standalone && base.iter().all(|name| chosen.contains(name)) {
+            self.launch.templates = chosen
+                .into_iter()
+                .filter(|name| !base.contains(name))
+                .collect();
+            return;
+        }
+        if !self.launch.standalone {
+            self.show_action_message(
+                "standalone — dropping a Workspace template means this launch carries its own list",
+            );
+        }
+        self.launch.standalone = true;
+        self.launch.templates = chosen;
     }
 
     /// Open the prompt that adds an extra mount.
@@ -1576,6 +1661,13 @@ impl App {
                 if self.launch.mounts.contains(&mount) {
                     return self.show_action_message("that mount is already in the launch policy");
                 }
+                // A mount the Workspace already grants identically needs no
+                // overlay at all. Saying so is more useful than adding a row
+                // that changes nothing about the sandbox.
+                if !self.launch.standalone && self.workspace_launch.mounts.contains(&mount) {
+                    return self
+                        .show_action_message("the Workspace policy already grants that mount");
+                }
                 self.launch.mounts.push(mount);
                 self.driva_selected_mount = self.launch.mounts.len() - 1;
             }
@@ -1589,12 +1681,19 @@ impl App {
             return;
         }
         if self.launch.mounts.is_empty() {
-            return self.show_action_message("no added mount to remove");
+            // The cursor only ever sits on this launch's own mounts, so name
+            // the key that does reach a Workspace one rather than leaving the
+            // operator pressing `x` at a row it cannot touch.
+            return self.show_action_message(if self.workspace_launch.mounts.is_empty() {
+                "no added mount to remove"
+            } else {
+                "the Workspace policy's mounts are not this launch's to remove — press I to stop inheriting it"
+            });
         }
         let index = self.driva_selected_mount.min(self.launch.mounts.len() - 1);
         let removed = self.launch.mounts.remove(index);
         self.driva_selected_mount = index.min(self.launch.mounts.len().saturating_sub(1));
-        self.show_action_message(format!("removed {}", LaunchInputs::mount_label(&removed)));
+        self.show_action_message(format!("removed {}", mount_label(&removed)));
     }
 
     pub fn driva_select_next_mount(&mut self) {
@@ -3147,7 +3246,7 @@ mod tests {
         assert!(app.needs_driva_plan());
         app.set_planned_driva_options(
             app.selection.clone(),
-            app.launch.clone(),
+            app.effective_launch(),
             Some(options("planned")),
         );
         assert!(app.driva_planned);
@@ -3157,7 +3256,7 @@ mod tests {
         app.selection = styra_server::agent::Selection::parse("claude").unwrap();
         assert!(app.needs_driva_plan());
         // A failed plan still counts as asked: the server is not polled per frame.
-        app.set_planned_driva_options(app.selection.clone(), app.launch.clone(), None);
+        app.set_planned_driva_options(app.selection.clone(), app.effective_launch(), None);
         assert!(!app.needs_driva_plan());
         assert_eq!(
             app.driva_options.as_ref().unwrap().isolation_backend,
@@ -3187,7 +3286,7 @@ mod tests {
         let mut app = App::pending(styra_server::agent::Selection::parse("codex").unwrap());
         app.set_planned_driva_options(
             app.selection.clone(),
-            app.launch.clone(),
+            app.effective_launch(),
             Some(DrivaOptions {
                 isolation_backend: "bwrap".into(),
                 command: vec!["codex".into()],
@@ -3198,16 +3297,16 @@ mod tests {
         );
         assert!(!app.needs_driva_plan());
 
-        app.toggle_launch_network();
-        assert!(app.launch.network);
+        app.cycle_launch_network();
+        assert_eq!(app.launch.network, Some(true));
         assert!(app.needs_driva_plan());
 
-        app.set_planned_driva_options(app.selection.clone(), app.launch.clone(), None);
+        app.set_planned_driva_options(app.selection.clone(), app.effective_launch(), None);
         assert!(!app.needs_driva_plan());
 
         app.set_launch_templates(vec!["rust".into()]);
         assert!(app.needs_driva_plan());
-        app.set_planned_driva_options(app.selection.clone(), app.launch.clone(), None);
+        app.set_planned_driva_options(app.selection.clone(), app.effective_launch(), None);
 
         app.driva_prompt = Some("/srv/data:rw".into());
         app.confirm_driva_prompt();
@@ -3222,17 +3321,137 @@ mod tests {
         let mut app = app();
         assert!(!app.can_edit_launch());
 
-        app.toggle_launch_network();
-        assert!(!app.launch.network);
+        app.cycle_launch_network();
+        assert_eq!(app.launch.network, None);
         app.set_launch_templates(vec!["rust".into()]);
         assert!(app.launch.templates.is_empty());
         app.open_driva_prompt();
         assert!(app.driva_prompt.is_none());
+        app.toggle_launch_standalone();
+        assert!(!app.launch.standalone);
 
         let mut pending = App::pending(styra_server::agent::Selection::parse("codex").unwrap());
         assert!(pending.can_edit_launch());
-        pending.toggle_launch_network();
-        assert!(pending.launch.network);
+        pending.cycle_launch_network();
+        assert_eq!(pending.launch.network, Some(true));
+    }
+
+    fn workspace_policy() -> LaunchPolicy {
+        LaunchPolicy {
+            network: Some(true),
+            templates: vec!["rust".into()],
+            mounts: vec![LaunchMount {
+                source: PathBuf::from("/srv/corpus"),
+                destination: None,
+                writable: false,
+            }],
+            standalone: false,
+        }
+    }
+
+    fn pending_in_a_workspace_with_a_policy() -> App {
+        let mut app = App::pending(styra_server::agent::Selection::parse("codex").unwrap());
+        app.set_workspace_launch(workspace_policy());
+        app
+    }
+
+    /// The two halves are held apart, and only the launch's own is edited: what
+    /// the Workspace grants is added to, not replaced, and an edit that would
+    /// have overwritten it before now sits on top of it.
+    #[test]
+    fn an_edit_adds_to_the_workspace_policy_rather_than_replacing_it() {
+        let mut app = pending_in_a_workspace_with_a_policy();
+        assert_eq!(app.effective_launch(), workspace_policy());
+
+        app.set_launch_templates(vec!["rust".into(), "browser".into()]);
+        // Only the addition is this launch's; the Workspace keeps its own.
+        assert_eq!(app.launch.templates, vec!["browser"]);
+        assert!(!app.launch.standalone);
+        assert_eq!(
+            app.effective_launch().templates,
+            vec!["rust".to_owned(), "browser".to_owned()]
+        );
+
+        app.driva_prompt = Some("/srv/scratch:rw".into());
+        app.confirm_driva_prompt();
+        assert_eq!(app.launch.mounts.len(), 1);
+        assert_eq!(app.effective_launch().mounts.len(), 2);
+    }
+
+    /// Dropping a template the Workspace grants cannot be said by adding to it,
+    /// so the launch stops inheriting instead of silently doing nothing.
+    #[test]
+    fn deselecting_a_workspace_template_makes_the_launch_standalone() {
+        let mut app = pending_in_a_workspace_with_a_policy();
+        app.set_launch_templates(vec!["browser".into()]);
+
+        assert!(app.launch.standalone);
+        assert_eq!(app.launch.templates, vec!["browser"]);
+        let effective = app.effective_launch();
+        assert_eq!(effective.templates, vec!["browser"]);
+        // Standalone is the whole policy, so the Workspace's mounts and its
+        // network grant go with its templates.
+        assert!(effective.mounts.is_empty());
+        assert!(!effective.grants_network());
+    }
+
+    /// `w` states the opposite of what would otherwise be inherited, and then
+    /// returns to inheriting — there is no third state worth stopping on.
+    #[test]
+    fn network_toggles_against_the_workspace_policy_and_back_to_inheriting() {
+        let mut app = pending_in_a_workspace_with_a_policy();
+        assert!(app.effective_launch().grants_network());
+
+        app.cycle_launch_network();
+        assert_eq!(app.launch.network, Some(false));
+        assert!(!app.effective_launch().grants_network());
+
+        app.cycle_launch_network();
+        assert_eq!(app.launch.network, None);
+        assert!(app.effective_launch().grants_network());
+    }
+
+    /// A mount the Workspace already grants identically needs no overlay, and
+    /// one of its mounts is not this launch's to remove.
+    #[test]
+    fn the_workspace_policys_mounts_are_not_this_launchs_to_add_or_remove() {
+        let mut app = pending_in_a_workspace_with_a_policy();
+        app.driva_prompt = Some("/srv/corpus:ro".into());
+        app.confirm_driva_prompt();
+        assert!(app.launch.mounts.is_empty());
+
+        app.remove_selected_launch_mount();
+        assert_eq!(app.effective_launch().mounts, workspace_policy().mounts);
+
+        // Standalone is the way out, and it leaves the launch with nothing but
+        // its own inputs.
+        app.toggle_launch_standalone();
+        assert!(app.effective_launch().mounts.is_empty());
+    }
+
+    /// Storing the policy with the Workspace must not change what the next
+    /// launch runs under: the overlay is folded in, not layered onto itself.
+    #[test]
+    fn promoting_a_policy_to_the_workspace_leaves_the_effective_one_unchanged() {
+        let mut app = pending_in_a_workspace_with_a_policy();
+        app.set_launch_templates(vec!["rust".into(), "browser".into()]);
+        let before = app.effective_launch();
+
+        app.adopt_workspace_launch(before.clone());
+        assert!(app.launch.is_empty());
+        assert_eq!(app.effective_launch(), before);
+    }
+
+    /// Entering another Workspace re-plans: the policy a launch would run under
+    /// changed even though nothing the operator typed did.
+    #[test]
+    fn a_workspace_policy_change_re_asks_for_the_plan() {
+        let mut app = App::pending(styra_server::agent::Selection::parse("codex").unwrap());
+        app.set_planned_driva_options(app.selection.clone(), app.effective_launch(), None);
+        assert!(!app.needs_driva_plan());
+
+        app.set_workspace_launch(workspace_policy());
+        assert!(app.needs_driva_plan());
     }
 
     #[test]

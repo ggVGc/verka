@@ -15,8 +15,8 @@ mod types;
 pub use transport::{read_message, read_message_limited, write_message, MAX_REQUEST_BYTES};
 pub use types::{
     Direction, DrivaOptions, InteractionActivity, InteractionEnd, InteractionSummary,
-    InteractionUpdate, LaunchMount, LogEntry, LogLevel, RawLine, SessionSummary, TemplateSummary,
-    WorkspaceSummary,
+    InteractionUpdate, LaunchMount, LaunchPolicy, LogEntry, LogLevel, RawLine, SessionSummary,
+    TemplateSummary, WorkspaceSummary,
 };
 
 // These external vocabularies are serialized inside protocol payloads. Re-export
@@ -42,17 +42,11 @@ pub struct CreateWorkspace {
 pub struct CreateSession {
     pub workspace_id: String,
     pub selection: Selection,
+    /// This launch's own sandbox policy, layered over the Workspace's standing
+    /// one (see [`LaunchPolicy::merge`]). Templates are names and mounts are
+    /// requests; the server resolves both after merging.
     #[serde(default)]
-    pub network: bool,
-    /// Named Driva execution templates (see `driva templates`), applied as an
-    /// additive overlay on top of the profile's own mounts, environment, and
-    /// network policy. Later names in the list take precedence on conflict.
-    #[serde(default)]
-    pub templates: Vec<String>,
-    /// Extra host directories to bind into the sandbox, on top of the
-    /// workspace and whatever the profile and templates already grant.
-    #[serde(default)]
-    pub mounts: Vec<LaunchMount>,
+    pub launch: LaunchPolicy,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
     /// Optional operator-facing name. When absent, the server derives one
@@ -70,11 +64,7 @@ pub struct PlanSession {
     pub workspace_id: String,
     pub selection: Selection,
     #[serde(default)]
-    pub network: bool,
-    #[serde(default)]
-    pub templates: Vec<String>,
-    #[serde(default)]
-    pub mounts: Vec<LaunchMount>,
+    pub launch: LaunchPolicy,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -97,11 +87,7 @@ pub struct UpdateNotes {
 pub struct ResumeSession {
     pub id: String,
     #[serde(default)]
-    pub network: bool,
-    #[serde(default)]
-    pub templates: Vec<String>,
-    #[serde(default)]
-    pub mounts: Vec<LaunchMount>,
+    pub launch: LaunchPolicy,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -193,6 +179,13 @@ pub enum Request {
     RenameSession(RenameSession),
     UpdateSessionNotes(UpdateNotes),
     UpdateWorkspaceNotes(UpdateNotes),
+    /// Replace a Workspace's standing sandbox policy: the templates, mounts and
+    /// network permission every launch in it starts from. Applies to launches
+    /// made after it, not to interactions already running under the old one.
+    SetWorkspaceLaunch {
+        workspace_id: String,
+        launch: LaunchPolicy,
+    },
     SendMessage {
         id: String,
         message: SendMessage,
@@ -277,6 +270,7 @@ pub enum Response {
     SessionRenamed(SessionSummary),
     SessionNotesUpdated(SessionSummary),
     WorkspaceNotesUpdated(WorkspaceSummary),
+    WorkspaceLaunchUpdated(WorkspaceSummary),
     Accepted,
     Queued(usize),
     TakenQueuedMessage(Option<String>),
@@ -343,9 +337,7 @@ mod tests {
                 model: "claude-opus-5".into(),
                 effort: crate::agent::Effort::XHigh,
             },
-            network: false,
-            templates: Vec::new(),
-            mounts: Vec::new(),
+            launch: LaunchPolicy::default(),
             message: None,
             name: None,
         });
@@ -361,22 +353,30 @@ mod tests {
         let request = Request::PlanSession(PlanSession {
             workspace_id: "w-1".into(),
             selection: crate::agent::Selection::new(crate::agent::Provider::Codex),
-            network: true,
-            templates: vec!["browser".into()],
-            mounts: vec![LaunchMount {
-                source: PathBuf::from("/srv/data"),
-                destination: None,
-                writable: true,
-            }],
+            launch: LaunchPolicy {
+                network: Some(true),
+                templates: vec!["browser".into()],
+                mounts: vec![LaunchMount {
+                    source: PathBuf::from("/srv/data"),
+                    destination: None,
+                    writable: true,
+                }],
+                standalone: false,
+            },
         });
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(json["operation"], "plan_session");
         assert_eq!(json["data"]["workspace_id"], "w-1");
-        assert_eq!(json["data"]["network"], true);
-        assert_eq!(json["data"]["templates"][0], "browser");
-        assert_eq!(json["data"]["mounts"][0]["source"], "/srv/data");
-        assert_eq!(json["data"]["mounts"][0]["writable"], true);
-        assert!(json["data"]["mounts"][0].get("destination").is_none());
+        assert_eq!(json["data"]["launch"]["network"], true);
+        assert_eq!(json["data"]["launch"]["templates"][0], "browser");
+        assert_eq!(json["data"]["launch"]["mounts"][0]["source"], "/srv/data");
+        assert_eq!(json["data"]["launch"]["mounts"][0]["writable"], true);
+        assert!(json["data"]["launch"]["mounts"][0]
+            .get("destination")
+            .is_none());
+        // An overlay that asks for nothing says nothing on the wire, so a
+        // Workspace's standing policy is what a bare launch runs under.
+        assert!(json["data"]["launch"].get("standalone").is_none());
         assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
 
         let response = Response::SessionPlan(DrivaOptions {
@@ -395,21 +395,24 @@ mod tests {
     fn resume_names_only_the_existing_session_and_launch_policy() {
         let request = Request::ResumeSession(ResumeSession {
             id: "styra-1".into(),
-            network: true,
-            templates: vec!["rust".into()],
-            mounts: Vec::new(),
+            launch: LaunchPolicy {
+                network: Some(true),
+                templates: vec!["rust".into()],
+                ..LaunchPolicy::default()
+            },
         });
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(json["operation"], "resume_session");
         assert_eq!(json["data"]["id"], "styra-1");
-        assert_eq!(json["data"]["templates"][0], "rust");
+        assert_eq!(json["data"]["launch"]["templates"][0], "rust");
         assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
     }
 
-    /// Launch inputs are additive on the wire: a client that predates extra
-    /// mounts omits the field entirely, and must still be understood.
+    /// A launch that names no policy of its own is the ordinary case — it runs
+    /// under whatever the Workspace stands for — so the field is optional and
+    /// its absence must read as an empty overlay rather than an error.
     #[test]
-    fn launch_requests_default_their_extra_mounts_to_none() {
+    fn a_launch_request_may_name_no_policy_of_its_own() {
         let request: Request = serde_json::from_str(
             r#"{"operation":"plan_session","data":{"workspace_id":"w-1",
                  "selection":{"provider":"codex","model":"gpt-5.6-sol","effort":"high"}}}"#,
@@ -418,9 +421,51 @@ mod tests {
         let Request::PlanSession(plan) = request else {
             panic!("expected a plan request");
         };
-        assert!(plan.mounts.is_empty());
-        assert!(plan.templates.is_empty());
-        assert!(!plan.network);
+        assert!(plan.launch.is_empty());
+        assert_eq!(plan.launch.network, None);
+    }
+
+    #[test]
+    fn a_workspace_carries_the_policy_its_launches_start_from() {
+        let launch = LaunchPolicy {
+            network: Some(true),
+            templates: vec!["rust".into()],
+            mounts: vec![LaunchMount {
+                source: PathBuf::from("/srv/corpus"),
+                destination: Some(PathBuf::from("/mnt/corpus")),
+                writable: false,
+            }],
+            standalone: false,
+        };
+        let request = Request::SetWorkspaceLaunch {
+            workspace_id: "w-1".into(),
+            launch: launch.clone(),
+        };
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["operation"], "set_workspace_launch");
+        assert_eq!(json["data"]["launch"]["templates"][0], "rust");
+        assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
+
+        let summary = WorkspaceSummary {
+            id: "w-1".into(),
+            name: None,
+            notes: String::new(),
+            host_path: PathBuf::from("/home/op/project"),
+            path: PathBuf::from("/store/workspaces/w-1"),
+            session_count: 0,
+            age: "just now".into(),
+            created_at_ms: 1,
+            last_accessed_at_ms: 1,
+            launch,
+        };
+        let response = Response::WorkspaceLaunchUpdated(summary);
+        let json = serde_json::to_value(&response).unwrap();
+        assert_eq!(json["type"], "workspace_launch_updated");
+        assert_eq!(
+            json["data"]["launch"]["mounts"][0]["destination"],
+            "/mnt/corpus"
+        );
+        assert_eq!(serde_json::from_value::<Response>(json).unwrap(), response);
     }
 
     #[test]

@@ -68,6 +68,15 @@ workspaces/<WORKSPACE-ID>/
     diagnostics.log
 ```
 
+`workspace.json` also holds the Workspace's standing launch policy: the Driva
+templates, extra mounts, and network permission every launch there starts from.
+An individual launch adds its own on top — the driva view (`d`) edits that half
+and shows which grants come from which layer — so `W` keeps a policy for the
+Workspace and every client launching there picks it up, while `D` keeps one as
+this client's own starting point. A launch that asks for nothing runs under
+exactly the Workspace's policy; `I` makes one ignore it entirely, which is how a
+single interaction drops a grant the Workspace makes.
+
 ## Socket API
 
 Each connection carries one newline-terminated JSON request and one
@@ -83,13 +92,14 @@ Operations:
 | `create_workspace` | host path and optional name | `workspace_created` |
 | `list_workspaces` | none | `workspaces` |
 | `workspace` | Workspace id | `workspace` |
-| `create_session` | Workspace id, provider/model/effort selection, network, templates, extra mounts, optional message | `session_created` |
+| `create_session` | Workspace id, provider/model/effort selection, this launch's own policy, optional message | `session_created` |
 | `plan_session` | Workspace id and the same launch inputs, creating nothing | `session_plan` |
 | `list_templates` | Workspace id | `templates` |
-| `resume_session` | Session id, network, templates, extra mounts | `session_resumed` |
+| `resume_session` | Session id and this launch's own policy | `session_resumed` |
 | `rename_session` | Session id and optional name | `session_renamed` |
 | `update_session_notes` | Session id and plain-text notes | `session_notes_updated` |
 | `update_workspace_notes` | Workspace id and plain-text notes | `workspace_notes_updated` |
+| `set_workspace_launch` | Workspace id and the standing launch policy every launch there starts from | `workspace_launch_updated` |
 | `list_sessions` | Workspace id | `stored_sessions` |
 | `send_message` | session id and message | `accepted` |
 | `updates` | session id and `after` cursor | `updates` |

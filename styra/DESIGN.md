@@ -339,8 +339,10 @@ workspaces/<workspace-id>/
 ```
 
 `workspace.json` records the Workspace identity, optional display name, host
-directory, and creation time. A host directory does not determine identity:
-separate Workspaces may intentionally refer to the same checkout.
+directory, creation time, and the standing launch policy every Session started
+here begins from (see "The sandbox is chosen where it is shown"). A host
+directory does not determine identity: separate Workspaces may intentionally
+refer to the same checkout.
 
 Alongside `journal.jsonl`, one `session.json` is written at session creation:
 the owning Workspace plus genta's `SessionMeta` (the structured selection and
@@ -586,7 +588,8 @@ The driva view (`d`) answers "what can this agent touch": isolation backend,
 command, working directory, network policy, and every mount. On a live
 interaction that is a record, captured at spawn from the same `ExecutionRequest`
 Driva executes. On the blank start screen there is nothing running to record,
-but the policy is already decided — by the selection and the launch inputs — so
+but the policy is already decided — by the selection, the Workspace's standing
+policy, and this launch's own inputs over it — so
 the client asks the server for it with `plan_session` and shows that instead,
 marked as planned. The server resolves it through the same profile, template and
 mount resolution `create_session` uses, creating no session, journal or control
@@ -600,16 +603,39 @@ the plan.
 
 While nothing has launched, the driva view is also where the policy is decided.
 Networking (`w`), the Driva templates to layer (`T`), and extra host mounts (`m`
-to add, `x` to remove) are all editable there, and `D` saves the result as the
-standing default alongside the launch selection.
+to add, `x` to remove) are all editable there.
 
-Those three inputs live on `App::launch` as [`LaunchInputs`], seeded from the
-saved defaults with this invocation's flags over them, rather than being read
-from the CLI at each call site. That is what makes the view editable at all:
-every launch path — `create_session`, `plan_session`, `resume_session` — is fed
-from that one value, so an edit is automatically re-planned (the plan is keyed
-on the selection *and* the inputs) and automatically applied when the operator's
-first message finally starts the agent.
+Those inputs are a [`LaunchPolicy`], and there are two of them. Most of what a
+given body of work needs from its sandbox is a property of the work, not of one
+interaction with an agent about it: the corpus that has to be readable, the
+toolchain template, whether anything here may reach the network. That belongs to
+the Workspace, so a Workspace stores one — in `workspace.json`, beside its notes
+— and every launch there starts from it, from any client. What is particular to
+one interaction is the other: `App::launch`, seeded from the saved defaults with
+this invocation's flags over it.
+
+`LaunchPolicy::merge` is where the two become one, and it lives on the server
+because the server is what resolves the result. It is additive by default: the
+overlay's templates layer after the Workspace's (so a repeated name moves later,
+where it wins), its mounts add to them (except one landing on a destination the
+Workspace already binds, which replaces it rather than colliding with it), and a
+stated `network` overrides an inherited one. Adding cannot express *dropping*
+something the Workspace grants, so `standalone` (`I`) does: that launch ignores
+the Workspace's policy entirely and carries its own.
+
+Two keys keep a policy, and they keep different halves. `W` stores what the view
+shows as the Workspace's own, where every client launching there picks it up;
+the overlay is then folded in and emptied, so storing a policy never changes
+what the next launch runs under. `D` saves only this launch's half as the
+client's standing default, because saving the merge would carry grants meant for
+one Workspace into launches everywhere else.
+
+Every launch path — `create_session`, `plan_session`, `resume_session` — sends
+the overlay and merges it against the Workspace on the server, which is what
+makes the view editable at all: an edit is automatically re-planned (the plan is
+keyed on the selection *and* the merged policy, so entering a Workspace with its
+own grants re-asks too) and automatically applied when the operator's first
+message finally starts the agent.
 
 The client never resolves policy itself. It sends what the operator asked for —
 template *names*, mount *requests* — and the server resolves both against the
@@ -619,7 +645,10 @@ extra mount reaches Driva as an ordinary bind mount alongside the profile's own,
 and the captured `DrivaOptions` therefore shows it without any special case. The
 view still lists the operator's own mounts separately from the effective set,
 because only those can be removed: the workspace, the profile's credential
-mounts and the broker's control mount are not the operator's to drop.
+mounts and the broker's control mount are not the operator's to drop. The
+Workspace's own mounts are listed separately again, and without a cursor, for
+the same reason — they apply to every launch here and are not this one's to
+drop, only to stop inheriting.
 
 Editing stops the moment an interaction exists. From then on the view is a
 record of the sandbox an agent is confined to, and changing that means a new

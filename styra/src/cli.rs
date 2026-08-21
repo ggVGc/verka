@@ -20,13 +20,16 @@ pub struct Cli {
     #[arg(long)]
     pub workspace: Option<PathBuf>,
     /// Permit agent networking (providers may default this on). Adds to the
-    /// saved default policy; the driva view (`d`) can still change it before
-    /// an interaction starts.
+    /// saved default policy, which is itself layered over the Workspace's
+    /// standing one; the driva view (`d`) can still change it before an
+    /// interaction starts.
     #[arg(long)]
     pub network: bool,
     /// Apply a Driva execution template to the agent sandbox (see `driva
     /// templates`); may be repeated to layer several, e.g. a `rust` toolchain.
     /// Replaces the saved default list, since the order given is the layering.
+    /// Layered after the Workspace's own templates, not instead of them: use
+    /// `I` in the driva view to launch without those.
     #[arg(long = "template", value_name = "NAME")]
     pub template: Vec<String>,
     /// Open a captured journal read-only instead of launching an agent: with

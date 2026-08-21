@@ -31,9 +31,7 @@ fn main() -> anyhow::Result<()> {
     let session = client.create_session(&CreateSession {
         workspace_id: workspace.id,
         selection: styra_server::agent::Selection::new(styra_server::agent::Provider::Codex),
-        network: false,
-        templates: Vec::new(),
-        mounts: Vec::new(),
+        launch: Default::default(),
         message: Some(prompt),
         name: None,
     })?;

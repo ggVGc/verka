@@ -9,7 +9,7 @@ use crate::protocol::{
 };
 use crate::protocol::{
     DrivaOptions, InteractionActivity, InteractionSummary, InteractionUpdate, LaunchMount,
-    SessionSummary, TemplateSummary,
+    LaunchPolicy, SessionSummary, TemplateSummary,
 };
 use anyhow::{Context, Result};
 use std::collections::{HashMap, HashSet};
@@ -245,10 +245,14 @@ impl ServerState {
         let selection = request.selection;
         let name = journal::normalize_session_name(request.name.as_deref())?
             .or_else(|| journal::name_from_message(request.message.as_deref()));
+        // The Workspace's standing policy with this launch's own over it. Done
+        // here rather than in the client so every launch path resolves the same
+        // way, and a client cannot launch under something the plan did not show.
+        let launch = LaunchPolicy::merge(&owning_workspace.launch, &request.launch);
         let mut profile = crate::agent::resolve_profile(&selection, &self.inner.layout)?;
-        profile.network = profile.network || request.network;
-        let template = resolve_templates(&workspace, &request.templates)?;
-        let extra_mounts = resolve_launch_mounts(&request.mounts)?;
+        profile.network = profile.network || launch.grants_network();
+        let template = resolve_templates(&workspace, &launch.templates)?;
+        let extra_mounts = resolve_launch_mounts(&launch.mounts)?;
         // Resolve host tooling before creating durable session state, so a
         // missing tmux or broker executable cannot leave an empty journal.
         let tmux = genta::agent::resolve_executable(Path::new("tmux"))
@@ -435,10 +439,11 @@ impl ServerState {
         let owning_workspace =
             crate::workspace::get(&self.inner.store_root, &request.workspace_id)?;
         let workspace = owning_workspace.host_path;
+        let launch = LaunchPolicy::merge(&owning_workspace.launch, &request.launch);
         let mut profile = crate::agent::resolve_profile(&request.selection, &self.inner.layout)?;
-        profile.network = profile.network || request.network;
-        let template = resolve_templates(&workspace, &request.templates)?;
-        let extra_mounts = resolve_launch_mounts(&request.mounts)?;
+        profile.network = profile.network || launch.grants_network();
+        let template = resolve_templates(&workspace, &launch.templates)?;
+        let extra_mounts = resolve_launch_mounts(&launch.mounts)?;
         let tmux = genta::agent::resolve_executable(Path::new("tmux"))
             .context("tmux is required for Styra session shells")?;
         let spec = InteractionSpec {
@@ -501,11 +506,12 @@ impl ServerState {
             crate::workspace::get(&self.inner.store_root, &summary.workspace_id)?;
         let workspace = owning_workspace.host_path;
         let selection = summary.selection;
+        let launch = LaunchPolicy::merge(&owning_workspace.launch, &request.launch);
         let mut profile = crate::agent::resolve_profile(&selection, &self.inner.layout)?;
         profile.resume(selection.provider, &provider_session_id)?;
-        profile.network = profile.network || request.network;
-        let template = resolve_templates(&workspace, &request.templates)?;
-        let extra_mounts = resolve_launch_mounts(&request.mounts)?;
+        profile.network = profile.network || launch.grants_network();
+        let template = resolve_templates(&workspace, &launch.templates)?;
+        let extra_mounts = resolve_launch_mounts(&launch.mounts)?;
 
         let tmux = genta::agent::resolve_executable(Path::new("tmux"))
             .context("tmux is required for Styra session shells")?;
@@ -805,6 +811,12 @@ impl ServerState {
             }
             Request::UpdateWorkspaceNotes(request) => Ok(Response::WorkspaceNotesUpdated(
                 crate::workspace::store_notes(&self.inner.store_root, &request.id, request.notes)?,
+            )),
+            Request::SetWorkspaceLaunch {
+                workspace_id,
+                launch,
+            } => Ok(Response::WorkspaceLaunchUpdated(
+                crate::workspace::store_launch(&self.inner.store_root, &workspace_id, launch)?,
             )),
             Request::SendMessage { id, message } => {
                 let interaction = self.interaction(&id)?;
@@ -1352,9 +1364,7 @@ mod tests {
         let error = state
             .resume_session(ResumeSession {
                 id: "0000000000001-1-1".into(),
-                network: false,
-                templates: Vec::new(),
-                mounts: Vec::new(),
+                launch: LaunchPolicy::default(),
             })
             .unwrap_err();
         assert!(error.to_string().contains("can be viewed but not resumed"));
@@ -1372,6 +1382,75 @@ mod tests {
         assert!(tree_has_session(&root, "provider-7"));
         assert!(!tree_has_session(&root, "provider-gone"));
         std::fs::remove_dir_all(root).ok();
+    }
+
+    /// The standing policy is stored with the Workspace, not with the client
+    /// that set it, so every client launching there reads the same one back.
+    #[test]
+    fn a_workspace_launch_policy_is_stored_and_reported_back() {
+        let store = std::env::temp_dir().join(format!(
+            "styra-server-workspace-launch-{}",
+            std::process::id()
+        ));
+        let host = store.with_extension("host");
+        std::fs::remove_dir_all(&store).ok();
+        std::fs::create_dir_all(&host).unwrap();
+        let state = ServerState::new(store.clone(), store.with_extension("sock"));
+
+        let created = match state
+            .handle(Request::CreateWorkspace(CreateWorkspace {
+                host_path: host.clone(),
+                name: None,
+            }))
+            .unwrap()
+        {
+            Response::WorkspaceCreated(workspace) => workspace,
+            other => panic!("unexpected response: {other:?}"),
+        };
+        assert!(created.launch.is_empty());
+
+        let launch = LaunchPolicy {
+            network: Some(true),
+            templates: vec!["rust".into()],
+            mounts: vec![LaunchMount {
+                source: PathBuf::from("/srv/corpus"),
+                destination: None,
+                writable: false,
+            }],
+            standalone: false,
+        };
+        let updated = match state
+            .handle(Request::SetWorkspaceLaunch {
+                workspace_id: created.id.clone(),
+                launch: launch.clone(),
+            })
+            .unwrap()
+        {
+            Response::WorkspaceLaunchUpdated(workspace) => workspace,
+            other => panic!("unexpected response: {other:?}"),
+        };
+        assert_eq!(updated.launch, launch);
+
+        match state
+            .handle(Request::Workspace {
+                id: created.id.clone(),
+            })
+            .unwrap()
+        {
+            Response::Workspace(workspace) => assert_eq!(workspace.launch, launch),
+            other => panic!("unexpected response: {other:?}"),
+        }
+
+        // A policy cannot be stored for a Workspace that is not there.
+        assert!(state
+            .handle(Request::SetWorkspaceLaunch {
+                workspace_id: "no-such-workspace".into(),
+                launch,
+            })
+            .is_err());
+
+        std::fs::remove_dir_all(store).ok();
+        std::fs::remove_dir_all(host).ok();
     }
 
     #[test]

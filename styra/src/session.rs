@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
-use crate::app::{App, LaunchInputs, Status};
+use crate::app::{App, LaunchPolicy, Status};
 use styra_server::agent::Selection;
 use styra_server::protocol::{
     CreateSession, CreateWorkspace, PlanSession, ResumeSession, SessionInfo,
@@ -80,9 +80,12 @@ pub fn all_sessions(client: &Client) -> Result<Vec<SessionSummary>> {
     Ok(sessions)
 }
 
+/// Ask the server for a session. `launch` is this launch's own policy only:
+/// the Workspace's standing one is added on the server, so the client cannot
+/// launch under a policy it never showed.
 pub fn create_session(
     client: &Client,
-    launch: &LaunchInputs,
+    launch: &LaunchPolicy,
     workspace_id: &str,
     selection: &Selection,
     seed: Option<&str>,
@@ -90,9 +93,7 @@ pub fn create_session(
     client.create_session(&CreateSession {
         workspace_id: workspace_id.to_owned(),
         selection: selection.clone(),
-        network: launch.network,
-        templates: launch.templates.clone(),
-        mounts: launch.mounts.clone(),
+        launch: launch.clone(),
         message: seed.map(str::to_owned),
         name: None,
     })
@@ -107,18 +108,19 @@ pub fn ensure_driva_plan(app: &mut App, client: &Client, workspace_id: &str, liv
         return;
     }
     let selection = app.selection.clone();
+    // Sent as the overlay alone, but remembered as the merge: the server's
+    // answer is for the whole policy, so that is what the plan is keyed on.
     let launch = app.launch.clone();
+    let effective = app.effective_launch();
     let planned = client.plan_session(&PlanSession {
         workspace_id: workspace_id.to_owned(),
         selection: selection.clone(),
-        network: launch.network,
-        templates: launch.templates.clone(),
-        mounts: launch.mounts.clone(),
+        launch,
     });
     match planned {
-        Ok(options) => app.set_planned_driva_options(selection, launch, Some(options)),
+        Ok(options) => app.set_planned_driva_options(selection, effective, Some(options)),
         Err(error) => {
-            app.set_planned_driva_options(selection, launch, None);
+            app.set_planned_driva_options(selection, effective, None);
             // An edit the server rejects (an unknown template, a path that is
             // not there) lands here. The retained plan is the last one that
             // did resolve, so say so where the operator is looking rather than
@@ -137,7 +139,7 @@ pub fn ensure_driva_plan(app: &mut App, client: &Client, workspace_id: &str, liv
 /// event loop takes over.
 pub fn launch_live_session(
     client: &Client,
-    launch: &LaunchInputs,
+    launch: &LaunchPolicy,
     workspace_id: &str,
     selection: &Selection,
     seed: Option<&str>,
@@ -251,9 +253,7 @@ pub fn resume_and_send(app: &mut App, client: &Client, live: &mut Live, message:
     }
     match client.resume_session(&ResumeSession {
         id: app.session_id.clone(),
-        network: app.launch.network,
-        templates: app.launch.templates.clone(),
-        mounts: app.launch.mounts.clone(),
+        launch: app.launch.clone(),
     }) {
         Ok(info) => {
             app.session_name = info.name.clone();
@@ -368,6 +368,7 @@ mod tests {
             age: "now".into(),
             created_at_ms: 1,
             last_accessed_at_ms: 1,
+            launch: Default::default(),
         }
     }
 

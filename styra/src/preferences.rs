@@ -14,7 +14,7 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use styra_server::agent::{validate_selection, Provider, Selection};
 
-use crate::app::LaunchInputs;
+use crate::app::LaunchPolicy;
 
 const FILE_NAME: &str = "defaults.json";
 
@@ -28,16 +28,17 @@ const RECENT_MODELS_FILE_NAME: &str = "recent-models.json";
 #[serde(default, deny_unknown_fields)]
 pub struct Defaults {
     pub selection: Selection,
-    /// The standing sandbox policy: templates, extra mounts, and whether
-    /// networking is permitted. Empty unless the operator saved one.
-    pub launch: LaunchInputs,
+    /// This client's standing launch policy: what it offers as a new
+    /// interaction's own inputs, over whatever the Workspace being launched in
+    /// already stands for. Empty unless the operator saved one.
+    pub launch: LaunchPolicy,
 }
 
 impl Default for Defaults {
     fn default() -> Self {
         Self {
             selection: Selection::new(Provider::Codex),
-            launch: LaunchInputs::default(),
+            launch: LaunchPolicy::default(),
         }
     }
 }
@@ -83,7 +84,7 @@ pub fn load_or_default(path: &Path) -> Result<Defaults> {
         Err(current) => match serde_json::from_slice::<Selection>(&bytes) {
             Ok(selection) => Defaults {
                 selection,
-                launch: LaunchInputs::default(),
+                launch: LaunchPolicy::default(),
             },
             // Report the failure to read the current shape: a file that is
             // neither is far more likely to be a damaged current one than an
@@ -107,7 +108,7 @@ pub fn save_selection(path: &Path, selection: &Selection) -> Result<()> {
 }
 
 /// Replace the saved default launch policy, keeping the saved selection.
-pub fn save_launch(path: &Path, launch: &LaunchInputs) -> Result<()> {
+pub fn save_launch(path: &Path, launch: &LaunchPolicy) -> Result<()> {
     let mut defaults = load_or_default(path).unwrap_or_default();
     defaults.launch = launch.clone();
     save(path, &defaults)
@@ -217,7 +218,7 @@ mod tests {
         fs::remove_dir_all(path.parent().unwrap()).ok();
         let defaults = load_or_default(&path).unwrap();
         assert_eq!(defaults.selection, Selection::new(Provider::Codex));
-        assert_eq!(defaults.launch, LaunchInputs::default());
+        assert_eq!(defaults.launch, LaunchPolicy::default());
     }
 
     #[test]
@@ -231,14 +232,15 @@ mod tests {
                 model: "claude-sonnet-5".into(),
                 effort: Effort::Max,
             },
-            launch: LaunchInputs {
-                network: true,
+            launch: LaunchPolicy {
+                network: Some(true),
                 templates: vec!["rust".into()],
                 mounts: vec![styra_server::LaunchMount {
                     source: PathBuf::from("/srv/data"),
                     destination: None,
                     writable: false,
                 }],
+                standalone: false,
             },
         };
 
@@ -259,10 +261,10 @@ mod tests {
         let root = temp_path("halves");
         fs::remove_dir_all(&root).ok();
         let path = root.join(FILE_NAME);
-        let launch = LaunchInputs {
-            network: true,
+        let launch = LaunchPolicy {
+            network: Some(true),
             templates: vec!["browser".into()],
-            mounts: Vec::new(),
+            ..LaunchPolicy::default()
         };
         let selection = Selection {
             provider: Provider::Claude,
@@ -297,7 +299,7 @@ mod tests {
 
         let defaults = load_or_default(&path).unwrap();
         assert_eq!(defaults.selection, selection);
-        assert_eq!(defaults.launch, LaunchInputs::default());
+        assert_eq!(defaults.launch, LaunchPolicy::default());
         fs::remove_dir_all(root).ok();
     }
 

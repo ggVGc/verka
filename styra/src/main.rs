@@ -22,14 +22,22 @@ mod session;
 mod terminal;
 mod ui;
 
-use app::{App, LaunchInputs};
+use app::{App, LaunchPolicy};
 use cli::{Cli, CliCommand};
 use config::Config;
 use event_loop::RunOutcome;
 use session::Live;
 use styra_server::{Client, LogEntry, WorkspaceSummary};
 
-fn refresh_workspace_name(app: &mut App, client: &Client, active: &WorkspaceSummary) {
+/// Point the app at the Workspace it is now showing: its display name, and the
+/// standing launch policy every interaction started there is layered onto.
+///
+/// Both are resolved from Workspace metadata for the same reason — a Session
+/// carries only the durable Workspace id — and both have to be refreshed at the
+/// same moments, which is why one function does it. Following a Session into
+/// another Workspace without this would leave the Driva view attributing that
+/// Workspace's launches to the policy of the one just left.
+fn refresh_workspace_context(app: &mut App, client: &Client, active: &WorkspaceSummary) {
     let workspace = app
         .workspace_id
         .as_deref()
@@ -44,6 +52,9 @@ fn refresh_workspace_name(app: &mut App, client: &Client, active: &WorkspaceSumm
                 .find(|workspace| workspace.id == id)
         });
     app.workspace_name = workspace.as_ref().map(session::workspace_display_name);
+    if let Some(workspace) = workspace {
+        app.set_workspace_launch(workspace.launch);
+    }
 }
 
 fn workspace_for_new_session(
@@ -66,11 +77,12 @@ fn workspace_for_new_session(
 
 fn pending_app(
     selection: styra_server::agent::Selection,
-    launch: LaunchInputs,
+    launch: LaunchPolicy,
     workspace: &WorkspaceSummary,
 ) -> App {
     let mut app = App::pending(selection);
     app.launch = launch;
+    app.set_workspace_launch(workspace.launch.clone());
     app.workspace_id = Some(workspace.id.clone());
     app.set_workspace_root(workspace.host_path.clone());
     app
@@ -84,15 +96,22 @@ fn pending_app(
 /// rather than adding to it, because the flag names a whole layering and the
 /// order within it is significant.
 ///
+/// This is one launch's *own* policy, not the whole of it: whatever standing
+/// policy the Workspace being launched in carries is layered underneath, on the
+/// server. A client that has saved nothing therefore launches under exactly the
+/// Workspace's policy.
+///
 /// Re-read rather than cached, so a policy saved with `D` during the session
 /// is what the next blank screen offers.
 fn standing_launch(
     preferences_path: &Path,
     cli: &Cli,
-) -> Result<(styra_server::agent::Selection, LaunchInputs)> {
+) -> Result<(styra_server::agent::Selection, LaunchPolicy)> {
     let defaults = preferences::load_or_default(preferences_path)?;
     let mut launch = defaults.launch;
-    launch.network |= cli.network;
+    if cli.network {
+        launch.network = Some(true);
+    }
     if !cli.template.is_empty() {
         launch.templates = cli.template.clone();
     }
@@ -108,7 +127,7 @@ fn open_start_screen(
     client: &Client,
     terminal: &mut Option<Terminal<CrosstermBackend<Stdout>>>,
     selection: styra_server::agent::Selection,
-    launch: LaunchInputs,
+    launch: LaunchPolicy,
     active_workspace: &WorkspaceSummary,
 ) -> Result<(App, Live)> {
     let mut interactions: Vec<_> = client
@@ -341,7 +360,7 @@ fn main() -> Result<()> {
             }
         }
     }
-    refresh_workspace_name(&mut app, &client, &active_workspace);
+    refresh_workspace_context(&mut app, &client, &active_workspace);
 
     let mut terminal = match terminal {
         Some(terminal) => terminal,
@@ -447,7 +466,7 @@ fn main() -> Result<()> {
                 app = pending_app(selection, launch.clone(), &active_workspace);
             }
         }
-        refresh_workspace_name(&mut app, &client, &active_workspace);
+        refresh_workspace_context(&mut app, &client, &active_workspace);
     };
 
     terminal::restore(&mut terminal)?;
@@ -538,6 +557,7 @@ mod cli_tests {
             age: "now".into(),
             created_at_ms: 0,
             last_accessed_at_ms: 0,
+            launch: Default::default(),
         }
     }
 
@@ -614,6 +634,31 @@ mod cli_tests {
         assert_eq!(pending.workspace_id.as_deref(), Some("viewed"));
         assert_eq!(pending.workspace_root, Some(PathBuf::from("/work/viewed")));
         assert_eq!(pending.selection, selection);
+    }
+
+    /// A new session started from a Workspace begins on that Workspace's own
+    /// standing policy, while the operator's own inputs travel with them.
+    #[test]
+    fn a_new_session_starts_from_the_policy_of_the_workspace_it_lands_in() {
+        let selection = Selection::parse("codex:gpt-5.6-sol/high").unwrap();
+        let mut landed_in = workspace("second", "/work/second");
+        landed_in.launch = styra_server::LaunchPolicy {
+            templates: vec!["rust".into()],
+            ..styra_server::LaunchPolicy::default()
+        };
+        let carried = styra_server::LaunchPolicy {
+            templates: vec!["browser".into()],
+            ..styra_server::LaunchPolicy::default()
+        };
+
+        let pending = pending_app(selection, carried.clone(), &landed_in);
+
+        assert_eq!(pending.workspace_launch, landed_in.launch);
+        assert_eq!(pending.launch, carried);
+        assert_eq!(
+            pending.effective_launch().templates,
+            vec!["rust".to_owned(), "browser".to_owned()]
+        );
     }
 
     #[test]

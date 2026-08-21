@@ -182,9 +182,7 @@ done
         .create_session(&CreateSession {
             workspace_id: owning_workspace.id,
             selection: styra_server::agent::Selection::new(styra_server::agent::Provider::Codex),
-            network: false,
-            templates: Vec::new(),
-            mounts: Vec::new(),
+            launch: Default::default(),
             message: None,
             name: None,
         })

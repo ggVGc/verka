@@ -265,10 +265,32 @@ pub fn run(
                     app.push_log(LogEntry::warn("no Driva templates are available"));
                     continue;
                 }
-                let current = app.launch.templates.clone();
+                // The picker offers, and returns, the whole layering a launch
+                // would apply — the Workspace's templates included, since those
+                // are as much part of what the operator is choosing as their
+                // own. Turning the choice back into an overlay is `App`'s job.
+                let current = app.effective_launch().templates;
                 let chosen = picker::run_template_picker(terminal, &templates, &current)?;
                 if let Some(chosen) = chosen {
                     app.set_launch_templates(chosen);
+                }
+            }
+            Some(Request::StoreWorkspaceLaunch) => {
+                // What is stored is the merge, not the overlay: the operator is
+                // keeping the policy the view shows. The overlay is then
+                // redundant and `adopt_workspace_launch` clears it, so the
+                // effective policy is unchanged by the act of storing it.
+                let launch = app.effective_launch();
+                match client.set_workspace_launch(workspace_id, &launch) {
+                    Ok(workspace) => {
+                        app.adopt_workspace_launch(workspace.launch);
+                        app.show_action_message(
+                            "saved as this Workspace's launch policy — every launch here starts from it",
+                        );
+                    }
+                    Err(error) => app.push_log(LogEntry::error(format!(
+                        "could not save the Workspace launch policy: {error:#}"
+                    ))),
                 }
             }
             Some(Request::EditFile) => {

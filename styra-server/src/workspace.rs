@@ -4,7 +4,7 @@
 //! directory and owns any number of durable provider Sessions beneath
 //! `workspaces/<workspace-id>/sessions/`.
 
-use crate::protocol::WorkspaceSummary;
+use crate::protocol::{LaunchPolicy, WorkspaceSummary};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -23,6 +23,11 @@ struct WorkspaceMeta {
     created_at_ms: u64,
     #[serde(default)]
     last_accessed_at_ms: Option<u64>,
+    /// The Workspace's standing sandbox policy. Absent in metadata written
+    /// before Workspaces carried one, which reads as the empty policy: every
+    /// launch there then runs on its own inputs alone, exactly as it did.
+    #[serde(default, skip_serializing_if = "LaunchPolicy::is_empty")]
+    launch: LaunchPolicy,
 }
 
 pub fn workspaces_dir(store_root: &Path) -> PathBuf {
@@ -61,6 +66,7 @@ pub fn create(
         host_path: host_path.clone(),
         created_at_ms,
         last_accessed_at_ms: Some(created_at_ms),
+        launch: LaunchPolicy::default(),
     };
     write_meta(&path, &meta)?;
     Ok(WorkspaceSummary {
@@ -73,6 +79,7 @@ pub fn create(
         age: "just now".into(),
         created_at_ms,
         last_accessed_at_ms: created_at_ms,
+        launch: LaunchPolicy::default(),
     })
 }
 
@@ -148,6 +155,7 @@ fn summary_from_meta(path: &Path, meta: WorkspaceMeta, now: u64) -> Result<Works
         age: humanize_age(now, meta.created_at_ms),
         created_at_ms: meta.created_at_ms,
         last_accessed_at_ms,
+        launch: meta.launch,
     })
 }
 
@@ -159,6 +167,29 @@ pub fn store_notes(store_root: &Path, id: &str, notes: String) -> Result<Workspa
     }
     let mut meta = read_meta(&path)?;
     meta.notes = notes;
+    write_meta(&path, &meta)?;
+    summary_from_meta(&path, meta, now_ms())
+}
+
+/// Replace a Workspace's standing sandbox policy.
+///
+/// Stored with the Workspace rather than with the client that set it, so every
+/// launch in this Workspace — from any client, on any machine sharing the store
+/// — starts from the same grants. Interactions already running keep the policy
+/// they were spawned under; a policy is applied at launch, not enforced live.
+pub fn store_launch(store_root: &Path, id: &str, launch: LaunchPolicy) -> Result<WorkspaceSummary> {
+    let path = workspace_dir(store_root, id);
+    if !path.is_dir() {
+        anyhow::bail!("Workspace {id:?} was not found");
+    }
+    let mut meta = read_meta(&path)?;
+    // `standalone` says "ignore the layer below me", and a Workspace policy has
+    // no layer below it. Storing it would be storing a contradiction, so it is
+    // dropped here rather than quietly carried and ignored at merge time.
+    meta.launch = LaunchPolicy {
+        standalone: false,
+        ..launch
+    };
     write_meta(&path, &meta)?;
     summary_from_meta(&path, meta, now_ms())
 }
@@ -232,6 +263,63 @@ mod tests {
             get(&store, &first.id).unwrap().name.as_deref(),
             Some("first")
         );
+    }
+
+    /// A stored policy is the Workspace's, so it has to survive everything
+    /// else that rewrites the metadata around it.
+    #[test]
+    fn a_stored_launch_policy_outlives_other_metadata_edits() {
+        let store = temp_dir("launch-store");
+        let host = temp_dir("launch-host");
+        let workspace = create(&store, &host, None).unwrap();
+        assert!(workspace.launch.is_empty());
+
+        let launch = LaunchPolicy {
+            network: Some(true),
+            templates: vec!["rust".into()],
+            mounts: vec![crate::protocol::LaunchMount {
+                source: PathBuf::from("/srv/corpus"),
+                destination: Some(PathBuf::from("/mnt/corpus")),
+                writable: false,
+            }],
+            // A Workspace policy has no layer below it to ignore, so this is
+            // dropped rather than stored as a contradiction.
+            standalone: true,
+        };
+        let stored = store_launch(&store, &workspace.id, launch.clone()).unwrap();
+        assert!(!stored.launch.standalone);
+        assert_eq!(stored.launch.templates, launch.templates);
+
+        // Notes, and the access bump the picker relies on, both rewrite
+        // `workspace.json`; neither is allowed to drop the policy.
+        store_notes(&store, &workspace.id, "shared notes".into()).unwrap();
+        access(&store, &workspace.id).unwrap();
+        let reread = get(&store, &workspace.id).unwrap();
+        assert_eq!(reread.notes, "shared notes");
+        assert_eq!(reread.launch.mounts, launch.mounts);
+        assert_eq!(reread.launch.network, Some(true));
+
+        std::fs::remove_dir_all(store).ok();
+        std::fs::remove_dir_all(host).ok();
+    }
+
+    /// Metadata written before Workspaces carried a policy must still read, as
+    /// the empty policy: those launches ran on their own inputs alone.
+    #[test]
+    fn metadata_without_a_launch_policy_reads_as_the_empty_one() {
+        let store = temp_dir("legacy-store");
+        let host = temp_dir("legacy-host");
+        let workspace = create(&store, &host, None).unwrap();
+        let meta_path = workspace.path.join(WORKSPACE_META_FILE);
+        let mut json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&meta_path).unwrap()).unwrap();
+        json.as_object_mut().unwrap().remove("launch");
+        std::fs::write(&meta_path, serde_json::to_string(&json).unwrap()).unwrap();
+
+        assert!(get(&store, &workspace.id).unwrap().launch.is_empty());
+
+        std::fs::remove_dir_all(store).ok();
+        std::fs::remove_dir_all(host).ok();
     }
 
     #[test]
