@@ -2,14 +2,14 @@
 //! uncapped expanded content of the selected entry, regardless of whether it
 //! is folded in the list.
 
-use super::{message_text_color, summary_line, DETAIL_INDENT};
+use super::{message_text_color, summary_line, wrap_line, DETAIL_INDENT};
 use crate::app::App;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Frame;
-use styra_server::event::{DetailBlock, PresentationMode};
+use styra_server::event::{AgentEvent, DetailBlock, PresentationMode};
 
 pub(crate) fn render_preview(frame: &mut Frame, app: &App, area: Rect) {
     let title = match app.preview_mode {
@@ -20,7 +20,11 @@ pub(crate) fn render_preview(frame: &mut Frame, app: &App, area: Rect) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::DarkGray))
         .title(Span::styled(title, Style::default().fg(Color::Gray)));
-    let lines = preview_lines(app);
+    let lines = wrap_preview_lines(
+        preview_lines(app),
+        usize::from(area.width.saturating_sub(2)),
+        preview_summary_indent(app),
+    );
     let scroll_limit = preview_scroll_limit(
         &lines,
         area.width.saturating_sub(2),
@@ -40,7 +44,11 @@ pub(crate) fn render_preview(frame: &mut Frame, app: &App, area: Rect) {
 /// chrome at all — just the text, filling the whole terminal, so it can be
 /// selected and copied cleanly.
 pub(crate) fn render_fullscreen_preview(frame: &mut Frame, app: &App, area: Rect) {
-    let lines = preview_lines(app);
+    let lines = wrap_preview_lines(
+        preview_lines(app),
+        usize::from(area.width),
+        preview_summary_indent(app),
+    );
     let scroll_limit = preview_scroll_limit(&lines, area.width, area.height);
     app.preview.note_limit(scroll_limit);
     let scroll = app.preview.clamped();
@@ -48,6 +56,40 @@ pub(crate) fn render_fullscreen_preview(frame: &mut Frame, app: &App, area: Rect
         .wrap(Wrap { trim: false })
         .scroll((scroll, 0));
     frame.render_widget(paragraph, area);
+}
+
+/// Word-wraps the preview's logical lines with the same hanging indent as
+/// the expanded list entries (`entry_item` in `list.rs`), so a wrapped line
+/// stays aligned with the text that follows its `«`/`»` marker or detail
+/// indent instead of jumping to the left edge.
+fn wrap_preview_lines(lines: Vec<Line<'static>>, width: usize, summary_indent: usize) -> Vec<Line<'static>> {
+    lines
+        .into_iter()
+        .enumerate()
+        .flat_map(|(index, line)| {
+            let continuation_indent = if index == 0 {
+                summary_indent
+            } else {
+                DETAIL_INDENT.len()
+            };
+            wrap_line(line, width, continuation_indent)
+        })
+        .collect()
+}
+
+/// The summary row's hanging indent for a wrapped continuation: aligned
+/// under the `«`/`»` marker for conversation entries, flush left otherwise —
+/// matching `entry_item`'s `summary_indent` in `list.rs`.
+fn preview_summary_indent(app: &App) -> usize {
+    let is_conversation = matches!(
+        app.selected_entry().map(|entry| &entry.event),
+        Some(AgentEvent::UserMessage { .. } | AgentEvent::AgentMessage { .. })
+    );
+    if is_conversation {
+        2
+    } else {
+        0
+    }
 }
 
 pub(crate) fn preview_scroll_limit(lines: &[Line<'_>], width: u16, height: u16) -> u16 {
@@ -622,5 +664,54 @@ mod tests {
         let (x, y) = find_column(&buffer, "preview");
         let cell = buffer.cell((x, y)).unwrap();
         assert_ne!(cell.style().fg, Some(Color::DarkGray));
+    }
+
+    #[test]
+    fn preview_wrapped_agent_messages_keep_a_hanging_indent() {
+        // The list panel already hangs a wrapped continuation under the
+        // `«`/`»` marker instead of jumping to the left edge; the preview
+        // panel must wrap the same way rather than leaning on the widget's
+        // own left-flush word wrap.
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
+        app.push_event(AgentEvent::AgentMessage {
+            text: "one two three four five six seven eight nine ten eleven twelve".into(),
+        });
+        app.toggle_preview();
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        terminal
+            .draw(|frame| super::super::render(frame, &app))
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+
+        let full_area = ratatui::layout::Rect::new(0, 0, 80, 20);
+        let chunks = ratatui::layout::Layout::default()
+            .direction(ratatui::layout::Direction::Horizontal)
+            .constraints([
+                ratatui::layout::Constraint::Percentage(60),
+                ratatui::layout::Constraint::Percentage(40),
+            ])
+            .split(full_area);
+        let preview_area = chunks[1];
+        let left = preview_area.x + 1;
+        let right = preview_area.x + preview_area.width - 1;
+
+        let rows: Vec<String> = (preview_area.y + 1..preview_area.y + preview_area.height - 1)
+            .map(|y| {
+                (left..right)
+                    .map(|x| buffer.cell((x, y)).unwrap().symbol())
+                    .collect::<String>()
+            })
+            .filter(|row| row.contains("one") || row.contains("four") || row.contains("seven"))
+            .collect();
+
+        assert!(rows.len() >= 2, "{rows:?}");
+        assert!(
+            rows.iter().all(|row| row.starts_with(DETAIL_INDENT)),
+            "wrapped preview rows must all share the detail body's hanging indent: {rows:?}"
+        );
     }
 }

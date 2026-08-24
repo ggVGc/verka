@@ -29,7 +29,7 @@ use help::render_keybinds;
 use input::{input_area_height, render_input};
 use launcher::render_launcher;
 use list::render_list;
-pub(crate) use list::summary_line;
+pub(crate) use list::{summary_line, wrap_line};
 pub(crate) use log::log_line;
 use log::render_log;
 use messages::{message_area_height, render_messages};

@@ -453,7 +453,11 @@ fn truncate_line(line: Line<'static>, width: usize, has_marker: bool) -> Line<'s
 /// text stays aligned with the text following its `«`/`»` marker (and detail
 /// rows retain their body indent) instead of jumping to the far-left edge.
 /// `List` does not wrap on its own, so long lines would otherwise be clipped.
-fn wrap_line(line: Line<'static>, width: usize, continuation_indent: usize) -> Vec<Line<'static>> {
+pub(crate) fn wrap_line(
+    line: Line<'static>,
+    width: usize,
+    continuation_indent: usize,
+) -> Vec<Line<'static>> {
     if width == 0 {
         return vec![line];
     }
