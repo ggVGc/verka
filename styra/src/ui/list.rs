@@ -568,7 +568,10 @@ fn split_keep_whitespace(s: &str) -> Vec<String> {
 
 /// `has_detail` is false when the entry has nothing beyond its summary (e.g.
 /// a bare `turn started` marker); folding is meaningless there, so no arrow
-/// is shown at all rather than one that never does anything when pressed.
+/// is shown at all rather than one that never does anything when pressed. An
+/// expanded entry also shows no arrow: its content is already on screen, so
+/// the marker column is reserved for entries that still have something to
+/// unfold.
 /// `show_summary` is false in previews, whose detail body carries the full
 /// content. Inline expanded entries keep the summary in this first row and
 /// omit the matching first detail row, so expansion does not make the header
@@ -581,7 +584,7 @@ pub(crate) fn summary_line(
 ) -> Line<'static> {
     let marker = match (has_detail, entry.expanded) {
         (false, _) => " ",
-        (true, true) => "▾",
+        (true, true) => " ",
         (true, false) => "▸",
     };
     let tag = entry.event.tag();
@@ -1171,7 +1174,9 @@ mod tests {
 
         app.toggle_expand();
         let expanded = rendered(&app);
-        assert!(expanded.contains('▾'));
+        // Expanding drops the arrow: there is nothing left to unfold.
+        assert!(!expanded.contains('▾'));
+        assert!(!expanded.contains('▸'));
         let expanded_zs = expanded.chars().filter(|&c| c == 'z').count();
         assert!(expanded_zs > collapsed_zs);
         // The full message appears exactly once — not the truncated summary
@@ -1349,7 +1354,7 @@ mod tests {
         });
         app.expand_all();
         let screen = rendered(&app);
-        assert!(screen.contains('▾'));
+        assert!(!screen.contains('▾'));
         assert!(screen.contains("24 passed"));
     }
 
