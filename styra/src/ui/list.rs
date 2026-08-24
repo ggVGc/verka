@@ -1,7 +1,7 @@
 //! The main event list: each entry a summary line that grows inline when
 //! expanded, plus the empty-list start screen and the trailing status tail.
 
-use super::markdown::markdown_line_spans;
+use super::markdown::markdown_block_lines;
 use super::{
     conversation_only_title, format_duration, message_text_color, render_placeholder,
     render_preview, tag_color, view_block, DETAIL_INDENT, MAX_DETAIL_LINES, SELECTION_BG,
@@ -786,11 +786,7 @@ pub(crate) fn detail_lines(
         match block {
             DetailBlock::Text(text) => {
                 let base_style = Style::default().fg(text_color);
-                for line in text.lines() {
-                    let mut spans = vec![Span::styled(DETAIL_INDENT.to_owned(), base_style)];
-                    spans.extend(markdown_line_spans(line, base_style));
-                    lines.push(Line::from(spans));
-                }
+                lines.extend(markdown_block_lines(&text, base_style, DETAIL_INDENT));
             }
             DetailBlock::Code { text, .. } => {
                 for line in text.lines() {

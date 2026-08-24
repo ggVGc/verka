@@ -5,10 +5,24 @@
 
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::Span;
+use ratatui::text::{Line, Span};
+
+/// Renders a detail block's full markdown buffer as styled lines, each
+/// prefixed with `indent`. Takes the whole buffer (rather than one line at a
+/// time) so the renderer can see multi-line constructs like tables as a
+/// single unit instead of independent lines.
+pub(crate) fn markdown_block_lines(text: &str, base_style: Style, indent: &str) -> Vec<Line<'static>> {
+    text.lines()
+        .map(|line| {
+            let mut spans = vec![Span::styled(indent.to_owned(), base_style)];
+            spans.extend(markdown_line_spans(line, base_style));
+            Line::from(spans)
+        })
+        .collect()
+}
 
 /// Renders one line of an agent message's markdown as styled spans.
-pub(crate) fn markdown_line_spans(line: &str, base_style: Style) -> Vec<Span<'static>> {
+fn markdown_line_spans(line: &str, base_style: Style) -> Vec<Span<'static>> {
     let trimmed = line.trim_start();
     let indent = &line[..line.len() - trimmed.len()];
     let mut spans = vec![Span::styled(indent.to_owned(), base_style)];

@@ -96,14 +96,7 @@ fn presented_block_lines(
     if mode == PresentationMode::Pretty {
         if let DetailBlock::Text(text) = &block {
             let base_style = Style::default().fg(text_color);
-            return text
-                .lines()
-                .map(|line| {
-                    let mut spans = vec![Span::styled(DETAIL_INDENT.to_owned(), base_style)];
-                    spans.extend(super::markdown::markdown_line_spans(line, base_style));
-                    Line::from(spans)
-                })
-                .collect();
+            return super::markdown::markdown_block_lines(text, base_style, DETAIL_INDENT);
         }
     }
     let (text, language) = match block {
