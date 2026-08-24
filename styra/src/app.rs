@@ -1801,19 +1801,6 @@ impl App {
         }
     }
 
-    /// Show and expand the operator/agent conversation while folding every
-    /// other event.
-    pub fn expand_conversation(&mut self) {
-        self.conversation_only = true;
-        for entry in &mut self.entries {
-            entry.expanded = matches!(
-                entry.event,
-                AgentEvent::UserMessage { .. } | AgentEvent::AgentMessage { .. }
-            );
-        }
-        self.reconcile_filtered_selection();
-    }
-
     pub fn selected_entry(&self) -> Option<&Entry> {
         self.entries.get(self.selected)
     }
@@ -2102,26 +2089,6 @@ mod tests {
         assert!(!app.entries[0].expanded);
         assert!(app.entries[1].expanded);
         assert!(!app.entries[2].expanded);
-    }
-
-    #[test]
-    fn expanding_conversation_enables_the_filter_and_collapses_other_event_types() {
-        let mut app = app();
-        app.push_event(AgentEvent::UserMessage {
-            text: "question".into(),
-        });
-        app.push_event(AgentEvent::TurnStarted);
-        app.push_event(AgentEvent::AgentMessage {
-            text: "answer".into(),
-        });
-        app.expand_all();
-
-        app.expand_conversation();
-
-        assert!(app.conversation_only);
-        assert!(app.entries[0].expanded);
-        assert!(!app.entries[1].expanded);
-        assert!(app.entries[2].expanded);
     }
 
     #[test]

@@ -138,7 +138,6 @@ pub fn handle_list_key(
             KeyCode::Char('z') => *pending_fold = true,
             KeyCode::Char('m') => app.toggle_minor(),
             KeyCode::Char('p') => app.toggle_preview(),
-            KeyCode::Char('C') => app.expand_conversation(),
             KeyCode::Char('y') => copy_selection(app),
             _ => {}
         },
