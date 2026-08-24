@@ -14,6 +14,7 @@ base64.workspace = true
 clap.workspace = true
 ratatui = { workspace = true, features = ["unstable-rendered-line-info"] }
 pulldown-cmark.workspace = true
+tui-markdown.workspace = true
 crossterm.workspace = true
 serde.workspace = true
 serde_json.workspace = true
