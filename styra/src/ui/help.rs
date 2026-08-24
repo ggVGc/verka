@@ -66,7 +66,10 @@ pub(crate) fn render_keybinds(frame: &mut Frame, area: Rect) {
         section("Driva (launch policy, before an interaction starts)"),
         bindings("w", "permit/forbid agent networking"),
         bindings("T", "choose Driva templates"),
-        bindings("m / x", "add a mount / remove the selected one"),
+        bindings(
+            "m / g / x",
+            "add a mount / the git checkout here (rw) / remove the selected one",
+        ),
         bindings("j/k or ↓/↑", "move among the mounts you added"),
         bindings("I", "add to / ignore the Workspace policy"),
         bindings("D / W", "save this policy for new clients / this Workspace"),

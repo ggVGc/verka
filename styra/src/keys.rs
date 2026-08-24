@@ -181,6 +181,9 @@ pub fn handle_list_key(
                 }
             }
             KeyCode::Char('m') => app.open_driva_prompt(),
+            // The mount nobody should have to type out: the checkout this
+            // client was started in, writable.
+            KeyCode::Char('g') => app.add_git_root_mount(),
             KeyCode::Char('x') => app.remove_selected_launch_mount(),
             // Mirrors `D` in the launch picker: keep this policy as the one a
             // brand-new client starts from, rather than only this session's.

@@ -1635,6 +1635,53 @@ impl App {
         self.launch.templates = chosen;
     }
 
+    /// Add the git checkout the client was started in as a writable mount —
+    /// the one mount an operator almost always wants and the most tedious to
+    /// type, since it means knowing where the repository root actually is.
+    ///
+    /// The root, not the working directory: an agent handed only a subdirectory
+    /// of a checkout cannot see `.git`, so anything it tries to do with history
+    /// fails in a way that reads as a broken agent rather than a mount that was
+    /// cut too narrowly.
+    pub fn add_git_root_mount(&mut self) {
+        if !self.allow_launch_edit() {
+            return;
+        }
+        let Some(root) = self.git_root() else {
+            return self.show_action_message("no .git found at or above the working directory");
+        };
+        let mount = LaunchMount {
+            source: root,
+            destination: None,
+            writable: true,
+        };
+        if self.launch.mounts.contains(&mount) {
+            return self.show_action_message("that mount is already in the launch policy");
+        }
+        if !self.launch.standalone && self.workspace_launch.mounts.contains(&mount) {
+            return self.show_action_message("the Workspace policy already grants that mount");
+        }
+        let label = mount_label(&mount);
+        self.launch.mounts.push(mount);
+        self.driva_selected_mount = self.launch.mounts.len() - 1;
+        self.show_action_message(format!("added {label}"));
+    }
+
+    /// The nearest enclosing directory that holds a `.git`, starting from the
+    /// Workspace's host path when there is one and the process's own working
+    /// directory otherwise. Inside a worktree `.git` is a file rather than a
+    /// directory, so the test is existence and not kind.
+    fn git_root(&self) -> Option<PathBuf> {
+        let start = self
+            .workspace_root
+            .clone()
+            .or_else(|| std::env::current_dir().ok())?;
+        start
+            .ancestors()
+            .find(|directory| directory.join(".git").exists())
+            .map(Path::to_path_buf)
+    }
+
     /// Open the prompt that adds an extra mount.
     pub fn open_driva_prompt(&mut self) {
         if !self.allow_launch_edit() {
