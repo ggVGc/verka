@@ -112,16 +112,12 @@ pub(crate) fn render_list(frame: &mut Frame, app: &App, area: Rect) {
     // useful content. Otherwise moving past a tall entry can look attractive
     // merely because the algorithm cannot see the row waiting below it.
     let item_heights: Vec<usize> = items.iter().map(ListItem::height).collect();
-    // An explicit background rather than `Modifier::REVERSED`: reversing
-    // would swap a `White` foreground (summary and detail text alike) into
-    // the background, flashing the selected row to a glaring full white.
-    // No `Modifier::BOLD` either: `highlight_style` applies to the whole
-    // selected row as one unit, so an expanded entry's detail body would be
-    // forced bold right along with its summary line, with no way to exempt
-    // it — the background alone is enough to mark the selection.
-    let list = List::new(items)
-        .block(block)
-        .highlight_style(Style::default().bg(SELECTION_BG));
+    // No `highlight_style`: it applies to the whole selected row as one
+    // unit, so an expanded entry's detail body would be filled — and forced
+    // bold — right along with its summary line, with no way to exempt it.
+    // `entry_item` paints the backdrop on the summary row alone instead, so
+    // the selection reads as a single line rather than as a block.
+    let list = List::new(items).block(block);
     let mut state = ListState::default();
     let position = visible
         .iter()
@@ -324,7 +320,8 @@ fn entry_item(
         // A collapsed entry is always exactly one row: wrapping it would make
         // one long message push the rest of the session off screen, and the
         // available width shrinks whenever the preview pane opens.
-        return ListItem::new(vec![truncate_line(summary, width, entry.has_detail())]);
+        let row = truncate_line(summary, width, entry.has_detail());
+        return ListItem::new(vec![with_selection_backdrop(row, selected)]);
     }
     let mut lines = vec![summary];
     let mut detail = detail_lines(&entry.event, protocol, None);
@@ -373,7 +370,23 @@ fn entry_item(
             Style::default().fg(Color::Gray),
         )));
     }
+    if let Some(first) = wrapped.first_mut() {
+        *first = with_selection_backdrop(std::mem::take(first), selected);
+    }
     ListItem::new(wrapped)
+}
+
+/// Mark the selection by backing its first row — and only that row — with
+/// [`SELECTION_BG`]. An expanded entry's detail body keeps the plain
+/// background, so the highlight reads as one line rather than as a block.
+/// The style sits on the [`Line`], not on its spans, so the fill runs to the
+/// full width of the row instead of stopping at the end of the text.
+fn with_selection_backdrop(line: Line<'static>, selected: bool) -> Line<'static> {
+    if !selected {
+        return line;
+    }
+    let style = line.style.bg(SELECTION_BG);
+    line.style(style)
 }
 
 /// A conversation already starts with a direction glyph, so tint that glyph
@@ -1034,7 +1047,7 @@ mod tests {
     }
 
     #[test]
-    fn only_the_selected_entrys_expanded_content_gets_the_selection_backdrop() {
+    fn only_the_selected_entrys_first_row_gets_the_selection_backdrop() {
         let mut app = App::new(
             styra_server::agent::Selection::parse("codex").unwrap(),
             "s1",
@@ -1046,7 +1059,8 @@ mod tests {
             text: "three\nfour".into(),
         });
         // `push_event` leaves the second (last) entry selected via follow;
-        // both get expanded, but only the selected one should be highlighted.
+        // both get expanded, but only the selected entry's summary row — not
+        // its detail body — should be highlighted.
         app.expand_all();
 
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
@@ -1070,10 +1084,10 @@ mod tests {
                 .any(|x| buffer.cell((x, y)).unwrap().style().bg == Some(SELECTION_BG))
         };
 
-        let unselected_detail_row = row_containing("two");
-        let selected_detail_row = row_containing("four");
-        assert!(!row_has_selection_backdrop(unselected_detail_row));
-        assert!(row_has_selection_backdrop(selected_detail_row));
+        assert!(row_has_selection_backdrop(row_containing("three")));
+        assert!(!row_has_selection_backdrop(row_containing("four")));
+        assert!(!row_has_selection_backdrop(row_containing("one")));
+        assert!(!row_has_selection_backdrop(row_containing("two")));
     }
 
     #[test]
