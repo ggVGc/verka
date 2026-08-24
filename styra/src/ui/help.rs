@@ -54,7 +54,7 @@ pub(crate) fn render_keybinds(frame: &mut Frame, area: Rect) {
         bindings("c", "toggle conversation-only events"),
         bindings("P", "toggle full-screen preview"),
         bindings("v", "toggle pretty/diff preview"),
-        bindings("PgUp/PgDn", "scroll preview"),
+        bindings("PgUp/PgDn", "scroll preview (full-screen: j/k, entry: J/K)"),
         bindings("y", "copy selected entry to clipboard"),
         Line::default(),
         section("Raw, log, and transcript"),

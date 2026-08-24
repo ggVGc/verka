@@ -522,6 +522,14 @@ impl Scroll {
     pub fn page_up(&mut self) {
         self.offset = self.clamped().saturating_sub(SCROLL_PAGE);
     }
+
+    pub fn line_down(&mut self) {
+        self.offset = self.clamped().saturating_add(1).min(self.limit.get());
+    }
+
+    pub fn line_up(&mut self) {
+        self.offset = self.clamped().saturating_sub(1);
+    }
 }
 
 /// How far one navigation key moves: the two step sizes the event list offers.

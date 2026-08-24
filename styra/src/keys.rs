@@ -232,14 +232,17 @@ pub fn handle_list_key(
             KeyCode::Char('y') => copy_selection(app),
             _ => {}
         },
+        // Full-screen preview is the one view where the text, not the entry
+        // list, is what the reader is moving through: `j`/`k` scroll it a line
+        // at a time and the shifted pair changes entry.
         View::Preview => match key.code {
             KeyCode::Char('v') => app.toggle_preview_mode(),
             KeyCode::PageDown => app.preview.page_down(),
             KeyCode::PageUp => app.preview.page_up(),
-            KeyCode::Char('J') | KeyCode::Down => app.select_next(),
-            KeyCode::Char('K') | KeyCode::Up => app.select_prev(),
-            KeyCode::Char('j') => app.select_next_line(),
-            KeyCode::Char('k') => app.select_prev_line(),
+            KeyCode::Char('j') => app.preview.line_down(),
+            KeyCode::Char('k') => app.preview.line_up(),
+            KeyCode::Char('J') | KeyCode::Down => app.select_next_line(),
+            KeyCode::Char('K') | KeyCode::Up => app.select_prev_line(),
             KeyCode::Char('g') => app.select_first(),
             KeyCode::Char('G') => app.select_last(),
             KeyCode::Char('y') => copy_selection(app),
