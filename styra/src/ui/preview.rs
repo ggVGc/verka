@@ -116,7 +116,13 @@ pub(crate) fn preview_lines(app: &App) -> Vec<Line<'static>> {
     };
 
     let protocol = app.selection.provider.protocol();
-    let mut lines = vec![summary_line(entry, entry.has_detail(), false, protocol)];
+    let mut lines = vec![summary_line(
+        entry,
+        entry.expanded,
+        entry.has_detail(),
+        false,
+        protocol,
+    )];
     for block in protocol.presented_detail(&entry.event, app.preview_mode) {
         lines.extend(presented_block_lines(
             block,

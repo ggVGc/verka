@@ -100,6 +100,7 @@ pub(crate) fn render_list(frame: &mut Frame, app: &App, area: Rect) {
         .map(|(idx, entry)| {
             entry_item(
                 entry,
+                app.entry_expanded(*idx),
                 width,
                 viewport_height,
                 app.selection.provider.protocol(),
@@ -296,6 +297,7 @@ fn running_tail(progress: &Progress) -> String {
 /// shows the entry in full and scrolls.
 fn entry_item(
     entry: &Entry,
+    expanded: bool,
     width: usize,
     viewport_height: usize,
     protocol: Protocol,
@@ -312,11 +314,11 @@ fn entry_item(
         width
     };
     let summary = selected_summary_line(
-        summary_line(entry, entry.has_detail(), true, protocol),
+        summary_line(entry, expanded, entry.has_detail(), true, protocol),
         is_conversation,
         selected,
     );
-    if !entry.expanded {
+    if !expanded {
         // A collapsed entry is always exactly one row: wrapping it would make
         // one long message push the rest of the session off screen, and the
         // available width shrinks whenever the preview pane opens.
@@ -578,11 +580,12 @@ fn split_keep_whitespace(s: &str) -> Vec<String> {
 /// appear empty or move its first line down.
 pub(crate) fn summary_line(
     entry: &Entry,
+    expanded: bool,
     has_detail: bool,
     show_summary: bool,
     protocol: Protocol,
 ) -> Line<'static> {
-    let marker = match (has_detail, entry.expanded) {
+    let marker = match (has_detail, expanded) {
         (false, _) => " ",
         (true, true) => " ",
         (true, false) => "▸",
@@ -682,7 +685,7 @@ pub(crate) fn summary_line(
         }
         let mut summary = file_action_summary(&entry.event)
             .unwrap_or_else(|| protocol.presented_summary(&entry.event, PresentationMode::Pretty));
-        if entry.expanded && summary.ends_with('…') {
+        if expanded && summary.ends_with('…') {
             if let Some(first_line) = protocol
                 .presented_detail(&entry.event, PresentationMode::Pretty)
                 .first()
@@ -1185,6 +1188,29 @@ mod tests {
     }
 
     #[test]
+    fn conversation_only_mode_renders_every_entry_expanded() {
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
+        app.push_event(AgentEvent::AgentMessage {
+            text: "z".repeat(500),
+        });
+        let collapsed = rendered(&app);
+        assert!(collapsed.contains('▸'));
+        assert!(collapsed.chars().filter(|&c| c == 'z').count() < 500);
+
+        app.toggle_conversation_only();
+        let expanded = rendered(&app);
+        assert!(!expanded.contains('▸'));
+        assert_eq!(expanded.chars().filter(|&c| c == 'z').count(), 500);
+
+        // The filter did not consume the entry's own folding state.
+        app.toggle_conversation_only();
+        assert!(rendered(&app).contains('▸'));
+    }
+
+    #[test]
     fn a_shell_tool_gets_a_checkmark_only_when_it_completes() {
         let mut app = App::new(
             styra_server::agent::Selection::parse("codex").unwrap(),
@@ -1216,6 +1242,7 @@ mod tests {
 
         let line = summary_line(
             &app.entries[0],
+            app.entries[0].expanded,
             app.entries[0].has_detail(),
             true,
             app.selection.provider.protocol(),
@@ -1278,6 +1305,7 @@ mod tests {
 
         let line = summary_line(
             &app.entries[0],
+            app.entries[0].expanded,
             app.entries[0].has_detail(),
             true,
             app.selection.provider.protocol(),
@@ -1419,7 +1447,18 @@ mod tests {
         app.expand_all();
 
         let protocol = app.selection.provider.protocol();
-        assert!(entry_item(&app.entries[1], 78, 18, protocol, false).height() <= 18);
+        assert!(
+            entry_item(
+                &app.entries[1],
+                app.entries[1].expanded,
+                78,
+                18,
+                protocol,
+                false
+            )
+            .height()
+                <= 18
+        );
 
         let screen = rendered(&app);
         assert!(screen.contains("line number 0"), "{screen}");
@@ -1497,7 +1536,15 @@ mod tests {
         });
         let protocol = app.selection.provider.protocol();
         assert_eq!(
-            entry_item(&app.entries[0], 40, 18, protocol, false).height(),
+            entry_item(
+                &app.entries[0],
+                app.entries[0].expanded,
+                40,
+                18,
+                protocol,
+                false
+            )
+            .height(),
             1,
             "a collapsed entry must stay on a single row"
         );
@@ -1562,7 +1609,7 @@ mod tests {
         let protocol = app.selection.provider.protocol();
         for entry in &app.entries {
             assert_eq!(
-                entry_item(entry, 200, 18, protocol, false).height(),
+                entry_item(entry, entry.expanded, 200, 18, protocol, false).height(),
                 2,
                 "both human and agent messages should wrap at the conversation cap"
             );

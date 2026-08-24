@@ -1905,6 +1905,15 @@ impl App {
 
     // --- Expansion -----------------------------------------------------------
 
+    /// Whether an entry renders expanded. Conversation-only mode shows every
+    /// remaining line in full: with tool activity filtered away, what is left
+    /// is prose meant to be read, and folding it would leave the list nearly
+    /// empty. The per-entry flag is left untouched, so the previous folding
+    /// comes back as soon as the filter is turned off.
+    pub fn entry_expanded(&self, idx: usize) -> bool {
+        self.conversation_only || self.entries[idx].expanded
+    }
+
     pub fn toggle_expand(&mut self) {
         if let Some(entry) = self.entries.get_mut(self.selected) {
             entry.expanded = !entry.expanded;
