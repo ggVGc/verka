@@ -1537,11 +1537,13 @@ impl App {
     }
 
     /// Whether the launch policy can still be edited. Only before an
-    /// interaction exists: once one is running, what the Driva view shows is a
-    /// record of the sandbox it is confined to, and changing that would mean a
-    /// new session.
+    /// interaction exists, or after it has stopped: while one is running or
+    /// idle, what the Driva view shows is a record of the sandbox it is
+    /// confined to, and changing that would mean a new session. Once stopped,
+    /// there is no live sandbox to contradict, so editing reopens just as if
+    /// the interaction had never started.
     pub fn can_edit_launch(&self) -> bool {
-        self.status == Status::Pending
+        matches!(self.status, Status::Pending | Status::Stopped)
     }
 
     /// Refuse an edit to the launch policy when there is nothing to edit,

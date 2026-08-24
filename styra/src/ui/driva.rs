@@ -592,6 +592,31 @@ mod tests {
         assert!(!screen.contains("add mount"), "{screen}");
     }
 
+    /// Once stopped, there is no live sandbox left to contradict, so editing
+    /// reopens exactly as if the interaction had never started.
+    #[test]
+    fn a_stopped_interactions_launch_policy_can_be_edited_again() {
+        use crate::app::Status;
+        use styra_server::DrivaOptions;
+
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
+        app.toggle_view(View::Driva);
+        app.set_driva_options(DrivaOptions {
+            isolation_backend: "bwrap".into(),
+            command: vec!["codex".into()],
+            working_directory: PathBuf::from("/tmp/styra/workspace"),
+            network: false,
+            mounts: Vec::new(),
+        });
+        app.status = Status::Stopped;
+        assert!(app.can_edit_launch());
+        let screen = tall(&app);
+        assert!(screen.contains("add mount"), "{screen}");
+    }
+
     #[test]
     fn the_mount_prompt_floats_over_the_policy_it_edits() {
         let mut app = editable_app();
