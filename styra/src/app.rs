@@ -121,6 +121,56 @@ pub fn mount_label(mount: &LaunchMount) -> String {
     }
 }
 
+/// The directories holding the git history of a checkout whose root is
+/// `root`, for the case where the root alone does not hold it.
+///
+/// In an ordinary checkout `.git` is a directory inside the root and this is
+/// empty. In a linked worktree `.git` is instead a file naming a directory
+/// under the main checkout, which in turn names the common directory that
+/// carries the objects and refs — both live outside the worktree, so both have
+/// to be mounted for history to be readable at all.
+fn git_history_directories(root: &Path) -> Vec<PathBuf> {
+    let pointer = root.join(".git");
+    if pointer.is_dir() {
+        return Vec::new();
+    }
+    let Some(git_directory) = std::fs::read_to_string(&pointer)
+        .ok()
+        .and_then(|contents| {
+            contents.lines().find_map(|line| {
+                line.trim()
+                    .strip_prefix("gitdir:")
+                    .map(|target| target.trim().to_owned())
+            })
+        })
+        .map(|target| resolve_against(root, Path::new(&target)))
+    else {
+        return Vec::new();
+    };
+    let common = std::fs::read_to_string(git_directory.join("commondir"))
+        .ok()
+        .map(|contents| resolve_against(&git_directory, Path::new(contents.trim())));
+    let mut directories = vec![git_directory];
+    if let Some(common) = common {
+        if !directories.contains(&common) {
+            directories.push(common);
+        }
+    }
+    directories
+}
+
+/// Interpret a path a git pointer file gave us, which may be relative to the
+/// file that named it. Canonicalized when the target exists so that the `..`
+/// segments git writes do not reach the launch policy as-is.
+fn resolve_against(base: &Path, target: &Path) -> PathBuf {
+    let joined = if target.is_absolute() {
+        target.to_path_buf()
+    } else {
+        base.join(target)
+    };
+    std::fs::canonicalize(&joined).unwrap_or(joined)
+}
+
 /// Parse the `source[:destination][:ro|rw]` an operator types into a mount
 /// request.
 ///
@@ -1651,6 +1701,11 @@ impl App {
     /// of a checkout cannot see `.git`, so anything it tries to do with history
     /// fails in a way that reads as a broken agent rather than a mount that was
     /// cut too narrowly.
+    ///
+    /// Inside a linked worktree the root is not enough either: its `.git` is a
+    /// file pointing at a directory that lives under the main checkout, so the
+    /// history is outside the mount and every command that reads it fails. The
+    /// directories that file leads to are added alongside the root.
     pub fn add_git_root_mount(&mut self) {
         if !self.allow_launch_edit() {
             return;
@@ -1658,21 +1713,39 @@ impl App {
         let Some(root) = self.git_root() else {
             return self.show_action_message("no .git found at or above the working directory");
         };
-        let mount = LaunchMount {
-            source: root,
-            destination: None,
-            writable: true,
-        };
-        if self.launch.mounts.contains(&mount) {
-            return self.show_action_message("that mount is already in the launch policy");
+        let mut sources = vec![root.clone()];
+        for directory in git_history_directories(&root) {
+            if !sources.iter().any(|source| directory.starts_with(source)) {
+                sources.push(directory);
+            }
         }
-        if !self.launch.standalone && self.workspace_launch.mounts.contains(&mount) {
-            return self.show_action_message("the Workspace policy already grants that mount");
+
+        let mut added = Vec::new();
+        let mut skipped = Vec::new();
+        for source in sources {
+            let mount = LaunchMount {
+                source,
+                destination: None,
+                writable: true,
+            };
+            if self.launch.mounts.contains(&mount) {
+                skipped.push("that mount is already in the launch policy");
+                continue;
+            }
+            if !self.launch.standalone && self.workspace_launch.mounts.contains(&mount) {
+                skipped.push("the Workspace policy already grants that mount");
+                continue;
+            }
+            added.push(mount_label(&mount));
+            self.launch.mounts.push(mount);
+            self.driva_selected_mount = self.launch.mounts.len() - 1;
         }
-        let label = mount_label(&mount);
-        self.launch.mounts.push(mount);
-        self.driva_selected_mount = self.launch.mounts.len() - 1;
-        self.show_action_message(format!("added {label}"));
+
+        match (added.is_empty(), skipped.first()) {
+            (true, Some(reason)) => self.show_action_message(*reason),
+            (true, None) => {}
+            (false, _) => self.show_action_message(format!("added {}", added.join(", "))),
+        }
     }
 
     /// The nearest enclosing directory that holds a `.git`, starting from the
@@ -2016,6 +2089,35 @@ mod tests {
             styra_server::agent::Selection::parse("codex").unwrap(),
             "session-1",
         )
+    }
+
+    #[test]
+    fn a_worktree_contributes_the_directories_holding_its_history() {
+        let base = std::env::temp_dir().join("styra-git-history-directories");
+        let _ = std::fs::remove_dir_all(&base);
+        let main = base.join("main");
+        let worktree_git = main.join(".git/worktrees/feature");
+        let worktree = base.join("feature");
+        std::fs::create_dir_all(&worktree_git).unwrap();
+        std::fs::create_dir_all(&worktree).unwrap();
+        std::fs::write(
+            worktree.join(".git"),
+            "gitdir: ../main/.git/worktrees/feature\n",
+        )
+        .unwrap();
+        std::fs::write(worktree_git.join("commondir"), "../..\n").unwrap();
+
+        let directories = git_history_directories(&worktree);
+
+        assert_eq!(
+            directories,
+            vec![
+                std::fs::canonicalize(&worktree_git).unwrap(),
+                std::fs::canonicalize(main.join(".git")).unwrap(),
+            ]
+        );
+        assert!(git_history_directories(&main).is_empty());
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
