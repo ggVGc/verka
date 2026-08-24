@@ -270,8 +270,8 @@ pub fn render_template_picker(
     frame.render_stateful_widget(list, area, &mut state);
 }
 
-/// Render the current-interactions picker: interactions on the left and the selected
-/// interaction's live diagnostic/stderr log on the right.
+/// Render the current-interactions picker: interactions in a band across the
+/// top and the selected interaction's live diagnostic/stderr log below.
 ///
 /// Like [`render_picker`], it stands apart from [`crate::app::App`] because it
 /// overlays whichever session is currently loaded. The picker loop owns and
@@ -285,8 +285,8 @@ pub fn render_interactions_picker(
 ) {
     let area = frame.area();
     let panes = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(42), Constraint::Percentage(58)])
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(25), Constraint::Percentage(75)])
         .split(area);
     let interactions_block = Block::default()
         .borders(Borders::ALL)
