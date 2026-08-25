@@ -549,6 +549,13 @@ result records where it came from (`SessionOrigin`: the source Session id,
 its provider, and the cutoff, or no cutoff for a full branch), which is not a
 live link — it is a historical fact, fixed at branch time.
 
+The branch's Styra journal is seeded with the same leading history as its
+native provider transcript, so opening the new Session shows the conversation
+immediately rather than an empty preview. Copied agent records retain the wire
+protocol that produced them. This matters for provider conversion: historical
+Claude lines still decode as Claude while new Codex app-server lines appended
+after resume decode as Codex (and conversely).
+
 Two client-facing shortcuts:
 
 - `x` in the Session picker converts the selected Session's native transcript

@@ -2,7 +2,8 @@
 //!
 //! The journal is the fundamental record of a session: an ordered log of
 //! source-tagged records. An agent record holds the verbatim line received on
-//! the agent's stdout; an operator record holds a message the operator sent.
+//! the agent's stdout (and, for copied branch history, the protocol that
+//! produced it); an operator record holds a message the operator sent.
 //! Append order is receive order, so the single file reconstructs the whole
 //! session with agent and operator turns interleaved. Nothing rendered is
 //! stored — [`replay`] reproduces events on demand through the protocol
@@ -44,7 +45,15 @@ struct StoredSessionMeta {
 #[serde(tag = "source", rename_all = "lowercase")]
 enum Record {
     /// A line received verbatim on the agent's stdout.
-    Agent { at_ms: u64, raw: String },
+    Agent {
+        at_ms: u64,
+        raw: String,
+        /// A branched Session can contain history produced by a different
+        /// provider than the one that will append to it. Old journals omit
+        /// this field and continue to use the Session's current protocol.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        protocol: Option<Protocol>,
+    },
     /// A message the operator sent to the agent.
     User { at_ms: u64, text: String },
 }
@@ -115,7 +124,56 @@ impl Journal {
         self.write(&Record::Agent {
             at_ms: now_ms(),
             raw: raw.to_owned(),
+            protocol: None,
         })
+    }
+
+    /// Seed a branch with the source journal's leading history. Agent records
+    /// remember the protocol that produced them, so a provider-converted
+    /// branch can replay its old lines and later append lines in its new
+    /// protocol. Existing per-record overrides are retained when branching a
+    /// Session that was itself converted before.
+    pub(crate) fn copy_prefix_from(
+        &mut self,
+        source: &Path,
+        source_protocol: Protocol,
+        through_ms: Option<u64>,
+    ) -> Result<()> {
+        let file_path = if source.is_dir() {
+            source.join(JOURNAL_FILE)
+        } else {
+            source.to_path_buf()
+        };
+        let file = File::open(&file_path)
+            .with_context(|| format!("opening source journal {}", file_path.display()))?;
+        for line in BufReader::new(file).lines() {
+            let line = line.context("reading source journal line")?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            let record: Record = serde_json::from_str(&line)
+                .with_context(|| format!("parsing source journal {}", file_path.display()))?;
+            let at_ms = match &record {
+                Record::Agent { at_ms, .. } | Record::User { at_ms, .. } => *at_ms,
+            };
+            if through_ms.is_some_and(|cutoff| at_ms > cutoff) {
+                break;
+            }
+            let record = match record {
+                Record::Agent {
+                    at_ms,
+                    raw,
+                    protocol,
+                } => Record::Agent {
+                    at_ms,
+                    raw,
+                    protocol: protocol.or(Some(source_protocol)),
+                },
+                user @ Record::User { .. } => user,
+            };
+            self.write(&record)?;
+        }
+        Ok(())
     }
 
     /// Record a message the operator sent to the agent.
@@ -435,7 +493,11 @@ pub fn replay(path: &Path, protocol: Protocol) -> Result<Vec<AgentEvent>> {
             continue;
         }
         match serde_json::from_str::<Record>(&line) {
-            Ok(Record::Agent { raw, .. }) => events.push(decode_line(protocol, &raw)),
+            Ok(Record::Agent {
+                raw,
+                protocol: record_protocol,
+                ..
+            }) => events.push(decode_line(record_protocol.unwrap_or(protocol), &raw)),
             Ok(Record::User { text, .. }) => events.push(AgentEvent::UserMessage { text }),
             Err(error) => events.push(AgentEvent::Malformed {
                 error: format!("unreadable journal record: {error}"),
@@ -462,7 +524,9 @@ pub fn replay_raw(path: &Path) -> Result<Vec<RawLine>> {
             continue;
         }
         match serde_json::from_str::<Record>(&line) {
-            Ok(Record::Agent { raw: text, at_ms }) => raw.push(RawLine {
+            Ok(Record::Agent {
+                raw: text, at_ms, ..
+            }) => raw.push(RawLine {
                 direction: Direction::FromAgent,
                 text,
                 at_ms,
@@ -551,6 +615,86 @@ mod tests {
         assert_eq!(events, vec![decode_line(Protocol::CodexJsonl, raw)]);
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_branch_replays_seed_history_with_its_original_protocol() {
+        let source = temp_dir("branch-source");
+        let destination = temp_dir("branch-destination");
+        {
+            let mut journal = Journal::create(&source).unwrap();
+            journal.record_user_message("old question").unwrap();
+            journal
+                .record_agent_line(
+                    r#"{"type":"assistant","message":{"content":[{"type":"text","text":"old answer"}]}}"#,
+                )
+                .unwrap();
+        }
+        {
+            let mut journal = Journal::create(&destination).unwrap();
+            journal
+                .copy_prefix_from(&source, Protocol::ClaudeJsonl, None)
+                .unwrap();
+            journal
+                .record_agent_line(
+                    r#"{"method":"item/completed","params":{"item":{"type":"agentMessage","id":"m","text":"new answer"}}}"#,
+                )
+                .unwrap();
+        }
+
+        assert_eq!(
+            replay(&destination, Protocol::CodexAppServer).unwrap(),
+            vec![
+                AgentEvent::UserMessage {
+                    text: "old question".into()
+                },
+                AgentEvent::AgentMessage {
+                    text: "old answer".into()
+                },
+                AgentEvent::AgentMessage {
+                    text: "new answer".into()
+                },
+            ]
+        );
+
+        std::fs::remove_dir_all(source).ok();
+        std::fs::remove_dir_all(destination).ok();
+    }
+
+    #[test]
+    fn a_branch_copies_only_the_journal_prefix_through_its_cutoff() {
+        let source = temp_dir("branch-prefix-source");
+        let destination = temp_dir("branch-prefix-destination");
+        std::fs::write(
+            source.join(JOURNAL_FILE),
+            concat!(
+                "{\"source\":\"user\",\"at_ms\":1,\"text\":\"first\"}\n",
+                "{\"source\":\"user\",\"at_ms\":2,\"text\":\"second\"}\n",
+                "{\"source\":\"user\",\"at_ms\":3,\"text\":\"third\"}\n"
+            ),
+        )
+        .unwrap();
+        {
+            let mut journal = Journal::create(&destination).unwrap();
+            journal
+                .copy_prefix_from(&source, Protocol::ClaudeJsonl, Some(2))
+                .unwrap();
+        }
+
+        assert_eq!(
+            replay(&destination, Protocol::CodexAppServer).unwrap(),
+            vec![
+                AgentEvent::UserMessage {
+                    text: "first".into()
+                },
+                AgentEvent::UserMessage {
+                    text: "second".into()
+                },
+            ]
+        );
+
+        std::fs::remove_dir_all(source).ok();
+        std::fs::remove_dir_all(destination).ok();
     }
 
     fn test_profile(name: &str, protocol: Protocol) -> Profile {

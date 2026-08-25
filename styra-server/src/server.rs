@@ -709,6 +709,13 @@ impl ServerState {
         let summary = self.stored_summary(id)?;
         let to_provider = other_interactive_provider(summary.selection.provider)?;
         self.branch_session(id, None, Some(to_provider))
+            .with_context(|| {
+                format!(
+                    "converting session {id:?} from {} to {}",
+                    summary.selection.provider.as_str(),
+                    to_provider.as_str()
+                )
+            })
     }
 
     /// Branch a stored Session into a new sibling Session in the same
@@ -784,13 +791,15 @@ impl ServerState {
             Selection::new(to_provider)
         };
         let profile = crate::agent::resolve_profile(&selection, &self.inner.layout)?;
-        let (journal, new_id) = Journal::create_in_workspace(
+        let (mut journal, new_id) = Journal::create_in_workspace(
             &self.inner.store_root,
             &summary.workspace_id,
             &profile,
             &selection,
             summary.name.clone(),
         )?;
+        let source_protocol = journal::read_session_meta(&summary.path)?.protocol;
+        journal.copy_prefix_from(&summary.path, source_protocol, at_ms)?;
         let directory = journal
             .path()
             .parent()
@@ -1673,6 +1682,27 @@ mod tests {
             })
             .unwrap_err();
         assert!(error.to_string().contains("can be viewed but not resumed"));
+
+        // Conversion needs the provider's native transcript just as resume
+        // does. A legacy Styra-only journal must fail without making a
+        // partially-created sibling session appear in the picker.
+        let error = state
+            .convert_session_provider("0000000000001-1-1")
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("converting session"),
+            "{error:#}"
+        );
+        assert!(
+            format!("{error:#}").contains("no stored provider session id"),
+            "{error:#}"
+        );
+        assert_eq!(
+            crate::workspace::get(&store, &workspace.id)
+                .unwrap()
+                .session_count,
+            1
+        );
 
         std::fs::remove_dir_all(store).ok();
         std::fs::remove_dir_all(host).ok();
