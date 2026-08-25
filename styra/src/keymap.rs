@@ -103,8 +103,8 @@ pub(crate) const REFERENCE: &[ReferenceRow] = &[
         action: "toggle full-screen preview",
     },
     ReferenceRow::Binding {
-        keys: "v",
-        action: "toggle pretty/diff preview",
+        keys: "v / C",
+        action: "pretty/diff preview; preview the newest command",
     },
     ReferenceRow::Binding {
         keys: "PgUp/PgDn",

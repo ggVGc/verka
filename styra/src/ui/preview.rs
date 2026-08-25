@@ -3,7 +3,7 @@
 //! is folded in the list.
 
 use super::{message_text_color, summary_line, wrap_line, DETAIL_INDENT};
-use crate::app::App;
+use crate::app::{App, PreviewTarget};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
@@ -12,9 +12,19 @@ use ratatui::Frame;
 use styra_server::event::{AgentEvent, DetailBlock, PresentationMode};
 
 pub(crate) fn render_preview(frame: &mut Frame, app: &App, area: Rect) {
-    let title = match app.preview_mode {
-        PresentationMode::Pretty => " preview · pretty · v: raw ",
-        PresentationMode::Raw => " preview · raw · v: pretty ",
+    let title = match (app.preview_mode, app.preview_target) {
+        (PresentationMode::Pretty, PreviewTarget::Selection) => {
+            " preview · pretty · v: raw · C: command "
+        }
+        (PresentationMode::Raw, PreviewTarget::Selection) => {
+            " preview · raw · v: pretty · C: command "
+        }
+        (PresentationMode::Pretty, PreviewTarget::Command) => {
+            " command · pretty · v: raw · C: selection "
+        }
+        (PresentationMode::Raw, PreviewTarget::Command) => {
+            " command · raw · v: pretty · C: selection "
+        }
     };
     let block = Block::default()
         .borders(Borders::ALL)
@@ -62,7 +72,11 @@ pub(crate) fn render_fullscreen_preview(frame: &mut Frame, app: &App, area: Rect
 /// the expanded list entries (`entry_item` in `list.rs`), so a wrapped line
 /// stays aligned with the text that follows its `«`/`»` marker or detail
 /// indent instead of jumping to the left edge.
-fn wrap_preview_lines(lines: Vec<Line<'static>>, width: usize, summary_indent: usize) -> Vec<Line<'static>> {
+fn wrap_preview_lines(
+    lines: Vec<Line<'static>>,
+    width: usize,
+    summary_indent: usize,
+) -> Vec<Line<'static>> {
     lines
         .into_iter()
         .enumerate()
@@ -82,7 +96,7 @@ fn wrap_preview_lines(lines: Vec<Line<'static>>, width: usize, summary_indent: u
 /// matching `entry_item`'s `summary_indent` in `list.rs`.
 fn preview_summary_indent(app: &App) -> usize {
     let is_conversation = matches!(
-        app.selected_entry().map(|entry| &entry.event),
+        app.preview_entry().map(|entry| &entry.event),
         Some(AgentEvent::UserMessage { .. } | AgentEvent::AgentMessage { .. })
     );
     if is_conversation {
@@ -108,7 +122,7 @@ pub(crate) fn preview_scroll_limit(lines: &[Line<'_>], width: u16, height: u16) 
 /// Shared body for the side-panel and full-screen preview: the selected
 /// entry's uncapped summary and detail.
 pub(crate) fn preview_lines(app: &App) -> Vec<Line<'static>> {
-    let Some(entry) = app.selected_entry() else {
+    let Some(entry) = app.preview_entry() else {
         return vec![Line::from(Span::styled(
             "  no entry selected",
             Style::default().fg(Color::Gray),
@@ -358,6 +372,52 @@ mod tests {
         let shown = rendered(&app);
         assert!(shown.contains("preview"));
         assert!(shown.contains("24 passed"));
+    }
+
+    #[test]
+    fn command_mode_previews_the_newest_command_and_result_whatever_is_focused() {
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
+        app.push_event(AgentEvent::CommandCompleted {
+            command: "cargo test".into(),
+            status: "completed".into(),
+            exit_code: Some(0),
+            output: "24 passed".into(),
+        });
+        app.push_event(AgentEvent::AgentMessage {
+            text: "all green".into(),
+        });
+        app.select_last();
+        app.toggle_preview();
+
+        // Focus is on the message, so that is what the preview shows.
+        let shown = rendered(&app);
+        assert!(shown.contains("all green"));
+        assert!(!shown.contains("24 passed"));
+
+        app.toggle_preview_target();
+        let shown = rendered(&app);
+        assert!(shown.contains("command"));
+        assert!(shown.contains("cargo test"));
+        assert!(shown.contains("24 passed"));
+        // Still selecting the message; only the preview's target changed.
+        assert_eq!(app.selected, app.entries.len() - 1);
+    }
+
+    #[test]
+    fn command_mode_falls_back_to_the_selection_before_any_command_runs() {
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
+        app.push_event(AgentEvent::AgentMessage {
+            text: "all green".into(),
+        });
+        app.toggle_preview();
+        app.toggle_preview_target();
+        assert!(rendered(&app).contains("all green"));
     }
 
     #[test]

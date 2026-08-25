@@ -41,6 +41,18 @@ pub enum View {
     Preview,
 }
 
+/// Which entry the preview panel shows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PreviewTarget {
+    /// The entry the list selection is on.
+    #[default]
+    Selection,
+    /// The newest shell command and its result, regardless of where the
+    /// selection currently is — so the preview keeps showing what the agent
+    /// is running while the operator reads elsewhere in the list.
+    Command,
+}
+
 /// The session's lifecycle as the operator sees it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Status {
@@ -631,6 +643,8 @@ pub struct App {
     /// How far the selected entry's preview is scrolled.
     pub preview: Scroll,
     pub preview_mode: PresentationMode,
+    /// Whether the preview follows the selection or the newest command.
+    pub preview_target: PreviewTarget,
     /// What the next session launches with: agent, model, reasoning effort.
     /// This is the choice for the current workspace, edited through [`Launcher`]
     /// while nothing is running. The terminal client only persists it as the
@@ -788,6 +802,7 @@ impl App {
             show_preview: false,
             preview: Scroll::default(),
             preview_mode: PresentationMode::Pretty,
+            preview_target: PreviewTarget::Selection,
             selection,
             launcher: None,
             recent_models: Vec::new(),
@@ -1554,6 +1569,34 @@ impl App {
         self.preview.reset();
     }
 
+    pub fn toggle_preview_target(&mut self) {
+        self.preview_target = match self.preview_target {
+            PreviewTarget::Selection => PreviewTarget::Command,
+            PreviewTarget::Command => PreviewTarget::Selection,
+        };
+        self.preview.reset();
+    }
+
+    /// The entry the preview panel and the `y` shortcut act on: the selected
+    /// one, or — in [`PreviewTarget::Command`] — the newest shell entry. That
+    /// entry holds both the command and its result, since a completion
+    /// replaces its start row in place (see [`Self::push_event`]). Falls back
+    /// to the selection while no command has run yet, so the panel is never
+    /// blank just because the mode is on.
+    pub fn preview_entry(&self) -> Option<&Entry> {
+        if self.preview_target == PreviewTarget::Command {
+            if let Some(entry) = self
+                .entries
+                .iter()
+                .rev()
+                .find(|entry| entry.event.tag() == "shell")
+            {
+                return Some(entry);
+            }
+        }
+        self.selected_entry()
+    }
+
     /// Record the host directory backing the agent's workspace, so the
     /// preview panel can resolve a changed file's path to its current
     /// content on disk.
@@ -2011,7 +2054,7 @@ impl App {
             // `y` here just automates the selection an operator would
             // otherwise make by hand.
             View::Events | View::Preview => {
-                let entry = self.selected_entry()?;
+                let entry = self.preview_entry()?;
                 let protocol = self.selection.provider.protocol();
                 let mut text = String::new();
                 for block in protocol.presented_detail(&entry.event, self.preview_mode) {
