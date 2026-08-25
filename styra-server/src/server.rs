@@ -336,9 +336,30 @@ impl ServerState {
             .name(format!("styra-updates-{id}"))
             .spawn(move || {
                 let mut background_work = false;
+                // Once the provider reports its background-task set, that
+                // count alone drives `background_work`; the tool-call
+                // heuristics below are a fallback for quieter providers.
+                let mut background_count_known = false;
                 let mut background_polls = HashSet::new();
                 while let Ok(update) = receiver.recv() {
                     match &update {
+                        InteractionUpdate::Event(event)
+                            if event.background_tasks_running().is_some() =>
+                        {
+                            let running = event
+                                .background_tasks_running()
+                                .expect("guard checked the running count is present");
+                            background_count_known = true;
+                            background_work = running > 0;
+                            if !background_work {
+                                let mut activity = activity
+                                    .lock()
+                                    .expect("interaction activity lock poisoned");
+                                if *activity == InteractionActivity::Background {
+                                    *activity = InteractionActivity::Pending;
+                                }
+                            }
+                        }
                         InteractionUpdate::Event(event) if event.starts_background_task() => {
                             background_work = true;
                             *activity.lock().expect("interaction activity lock poisoned") =
@@ -375,7 +396,7 @@ impl ServerState {
                             id,
                             ..
                         }) if background_polls.remove(id) => {
-                            if update_finishes_background(&update) {
+                            if !background_count_known && update_finishes_background(&update) {
                                 background_work = false;
                                 *activity.lock().expect("interaction activity lock poisoned") =
                                     InteractionActivity::Pending;
@@ -583,9 +604,30 @@ impl ServerState {
             .name(format!("styra-updates-{id}"))
             .spawn(move || {
                 let mut background_work = false;
+                // Once the provider reports its background-task set, that
+                // count alone drives `background_work`; the tool-call
+                // heuristics below are a fallback for quieter providers.
+                let mut background_count_known = false;
                 let mut background_polls = HashSet::new();
                 while let Ok(update) = receiver.recv() {
                     match &update {
+                        InteractionUpdate::Event(event)
+                            if event.background_tasks_running().is_some() =>
+                        {
+                            let running = event
+                                .background_tasks_running()
+                                .expect("guard checked the running count is present");
+                            background_count_known = true;
+                            background_work = running > 0;
+                            if !background_work {
+                                let mut activity = activity
+                                    .lock()
+                                    .expect("interaction activity lock poisoned");
+                                if *activity == InteractionActivity::Background {
+                                    *activity = InteractionActivity::Pending;
+                                }
+                            }
+                        }
                         InteractionUpdate::Event(event) if event.starts_background_task() => {
                             background_work = true;
                             *activity.lock().expect("interaction activity lock poisoned") =
@@ -622,7 +664,7 @@ impl ServerState {
                             id,
                             ..
                         }) if background_polls.remove(id) => {
-                            if update_finishes_background(&update) {
+                            if !background_count_known && update_finishes_background(&update) {
                                 background_work = false;
                                 *activity.lock().expect("interaction activity lock poisoned") =
                                     InteractionActivity::Pending;

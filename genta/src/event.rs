@@ -156,6 +156,11 @@ pub enum AgentEvent {
     Error {
         message: String,
     },
+    /// The authoritative count of background tasks the agent currently has
+    /// running, as reported by the provider whenever that set changes.
+    BackgroundTasks {
+        running: usize,
+    },
     /// A recognised envelope with no rendered view; carried, not shown as prose.
     Unknown {
         wire_type: String,
@@ -204,6 +209,18 @@ impl AgentEvent {
                 == Some(true)
     }
 
+    /// The authoritative background-task count this event carries, if any.
+    /// Claude reports the whole set whenever it changes, which is a far better
+    /// signal than inferring the lifecycle from tool calls: the agent need not
+    /// poll a task at all to learn it finished, so a client that waits for a
+    /// poll can hold a "background work running" state forever.
+    pub fn background_tasks_running(&self) -> Option<usize> {
+        match self {
+            AgentEvent::BackgroundTasks { running } => Some(*running),
+            _ => None,
+        }
+    }
+
     /// Whether this event is a completed poll of a background task. Claude's
     /// task tools use slightly different names across releases, so accept both
     /// spellings and inspect the result text rather than relying on one exact
@@ -242,6 +259,7 @@ impl AgentEvent {
             AgentEvent::AgentMessage { .. } => "agent",
             AgentEvent::Thinking { .. } => "thinking",
             AgentEvent::Error { .. } => "error",
+            AgentEvent::BackgroundTasks { .. } => "tasks",
             AgentEvent::Unknown { .. } => "unknown",
             AgentEvent::Malformed { .. } => "malformed",
         }
@@ -261,6 +279,7 @@ impl AgentEvent {
                 | AgentEvent::TurnCompleted { .. }
                 | AgentEvent::UsageUpdated { .. }
                 | AgentEvent::Thinking { .. }
+                | AgentEvent::BackgroundTasks { .. }
         ) || matches!(self, AgentEvent::Unknown { wire_type }
             if wire_type == "rate_limit_event" || wire_type.starts_with("system:"))
     }
@@ -327,6 +346,11 @@ impl AgentEvent {
                 (line, None) => line,
             },
             AgentEvent::Error { message } => first_line(message),
+            AgentEvent::BackgroundTasks { running } => match running {
+                0 => "no background tasks running".into(),
+                1 => "1 background task running".into(),
+                many => format!("{many} background tasks running"),
+            },
             AgentEvent::Unknown { wire_type } => wire_type.clone(),
             AgentEvent::Malformed { error } => first_line(error),
         };
@@ -440,6 +464,7 @@ impl AgentEvent {
                 _ => markdown_blocks(text),
             },
             AgentEvent::Error { message } => vec![DetailBlock::Text(message.clone())],
+            AgentEvent::BackgroundTasks { .. } => vec![DetailBlock::Text(self.summary())],
             AgentEvent::Unknown { wire_type } => {
                 vec![DetailBlock::Text(format!(
                     "unrecognised event: {wire_type}"
@@ -832,6 +857,15 @@ fn decode_claude_value(value: &Value) -> AgentEvent {
                     None => AgentEvent::Unknown {
                         wire_type: "system:thinking_tokens".into(),
                     },
+                }
+            } else if subtype == "background_tasks_changed" {
+                // The whole set of live background tasks, resent on every
+                // change. Its length is the authoritative running count.
+                AgentEvent::BackgroundTasks {
+                    running: value
+                        .get("tasks")
+                        .and_then(Value::as_array)
+                        .map_or(0, Vec::len),
                 }
             } else {
                 AgentEvent::Unknown {
@@ -1538,6 +1572,42 @@ mod tests {
             }
         );
         assert!(event.is_minor());
+    }
+
+    #[test]
+    fn claude_background_task_set_carries_the_running_count() {
+        let started = decode_line(
+            Protocol::ClaudeJsonl,
+            r#"{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"bk8","task_type":"local_bash","description":"Compile project with sbt"}]}"#,
+        );
+        assert_eq!(started, AgentEvent::BackgroundTasks { running: 1 });
+        assert_eq!(started.background_tasks_running(), Some(1));
+        assert!(started.is_minor());
+        assert_eq!(started.summary(), "1 background task running");
+
+        let drained = decode_line(
+            Protocol::ClaudeJsonl,
+            r#"{"type":"system","subtype":"background_tasks_changed","tasks":[]}"#,
+        );
+        assert_eq!(drained, AgentEvent::BackgroundTasks { running: 0 });
+        assert_eq!(drained.background_tasks_running(), Some(0));
+        assert_eq!(drained.summary(), "no background tasks running");
+    }
+
+    #[test]
+    fn claude_bash_result_wording_is_not_trusted_to_end_a_background_task() {
+        // Claude's own completion notice reads "[exited with code 0]", which
+        // none of the heuristic phrases match. The reported task set is what
+        // clients must rely on.
+        let completed = AgentEvent::ToolCompleted {
+            id: "t-1".into(),
+            name: "t-1".into(),
+            detail: String::new(),
+            status: "completed".into(),
+            output: "[exited with code 0]".into(),
+        };
+        assert!(!completed.finishes_background_task());
+        assert_eq!(completed.background_tasks_running(), None);
     }
 
     #[test]

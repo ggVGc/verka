@@ -718,6 +718,10 @@ pub struct App {
     /// How many events have arrived from the agent, for the spinner's phase.
     events_received: usize,
     background_work: bool,
+    /// Set once the provider has reported its background-task set. From then
+    /// on that count is the only thing that moves `background_work`; the
+    /// tool-call heuristics are a fallback for providers that stay silent.
+    background_count_known: bool,
     /// The verbatim wire interaction, in occurrence order.
     pub raw: Vec<RawLine>,
     /// Which wire line the raw view has selected.
@@ -826,6 +830,7 @@ impl App {
             last_event_at: None,
             events_received: 0,
             background_work: false,
+            background_count_known: false,
             raw: Vec::new(),
             raw_selected: 0,
             raw_follow: true,
@@ -1214,7 +1219,7 @@ impl App {
                         output: output.clone(),
                     };
                 }
-                if finishes_background {
+                if finishes_background && !self.background_count_known {
                     self.background_work = false;
                     self.status = Status::Idle;
                 }
@@ -1332,7 +1337,13 @@ impl App {
             }
             _ => {}
         }
-        if event.starts_background_task() {
+        if let Some(running) = event.background_tasks_running() {
+            self.background_count_known = true;
+            self.background_work = running > 0;
+            if !self.background_work && self.status == Status::Background {
+                self.status = Status::Idle;
+            }
+        } else if event.starts_background_task() {
             self.background_work = true;
         }
         let transfer_expansion = self.follow
@@ -2441,6 +2452,52 @@ mod tests {
             output: "Task completed successfully".into(),
         });
         assert_eq!(app.status, Status::Idle);
+    }
+
+    #[test]
+    fn reported_empty_background_set_clears_the_status_without_a_poll() {
+        let mut app = app();
+        app.push_event(AgentEvent::ToolStarted {
+            id: "bash-1".into(),
+            name: "Bash".into(),
+            detail: r#"{"command":"cargo test","run_in_background":true}"#.into(),
+        });
+        app.push_event(AgentEvent::BackgroundTasks { running: 1 });
+        app.push_event(AgentEvent::TurnCompleted {
+            usage: TokenUsage::default(),
+        });
+        assert_eq!(app.status, Status::Background);
+
+        // The agent never polls the task; it reads the output file directly
+        // and the provider reports the set is empty. That must clear.
+        app.push_event(AgentEvent::BackgroundTasks { running: 0 });
+        assert_eq!(app.status, Status::Idle);
+        app.push_event(AgentEvent::TurnCompleted {
+            usage: TokenUsage::default(),
+        });
+        assert_eq!(app.status, Status::Idle);
+    }
+
+    #[test]
+    fn a_poll_of_one_task_does_not_clear_a_reported_second_one() {
+        let mut app = app();
+        app.push_event(AgentEvent::BackgroundTasks { running: 2 });
+        app.push_event(AgentEvent::ToolStarted {
+            id: "poll-1".into(),
+            name: "TaskOutput".into(),
+            detail: r#"{"task_id":"one"}"#.into(),
+        });
+        app.push_event(AgentEvent::ToolCompleted {
+            id: "poll-1".into(),
+            name: "poll-1".into(),
+            detail: String::new(),
+            status: "completed".into(),
+            output: "Task completed successfully".into(),
+        });
+        app.push_event(AgentEvent::TurnCompleted {
+            usage: TokenUsage::default(),
+        });
+        assert_eq!(app.status, Status::Background);
     }
 
     #[test]

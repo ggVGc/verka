@@ -168,8 +168,11 @@ pub fn event_blocks(event: &AgentEvent) -> Vec<WorkLogBlock> {
         },
         // Unknown provider events have no presentation; a UserMessage is a
         // host echo of the operator's own input, which Orka's batch runs never
-        // produce and its views do not render.
-        AgentEvent::Unknown { .. } | AgentEvent::UserMessage { .. } => return Vec::new(),
+        // produce and its views do not render; a background-task count is
+        // bookkeeping for live views, not part of a finished run's log.
+        AgentEvent::Unknown { .. }
+        | AgentEvent::UserMessage { .. }
+        | AgentEvent::BackgroundTasks { .. } => return Vec::new(),
     };
     vec![block]
 }
