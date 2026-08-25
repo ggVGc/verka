@@ -140,7 +140,42 @@ pub fn run_session_picker(
             KeyCode::Char('e') if !sessions.is_empty() => {
                 notes::edit_session_notes(terminal, client, sessions, selected, &preview_updates)?;
             }
+            KeyCode::Char('x') if !sessions.is_empty() => {
+                match client.convert_session_provider(&sessions[selected].id) {
+                    Ok(converted) => return Ok(Some(converted.id)),
+                    Err(error) => show_message(
+                        terminal,
+                        sessions,
+                        selected,
+                        "could not convert session",
+                        &format!("{error:#}"),
+                    )?,
+                }
+            }
             _ => {}
+        }
+    }
+}
+
+/// Show a dismissable notice over the session picker and block until any key
+/// dismisses it, so an error from an in-picker action (e.g. a failed
+/// conversion) is seen rather than lost.
+fn show_message(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    sessions: &[styra_server::SessionSummary],
+    selected: usize,
+    title: &str,
+    message: &str,
+) -> Result<()> {
+    loop {
+        terminal.draw(|frame| {
+            ui::render_picker(frame, sessions, selected, ui::Preview::Ready(&[]));
+            ui::render_message_popup(frame, title, message);
+        })?;
+        if let Event::Key(key) = event::read()? {
+            if key.kind == KeyEventKind::Press {
+                return Ok(());
+            }
         }
     }
 }

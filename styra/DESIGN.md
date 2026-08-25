@@ -525,6 +525,16 @@ Interaction using the native provider id captured when the Session began. A
 missing id or missing provider record is an error, without affecting
 read-only journal replay; the typed message is preserved for a retry.
 
+`x` in the Session picker converts the selected Session's native transcript
+(a Codex rollout or Claude project JSONL) to Styra's other interactive
+provider, via Genta's session conversion (see genta/README.md). The source
+Session, its native transcript, and its Styra journal are left untouched;
+conversion writes a new sibling Session in the same Workspace, carrying over
+its name and notes, that opens under the other provider with the converted
+history as its starting context. The picker opens the new Session immediately
+on success, or shows the failure (most commonly a stored Session with no
+provider id, so nothing native exists to convert) without leaving the list.
+
 ### Current Interactions
 
 `A` opens the server's current-Interactions picker. Each entry names its

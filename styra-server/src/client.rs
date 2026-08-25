@@ -69,6 +69,16 @@ impl Client {
         }
     }
 
+    /// Convert a stored Session's native transcript to the other interactive
+    /// provider's format and return the new sibling Session it was written
+    /// to. The source Session is untouched.
+    pub fn convert_session_provider(&self, id: &str) -> Result<SessionSummary> {
+        match self.request(Request::ConvertSessionProvider { id: id.to_owned() })? {
+            Response::SessionConverted(value) => Ok(value),
+            other => unexpected("session_converted", other),
+        }
+    }
+
     pub fn rename_session(&self, id: &str, name: Option<&str>) -> Result<SessionSummary> {
         match self.request(Request::RenameSession(RenameSession {
             id: id.to_owned(),

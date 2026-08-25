@@ -659,6 +659,68 @@ impl ServerState {
         })
     }
 
+    /// Convert a stored Session's native transcript to the other interactive
+    /// provider using Genta's session conversion, and record the result as a
+    /// new sibling Session in the same Workspace. The source Session, its
+    /// native transcript, and its Styra journal are left untouched, mirroring
+    /// Genta's own conversion, which assigns the destination a fresh id so it
+    /// can coexist with its source.
+    fn convert_session_provider(&self, id: &str) -> Result<SessionSummary> {
+        let summary = self.stored_summary(id)?;
+        let from_provider = summary.selection.provider;
+        let to_provider = other_interactive_provider(from_provider)?;
+        let provider_session_id = journal::read_provider_session_id(&summary.path)?
+            .with_context(|| {
+                format!("session {id:?} has no stored provider session id; there is no native transcript to convert")
+            })?;
+        let source_path = find_native_session_file(from_provider, &provider_session_id)?;
+        let source = std::fs::read_to_string(&source_path)
+            .with_context(|| format!("reading {}", source_path.display()))?;
+
+        let owning_workspace =
+            crate::workspace::get(&self.inner.store_root, &summary.workspace_id)?;
+        let cwd = owning_workspace.host_path;
+        let options = genta::session::ConversionOptions {
+            cwd: Some(cwd.to_string_lossy().into_owned()),
+            ..Default::default()
+        };
+        let converted = genta::session::convert(
+            &source,
+            native_session_format(from_provider),
+            native_session_format(to_provider),
+            &options,
+        )?;
+        let converted_session = genta::session::parse(&converted, native_session_format(to_provider))?;
+
+        let destination = native_session_destination(to_provider, &converted_session.id, &cwd)?;
+        if let Some(parent) = destination.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("creating {}", parent.display()))?;
+        }
+        std::fs::write(&destination, &converted)
+            .with_context(|| format!("writing {}", destination.display()))?;
+
+        let selection = Selection::new(to_provider);
+        let profile = crate::agent::resolve_profile(&selection, &self.inner.layout)?;
+        let (journal, new_id) = Journal::create_in_workspace(
+            &self.inner.store_root,
+            &summary.workspace_id,
+            &profile,
+            &selection,
+            summary.name.clone(),
+        )?;
+        let directory = journal
+            .path()
+            .parent()
+            .context("a freshly created session journal has a parent directory")?;
+        journal::store_provider_session_id(directory, &converted_session.id)?;
+        if !summary.notes.is_empty() {
+            journal::store_session_notes(directory, summary.notes.clone())?;
+        }
+
+        self.stored_summary(&new_id)
+    }
+
     fn interaction(&self, id: &str) -> Result<Arc<ManagedInteraction>> {
         self.inner
             .interactions
@@ -789,6 +851,9 @@ impl ServerState {
             Request::ResumeSession(request) => {
                 Ok(Response::SessionResumed(self.resume_session(request)?))
             }
+            Request::ConvertSessionProvider { id } => Ok(Response::SessionConverted(
+                self.convert_session_provider(&id)?,
+            )),
             Request::RenameSession(request) => {
                 let summary = self.stored_summary(&request.id)?;
                 let name = journal::store_session_name(&summary.path, request.name.as_deref())?;
@@ -971,9 +1036,15 @@ fn ensure_native_session_exists(
     provider: crate::agent::Provider,
     provider_session_id: &str,
 ) -> Result<()> {
+    find_native_session_file(provider, provider_session_id).map(|_| ())
+}
+
+/// The provider's own on-disk roots for its native, resumable session
+/// transcripts.
+fn native_session_roots(provider: crate::agent::Provider) -> Result<Vec<PathBuf>> {
     let home = std::env::var_os("HOME").context("HOME is required to locate provider sessions")?;
     let home = PathBuf::from(home);
-    let roots: Vec<PathBuf> = match provider {
+    Ok(match provider {
         crate::agent::Provider::Codex => vec![
             home.join(".codex/sessions"),
             home.join(".codex/archived_sessions"),
@@ -982,35 +1053,107 @@ fn ensure_native_session_exists(
         crate::agent::Provider::CodexExec => {
             anyhow::bail!("provider codex-exec does not support resuming sessions")
         }
-    };
-    if roots
-        .iter()
-        .any(|root| tree_has_session(root, provider_session_id))
-    {
-        return Ok(());
-    }
-    anyhow::bail!(
-        "{} session {:?} does not exist anymore; the Styra transcript is still available read-only",
-        provider.as_str(),
-        provider_session_id
-    )
+    })
 }
 
-fn tree_has_session(root: &Path, provider_session_id: &str) -> bool {
-    let Ok(entries) = std::fs::read_dir(root) else {
-        return false;
-    };
-    entries.filter_map(|entry| entry.ok()).any(|entry| {
+/// Find a provider's native transcript file by id, searching its known
+/// storage roots. Sessions are exempt from styra's picture of where within a
+/// root they live (Codex nests by date; Claude nests by project), so this
+/// walks the whole tree rather than assuming a layout.
+fn find_native_session_file(
+    provider: crate::agent::Provider,
+    provider_session_id: &str,
+) -> Result<PathBuf> {
+    native_session_roots(provider)?
+        .iter()
+        .find_map(|root| find_session_file(root, provider_session_id))
+        .with_context(|| {
+            format!(
+                "{} session {:?} does not exist anymore; the Styra transcript is still available read-only",
+                provider.as_str(),
+                provider_session_id
+            )
+        })
+}
+
+fn find_session_file(root: &Path, provider_session_id: &str) -> Option<PathBuf> {
+    let entries = std::fs::read_dir(root).ok()?;
+    for entry in entries.filter_map(|entry| entry.ok()) {
         let path = entry.path();
         if entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
-            tree_has_session(&path, provider_session_id)
-        } else {
-            entry
-                .file_name()
-                .to_string_lossy()
-                .contains(provider_session_id)
+            if let Some(found) = find_session_file(&path, provider_session_id) {
+                return Some(found);
+            }
+        } else if entry
+            .file_name()
+            .to_string_lossy()
+            .contains(provider_session_id)
+        {
+            return Some(path);
         }
-    })
+    }
+    None
+}
+
+/// The other of Styra's two interactive providers — conversion always flips
+/// between exactly these two, since Genta's batch-only `codex-exec` has no
+/// resumable native session to convert to or from.
+fn other_interactive_provider(provider: crate::agent::Provider) -> Result<crate::agent::Provider> {
+    match provider {
+        crate::agent::Provider::Codex => Ok(crate::agent::Provider::Claude),
+        crate::agent::Provider::Claude => Ok(crate::agent::Provider::Codex),
+        crate::agent::Provider::CodexExec => {
+            anyhow::bail!("provider codex-exec does not support session conversion")
+        }
+    }
+}
+
+/// The native transcript format Genta's session conversion reads and writes
+/// for a given provider.
+fn native_session_format(provider: crate::agent::Provider) -> genta::session::SessionFormat {
+    match provider {
+        crate::agent::Provider::Codex | crate::agent::Provider::CodexExec => {
+            genta::session::SessionFormat::Codex
+        }
+        crate::agent::Provider::Claude => genta::session::SessionFormat::Claude,
+    }
+}
+
+/// Where a freshly converted transcript must be written for its destination
+/// provider's own resume to find it: Claude scopes sessions under a
+/// per-project directory keyed by the encoded working directory; Codex scans
+/// its whole sessions tree by id, so a dedicated subdirectory keeps
+/// Genta-imported rollouts apart from Codex's own date-nested ones.
+fn native_session_destination(
+    provider: crate::agent::Provider,
+    session_id: &str,
+    cwd: &Path,
+) -> Result<PathBuf> {
+    let home =
+        std::env::var_os("HOME").context("HOME is required to place a converted provider session")?;
+    let home = PathBuf::from(home);
+    match provider {
+        crate::agent::Provider::Claude => Ok(home
+            .join(".claude/projects")
+            .join(claude_project_directory_name(cwd))
+            .join(format!("{session_id}.jsonl"))),
+        crate::agent::Provider::Codex => Ok(home
+            .join(".codex/sessions/genta-imported")
+            .join(format!("rollout-{session_id}.jsonl"))),
+        crate::agent::Provider::CodexExec => {
+            anyhow::bail!("provider codex-exec cannot store a resumable session")
+        }
+    }
+}
+
+/// Claude Code's own encoding of a project's working directory into its
+/// session storage directory name: every character that is not plain ASCII
+/// alphanumeric becomes `-`.
+fn claude_project_directory_name(cwd: &Path) -> String {
+    cwd.to_string_lossy()
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+        .collect()
 }
 
 /// Resolve and merge the named Driva templates against a `driva.toml` in the
@@ -1405,9 +1548,69 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
         std::fs::create_dir_all(root.join("nested")).unwrap();
         std::fs::write(root.join("nested/rollout-provider-7.jsonl"), "").unwrap();
-        assert!(tree_has_session(&root, "provider-7"));
-        assert!(!tree_has_session(&root, "provider-gone"));
+        assert!(find_session_file(&root, "provider-7").is_some());
+        assert!(find_session_file(&root, "provider-gone").is_none());
         std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn conversion_always_flips_between_styras_two_interactive_providers() {
+        assert_eq!(
+            other_interactive_provider(crate::agent::Provider::Codex).unwrap(),
+            crate::agent::Provider::Claude
+        );
+        assert_eq!(
+            other_interactive_provider(crate::agent::Provider::Claude).unwrap(),
+            crate::agent::Provider::Codex
+        );
+        assert!(other_interactive_provider(crate::agent::Provider::CodexExec).is_err());
+    }
+
+    #[test]
+    fn native_session_format_matches_each_providers_own_transcript() {
+        assert_eq!(
+            native_session_format(crate::agent::Provider::Codex),
+            genta::session::SessionFormat::Codex
+        );
+        assert_eq!(
+            native_session_format(crate::agent::Provider::CodexExec),
+            genta::session::SessionFormat::Codex
+        );
+        assert_eq!(
+            native_session_format(crate::agent::Provider::Claude),
+            genta::session::SessionFormat::Claude
+        );
+    }
+
+    #[test]
+    fn claude_project_directory_names_replace_every_non_alphanumeric_character() {
+        assert_eq!(
+            claude_project_directory_name(Path::new("/home/op/.dotfiles/project")),
+            "-home-op--dotfiles-project"
+        );
+    }
+
+    #[test]
+    fn a_converted_destination_is_scoped_by_provider() {
+        let claude = native_session_destination(
+            crate::agent::Provider::Claude,
+            "new-id",
+            Path::new("/home/op/project"),
+        )
+        .unwrap();
+        assert!(claude.ends_with("-home-op-project/new-id.jsonl"));
+
+        let codex =
+            native_session_destination(crate::agent::Provider::Codex, "new-id", Path::new("/x"))
+                .unwrap();
+        assert!(codex.ends_with("genta-imported/rollout-new-id.jsonl"));
+
+        assert!(native_session_destination(
+            crate::agent::Provider::CodexExec,
+            "new-id",
+            Path::new("/x")
+        )
+        .is_err());
     }
 
     /// The standing policy is stored with the Workspace, not with the client

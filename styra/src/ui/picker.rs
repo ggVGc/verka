@@ -44,7 +44,7 @@ pub fn render_picker(
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
-        .title(" styra · choose a session · Enter open · r rename · e Session notes · q cancel ");
+        .title(" styra · choose a session · Enter open · r rename · e Session notes · x convert provider · q cancel ");
 
     if sessions.is_empty() {
         render_placeholder(frame, block, panes[0], "  no sessions found");
@@ -92,6 +92,29 @@ fn render_session_preview(
         session.map(|item| item.selection.provider.protocol()),
         preview,
         panes[1],
+    );
+}
+
+/// A dismissable one-line notice (e.g. a conversion failure), overlaid on top
+/// of the session picker it interrupted.
+pub fn render_message_popup(frame: &mut Frame, title: &str, message: &str) {
+    let area = frame.area();
+    let width = area.width.saturating_sub(8).min(72);
+    let popup = Rect::new(
+        area.x + (area.width.saturating_sub(width)) / 2,
+        area.y + area.height.saturating_sub(3) / 2,
+        width,
+        3,
+    );
+    frame.render_widget(Clear, popup);
+    frame.render_widget(
+        Paragraph::new(message.to_owned()).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Red))
+                .title(format!(" {title} · press any key ")),
+        ),
+        popup,
     );
 }
 

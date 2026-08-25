@@ -183,6 +183,14 @@ pub enum Request {
         workspace_id: String,
     },
     ResumeSession(ResumeSession),
+    /// Convert a stored Session's native provider transcript (Codex rollout or
+    /// Claude project JSONL) to the other interactive provider's format,
+    /// using Genta's session conversion. The source Session and its native
+    /// transcript are left untouched; the result is a new sibling Session in
+    /// the same Workspace, ready to resume under the other provider.
+    ConvertSessionProvider {
+        id: String,
+    },
     RenameSession(RenameSession),
     UpdateSessionNotes(UpdateNotes),
     UpdateWorkspaceNotes(UpdateNotes),
@@ -285,6 +293,7 @@ pub enum Response {
     SessionPlan(DrivaOptions),
     Templates(Vec<TemplateSummary>),
     SessionResumed(SessionInfo),
+    SessionConverted(SessionSummary),
     SessionRenamed(SessionSummary),
     SessionNotesUpdated(SessionSummary),
     WorkspaceNotesUpdated(WorkspaceSummary),
@@ -513,6 +522,17 @@ mod tests {
         assert_eq!(json["type"], "templates");
         assert_eq!(json["data"][0]["name"], "rust");
         assert_eq!(serde_json::from_value::<Response>(json).unwrap(), response);
+    }
+
+    #[test]
+    fn convert_session_provider_names_only_the_source_session() {
+        let request = Request::ConvertSessionProvider {
+            id: "styra-1".into(),
+        };
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["operation"], "convert_session_provider");
+        assert_eq!(json["data"]["id"], "styra-1");
+        assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
     }
 
     #[test]
