@@ -33,12 +33,8 @@ pub(crate) const REFERENCE: &[ReferenceRow] = &[
         action: "quit",
     },
     ReferenceRow::Binding {
-        keys: "s",
-        action: "interrupt active turn",
-    },
-    ReferenceRow::Binding {
-        keys: "S",
-        action: "stop interaction",
+        keys: "s / S",
+        action: "interrupt active turn / stop interaction",
     },
     ReferenceRow::Binding {
         keys: "b",
