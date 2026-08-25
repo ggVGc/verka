@@ -1,5 +1,6 @@
 //! Full-screen keyboard shortcut reference.
 
+use crate::keymap::{ReferenceRow, CLOSE_REFERENCE, REFERENCE};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
@@ -15,7 +16,7 @@ pub(crate) fn render_keybinds(frame: &mut Frame, area: Rect) {
         .add_modifier(Modifier::BOLD);
     let muted = Style::default().fg(Color::Gray);
 
-    let section = |name| Line::from(Span::styled(name, heading));
+    let section = |name: &'static str| Line::from(Span::styled(name, heading));
     let bindings = |keys: &'static str, action: &'static str| {
         Line::from(vec![
             Span::styled(format!("  {keys:<20}"), key),
@@ -23,88 +24,19 @@ pub(crate) fn render_keybinds(frame: &mut Frame, area: Rect) {
         ])
     };
 
-    let lines = vec![
-        section("Global"),
-        bindings("?", "show/close this reference"),
-        bindings("i / Esc", "focus message / return to list"),
-        bindings("q", "quit"),
-        bindings("s", "interrupt active turn"),
-        bindings("S", "stop interaction"),
-        bindings("n / N", "new session / stop and start new session"),
-        bindings("L", "choose model for an idle agent turn"),
-        bindings("!", "open session shell in a new terminal"),
-        bindings(
-            "a / A / V; E",
-            "current sessions/interactions/Workspaces; notes",
-        ),
-        bindings(
-            "r / l / t / d",
-            "raw / log / transcript / driva; press again for events",
-        ),
-        bindings("f", "files mentioned by the focused entry"),
-        Line::default(),
-        section("Events and previews"),
-        bindings("J/K or ↓/↑", "next/previous entry"),
-        bindings("j/k", "next/previous line"),
-        bindings("g/G", "first/last entry"),
-        bindings("Space, Enter, o", "toggle selected entry"),
-        bindings("O", "expand only selected"),
-        bindings("z R / z M", "expand all / collapse all"),
-        bindings("m / p", "toggle minor events / preview panel"),
-        bindings("c", "toggle conversation-only events"),
-        bindings("P", "toggle full-screen preview"),
-        bindings("v", "toggle pretty/diff preview"),
-        bindings("PgUp/PgDn", "scroll preview (full-screen: j/k, entry: J/K)"),
-        bindings("y", "copy selected entry to clipboard"),
-        Line::default(),
-        section("Raw, log, and transcript"),
-        bindings("j/k or ↓/↑", "move or scroll"),
-        bindings("g/G", "first/top or last/bottom"),
-        bindings("PgUp/PgDn", "scroll raw-line preview"),
-        bindings("y", "copy selected line to clipboard (raw view)"),
-        Line::default(),
-        section("Driva (launch policy, before an interaction starts)"),
-        bindings("w", "permit/forbid agent networking"),
-        bindings("T", "choose Driva templates"),
-        bindings(
-            "m / g / x",
-            "add a mount / the git checkout here (rw) / remove the selected one",
-        ),
-        bindings("j/k or ↓/↑", "move among the mounts you added"),
-        bindings("I", "add to / ignore the Workspace policy"),
-        bindings("D / W", "save this policy for new clients / this Workspace"),
-        Line::default(),
-        section("Files"),
-        bindings("j/k or ↓/↑", "next/previous file"),
-        bindings("J/K", "next/previous interaction-log entry"),
-        bindings("e", "open selected file in editor"),
-        bindings("p", "toggle interaction preview"),
-        bindings("a", "toggle focused-entry/all-session files"),
-        bindings("y", "copy selected file's path to clipboard"),
-        Line::default(),
-        section("Message editor"),
-        bindings("Enter", "send message"),
-        bindings(
-            "/cd <directory>",
-            "change the live Codex interaction directory",
-        ),
-        bindings("Alt+Enter", "insert newline"),
-        bindings("↑/↓", "older/newer message history"),
-        bindings("Ctrl+W", "delete previous word"),
-        bindings(
-            "Ctrl+L",
-            "choose model before first message or idle agent turn",
-        ),
-        Line::default(),
-        section("Launch and selection screens"),
-        bindings("j/k or ↓/↑", "move selection"),
-        bindings("Tab, h/l, ←/→", "move launch column"),
-        bindings("Enter", "select"),
-        bindings("D", "select and save launch default"),
-        bindings("Esc or q", "cancel"),
-        Line::default(),
-        Line::from(Span::styled(" ?, Esc, or q to close ", muted)),
-    ];
+    let mut lines = REFERENCE
+        .iter()
+        .map(|row| match row {
+            ReferenceRow::Section(name) => section(name),
+            ReferenceRow::Binding { keys, action } => bindings(keys, action),
+            ReferenceRow::Blank => Line::default(),
+        })
+        .collect::<Vec<_>>();
+    lines.push(Line::default());
+    lines.push(Line::from(Span::styled(
+        format!(" {CLOSE_REFERENCE} to close "),
+        muted,
+    )));
 
     let block = Block::default()
         .borders(Borders::ALL)

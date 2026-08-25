@@ -14,6 +14,7 @@ mod cli;
 mod clipboard;
 mod config;
 mod event_loop;
+mod keymap;
 mod keys;
 mod notes;
 mod picker;

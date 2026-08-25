@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use crate::app::{App, Focus, Request, Status};
 use crate::config::Config;
+use crate::keymap::HELP;
 use crate::keys;
 use crate::notes;
 use crate::picker;
@@ -145,7 +146,7 @@ pub fn run(
             continue;
         }
         // In input focus, `?` is message text rather than a shortcut.
-        if app.focus == Focus::List && key.code == KeyCode::Char('?') {
+        if app.focus == Focus::List && key.code == KeyCode::Char(HELP.chars().next().unwrap()) {
             app.show_keybinds = true;
             continue;
         }

@@ -1,6 +1,7 @@
 //! The one-line footer with the keyboard shortcut reference and workspace.
 
 use crate::app::App;
+use crate::keymap::HELP;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
@@ -22,7 +23,7 @@ pub(crate) fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
         .split(area);
 
     let keybinds = Paragraph::new(Line::from(Span::styled(
-        " ? keybinds",
+        format!(" {HELP} keybinds"),
         Style::default().fg(Color::Gray),
     )));
     let directory = Paragraph::new(Line::from(Span::styled(
