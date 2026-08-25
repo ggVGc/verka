@@ -659,6 +659,16 @@ fn codex_submission(text: &str) -> String {
 /// writable, so refreshed credentials and native session transcripts persist
 /// across interactions.
 ///
+/// `--dangerously-skip-permissions` has a side effect beyond the prompt it
+/// suppresses: Claude Code also injects guidance telling the agent to do its
+/// file work through `cat`/`sed`/heredocs rather than the dedicated file
+/// tools. That trade is aimed at sessions where each tool call costs a
+/// permission prompt, which is not this one: the flag is set because Driva is
+/// already the boundary, not because prompts are expensive. Bash-routed edits
+/// are also worse here, since they leave transcripts of shell invocations
+/// rather than legible file diffs. `--append-system-prompt` therefore restores
+/// the dedicated tools, and is passed next to the flag that makes it needed.
+///
 /// The command drives Claude Code's bidirectional `stream-json` mode: it reads
 /// `stream-json` user messages on stdin and emits `stream-json` events on
 /// stdout, staying alive until stdin closes (so, like the app-server codex
@@ -675,6 +685,19 @@ fn codex_submission(text: &str) -> String {
 /// here so adapting to a different contract is a localized change plus, if the
 /// event schema differs, the [`Protocol::ClaudeJsonl`](crate::event::Protocol)
 /// decoder.
+/// Countermands the file-tool guidance `--dangerously-skip-permissions` adds.
+///
+/// Kept next to the flag it answers so the two are read together: if that flag
+/// ever leaves the profile, this goes with it.
+const DEDICATED_FILE_TOOLS: &str = "\
+Use the dedicated Read, Edit, and Write tools for reading and editing files. \
+Do not route file work through Bash (cat, head, sed, heredocs, sed -i). This \
+overrides any guidance to prefer Bash for file work under bypass permissions \
+mode: this session is isolated in a sandbox, so tool calls are not gated by \
+permission prompts and there is nothing to economize on. Bash remains correct \
+for running commands, builds, tests, git, and process inspection, and for \
+search with grep and find.";
+
 pub fn claude(_layout: &SandboxLayout, executable: &Path, model: &str, effort: Effort) -> Profile {
     let mut command = vec![
         executable.to_string_lossy().into_owned(),
@@ -685,6 +708,8 @@ pub fn claude(_layout: &SandboxLayout, executable: &Path, model: &str, effort: E
         "stream-json".into(),
         "--verbose".into(),
         "--dangerously-skip-permissions".into(),
+        "--append-system-prompt".into(),
+        DEDICATED_FILE_TOOLS.into(),
     ];
     command.push("--model".into());
     command.push(model.to_owned());
@@ -985,6 +1010,17 @@ mod tests {
             .command
             .iter()
             .any(|arg| arg == "--dangerously-skip-permissions"));
+        // Skipping the permission prompt makes Claude Code push the agent
+        // toward Bash for file work; the profile pays that back in the same
+        // command line rather than relying on host configuration.
+        assert!(
+            profile
+                .command
+                .windows(2)
+                .any(|pair| pair[0] == "--append-system-prompt"
+                    && pair[1] == DEDICATED_FILE_TOOLS),
+            "the bypass-mode file-tool guidance is countermanded in-band"
+        );
         // A bare `claude` pins the provider's declared default rather than
         // leaving the model to Claude Code's own configuration.
         assert!(profile
