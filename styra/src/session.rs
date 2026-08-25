@@ -311,6 +311,29 @@ pub fn pause_interaction(app: &mut App, client: &Client, live: &mut Live) {
     }
 }
 
+/// Branch the current Session into a new sibling, seeded with its history up
+/// to the selected entry (or the whole history, while the list is following
+/// the newest entry or the selection has no known wire line). The result is
+/// opened immediately, so the operator sees what they branched rather than
+/// having to find it again in the picker.
+pub fn branch_session(app: &mut App, client: &Client) {
+    let at_ms = (!app.follow)
+        .then(|| app.entries.get(app.selected).and_then(|entry| entry.raw_index))
+        .flatten()
+        .and_then(|index| app.raw.get(index))
+        .map(|line| line.at_ms);
+    match client.branch_session(&app.session_id, at_ms, None) {
+        Ok(branched) => {
+            app.push_log(LogEntry::info(format!(
+                "branched to session {}",
+                branched.name.as_deref().unwrap_or(&branched.id)
+            )));
+            app.ask(crate::app::Request::OpenSession(branched.id));
+        }
+        Err(error) => app.push_log(LogEntry::error(format!("branch failed: {error:#}"))),
+    }
+}
+
 pub fn interrupt_interaction(app: &mut App, client: &Client, live: &Live) {
     let Live::Running { session_id, .. } = live else {
         return app.push_log(LogEntry::warn("no live interaction to interrupt"));

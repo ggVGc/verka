@@ -92,6 +92,7 @@ pub fn handle_list_key(
         KeyCode::Char('q') => return app.ask(Request::Quit),
         KeyCode::Char('s') => return session::interrupt_interaction(app, client, live),
         KeyCode::Char('S') => return session::pause_interaction(app, client, live),
+        KeyCode::Char('b') => return session::branch_session(app, client),
         KeyCode::Char('!') => {
             let Live::Running { session_id, .. } = live else {
                 return app.show_action_message("no live interaction to open a shell for");

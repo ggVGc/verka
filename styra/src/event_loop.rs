@@ -211,6 +211,7 @@ pub fn run(
                     });
                 }
             }
+            Some(Request::OpenSession(id)) => return Ok(RunOutcome::OpenSession(id)),
             Some(Request::Sessions) => {
                 let mut sessions = client.list_sessions(workspace_id)?;
                 if sessions.is_empty() {

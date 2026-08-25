@@ -732,7 +732,7 @@ pub struct App {
 
 /// Something the operator asked for that [`App`] cannot carry out itself,
 /// because it means leaving this screen or this process.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Request {
     Quit,
     /// Choose a Workspace, then one of its Sessions.
@@ -740,6 +740,10 @@ pub enum Request {
     /// Choose another Session in the current Workspace. This only changes the
     /// client view; it stops neither Session.
     Sessions,
+    /// Switch the client view directly to an already-known Session id,
+    /// skipping the picker — e.g. right after branching one, to look at the
+    /// result rather than having to find it again in the list.
+    OpenSession(String),
     /// List the server's live interactions and, if the operator picks one,
     /// attach to it. The current interaction is left running, not stopped:
     /// attaching only changes what this client views.
@@ -3033,6 +3037,7 @@ mod tests {
             Request::Quit,
             Request::Workspace,
             Request::Sessions,
+            Request::OpenSession("s-1".into()),
             Request::Interactions,
             Request::Reset,
             Request::NewSession,
@@ -3040,7 +3045,7 @@ mod tests {
         ] {
             let mut app = app();
             assert_eq!(app.take_request(), None);
-            app.ask(request);
+            app.ask(request.clone());
             assert_eq!(app.take_request(), Some(request));
             // Taking it clears it, so the loop acts on a request once rather
             // than reopening the same picker on the next frame.
@@ -3058,6 +3063,7 @@ mod tests {
 
         for i in 0..5 {
             app.push_raw(RawLine {
+                at_ms: 0,
                 direction: Direction::FromAgent,
                 text: format!("line {i}"),
             });
@@ -3071,6 +3077,7 @@ mod tests {
         // A new line while a specific line is selected keeps that same line
         // in view rather than yanking to the new tail.
         app.push_raw(RawLine {
+            at_ms: 0,
             direction: Direction::ToAgent,
             text: "new".into(),
         });
@@ -3090,6 +3097,7 @@ mod tests {
         let mut app = app();
         for i in 0..3 {
             app.push_raw(RawLine {
+                at_ms: 0,
                 direction: Direction::FromAgent,
                 text: format!("{{\"n\":{i}}}"),
             });
@@ -3924,6 +3932,7 @@ mod tests {
         use styra_server::{Direction, RawLine};
         let mut app = app();
         app.push_raw(RawLine {
+            at_ms: 0,
             direction: Direction::FromAgent,
             text: r#"{"type":"turn.started"}"#.into(),
         });

@@ -274,6 +274,7 @@ impl Interaction {
                             let raw_line = RawLine {
                                 direction: Direction::FromAgent,
                                 text: raw.to_owned(),
+                                at_ms: crate::journal::now_ms(),
                             };
                             if reader_updates
                                 .send(InteractionUpdate::Raw(raw_line))
@@ -454,6 +455,7 @@ impl Interaction {
             text: String::from_utf8_lossy(&bytes)
                 .trim_end_matches(['\r', '\n'])
                 .to_owned(),
+            at_ms: crate::journal::now_ms(),
         }));
         let mut guard = self.stdin.lock().expect("interaction stdin lock poisoned");
         let writer = guard
@@ -526,6 +528,7 @@ fn apply_appserver_actions(
                 let _ = updates.send(InteractionUpdate::Raw(RawLine {
                     direction: Direction::ToAgent,
                     text: line.clone(),
+                    at_ms: crate::journal::now_ms(),
                 }));
                 if let Ok(mut guard) = stdin.lock() {
                     if let Some(writer) = guard.as_mut() {

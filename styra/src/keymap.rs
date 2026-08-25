@@ -41,6 +41,10 @@ pub(crate) const REFERENCE: &[ReferenceRow] = &[
         action: "stop interaction",
     },
     ReferenceRow::Binding {
+        keys: "b",
+        action: "branch a new session from the selected entry",
+    },
+    ReferenceRow::Binding {
         keys: "n / N",
         action: "new session / stop and start new session",
     },

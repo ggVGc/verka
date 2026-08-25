@@ -246,10 +246,12 @@ mod tests {
             "s1",
         );
         app.push_raw(RawLine {
+            at_ms: 0,
             direction: Direction::ToAgent,
             text: r#"{"op":"user_input"}"#.into(),
         });
         app.push_raw(RawLine {
+            at_ms: 0,
             direction: Direction::FromAgent,
             text: r#"{"type":"turn.started"}"#.into(),
         });
@@ -275,6 +277,7 @@ mod tests {
             "s1",
         );
         app.push_raw(RawLine {
+            at_ms: 0,
             direction: Direction::FromAgent,
             text: format!(
                 r#"{{"type":"item.completed","text":"{}END"}}"#,
@@ -301,6 +304,7 @@ mod tests {
             "s1",
         );
         app.push_raw(RawLine {
+            at_ms: 0,
             direction: Direction::FromAgent,
             text: r#"{"type":"turn.started","ok":true,"count":3}"#.into(),
         });
@@ -320,10 +324,12 @@ mod tests {
             "s1",
         );
         app.push_raw(RawLine {
+            at_ms: 0,
             direction: Direction::FromAgent,
             text: r#"{"marker":"first"}"#.into(),
         });
         app.push_raw(RawLine {
+            at_ms: 0,
             direction: Direction::FromAgent,
             text: r#"{"marker":"second"}"#.into(),
         });
@@ -340,6 +346,7 @@ mod tests {
     fn the_selected_raw_lines_text_is_yellow() {
         use styra_server::{Direction, RawLine};
         let line = RawLine {
+            at_ms: 0,
             direction: Direction::FromAgent,
             text: "hello".into(),
         };

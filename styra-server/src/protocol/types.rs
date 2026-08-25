@@ -114,6 +114,15 @@ pub enum Direction {
 pub struct RawLine {
     pub direction: Direction,
     pub text: String,
+    /// When this line was recorded. Lets a client resolve "branch the
+    /// session here" for a selected entry back to a moment in time, which is
+    /// compared against the native provider transcript's own timestamps to
+    /// decide how much of the history a branch keeps — the two are decoded
+    /// differently (Styra's journal vs. the provider's own file) and cannot
+    /// otherwise be lined up. Defaults to `0` for a line from a client that
+    /// predates this field, which is not a moment any real branch resolves to.
+    #[serde(default)]
+    pub at_ms: u64,
 }
 
 /// How an interaction finished.
@@ -326,6 +335,24 @@ pub struct InteractionSummary {
     pub activity: InteractionActivity,
 }
 
+/// Where a Session came from, when it was not launched fresh but branched
+/// from another one — see [`crate::server::ServerState::branch_session`].
+/// Recorded once, at branch time; it never updates as the source Session
+/// keeps being worked on afterwards, the same way a git branch's fork point
+/// does not move when the source gets new commits.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionOrigin {
+    /// The Session this one was branched from.
+    pub session_id: String,
+    /// The provider the source Session was running under at branch time.
+    pub provider: crate::agent::Provider,
+    /// The moment in the source's history the branch was taken at, matching
+    /// a [`RawLine::at_ms`] the operator selected. `None` means the branch
+    /// kept the whole history — what a plain provider conversion is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at_ms: Option<u64>,
+}
+
 /// A stored session, enough to display and select it from a list — see
 /// [`crate::journal::list_sessions`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -349,6 +376,10 @@ pub struct SessionSummary {
     /// The millisecond timestamp embedded in `id`, used to sort newest
     /// first; `None` for an id that doesn't match the expected shape.
     pub created_at_ms: Option<u64>,
+    /// Set when this Session was branched from another one, rather than
+    /// launched fresh.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<SessionOrigin>,
 }
 
 #[cfg(test)]

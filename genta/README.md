@@ -52,3 +52,8 @@ genta convert --from codex --to claude rollout-...jsonl converted.jsonl
 Use `--session-id` when a caller needs to choose the target id and `--cwd` when
 the target should resume in a different workspace. The generated JSONL is
 intended to be placed in the destination CLI's normal session directory.
+
+`--keep-messages N` turns a conversion into a *branch*: the destination gets
+only the first N messages of the source's history, whether or not the format
+also changes. A full conversion is the special case of a branch that keeps
+everything.

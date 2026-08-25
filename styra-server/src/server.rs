@@ -9,7 +9,7 @@ use crate::protocol::{
 };
 use crate::protocol::{
     DrivaOptions, InteractionActivity, InteractionSummary, InteractionUpdate, LaunchMount,
-    LaunchPolicy, SessionSummary, TemplateSummary,
+    LaunchPolicy, SessionOrigin, SessionSummary, TemplateSummary,
 };
 use anyhow::{Context, Result};
 use std::collections::{HashMap, HashSet};
@@ -660,18 +660,46 @@ impl ServerState {
     }
 
     /// Convert a stored Session's native transcript to the other interactive
-    /// provider using Genta's session conversion, and record the result as a
-    /// new sibling Session in the same Workspace. The source Session, its
-    /// native transcript, and its Styra journal are left untouched, mirroring
-    /// Genta's own conversion, which assigns the destination a fresh id so it
-    /// can coexist with its source.
+    /// provider, keeping its whole history. Sugar over [`Self::branch_session`]
+    /// for the common case, kept as its own operation so a caller does not
+    /// need to name the general one just to flip providers.
     fn convert_session_provider(&self, id: &str) -> Result<SessionSummary> {
         let summary = self.stored_summary(id)?;
+        let to_provider = other_interactive_provider(summary.selection.provider)?;
+        self.branch_session(id, None, Some(to_provider))
+    }
+
+    /// Branch a stored Session into a new sibling Session in the same
+    /// Workspace, seeded with its history up to `at_ms` (the whole history
+    /// when `None`), optionally under a different provider. The source
+    /// Session, its native transcript, and its Styra journal are left
+    /// untouched — a branch is always a fresh copy, never a live reference,
+    /// so nothing the source does afterwards is visible on the branch and
+    /// nothing the branch does is visible on the source.
+    ///
+    /// The branch always gets a fresh native provider session id, even when
+    /// the provider does not change: Genta's own conversion only generates
+    /// one when the format changes, but a same-provider branch still needs
+    /// its own id, or the provider's own `--resume` lookup — which searches
+    /// its whole session tree by id — could not tell the two apart.
+    fn branch_session(
+        &self,
+        id: &str,
+        at_ms: Option<u64>,
+        provider: Option<crate::agent::Provider>,
+    ) -> Result<SessionSummary> {
+        let summary = self.stored_summary(id)?;
         let from_provider = summary.selection.provider;
-        let to_provider = other_interactive_provider(from_provider)?;
+        let to_provider = provider.unwrap_or(from_provider);
+        if !crate::agent::PROVIDERS.contains(&to_provider) {
+            anyhow::bail!(
+                "provider {:?} is not an interactive provider Styra can branch into",
+                to_provider.as_str()
+            );
+        }
         let provider_session_id = journal::read_provider_session_id(&summary.path)?
             .with_context(|| {
-                format!("session {id:?} has no stored provider session id; there is no native transcript to convert")
+                format!("session {id:?} has no stored provider session id; there is no native transcript to branch from")
             })?;
         let source_path = find_native_session_file(from_provider, &provider_session_id)?;
         let source = std::fs::read_to_string(&source_path)
@@ -680,27 +708,39 @@ impl ServerState {
         let owning_workspace =
             crate::workspace::get(&self.inner.store_root, &summary.workspace_id)?;
         let cwd = owning_workspace.host_path;
+        let keep_messages = at_ms
+            .map(|cutoff| messages_up_to(&source, native_session_format(from_provider), cutoff))
+            .transpose()?;
+
+        let new_native_id = uuid::Uuid::new_v4().to_string();
         let options = genta::session::ConversionOptions {
+            id: Some(new_native_id.clone()),
             cwd: Some(cwd.to_string_lossy().into_owned()),
+            keep_messages,
             ..Default::default()
         };
-        let converted = genta::session::convert(
+        let branched = genta::session::convert(
             &source,
             native_session_format(from_provider),
             native_session_format(to_provider),
             &options,
         )?;
-        let converted_session = genta::session::parse(&converted, native_session_format(to_provider))?;
 
-        let destination = native_session_destination(to_provider, &converted_session.id, &cwd)?;
+        let destination = native_session_destination(to_provider, &new_native_id, &cwd)?;
         if let Some(parent) = destination.parent() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("creating {}", parent.display()))?;
         }
-        std::fs::write(&destination, &converted)
+        std::fs::write(&destination, &branched)
             .with_context(|| format!("writing {}", destination.display()))?;
 
-        let selection = Selection::new(to_provider);
+        // A same-provider branch is a checkpoint: it keeps running under the
+        // exact model and effort the source had, not the provider's defaults.
+        let selection = if to_provider == from_provider {
+            summary.selection.clone()
+        } else {
+            Selection::new(to_provider)
+        };
         let profile = crate::agent::resolve_profile(&selection, &self.inner.layout)?;
         let (journal, new_id) = Journal::create_in_workspace(
             &self.inner.store_root,
@@ -713,10 +753,18 @@ impl ServerState {
             .path()
             .parent()
             .context("a freshly created session journal has a parent directory")?;
-        journal::store_provider_session_id(directory, &converted_session.id)?;
+        journal::store_provider_session_id(directory, &new_native_id)?;
         if !summary.notes.is_empty() {
             journal::store_session_notes(directory, summary.notes.clone())?;
         }
+        journal::store_session_origin(
+            directory,
+            SessionOrigin {
+                session_id: id.to_owned(),
+                provider: from_provider,
+                at_ms,
+            },
+        )?;
 
         self.stored_summary(&new_id)
     }
@@ -853,6 +901,13 @@ impl ServerState {
             }
             Request::ConvertSessionProvider { id } => Ok(Response::SessionConverted(
                 self.convert_session_provider(&id)?,
+            )),
+            Request::BranchSession {
+                id,
+                at_ms,
+                provider,
+            } => Ok(Response::SessionBranched(
+                self.branch_session(&id, at_ms, provider)?,
             )),
             Request::RenameSession(request) => {
                 let summary = self.stored_summary(&request.id)?;
@@ -1117,6 +1172,45 @@ fn native_session_format(provider: crate::agent::Provider) -> genta::session::Se
         }
         crate::agent::Provider::Claude => genta::session::SessionFormat::Claude,
     }
+}
+
+/// How many of a native transcript's leading messages have a timestamp at or
+/// before `cutoff`. Used to turn a UI-selected moment (a [`RawLine::at_ms`],
+/// milliseconds since the epoch) into Genta's `keep_messages` count: the two
+/// histories are decoded differently — Styra's journal replays its own
+/// records, this parses the provider's own transcript — so time is the only
+/// axis they agree on. Messages are recorded in order, so this is the length
+/// of their leading run at or before the cutoff, not a filtered count; a
+/// message with no timestamp, or one Styra cannot parse, is kept rather than
+/// used to end that run, since excluding it could silently drop history the
+/// operator meant to keep.
+fn messages_up_to(
+    source: &str,
+    format: genta::session::SessionFormat,
+    cutoff: u64,
+) -> Result<usize> {
+    let session = genta::session::parse(source, format)?;
+    Ok(session
+        .messages
+        .iter()
+        .take_while(|message| {
+            message
+                .timestamp
+                .as_deref()
+                .and_then(parse_rfc3339_ms)
+                .is_none_or(|at_ms| at_ms <= cutoff)
+        })
+        .count())
+}
+
+/// Parse a provider's RFC 3339 message timestamp (e.g.
+/// `"2026-08-21T10:00:00.000Z"`) into milliseconds since the epoch, so it can
+/// be compared against a [`RawLine::at_ms`] cutoff. `None` on anything that
+/// does not parse — callers treat that as "keep it" rather than as an error,
+/// since one malformed timestamp should not fail an entire branch.
+fn parse_rfc3339_ms(timestamp: &str) -> Option<u64> {
+    let parsed = time::OffsetDateTime::parse(timestamp, &time::format_description::well_known::Rfc3339).ok()?;
+    u64::try_from(parsed.unix_timestamp_nanos() / 1_000_000).ok()
 }
 
 /// Where a freshly converted transcript must be written for its destination
@@ -1611,6 +1705,44 @@ mod tests {
             Path::new("/x")
         )
         .is_err());
+    }
+
+    #[test]
+    fn rfc3339_timestamps_parse_to_milliseconds_since_the_epoch() {
+        assert_eq!(
+            parse_rfc3339_ms("2026-08-21T10:00:00.000Z"),
+            Some(1787306400000)
+        );
+        assert_eq!(
+            parse_rfc3339_ms("2026-08-21T10:00:00.500Z"),
+            Some(1787306400500)
+        );
+        assert_eq!(parse_rfc3339_ms("not a timestamp"), None);
+    }
+
+    #[test]
+    fn messages_up_to_keeps_the_leading_run_at_or_before_the_cutoff() {
+        let claude = concat!(
+            r#"{"type":"user","uuid":"u1","parentUuid":null,"isSidechain":false,"cwd":"/repo","sessionId":"id","timestamp":"2026-08-21T10:00:00.000Z","message":{"role":"user","content":"first"}}"#,
+            "\n",
+            r#"{"type":"assistant","uuid":"a1","parentUuid":"u1","isSidechain":false,"cwd":"/repo","sessionId":"id","timestamp":"2026-08-21T10:00:01.000Z","message":{"role":"assistant","content":[{"type":"text","text":"second"}]}}"#,
+            "\n",
+            r#"{"type":"user","uuid":"u2","parentUuid":"a1","isSidechain":false,"cwd":"/repo","sessionId":"id","timestamp":"2026-08-21T10:00:02.000Z","message":{"role":"user","content":"third"}}"#,
+            "\n",
+        );
+        let cutoff = parse_rfc3339_ms("2026-08-21T10:00:01.000Z").unwrap();
+        assert_eq!(
+            messages_up_to(claude, genta::session::SessionFormat::Claude, cutoff).unwrap(),
+            2
+        );
+        assert_eq!(
+            messages_up_to(claude, genta::session::SessionFormat::Claude, 0).unwrap(),
+            0
+        );
+        assert_eq!(
+            messages_up_to(claude, genta::session::SessionFormat::Claude, u64::MAX).unwrap(),
+            3
+        );
     }
 
     /// The standing policy is stored with the Workspace, not with the client

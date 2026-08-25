@@ -96,7 +96,8 @@ Operations:
 | `plan_session` | Workspace id and the same launch inputs, creating nothing | `session_plan` |
 | `list_templates` | Workspace id | `templates` |
 | `resume_session` | Session id and this launch's own policy | `session_resumed` |
-| `convert_session_provider` | Session id | `session_converted` (a new sibling Session, resumable under Styra's other interactive provider) |
+| `convert_session_provider` | Session id | `session_converted` (a new sibling Session, resumable under Styra's other interactive provider; sugar over `branch_session` with no cutoff and the other provider) |
+| `branch_session` | Session id, optional history cutoff (`at_ms`), optional destination provider | `session_branched` (a new sibling Session seeded with the history up to the cutoff, or all of it) |
 | `rename_session` | Session id and optional name | `session_renamed` |
 | `update_session_notes` | Session id and plain-text notes | `session_notes_updated` |
 | `update_workspace_notes` | Workspace id and plain-text notes | `workspace_notes_updated` |

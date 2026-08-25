@@ -50,6 +50,11 @@ enum Command {
         /// Override the destination working directory.
         #[arg(long)]
         cwd: Option<String>,
+        /// Keep only the first N messages of the source session, dropping the
+        /// rest — a branch at an earlier point in the history rather than a
+        /// full conversion.
+        #[arg(long)]
+        keep_messages: Option<usize>,
     },
 }
 
@@ -112,6 +117,7 @@ fn main() -> Result<()> {
             to,
             session_id,
             cwd,
+            keep_messages,
         } => {
             let converted = session::convert(
                 &read_input(&input)?,
@@ -120,6 +126,7 @@ fn main() -> Result<()> {
                 &ConversionOptions {
                     id: session_id,
                     cwd,
+                    keep_messages,
                     ..Default::default()
                 },
             )?;

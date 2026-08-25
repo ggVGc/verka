@@ -15,7 +15,7 @@
 
 use crate::agent::{Profile, Selection, SessionMeta};
 use crate::event::{decode_line, AgentEvent, Protocol};
-use crate::protocol::{Direction, RawLine, SessionSummary};
+use crate::protocol::{Direction, RawLine, SessionOrigin, SessionSummary};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
@@ -32,6 +32,8 @@ struct StoredSessionMeta {
     notes: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     provider_session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    origin: Option<SessionOrigin>,
     #[serde(flatten)]
     agent: SessionMeta,
 }
@@ -173,6 +175,7 @@ fn write_session_meta(
         name,
         notes: String::new(),
         provider_session_id: None,
+        origin: None,
         agent: meta.clone(),
     };
     let json = serde_json::to_string_pretty(&stored).context("serializing session metadata")?;
@@ -210,6 +213,7 @@ pub fn session_summary_at(path: &Path, workspace_id: &str) -> Result<SessionSumm
         selection: meta.agent.selection,
         age: humanize_age(now_ms(), created_at_ms),
         created_at_ms,
+        origin: meta.origin,
     })
 }
 
@@ -304,6 +308,20 @@ pub fn store_provider_session_id(path: &Path, provider_session_id: &str) -> Resu
         ),
         None => stored.provider_session_id = Some(provider_session_id.to_owned()),
     }
+    write_stored_session_meta(&directory, &stored)
+}
+
+/// Record that a freshly created Session was branched from another one,
+/// rather than launched fresh. Set once, right after creation — a Session's
+/// origin does not change afterwards.
+pub fn store_session_origin(path: &Path, origin: SessionOrigin) -> Result<()> {
+    let directory = if path.is_dir() {
+        path.to_path_buf()
+    } else {
+        path.parent().map(Path::to_path_buf).unwrap_or_default()
+    };
+    let mut stored = read_stored_session_meta(&directory)?;
+    stored.origin = Some(origin);
     write_stored_session_meta(&directory, &stored)
 }
 
@@ -444,13 +462,15 @@ pub fn replay_raw(path: &Path) -> Result<Vec<RawLine>> {
             continue;
         }
         match serde_json::from_str::<Record>(&line) {
-            Ok(Record::Agent { raw: text, .. }) => raw.push(RawLine {
+            Ok(Record::Agent { raw: text, at_ms }) => raw.push(RawLine {
                 direction: Direction::FromAgent,
                 text,
+                at_ms,
             }),
-            Ok(Record::User { text, .. }) => raw.push(RawLine {
+            Ok(Record::User { text, at_ms }) => raw.push(RawLine {
                 direction: Direction::ToAgent,
                 text,
+                at_ms,
             }),
             Err(_) => {}
         }
@@ -458,7 +478,7 @@ pub fn replay_raw(path: &Path) -> Result<Vec<RawLine>> {
     Ok(raw)
 }
 
-fn now_ms() -> u64 {
+pub(crate) fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
@@ -609,6 +629,7 @@ mod tests {
             selection: crate::agent::Selection::new(crate::agent::Provider::Codex),
             age: String::new(),
             created_at_ms,
+            origin: None,
         };
         let mut sessions = vec![
             summary(Some(100)),

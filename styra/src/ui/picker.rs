@@ -548,7 +548,7 @@ fn interaction_item(
 fn session_item(session: &SessionSummary, selected: bool) -> ListItem<'static> {
     let provider = session.selection.provider.as_str();
     let display_name = session.name.as_deref().unwrap_or(&session.id);
-    ListItem::new(vec![
+    let mut lines = vec![
         Line::from(vec![
             Span::styled(
                 if selected { "• " } else { "  " },
@@ -577,7 +577,23 @@ fn session_item(session: &SessionSummary, selected: bool) -> ListItem<'static> {
                 Style::default().fg(Color::DarkGray),
             ),
         ]),
-    ])
+    ];
+    if let Some(origin) = &session.origin {
+        let kind = if origin.provider == session.selection.provider {
+            "branched"
+        } else {
+            "converted"
+        };
+        lines.push(Line::from(Span::styled(
+            format!(
+                "  ⤷ {kind} from {} ({})",
+                short_id(&origin.session_id),
+                origin.provider.as_str()
+            ),
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+    ListItem::new(lines)
 }
 
 fn short_id(id: &str) -> &str {
@@ -602,6 +618,7 @@ mod tests {
             selection: styra_server::agent::Selection::parse(selection).unwrap(),
             age: age.into(),
             created_at_ms: None,
+            origin: None,
         }
     }
 
@@ -635,6 +652,29 @@ mod tests {
         assert!(screen.contains("claude"));
         assert!(screen.contains("3h ago"));
         assert!(screen.contains("s-2"));
+    }
+
+    #[test]
+    fn a_branched_session_shows_where_it_came_from() {
+        let mut session = picker_summary("s-2", "claude", "2m ago");
+        session.origin = Some(styra_server::SessionOrigin {
+            session_id: "s-1".into(),
+            provider: styra_server::agent::Provider::Codex,
+            at_ms: None,
+        });
+        let screen = rendered_picker(&[session], 0);
+        assert!(screen.contains("converted from"), "{screen}");
+        assert!(screen.contains("s-1"), "{screen}");
+        assert!(screen.contains("codex"), "{screen}");
+
+        let mut checkpoint = picker_summary("s-3", "codex", "2m ago");
+        checkpoint.origin = Some(styra_server::SessionOrigin {
+            session_id: "s-1".into(),
+            provider: styra_server::agent::Provider::Codex,
+            at_ms: Some(1000),
+        });
+        let screen = rendered_picker(&[checkpoint], 0);
+        assert!(screen.contains("branched from"), "{screen}");
     }
 
     #[test]

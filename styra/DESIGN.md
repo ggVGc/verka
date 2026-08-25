@@ -525,15 +525,46 @@ Interaction using the native provider id captured when the Session began. A
 missing id or missing provider record is an error, without affecting
 read-only journal replay; the typed message is preserved for a retry.
 
-`x` in the Session picker converts the selected Session's native transcript
-(a Codex rollout or Claude project JSONL) to Styra's other interactive
-provider, via Genta's session conversion (see genta/README.md). The source
-Session, its native transcript, and its Styra journal are left untouched;
-conversion writes a new sibling Session in the same Workspace, carrying over
-its name and notes, that opens under the other provider with the converted
-history as its starting context. The picker opens the new Session immediately
-on success, or shows the failure (most commonly a stored Session with no
-provider id, so nothing native exists to convert) without leaving the list.
+### Branching a Session
+
+A Session can be branched: forked into a new sibling Session in the same
+Workspace, seeded with its history up to some point, optionally under a
+different provider. Provider conversion is the special case where the
+branch point is the end of the history and the provider changes; a
+same-provider branch at an earlier point is a checkpoint or retry point.
+Both go through the same server operation, `branch_session` (`x`/`b` below
+are its two client-facing shortcuts), built on Genta's session conversion
+(see genta/README.md) with one addition: `ConversionOptions::keep_messages`
+truncates the parsed history to a prefix before re-serializing it, which is
+what "branch at an earlier point" means at the transcript level.
+
+A branch is always a fresh copy, never a live reference: the source Session,
+its native transcript, and its Styra journal are left untouched, and nothing
+either side does afterwards is visible on the other — the same way a git
+branch's fork point does not move when the source gets new commits. The
+branch always gets its own fresh native provider session id, even when the
+provider does not change, since the provider's own `--resume` lookup searches
+its whole session tree by id and could not otherwise tell the two apart. The
+result records where it came from (`SessionOrigin`: the source Session id,
+its provider, and the cutoff, or no cutoff for a full branch), which is not a
+live link — it is a historical fact, fixed at branch time.
+
+Two client-facing shortcuts:
+
+- `x` in the Session picker converts the selected Session's native transcript
+  to Styra's other interactive provider, keeping the whole history. Carries
+  over the source's name and notes. The picker opens the new Session
+  immediately on success, or shows the failure (most commonly a stored
+  Session with no provider id, so nothing native exists to convert) without
+  leaving the list.
+- `b` in the event list branches the current Session under the *same*
+  provider, seeded with history up to the selected entry (a checkpoint), or
+  the whole history when the list is following the newest entry or the
+  selection has no known wire line. Opens the branch immediately, the same
+  as `x`. The cutoff is resolved by timestamp — Styra's own journal and a
+  provider's native transcript are decoded differently and do not otherwise
+  line up — so a `RawLine`'s `at_ms` (via the selected entry's `raw_index`)
+  is compared against each native message's own timestamp.
 
 ### Current Interactions
 

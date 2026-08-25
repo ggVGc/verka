@@ -15,8 +15,8 @@ mod types;
 pub use transport::{read_message, read_message_limited, write_message, MAX_REQUEST_BYTES};
 pub use types::{
     Direction, DrivaOptions, InteractionActivity, InteractionEnd, InteractionSummary,
-    InteractionUpdate, LaunchMount, LaunchPolicy, LogEntry, LogLevel, RawLine, SessionSummary,
-    TemplateSummary, WorkspaceSummary,
+    InteractionUpdate, LaunchMount, LaunchPolicy, LogEntry, LogLevel, RawLine, SessionOrigin,
+    SessionSummary, TemplateSummary, WorkspaceSummary,
 };
 
 // These external vocabularies are serialized inside protocol payloads. Re-export
@@ -187,9 +187,23 @@ pub enum Request {
     /// Claude project JSONL) to the other interactive provider's format,
     /// using Genta's session conversion. The source Session and its native
     /// transcript are left untouched; the result is a new sibling Session in
-    /// the same Workspace, ready to resume under the other provider.
+    /// the same Workspace, ready to resume under the other provider. Sugar
+    /// for [`Request::BranchSession`] with `at_ms: None` and the other
+    /// provider named.
     ConvertSessionProvider {
         id: String,
+    },
+    /// Branch a stored Session's native provider transcript into a new
+    /// sibling Session in the same Workspace, seeded with its history up to
+    /// `at_ms` (the whole history when absent), optionally under a different
+    /// provider. The source Session, its native transcript, and its Styra
+    /// journal are left untouched.
+    BranchSession {
+        id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        at_ms: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provider: Option<Provider>,
     },
     RenameSession(RenameSession),
     UpdateSessionNotes(UpdateNotes),
@@ -294,6 +308,7 @@ pub enum Response {
     Templates(Vec<TemplateSummary>),
     SessionResumed(SessionInfo),
     SessionConverted(SessionSummary),
+    SessionBranched(SessionSummary),
     SessionRenamed(SessionSummary),
     SessionNotesUpdated(SessionSummary),
     WorkspaceNotesUpdated(WorkspaceSummary),
@@ -533,6 +548,35 @@ mod tests {
         assert_eq!(json["operation"], "convert_session_provider");
         assert_eq!(json["data"]["id"], "styra-1");
         assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
+    }
+
+    #[test]
+    fn branch_session_names_an_optional_cutoff_and_provider() {
+        let request = Request::BranchSession {
+            id: "styra-1".into(),
+            at_ms: Some(42),
+            provider: Some(crate::agent::Provider::Claude),
+        };
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["operation"], "branch_session");
+        assert_eq!(json["data"]["at_ms"], 42);
+        assert_eq!(json["data"]["provider"], "claude");
+        assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
+
+        // A branch that keeps the whole history under the same provider says
+        // nothing beyond the source id.
+        let bare: Request = serde_json::from_str(
+            r#"{"operation":"branch_session","data":{"id":"styra-1"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            bare,
+            Request::BranchSession {
+                id: "styra-1".into(),
+                at_ms: None,
+                provider: None,
+            }
+        );
     }
 
     #[test]

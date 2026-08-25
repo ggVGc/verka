@@ -48,10 +48,19 @@ pub struct ConversionOptions {
     pub id: Option<String>,
     pub cwd: Option<String>,
     pub timestamp: Option<String>,
+    /// Keep only the first `keep_messages` messages of the source session,
+    /// dropping the rest. `None` keeps the whole history. This is what turns
+    /// a conversion into a *branch*: a destination session seeded with a
+    /// prefix of the source's history rather than all of it, whether or not
+    /// the format also changes. A full conversion is the special case where
+    /// this is `None` — a branch at the very end of the history.
+    pub keep_messages: Option<usize>,
 }
 
-/// Convert a complete native JSONL session into the other provider's native
-/// JSONL format. The result always ends in a newline and is ready to write.
+/// Convert a native JSONL session into the other provider's native JSONL
+/// format, optionally truncated to a prefix of its history (see
+/// [`ConversionOptions::keep_messages`]). The result always ends in a newline
+/// and is ready to write.
 pub fn convert(
     input: &str,
     from: SessionFormat,
@@ -59,6 +68,9 @@ pub fn convert(
     options: &ConversionOptions,
 ) -> Result<String> {
     let mut session = parse(input, from)?;
+    if let Some(keep) = options.keep_messages {
+        session.messages.truncate(keep);
+    }
     if let Some(id) = &options.id {
         session.id = id.clone();
     } else if from != to {
@@ -433,6 +445,41 @@ mod tests {
         assert_eq!(
             parse(&output, SessionFormat::Claude).unwrap().messages,
             parse(&codex, SessionFormat::Codex).unwrap().messages
+        );
+    }
+
+    #[test]
+    fn keep_messages_branches_a_prefix_of_the_history() {
+        let output = convert(
+            CLAUDE,
+            SessionFormat::Claude,
+            SessionFormat::Claude,
+            &ConversionOptions {
+                id: Some("branch-id".into()),
+                keep_messages: Some(1),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let parsed = parse(&output, SessionFormat::Claude).unwrap();
+        assert_eq!(parsed.messages.len(), 1);
+        assert_eq!(parsed.messages[0].text, "Fix it");
+
+        // A branch can also change format in the same step.
+        let converted = convert(
+            CLAUDE,
+            SessionFormat::Claude,
+            SessionFormat::Codex,
+            &ConversionOptions {
+                id: Some("branch-id-2".into()),
+                keep_messages: Some(2),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            parse(&converted, SessionFormat::Codex).unwrap().messages.len(),
+            2
         );
     }
 
