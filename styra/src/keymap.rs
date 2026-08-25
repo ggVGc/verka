@@ -62,7 +62,7 @@ pub(crate) const REFERENCE: &[ReferenceRow] = &[
     },
     ReferenceRow::Binding {
         keys: "f",
-        action: "files mentioned by the focused entry",
+        action: "selected response changes / focused-entry files",
     },
     ReferenceRow::Binding {
         keys: "X",
@@ -174,7 +174,7 @@ pub(crate) const REFERENCE: &[ReferenceRow] = &[
     },
     ReferenceRow::Binding {
         keys: "a; y",
-        action: "focused-entry/all-session files; copy the path",
+        action: "selected-response/all-session files; copy the path",
     },
     ReferenceRow::Blank,
     ReferenceRow::Section("Typed answer"),

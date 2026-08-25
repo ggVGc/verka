@@ -590,6 +590,10 @@ fn interaction_preview_line(
             format!("working directory: {}", directory.display()),
             Style::default().fg(Color::Cyan),
         )),
+        InteractionUpdate::TurnChanges(changes) => Line::from(Span::styled(
+            format!("Δ {} changed file(s)", changes.files.len()),
+            Style::default().fg(Color::Yellow),
+        )),
         InteractionUpdate::Ended(end) => {
             let (message, color) = match (&end.error, end.exit_code) {
                 (Some(error), _) => (format!("failed: {error}"), Color::Red),

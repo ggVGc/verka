@@ -65,6 +65,7 @@ workspaces/<WORKSPACE-ID>/
   sessions/<SESSION-ID>/
     session.json
     journal.jsonl
+    turn-changes.v1.jsonl
     diagnostics.log
 ```
 
@@ -198,6 +199,17 @@ with `--resume`. Styra preserves the provider's own state directory for this
 purpose. If the provider has removed its session—or an older Styra journal
 predates native-id capture—the raw journal remains viewable, but resume
 returns an error and the message is not lost, ready to retry.
+
+For Git Workspaces, Styra records the net Git-visible changes made during each
+conversation turn independently of provider file-change events. Tracked files
+and non-ignored untracked files are included; ignored build output is not. The
+server snapshots the host worktree through a private index immediately before
+message dispatch and again at turn completion, retaining a binary-capable patch with
+the Session. This includes writes made by shell commands, formatters, and other
+subprocesses without changing the checkout's ordinary index or HEAD. Select an
+agent response and press `f` to inspect its historical response diff. In a
+non-Git Workspace, the Files view reports that authoritative capture was
+unavailable and continues to expose provider-reported files.
 
 Sessions receive a display name from their first prompt (normalized and
 truncated locally; no extra model call is made). In a Session picker, press

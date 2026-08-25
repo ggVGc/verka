@@ -59,6 +59,12 @@ fn main() -> anyhow::Result<()> {
                 InteractionUpdate::WorkingDirectoryChanged(directory) => {
                     println!("CWD    {}", directory.display())
                 }
+                InteractionUpdate::TurnChanges(changes) => println!(
+                    "CHANGES turn={} status={:?} files={}",
+                    changes.turn,
+                    changes.status,
+                    changes.files.len()
+                ),
                 InteractionUpdate::Ended(end) => {
                     println!("ENDED  exit={:?} error={:?}", end.exit_code, end.error);
                     return Ok(());

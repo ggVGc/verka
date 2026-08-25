@@ -242,6 +242,9 @@ pub fn open_stored(client: &Client, session_id: &str) -> Result<(App, Live)> {
             app.push_event(event);
         }
     }
+    for changes in stored.turn_changes {
+        app.record_turn_changes(changes);
+    }
     // A replayed session has no live agent to end; mark it stopped.
     app.on_ended(styra_server::InteractionEnd {
         exit_code: None,
@@ -389,6 +392,7 @@ pub fn apply_update(app: &mut App, update: InteractionUpdate) {
         InteractionUpdate::WorkingDirectoryChanged(directory) => {
             app.set_working_directory(directory);
         }
+        InteractionUpdate::TurnChanges(changes) => app.record_turn_changes(changes),
         InteractionUpdate::Ended(end) => app.on_ended(end),
     }
 }

@@ -220,6 +220,29 @@ pub fn read_queued_messages(directory: &Path) -> Result<Vec<QueuedMessage>> {
     serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))
 }
 
+/// Count durable operator turns without decoding provider traffic. This keeps
+/// host-assigned turn numbers stable when an older Session is resumed after
+/// turn-change capture was introduced.
+pub fn user_message_count(directory: &Path) -> Result<u64> {
+    let path = if directory.is_dir() {
+        directory.join(JOURNAL_FILE)
+    } else {
+        directory.to_path_buf()
+    };
+    let file = File::open(&path).with_context(|| format!("opening {}", path.display()))?;
+    let mut count = 0;
+    for line in BufReader::new(file).lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        if matches!(serde_json::from_str::<Record>(&line)?, Record::User { .. }) {
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
 /// Persist the current queue of not-yet-sent operator messages for a Session.
 pub fn write_queued_messages(directory: &Path, messages: &[QueuedMessage]) -> Result<()> {
     let path = directory.join(QUEUE_FILE);

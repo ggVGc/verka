@@ -66,8 +66,13 @@ fn items(app: &App) -> Vec<FileItem> {
 }
 
 pub(crate) fn render_files(frame: &mut Frame, app: &App, area: Rect) {
+    let response_changes = (!app.file_show_all)
+        .then(|| app.selected_turn_changes())
+        .flatten();
     let scope = if app.file_show_all {
         "files · all session · a: focused"
+    } else if response_changes.is_some() {
+        "changes · selected response · a: all session"
     } else {
         "files · focused entry · a: all"
     };
@@ -101,13 +106,19 @@ pub(crate) fn render_files(frame: &mut Frame, app: &App, area: Rect) {
             Style::default().fg(Color::Gray),
         ));
     if files.is_empty() {
-        render_placeholder(
-            frame,
-            tree_block,
-            left[1],
-            "no files mentioned by this entry",
-        );
-        render_empty_content(frame, content_area);
+        let message = match response_changes {
+            Some(changes) if changes.error.is_some() => {
+                "change capture unavailable for this response"
+            }
+            Some(_) => "this response made no net filesystem changes",
+            None => "no files mentioned by this entry",
+        };
+        render_placeholder(frame, tree_block, left[1], message);
+        if let Some(changes) = response_changes {
+            render_empty_changes(frame, changes, content_area);
+        } else {
+            render_empty_content(frame, content_area);
+        }
     } else {
         render_tree(
             frame,
@@ -119,6 +130,7 @@ pub(crate) fn render_files(frame: &mut Frame, app: &App, area: Rect) {
         render_content(
             frame,
             &files[app.file_selected.min(files.len() - 1)],
+            response_changes,
             content_area,
         );
     }
@@ -205,22 +217,51 @@ fn render_tree(
     frame.render_widget(Paragraph::new(lines).block(block).scroll((scroll, 0)), area);
 }
 
-fn render_content(frame: &mut Frame, file: &FileItem, area: Rect) {
-    let title = format!(" {} ", file.reported);
+fn render_content(
+    frame: &mut Frame,
+    file: &FileItem,
+    response_changes: Option<&styra_server::TurnChanges>,
+    area: Rect,
+) {
+    let title = response_changes
+        .map(|changes| {
+            format!(
+                " response {} diff · {} files ",
+                changes.turn,
+                changes.files.len()
+            )
+        })
+        .unwrap_or_else(|| format!(" {} ", file.reported));
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::DarkGray))
         .title(Span::styled(title, Style::default().fg(Color::Cyan)));
-    let text = match std::fs::read_to_string(&file.resolved) {
-        Ok(content) if content.is_empty() => Text::from(Line::from(Span::styled(
-            "(empty file)",
-            Style::default().fg(Color::Gray),
-        ))),
-        Ok(content) => Text::from(content.replace('\t', "    ")),
-        Err(error) => Text::from(Line::from(Span::styled(
-            format!("could not read file: {error}"),
-            Style::default().fg(Color::Red),
-        ))),
+    let text = if let Some(changes) = response_changes {
+        if let Some(error) = &changes.error {
+            Text::from(Line::from(Span::styled(
+                format!("change capture unavailable: {error}"),
+                Style::default().fg(Color::Red),
+            )))
+        } else if changes.diff.is_empty() {
+            Text::from(Line::from(Span::styled(
+                "(no net filesystem changes)",
+                Style::default().fg(Color::Gray),
+            )))
+        } else {
+            Text::from(changes.diff.replace('\t', "    "))
+        }
+    } else {
+        match std::fs::read_to_string(&file.resolved) {
+            Ok(content) if content.is_empty() => Text::from(Line::from(Span::styled(
+                "(empty file)",
+                Style::default().fg(Color::Gray),
+            ))),
+            Ok(content) => Text::from(content.replace('\t', "    ")),
+            Err(error) => Text::from(Line::from(Span::styled(
+                format!("could not read file: {error}"),
+                Style::default().fg(Color::Red),
+            ))),
+        }
     };
     frame.render_widget(
         Paragraph::new(text).block(block).wrap(Wrap { trim: false }),
@@ -237,6 +278,21 @@ fn render_empty_content(frame: &mut Frame, area: Rect) {
             Style::default().fg(Color::Gray),
         ));
     render_placeholder(frame, block, area, "no file selected");
+}
+
+fn render_empty_changes(frame: &mut Frame, changes: &styra_server::TurnChanges, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::DarkGray))
+        .title(Span::styled(
+            format!(" response {} diff ", changes.turn),
+            Style::default().fg(Color::Gray),
+        ));
+    let message = changes
+        .error
+        .as_deref()
+        .unwrap_or("no net filesystem changes");
+    render_placeholder(frame, block, area, message);
 }
 
 #[cfg(test)]
@@ -305,5 +361,51 @@ mod tests {
         let (_, preview_y) = find("preview · pretty", 54, 90, 0).unwrap();
         assert!(preview_y < 8, "entry preview belongs in upper-right pane");
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn selected_agent_response_renders_its_durable_turn_diff() {
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
+        app.push_event(AgentEvent::UserMessage {
+            text: "edit it".into(),
+        });
+        app.push_event(AgentEvent::AgentMessage {
+            text: "done".into(),
+        });
+        app.push_event(AgentEvent::TurnCompleted {
+            usage: Default::default(),
+        });
+        app.record_turn_changes(styra_server::TurnChanges {
+            turn: 1,
+            status: styra_server::TurnChangeStatus::Complete,
+            files: vec![styra_server::TurnFileChange {
+                path: "src/main.rs".into(),
+                status: "M".into(),
+                old_path: None,
+            }],
+            diff: "diff --git a/src/main.rs b/src/main.rs\n-old\n+new\n".into(),
+            error: None,
+        });
+        app.view = crate::app::View::Files;
+
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 20)).unwrap();
+        terminal
+            .draw(|frame| super::super::render(frame, &app))
+            .unwrap();
+        let screen = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(screen.contains("changes · selected response"), "{screen}");
+        assert!(screen.contains("src/main.rs"), "{screen}");
+        assert!(screen.contains("-old"), "{screen}");
+        assert!(screen.contains("+new"), "{screen}");
     }
 }

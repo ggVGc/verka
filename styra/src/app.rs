@@ -14,7 +14,7 @@
 //! `main` feeds it input and session updates.
 
 use std::cell::Cell;
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use styra_server::agent::SandboxLayout;
@@ -22,7 +22,7 @@ use styra_server::agent::{Provider, Selection};
 use styra_server::event::PresentationMode;
 use styra_server::event::{AgentEvent, DetailBlock, TokenUsage};
 use styra_server::{Answer, AnswerValue, Contract, FileLocation, QueuedMessage};
-use styra_server::{InteractionEnd, LogEntry, RawLine};
+use styra_server::{InteractionEnd, LogEntry, RawLine, TurnChanges};
 
 use crate::composer::Composer;
 use crate::ingest;
@@ -246,6 +246,10 @@ impl Scroll {
 pub struct App {
     /// The event list and the operator's place in it; see [`Timeline`].
     pub timeline: Timeline,
+    /// Durable host-observed workspace deltas keyed by conversation turn.
+    pub turn_changes: BTreeMap<u64, TurnChanges>,
+    next_turn: u64,
+    active_turn: Option<u64>,
     pub focus: Focus,
     pub view: View,
     /// Whether the full-screen keyboard shortcut reference is open.
@@ -419,6 +423,9 @@ impl App {
     pub fn new(selection: Selection, session_id: impl Into<String>) -> Self {
         Self {
             timeline: Timeline::default(),
+            turn_changes: BTreeMap::new(),
+            next_turn: 1,
+            active_turn: None,
             focus: Focus::List,
             view: View::Events,
             show_keybinds: false,
@@ -820,6 +827,35 @@ impl App {
         }
     }
 
+    /// Keep a turn's host-observed workspace delta, replacing any earlier
+    /// partial capture for the same turn.
+    pub fn record_turn_changes(&mut self, changes: TurnChanges) {
+        self.turn_changes.insert(changes.turn, changes);
+    }
+
+    /// The delta captured for the turn the selected row belongs to, if the
+    /// server sent one.
+    pub fn selected_turn_changes(&self) -> Option<&TurnChanges> {
+        let turn = self.timeline.selected_entry()?.turn?;
+        self.turn_changes.get(&turn)
+    }
+
+    /// Open a new turn if this event is the operator message that starts one,
+    /// and report the turn the event belongs to.
+    pub(crate) fn open_turn_if(&mut self, event: &AgentEvent) -> Option<u64> {
+        if matches!(event, AgentEvent::UserMessage { .. }) {
+            self.active_turn = Some(self.next_turn);
+            self.next_turn += 1;
+        }
+        self.active_turn
+    }
+
+    /// Close the current turn; later events belong to no turn until the next
+    /// operator message opens one.
+    pub(crate) fn close_turn(&mut self) {
+        self.active_turn = None;
+    }
+
     /// The provider's own count of what it is running in the background. Once
     /// it has reported one, that count is the only thing that moves the flag.
     pub(crate) fn note_background_count(&mut self, running: usize) {
@@ -1057,6 +1093,15 @@ impl App {
     /// currently resolve to files. Paths retain their reported spelling so the
     /// Files renderer can distinguish workspace-relative and external roots.
     pub fn file_paths(&self) -> Vec<String> {
+        if !self.file_show_all {
+            if let Some(changes) = self.selected_turn_changes() {
+                let mut paths: Vec<_> =
+                    changes.files.iter().map(|file| file.path.clone()).collect();
+                paths.sort();
+                paths.dedup();
+                return paths;
+            }
+        }
         let entries: Box<dyn Iterator<Item = &Entry> + '_> = if self.file_show_all {
             Box::new(self.timeline.entries.iter())
         } else {

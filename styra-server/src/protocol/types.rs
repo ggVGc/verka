@@ -58,8 +58,49 @@ pub enum InteractionUpdate {
     Log(LogEntry),
     /// The host directory used for subsequent agent turns.
     WorkingDirectoryChanged(PathBuf),
+    /// The Git-visible workspace delta observed between dispatching one
+    /// operator message and the provider completing that turn. Produced by the
+    /// host rather than decoded from the provider, so shell-driven writes are
+    /// included too.
+    TurnChanges(TurnChanges),
     /// The agent process ended; no further events will arrive.
     Ended(InteractionEnd),
+}
+
+/// Whether a turn reached the provider's normal completion boundary before
+/// its final workspace snapshot was taken.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnChangeStatus {
+    Complete,
+    Partial,
+    Unavailable,
+}
+
+/// One tracked or non-ignored path in a turn-scoped workspace delta.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TurnFileChange {
+    pub path: String,
+    /// Git's stable one-letter status (`A`, `M`, `D`, `R`, ...).
+    pub status: String,
+    /// The source path for a rename or copy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub old_path: Option<String>,
+}
+
+/// Durable, provider-independent filesystem evidence for one conversation
+/// turn. `diff` is the exact binary-capable Git patch between the two private
+/// snapshots and remains useful after later turns change the workspace again.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TurnChanges {
+    pub turn: u64,
+    pub status: TurnChangeStatus,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<TurnFileChange>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub diff: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 /// Severity of a [`LogEntry`], used to colour the log view.

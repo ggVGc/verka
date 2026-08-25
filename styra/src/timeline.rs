@@ -27,6 +27,10 @@ pub struct Entry {
     /// encoded wire line is journaled, so for it this points at whatever line
     /// came just before instead of its own.
     pub raw_index: Option<usize>,
+    /// Host-assigned conversation turn containing this event. This is local
+    /// and provider-independent: every event from the operator message through
+    /// `TurnCompleted` shares the same number.
+    pub turn: Option<u64>,
     /// The shape this turn asked its reply to come back in, for an operator
     /// message the server framed. Set at ingest, where the framing is
     /// recognised and removed from `event`, so the list shows the message as
@@ -313,6 +317,7 @@ mod tests {
                     event,
                     expanded: false,
                     raw_index: None,
+                    turn: None,
                     contract: None,
                 })
                 .collect(),

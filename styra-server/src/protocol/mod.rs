@@ -17,7 +17,7 @@ pub use types::{
     Answer, AnswerValue, Contract, Direction, DrivaOptions, FileLocation, InteractionActivity,
     InteractionEnd, InteractionSummary, InteractionUpdate, LaunchMount, LaunchPolicy, LogEntry,
     LogLevel, QueuedMessage, RawLine, SessionOrigin, SessionSummary, TemplateSummary,
-    WorkspaceSummary,
+    TurnChangeStatus, TurnChanges, TurnFileChange, WorkspaceSummary,
 };
 
 // These external vocabularies are serialized inside protocol payloads. Re-export
@@ -191,6 +191,10 @@ pub struct StoredSession {
     pub events: Vec<AgentEvent>,
     /// Empty when the request asked for no raw lines.
     pub raw: Vec<RawLine>,
+    /// Host-observed workspace deltas, one per turn captured by a server new
+    /// enough to support them. Older Sessions naturally return an empty list.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub turn_changes: Vec<TurnChanges>,
 }
 
 /// One JSON request sent as a single line over the Unix socket.

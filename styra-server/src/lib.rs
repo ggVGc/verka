@@ -89,6 +89,7 @@ pub mod daemon;
 pub mod paths;
 pub mod protocol;
 pub mod spawn;
+pub mod turn_changes;
 
 pub use client::Client;
 pub use daemon::{run, serve_if_requested, ServerConfig};
@@ -96,7 +97,7 @@ pub use protocol::{
     Answer, AnswerValue, Contract, Direction, DrivaOptions, FileLocation, InteractionActivity,
     InteractionEnd, InteractionSummary, InteractionUpdate, LaunchMount, LaunchPolicy, LogEntry,
     LogLevel, QueuedMessage, RawLine, SessionOrigin, SessionSummary, TemplateSummary,
-    WorkspaceSummary,
+    TurnChangeStatus, TurnChanges, TurnFileChange, WorkspaceSummary,
 };
 pub use spawn::ensure_server;
 

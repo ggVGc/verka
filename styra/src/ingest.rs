@@ -21,6 +21,10 @@ pub fn push_event(app: &mut App, event: AgentEvent) {
     // for; the framing is boilerplate the list repeating adds nothing, and
     // the raw view still holds the line exactly as it went out.
     let (event, contract) = unframed(event);
+    // An operator message opens a turn; `TurnCompleted` below closes it. Every
+    // row in between carries the number, so the host's workspace delta for a
+    // turn can be found from whichever of its rows is selected.
+    let event_turn = app.open_turn_if(&event);
     // Set before the replacement paths below, all of which return early:
     // a command or tool finishing is activity like any other.
     app.note_event_received();
@@ -176,15 +180,20 @@ pub fn push_event(app: &mut App, event: AgentEvent) {
         app.timeline.entries[app.timeline.selected].expanded = false;
     }
     let raw_index = app.raw.len().checked_sub(1);
+    let completes_turn = matches!(event, AgentEvent::TurnCompleted { .. });
     app.timeline.entries.push(Entry {
         event,
         expanded: transfer_expansion,
         raw_index,
+        turn: event_turn,
         contract,
     });
     // Follow the tail of what is actually rendered. Hidden minor events
     // must not move the selection (and therefore the list viewport).
     follow_visible_tail(app);
+    if completes_turn {
+        app.close_turn();
+    }
 }
 
 /// Strip the server's contract framing from an operator message, returning the

@@ -65,6 +65,8 @@ struct ManagedInteraction {
     queue: Mutex<std::collections::VecDeque<QueuedMessage>>,
     /// The session's durable directory: its journal, metadata and queue.
     session_path: PathBuf,
+    /// Host-side before/after snapshots for the currently dispatched turn.
+    turn_changes: Arc<Mutex<crate::turn_changes::Tracker>>,
 }
 
 fn update_finishes_background(update: &InteractionUpdate) -> bool {
@@ -164,8 +166,26 @@ impl ManagedInteraction {
                 self.interaction.session_id()
             );
         }
+        self.turn_changes
+            .lock()
+            .expect("turn-change tracker lock poisoned")
+            .begin();
         self.interaction.send(text)?;
         Ok(())
+    }
+
+    fn send_with_selection(&self, text: &str, selection: &Selection) -> Result<()> {
+        if !self.accepting_messages.load(Ordering::Acquire) {
+            anyhow::bail!(
+                "session {} is not accepting messages",
+                self.interaction.session_id()
+            );
+        }
+        self.turn_changes
+            .lock()
+            .expect("turn-change tracker lock poisoned")
+            .begin();
+        self.interaction.send_with_selection(text, Some(selection))
     }
 
     fn stop(&self) {
@@ -318,6 +338,15 @@ impl ServerState {
         let updates = Arc::new(Mutex::new(Vec::new()));
         let accepting_messages = Arc::new(AtomicBool::new(true));
         let activity = Arc::new(Mutex::new(InteractionActivity::Pending));
+        let turn_changes = Arc::new(Mutex::new(crate::turn_changes::Tracker::open(
+            workspace.clone(),
+            journal_path
+                .parent()
+                .unwrap_or(&self.inner.store_root)
+                .to_path_buf(),
+            &id,
+            0,
+        )));
         let managed = Arc::new(ManagedInteraction {
             interaction,
             updates: Arc::clone(&updates),
@@ -334,6 +363,7 @@ impl ServerState {
                 .parent()
                 .unwrap_or(&self.inner.store_root)
                 .to_path_buf(),
+            turn_changes: Arc::clone(&turn_changes),
         });
         std::thread::Builder::new()
             .name(format!("styra-updates-{id}"))
@@ -344,7 +374,10 @@ impl ServerState {
                 // heuristics below are a fallback for quieter providers.
                 let mut background_count_known = false;
                 let mut background_polls = HashSet::new();
+                let mut provider_turn_completed = false;
                 while let Ok(update) = receiver.recv() {
+                    let mut finish_complete = false;
+                    let ended = matches!(update, InteractionUpdate::Ended(_));
                     match &update {
                         InteractionUpdate::Event(event)
                             if event.background_tasks_running().is_some() =>
@@ -359,6 +392,10 @@ impl ServerState {
                                     activity.lock().expect("interaction activity lock poisoned");
                                 if *activity == InteractionActivity::Background {
                                     *activity = InteractionActivity::Pending;
+                                }
+                                if provider_turn_completed {
+                                    finish_complete = true;
+                                    provider_turn_completed = false;
                                 }
                             }
                         }
@@ -387,6 +424,11 @@ impl ServerState {
                         InteractionUpdate::Event(crate::event::AgentEvent::TurnCompleted {
                             ..
                         }) => {
+                            if background_work {
+                                provider_turn_completed = true;
+                            } else {
+                                finish_complete = true;
+                            }
                             *activity.lock().expect("interaction activity lock poisoned") =
                                 if background_work {
                                     InteractionActivity::Background
@@ -402,6 +444,10 @@ impl ServerState {
                                 background_work = false;
                                 *activity.lock().expect("interaction activity lock poisoned") =
                                     InteractionActivity::Pending;
+                                if provider_turn_completed {
+                                    finish_complete = true;
+                                    provider_turn_completed = false;
+                                }
                             }
                         }
                         _ => {}
@@ -412,6 +458,19 @@ impl ServerState {
                     let mut history = updates.lock().expect("interaction update lock poisoned");
                     let sequence = history.len() as u64 + 1;
                     history.push(SequencedUpdate { sequence, update });
+                    if finish_complete || ended {
+                        if let Some(changes) = turn_changes
+                            .lock()
+                            .expect("turn-change tracker lock poisoned")
+                            .finish(finish_complete)
+                        {
+                            let sequence = history.len() as u64 + 1;
+                            history.push(SequencedUpdate {
+                                sequence,
+                                update: InteractionUpdate::TurnChanges(changes),
+                            });
+                        }
+                    }
                 }
             })
             .context("starting the interaction update collector")?;
@@ -597,6 +656,12 @@ impl ServerState {
         // on a previous attachment (one stopped before the interaction went
         // idle enough to send them), so reload them rather than starting empty.
         let queued = journal::read_queued_messages(&summary.path)?;
+        let turn_changes = Arc::new(Mutex::new(crate::turn_changes::Tracker::open(
+            workspace.clone(),
+            summary.path.clone(),
+            &request.id,
+            journal::user_message_count(&summary.path)?,
+        )));
         let managed = Arc::new(ManagedInteraction {
             interaction,
             updates: Arc::clone(&updates),
@@ -610,6 +675,7 @@ impl ServerState {
             shell,
             queue: Mutex::new(queued.into_iter().collect()),
             session_path: summary.path.clone(),
+            turn_changes: Arc::clone(&turn_changes),
         });
         let id = request.id.clone();
         std::thread::Builder::new()
@@ -621,7 +687,10 @@ impl ServerState {
                 // heuristics below are a fallback for quieter providers.
                 let mut background_count_known = false;
                 let mut background_polls = HashSet::new();
+                let mut provider_turn_completed = false;
                 while let Ok(update) = receiver.recv() {
+                    let mut finish_complete = false;
+                    let ended = matches!(update, InteractionUpdate::Ended(_));
                     match &update {
                         InteractionUpdate::Event(event)
                             if event.background_tasks_running().is_some() =>
@@ -636,6 +705,10 @@ impl ServerState {
                                     activity.lock().expect("interaction activity lock poisoned");
                                 if *activity == InteractionActivity::Background {
                                     *activity = InteractionActivity::Pending;
+                                }
+                                if provider_turn_completed {
+                                    finish_complete = true;
+                                    provider_turn_completed = false;
                                 }
                             }
                         }
@@ -664,6 +737,11 @@ impl ServerState {
                         InteractionUpdate::Event(crate::event::AgentEvent::TurnCompleted {
                             ..
                         }) => {
+                            if background_work {
+                                provider_turn_completed = true;
+                            } else {
+                                finish_complete = true;
+                            }
                             *activity.lock().expect("interaction activity lock poisoned") =
                                 if background_work {
                                     InteractionActivity::Background
@@ -679,6 +757,10 @@ impl ServerState {
                                 background_work = false;
                                 *activity.lock().expect("interaction activity lock poisoned") =
                                     InteractionActivity::Pending;
+                                if provider_turn_completed {
+                                    finish_complete = true;
+                                    provider_turn_completed = false;
+                                }
                             }
                         }
                         _ => {}
@@ -689,6 +771,19 @@ impl ServerState {
                     let mut history = updates.lock().expect("interaction update lock poisoned");
                     let sequence = history.len() as u64 + 1;
                     history.push(SequencedUpdate { sequence, update });
+                    if finish_complete || ended {
+                        if let Some(changes) = turn_changes
+                            .lock()
+                            .expect("turn-change tracker lock poisoned")
+                            .finish(finish_complete)
+                        {
+                            let sequence = history.len() as u64 + 1;
+                            history.push(SequencedUpdate {
+                                sequence,
+                                update: InteractionUpdate::TurnChanges(changes),
+                            });
+                        }
+                    }
                 }
             })
             .context("starting the resumed interaction update collector")?;
@@ -1066,9 +1161,7 @@ impl ServerState {
                     }
                     None => message.text,
                 };
-                interaction
-                    .interaction
-                    .send_with_selection(&text, Some(&interaction.selection()))?;
+                interaction.send_with_selection(&text, &interaction.selection())?;
                 Ok(Response::Accepted)
             }
             Request::SetSessionSelection { id, selection } => {
@@ -1161,10 +1254,12 @@ impl ServerState {
                 } else {
                     Vec::new()
                 };
+                let turn_changes = crate::turn_changes::read(&summary.path)?;
                 Ok(Response::StoredSession(StoredSession {
                     summary,
                     events,
                     raw,
+                    turn_changes,
                 }))
             }
             Request::Shell { id } => Ok(Response::Shell(self.shell(&id)?)),
@@ -1197,6 +1292,9 @@ fn replayed_session_updates(
     }
     for line in raw {
         push_sequenced(&mut updates, InteractionUpdate::Raw(line));
+    }
+    for changes in crate::turn_changes::read(path)? {
+        push_sequenced(&mut updates, InteractionUpdate::TurnChanges(changes));
     }
     Ok(updates)
 }

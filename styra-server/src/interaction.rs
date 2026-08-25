@@ -881,6 +881,7 @@ mod tests {
                 Ok(InteractionUpdate::Raw(line)) => raw_directions.push(line.direction),
                 Ok(InteractionUpdate::Log(entry)) => logs.push(entry.message),
                 Ok(InteractionUpdate::WorkingDirectoryChanged(_)) => {}
+                Ok(InteractionUpdate::TurnChanges(_)) => {}
                 Ok(InteractionUpdate::Ended(_)) => ended = true,
                 Err(_) => {}
             }

@@ -1633,6 +1633,7 @@ mod tests {
                 text: "the visible summary\nhidden detail".into(),
             },
             expanded: true,
+            turn: None,
             raw_index: None,
             contract: None,
         };
