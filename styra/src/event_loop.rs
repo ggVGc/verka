@@ -56,7 +56,7 @@ pub fn run(
     loop {
         app.expire_action_messages();
         notes::ensure_loaded(app, client, workspace_id);
-        session::ensure_driva_plan(app, client, workspace_id, live);
+        session::ensure_driva_plan(app, client, workspace_id);
         let mut disconnected = false;
         if let Live::Running { session_id, cursor } = live {
             match client.updates(session_id, *cursor) {

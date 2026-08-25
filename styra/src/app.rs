@@ -1596,8 +1596,15 @@ impl App {
 
     /// Whether the launch policy for a not-yet-started interaction still has to
     /// be asked for: a live session's own policy is never superseded by a plan.
+    ///
+    /// A stopped or ended session is asked about too, and this is why it is
+    /// keyed on the inputs rather than on "have we ever been told a policy".
+    /// What it holds is the record of the interaction that just finished; the
+    /// moment a mount or a template is added, that record no longer describes
+    /// what the next message would resume under, and showing it unchanged read
+    /// as the edit having been discarded.
     pub fn needs_driva_plan(&self) -> bool {
-        if self.driva_options.is_some() && !self.driva_planned {
+        if !self.can_edit_launch() {
             return false;
         }
         match &self.driva_plan_key {
@@ -1635,13 +1642,23 @@ impl App {
     }
 
     /// Whether the launch policy can still be edited. Only before an
-    /// interaction exists, or after it has stopped: while one is running or
+    /// interaction exists, or after one has finished: while one is running or
     /// idle, what the Driva view shows is a record of the sandbox it is
-    /// confined to, and changing that would mean a new session. Once stopped,
-    /// there is no live sandbox to contradict, so editing reopens just as if
-    /// the interaction had never started.
+    /// confined to, and changing that would mean a new session. Once nothing is
+    /// running there is no live sandbox to contradict, so editing reopens just
+    /// as if the interaction had never started — and the resume the next
+    /// message triggers launches under the edited policy.
+    ///
+    /// `Ended` counts as much as `Stopped`. An agent that exited on its own,
+    /// and a stored session replayed from its journal (which is marked ended
+    /// when it is opened), are resumed by exactly the same path as one the
+    /// operator stopped, so refusing edits there only made the policy look
+    /// frozen while the resume happily accepted a new one.
     pub fn can_edit_launch(&self) -> bool {
-        matches!(self.status, Status::Pending | Status::Stopped)
+        matches!(
+            self.status,
+            Status::Pending | Status::Stopped | Status::Ended { .. }
+        )
     }
 
     /// Refuse an edit to the launch policy when there is nothing to edit,
@@ -1652,7 +1669,7 @@ impl App {
         if self.can_edit_launch() {
             return true;
         }
-        self.show_action_message("the launch policy is fixed once an interaction has started");
+        self.show_action_message("the launch policy is fixed while an interaction is running");
         false
     }
 
@@ -3456,7 +3473,7 @@ mod tests {
             }
         }
 
-        let mut app = app();
+        let mut app = App::pending(styra_server::agent::Selection::parse("codex").unwrap());
         assert!(app.needs_driva_plan());
         app.set_planned_driva_options(
             app.selection.clone(),
@@ -3479,6 +3496,7 @@ mod tests {
 
         // Once something is running, what it runs under replaces the plan and
         // no further planning happens.
+        app.status = Status::Running;
         app.set_driva_options(options("live"));
         assert!(!app.driva_planned);
         assert!(!app.needs_driva_plan());
@@ -3488,6 +3506,59 @@ mod tests {
             app.driva_options.as_ref().unwrap().isolation_backend,
             "live"
         );
+    }
+
+    /// The reported flow: stop a session, add a mount, send a new message. The
+    /// mount has to reach the resume, and the view has to stop describing the
+    /// sandbox the stopped interaction ran in — otherwise the edit reads as
+    /// having been discarded and the old policy as having been restored.
+    #[test]
+    fn a_stopped_or_ended_session_re_plans_its_policy_before_the_resume() {
+        use styra_server::DrivaOptions;
+
+        let live = DrivaOptions {
+            isolation_backend: "bwrap".into(),
+            command: vec!["codex".into()],
+            working_directory: PathBuf::from("/tmp/styra/workspace"),
+            network: false,
+            mounts: Vec::new(),
+        };
+
+        for status in [
+            Status::Stopped,
+            Status::Ended {
+                exit_code: Some(0),
+                error: None,
+            },
+        ] {
+            let mut app = app();
+            app.set_driva_options(live.clone());
+            // While it runs, the record stands and nothing is asked.
+            assert!(!app.can_edit_launch());
+            assert!(!app.needs_driva_plan());
+
+            app.status = status;
+            assert!(app.can_edit_launch());
+            // Nothing has changed yet, but the record is the previous
+            // interaction's, so the sandbox a resume would use is asked for.
+            assert!(app.needs_driva_plan());
+            app.set_planned_driva_options(
+                app.selection.clone(),
+                app.effective_launch(),
+                Some(live.clone()),
+            );
+            assert!(!app.needs_driva_plan());
+
+            // The edit lands in the launch policy the resume sends...
+            app.launch.mounts.push(styra_server::LaunchMount {
+                source: PathBuf::from("/srv/data"),
+                destination: None,
+                writable: false,
+            });
+            assert_eq!(app.effective_launch().mounts.len(), 1);
+            // ...and is re-planned, so the view answers for it.
+            assert!(app.needs_driva_plan());
+        }
     }
 
     /// Editing the launch inputs changes what would be launched, so the plan

@@ -99,12 +99,17 @@ pub fn create_session(
     })
 }
 
-/// Before anything has launched there is no sandbox to describe, but there is
-/// one decided: ask the server what a new interaction under the current
-/// selection would run in, so the Driva view answers "what will this agent be
-/// able to touch" rather than waiting for the first message.
-pub fn ensure_driva_plan(app: &mut App, client: &Client, workspace_id: &str, live: &Live) {
-    if !matches!(live, Live::Pending) || !app.needs_driva_plan() {
+/// While nothing is running there is no sandbox to describe, but there is one
+/// decided: ask the server what an interaction started under the current
+/// selection and policy would run in, so the Driva view answers "what will this
+/// agent be able to touch" rather than waiting for the next message.
+pub fn ensure_driva_plan(app: &mut App, client: &Client, workspace_id: &str) {
+    // Not just the blank screen: a stopped or ended Session is resumed under
+    // whatever the policy says when the next message is sent, so it is planned
+    // the same way. Gated on the policy being editable rather than on `live`,
+    // so the two questions ("can this be changed" and "is what is shown still
+    // true") cannot drift apart.
+    if !app.can_edit_launch() || !app.needs_driva_plan() {
         return;
     }
     let selection = app.selection.clone();
