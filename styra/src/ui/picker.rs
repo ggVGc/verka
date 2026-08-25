@@ -5,8 +5,8 @@
 
 use super::notes::render_notes_pane;
 use super::{
-    log_line, message_text_color, render_placeholder, status_color, tag_color, SELECTION_BG,
-    SELECTION_MARKER,
+    log_line, message_text_color, render_placeholder, status_color, tag_color, LIVE_MARKER,
+    SELECTION_BG, SELECTION_MARKER,
 };
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -139,71 +139,56 @@ pub fn render_name_prompt(frame: &mut Frame, value: &str) {
     );
 }
 
+/// Whether the picker has the selected Workspace's Session list yet. Loading
+/// is a round-trip to the server, so an unread Workspace and an empty one
+/// must not read the same.
+#[derive(Debug, Clone, Copy)]
+pub enum SessionsPreview<'a> {
+    Loading,
+    Ready(&'a [SessionSummary]),
+}
+
 /// Render the top-level Workspace picker. Entering a Workspace leads to its
-/// separate Session picker.
+/// separate Session picker, so the right-hand pane previews that next screen
+/// for the row under the cursor: the Workspace's notes above its Sessions.
 pub fn render_workspace_picker(
     frame: &mut Frame,
     workspaces: &[WorkspaceSummary],
     selected: usize,
+    interactions: &[InteractionSummary],
+    preview: SessionsPreview<'_>,
 ) {
     let area = frame.area();
     let panes = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
+        .constraints([Constraint::Percentage(58), Constraint::Percentage(42)])
         .split(area);
+    let side = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
+        .split(panes[1]);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
         .title(
-            " styra · choose a Workspace · Enter open · e Workspace notes · c create · q cancel ",
+            " styra \u{b7} choose a Workspace \u{b7} Enter open \u{b7} e Workspace notes \u{b7} c create \u{b7} q cancel ",
         );
     if workspaces.is_empty() {
         render_placeholder(
             frame,
             block,
             panes[0],
-            "  no Workspaces found · press c to create one in the current directory",
+            "  no Workspaces found \u{b7} press c to create one in the current directory",
         );
-        render_notes_pane(frame, notes::Scope::Workspace, None, panes[1]);
+        render_notes_pane(frame, notes::Scope::Workspace, None, side[0]);
+        render_sessions_preview(frame, None, preview, interactions, side[1]);
         return;
     }
+    let selected = selected.min(workspaces.len() - 1);
     let items: Vec<ListItem> = workspaces
         .iter()
         .enumerate()
-        .map(|(index, workspace)| {
-            let name = crate::session::workspace_display_name(workspace);
-            ListItem::new(Line::from(vec![
-                Span::styled(
-                    if index == selected.min(workspaces.len() - 1) {
-                        "• "
-                    } else {
-                        "  "
-                    },
-                    Style::default().fg(if index == selected.min(workspaces.len() - 1) {
-                        SELECTION_MARKER
-                    } else {
-                        Color::Cyan
-                    }),
-                ),
-                Span::styled(
-                    format!("{name:<19} "),
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    format!(
-                        "{:>3} sessions  {:<10} ",
-                        workspace.session_count, workspace.age
-                    ),
-                    Style::default().fg(Color::Gray),
-                ),
-                Span::styled(
-                    workspace.host_path.display().to_string(),
-                    Style::default().fg(Color::White),
-                ),
-            ]))
-        })
+        .map(|(index, workspace)| workspace_item(workspace, index == selected, interactions))
         .collect();
     let list = List::new(items).block(block).highlight_style(
         Style::default()
@@ -211,14 +196,149 @@ pub fn render_workspace_picker(
             .add_modifier(Modifier::BOLD),
     );
     let mut state = ListState::default();
-    state.select(Some(selected.min(workspaces.len() - 1)));
+    state.select(Some(selected));
     frame.render_stateful_widget(list, panes[0], &mut state);
+    let workspace = workspaces.get(selected);
     render_notes_pane(
         frame,
         notes::Scope::Workspace,
-        workspaces.get(selected).map(|item| item.notes.as_str()),
-        panes[1],
+        workspace.map(|item| item.notes.as_str()),
+        side[0],
     );
+    render_sessions_preview(frame, workspace, preview, interactions, side[1]);
+}
+
+/// One Workspace row. A Workspace holding an Interaction the server still
+/// accepts input for is marked and counted: that is where the operator has
+/// work in flight, and it is why the row sorts where it does.
+fn workspace_item(
+    workspace: &WorkspaceSummary,
+    selected: bool,
+    interactions: &[InteractionSummary],
+) -> ListItem<'static> {
+    let name = crate::session::workspace_display_name(workspace);
+    let live = live_interactions(&workspace.id, interactions);
+    ListItem::new(Line::from(vec![
+        Span::styled(
+            if selected { "\u{2022} " } else { "  " },
+            Style::default().fg(if selected {
+                SELECTION_MARKER
+            } else {
+                Color::Cyan
+            }),
+        ),
+        Span::styled(
+            format!("{name:<19} "),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("{:>3} sessions  ", workspace.session_count),
+            Style::default().fg(Color::Gray),
+        ),
+        Span::styled(
+            format!("{:<9}", live_label(live)),
+            Style::default()
+                .fg(LIVE_MARKER)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("{:<10} ", workspace.age),
+            Style::default().fg(Color::Gray),
+        ),
+        Span::styled(
+            workspace.host_path.display().to_string(),
+            Style::default().fg(Color::White),
+        ),
+    ]))
+}
+
+/// The liveness column: a dot and a count, or nothing at all. Dot and count
+/// share one column so a Workspace with no work in flight costs the row only
+/// the blank width, leaving the host path room to be read.
+fn live_label(live: usize) -> String {
+    match live {
+        0 => String::new(),
+        n => format!("\u{25cf} {n} live"),
+    }
+}
+
+/// Interactions in a Workspace the server still accepts input for, whether
+/// idle and waiting on the operator or busy with a turn.
+fn live_interactions(workspace_id: &str, interactions: &[InteractionSummary]) -> usize {
+    interactions
+        .iter()
+        .filter(|interaction| interaction.accepting && interaction.workspace_id == workspace_id)
+        .count()
+}
+
+/// The Session-picker preview: the Sessions `Enter` would open this Workspace
+/// on, in the same order that screen shows them, with the live ones marked.
+fn render_sessions_preview(
+    frame: &mut Frame,
+    workspace: Option<&WorkspaceSummary>,
+    preview: SessionsPreview<'_>,
+    interactions: &[InteractionSummary],
+    area: Rect,
+) {
+    let title = match workspace {
+        Some(workspace) => format!(
+            " sessions \u{b7} {} ",
+            crate::session::workspace_display_name(workspace)
+        ),
+        None => " sessions ".to_owned(),
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::DarkGray))
+        .title(title);
+    let sessions = match preview {
+        SessionsPreview::Loading => {
+            render_placeholder(frame, block, area, "  loading\u{2026}");
+            return;
+        }
+        SessionsPreview::Ready(sessions) => sessions,
+    };
+    if sessions.is_empty() {
+        render_placeholder(frame, block, area, "  no sessions yet");
+        return;
+    }
+    let items: Vec<ListItem> = sessions
+        .iter()
+        .map(|session| {
+            let live = interactions
+                .iter()
+                .any(|interaction| interaction.accepting && interaction.id == session.id);
+            preview_session_item(session, live)
+        })
+        .collect();
+    frame.render_widget(List::new(items).block(block), area);
+}
+
+/// A Session as the preview shows it: one line, since this pane stands beside
+/// the Workspace list rather than replacing it, and the full two-line form is
+/// what the Session picker itself draws once the Workspace is open.
+fn preview_session_item(session: &SessionSummary, live: bool) -> ListItem<'static> {
+    let display_name = session
+        .name
+        .as_deref()
+        .unwrap_or_else(|| short_id(&session.id));
+    ListItem::new(Line::from(vec![
+        Span::styled(
+            if live { "\u{25cf} " } else { "  " },
+            Style::default().fg(LIVE_MARKER),
+        ),
+        Span::styled(
+            format!("{:<8} ", session.selection.provider.as_str()),
+            Style::default().fg(Color::Cyan),
+        ),
+        Span::styled(
+            format!("{display_name:<20} "),
+            Style::default().fg(Color::White),
+        ),
+        Span::styled(session.age.clone(), Style::default().fg(Color::Gray)),
+    ]))
 }
 
 /// Render the Driva template picker: every template the Workspace could name,
@@ -630,6 +750,17 @@ mod tests {
         screen_text(terminal.backend().buffer())
     }
 
+    /// Split a flattened screen back into rows, so an assertion can say which
+    /// row a marker landed on rather than only that it is somewhere on screen.
+    fn screen_lines(screen: &str, width: usize) -> Vec<String> {
+        screen
+            .chars()
+            .collect::<Vec<_>>()
+            .chunks(width)
+            .map(|row| row.iter().collect())
+            .collect()
+    }
+
     fn screen_text(buffer: &ratatui::buffer::Buffer) -> String {
         buffer
             .content()
@@ -722,36 +853,125 @@ mod tests {
         assert!(!screen.contains("cargo test"), "{screen}");
     }
 
-    #[test]
-    fn workspace_picker_lists_workspaces_before_sessions() {
-        let workspaces = vec![WorkspaceSummary {
-            id: "w-1".into(),
-            name: Some("retry work".into()),
+    fn workspace_summary(id: &str, name: &str, session_count: usize) -> WorkspaceSummary {
+        WorkspaceSummary {
+            id: id.into(),
+            name: Some(name.into()),
             notes: String::new(),
-            host_path: PathBuf::from("/home/op/retry"),
-            path: PathBuf::from("/state/workspaces/w-1"),
-            session_count: 3,
+            host_path: PathBuf::from(format!("/home/op/{id}")),
+            path: PathBuf::from(format!("/state/workspaces/{id}")),
+            session_count,
             age: "2h ago".into(),
             created_at_ms: 1,
             last_accessed_at_ms: 1,
             launch: Default::default(),
-        }];
-        let mut terminal = Terminal::new(TestBackend::new(100, 12)).unwrap();
+        }
+    }
+
+    /// Wide enough that the left pane holds a whole row — name, counts,
+    /// liveness, age, host path — so an assertion about the row is not really
+    /// an assertion about where it was truncated.
+    const WORKSPACE_PICKER_WIDTH: usize = 130;
+
+    fn rendered_workspace_picker(
+        workspaces: &[WorkspaceSummary],
+        selected: usize,
+        interactions: &[InteractionSummary],
+        preview: SessionsPreview<'_>,
+    ) -> String {
+        let mut terminal =
+            Terminal::new(TestBackend::new(WORKSPACE_PICKER_WIDTH as u16, 14)).unwrap();
         terminal
-            .draw(|frame| render_workspace_picker(frame, &workspaces, 0))
+            .draw(|frame| {
+                render_workspace_picker(frame, workspaces, selected, interactions, preview)
+            })
             .unwrap();
-        let screen = terminal
-            .backend()
-            .buffer()
-            .clone()
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>();
+        screen_text(terminal.backend().buffer())
+    }
+
+    #[test]
+    fn workspace_picker_lists_workspaces_before_sessions() {
+        let mut workspace = workspace_summary("retry", "retry work", 3);
+        workspace.host_path = PathBuf::from("/home/op/retry");
+        let screen = rendered_workspace_picker(&[workspace], 0, &[], SessionsPreview::Ready(&[]));
         assert!(screen.contains("choose a Workspace"), "{screen}");
         assert!(screen.contains("retry work"), "{screen}");
         assert!(screen.contains("3 sessions"), "{screen}");
         assert!(screen.contains("/home/op/retry"), "{screen}");
+    }
+
+    #[test]
+    fn workspace_picker_marks_workspaces_holding_a_live_interaction() {
+        let workspaces = vec![
+            workspace_summary("w-1", "payments", 2),
+            workspace_summary("w-2", "quiet", 1),
+        ];
+        let interactions = vec![
+            interaction_summary("s-1", "codex", true),
+            interaction_summary("s-2", "claude", true),
+            // Stopped: the server no longer accepts input, so it is not work
+            // in flight and must not mark the Workspace.
+            InteractionSummary {
+                workspace_id: "w-2".into(),
+                ..interaction_summary("s-3", "codex", false)
+            },
+        ];
+
+        let screen =
+            rendered_workspace_picker(&workspaces, 0, &interactions, SessionsPreview::Ready(&[]));
+
+        let payments = screen_lines(&screen, WORKSPACE_PICKER_WIDTH)
+            .into_iter()
+            .find(|line| line.contains("payments"))
+            .unwrap();
+        let quiet = screen_lines(&screen, WORKSPACE_PICKER_WIDTH)
+            .into_iter()
+            .find(|line| line.contains("quiet"))
+            .unwrap();
+        assert!(payments.contains('\u{25cf}'), "{payments}");
+        assert!(payments.contains("2 live"), "{payments}");
+        assert!(!quiet.contains('\u{25cf}'), "{quiet}");
+        assert!(!quiet.contains("live"), "{quiet}");
+    }
+
+    #[test]
+    fn workspace_picker_previews_the_selected_workspaces_sessions() {
+        let workspaces = vec![
+            workspace_summary("w-1", "payments", 2),
+            workspace_summary("w-2", "quiet", 0),
+        ];
+        let mut named = picker_summary("s-1", "codex", "2m ago");
+        named.name = Some("retry backoff".into());
+        let sessions = vec![named, picker_summary("s-9", "claude", "1h ago")];
+
+        let screen = rendered_workspace_picker(
+            &workspaces,
+            0,
+            &[interaction_summary("s-1", "codex", true)],
+            SessionsPreview::Ready(&sessions),
+        );
+
+        assert!(screen.contains("sessions \u{b7} payments"), "{screen}");
+        assert!(screen.contains("retry backoff"), "{screen}");
+        assert!(screen.contains("2m ago"), "{screen}");
+        assert!(screen.contains("1h ago"), "{screen}");
+        // The live Session carries the same dot its Workspace row does.
+        let live_row = screen_lines(&screen, WORKSPACE_PICKER_WIDTH)
+            .into_iter()
+            .find(|line| line.contains("retry backoff"))
+            .unwrap();
+        assert!(live_row.contains('\u{25cf}'), "{live_row}");
+    }
+
+    #[test]
+    fn an_unloaded_workspace_preview_reads_as_loading_rather_than_as_empty() {
+        let workspaces = vec![workspace_summary("w-1", "payments", 2)];
+
+        let loading = rendered_workspace_picker(&workspaces, 0, &[], SessionsPreview::Loading);
+        assert!(loading.contains("loading"), "{loading}");
+
+        let empty = rendered_workspace_picker(&workspaces, 0, &[], SessionsPreview::Ready(&[]));
+        assert!(empty.contains("no sessions yet"), "{empty}");
     }
 
     fn interaction_summary(id: &str, selection: &str, accepting: bool) -> InteractionSummary {

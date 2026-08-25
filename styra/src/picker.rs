@@ -15,6 +15,11 @@ use crate::ui;
 /// scrolling through the list costs no loads at all.
 const PREVIEW_SETTLE: Duration = Duration::from_millis(120);
 
+/// How often the Workspace picker re-asks the server which Interactions are
+/// live. Rare enough to leave a long-open picker idle, frequent enough that a
+/// turn ending is visible without the operator moving the cursor.
+const LIVENESS_REFRESH: Duration = Duration::from_secs(2);
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkspaceChoice {
     Existing(WorkspaceSummary),
@@ -215,7 +220,9 @@ fn read_session_name(
 /// current directory, Esc or q to back out.
 ///
 /// The list is ordered once on entry, by [`sort_workspaces`]. A Workspace the
-/// operator opens is not reordered under them while they look at it.
+/// operator opens is not reordered under them while they look at it — but its
+/// liveness marker is refreshed as the picker sits open, so a Workspace whose
+/// agent finishes or goes idle says so without the ordering shifting.
 pub fn run_workspace_picker(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     client: &Client,
@@ -223,10 +230,45 @@ pub fn run_workspace_picker(
 ) -> Result<Option<WorkspaceChoice>> {
     // A server that cannot answer still leaves a useful list: without live
     // interactions to consult, the ordering falls back to recent access alone.
-    sort_workspaces(workspaces, &client.list_interactions().unwrap_or_default());
+    let mut interactions = client.list_interactions().unwrap_or_default();
+    sort_workspaces(workspaces, &interactions);
     let mut selected = 0usize;
+    let mut refreshed = Instant::now();
+    // The Session list of the row under the cursor, loaded like the session
+    // picker's conversation preview: a blocking round-trip, so holding `j`
+    // must not queue one load per row it passes over.
+    let mut preview_id = String::new();
+    let mut preview_sessions: Vec<styra_server::SessionSummary> = Vec::new();
+    let mut settle_from: Option<Instant> = None;
     loop {
-        terminal.draw(|frame| ui::render_workspace_picker(frame, workspaces, selected))?;
+        if let Some(workspace) = workspaces.get(selected) {
+            if preview_id != workspace.id {
+                preview_id.clone_from(&workspace.id);
+                preview_sessions.clear();
+                settle_from = Some(Instant::now());
+            }
+            if settle_from.is_some_and(|since| since.elapsed() >= PREVIEW_SETTLE) {
+                settle_from = None;
+                preview_sessions = client.list_sessions(&preview_id).unwrap_or_default();
+            }
+        }
+        if refreshed.elapsed() >= LIVENESS_REFRESH {
+            refreshed = Instant::now();
+            if let Ok(current) = client.list_interactions() {
+                interactions = current;
+            }
+        }
+
+        // Until the settle timer fires and the load returns, the pane says so:
+        // a Workspace with no Sessions and an unread one look nothing alike.
+        let preview = if settle_from.is_some() {
+            ui::SessionsPreview::Loading
+        } else {
+            ui::SessionsPreview::Ready(&preview_sessions)
+        };
+        terminal.draw(|frame| {
+            ui::render_workspace_picker(frame, workspaces, selected, &interactions, preview)
+        })?;
         if !event::poll(Duration::from_millis(100))? {
             continue;
         }
@@ -249,7 +291,14 @@ pub fn run_workspace_picker(
             }
             KeyCode::Char('c') => return Ok(Some(WorkspaceChoice::CreateCurrentDirectory)),
             KeyCode::Char('e') if !workspaces.is_empty() => {
-                notes::edit_workspace_notes(terminal, client, workspaces, selected)?;
+                notes::edit_workspace_notes(
+                    terminal,
+                    client,
+                    workspaces,
+                    selected,
+                    &interactions,
+                    &preview_sessions,
+                )?;
             }
             _ => {}
         }

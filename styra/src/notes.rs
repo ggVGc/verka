@@ -295,18 +295,30 @@ pub fn edit_session_notes(
     Ok(())
 }
 
-/// The same from the Workspace picker.
+/// The same from the Workspace picker. The picker's own liveness and Session
+/// preview are passed through so the backdrop behind the editor stays the
+/// screen the operator opened it from.
 pub fn edit_workspace_notes(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     client: &Client,
     workspaces: &mut [WorkspaceSummary],
     selected: usize,
+    interactions: &[styra_server::InteractionSummary],
+    sessions: &[styra_server::SessionSummary],
 ) -> Result<()> {
     let Some(notes) = prompt(
         terminal,
         Scope::Workspace,
         &workspaces[selected].notes,
-        |frame| ui::render_workspace_picker(frame, workspaces, selected),
+        |frame| {
+            ui::render_workspace_picker(
+                frame,
+                workspaces,
+                selected,
+                interactions,
+                ui::SessionsPreview::Ready(sessions),
+            )
+        },
     )?
     else {
         return Ok(());

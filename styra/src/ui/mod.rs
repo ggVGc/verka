@@ -37,8 +37,7 @@ use notes::render_notes;
 pub use notes::render_notes_prompt;
 pub use picker::{
     render_interactions_picker, render_message_popup, render_name_prompt, render_picker,
-    render_template_picker, Preview,
-    render_workspace_picker,
+    render_template_picker, render_workspace_picker, Preview, SessionsPreview,
 };
 pub(crate) use preview::preview_scroll_limit;
 use preview::{render_fullscreen_preview, render_preview};
@@ -64,6 +63,9 @@ const SELECTION_BG: Color = Color::Rgb(44, 42, 30);
 /// Foreground used for the small current-line marker at the left edge of a
 /// selectable row.
 const SELECTION_MARKER: Color = Color::Yellow;
+/// Foreground for the liveness dot: a Workspace or Session the server still
+/// accepts input for. Green reads as "in flight" wherever it appears.
+const LIVE_MARKER: Color = Color::Green;
 
 /// A duration in the compact form the status line and tail use: `12s`,
 /// `2m14s`, `1h04m`. Seconds are dropped past an hour, where they no longer

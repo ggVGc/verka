@@ -513,9 +513,23 @@ temporary worktree, but the first form only summarizes the paths.
 
 ### Workspace and Session navigation
 
-`V` opens the Workspace picker. Choosing a Workspace then opens its Session
-picker; choosing a Session attaches to its Interaction when live, otherwise it
-replays the stored journal read-only. Neither step stops the Interaction the
+`V` opens the Workspace picker. The list is ordered once on entry — Workspaces
+holding an Interaction the server still accepts input for first, then the rest
+by recent access — and each such row is marked with a green dot and a count
+(`2 live`), so where work is in flight is legible directly rather than only
+implied by the ordering. The marker refreshes while the picker sits open; the
+ordering does not, so a row does not move under the cursor looking at it.
+
+The right-hand pane previews the screen `Enter` leads to: the selected
+Workspace's notes above its Sessions, listed one line each — provider, name,
+age — with live ones carrying the same green dot. Loading a Session list is a
+round-trip to the server, so it waits for the cursor to settle (as the Session
+picker's conversation preview does) and the pane says `loading…` until it
+lands: a Workspace with no Sessions and an unread one must not read the same.
+
+Choosing a Workspace then opens its Session picker; choosing a Session
+attaches to its Interaction when live, otherwise it replays the stored
+journal read-only. Neither step stops the Interaction the
 client was previously viewing. An empty Workspace opens a blank pending Session
 screen. `Esc`/`q` cancels without changing the current view.
 
