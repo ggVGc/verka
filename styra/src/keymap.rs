@@ -144,7 +144,7 @@ pub(crate) const REFERENCE: &[ReferenceRow] = &[
     },
     ReferenceRow::Binding {
         keys: "m / g / x",
-        action: "add a mount / the git checkout here (rw) / remove the selected one",
+        action: "add a mount / the git history here (rw) / remove the selected one",
     },
     ReferenceRow::Binding {
         keys: "j/k or ↓/↑",

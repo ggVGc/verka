@@ -207,7 +207,7 @@ fn editable_section(app: &App) -> Vec<Line<'static>> {
     }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "  m add mount · g git root (rw) · x remove · T templates · w network",
+        "  m add mount · g .git (rw) · x remove · T templates · w network",
         Style::default().fg(Color::DarkGray),
     )));
     lines.push(Line::from(Span::styled(
@@ -439,7 +439,7 @@ mod tests {
         assert!(screen.contains("templates none"), "{screen}");
         assert!(screen.contains("added by you"), "{screen}");
         assert!(screen.contains("none — press m to add one"), "{screen}");
-        assert!(screen.contains("m add mount · g git root (rw)"), "{screen}");
+        assert!(screen.contains("m add mount · g .git (rw)"), "{screen}");
 
         app.set_launch_templates(vec!["rust".into(), "browser".into()]);
         app.driva_prompt = Some("/srv/data:/mnt/data:rw".into());
@@ -617,10 +617,11 @@ mod tests {
         assert!(screen.contains("add mount"), "{screen}");
     }
 
-    /// The shortcut for the mount almost every launch wants: the checkout the
-    /// client was started in, writable, without typing the path.
+    /// The shortcut for the mount almost every launch wants: the history of the
+    /// checkout the client was started in, writable, without typing the path.
+    /// The `.git` alone — the workspace already carries the tree.
     #[test]
-    fn g_adds_the_working_directorys_git_root_as_a_writable_mount() {
+    fn g_adds_the_working_directorys_git_directory_as_a_writable_mount() {
         let mut app = editable_app();
         let root = std::env::current_dir()
             .unwrap()
@@ -631,7 +632,11 @@ mod tests {
         app.add_git_root_mount();
         let screen = tall(&app);
         assert!(
-            screen.contains(&format!("{} (rw)", root.display())),
+            screen.contains(&format!("{} (rw)", root.join(".git").display())),
+            "{screen}"
+        );
+        assert!(
+            !screen.contains(&format!("{} (rw)", root.display())),
             "{screen}"
         );
 

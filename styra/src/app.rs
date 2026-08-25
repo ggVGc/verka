@@ -1793,19 +1793,22 @@ impl App {
         self.launch.templates = chosen;
     }
 
-    /// Add the git checkout the client was started in as a writable mount —
-    /// the one mount an operator almost always wants and the most tedious to
-    /// type, since it means knowing where the repository root actually is.
+    /// Add the history of the git checkout the client was started in as a
+    /// writable mount — the one mount an operator almost always wants and the
+    /// most tedious to type, since it means knowing where the repository root
+    /// actually is.
     ///
-    /// The root, not the working directory: an agent handed only a subdirectory
-    /// of a checkout cannot see `.git`, so anything it tries to do with history
-    /// fails in a way that reads as a broken agent rather than a mount that was
-    /// cut too narrowly.
+    /// The checkout's `.git` and not the checkout itself: the workspace the
+    /// agent already has is where the files live, so mounting the whole root
+    /// would hand it a second copy of the tree. What it is missing is the
+    /// history — an agent that cannot see `.git` fails every command that
+    /// reads it in a way that reads as a broken agent rather than a mount that
+    /// was cut too narrowly.
     ///
-    /// Inside a linked worktree the root is not enough either: its `.git` is a
-    /// file pointing at a directory that lives under the main checkout, so the
-    /// history is outside the mount and every command that reads it fails. The
-    /// directories that file leads to are added alongside the root.
+    /// Inside a linked worktree that `.git` is a file pointing at a directory
+    /// that lives under the main checkout, so the history is outside the mount
+    /// and every command that reads it still fails. The directories that file
+    /// leads to are added alongside it.
     pub fn add_git_root_mount(&mut self) {
         if !self.allow_launch_edit() {
             return;
@@ -1813,7 +1816,7 @@ impl App {
         let Some(root) = self.git_root() else {
             return self.show_action_message("no .git found at or above the working directory");
         };
-        let mut sources = vec![root.clone()];
+        let mut sources = vec![root.join(".git")];
         for directory in git_history_directories(&root) {
             if !sources.iter().any(|source| directory.starts_with(source)) {
                 sources.push(directory);
