@@ -118,7 +118,6 @@ pub(crate) fn render_list(frame: &mut Frame, app: &App, area: Rect) {
     // bold — right along with its summary line, with no way to exempt it.
     // `entry_item` paints the backdrop on the summary row alone instead, so
     // the selection reads as a single line rather than as a block.
-    let list = List::new(items).block(block);
     let mut state = ListState::default();
     let position = visible
         .iter()
@@ -130,10 +129,56 @@ pub(crate) fn render_list(frame: &mut Frame, app: &App, area: Rect) {
         &item_heights,
         viewport_height,
     );
+    clip_boundary_entry(&mut items, &visible, offset, viewport_height, width, app);
+    let list = List::new(items).block(block);
     *state.offset_mut() = offset;
     state.select(position);
     frame.render_stateful_widget(list, area, &mut state);
     app.list_offset.set(state.offset());
+}
+
+/// Ratatui's `List` only renders complete items. If the next expanded entry is
+/// taller than the rows left at the bottom of the viewport, it would therefore
+/// disappear entirely even though some of its text could be shown. Rebuild
+/// that boundary entry with the actual remaining row budget. When it is the
+/// final entry, retain a row for the status tail whenever there is room for
+/// both its summary and the tail.
+fn clip_boundary_entry(
+    items: &mut [ListItem<'static>],
+    visible: &[(usize, &Entry)],
+    offset: usize,
+    viewport_height: usize,
+    width: usize,
+    app: &App,
+) {
+    let mut remaining = viewport_height;
+    for item_index in offset..items.len() {
+        let height = items[item_index].height();
+        if height <= remaining {
+            remaining -= height;
+            continue;
+        }
+        if remaining == 0 || item_index >= visible.len() {
+            return;
+        }
+
+        let (entry_index, entry) = visible[item_index];
+        let is_last_entry = item_index + 1 == visible.len();
+        let max_rows = if is_last_entry && remaining > 1 {
+            remaining - 1
+        } else {
+            remaining
+        };
+        items[item_index] = entry_item_with_max_rows(
+            entry,
+            app.entry_expanded(entry_index),
+            width,
+            max_rows,
+            app.selection.provider.protocol(),
+            entry_index == app.selected,
+        );
+        return;
+    }
 }
 
 /// Keep the selected item within a small margin of the viewport edges, like
@@ -303,6 +348,24 @@ fn entry_item(
     protocol: Protocol,
     selected: bool,
 ) -> ListItem<'static> {
+    entry_item_with_max_rows(
+        entry,
+        expanded,
+        width,
+        viewport_height.saturating_sub(1).max(1),
+        protocol,
+        selected,
+    )
+}
+
+fn entry_item_with_max_rows(
+    entry: &Entry,
+    expanded: bool,
+    width: usize,
+    max_rows: usize,
+    protocol: Protocol,
+    selected: bool,
+) -> ListItem<'static> {
     let is_conversation = matches!(
         entry.event,
         AgentEvent::UserMessage { .. } | AgentEvent::AgentMessage { .. }
@@ -362,15 +425,23 @@ fn entry_item(
         .collect();
     // The cap above bounds logical detail lines, which say nothing about how
     // many rows they occupy once wrapped, so the height has to be bounded
-    // again here. One row is left spare for the status tail.
-    let max_rows = viewport_height.saturating_sub(1).max(1);
+    // again here.
     if wrapped.len() > max_rows {
-        let hidden = wrapped.len() - (max_rows - 1);
-        wrapped.truncate(max_rows - 1);
-        wrapped.push(Line::from(Span::styled(
-            format!("{DETAIL_INDENT}… {hidden} more rows — press p for the full entry"),
-            Style::default().fg(Color::Gray),
-        )));
+        if max_rows == 1 {
+            wrapped.truncate(1);
+            if let Some(summary) = wrapped.first_mut() {
+                summary
+                    .spans
+                    .push(Span::styled(" …", Style::default().fg(Color::Gray)));
+            }
+        } else {
+            let hidden = wrapped.len() - (max_rows - 1);
+            wrapped.truncate(max_rows - 1);
+            wrapped.push(Line::from(Span::styled(
+                format!("{DETAIL_INDENT}… {hidden} more rows — press p for the full entry"),
+                Style::default().fg(Color::Gray),
+            )));
+        }
     }
     if let Some(first) = wrapped.first_mut() {
         *first = with_selection_backdrop(std::mem::take(first), selected);
@@ -1485,6 +1556,59 @@ mod tests {
         let screen = rendered(&app);
         assert!(screen.contains("line number 0"), "{screen}");
         assert!(screen.contains("the selected message"), "{screen}");
+    }
+
+    #[test]
+    fn a_long_expanded_entry_after_the_selection_still_shows_its_summary() {
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
+        app.push_event(AgentEvent::AgentMessage {
+            text: "the selected message".into(),
+        });
+        app.push_event(AgentEvent::AgentMessage {
+            text: "a short message in between".into(),
+        });
+        app.push_event(AgentEvent::AgentMessage {
+            text: (0..60).map(|i| format!("tail line number {i}\n")).collect(),
+        });
+        app.expand_all();
+        app.select_prev_line();
+        app.select_prev_line();
+
+        let screen = rendered(&app);
+        assert!(screen.contains("the selected message"), "{screen}");
+        assert!(screen.contains("tail line number 0"), "{screen}");
+        assert!(screen.contains("tail line number 1"), "{screen}");
+        assert!(screen.contains("press p for the full entry"), "{screen}");
+    }
+
+    #[test]
+    fn clipping_an_expanded_entry_to_one_row_preserves_its_summary() {
+        let entry = Entry {
+            event: AgentEvent::AgentMessage {
+                text: "the visible summary\nhidden detail".into(),
+            },
+            expanded: true,
+            raw_index: None,
+        };
+        let item = entry_item_with_max_rows(&entry, true, 78, 1, Protocol::CodexAppServer, false);
+
+        assert_eq!(item.height(), 1);
+        let mut terminal = Terminal::new(TestBackend::new(80, 1)).unwrap();
+        terminal
+            .draw(|frame| frame.render_widget(List::new(vec![item]), frame.area()))
+            .unwrap();
+        let screen = terminal
+            .backend()
+            .buffer()
+            .clone()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(screen.contains("the visible summary"), "{screen}");
     }
 
     #[test]
