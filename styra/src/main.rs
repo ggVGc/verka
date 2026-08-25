@@ -89,6 +89,13 @@ fn pending_app(
     app
 }
 
+/// Carry client-side display state across the active-interactions picker.
+/// Attaching rebuilds the [`App`] from the selected interaction, but this
+/// filter belongs to the operator's view rather than to either Session.
+fn carry_active_session_view(previous: &App, next: &mut App) {
+    next.conversation_only = previous.conversation_only;
+}
+
 /// What a new interaction starts from: the operator's saved defaults with this
 /// invocation's flags over them.
 ///
@@ -433,6 +440,7 @@ fn main() -> Result<()> {
                 match session::attach_live_interaction(&client, interaction) {
                     Ok((mut new_app, new_live)) => {
                         new_app.launch = launch.clone();
+                        carry_active_session_view(&app, &mut new_app);
                         app = new_app;
                         live = new_live;
                     }
@@ -618,6 +626,18 @@ mod cli_tests {
             event_loop::interaction_stopped_by(&RunOutcome::NewSession, &live),
             None
         );
+    }
+
+    #[test]
+    fn active_session_selection_keeps_the_conversation_only_filter() {
+        let selection = Selection::parse("codex").unwrap();
+        let mut previous = App::new(selection.clone(), "previous");
+        previous.toggle_conversation_only();
+        let mut next = App::new(selection, "next");
+
+        carry_active_session_view(&previous, &mut next);
+
+        assert!(next.conversation_only);
     }
 
     #[test]
