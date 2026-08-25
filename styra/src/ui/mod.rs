@@ -164,14 +164,15 @@ fn title_line(
 }
 
 /// How long the current status has held, for the views' shared title — or
-/// `None` where the figure would say nothing: before a launch, and once the
-/// process has ended, since neither is a state the operator is waiting out.
+/// `None` where the figure would say nothing: before a launch, once the
+/// process has ended, and while idle — none of those is a state the operator
+/// is waiting out, so how long it has held is not worth counting.
 fn status_elapsed(app: &App) -> Option<String> {
     match app.status {
-        Status::Running | Status::Idle | Status::Background | Status::Stopped => {
+        Status::Running | Status::Background | Status::Stopped => {
             Some(format_duration(app.progress().in_status))
         }
-        Status::Pending | Status::Ended { .. } => None,
+        Status::Pending | Status::Idle | Status::Ended { .. } => None,
     }
 }
 

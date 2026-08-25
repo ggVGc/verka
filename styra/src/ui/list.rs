@@ -302,8 +302,10 @@ fn status_tail(app: &App) -> Line<'static> {
             Color::DarkGray,
         ),
         Status::Running => (running_tail(&progress), Color::Yellow),
+        // Idle carries no elapsed figure: nothing is happening, so a
+        // climbing counter only draws the eye to a number that means nothing.
         Status::Idle => (
-            format!("  ── idle {elapsed} · waiting for your message ──"),
+            "  ── idle · waiting for your message ──".to_string(),
             Color::Green,
         ),
         Status::Background => (
@@ -1020,7 +1022,7 @@ mod tests {
     }
 
     #[test]
-    fn an_idle_session_shows_how_long_it_has_been_waiting() {
+    fn an_idle_session_says_it_waits_without_counting_the_wait() {
         let mut app = App::new(
             styra_server::agent::Selection::parse("codex").unwrap(),
             "s1",
@@ -1035,9 +1037,10 @@ mod tests {
 
         let screen = rendered(&app);
         assert!(
-            screen.contains("idle 0s · waiting for your message"),
+            screen.contains("idle · waiting for your message"),
             "{screen}"
         );
+        assert!(!screen.contains("idle 0s"), "{screen}");
     }
 
     fn rendered(app: &App) -> String {
