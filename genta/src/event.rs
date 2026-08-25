@@ -143,9 +143,15 @@ pub enum AgentEvent {
         text: String,
     },
     /// Claude's extended-thinking prose, surfaced only when a message carries
-    /// no visible text alongside it — see [`AgentEvent::is_minor`].
+    /// no visible text alongside it — see [`AgentEvent::is_minor`]. Claude also
+    /// reports a running thinking-token count on its own, with no prose; such
+    /// an update carries only `tokens`, and clients fold consecutive thinking
+    /// events into one line rather than showing every tick (see
+    /// [`AgentEvent::updates_thinking`]).
     Thinking {
         text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tokens: Option<u64>,
     },
     Error {
         message: String,
@@ -259,6 +265,14 @@ impl AgentEvent {
             if wire_type == "rate_limit_event" || wire_type.starts_with("system:"))
     }
 
+    /// Whether this event refreshes the current thinking line rather than
+    /// adding one of its own. Claude emits extended-thinking prose and a
+    /// running token count as separate lines, many per turn; clients fold a
+    /// run of them into a single line that changes in place.
+    pub fn updates_thinking(&self) -> bool {
+        matches!(self, AgentEvent::Thinking { .. })
+    }
+
     /// A single collapsed-line summary. Never contains newlines.
     pub fn summary(&self) -> String {
         let line = match self {
@@ -304,9 +318,14 @@ impl AgentEvent {
                 format!("{name}: {} ({status})", first_line(detail))
             }
             AgentEvent::ToolCompleted { name, status, .. } => format!("{name} ({status})"),
-            AgentEvent::PlanUpdated { text }
-            | AgentEvent::AgentMessage { text }
-            | AgentEvent::Thinking { text } => first_line(text),
+            AgentEvent::PlanUpdated { text } | AgentEvent::AgentMessage { text } => {
+                first_line(text)
+            }
+            AgentEvent::Thinking { text, tokens } => match (first_line(text), tokens) {
+                (line, Some(tokens)) if line.is_empty() => format!("thinking · {tokens} tokens"),
+                (line, Some(tokens)) => format!("{line} · {tokens} tokens"),
+                (line, None) => line,
+            },
             AgentEvent::Error { message } => first_line(message),
             AgentEvent::Unknown { wire_type } => wire_type.clone(),
             AgentEvent::Malformed { error } => first_line(error),
@@ -411,9 +430,15 @@ impl AgentEvent {
                 }
                 blocks
             }
-            AgentEvent::PlanUpdated { text }
-            | AgentEvent::AgentMessage { text }
-            | AgentEvent::Thinking { text } => markdown_blocks(text),
+            AgentEvent::PlanUpdated { text } | AgentEvent::AgentMessage { text } => {
+                markdown_blocks(text)
+            }
+            AgentEvent::Thinking { text, tokens } => match (text.is_empty(), tokens) {
+                (true, Some(tokens)) => {
+                    vec![DetailBlock::Text(format!("{tokens} thinking tokens"))]
+                }
+                _ => markdown_blocks(text),
+            },
             AgentEvent::Error { message } => vec![DetailBlock::Text(message.clone())],
             AgentEvent::Unknown { wire_type } => {
                 vec![DetailBlock::Text(format!(
@@ -794,6 +819,20 @@ fn decode_claude_value(value: &Value) -> AgentEvent {
                     model: string(value, "model").map(clean_terminal_text),
                     effort: None,
                 }
+            } else if subtype == "thinking_tokens" {
+                // Claude reports the running extended-thinking token count as
+                // its own line, repeatedly, with no prose. Field naming has
+                // varied across releases, so take whichever count is present;
+                // a line with none stays an unrecognised system event.
+                match claude_thinking_tokens(value) {
+                    Some(tokens) => AgentEvent::Thinking {
+                        text: String::new(),
+                        tokens: Some(tokens),
+                    },
+                    None => AgentEvent::Unknown {
+                        wire_type: "system:thinking_tokens".into(),
+                    },
+                }
             } else {
                 AgentEvent::Unknown {
                     wire_type: clean_terminal_text(&format!("system:{subtype}")),
@@ -812,6 +851,19 @@ fn decode_claude_value(value: &Value) -> AgentEvent {
 /// Choose the salient block of an assistant message: a tool call is the action
 /// worth surfacing, then visible prose, then reasoning. The full message stays
 /// available verbatim in the raw view.
+/// The thinking-token count from a `system:thinking_tokens` line, under any of
+/// the keys Claude has used for it.
+fn claude_thinking_tokens(value: &Value) -> Option<u64> {
+    [
+        "thinking_tokens",
+        "tokens",
+        "count",
+        "total_thinking_tokens",
+    ]
+    .iter()
+    .find_map(|key| value.get(key).and_then(Value::as_u64))
+}
+
 fn decode_claude_assistant(message: &Value) -> AgentEvent {
     match message.get("content") {
         Some(Value::String(text)) => {
@@ -838,6 +890,7 @@ fn decode_claude_assistant(message: &Value) -> AgentEvent {
             if let Some(thinking) = thinking {
                 return AgentEvent::Thinking {
                     text: clean_terminal_text(thinking),
+                    tokens: None,
                 };
             }
         }
@@ -1488,6 +1541,24 @@ mod tests {
     }
 
     #[test]
+    fn claude_system_thinking_tokens_carries_the_running_count() {
+        let event = decode_line(
+            Protocol::ClaudeJsonl,
+            r#"{"type":"system","subtype":"thinking_tokens","thinking_tokens":1280}"#,
+        );
+        assert_eq!(
+            event,
+            AgentEvent::Thinking {
+                text: String::new(),
+                tokens: Some(1280),
+            }
+        );
+        assert!(event.is_minor());
+        assert!(event.updates_thinking());
+        assert_eq!(event.summary(), "thinking · 1280 tokens");
+    }
+
+    #[test]
     fn claude_system_thinking_tokens_is_minor() {
         let event = decode_line(
             Protocol::ClaudeJsonl,
@@ -1582,7 +1653,8 @@ mod tests {
         assert_eq!(
             event,
             AgentEvent::Thinking {
-                text: "weigh the options".into()
+                text: "weigh the options".into(),
+                tokens: None,
             }
         );
         assert!(event.is_minor());

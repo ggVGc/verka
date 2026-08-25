@@ -445,6 +445,11 @@ transcript reads as a document front-to-back, not a tail-following stream, so
 there is no "stays put while scrolled up" logic to speak of — new content
 just extends past whatever is already below the viewport.
 
+Claude streams extended thinking as many lines per turn — reasoning prose plus
+a running `thinking_tokens` count. They all describe one ongoing thought, so a
+consecutive run of them folds into a single list line whose token figure is
+rewritten in place; the line only breaks when other work intervenes.
+
 `c` toggles a conversation-only filter in the main event list, hiding tools,
 thinking, plans, and lifecycle events while retaining the operator's messages
 and the agent's replies. Like the minor-event filter, it does not switch views.

@@ -128,6 +128,7 @@ mod tests {
         });
         app.push_event(AgentEvent::Thinking {
             text: "hide this reasoning".into(),
+            tokens: None,
         });
         app.push_event(AgentEvent::AgentMessage {
             text: "keep this reply".into(),

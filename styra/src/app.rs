@@ -1230,6 +1230,42 @@ impl App {
                 return;
             }
         }
+        // Claude reports extended thinking as a stream of lines — prose blocks
+        // and a running token count — many per turn. They all describe the
+        // same ongoing reasoning, so a run of them refreshes one line in place
+        // (keeping the last prose seen when only the count moved) instead of
+        // filling the list with a line per tick.
+        if event.updates_thinking() {
+            if let Some(entry) = self.entries.last_mut() {
+                if entry.event.updates_thinking() {
+                    if let (
+                        AgentEvent::Thinking { text, tokens },
+                        AgentEvent::Thinking {
+                            text: shown,
+                            tokens: counted,
+                        },
+                    ) = (&event, &mut entry.event)
+                    {
+                        if !text.is_empty() {
+                            *shown = text.clone();
+                        }
+                        if tokens.is_some() {
+                            *counted = *tokens;
+                        }
+                    }
+                    // The refreshed line stands for the newest wire message.
+                    entry.raw_index = self.raw.len().checked_sub(1);
+                    if self.status.is_active() {
+                        self.status = Status::Running;
+                    }
+                    if self.follow && self.is_visible(self.entries.len() - 1) {
+                        self.selected = self.entries.len() - 1;
+                        self.preview.reset();
+                    }
+                    return;
+                }
+            }
+        }
         match &event {
             AgentEvent::TurnCompleted { usage } => {
                 // The app-server protocol's `turn/completed` carries no usage
@@ -2221,6 +2257,41 @@ mod tests {
         app.select_next_line();
         assert!(app.follow);
         assert_eq!(app.selected, app.entries.len() - 1);
+    }
+
+    #[test]
+    fn thinking_updates_fold_into_one_line_that_shows_the_latest_count() {
+        let mut app = app();
+        app.push_event(AgentEvent::AgentMessage { text: "a".into() });
+        app.push_event(AgentEvent::Thinking {
+            text: "weigh the options".into(),
+            tokens: None,
+        });
+        app.push_event(AgentEvent::Thinking {
+            text: String::new(),
+            tokens: Some(64),
+        });
+        app.push_event(AgentEvent::Thinking {
+            text: String::new(),
+            tokens: Some(512),
+        });
+
+        assert_eq!(app.entries.len(), 2);
+        assert_eq!(
+            app.entries[1].event,
+            AgentEvent::Thinking {
+                text: "weigh the options".into(),
+                tokens: Some(512),
+            }
+        );
+
+        // A new run of thinking after other work starts its own line.
+        app.push_event(AgentEvent::AgentMessage { text: "b".into() });
+        app.push_event(AgentEvent::Thinking {
+            text: String::new(),
+            tokens: Some(8),
+        });
+        assert_eq!(app.entries.len(), 4);
     }
 
     #[test]
