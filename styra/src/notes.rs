@@ -286,7 +286,7 @@ pub fn edit_session_notes(
         terminal,
         Scope::Session,
         &sessions[selected].notes,
-        |frame| ui::render_picker(frame, sessions, selected, updates),
+        |frame| ui::render_picker(frame, sessions, selected, ui::Preview::Ready(updates)),
     )?
     else {
         return Ok(());

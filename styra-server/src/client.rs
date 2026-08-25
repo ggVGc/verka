@@ -259,9 +259,21 @@ impl Client {
     }
 
     pub fn updates(&self, id: &str, after: u64) -> Result<Updates> {
+        self.updates_filtered(id, after, true)
+    }
+
+    /// Updates without the verbatim wire lines, for a client that renders no
+    /// raw view. Replaying a long interaction from zero is dominated by those
+    /// lines, so not asking for them is the difference the preview pane feels.
+    pub fn updates_without_raw(&self, id: &str, after: u64) -> Result<Updates> {
+        self.updates_filtered(id, after, false)
+    }
+
+    fn updates_filtered(&self, id: &str, after: u64, raw: bool) -> Result<Updates> {
         match self.request(Request::Updates {
             id: id.to_owned(),
             after,
+            raw,
         })? {
             Response::Updates(value) => Ok(value),
             other => unexpected("updates", other),
@@ -285,7 +297,20 @@ impl Client {
     }
 
     pub fn stored_session(&self, id: &str) -> Result<StoredSession> {
-        match self.request(Request::StoredSession { id: id.to_owned() })? {
+        self.stored_session_filtered(id, true)
+    }
+
+    /// A stored session's decoded events only. The server then reads the
+    /// journal once instead of twice and ships half the payload.
+    pub fn stored_session_events(&self, id: &str) -> Result<StoredSession> {
+        self.stored_session_filtered(id, false)
+    }
+
+    fn stored_session_filtered(&self, id: &str, raw: bool) -> Result<StoredSession> {
+        match self.request(Request::StoredSession {
+            id: id.to_owned(),
+            raw,
+        })? {
             Response::StoredSession(value) => Ok(value),
             other => unexpected("stored_session", other),
         }

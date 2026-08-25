@@ -747,11 +747,12 @@ impl ServerState {
     }
 
     fn stored_summary(&self, id: &str) -> Result<SessionSummary> {
+        // Probe each Workspace for this exact id rather than listing every
+        // Session in it: the directory name *is* the id, so a stat per
+        // Workspace replaces reading every stored session's metadata.
         for workspace in crate::workspace::list(&self.inner.store_root)? {
             if let Some(session) =
-                journal::list_workspace_sessions(&self.inner.store_root, &workspace.id)?
-                    .into_iter()
-                    .find(|session| session.id == id)
+                journal::find_workspace_session(&self.inner.store_root, &workspace.id, id)?
             {
                 return Ok(session);
             }
@@ -873,15 +874,20 @@ impl ServerState {
                     .remove(&id);
                 Ok(Response::Accepted)
             }
-            Request::Updates { id, after } => {
+            Request::Updates { id, after, raw } => {
                 let interaction = self.interaction(&id)?;
                 let all = interaction
                     .updates
                     .lock()
                     .expect("interaction update lock poisoned");
+                // A client that renders no raw view (the picker preview) asks
+                // for none: raw lines are the bulk of an interaction's volume,
+                // and cloning then shipping them only to be dropped is what
+                // made replaying a long session from zero slow.
                 let updates = all
                     .iter()
                     .filter(|update| update.sequence > after)
+                    .filter(|update| raw || !matches!(update.update, InteractionUpdate::Raw(_)))
                     .cloned()
                     .collect();
                 let next = all.last().map(|update| update.sequence).unwrap_or(after);
@@ -905,11 +911,17 @@ impl ServerState {
             Request::ListSessions { workspace_id } => Ok(Response::StoredSessions(
                 journal::list_workspace_sessions(self.store_root(), &workspace_id)?,
             )),
-            Request::StoredSession { id } => {
+            Request::StoredSession { id, raw: want_raw } => {
                 let summary = self.stored_summary(&id)?;
                 let meta = journal::read_session_meta(&summary.path)?;
                 let events = journal::replay(&summary.path, meta.protocol)?;
-                let raw = journal::replay_raw(&summary.path)?;
+                // Reconstructing the raw lines re-reads and re-parses the whole
+                // journal, so only pay for it when the caller renders them.
+                let raw = if want_raw {
+                    journal::replay_raw(&summary.path)?
+                } else {
+                    Vec::new()
+                };
                 Ok(Response::StoredSession(StoredSession {
                     summary,
                     events,
@@ -1332,11 +1344,25 @@ mod tests {
         assert!(matches!(
             state
                 .handle(Request::StoredSession {
-                    id: "0000000000001-1-1".into()
+                    id: "0000000000001-1-1".into(),
+                    raw: true,
                 })
                 .unwrap(),
             Response::StoredSession(_)
         ));
+        // The same session asked for without raw lines: the decoded events are
+        // still there, the verbatim wire log is not shipped at all.
+        let Response::StoredSession(events_only) = state
+            .handle(Request::StoredSession {
+                id: "0000000000001-1-1".into(),
+                raw: false,
+            })
+            .unwrap()
+        else {
+            panic!("expected a stored session");
+        };
+        assert_eq!(events_only.events.len(), 2);
+        assert!(events_only.raw.is_empty());
         let replayed =
             replayed_session_updates(&session_dir, crate::event::Protocol::CodexAppServer).unwrap();
         assert_eq!(

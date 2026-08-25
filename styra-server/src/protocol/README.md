@@ -32,6 +32,12 @@ response returns updates after that sequence and a `next` cursor. Passing that
 `next` value as the following `after` value is safe. Multiple clients may hold
 independent cursors.
 
+Both `updates` and `stored_session` carry a `raw` flag, defaulting to `true`.
+Setting it to `false` omits the verbatim agent wire lines: `updates` filters out
+`raw` updates, and `stored_session` returns an empty `raw` list without
+re-reading the journal to rebuild it. A client that renders only decoded events
+should pass `false` — the wire lines dominate the size of a long interaction.
+
 A resumed interaction seeds its update stream from stored history. The resume
 response's `updates_after` cursor lets the resuming client skip history it has
 already rendered; a newly attaching client starts from zero.

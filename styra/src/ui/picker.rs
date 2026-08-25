@@ -17,6 +17,15 @@ use ratatui::Frame;
 use crate::notes;
 use styra_server::{InteractionSummary, InteractionUpdate, SessionSummary, WorkspaceSummary};
 
+/// Whether the picker has the selected session's conversation yet. Loading is
+/// a round-trip to the server, so "nothing to show" and "nothing yet" are
+/// genuinely different states and must not read the same.
+#[derive(Debug, Clone, Copy)]
+pub enum Preview<'a> {
+    Loading,
+    Ready(&'a [InteractionUpdate]),
+}
+
 /// Render the session picker screen: every stored session, newest first,
 /// with `selected` highlighted. Standalone from [`crate::app::App`] — the
 /// picker runs before any session is loaded, so it has no state of its own
@@ -25,7 +34,7 @@ pub fn render_picker(
     frame: &mut Frame,
     sessions: &[SessionSummary],
     selected: usize,
-    updates: &[InteractionUpdate],
+    preview: Preview<'_>,
 ) {
     let area = frame.area();
     let panes = Layout::default()
@@ -39,7 +48,7 @@ pub fn render_picker(
 
     if sessions.is_empty() {
         render_placeholder(frame, block, panes[0], "  no sessions found");
-        render_session_preview(frame, None, updates, panes[1]);
+        render_session_preview(frame, None, preview, panes[1]);
         return;
     }
 
@@ -58,13 +67,13 @@ pub fn render_picker(
     state.select(Some(selected));
     frame.render_stateful_widget(list, panes[0], &mut state);
     let session = sessions.get(selected);
-    render_session_preview(frame, session, updates, panes[1]);
+    render_session_preview(frame, session, preview, panes[1]);
 }
 
 fn render_session_preview(
     frame: &mut Frame,
     session: Option<&SessionSummary>,
-    updates: &[InteractionUpdate],
+    preview: Preview<'_>,
     area: Rect,
 ) {
     let panes = Layout::default()
@@ -81,7 +90,7 @@ fn render_session_preview(
         frame,
         session.map(|item| item.id.as_str()),
         session.map(|item| item.selection.provider.protocol()),
-        updates,
+        preview,
         panes[1],
     );
 }
@@ -300,7 +309,7 @@ pub fn render_interactions_picker(
             panes[0],
             "  no live interactions on the server",
         );
-        render_log_preview(frame, None, None, updates, panes[1]);
+        render_log_preview(frame, None, None, Preview::Ready(updates), panes[1]);
         return;
     }
 
@@ -329,7 +338,7 @@ pub fn render_interactions_picker(
         frame,
         interaction.map(|item| item.id.as_str()),
         interaction.map(|item| item.selection.provider.protocol()),
-        updates,
+        Preview::Ready(updates),
         panes[1],
     );
 }
@@ -338,7 +347,7 @@ fn render_log_preview(
     frame: &mut Frame,
     id: Option<&str>,
     protocol: Option<styra_server::event::Protocol>,
-    updates: &[InteractionUpdate],
+    preview: Preview<'_>,
     area: Rect,
 ) {
     let title = id
@@ -348,6 +357,16 @@ fn render_log_preview(
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::DarkGray))
         .title(title);
+
+    let updates = match preview {
+        // Nothing has been asked of the server yet, or the answer is still on
+        // its way: say so, rather than claiming an empty conversation.
+        Preview::Loading => {
+            render_placeholder(frame, block, area, "  loading…");
+            return;
+        }
+        Preview::Ready(updates) => updates,
+    };
 
     // The preview follows the tail of the conversation only — the same filter
     // the main list applies in conversation-only mode — so a glance down the
@@ -566,12 +585,13 @@ mod tests {
     fn rendered_picker(sessions: &[SessionSummary], selected: usize) -> String {
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
         terminal
-            .draw(|frame| render_picker(frame, sessions, selected, &[]))
+            .draw(|frame| render_picker(frame, sessions, selected, Preview::Ready(&[])))
             .unwrap();
-        terminal
-            .backend()
-            .buffer()
-            .clone()
+        screen_text(terminal.backend().buffer())
+    }
+
+    fn screen_text(buffer: &ratatui::buffer::Buffer) -> String {
+        buffer
             .content()
             .iter()
             .map(|cell| cell.symbol())
@@ -622,7 +642,7 @@ mod tests {
         ];
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
         terminal
-            .draw(|frame| render_picker(frame, &sessions, 0, &updates))
+            .draw(|frame| render_picker(frame, &sessions, 0, Preview::Ready(&updates)))
             .unwrap();
         let screen = terminal
             .backend()
@@ -770,6 +790,27 @@ mod tests {
     }
 
     #[test]
+    fn an_unloaded_preview_reads_as_loading_rather_than_as_empty() {
+        let sessions = vec![picker_summary("s-1", "codex", "2m ago")];
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+
+        terminal
+            .draw(|frame| render_picker(frame, &sessions, 0, Preview::Loading))
+            .unwrap();
+        let loading = screen_text(terminal.backend().buffer());
+        assert!(loading.contains("loading"), "{loading}");
+        assert!(!loading.contains("no messages yet"), "{loading}");
+
+        // The same session once loaded, with nothing in it, says the opposite.
+        terminal
+            .draw(|frame| render_picker(frame, &sessions, 0, Preview::Ready(&[])))
+            .unwrap();
+        let loaded = screen_text(terminal.backend().buffer());
+        assert!(loaded.contains("no messages yet"), "{loaded}");
+        assert!(!loaded.contains("loading"), "{loaded}");
+    }
+
+    #[test]
     fn interactions_picker_previews_the_selected_interactions_log() {
         let interactions = vec![
             interaction_summary("s-1", "codex", true),
@@ -802,7 +843,7 @@ mod tests {
 
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
         terminal
-            .draw(|frame| render_picker(frame, &sessions, 1, &[]))
+            .draw(|frame| render_picker(frame, &sessions, 1, Preview::Ready(&[])))
             .unwrap();
         let buffer = terminal.backend().buffer().clone();
 

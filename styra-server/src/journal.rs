@@ -191,32 +191,53 @@ pub fn list_workspace_sessions(
     )
 }
 
+/// Summarize the one Session stored in `path`, without touching its siblings.
+/// Looking a single session up is the common case (a picker preview, a resume)
+/// and must not cost a scan of the whole Workspace.
+pub fn session_summary_at(path: &Path, workspace_id: &str) -> Result<SessionSummary> {
+    let id = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let meta = read_stored_session_meta(path)?;
+    let created_at_ms = session_created_at_ms(&id);
+    Ok(SessionSummary {
+        id,
+        name: meta.name,
+        notes: meta.notes,
+        workspace_id: workspace_id.to_owned(),
+        path: path.to_path_buf(),
+        selection: meta.agent.selection,
+        age: humanize_age(now_ms(), created_at_ms),
+        created_at_ms,
+    })
+}
+
+/// Summarize `session_id` in `workspace_id`, or `None` when that Workspace
+/// stores no such Session.
+pub fn find_workspace_session(
+    store_root: &Path,
+    workspace_id: &str,
+    session_id: &str,
+) -> Result<Option<SessionSummary>> {
+    let path = crate::workspace::sessions_dir(store_root, workspace_id).join(session_id);
+    if !path.is_dir() {
+        return Ok(None);
+    }
+    session_summary_at(&path, workspace_id).map(Some)
+}
+
 fn list_sessions_at(dir: &Path, workspace_id: &str) -> Result<Vec<SessionSummary>> {
     if !dir.exists() {
         return Ok(Vec::new());
     }
-    let now = now_ms();
     let mut sessions = Vec::new();
     for entry in std::fs::read_dir(&dir).with_context(|| format!("reading {}", dir.display()))? {
         let entry = entry.with_context(|| format!("reading an entry in {}", dir.display()))?;
         if !entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
             continue;
         }
-        let path = entry.path();
-        let id = entry.file_name().to_string_lossy().into_owned();
-        let meta = read_stored_session_meta(&path)?;
-        let selection = meta.agent.selection;
-        let created_at_ms = session_created_at_ms(&id);
-        sessions.push(SessionSummary {
-            id,
-            name: meta.name,
-            notes: meta.notes,
-            workspace_id: workspace_id.to_owned(),
-            path,
-            selection,
-            age: humanize_age(now, created_at_ms),
-            created_at_ms,
-        });
+        sessions.push(session_summary_at(&entry.path(), workspace_id)?);
     }
     sort_newest_first(&mut sessions);
     Ok(sessions)

@@ -25,6 +25,12 @@ pub use crate::agent::{Effort, Provider, Selection as AgentSelection};
 pub use crate::event::AgentEvent as ProtocolAgentEvent;
 pub use crate::{Mount, MountAccess};
 
+/// `serde` default for the protocol's opt-out booleans, whose absence must
+/// mean "as before".
+fn yes() -> bool {
+    true
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Health {
     pub service: String,
@@ -146,6 +152,7 @@ pub struct Updates {
 pub struct StoredSession {
     pub summary: SessionSummary,
     pub events: Vec<AgentEvent>,
+    /// Empty when the request asked for no raw lines.
     pub raw: Vec<RawLine>,
 }
 
@@ -237,6 +244,12 @@ pub enum Request {
     Updates {
         id: String,
         after: u64,
+        /// Include `InteractionUpdate::Raw` wire lines. Clients with no raw
+        /// view (a preview pane) pass `false` and skip the bulk of a long
+        /// interaction's volume. Defaults to `true`, which is what a client
+        /// that predates the field expects.
+        #[serde(default = "yes")]
+        raw: bool,
     },
     ListInteractions,
     ListSessions {
@@ -244,6 +257,11 @@ pub enum Request {
     },
     StoredSession {
         id: String,
+        /// Include the journal's verbatim wire lines. Reconstructing them
+        /// re-reads the whole journal, so a caller that only renders decoded
+        /// events passes `false`. Defaults to `true` for older clients.
+        #[serde(default = "yes")]
+        raw: bool,
     },
     Shell {
         id: String,
@@ -316,12 +334,21 @@ mod tests {
         let request = Request::Updates {
             id: "s-1".into(),
             after: 8,
+            raw: true,
         };
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(json["operation"], "updates");
         assert_eq!(json["data"]["id"], "s-1");
         assert_eq!(json["data"]["after"], 8);
         assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
+        // A client that predates the raw opt-out still gets raw lines.
+        assert_eq!(
+            serde_json::from_str::<Request>(
+                r#"{"operation":"updates","data":{"id":"s-1","after":8}}"#
+            )
+            .unwrap(),
+            request
+        );
         assert!(
             serde_json::from_str::<Request>(r#"{"api_version":"v3","operation":"health"}"#)
                 .is_err()

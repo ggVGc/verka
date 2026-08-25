@@ -3,12 +3,17 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use std::io::Stdout;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use styra_server::{Client, InteractionSummary, InteractionUpdate, LogEntry, WorkspaceSummary};
 
 use crate::notes;
 use crate::ui;
+
+/// How long the cursor must rest on a Session before its preview is loaded.
+/// Short enough to feel immediate when the cursor stops, long enough that
+/// scrolling through the list costs no loads at all.
+const PREVIEW_SETTLE: Duration = Duration::from_millis(120);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkspaceChoice {
@@ -28,18 +33,30 @@ pub fn run_session_picker(
     let mut preview_cursor = 0u64;
     let mut preview_updates = Vec::new();
     let mut preview_live = false;
+    // Set while the cursor has moved but its Session has not been loaded yet.
+    // Loading is a blocking round-trip, so holding `j` must not queue one load
+    // per row it passes over; the load waits for the cursor to settle.
+    let mut settle_from: Option<Instant> = None;
     loop {
         if let Some(selected_session) = sessions.get(selected) {
             if preview_id != selected_session.id {
                 preview_id.clone_from(&selected_session.id);
                 preview_cursor = 0;
                 preview_updates.clear();
+                preview_live = false;
+                settle_from = Some(Instant::now());
+            }
+            if settle_from.is_some_and(|since| since.elapsed() >= PREVIEW_SETTLE) {
+                settle_from = None;
                 preview_live = client
                     .list_interactions()?
                     .iter()
                     .any(|interaction| interaction.id == preview_id);
                 if !preview_live {
-                    match client.stored_session(&preview_id) {
+                    // The preview renders decoded events only, so the raw wire
+                    // lines are left on the server rather than shipped here to
+                    // be dropped.
+                    match client.stored_session_events(&preview_id) {
                         Ok(stored) => {
                             preview_updates.extend(
                                 stored
@@ -61,15 +78,11 @@ pub fn run_session_picker(
                 }
             }
             if preview_live {
-                match client.updates(&preview_id, preview_cursor) {
+                match client.updates_without_raw(&preview_id, preview_cursor) {
                     Ok(batch) => {
                         preview_cursor = batch.next;
-                        preview_updates.extend(batch.updates.into_iter().filter_map(|sequenced| {
-                            match sequenced.update {
-                                InteractionUpdate::Raw(_) => None,
-                                update => Some(update),
-                            }
-                        }));
+                        preview_updates
+                            .extend(batch.updates.into_iter().map(|sequenced| sequenced.update));
                     }
                     Err(error) => {
                         let message = format!("could not load current log: {error:#}");
@@ -84,7 +97,14 @@ pub fn run_session_picker(
             }
         }
 
-        terminal.draw(|frame| ui::render_picker(frame, sessions, selected, &preview_updates))?;
+        // Until the settle timer fires and the load returns, the pane says so:
+        // an empty conversation and an unread one look nothing alike.
+        let preview = if settle_from.is_some() {
+            ui::Preview::Loading
+        } else {
+            ui::Preview::Ready(&preview_updates)
+        };
+        terminal.draw(|frame| ui::render_picker(frame, sessions, selected, preview))?;
 
         if !event::poll(Duration::from_millis(100))? {
             continue;
@@ -134,7 +154,7 @@ fn read_session_name(
     let mut value = initial.to_owned();
     loop {
         terminal.draw(|frame| {
-            ui::render_picker(frame, sessions, selected, &[]);
+            ui::render_picker(frame, sessions, selected, ui::Preview::Ready(&[]));
             ui::render_name_prompt(frame, &value);
         })?;
         let Event::Key(key) = event::read()? else {
