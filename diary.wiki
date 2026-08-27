@@ -1,3 +1,8 @@
+2026-08-27
+A unit of work is not a git commit, or a branc/PR.
+It is a development session, now often driven by interaction with a coding agent, and the output changes of that session.
+That is what should be reviewed as a unit.
+
 2026-08-01
 There's often talk about humans not being able to keep up with all the code produced by LLMs, because things can move so fast now,
 hence we need to shift our focus and work differently. To some degree, that is true, we now have the possibility to focus more on
