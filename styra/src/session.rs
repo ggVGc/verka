@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
 use crate::app::{App, LaunchPolicy, Status};
+use crate::launch;
 use styra_server::agent::Selection;
 use styra_server::protocol::{
     CreateSession, CreateWorkspace, PlanSession, ResumeSession, SessionInfo,
@@ -109,23 +110,24 @@ pub fn ensure_driva_plan(app: &mut App, client: &Client, workspace_id: &str) {
     // the same way. Gated on the policy being editable rather than on `live`,
     // so the two questions ("can this be changed" and "is what is shown still
     // true") cannot drift apart.
-    if !app.can_edit_launch() || !app.needs_driva_plan() {
+    if !launch::wants_plan(app) {
         return;
     }
     let selection = app.selection.clone();
-    // Sent as the overlay alone, but remembered as the merge: the server's
-    // answer is for the whole policy, so that is what the plan is keyed on.
-    let launch = app.launch.clone();
-    let effective = app.effective_launch();
+    // Sent as this interaction's own half alone, but remembered as the merge:
+    // the server answers for the whole policy, having its own copy of the
+    // Workspace's, so the merge is what the plan is keyed on.
+    let overlay = app.launch.interaction.clone();
+    let effective = app.launch.effective();
     let planned = client.plan_session(&PlanSession {
         workspace_id: workspace_id.to_owned(),
         selection: selection.clone(),
-        launch,
+        launch: overlay,
     });
     match planned {
-        Ok(options) => app.set_planned_driva_options(selection, effective, Some(options)),
+        Ok(options) => app.launch.plan(selection, effective, Some(options)),
         Err(error) => {
-            app.set_planned_driva_options(selection, effective, None);
+            app.launch.plan(selection, effective, None);
             // An edit the server rejects (an unknown template, a path that is
             // not there) lands here. The retained plan is the last one that
             // did resolve, so say so where the operator is looking rather than
@@ -151,11 +153,11 @@ pub fn launch_live_session(
 ) -> Result<(App, SessionInfo)> {
     let info = create_session(client, launch, workspace_id, selection, seed)?;
     let mut app = App::new(info.selection.clone(), info.id.clone());
-    app.launch = launch.clone();
+    app.launch.interaction = launch.clone();
     app.session_name = info.name.clone();
     app.workspace_id = Some(info.workspace_id.clone());
     app.set_workspace_root(info.workspace.clone());
-    app.set_driva_options(info.driva.clone());
+    app.launch.record(info.driva.clone());
     app.push_log(LogEntry::info(format!(
         "journal: {}",
         info.journal_path.display()
@@ -177,7 +179,7 @@ pub fn attach_live_interaction(
     app.session_name = interaction.name.clone();
     app.workspace_id = Some(interaction.workspace_id.clone());
     app.set_workspace_root(interaction.workspace.clone());
-    app.set_driva_options(interaction.driva.clone());
+    app.launch.record(interaction.driva.clone());
     let batch = client.updates(&interaction.id, 0)?;
     let cursor = batch.next;
     for sequenced in batch.updates {
@@ -258,12 +260,12 @@ pub fn resume_and_send(app: &mut App, client: &Client, live: &mut Live, message:
     }
     match client.resume_session(&ResumeSession {
         id: app.session_id.clone(),
-        launch: app.launch.clone(),
+        launch: app.launch.interaction.clone(),
     }) {
         Ok(info) => {
             app.session_name = info.name.clone();
             app.set_workspace_root(info.workspace);
-            app.set_driva_options(info.driva);
+            app.launch.record(info.driva);
             app.push_log(LogEntry::info("resumed with provider-native context"));
             for message in &info.queued {
                 app.queue_message(message.clone());
@@ -322,8 +324,13 @@ pub fn pause_interaction(app: &mut App, client: &Client, live: &mut Live) {
 /// opened immediately, so the operator sees what they branched rather than
 /// having to find it again in the picker.
 pub fn branch_session(app: &mut App, client: &Client) {
-    let at_ms = (!app.follow)
-        .then(|| app.entries.get(app.selected).and_then(|entry| entry.raw_index))
+    let at_ms = (!app.timeline.follow)
+        .then(|| {
+            app.timeline
+                .entries
+                .get(app.timeline.selected)
+                .and_then(|entry| entry.raw_index)
+        })
         .flatten()
         .and_then(|index| app.raw.get(index))
         .map(|line| line.at_ms);

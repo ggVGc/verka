@@ -10,6 +10,7 @@ use crate::app::{App, Focus, Request, Status};
 use crate::config::Config;
 use crate::keymap::HELP;
 use crate::keys;
+use crate::launch::{self, LaunchScope};
 use crate::notes;
 use crate::picker;
 use crate::preferences;
@@ -141,8 +142,8 @@ pub fn run(
         }
         // So is the Driva view's mount prompt: what is typed into it is part
         // of a path, including the characters that are shortcuts elsewhere.
-        if app.driva_prompt.is_some() {
-            keys::handle_driva_prompt_key(app, key);
+        if app.launch.prompt.is_some() {
+            keys::handle_mount_prompt_key(app, key);
             continue;
         }
         // In input focus, `?` is message text rather than a shortcut.
@@ -267,27 +268,57 @@ pub fn run(
                     app.push_log(LogEntry::warn("no Driva templates are available"));
                     continue;
                 }
-                // The picker offers, and returns, the whole layering a launch
-                // would apply — the Workspace's templates included, since those
-                // are as much part of what the operator is choosing as their
-                // own. Turning the choice back into an overlay is `App`'s job.
-                let current = app.effective_launch().templates;
+                // Which templates the picker starts from is the layer being
+                // edited. For the Workspace's own that is exactly its list. For
+                // this interaction's, the picker offers and returns the whole
+                // layering a launch would apply — the Workspace's templates
+                // included, since those are as much part of what the operator is
+                // choosing as their own. Turning that choice back into an
+                // overlay is `App`'s job.
+                let current = match app.launch.scope {
+                    LaunchScope::Workspace => app.launch.workspace.templates.clone(),
+                    LaunchScope::Interaction => app.launch.effective().templates,
+                };
                 let chosen = picker::run_template_picker(terminal, &templates, &current)?;
                 if let Some(chosen) = chosen {
-                    app.set_launch_templates(chosen);
+                    launch::set_templates(app, chosen);
                 }
             }
-            Some(Request::StoreWorkspaceLaunch) => {
+            Some(Request::StoreWorkspaceLaunch { announce }) => {
+                // The Workspace's own layer, as edited in the driva view, sent
+                // to the server that owns it. Raised by each such edit, so the
+                // policy on screen is the policy the next launch merges — the
+                // launch paths send only the overlay and read this from the
+                // Workspace, so a change kept here alone would not be applied.
+                let policy = app.launch.workspace.clone();
+                match client.set_workspace_launch(workspace_id, &policy) {
+                    Ok(workspace) => {
+                        app.launch.workspace_stored(workspace.launch);
+                        if announce {
+                            app.show_action_message(
+                                "stored with the Workspace — every launch here starts from it",
+                            );
+                        }
+                    }
+                    // The edit stays on screen, marked as not stored: it is what
+                    // the operator asked for, and `W` retries. What it is not is
+                    // part of the effective policy, which the view says.
+                    Err(error) => app.push_log(LogEntry::error(format!(
+                        "could not save the Workspace launch policy: {error:#}"
+                    ))),
+                }
+            }
+            Some(Request::PromoteLaunchToWorkspace) => {
                 // What is stored is the merge, not the overlay: the operator is
                 // keeping the policy the view shows. The overlay is then
-                // redundant and `adopt_workspace_launch` clears it, so the
+                // redundant and `Launch::adopt_workspace` clears it, so the
                 // effective policy is unchanged by the act of storing it.
-                let launch = app.effective_launch();
-                match client.set_workspace_launch(workspace_id, &launch) {
+                let policy = app.launch.effective();
+                match client.set_workspace_launch(workspace_id, &policy) {
                     Ok(workspace) => {
-                        app.adopt_workspace_launch(workspace.launch);
+                        app.launch.adopt_workspace(workspace.launch);
                         app.show_action_message(
-                            "saved as this Workspace's launch policy — every launch here starts from it",
+                            "moved into this Workspace's policy — every launch here starts from it",
                         );
                     }
                     Err(error) => app.push_log(LogEntry::error(format!(

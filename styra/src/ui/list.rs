@@ -7,7 +7,8 @@ use super::{
     render_preview, tag_color, view_block, DETAIL_INDENT, MAX_DETAIL_LINES, SELECTION_BG,
     SELECTION_MARKER,
 };
-use crate::app::{App, Entry, Progress, Status, View};
+use crate::app::{App, Progress, Status, View};
+use crate::timeline::Entry;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -44,11 +45,11 @@ pub(crate) fn render_list(frame: &mut Frame, app: &App, area: Rect) {
         })
         .unwrap_or_default();
     let mut block = view_block(app, None).title_bottom(Line::from(usage).right_aligned());
-    if app.conversation_only {
+    if app.timeline.conversation_only {
         block = conversation_only_title(block);
     }
 
-    if app.entries.is_empty() {
+    if app.timeline.entries.is_empty() {
         // Before anything is launched, the empty list is the start screen: the
         // one moment the agent, model, and effort are still open, so it says
         // what they are and how to change them instead of only waiting.
@@ -77,10 +78,11 @@ pub(crate) fn render_list(frame: &mut Frame, app: &App, area: Rect) {
     }
 
     let visible: Vec<(usize, &Entry)> = app
+        .timeline
         .entries
         .iter()
         .enumerate()
-        .filter(|(idx, _)| app.is_visible(*idx))
+        .filter(|(idx, _)| app.timeline.is_visible(*idx))
         .collect();
 
     if visible.is_empty() {
@@ -100,11 +102,11 @@ pub(crate) fn render_list(frame: &mut Frame, app: &App, area: Rect) {
         .map(|(idx, entry)| {
             entry_item(
                 entry,
-                app.entry_expanded(*idx),
+                app.timeline.entry_expanded(*idx),
                 width,
                 viewport_height,
                 app.selection.provider.protocol(),
-                *idx == app.selected,
+                *idx == app.timeline.selected,
             )
         })
         .collect();
@@ -121,10 +123,14 @@ pub(crate) fn render_list(frame: &mut Frame, app: &App, area: Rect) {
     let mut state = ListState::default();
     let position = visible
         .iter()
-        .position(|(idx, _)| *idx == app.selected)
-        .or_else(|| visible.iter().rposition(|(idx, _)| *idx < app.selected));
+        .position(|(idx, _)| *idx == app.timeline.selected)
+        .or_else(|| {
+            visible
+                .iter()
+                .rposition(|(idx, _)| *idx < app.timeline.selected)
+        });
     let offset = list_offset_with_scrolloff(
-        app.list_offset.get(),
+        app.timeline.list_offset.get(),
         position,
         &item_heights,
         viewport_height,
@@ -134,7 +140,7 @@ pub(crate) fn render_list(frame: &mut Frame, app: &App, area: Rect) {
     *state.offset_mut() = offset;
     state.select(position);
     frame.render_stateful_widget(list, area, &mut state);
-    app.list_offset.set(state.offset());
+    app.timeline.list_offset.set(state.offset());
 }
 
 /// Ratatui's `List` only renders complete items. If the next expanded entry is
@@ -171,11 +177,11 @@ fn clip_boundary_entry(
         };
         items[item_index] = entry_item_with_max_rows(
             entry,
-            app.entry_expanded(entry_index),
+            app.timeline.entry_expanded(entry_index),
             width,
             max_rows,
             app.selection.provider.protocol(),
-            entry_index == app.selected,
+            entry_index == app.timeline.selected,
         );
         return;
     }
@@ -1069,7 +1075,7 @@ mod tests {
         });
         // `push_event` leaves the newest entry both selected (via follow) and,
         // once expanded, the case that used to flip to a reversed-white fill.
-        app.expand_all();
+        app.timeline.expand_all();
 
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
         terminal
@@ -1096,7 +1102,7 @@ mod tests {
         app.push_event(AgentEvent::AgentMessage {
             text: "hello\nworld".into(),
         });
-        app.expand_all();
+        app.timeline.expand_all();
 
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
         terminal
@@ -1141,7 +1147,7 @@ mod tests {
         // `push_event` leaves the second (last) entry selected via follow;
         // both get expanded, but only the selected entry's summary row — not
         // its detail body — should be highlighted.
-        app.expand_all();
+        app.timeline.expand_all();
 
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
         terminal
@@ -1249,7 +1255,7 @@ mod tests {
         assert!(collapsed.contains('▸'));
         let collapsed_zs = collapsed.chars().filter(|&c| c == 'z').count();
 
-        app.toggle_expand();
+        app.timeline.toggle_expand();
         let expanded = rendered(&app);
         // Expanding drops the arrow: there is nothing left to unfold.
         assert!(!expanded.contains('▾'));
@@ -1315,9 +1321,9 @@ mod tests {
         assert_eq!(screen.matches("Shell").count(), 1);
 
         let line = summary_line(
-            &app.entries[0],
-            app.entries[0].expanded,
-            app.entries[0].has_detail(),
+            &app.timeline.entries[0],
+            app.timeline.entries[0].expanded,
+            app.timeline.entries[0].has_detail(),
             true,
             app.selection.provider.protocol(),
         );
@@ -1378,9 +1384,9 @@ mod tests {
         });
 
         let line = summary_line(
-            &app.entries[0],
-            app.entries[0].expanded,
-            app.entries[0].has_detail(),
+            &app.timeline.entries[0],
+            app.timeline.entries[0].expanded,
+            app.timeline.entries[0].has_detail(),
             true,
             app.selection.provider.protocol(),
         );
@@ -1392,7 +1398,7 @@ mod tests {
         assert_eq!(warning.style.fg, Some(Color::Yellow));
         assert!(!rendered(&app).contains('✓'));
 
-        app.expand_all();
+        app.timeline.expand_all();
         let screen = rendered(&app);
         assert!(screen.contains("reported success; output contains an error diagnostic"));
     }
@@ -1454,7 +1460,7 @@ mod tests {
             exit_code: Some(0),
             output: "24 passed".into(),
         });
-        app.expand_all();
+        app.timeline.expand_all();
         let screen = rendered(&app);
         assert!(!screen.contains('▾'));
         assert!(screen.contains("24 passed"));
@@ -1472,7 +1478,7 @@ mod tests {
             detail: r#"{"command":"cargo test --all","description":"run the suite"}"#.into(),
         });
 
-        app.expand_all();
+        app.timeline.expand_all();
         let screen = rendered(&app);
         assert!(screen.contains("cargo test --all"));
         assert!(!screen.contains("description"));
@@ -1490,7 +1496,7 @@ mod tests {
             exit_code: Some(0),
             output: "24 passed".into(),
         });
-        app.expand_all();
+        app.timeline.expand_all();
         let screen = rendered(&app);
         // The command stays beside the Shell header when expanded, while its
         // matching first detail line is omitted so it is not printed twice.
@@ -1518,13 +1524,13 @@ mod tests {
         app.push_event(AgentEvent::AgentMessage {
             text: (0..60).map(|i| format!("line number {i}\n")).collect(),
         });
-        app.expand_all();
+        app.timeline.expand_all();
 
         let protocol = app.selection.provider.protocol();
         assert!(
             entry_item(
-                &app.entries[1],
-                app.entries[1].expanded,
+                &app.timeline.entries[1],
+                app.timeline.entries[1].expanded,
                 78,
                 18,
                 protocol,
@@ -1554,7 +1560,7 @@ mod tests {
         app.push_event(AgentEvent::AgentMessage {
             text: "the selected message".into(),
         });
-        app.expand_all();
+        app.timeline.expand_all();
 
         let screen = rendered(&app);
         assert!(screen.contains("line number 0"), "{screen}");
@@ -1576,7 +1582,7 @@ mod tests {
         app.push_event(AgentEvent::AgentMessage {
             text: (0..60).map(|i| format!("tail line number {i}\n")).collect(),
         });
-        app.expand_all();
+        app.timeline.expand_all();
         app.select_prev_line();
         app.select_prev_line();
 
@@ -1646,7 +1652,7 @@ mod tests {
             text: "hello world".into(),
         });
         // Hidden by default; no toggle needed to get here.
-        assert!(!app.show_minor);
+        assert!(!app.timeline.show_minor);
         let screen = rendered(&app);
         assert!(!screen.contains("t-1"));
         assert!(screen.contains("hello world"));
@@ -1664,8 +1670,8 @@ mod tests {
         let protocol = app.selection.provider.protocol();
         assert_eq!(
             entry_item(
-                &app.entries[0],
-                app.entries[0].expanded,
+                &app.timeline.entries[0],
+                app.timeline.entries[0].expanded,
                 40,
                 18,
                 protocol,
@@ -1679,7 +1685,7 @@ mod tests {
         let screen = rendered(&app);
         assert!(screen.contains('…'), "{screen:?}");
 
-        app.expand_all();
+        app.timeline.expand_all();
         let screen = rendered(&app);
         assert!(
             screen.matches("word").count() > 20,
@@ -1696,7 +1702,7 @@ mod tests {
         app.push_event(AgentEvent::AgentMessage {
             text: "one two three four five six seven eight nine ten eleven twelve".into(),
         });
-        app.expand_all();
+        app.timeline.expand_all();
 
         let mut terminal = Terminal::new(TestBackend::new(24, 10)).unwrap();
         terminal
@@ -1731,10 +1737,10 @@ mod tests {
             text: long_word.clone(),
         });
         app.push_event(AgentEvent::AgentMessage { text: long_word });
-        app.expand_all();
+        app.timeline.expand_all();
 
         let protocol = app.selection.provider.protocol();
-        for entry in &app.entries {
+        for entry in &app.timeline.entries {
             assert_eq!(
                 entry_item(entry, entry.expanded, 200, 18, protocol, false).height(),
                 2,

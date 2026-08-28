@@ -3,7 +3,7 @@
 //! operator sees exactly what it is selecting.
 
 use super::{SELECTION_BG, SELECTION_MARKER};
-use crate::app::{LaunchColumn, Launcher};
+use crate::launcher::{LaunchColumn, Launcher};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};

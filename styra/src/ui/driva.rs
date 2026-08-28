@@ -4,39 +4,118 @@
 //!
 //! Before anything has launched the same fields describe the policy the next
 //! interaction would start under, marked as planned so the two are not read as
-//! the same claim. In that state the view is also where the policy is chosen:
-//! the operator's own inputs are listed below the effective policy, separately,
-//! because only those can be edited — the rest come from the profile, the
-//! templates, and the sandbox broker.
+//! the same claim. In that state the view is also where the policy is chosen.
 //!
-//! Those inputs are in turn two layers, and the view keeps them apart for the
-//! same reason: the Workspace's standing policy applies to every launch there
-//! and is not this launch's to drop, while the launch's own overlay is exactly
-//! what `m`, `x`, `T` and `w` edit. A row the operator cannot remove should not
-//! look like one they can.
+//! What is chosen is two settings, not one, and they are shown as two: the
+//! Workspace's standing policy applies to every launch here and outlives every
+//! interaction in it, while this interaction's own settings are layered over it
+//! and go when it does. Each gets its own pane, with the same three rows in the
+//! same order, so the difference between them is which pane a grant sits in and
+//! nothing else. `Tab` moves the editing keys between the panes and the focused
+//! one says so; every other key acts on whichever that is, so there is one set
+//! of keys rather than one per layer.
+//!
+//! Above both is the policy those two resolve to, which is what the agent
+//! actually gets — including the parts neither pane can change: the workspace
+//! mount, the profile's credential mounts, the broker's control mount.
 
 use super::{render_placeholder, view_block};
-use crate::app::{mount_label, App};
+use crate::app::App;
+use crate::launch::LaunchScope;
+use crate::mount;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
-use styra_server::{Mount, MountAccess};
+use styra_server::{DrivaOptions, Mount, MountAccess};
+
+/// Rows the effective-policy summary keeps for itself before either settings
+/// pane is given any height. Enough for the banner and the fields that say what
+/// is about to run; the mounts below them are what a short terminal loses.
+const SUMMARY_MIN_HEIGHT: u16 = 5;
+
+/// Width of the label column inside a settings pane. Wide enough for
+/// `templates`, and identical in both panes so the two read as one form.
+const SETTING_LABEL: usize = 10;
 
 pub(crate) fn render_driva(frame: &mut Frame, app: &App, area: Rect) {
     let block = view_block(app, Some("driva"));
 
-    let Some(options) = &app.driva_options else {
+    let Some(options) = &app.launch.driva else {
         render_placeholder(frame, block, area, "  no launch policy to describe");
         render_prompt(frame, app, area);
         return;
     };
 
+    // A live interaction's policy is a record: there is nothing to choose, so
+    // the panes and their keys are not drawn over it at all.
+    if !app.can_edit_launch() {
+        let paragraph = Paragraph::new(summary_lines(app, options))
+            .block(block)
+            .wrap(Wrap { trim: false });
+        frame.render_widget(paragraph, area);
+        render_prompt(frame, app, area);
+        return;
+    }
+
+    let mut rest = block.inner(area);
+    frame.render_widget(block, area);
+
+    // Carved from the bottom: the panes and the keys for them are the point of
+    // this screen while it is editable, and each is given only what is left
+    // above the summary's own floor, so a short terminal drops the ends of the
+    // mount list rather than the settings being edited.
+    let hints = hint_lines(app);
+    let workspace = pane_rows(app, LaunchScope::Workspace);
+    let interaction = pane_rows(app, LaunchScope::Interaction);
+    let hint_area = take_bottom(&mut rest, hints.len() as u16, 1);
+    let interaction_area = take_bottom(&mut rest, interaction.len() as u16 + 2, SUMMARY_MIN_HEIGHT);
+    let workspace_area = take_bottom(&mut rest, workspace.len() as u16 + 2, SUMMARY_MIN_HEIGHT);
+
+    frame.render_widget(
+        Paragraph::new(summary_lines(app, options)).wrap(Wrap { trim: false }),
+        rest,
+    );
+    render_pane(
+        frame,
+        app,
+        LaunchScope::Workspace,
+        workspace,
+        workspace_area,
+    );
+    render_pane(
+        frame,
+        app,
+        LaunchScope::Interaction,
+        interaction,
+        interaction_area,
+    );
+    frame.render_widget(Paragraph::new(hints), hint_area);
+    render_prompt(frame, app, area);
+}
+
+/// Take `wanted` rows off the bottom of `area`, leaving at least `floor` there,
+/// and shrink `area` by what was taken. A zero-height result is a pane there was
+/// no room for; rendering it draws nothing.
+fn take_bottom(area: &mut Rect, wanted: u16, floor: u16) -> Rect {
+    let height = wanted.min(area.height.saturating_sub(floor));
+    area.height -= height;
+    Rect {
+        x: area.x,
+        y: area.y + area.height,
+        width: area.width,
+        height,
+    }
+}
+
+/// The policy the two settings panes resolve to: what the sandbox will actually
+/// be, including everything neither pane can change.
+fn summary_lines(app: &App, options: &DrivaOptions) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     // Before launch this is a plan, not a record: say so, so an operator does
     // not read it as the sandbox some agent is already running in.
-    if app.driva_planned {
+    if app.launch.planned {
         lines.push(Line::from(Span::styled(
             "  planned — applied when the next interaction starts",
             Style::default().fg(Color::Yellow),
@@ -60,23 +139,18 @@ pub(crate) fn render_driva(frame: &mut Frame, app: &App, area: Rect) {
     lines.extend([
         Line::from(""),
         Line::from(Span::styled(
-            "mounts",
+            if app.can_edit_launch() {
+                "effective mounts"
+            } else {
+                "mounts"
+            },
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         )),
     ]);
     lines.extend(options.mounts.iter().map(mount_line));
-
-    if app.can_edit_launch() {
-        lines.extend(editable_section(app));
-    }
-
-    let paragraph = Paragraph::new(lines)
-        .block(block)
-        .wrap(Wrap { trim: false });
-    frame.render_widget(paragraph, area);
-    render_prompt(frame, app, area);
+    lines
 }
 
 /// How the effective network policy reads, together with where it comes from
@@ -94,13 +168,13 @@ fn network_label(app: &App, effective: bool) -> String {
     if !app.can_edit_launch() {
         return on.to_owned();
     }
-    let asked = app.effective_launch().grants_network();
+    let asked = app.launch.effective().grants_network();
     if effective != asked {
         return format!("{on} — from the agent profile; your setting: off (w cannot revoke it)");
     }
-    match (app.launch.network, app.workspace_launch.network) {
+    match (app.launch.interaction.network, app.launch.workspace.network) {
         // Stated by this launch, against what it would otherwise inherit.
-        (Some(_), Some(_)) => format!("{on} — this launch, over the Workspace policy"),
+        (Some(_), Some(_)) => format!("{on} — this interaction, over the Workspace policy"),
         (Some(_), None) => on.to_owned(),
         (None, Some(_)) => format!("{on} — from the Workspace policy"),
         (None, None) => on.to_owned(),
@@ -108,17 +182,16 @@ fn network_label(app: &App, effective: bool) -> String {
 }
 
 /// The templates the next launch would layer, in the order they apply, saying
-/// which of them the Workspace contributes: those are not this launch's to
-/// remove without `I`.
+/// which of them the Workspace contributes: those live in the other pane.
 fn templates_label(app: &App) -> String {
-    let effective = app.effective_launch().templates;
+    let effective = app.launch.effective().templates;
     if effective.is_empty() {
         return "none".to_owned();
     }
-    let from_workspace = if app.launch.standalone {
+    let from_workspace = if app.launch.interaction.standalone {
         &[][..]
     } else {
-        &app.workspace_launch.templates
+        &app.launch.workspace.templates
     };
     effective
         .iter()
@@ -133,97 +206,239 @@ fn templates_label(app: &App) -> String {
         .join(", ")
 }
 
-/// The part of the policy this operator owns, in the two layers it is made of:
-/// what the Workspace grants every launch here, and what this launch adds on
-/// top — with a cursor over the second, since that is the half `x` can remove.
-///
-/// Both are kept separate from the effective mount list above rather than
-/// folded into it, because between them they are the only rows any key here can
-/// change — the workspace mount, the profile's credential mounts, and the
-/// broker's control mount are not the operator's to drop.
-fn editable_section(app: &App) -> Vec<Line<'static>> {
-    let heading = Style::default()
-        .fg(Color::Cyan)
-        .add_modifier(Modifier::BOLD);
-    let mut lines = Vec::new();
-    if !app.workspace_launch.mounts.is_empty() {
-        lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled("from the Workspace", heading),
-            Span::styled(
-                if app.launch.standalone {
-                    " · not applied (standalone)"
-                } else {
-                    " · every launch here"
-                },
-                Style::default().fg(Color::DarkGray),
-            ),
-        ]));
-        // Dimmed, and with no cursor: these are shown so the operator can see
-        // what they already have, not so they can edit it here.
-        let style = if app.launch.standalone {
-            Style::default()
-                .fg(Color::DarkGray)
-                .add_modifier(Modifier::CROSSED_OUT)
-        } else {
-            Style::default().fg(Color::Gray)
-        };
-        lines.extend(
-            app.workspace_launch.mounts.iter().map(|mount| {
-                Line::from(Span::styled(format!("    {}", mount_label(mount)), style))
-            }),
-        );
-    }
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled("added by you", heading)));
-    if app.launch.mounts.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "  none — press m to add one",
-            Style::default().fg(Color::Gray),
-        )));
+/// How one settings pane's rows are painted. The pane the keys act on is bright
+/// and carries the mount cursor; the other is muted, so which layer an edit
+/// would land in is never in question. A Workspace policy this interaction has
+/// opted out of is struck through as well as muted: it is still worth reading
+/// and still editable here, but it is not part of this launch.
+#[derive(Clone, Copy)]
+struct PaneStyle {
+    label: Style,
+    value: Style,
+    marker: Style,
+    cursor: bool,
+}
+
+fn pane_style(app: &App, scope: LaunchScope) -> PaneStyle {
+    let focused = app.launch.scope == scope;
+    let ignored = scope == LaunchScope::Workspace && app.launch.interaction.standalone;
+    let mut value = if focused {
+        Style::default().fg(Color::White)
     } else {
-        let selected = app
-            .driva_selected_mount
-            .min(app.launch.mounts.len().saturating_sub(1));
-        lines.extend(app.launch.mounts.iter().enumerate().map(|(index, mount)| {
-            let current = index == selected;
-            Line::from(vec![
-                Span::styled(
-                    if current { "  • " } else { "    " },
-                    Style::default().fg(Color::Yellow),
-                ),
-                Span::styled(
-                    mount_label(mount),
-                    if current {
-                        Style::default()
-                            .fg(Color::White)
-                            .add_modifier(Modifier::BOLD)
-                    } else {
-                        Style::default().fg(Color::White)
-                    },
-                ),
-            ])
-        }));
+        Style::default().fg(Color::Gray)
+    };
+    if ignored {
+        value = Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::CROSSED_OUT);
     }
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "  m add mount · g .git (rw) · x remove · T templates · w network",
-        Style::default().fg(Color::DarkGray),
-    )));
-    lines.push(Line::from(Span::styled(
-        if app.launch.standalone {
-            "  I inherit the Workspace policy · D save as default · W save for the Workspace"
+    PaneStyle {
+        label: if focused {
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
         } else {
-            "  I ignore the Workspace policy · D save as default · W save for the Workspace"
+            Style::default().fg(Color::DarkGray)
         },
-        Style::default().fg(Color::DarkGray),
+        value,
+        marker: Style::default().fg(Color::Yellow),
+        cursor: focused,
+    }
+}
+
+/// One row of a settings pane: a marker column, a fixed label column, a value.
+fn setting_line(style: PaneStyle, marked: bool, label: &str, value: &str) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            if marked && style.cursor {
+                " • "
+            } else {
+                "   "
+            },
+            style.marker,
+        ),
+        Span::styled(
+            format!("{label:<width$}", width = SETTING_LABEL),
+            style.label,
+        ),
+        Span::styled(value.to_owned(), style.value),
+    ])
+}
+
+/// The settings one layer holds, in the same rows for both layers.
+fn pane_rows(app: &App, scope: LaunchScope) -> Vec<Line<'static>> {
+    let style = pane_style(app, scope);
+    let policy = app.launch.policy(scope);
+    let mut rows = Vec::new();
+
+    // Whether this interaction starts from the Workspace's policy at all is the
+    // interaction's own answer, so it is a row of its pane rather than a key
+    // hint — `I` was invisible as anything but a hint before.
+    if scope == LaunchScope::Interaction {
+        rows.push(setting_line(
+            style,
+            false,
+            "inherits",
+            if policy.standalone {
+                "nothing — standalone, the Workspace policy does not apply"
+            } else {
+                "the Workspace policy above"
+            },
+        ));
+    }
+
+    rows.push(setting_line(
+        style,
+        false,
+        "network",
+        &scope_network_label(app, scope),
+    ));
+    rows.push(setting_line(
+        style,
+        false,
+        "templates",
+        &if policy.templates.is_empty() {
+            "none".to_owned()
+        } else {
+            policy.templates.join(", ")
+        },
+    ));
+
+    if policy.mounts.is_empty() {
+        rows.push(setting_line(style, false, "mounts", "none — m adds one"));
+        return rows;
+    }
+    let selected = app.launch.cursor(scope);
+    for (index, mount) in policy.mounts.iter().enumerate() {
+        rows.push(setting_line(
+            style,
+            index == selected,
+            if index == 0 { "mounts" } else { "" },
+            &mount::label(mount),
+        ));
+    }
+    rows
+}
+
+/// What one layer says about networking, as that layer alone.
+///
+/// The Workspace's is a plain on/off: nothing sits under it to inherit from.
+/// This interaction's has a third answer — saying nothing — and what that
+/// resolves to is worth printing next to it, since it is the reason `w` can look
+/// like it changed nothing.
+fn scope_network_label(app: &App, scope: LaunchScope) -> String {
+    match scope {
+        LaunchScope::Workspace => match app.launch.workspace.network {
+            Some(true) => "on".to_owned(),
+            Some(false) => "off".to_owned(),
+            None => "off — not stated".to_owned(),
+        },
+        LaunchScope::Interaction => match app.launch.interaction.network {
+            Some(true) => "on".to_owned(),
+            Some(false) => "off — withdrawn here".to_owned(),
+            None => {
+                let inherited =
+                    !app.launch.interaction.standalone && app.launch.workspace.grants_network();
+                format!(
+                    "not stated — inherits {}",
+                    if inherited { "on" } else { "off" }
+                )
+            }
+        },
+    }
+}
+
+/// One settings pane: a titled box saying which layer it is, what that layer
+/// reaches, and — for the Workspace's — whether the server has it.
+fn render_pane(
+    frame: &mut Frame,
+    app: &App,
+    scope: LaunchScope,
+    rows: Vec<Line<'static>>,
+    area: Rect,
+) {
+    if area.height == 0 {
+        return;
+    }
+    let focused = app.launch.scope == scope;
+    let title = Style::default().fg(if focused {
+        Color::Cyan
+    } else {
+        Color::DarkGray
+    });
+    let mut spans = vec![
+        Span::styled(if focused { " ▸ " } else { "   " }, title),
+        Span::styled(
+            scope.title(),
+            if focused {
+                title.add_modifier(Modifier::BOLD)
+            } else {
+                title
+            },
+        ),
+        Span::styled(
+            match scope {
+                LaunchScope::Workspace => " · every launch here ",
+                LaunchScope::Interaction => " · over the Workspace policy ",
+            },
+            Style::default().fg(Color::DarkGray),
+        ),
+    ];
+    // A Workspace edit is the server's to keep, and only a stored one is
+    // applied — so an unstored one is called out where it is being made.
+    if scope == LaunchScope::Workspace && app.launch.workspace_unsaved {
+        spans.push(Span::styled(
+            "· not stored · W retries ",
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        ));
+    }
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(if focused {
+            Color::Cyan
+        } else {
+            Color::DarkGray
+        }))
+        .title(Line::from(spans));
+    frame.render_widget(Paragraph::new(rows).block(block), area);
+}
+
+/// The keys, named against the pane they would act on. Two lines: what every
+/// pane answers to, then what is particular to the focused one.
+fn hint_lines(app: &App) -> Vec<Line<'static>> {
+    let muted = Style::default().fg(Color::DarkGray);
+    let mut lines = vec![Line::from(Span::styled(
+        format!(
+            "  Tab {} · m mount · g .git · x remove · T templates · w network",
+            app.launch.scope.other().phrase()
+        ),
+        muted,
+    ))];
+    lines.push(Line::from(Span::styled(
+        match app.launch.scope {
+            LaunchScope::Workspace if app.launch.workspace_unsaved => {
+                "  W store it with the Workspace — only a stored policy is applied".to_owned()
+            }
+            LaunchScope::Workspace => {
+                "  stored with the Workspace as you edit it — shared by every client".to_owned()
+            }
+            LaunchScope::Interaction => format!(
+                "  I {} · U move up into it · D save as default",
+                if app.launch.interaction.standalone {
+                    "inherit the Workspace"
+                } else {
+                    "ignore the Workspace"
+                }
+            ),
+        },
+        muted,
     )));
     lines
 }
 
 /// The "add a mount" prompt, floating over the view it edits.
 fn render_prompt(frame: &mut Frame, app: &App, area: Rect) {
-    let Some(text) = &app.driva_prompt else {
+    let Some(text) = &app.launch.prompt else {
         return;
     };
     let width = area.width.saturating_sub(4).min(72);
@@ -234,10 +449,18 @@ fn render_prompt(frame: &mut Frame, app: &App, area: Rect) {
         width,
         height,
     };
+    // Which layer the mount lands in is the prompt's own business too: it is
+    // opened from either pane and the path being typed says nothing about that.
+    // On the bottom border rather than beside the syntax, which is already as
+    // wide as the box.
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
-        .title(" mount · source[:destination][:ro|rw] · Enter add · Esc cancel ");
+        .title(" mount · source[:destination][:ro|rw] · Enter add · Esc cancel ")
+        .title_bottom(Line::from(Span::styled(
+            format!(" for {} ", app.launch.scope.phrase()),
+            Style::default().fg(Color::Cyan),
+        )));
     frame.render_widget(Clear, prompt);
     frame.render_widget(
         Paragraph::new(Line::from(vec![
@@ -350,7 +573,7 @@ mod tests {
         let placeholder = rendered(&app);
         assert!(placeholder.contains("no launch policy"));
 
-        app.set_driva_options(DrivaOptions {
+        app.launch.record(DrivaOptions {
             isolation_backend: "bwrap".into(),
             command: vec!["codex".into(), "app-server".into()],
             working_directory: PathBuf::from("/tmp/styra/workspace"),
@@ -378,9 +601,9 @@ mod tests {
         let selection = styra_server::agent::Selection::parse("codex").unwrap();
         let mut app = App::new(selection.clone(), "s1");
         app.toggle_view(View::Driva);
-        app.set_planned_driva_options(
+        app.launch.plan(
             selection,
-            app.effective_launch(),
+            app.launch.effective(),
             Some(DrivaOptions {
                 isolation_backend: "bwrap".into(),
                 command: vec!["codex".into(), "app-server".into()],
@@ -401,9 +624,9 @@ mod tests {
         let selection = styra_server::agent::Selection::parse("codex").unwrap();
         let mut app = App::pending(selection.clone());
         app.toggle_view(View::Driva);
-        app.set_planned_driva_options(
+        app.launch.plan(
             selection,
-            app.effective_launch(),
+            app.launch.effective(),
             Some(DrivaOptions {
                 isolation_backend: "bwrap".into(),
                 command: vec!["codex".into()],
@@ -430,31 +653,41 @@ mod tests {
             .collect::<String>()
     }
 
-    /// Before launch the view has to say what the operator can change, and
-    /// keep their own mounts apart from the ones they cannot remove.
+    /// Before launch the view has to say what can be changed, in the layer it
+    /// would be changed in, with the keys for it.
     #[test]
-    fn a_not_yet_started_launch_lists_the_operators_own_inputs_and_the_keys_for_them() {
+    fn a_not_yet_started_launch_shows_both_layers_and_the_keys_for_them() {
         let mut app = editable_app();
         let screen = tall(&app);
         assert!(screen.contains("templates none"), "{screen}");
-        assert!(screen.contains("added by you"), "{screen}");
-        assert!(screen.contains("none — press m to add one"), "{screen}");
-        assert!(screen.contains("m add mount · g .git (rw)"), "{screen}");
+        // Both panes, named, and the one the keys are on marked.
+        assert!(screen.contains("Workspace · every launch here"), "{screen}");
+        assert!(
+            screen.contains("this interaction · over the Workspace policy"),
+            "{screen}"
+        );
+        assert!(screen.contains("▸ this interaction"), "{screen}");
+        assert!(screen.contains("none — m adds one"), "{screen}");
+        assert!(
+            screen.contains("Tab the Workspace · m mount · g .git"),
+            "{screen}"
+        );
 
-        app.set_launch_templates(vec!["rust".into(), "browser".into()]);
-        app.driva_prompt = Some("/srv/data:/mnt/data:rw".into());
-        app.confirm_driva_prompt();
+        crate::launch::set_templates(&mut app, vec!["rust".into(), "browser".into()]);
+        app.launch.prompt = Some("/srv/data:/mnt/data:rw".into());
+        crate::launch::confirm_prompt(&mut app);
         let screen = tall(&app);
         assert!(screen.contains("rust, browser"), "{screen}");
         assert!(screen.contains("/srv/data → /mnt/data (rw)"), "{screen}");
     }
 
-    /// The two layers of the policy have to be told apart on screen: what the
-    /// Workspace grants every launch here is not this launch's to remove.
+    /// The two layers are separately visible and separately edited: what the
+    /// Workspace grants every launch here sits in its own pane, and `Tab` is
+    /// what moves the keys — and the cursor — onto it.
     #[test]
-    fn the_workspace_policys_grants_are_shown_apart_from_this_launchs() {
+    fn each_layer_is_shown_and_edited_in_its_own_pane() {
         let mut app = editable_app();
-        app.set_workspace_launch(styra_server::LaunchPolicy {
+        app.launch.set_workspace(styra_server::LaunchPolicy {
             network: Some(true),
             templates: vec!["rust".into()],
             mounts: vec![styra_server::LaunchMount {
@@ -464,32 +697,85 @@ mod tests {
             }],
             standalone: false,
         });
-        app.set_launch_templates(vec!["rust".into(), "browser".into()]);
-        app.driva_prompt = Some("/srv/scratch:rw".into());
-        app.confirm_driva_prompt();
+        crate::launch::set_templates(&mut app, vec!["rust".into(), "browser".into()]);
+        app.launch.prompt = Some("/srv/scratch:rw".into());
+        crate::launch::confirm_prompt(&mut app);
 
         let screen = tall(&app);
-        assert!(screen.contains("from the Workspace"), "{screen}");
-        assert!(screen.contains("every launch here"), "{screen}");
+        // Each layer's own rows, in its own pane.
         assert!(
             screen.contains("/srv/corpus → /mnt/corpus (ro)"),
             "{screen}"
         );
-        // The layering, with the Workspace's own contribution named.
-        assert!(screen.contains("rust (Workspace), browser"), "{screen}");
-        // And this launch's own half, which is the half `x` reaches.
         assert!(screen.contains("/srv/scratch (rw)"), "{screen}");
-        assert!(screen.contains("I ignore the Workspace policy"), "{screen}");
+        // And the layering they resolve to, with the Workspace's own named.
+        assert!(screen.contains("rust (Workspace), browser"), "{screen}");
+        // This interaction states nothing about the network, and the pane says
+        // what that inherits rather than leaving `w` looking inert.
+        assert!(screen.contains("not stated — inherits on"), "{screen}");
 
-        // Standalone says the Workspace's grants do not apply, and the view has
-        // to say so where they are listed rather than only in a key hint.
-        app.toggle_launch_standalone();
+        // Tab moves the keys onto the Workspace's layer, and the mount cursor
+        // with them: its mounts are removable there.
+        crate::launch::toggle_scope(&mut app);
         let screen = tall(&app);
-        assert!(screen.contains("not applied (standalone)"), "{screen}");
+        assert!(screen.contains("▸ Workspace"), "{screen}");
         assert!(
-            screen.contains("I inherit the Workspace policy"),
+            screen.contains("Tab this interaction · m mount"),
             "{screen}"
         );
+        crate::launch::remove_selected_mount(&mut app);
+        assert!(app.launch.workspace.mounts.is_empty());
+        // This interaction's own mount is untouched by an edit to the other
+        // layer.
+        assert_eq!(app.launch.interaction.mounts.len(), 1);
+    }
+
+    /// A Workspace edit only counts once the server has it, since the launch
+    /// paths merge the stored policy. An unstored one is called out.
+    #[test]
+    fn an_unstored_workspace_edit_says_so() {
+        let mut app = editable_app();
+        crate::launch::toggle_scope(&mut app);
+        crate::launch::cycle_network(&mut app);
+        assert_eq!(app.launch.workspace.network, Some(true));
+        assert!(app.launch.workspace_unsaved);
+
+        let screen = tall(&app);
+        assert!(screen.contains("not stored · W retries"), "{screen}");
+        assert!(screen.contains("W store it with the Workspace"), "{screen}");
+
+        // The server's acknowledgement clears it, and the pane goes back to
+        // saying the policy is shared.
+        let stored = app.launch.workspace.clone();
+        app.launch.workspace_stored(stored);
+        let screen = tall(&app);
+        assert!(!screen.contains("not stored"), "{screen}");
+        assert!(
+            screen.contains("stored with the Workspace as you edit it"),
+            "{screen}"
+        );
+    }
+
+    /// Standalone is this interaction's own row, and it says what it does to the
+    /// other layer where that layer is shown.
+    #[test]
+    fn standalone_is_a_row_of_this_interactions_pane_and_strikes_the_other_out() {
+        let mut app = editable_app();
+        app.launch.set_workspace(styra_server::LaunchPolicy {
+            templates: vec!["rust".into()],
+            ..styra_server::LaunchPolicy::default()
+        });
+        let screen = tall(&app);
+        assert!(screen.contains("the Workspace policy above"), "{screen}");
+        assert!(screen.contains("I ignore the Workspace"), "{screen}");
+
+        crate::launch::toggle_standalone(&mut app);
+        let screen = tall(&app);
+        assert!(
+            screen.contains("nothing — standalone, the Workspace policy does not apply"),
+            "{screen}"
+        );
+        assert!(screen.contains("I inherit the Workspace"), "{screen}");
     }
 
     /// A network answer the operator did not give themselves has to name the
@@ -499,13 +785,13 @@ mod tests {
         use styra_server::DrivaOptions;
 
         let mut app = editable_app();
-        app.set_workspace_launch(styra_server::LaunchPolicy {
+        app.launch.set_workspace(styra_server::LaunchPolicy {
             network: Some(true),
             ..styra_server::LaunchPolicy::default()
         });
-        app.set_planned_driva_options(
+        app.launch.plan(
             app.selection.clone(),
-            app.effective_launch(),
+            app.launch.effective(),
             Some(DrivaOptions {
                 isolation_backend: "bwrap".into(),
                 command: vec!["codex".into()],
@@ -519,10 +805,10 @@ mod tests {
 
         // Withdrawn by this launch: now it is the operator's own answer, over
         // the Workspace's.
-        app.cycle_launch_network();
-        app.set_planned_driva_options(
+        crate::launch::cycle_network(&mut app);
+        app.launch.plan(
             app.selection.clone(),
-            app.effective_launch(),
+            app.launch.effective(),
             Some(DrivaOptions {
                 isolation_backend: "bwrap".into(),
                 command: vec!["codex".into()],
@@ -533,7 +819,7 @@ mod tests {
         );
         let screen = tall(&app);
         assert!(
-            screen.contains("off — this launch, over the Workspace policy"),
+            screen.contains("off — this interaction, over the Workspace policy"),
             "{screen}"
         );
     }
@@ -547,9 +833,9 @@ mod tests {
 
         let mut app = editable_app();
         // The server's answer for a profile that permits networking on its own.
-        app.set_planned_driva_options(
+        app.launch.plan(
             app.selection.clone(),
-            app.effective_launch(),
+            app.launch.effective(),
             Some(DrivaOptions {
                 isolation_backend: "bwrap".into(),
                 command: vec!["codex".into()],
@@ -563,14 +849,14 @@ mod tests {
         assert!(screen.contains("your setting: off"), "{screen}");
 
         // Once the operator asks for it too, the field is just the policy.
-        app.cycle_launch_network();
+        crate::launch::cycle_network(&mut app);
         let screen = tall(&app);
         assert!(!screen.contains("from the agent profile"), "{screen}");
         assert!(screen.contains("network  on"), "{screen}");
     }
 
-    /// A live session's policy is a record, so none of the editing chrome is
-    /// drawn over it.
+    /// A live session's policy is a record, so neither settings pane nor any of
+    /// their keys are drawn over it.
     #[test]
     fn a_live_launch_policy_offers_no_editing() {
         use styra_server::DrivaOptions;
@@ -580,7 +866,7 @@ mod tests {
             "s1",
         );
         app.toggle_view(View::Driva);
-        app.set_driva_options(DrivaOptions {
+        app.launch.record(DrivaOptions {
             isolation_backend: "bwrap".into(),
             command: vec!["codex".into()],
             working_directory: PathBuf::from("/tmp/styra/workspace"),
@@ -588,8 +874,8 @@ mod tests {
             mounts: Vec::new(),
         });
         let screen = tall(&app);
-        assert!(!screen.contains("added by you"), "{screen}");
-        assert!(!screen.contains("add mount"), "{screen}");
+        assert!(!screen.contains("every launch here"), "{screen}");
+        assert!(!screen.contains("m mount"), "{screen}");
     }
 
     /// Once stopped, there is no live sandbox left to contradict, so editing
@@ -604,7 +890,7 @@ mod tests {
             "s1",
         );
         app.toggle_view(View::Driva);
-        app.set_driva_options(DrivaOptions {
+        app.launch.record(DrivaOptions {
             isolation_backend: "bwrap".into(),
             command: vec!["codex".into()],
             working_directory: PathBuf::from("/tmp/styra/workspace"),
@@ -614,7 +900,7 @@ mod tests {
         app.status = Status::Stopped;
         assert!(app.can_edit_launch());
         let screen = tall(&app);
-        assert!(screen.contains("add mount"), "{screen}");
+        assert!(screen.contains("m mount"), "{screen}");
     }
 
     /// The shortcut for the mount almost every launch wants: the history of the
@@ -629,7 +915,7 @@ mod tests {
             .find(|directory| directory.join(".git").exists())
             .unwrap()
             .to_path_buf();
-        app.add_git_root_mount();
+        crate::launch::add_git_history(&mut app);
         let screen = tall(&app);
         assert!(
             screen.contains(&format!("{} (rw)", root.join(".git").display())),
@@ -641,17 +927,20 @@ mod tests {
         );
 
         // And it is the operator's own mount, so asking twice adds nothing.
-        app.add_git_root_mount();
-        assert_eq!(app.launch.mounts.len(), 1);
+        crate::launch::add_git_history(&mut app);
+        assert_eq!(app.launch.interaction.mounts.len(), 1);
     }
 
     #[test]
     fn the_mount_prompt_floats_over_the_policy_it_edits() {
         let mut app = editable_app();
-        app.open_driva_prompt();
-        app.driva_prompt = Some("/srv/data".into());
+        crate::launch::open_prompt(&mut app);
+        app.launch.prompt = Some("/srv/data".into());
         let screen = tall(&app);
         assert!(screen.contains("source[:destination][:ro|rw]"), "{screen}");
         assert!(screen.contains("/srv/data"), "{screen}");
+        // Which layer it will land in is part of the prompt, since it is opened
+        // from either pane.
+        assert!(screen.contains("for this interaction"), "{screen}");
     }
 }

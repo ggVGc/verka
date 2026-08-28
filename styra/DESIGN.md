@@ -672,7 +672,15 @@ While nothing has launched, the driva view is also where the policy is decided.
 Networking (`w`), the Driva templates to layer (`T`), and extra host mounts (`m`
 to add, `x` to remove) are all editable there.
 
-Those inputs are a [`LaunchPolicy`], and there are two of them. Most of what a
+Those inputs are a [`LaunchPolicy`], and there are two of them — so the view
+shows two panes with the same rows in the same order, and every editing key acts
+on whichever pane `Tab` has focused. The focused pane is the bright one, carries
+the mount cursor, and is named in the key hints under both; the other is muted.
+That is the whole of the difference between changing what this conversation
+needs and changing what the work always needs, which was previously the
+difference between pressing a key and pressing a key followed by `W`.
+
+Most of what a
 given body of work needs from its sandbox is a property of the work, not of one
 interaction with an agent about it: the corpus that has to be readable, the
 toolchain template, whether anything here may reach the network. That belongs to
@@ -690,12 +698,22 @@ stated `network` overrides an inherited one. Adding cannot express *dropping*
 something the Workspace grants, so `standalone` (`I`) does: that launch ignores
 the Workspace's policy entirely and carries its own.
 
-Two keys keep a policy, and they keep different halves. `W` stores what the view
-shows as the Workspace's own, where every client launching there picks it up;
-the overlay is then folded in and emptied, so storing a policy never changes
-what the next launch runs under. `D` saves only this launch's half as the
-client's standing default, because saving the merge would carry grants meant for
-one Workspace into launches everywhere else.
+The two layers are kept in two different places, so an edit to each is made
+durable differently. This client owns the overlay: it lives in memory until `D`
+saves it as the client's standing default (only that half — saving the merge
+would carry grants meant for one Workspace into launches everywhere else). The
+server owns the Workspace's, and every launch path merges the *stored* one, so an
+edit to that pane is sent the moment it is made rather than on request: a change
+kept only in the client would be shown as part of the effective policy and then
+quietly not applied. While such a send is outstanding or has failed, the pane
+says `not stored` and `W` retries it; the planner also holds off, since a plan
+made against the policy the server still has would not describe what is on
+screen.
+
+`U` is the bridge between the panes: it moves this interaction's settings up into
+the Workspace's standing policy, storing the merge and emptying the overlay, so
+what the next launch runs under does not change. It is for the setting that turns
+out to belong to the work rather than to one conversation about it.
 
 Every launch path — `create_session`, `plan_session`, `resume_session` — sends
 the overlay and merges it against the Workspace on the server, which is what
@@ -710,12 +728,12 @@ Workspace's `driva.toml` and the host filesystem, so a bad path or an unknown
 template is rejected at plan time, from the same code the launch would use. An
 extra mount reaches Driva as an ordinary bind mount alongside the profile's own,
 and the captured `DrivaOptions` therefore shows it without any special case. The
-view still lists the operator's own mounts separately from the effective set,
-because only those can be removed: the workspace, the profile's credential
-mounts and the broker's control mount are not the operator's to drop. The
-Workspace's own mounts are listed separately again, and without a cursor, for
-the same reason — they apply to every launch here and are not this one's to
-drop, only to stop inheriting.
+view still lists the effective set apart from both panes, because much of it is
+in neither: the workspace, the profile's credential mounts and the broker's
+control mount are not the operator's to drop from either layer. A grant that *is*
+theirs is only ever in one pane, which is what says where to go to change it —
+and `I`, which makes this interaction ignore the Workspace's policy entirely,
+strikes that pane through rather than only reporting itself in a message.
 
 Editing stops the moment an interaction exists. From then on the view is a
 record of the sandbox an agent is confined to, and changing that means a new
@@ -781,9 +799,23 @@ styra/                   # the terminal client application
   Cargo.toml             # [[bin]] styra; depends on styra-server (path)
   src/
     main.rs              # CLI entry, terminal setup/teardown, event loop wiring
-    app.rs               # application state: list, selection, focus, session status
-    ui.rs                # widget layout: list, message box, status line
+    app.rs               # the App struct: session status, views, and the state below
+    timeline.rs          # the event list: rows, selection, filters, expansion
+    ingest.rs            # how one AgentEvent changes that list and the status
+    launch.rs            # the sandbox policy's two layers, and the keys that edit them
+    mount.rs             # writing, reading and locating host mounts (pure)
+    launcher.rs          # the agent/model/effort picker's state
+    composer.rs          # the message buffer and prompt history
+    notes.rs             # Session and Workspace notes: state, keys, persistence
+    ui/                  # widget layout, one module per view
 ```
+
+Each of those owns one field of [`App`] and everything that is only about it,
+so a feature is a module rather than a scattering of fields and methods over
+the state struct. Where a decision needs both — a mount added to the Workspace's
+layer has to reach the server, a selection move has to reset the preview scroll
+— the module makes the decision and hands back what happened, and `App` (or the
+event loop) does the part that is not its business to know about.
 
 The agent knowledge (`agent`), event decoding (`event`), app-server handshake
 (`appserver`), and rendering (`render`) live in the `genta` library; the server

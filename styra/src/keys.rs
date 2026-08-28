@@ -2,6 +2,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::path::Path;
 
 use crate::app::{App, Request, Status, View};
+use crate::launch;
 use crate::notes;
 use crate::preferences;
 use crate::session::{self, Live};
@@ -50,21 +51,21 @@ fn confirm(app: &mut App, preferences_path: &Path) {
     }
 }
 
-/// Keys for the Driva view's "add a mount" prompt. It is modal — every
+/// Keys for the driva view's "add a mount" prompt. It is modal — every
 /// printable key is part of the path being typed, `?` included — so the event
 /// loop routes keys here ahead of the keybind reference and every view and
 /// global binding, exactly as it does for the notes editor.
-pub fn handle_driva_prompt_key(app: &mut App, key: KeyEvent) {
+pub fn handle_mount_prompt_key(app: &mut App, key: KeyEvent) {
     match key.code {
-        KeyCode::Esc => app.cancel_driva_prompt(),
-        KeyCode::Enter => app.confirm_driva_prompt(),
+        KeyCode::Esc => launch::cancel_prompt(app),
+        KeyCode::Enter => launch::confirm_prompt(app),
         KeyCode::Backspace => {
-            if let Some(text) = app.driva_prompt.as_mut() {
+            if let Some(text) = app.launch.prompt.as_mut() {
                 text.pop();
             }
         }
         KeyCode::Char(ch) if !ch.is_control() => {
-            if let Some(text) = app.driva_prompt.as_mut() {
+            if let Some(text) = app.launch.prompt.as_mut() {
                 text.push(ch);
             }
         }
@@ -82,8 +83,8 @@ pub fn handle_list_key(
 ) {
     if std::mem::take(pending_fold) {
         match key.code {
-            KeyCode::Char('R') => app.expand_all(),
-            KeyCode::Char('M') => app.collapse_all(),
+            KeyCode::Char('R') => app.timeline.expand_all(),
+            KeyCode::Char('M') => app.timeline.collapse_all(),
             _ => {}
         }
         return;
@@ -132,9 +133,9 @@ pub fn handle_list_key(
             KeyCode::Char('K') | KeyCode::Up => app.select_prev(),
             KeyCode::Char('j') => app.select_next_line(),
             KeyCode::Char('k') => app.select_prev_line(),
-            KeyCode::Char(' ') | KeyCode::Enter => app.toggle_expand(),
-            KeyCode::Char('o') => app.toggle_expand(),
-            KeyCode::Char('O') => app.expand_only_selected(),
+            KeyCode::Char(' ') | KeyCode::Enter => app.timeline.toggle_expand(),
+            KeyCode::Char('o') => app.timeline.toggle_expand(),
+            KeyCode::Char('O') => app.timeline.expand_only_selected(),
             KeyCode::Char('g') => app.select_first(),
             KeyCode::Char('G') => app.select_last(),
             KeyCode::Char('z') => *pending_fold = true,
@@ -172,47 +173,54 @@ pub fn handle_list_key(
         // the global bindings above already claim (`t`, `n`, `d`, …), since
         // reaching the transcript or a new session from this view must keep
         // working while the policy is being edited.
+        //
+        // Every editing key acts on whichever of the two layers `Tab` has
+        // focused, so there is one set of them to learn rather than one per
+        // layer — and the view says which layer that is.
         View::Driva => match key.code {
-            KeyCode::Char('w') => app.cycle_launch_network(),
+            KeyCode::Tab | KeyCode::BackTab => launch::toggle_scope(app),
+            KeyCode::Char('w') => launch::cycle_network(app),
             // `I` for whether this launch inherits: `S` is claimed globally
             // above (stopping the interaction) and never reaches this match.
-            KeyCode::Char('I') => app.toggle_launch_standalone(),
+            KeyCode::Char('I') => launch::toggle_standalone(app),
             KeyCode::Char('T') => {
                 if app.allow_launch_edit() {
                     app.ask(Request::Templates);
                 }
             }
-            KeyCode::Char('m') => app.open_driva_prompt(),
+            KeyCode::Char('m') => launch::open_prompt(app),
             // The mount nobody should have to type out: the checkout this
             // client was started in, writable.
-            KeyCode::Char('g') => app.add_git_root_mount(),
-            KeyCode::Char('x') => app.remove_selected_launch_mount(),
+            KeyCode::Char('g') => launch::add_git_history(app),
+            KeyCode::Char('x') => launch::remove_selected_mount(app),
             // Mirrors `D` in the launch picker: keep this policy as the one a
             // brand-new client starts from, rather than only this session's.
-            // Only this launch's own half is saved — the Workspace's is already
-            // durable, and saving the merge would make every launch elsewhere
-            // carry grants meant for this Workspace.
+            // Only this interaction's own settings are saved — the Workspace's
+            // are already durable, and saving the merge would make every launch
+            // elsewhere carry grants meant for this Workspace.
             KeyCode::Char('D') => {
                 if app.allow_launch_edit() {
-                    let launch = app.launch.clone();
+                    let launch = app.launch.interaction.clone();
                     match preferences::save_launch(preferences_path, &launch) {
-                        Ok(()) => app.show_action_message("saved as the default launch policy"),
+                        Ok(()) => app.show_action_message(
+                            "saved this interaction's settings as the default for new clients",
+                        ),
                         Err(error) => app.push_log(LogEntry::error(format!(
                             "could not save the default launch policy: {error:#}"
                         ))),
                     }
                 }
             }
-            // The other place a policy can be kept: with the Workspace, where
-            // every client launching here picks it up. Needs the server, so the
-            // event loop does the asking.
-            KeyCode::Char('W') => {
-                if app.allow_launch_edit() {
-                    app.ask(Request::StoreWorkspaceLaunch);
-                }
-            }
-            KeyCode::Char('j') | KeyCode::Down => app.driva_select_next_mount(),
-            KeyCode::Char('k') | KeyCode::Up => app.driva_select_prev_mount(),
+            // Edits to the Workspace's layer are stored as they are made, so
+            // this is only ever a retry after one of those failed to reach the
+            // server. Needs the client, so the event loop does the asking.
+            KeyCode::Char('W') => launch::store_workspace(app),
+            // Move what this interaction added up into the Workspace's standing
+            // policy, once it turns out not to be particular to this
+            // conversation after all.
+            KeyCode::Char('U') => launch::promote_to_workspace(app),
+            KeyCode::Char('j') | KeyCode::Down => launch::select_next_mount(app),
+            KeyCode::Char('k') | KeyCode::Up => launch::select_prev_mount(app),
             _ => {}
         },
         View::Files => match key.code {
@@ -278,7 +286,7 @@ pub fn handle_input_key(
 ) {
     match key.code {
         KeyCode::Esc => app.enter_list(),
-        KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => app.input_newline(),
+        KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => app.composer.newline(),
         KeyCode::Enter => {
             if let Some(message) = app.take_message() {
                 app.enter_list();
@@ -335,7 +343,7 @@ pub fn handle_input_key(
                     }
                     Live::Pending => {
                         let selection = app.selection.clone();
-                        let launch = app.launch.clone();
+                        let launch = app.launch.interaction.clone();
                         match session::create_session(
                             client,
                             &launch,
@@ -349,7 +357,7 @@ pub fn handle_input_key(
                                 app.session_id = info.id.clone();
                                 app.session_name = info.name;
                                 app.set_workspace_root(info.workspace);
-                                app.set_driva_options(info.driva);
+                                app.launch.record(info.driva);
                                 app.push_log(LogEntry::info(format!(
                                     "journal: {}",
                                     info.journal_path.display()
@@ -372,14 +380,14 @@ pub fn handle_input_key(
                 }
             }
         }
-        KeyCode::Backspace => app.input_backspace(),
-        KeyCode::Up => app.input_history_previous(),
-        KeyCode::Down => app.input_history_next(),
+        KeyCode::Backspace => app.composer.backspace(),
+        KeyCode::Up => app.composer.history_previous(),
+        KeyCode::Down => app.composer.history_next(),
         KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            app.input_delete_word()
+            app.composer.delete_word()
         }
         KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => app.open_launcher(),
-        KeyCode::Char(ch) => app.input_char(ch),
+        KeyCode::Char(ch) => app.composer.char(ch),
         _ => {}
     }
 }

@@ -1,5 +1,13 @@
-//! Application state: the event list, selection, expansion, focus, the message
-//! buffer, and session status.
+//! Application state: session status, which view is up, the raw/log/files
+//! panels, and the pending request for the event loop.
+//!
+//! Anything with enough state of its own to be worth a module has one, and is
+//! carried here as a field rather than spread across this struct: the event
+//! list is a [`Timeline`], the sandbox policy a [`Launch`], and likewise
+//! [`Launcher`], [`Composer`] and [`Notes`]. What stays here is what belongs to
+//! no single one of them, and the few methods that have to join two — a
+//! selection move also resets the preview scroll, an edit to the launch policy
+//! is refused while an interaction is running.
 //!
 //! This module is pure state and transitions — no terminal, no threads, no IO —
 //! so the whole interaction model is unit-testable. [`crate::ui`] renders it and
@@ -10,13 +18,17 @@ use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use styra_server::agent::SandboxLayout;
-use styra_server::agent::{Provider, Selection, PROVIDERS};
+use styra_server::agent::{Provider, Selection};
 use styra_server::event::PresentationMode;
 use styra_server::event::{AgentEvent, DetailBlock, TokenUsage};
-use styra_server::LaunchMount;
-use styra_server::{DrivaOptions, InteractionEnd, LogEntry, RawLine};
+use styra_server::{InteractionEnd, LogEntry, RawLine};
 
+use crate::composer::Composer;
+use crate::ingest;
+use crate::launch::{self, Launch};
+use crate::launcher::Launcher;
 use crate::notes::Notes;
+use crate::timeline::{Entry, Step, Timeline};
 
 /// Which region receives keys, like vim's normal/insert split.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -114,162 +126,14 @@ impl From<styra_server::InteractionActivity> for Status {
 ///
 /// Defined on the wire rather than here ([`styra_server::LaunchPolicy`]),
 /// because both layers of it are the server's to resolve: the Workspace's
-/// standing policy and this launch's own overlay are merged there, once, for
-/// every launch path. The client holds the two apart ([`App::workspace_launch`]
-/// and [`App::launch`]) only so the Driva view can say where each grant comes
-/// from and edit the half that is the operator's.
+/// standing policy and this interaction's own are merged there, once, for every
+/// launch path. The client holds the two apart (in [`Launch`]) only so the driva
+/// view can say where each grant comes from and edit one without the other.
+///
+/// Re-exported because the modules that persist and send a policy
+/// ([`crate::preferences`], [`crate::session`]) want the type without wanting
+/// the state machine around it.
 pub use styra_server::LaunchPolicy;
-
-/// How an extra mount reads in the view and in the prompt that adds one.
-pub fn mount_label(mount: &LaunchMount) -> String {
-    let access = if mount.writable { "rw" } else { "ro" };
-    match &mount.destination {
-        Some(destination) => format!(
-            "{} → {} ({access})",
-            mount.source.display(),
-            destination.display()
-        ),
-        None => format!("{} ({access})", mount.source.display()),
-    }
-}
-
-/// The directories holding the git history of a checkout whose root is
-/// `root`, for the case where the root alone does not hold it.
-///
-/// In an ordinary checkout `.git` is a directory inside the root and this is
-/// empty. In a linked worktree `.git` is instead a file naming a directory
-/// under the main checkout, which in turn names the common directory that
-/// carries the objects and refs — both live outside the worktree, so both have
-/// to be mounted for history to be readable at all.
-fn git_history_directories(root: &Path) -> Vec<PathBuf> {
-    let pointer = root.join(".git");
-    if pointer.is_dir() {
-        return Vec::new();
-    }
-    let Some(git_directory) = std::fs::read_to_string(&pointer)
-        .ok()
-        .and_then(|contents| {
-            contents.lines().find_map(|line| {
-                line.trim()
-                    .strip_prefix("gitdir:")
-                    .map(|target| target.trim().to_owned())
-            })
-        })
-        .map(|target| resolve_against(root, Path::new(&target)))
-    else {
-        return Vec::new();
-    };
-    let common = std::fs::read_to_string(git_directory.join("commondir"))
-        .ok()
-        .map(|contents| resolve_against(&git_directory, Path::new(contents.trim())));
-    let mut directories = vec![git_directory];
-    if let Some(common) = common {
-        if !directories.contains(&common) {
-            directories.push(common);
-        }
-    }
-    directories
-}
-
-/// Interpret a path a git pointer file gave us, which may be relative to the
-/// file that named it. Canonicalized when the target exists so that the `..`
-/// segments git writes do not reach the launch policy as-is.
-fn resolve_against(base: &Path, target: &Path) -> PathBuf {
-    let joined = if target.is_absolute() {
-        target.to_path_buf()
-    } else {
-        base.join(target)
-    };
-    std::fs::canonicalize(&joined).unwrap_or(joined)
-}
-
-/// Parse the `source[:destination][:ro|rw]` an operator types into a mount
-/// request.
-///
-/// The access suffix is recognized only as a trailing `ro`/`rw`, so a path
-/// component is never mistaken for one. Access defaults to read-only: this
-/// grants an agent reach outside its workspace, so the quiet default is the
-/// one that grants least. Paths are checked for being absolute here rather
-/// than only on the server, because a relative path would otherwise resolve
-/// against the *server's* directory rather than the operator's.
-pub fn parse_launch_mount(text: &str) -> Result<LaunchMount, String> {
-    let text = text.trim();
-    if text.is_empty() {
-        return Err("give a path to mount, e.g. /srv/data:ro".into());
-    }
-    let mut parts: Vec<&str> = text.split(':').map(str::trim).collect();
-    let writable = match parts.last() {
-        Some(&"rw") => {
-            parts.pop();
-            true
-        }
-        Some(&"ro") => {
-            parts.pop();
-            false
-        }
-        _ => false,
-    };
-    let (source, destination) = match parts.as_slice() {
-        [source] => (*source, None),
-        [source, destination] => (*source, Some(*destination)),
-        _ => return Err("expected source[:destination][:ro|rw]".into()),
-    };
-    if source.is_empty() {
-        return Err("give a path to mount, e.g. /srv/data:ro".into());
-    }
-    let source = expand_home(source);
-    if !source.is_absolute() {
-        return Err(format!("{} must be an absolute path", source.display()));
-    }
-    let destination = match destination {
-        Some(destination) if destination.is_empty() => {
-            return Err("the destination cannot be empty".into())
-        }
-        Some(destination) => {
-            let destination = expand_home(destination);
-            if !destination.is_absolute() {
-                return Err(format!(
-                    "the destination {} must be an absolute path",
-                    destination.display()
-                ));
-            }
-            Some(destination)
-        }
-        None => None,
-    };
-    Ok(LaunchMount {
-        source,
-        destination,
-        writable,
-    })
-}
-
-/// Expand a leading `~`, so a typed path behaves the way it does in a shell.
-/// A `~` with no `HOME` to expand is left alone and rejected as non-absolute.
-fn expand_home(text: &str) -> PathBuf {
-    let path = PathBuf::from(text);
-    if path != Path::new("~") && !path.starts_with("~/") {
-        return path;
-    }
-    match std::env::var_os("HOME") {
-        Some(home) => PathBuf::from(home).join(path.strip_prefix("~").expect("prefix checked")),
-        None => path,
-    }
-}
-
-/// One event in the list, with its fold state.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Entry {
-    pub event: AgentEvent,
-    pub expanded: bool,
-    /// The index into [`App::raw`] of the wire line this entry was decoded
-    /// from, if known — lets the raw view jump straight to the line behind
-    /// an entry instead of making the operator hunt for it. Best-effort: an
-    /// operator's own message is echoed as an entry before its encoded wire
-    /// line is journaled, so for it this points at whatever line came just
-    /// before instead of its own.
-    pub raw_index: Option<usize>,
-}
 
 /// How long the session has been in its current state, and how long since
 /// anything last arrived from the agent.
@@ -302,35 +166,6 @@ const ACTION_MESSAGE_LIFETIME: Duration = Duration::from_secs(5);
 /// column by.
 const RECENT_MODELS: usize = 16;
 
-impl Entry {
-    /// Whether this entry has anything to show beyond its one-line summary —
-    /// the same test that decides whether the list shows a fold arrow next
-    /// to it. `crate::ui`'s detail rendering always drops the body's first
-    /// line (it invariably restates the summary — the command, the
-    /// message's first line, ...), so one line of detail alone doesn't
-    /// count; this mirrors that exactly rather than checking the raw,
-    /// undropped `AgentEvent::detail()` output. A summary truncated with an
-    /// ellipsis also counts, even with no extra detail lines, since its full
-    /// text is only reachable by expanding.
-    pub fn has_detail(&self) -> bool {
-        detail_line_count(&self.event) > 0 || self.event.summary().ends_with('…')
-    }
-}
-
-/// Total line count across an event's detail blocks, splitting multi-line
-/// text and code the same way the list's detail rendering does, minus the
-/// one line that rendering always drops as a restatement of the summary.
-fn detail_line_count(event: &AgentEvent) -> usize {
-    let count: usize = event
-        .detail()
-        .iter()
-        .map(|block| match block {
-            DetailBlock::Text(text) | DetailBlock::Code { text, .. } => text.lines().count(),
-        })
-        .sum();
-    count.saturating_sub(1)
-}
-
 /// The agent, model, and reasoning effort a session is on, as the status line
 /// names them.
 ///
@@ -349,196 +184,6 @@ pub struct LaunchLabel {
     /// names the model it resolved but never an effort, so a Claude session's
     /// effort is only ever what the launch asked for.
     pub effort_reported: bool,
-}
-
-/// Which of the launch picker's three columns has the keys.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LaunchColumn {
-    Provider,
-    Model,
-    Effort,
-}
-
-/// Which row of a column holds `value`, falling back to the first. Used to open
-/// a column on a provider's own declared default (see
-/// [`Provider::default_model`]), so switching agents lands on that provider's
-/// standard model and effort.
-fn row_of<T: PartialEq>(rows: &[T], value: &T) -> usize {
-    rows.iter().position(|row| row == value).unwrap_or(0)
-}
-
-/// The launch picker: the agent, model, and reasoning effort the *next* session
-/// will start with.
-///
-/// It edits a pending choice, not a running session — confirming it only records
-/// the selection, and the operator's own first message still starts the agent.
-/// Every row is a concrete choice out of the provider's own catalogs
-/// ([`Provider::models`], [`Provider::efforts`]), and a [`Selection`] always pins
-/// both, so there is nothing for a row meaning "whatever the agent is configured
-/// for" to express. A newly chosen agent opens on the model and effort
-/// the provider's declared defaults.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Launcher {
-    pub column: LaunchColumn,
-    pub provider: usize,
-    /// An index into [`Provider::models`], then `carried_model` if there is one.
-    pub model: usize,
-    /// An index into [`Provider::efforts`].
-    pub effort: usize,
-    /// A model the picker does not offer but the session was nonetheless
-    /// launched with. Shown as a final row so
-    /// the operator can leave it selected; the picker cannot type one, only
-    /// carry one it was opened on.
-    pub carried_model: Option<String>,
-    /// Models the operator has confirmed before, most recent first. They are
-    /// listed ahead of the rest of the catalog, so the handful of models
-    /// actually in use sit at the top of the column instead of wherever the
-    /// catalog happens to put them. Models for other agents are kept in the
-    /// list too and simply never match this provider's rows.
-    pub recent_models: Vec<String>,
-}
-
-impl Launcher {
-    /// Open the picker on `selection` — it always names a model and an effort, so
-    /// there is always a row to open on. A model the provider's catalog does not
-    /// list is carried as its own final row rather than dropped, so confirming
-    /// the picker cannot silently change an existing selection.
-    pub fn from_selection(selection: &Selection, recent_models: &[String]) -> Self {
-        let provider = row_of(&PROVIDERS, &selection.provider);
-        let models = selection.provider.models();
-        // A model the catalog does not list is carried as an extra row rather
-        // than falling back to the first.
-        let carried_model = (!models.iter().any(|candidate| *candidate == selection.model))
-            .then(|| selection.model.clone());
-        let effort = row_of(selection.provider.efforts(), &selection.effort);
-        let mut launcher = Self {
-            column: LaunchColumn::Provider,
-            provider,
-            model: 0,
-            effort,
-            carried_model,
-            recent_models: recent_models.to_vec(),
-        };
-        // Only now that the rows are ordered can the opening model be found:
-        // recency decides where it sits.
-        launcher.model = row_of(&launcher.models(), &selection.model);
-        launcher
-    }
-
-    pub fn provider(&self) -> Provider {
-        PROVIDERS[self.provider.min(PROVIDERS.len() - 1)]
-    }
-
-    /// What the picker currently describes. Every row is a concrete choice, so
-    /// this is always a fully pinned selection; the clamps cover a row index that
-    /// somehow outran its column rather than any "unset" state.
-    pub fn selection(&self) -> Selection {
-        let provider = self.provider();
-        let models = self.models();
-        let model = match models.get(self.model) {
-            Some(model) => model.clone(),
-            None => provider.default_model().to_owned(),
-        };
-        let efforts = provider.efforts();
-        let effort = efforts
-            .get(self.effort)
-            .copied()
-            .unwrap_or_else(|| provider.default_effort());
-        Selection {
-            provider,
-            model,
-            effort,
-        }
-    }
-
-    /// The model column's rows: the provider's catalog, plus a carried model if
-    /// the picker was opened on one, ordered most recently selected first.
-    ///
-    /// The sort is stable and only ranks models the operator has actually
-    /// confirmed, so everything else keeps the catalog's own order — and a
-    /// carried model, which the catalog does not list at all, stays last
-    /// until it is selected once.
-    pub fn models(&self) -> Vec<String> {
-        let mut rows: Vec<String> = self
-            .provider()
-            .models()
-            .iter()
-            .map(|model| (*model).to_owned())
-            .collect();
-        rows.extend(self.carried_model.clone());
-        rows.sort_by_key(|row| {
-            self.recent_models
-                .iter()
-                .position(|recent| recent == row)
-                .unwrap_or(usize::MAX)
-        });
-        rows
-    }
-
-    /// How many rows the model column has.
-    pub fn model_rows(&self) -> usize {
-        self.provider().models().len() + usize::from(self.carried_model.is_some())
-    }
-
-    /// How many rows the focused column has.
-    fn rows(&self) -> usize {
-        match self.column {
-            LaunchColumn::Provider => PROVIDERS.len(),
-            LaunchColumn::Model => self.model_rows(),
-            LaunchColumn::Effort => self.provider().efforts().len(),
-        }
-    }
-
-    fn row(&mut self) -> &mut usize {
-        match self.column {
-            LaunchColumn::Provider => &mut self.provider,
-            LaunchColumn::Model => &mut self.model,
-            LaunchColumn::Effort => &mut self.effort,
-        }
-    }
-
-    pub fn next(&mut self) {
-        let last = self.rows() - 1;
-        let row = self.row();
-        *row = (*row + 1).min(last);
-        self.after_move();
-    }
-
-    pub fn prev(&mut self) {
-        let row = self.row();
-        *row = row.saturating_sub(1);
-        self.after_move();
-    }
-
-    fn after_move(&mut self) {
-        // A model or effort chosen for the previous provider means nothing to the
-        // new one — the ladders and catalogs differ — so both reset to that
-        // agent's own opening rows rather than to whatever sits at the same
-        // index. That includes a carried model, which belonged to the agent the
-        // picker was opened on.
-        if self.column == LaunchColumn::Provider {
-            let provider = self.provider();
-            self.effort = row_of(provider.efforts(), &provider.default_effort());
-            self.carried_model = None;
-            self.model = row_of(&self.models(), &provider.default_model().to_owned());
-        }
-    }
-
-    pub fn next_column(&mut self) {
-        self.column = match self.column {
-            LaunchColumn::Provider => LaunchColumn::Model,
-            LaunchColumn::Model => LaunchColumn::Effort,
-            LaunchColumn::Effort => LaunchColumn::Provider,
-        };
-    }
-
-    pub fn prev_column(&mut self) {
-        self.column = match self.column {
-            LaunchColumn::Provider => LaunchColumn::Effort,
-            LaunchColumn::Model => LaunchColumn::Provider,
-            LaunchColumn::Effort => LaunchColumn::Model,
-        };
-    }
 }
 
 /// How far a preview panel is scrolled, and the last maximum offset its
@@ -594,30 +239,16 @@ impl Scroll {
     }
 }
 
-/// How far one navigation key moves: the two step sizes the event list offers.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Step {
-    /// Every visible entry, one at a time (`J`/`K`).
-    Line,
-    /// Only entries with something past their summary, so the keys that drive
-    /// the preview never stop on a row with nothing to preview (`j`/`k`).
-    WithDetail,
-}
-
 /// The complete UI state.
 pub struct App {
-    pub entries: Vec<Entry>,
-    pub selected: usize,
+    /// The event list and the operator's place in it; see [`Timeline`].
+    pub timeline: Timeline,
     pub focus: Focus,
     pub view: View,
     /// Whether the full-screen keyboard shortcut reference is open.
     pub show_keybinds: bool,
-    pub input: String,
-    /// Submitted prompts, oldest first, for readline-style Up/Down recall.
-    prompt_history: Vec<String>,
-    /// The recalled history row and the draft that was present before recall.
-    history_cursor: Option<usize>,
-    history_draft: String,
+    /// The message being typed and the ones already sent; see [`Composer`].
+    pub composer: Composer,
     /// Messages submitted while the current turn is running. They remain
     /// visible until sent or the interaction is stopped.
     queued_messages: VecDeque<String>,
@@ -625,18 +256,6 @@ pub struct App {
     /// Recent actions Styra performed without a direct operator command.
     /// Each is displayed for five seconds in the message panel.
     pub action_messages: VecDeque<ActionMessage>,
-    /// When true, the selection tracks the newest entry as events arrive.
-    pub follow: bool,
-    /// First visible item in the event list. Rendering updates this after it
-    /// accounts for wrapped and expanded row heights, so navigation can keep
-    /// a vim-like margin above and below the selection.
-    pub list_offset: Cell<usize>,
-    /// When false, minor lifecycle events (thread/turn/usage) are hidden from
-    /// the list and skipped by navigation.
-    pub show_minor: bool,
-    /// When true, the event list contains only messages exchanged between
-    /// the operator and the agent.
-    pub conversation_only: bool,
     /// When true, a side panel shows the full expanded content of the
     /// selected entry, independent of whether it is folded in the list.
     pub show_preview: bool,
@@ -677,35 +296,9 @@ pub struct App {
     pub workspace_root: Option<PathBuf>,
     /// The current directory within `workspace_root` used by a live interaction.
     pub working_directory: Option<PathBuf>,
-    /// The Driva policy (mounts, network, isolation backend) of the live
-    /// session, or — before one has launched — the policy the next interaction
-    /// would be launched under. `None` until either is known, as on a replayed
-    /// journal, which has no sandbox to describe and none to plan.
-    pub driva_options: Option<DrivaOptions>,
-    /// Whether `driva_options` describes a launch that has not happened yet.
-    /// The two are worth telling apart on screen: one is what the agent runs
-    /// under, the other is what it would run under.
-    pub driva_planned: bool,
-    /// What a new interaction in this Workspace starts from: the standing
-    /// policy stored with the Workspace itself, shared by every client that
-    /// launches there. Not the operator's to edit here — only to promote the
-    /// current policy into (see [`Self::adopt_workspace_launch`]).
-    pub workspace_launch: LaunchPolicy,
-    /// What *this* launch adds to (or says instead of) the Workspace's policy.
-    /// Editable from the Driva view while nothing has launched (see
-    /// [`Self::can_edit_launch`]), and the only half an edit touches.
-    pub launch: LaunchPolicy,
-    /// The (selection, effective policy) `driva_options` was planned for,
-    /// recorded even when the plan could not be fetched. Anything that changes
-    /// the policy — switching model, adding a mount, toggling network, entering
-    /// a Workspace with its own standing policy — makes this differ from the
-    /// current one and the plan is re-asked for; a failing server is asked once
-    /// per distinct input rather than on every frame.
-    driva_plan_key: Option<(Selection, LaunchPolicy)>,
-    /// Which of `launch.mounts` the Driva view has selected for removal.
-    pub driva_selected_mount: usize,
-    /// The open "add a mount" prompt, while the operator is typing one.
-    pub driva_prompt: Option<String>,
+    /// The sandbox policy: both of its layers, the sandbox they resolve to, and
+    /// which layer the driva view's keys are editing. See [`Launch`].
+    pub launch: Launch,
     pub latest_usage: Option<TokenUsage>,
     /// When the status last changed, and the status that was current then.
     /// Status is written from several places (an applied update, a queued send,
@@ -776,9 +369,18 @@ pub enum Request {
     /// list of them lives on the server, so the event loop fetches it and runs
     /// the picker.
     Templates,
-    /// Keep the policy now on screen as the Workspace's standing one, so every
-    /// launch here — from this client or any other — starts from it.
-    StoreWorkspaceLaunch,
+    /// Send the Workspace's standing policy, as edited here, to the server that
+    /// owns it — so every launch here, from this client or any other, starts
+    /// from it. Raised by each edit to that layer; `announce` is set only for
+    /// the explicit `W`, since an automatic store has nothing to report that
+    /// the edit's own message did not already say.
+    StoreWorkspaceLaunch {
+        announce: bool,
+    },
+    /// Move this interaction's own settings up into the Workspace's standing
+    /// policy: the merge is stored as the Workspace's and the overlay emptied,
+    /// so what the next launch runs under does not change.
+    PromoteLaunchToWorkspace,
     /// Tell the server the live interaction has been switched onto
     /// [`App::selection`], so the change lands now and outlives this client.
     ApplySelection,
@@ -787,22 +389,14 @@ pub enum Request {
 impl App {
     pub fn new(selection: Selection, session_id: impl Into<String>) -> Self {
         Self {
-            entries: Vec::new(),
-            selected: 0,
+            timeline: Timeline::default(),
             focus: Focus::List,
             view: View::Events,
             show_keybinds: false,
-            input: String::new(),
-            prompt_history: Vec::new(),
-            history_cursor: None,
-            history_draft: String::new(),
+            composer: Composer::default(),
             queued_messages: VecDeque::new(),
             status: Status::Running,
             action_messages: VecDeque::new(),
-            follow: true,
-            list_offset: Cell::new(0),
-            show_minor: false,
-            conversation_only: false,
             show_preview: false,
             preview: Scroll::default(),
             preview_mode: PresentationMode::Pretty,
@@ -817,13 +411,7 @@ impl App {
             session_name: None,
             workspace_root: None,
             working_directory: None,
-            driva_options: None,
-            driva_planned: false,
-            workspace_launch: LaunchPolicy::default(),
-            launch: LaunchPolicy::default(),
-            driva_plan_key: None,
-            driva_selected_mount: 0,
-            driva_prompt: None,
+            launch: Launch::default(),
             latest_usage: None,
             status_since: Instant::now(),
             noted_status: Status::Running,
@@ -1001,8 +589,7 @@ impl App {
     /// Replace the message box's contents outright, used to restore a message
     /// that failed to launch so it isn't lost.
     pub fn set_input(&mut self, text: String) {
-        self.input = text;
-        self.reset_history_navigation();
+        self.composer.set(text);
     }
 
     /// Append a diagnostic log entry, keeping the tail in view unless the
@@ -1054,10 +641,10 @@ impl App {
         }
         self.view = View::Raw;
         self.raw_preview.reset();
-        if !self.follow {
+        if !self.timeline.follow {
             if let Some(idx) = self
-                .entries
-                .get(self.selected)
+                .timeline
+                .selected_entry()
                 .and_then(|entry| entry.raw_index)
             {
                 self.raw_selected = idx.min(self.raw.len().saturating_sub(1));
@@ -1167,281 +754,130 @@ impl App {
     }
 
     // --- Ingesting session updates -----------------------------------------
+    //
+    // How an event changes the list is [`crate::ingest`]'s; these are the parts
+    // of that which are about the session rather than the list, kept here
+    // because the fields they move are this struct's own.
 
-    /// Append a decoded event, advancing status and, while following, selection.
+    /// Append a decoded event; see [`ingest::push_event`].
     pub fn push_event(&mut self, event: AgentEvent) {
-        // Set before the replacement paths below, all of which return early:
-        // a command or tool finishing is activity like any other.
+        ingest::push_event(self, event);
+    }
+
+    /// Record that the session ended; see [`ingest::on_ended`].
+    pub fn on_ended(&mut self, end: InteractionEnd) {
+        ingest::on_ended(self, end);
+    }
+
+    /// Note that something arrived from the agent, whatever it was: the spinner
+    /// steps with the count and the "nothing for a while" figure with the time.
+    pub(crate) fn note_event_received(&mut self) {
         self.last_event_at = Some(Instant::now());
         self.events_received += 1;
-        // A command completion is the final state of the command-start row.
-        // Replace the most recent matching start instead of adding a second
-        // line, so the list shows one command whose indication changes from
-        // running to its result.
-        if let AgentEvent::CommandCompleted { command, .. } = &event {
-            if let Some(entry) = self.entries.iter_mut().rev().find(|entry| {
-                matches!(&entry.event, AgentEvent::CommandStarted { command: started } if started == command)
-            }) {
-                entry.event = event;
-                if self.follow {
-                    self.selected = self.entries.len() - 1;
-                    self.preview.reset();
-                }
-                return;
-            }
-        }
-        // Same as above, for tool calls: a `ToolCompleted` is the final state
-        // of its matching `ToolStarted` row, correlated by id rather than
-        // name — Claude's `tool_result` only ever repeats the `tool_use_id`,
-        // never the tool's name or arguments, so the completed event's own
-        // `name`/`detail` are placeholders that get replaced with the started
-        // row's real ones (e.g. `Bash` and its command), so the finished row
-        // still shows what actually ran rather than just the bare tool name.
-        if let AgentEvent::ToolCompleted {
-            id, status, output, ..
-        } = &event
-        {
-            if let Some(entry) = self.entries.iter_mut().rev().find(|entry| {
-                matches!(&entry.event, AgentEvent::ToolStarted { id: started, .. } if started == id)
-            }) {
-                let finishes_background = matches!(
-                    &entry.event,
-                    AgentEvent::ToolStarted { name, .. }
-                        if matches!(name.as_str(), "TaskOutput" | "TaskGet" | "task_output" | "task_get")
-                            && event.finishes_background_task()
-                );
-                if let AgentEvent::ToolStarted { id, name, detail } = &entry.event {
-                    entry.event = AgentEvent::ToolCompleted {
-                        id: id.clone(),
-                        name: name.clone(),
-                        detail: detail.clone(),
-                        status: status.clone(),
-                        output: output.clone(),
-                    };
-                }
-                if finishes_background && !self.background_count_known {
-                    self.background_work = false;
-                    self.status = Status::Idle;
-                }
-                if self.follow {
-                    self.selected = self.entries.len() - 1;
-                    self.preview.reset();
-                }
-                return;
-            }
-            // Claude's Edit/Write/MultiEdit tool calls surface as `FileChanged`
-            // at start, not `ToolStarted` (see `claude_tool_started`), so their
-            // matching `ToolCompleted` never finds a started row above and
-            // would otherwise fall through to a new, id-only line. A clean
-            // result just confirms what the `FileChanged` row already showed,
-            // so it is dropped rather than appended a second time; a failed
-            // one replaces the row with a visible error, since the diff shown
-            // there may not have actually landed.
-            if let Some(entry) = self.entries.iter_mut().rev().find(|entry| {
-                matches!(&entry.event, AgentEvent::FileChanged { id: changed, .. } if changed == id)
-            }) {
-                if status == "error" {
-                    if let AgentEvent::FileChanged { paths, .. } = &entry.event {
-                        entry.event = AgentEvent::Error {
-                            message: format!("{}: {output}", paths.join(", ")),
-                        };
-                    }
-                }
-                if self.follow {
-                    self.selected = self.entries.len() - 1;
-                    self.preview.reset();
-                }
-                return;
-            }
-        }
-        // Claude reports extended thinking as a stream of lines — prose blocks
-        // and a running token count — many per turn. They all describe the
-        // same ongoing reasoning, so a run of them refreshes one line in place
-        // (keeping the last prose seen when only the count moved) instead of
-        // filling the list with a line per tick.
-        if event.updates_thinking() {
-            if let Some(entry) = self.entries.last_mut() {
-                if entry.event.updates_thinking() {
-                    if let (
-                        AgentEvent::Thinking { text, tokens },
-                        AgentEvent::Thinking {
-                            text: shown,
-                            tokens: counted,
-                        },
-                    ) = (&event, &mut entry.event)
-                    {
-                        if !text.is_empty() {
-                            *shown = text.clone();
-                        }
-                        if tokens.is_some() {
-                            *counted = *tokens;
-                        }
-                    }
-                    // The refreshed line stands for the newest wire message.
-                    entry.raw_index = self.raw.len().checked_sub(1);
-                    if self.status.is_active() {
-                        self.status = Status::Running;
-                    }
-                    if self.follow && self.is_visible(self.entries.len() - 1) {
-                        self.selected = self.entries.len() - 1;
-                        self.preview.reset();
-                    }
-                    return;
-                }
-            }
-        }
-        match &event {
-            AgentEvent::TurnCompleted { usage } => {
-                // The app-server protocol's `turn/completed` carries no usage
-                // figures of its own (a default, empty one); keep whatever the
-                // last `UsageUpdated` reported rather than blanking the display.
-                if *usage != TokenUsage::default() {
-                    self.latest_usage = Some(usage.clone());
-                }
-                if self.status.is_active() {
-                    self.status = if self.background_work {
-                        Status::Background
-                    } else {
-                        Status::Idle
-                    };
-                }
-            }
-            AgentEvent::UsageUpdated { usage } => {
-                self.latest_usage = Some(usage.clone());
-            }
-            // The agent naming its own model settles what is running, so it
-            // replaces the launch request in the status line. An effort the
-            // agent does not report leaves whatever was already known standing
-            // (Claude Code names a model but never an effort, so the launch's
-            // own `--effort` remains the only word on it).
-            AgentEvent::ThreadStarted {
-                model: Some(model),
-                effort,
-                ..
-            } => {
-                let known = effort
-                    .clone()
-                    .or_else(|| self.reported_model.take().and_then(|(_, effort)| effort));
-                self.reported_model = Some((model.clone(), known));
-            }
-            AgentEvent::UserMessage { .. }
-            | AgentEvent::TurnStarted
-            | AgentEvent::CommandStarted { .. }
-            | AgentEvent::ToolStarted { .. }
-            | AgentEvent::AgentMessage { .. }
-            | AgentEvent::Thinking { .. }
-            | AgentEvent::PlanUpdated { .. } => {
-                if self.status.is_active() {
-                    self.status = Status::Running;
-                }
-            }
-            _ => {}
-        }
-        if let Some(running) = event.background_tasks_running() {
-            self.background_count_known = true;
-            self.background_work = running > 0;
-            if !self.background_work && self.status == Status::Background {
-                self.status = Status::Idle;
-            }
-        } else if event.starts_background_task() {
-            self.background_work = true;
-        }
-        let transfer_expansion = self.follow
-            && self.event_is_visible(&event)
-            && self
-                .entries
-                .get(self.selected)
-                .is_some_and(|entry| entry.expanded)
-            && self.seek_forward(self.selected + 1, Step::Line).is_none();
-        if transfer_expansion {
-            self.entries[self.selected].expanded = false;
-        }
-        self.entries.push(Entry {
-            event,
-            expanded: transfer_expansion,
-            raw_index: self.raw.len().checked_sub(1),
-        });
-        // Follow the tail of what is actually rendered. Hidden minor events
-        // must not move the selection (and therefore the list viewport).
-        if self.follow && self.is_visible(self.entries.len() - 1) {
-            self.selected = self.entries.len() - 1;
-            self.preview.reset();
+    }
+
+    /// Where a completed turn leaves the session: still working on something in
+    /// the background, or genuinely waiting for the operator.
+    pub(crate) fn idle_or_background(&self) -> Status {
+        if self.background_work {
+            Status::Background
+        } else {
+            Status::Idle
         }
     }
 
-    /// Record that the session ended. This is terminal regardless of `Stopped`.
-    pub fn on_ended(&mut self, end: InteractionEnd) {
-        self.status = Status::Ended {
-            exit_code: end.exit_code,
-            error: end.error,
-        };
+    /// The provider's own count of what it is running in the background. Once
+    /// it has reported one, that count is the only thing that moves the flag.
+    pub(crate) fn note_background_count(&mut self, running: usize) {
+        self.background_count_known = true;
+        self.background_work = running > 0;
+        if !self.background_work && self.status == Status::Background {
+            self.status = Status::Idle;
+        }
+    }
+
+    /// A tool call that looks like it started background work, for providers
+    /// that never report a count.
+    pub(crate) fn note_background_started(&mut self) {
+        self.background_work = true;
+    }
+
+    /// The same heuristic in reverse, and ignored once the provider has spoken
+    /// for itself.
+    pub(crate) fn note_background_finished(&mut self) {
+        if !self.background_count_known {
+            self.background_work = false;
+            self.status = Status::Idle;
+        }
+    }
+
+    /// Put the selection on the last entry, where following leaves it, and
+    /// start its preview from the top.
+    pub(crate) fn select_tail(&mut self) {
+        self.timeline.select_tail();
+        self.preview.reset();
     }
 
     // --- List navigation ----------------------------------------------------
+    //
+    // Where the selection lands is [`Timeline`]'s; the preview scroll it
+    // invalidates is this struct's, so each of these is one of its moves plus
+    // that. See [`Timeline::select_forward`] for what "moved" means.
 
-    fn event_is_visible(&self, event: &AgentEvent) -> bool {
-        (self.show_minor || !event.is_minor())
-            && (!self.conversation_only
-                || matches!(
-                    event,
-                    AgentEvent::UserMessage { .. } | AgentEvent::AgentMessage { .. }
-                ))
-    }
-
-    /// Whether an entry is shown in the list under the current filters.
-    pub fn is_visible(&self, idx: usize) -> bool {
-        self.event_is_visible(&self.entries[idx].event)
-    }
-
-    /// Whether an entry is one `j`/`k` should land on: visible, and carrying
-    /// content worth previewing. Usually that means a fold arrow, but file
-    /// events are always navigable because their preview includes the current
-    /// file contents even when their event detail is only one line.
-    fn is_navigable(&self, idx: usize) -> bool {
-        self.is_visible(idx)
-            && (self.entries[idx].has_detail()
-                || matches!(self.entries[idx].event, AgentEvent::FileChanged { .. }))
-    }
-
-    fn reaches(&self, idx: usize, step: Step) -> bool {
-        match step {
-            Step::Line => self.is_visible(idx),
-            Step::WithDetail => self.is_navigable(idx),
-        }
-    }
-
-    /// The nearest index `step` can land on at or after `from`, if any.
-    fn seek_forward(&self, from: usize, step: Step) -> Option<usize> {
-        (from..self.entries.len()).find(|&i| self.reaches(i, step))
-    }
-
-    /// The nearest index `step` can land on at or before `from`, if any.
-    fn seek_back(&self, from: usize, step: Step) -> Option<usize> {
-        (0..=from).rev().find(|&i| self.reaches(i, step))
-    }
-
-    /// Move towards the tail, re-enabling follow only once the selection
-    /// reaches the last entry this step can land on.
-    fn select_forward(&mut self, step: Step) {
-        if let Some(next) = self.seek_forward(self.selected + 1, step) {
-            self.selected = next;
+    fn moved(&mut self, moved: bool) {
+        if moved {
             self.preview.reset();
         }
-        self.follow =
-            !self.entries.is_empty() && self.seek_forward(self.selected + 1, step).is_none();
     }
 
-    /// Move towards the start. Leaving the tail always pins the view.
-    fn select_backward(&mut self, step: Step) {
-        if let Some(prev) = self
-            .selected
-            .checked_sub(1)
-            .and_then(|from| self.seek_back(from, step))
-        {
-            self.selected = prev;
-            self.preview.reset();
-        }
-        self.follow = false;
+    /// Move to the next entry with an arrow (something beyond its bare
+    /// summary), skipping over ones with nothing else to show. See
+    /// [`Self::select_next_line`] to instead step one entry at a time.
+    pub fn select_next(&mut self) {
+        let moved = self.timeline.select_forward(Step::WithDetail);
+        self.moved(moved);
+    }
+
+    /// Move to the previous entry with an arrow; see [`Self::select_next`].
+    pub fn select_prev(&mut self) {
+        let moved = self.timeline.select_backward(Step::WithDetail);
+        self.moved(moved);
+    }
+
+    /// Move to the next visible entry regardless of whether it has anything
+    /// beyond its summary — a finer-grained step than [`Self::select_next`],
+    /// which skips entries with no arrow.
+    pub fn select_next_line(&mut self) {
+        let moved = self.timeline.select_forward(Step::Line);
+        self.moved(moved);
+    }
+
+    /// Move to the previous visible entry; see [`Self::select_next_line`].
+    pub fn select_prev_line(&mut self) {
+        let moved = self.timeline.select_backward(Step::Line);
+        self.moved(moved);
+    }
+
+    pub fn select_first(&mut self) {
+        let moved = self.timeline.select_first();
+        self.moved(moved);
+    }
+
+    pub fn select_last(&mut self) {
+        let moved = self.timeline.select_last();
+        self.moved(moved);
+    }
+
+    /// Toggle whether minor lifecycle events (thread/turn/usage) are shown.
+    pub fn toggle_minor(&mut self) {
+        let moved = self.timeline.toggle_minor();
+        self.moved(moved);
+    }
+
+    /// Toggle whether the main event list shows only operator/agent messages.
+    pub fn toggle_conversation_only(&mut self) {
+        let moved = self.timeline.toggle_conversation_only();
+        self.moved(moved);
     }
 
     /// Toggle the side panel that previews the selected entry's full content.
@@ -1479,9 +915,9 @@ impl App {
     /// Files renderer can distinguish workspace-relative and external roots.
     pub fn file_paths(&self) -> Vec<String> {
         let entries: Box<dyn Iterator<Item = &Entry> + '_> = if self.file_show_all {
-            Box::new(self.entries.iter())
+            Box::new(self.timeline.entries.iter())
         } else {
-            Box::new(self.selected_entry().into_iter())
+            Box::new(self.timeline.selected_entry().into_iter())
         };
         let mut paths = Vec::new();
         for entry in entries {
@@ -1596,16 +1032,11 @@ impl App {
     /// blank just because the mode is on.
     pub fn preview_entry(&self) -> Option<&Entry> {
         if self.preview_target == PreviewTarget::Command {
-            if let Some(entry) = self
-                .entries
-                .iter()
-                .rev()
-                .find(|entry| entry.event.tag() == "shell")
-            {
+            if let Some(entry) = self.timeline.newest_command() {
                 return Some(entry);
             }
         }
-        self.selected_entry()
+        self.timeline.selected_entry()
     }
 
     /// Record the host directory backing the agent's workspace, so the
@@ -1620,440 +1051,22 @@ impl App {
         self.working_directory = Some(path);
     }
 
-    /// Record the Driva policy the live session was launched under. This is the
-    /// real thing, so it replaces any plan made before the launch.
-    pub fn set_driva_options(&mut self, options: DrivaOptions) {
-        self.driva_options = Some(options);
-        self.driva_planned = false;
-        self.driva_plan_key = None;
-    }
-
-    /// Record the policy a new interaction under `selection` and this
-    /// effective launch policy would start with, or that the server could not
-    /// say (`None`). Either way the inputs are remembered as asked about.
-    ///
-    /// `launch` is the merged policy, not the operator's half of it: the server
-    /// answers for the merge, so keying the plan on anything less would leave a
-    /// Workspace's own grants able to change without the plan being re-asked.
-    pub fn set_planned_driva_options(
-        &mut self,
-        selection: Selection,
-        launch: LaunchPolicy,
-        options: Option<DrivaOptions>,
-    ) {
-        self.driva_plan_key = Some((selection, launch));
-        if let Some(options) = options {
-            self.driva_options = Some(options);
-            self.driva_planned = true;
-        }
-    }
-
-    /// Whether the launch policy for a not-yet-started interaction still has to
-    /// be asked for: a live session's own policy is never superseded by a plan.
-    ///
-    /// A stopped or ended session is asked about too, and this is why it is
-    /// keyed on the inputs rather than on "have we ever been told a policy".
-    /// What it holds is the record of the interaction that just finished; the
-    /// moment a mount or a template is added, that record no longer describes
-    /// what the next message would resume under, and showing it unchanged read
-    /// as the edit having been discarded.
-    pub fn needs_driva_plan(&self) -> bool {
-        if !self.can_edit_launch() {
-            return false;
-        }
-        match &self.driva_plan_key {
-            Some((selection, launch)) => {
-                selection != &self.selection || launch != &self.effective_launch()
-            }
-            None => true,
-        }
-    }
-
-    /// The single policy a launch from here would run under: the Workspace's
-    /// standing one with this launch's own over it. Merged by the same code the
-    /// server merges with, so what the view shows is what the launch resolves.
-    pub fn effective_launch(&self) -> LaunchPolicy {
-        LaunchPolicy::merge(&self.workspace_launch, &self.launch)
-    }
-
-    /// Adopt the standing policy of the Workspace now being viewed.
-    ///
-    /// The operator's own overlay is deliberately kept: it is what *this*
-    /// client is building for its next interaction, and carrying it across a
-    /// Workspace switch matches how the launch selection already travels.
-    pub fn set_workspace_launch(&mut self, launch: LaunchPolicy) {
-        self.workspace_launch = launch;
-        self.driva_selected_mount = 0;
-    }
-
-    /// Take the current effective policy as the Workspace's own, once the
-    /// server has stored it: the overlay is now redundant, so it is emptied
-    /// rather than left to be layered onto itself.
-    pub fn adopt_workspace_launch(&mut self, launch: LaunchPolicy) {
-        self.workspace_launch = launch;
-        self.launch = LaunchPolicy::default();
-        self.driva_selected_mount = 0;
-    }
-
-    /// Whether the launch policy can still be edited. Only before an
-    /// interaction exists, or after one has finished: while one is running or
-    /// idle, what the Driva view shows is a record of the sandbox it is
-    /// confined to, and changing that would mean a new session. Once nothing is
-    /// running there is no live sandbox to contradict, so editing reopens just
-    /// as if the interaction had never started — and the resume the next
-    /// message triggers launches under the edited policy.
-    ///
-    /// `Ended` counts as much as `Stopped`. An agent that exited on its own,
-    /// and a stored session replayed from its journal (which is marked ended
-    /// when it is opened), are resumed by exactly the same path as one the
-    /// operator stopped, so refusing edits there only made the policy look
-    /// frozen while the resume happily accepted a new one.
+    /// Whether the launch policy can still be edited; see [`launch::editable`].
     pub fn can_edit_launch(&self) -> bool {
-        matches!(
-            self.status,
-            Status::Pending | Status::Stopped | Status::Ended { .. }
-        )
+        launch::editable(&self.status)
     }
 
     /// Refuse an edit to the launch policy when there is nothing to edit,
-    /// saying why. Returns whether the caller may proceed. Public so a key
-    /// that leaves this module to do its work — opening the template picker,
-    /// writing the defaults file — refuses with the same words as the rest.
+    /// saying why. Returns whether the caller may proceed. Public because the
+    /// keys for it live in [`crate::launch`], and because one of them leaves
+    /// this process to do its work (writing the defaults file) and must refuse
+    /// with the same words as the rest.
     pub fn allow_launch_edit(&mut self) -> bool {
         if self.can_edit_launch() {
             return true;
         }
         self.show_action_message("the launch policy is fixed while an interaction is running");
         false
-    }
-
-    /// Permit or forbid agent networking for the next interaction.
-    ///
-    /// Two states, not three: either this launch states the opposite of what it
-    /// would otherwise inherit, or it states nothing and inherits. Stating
-    /// agreement with the Workspace is expressible but pointless, so `w` does
-    /// not stop there — the first press always changes the effective answer and
-    /// the second always returns to inheriting. With no Workspace policy in
-    /// play, "inherit" is "off" and this is the plain on/off toggle it was.
-    pub fn cycle_launch_network(&mut self) {
-        if !self.allow_launch_edit() {
-            return;
-        }
-        let inherited = self.workspace_launch.grants_network();
-        self.launch.network = match self.launch.network {
-            None => Some(!inherited),
-            Some(_) => None,
-        };
-        let message = match (self.launch.network, inherited) {
-            (Some(true), _) => "network on for the next interaction".to_owned(),
-            // Only ever a withdrawal of *this* permission: the profile and the
-            // templates have their own, which the server ORs in, so say so
-            // rather than promising a sandbox with no network.
-            (Some(false), _) => {
-                "network permission withdrawn — a profile or template may still permit it"
-                    .to_owned()
-            }
-            (None, inherited) => format!(
-                "network follows the Workspace policy again ({})",
-                if inherited { "on" } else { "off" }
-            ),
-        };
-        self.show_action_message(message);
-    }
-
-    /// Say whether this launch inherits the Workspace's templates and mounts or
-    /// carries the whole policy itself. Bound to `I`, for inheriting.
-    pub fn toggle_launch_standalone(&mut self) {
-        if !self.allow_launch_edit() {
-            return;
-        }
-        self.launch.standalone = !self.launch.standalone;
-        self.show_action_message(if self.launch.standalone {
-            "standalone — the Workspace policy does not apply to this launch"
-        } else {
-            "this launch adds to the Workspace policy again"
-        });
-    }
-
-    /// Adopt the templates chosen in the picker.
-    ///
-    /// The picker shows and returns the *effective* list, so the choice has to
-    /// be turned back into an overlay. Keeping everything the Workspace grants
-    /// means the overlay is just the additions. Dropping one of them cannot be
-    /// said by adding, so the launch stops inheriting and carries the list
-    /// itself — otherwise deselecting a Workspace template would silently do
-    /// nothing.
-    pub fn set_launch_templates(&mut self, chosen: Vec<String>) {
-        if !self.allow_launch_edit() {
-            return;
-        }
-        let base = &self.workspace_launch.templates;
-        if !self.launch.standalone && base.iter().all(|name| chosen.contains(name)) {
-            self.launch.templates = chosen
-                .into_iter()
-                .filter(|name| !base.contains(name))
-                .collect();
-            return;
-        }
-        if !self.launch.standalone {
-            self.show_action_message(
-                "standalone — dropping a Workspace template means this launch carries its own list",
-            );
-        }
-        self.launch.standalone = true;
-        self.launch.templates = chosen;
-    }
-
-    /// Add the history of the git checkout the client was started in as a
-    /// writable mount — the one mount an operator almost always wants and the
-    /// most tedious to type, since it means knowing where the repository root
-    /// actually is.
-    ///
-    /// The checkout's `.git` and not the checkout itself: the workspace the
-    /// agent already has is where the files live, so mounting the whole root
-    /// would hand it a second copy of the tree. What it is missing is the
-    /// history — an agent that cannot see `.git` fails every command that
-    /// reads it in a way that reads as a broken agent rather than a mount that
-    /// was cut too narrowly.
-    ///
-    /// Inside a linked worktree that `.git` is a file pointing at a directory
-    /// that lives under the main checkout, so the history is outside the mount
-    /// and every command that reads it still fails. The directories that file
-    /// leads to are added alongside it.
-    pub fn add_git_root_mount(&mut self) {
-        if !self.allow_launch_edit() {
-            return;
-        }
-        let Some(root) = self.git_root() else {
-            return self.show_action_message("no .git found at or above the working directory");
-        };
-        let mut sources = vec![root.join(".git")];
-        for directory in git_history_directories(&root) {
-            if !sources.iter().any(|source| directory.starts_with(source)) {
-                sources.push(directory);
-            }
-        }
-
-        let mut added = Vec::new();
-        let mut skipped = Vec::new();
-        for source in sources {
-            let mount = LaunchMount {
-                source,
-                destination: None,
-                writable: true,
-            };
-            if self.launch.mounts.contains(&mount) {
-                skipped.push("that mount is already in the launch policy");
-                continue;
-            }
-            if !self.launch.standalone && self.workspace_launch.mounts.contains(&mount) {
-                skipped.push("the Workspace policy already grants that mount");
-                continue;
-            }
-            added.push(mount_label(&mount));
-            self.launch.mounts.push(mount);
-            self.driva_selected_mount = self.launch.mounts.len() - 1;
-        }
-
-        match (added.is_empty(), skipped.first()) {
-            (true, Some(reason)) => self.show_action_message(*reason),
-            (true, None) => {}
-            (false, _) => self.show_action_message(format!("added {}", added.join(", "))),
-        }
-    }
-
-    /// The nearest enclosing directory that holds a `.git`, starting from the
-    /// Workspace's host path when there is one and the process's own working
-    /// directory otherwise. Inside a worktree `.git` is a file rather than a
-    /// directory, so the test is existence and not kind.
-    fn git_root(&self) -> Option<PathBuf> {
-        let start = self
-            .workspace_root
-            .clone()
-            .or_else(|| std::env::current_dir().ok())?;
-        start
-            .ancestors()
-            .find(|directory| directory.join(".git").exists())
-            .map(Path::to_path_buf)
-    }
-
-    /// Open the prompt that adds an extra mount.
-    pub fn open_driva_prompt(&mut self) {
-        if !self.allow_launch_edit() {
-            return;
-        }
-        self.driva_prompt = Some(String::new());
-    }
-
-    pub fn cancel_driva_prompt(&mut self) {
-        self.driva_prompt = None;
-    }
-
-    /// Accept what the prompt holds as an extra mount, or explain why it is not
-    /// one and leave the prompt open with the text still in it.
-    pub fn confirm_driva_prompt(&mut self) {
-        let Some(text) = self.driva_prompt.clone() else {
-            return;
-        };
-        if !self.allow_launch_edit() {
-            self.driva_prompt = None;
-            return;
-        }
-        match parse_launch_mount(&text) {
-            Ok(mount) => {
-                self.driva_prompt = None;
-                if self.launch.mounts.contains(&mount) {
-                    return self.show_action_message("that mount is already in the launch policy");
-                }
-                // A mount the Workspace already grants identically needs no
-                // overlay at all. Saying so is more useful than adding a row
-                // that changes nothing about the sandbox.
-                if !self.launch.standalone && self.workspace_launch.mounts.contains(&mount) {
-                    return self
-                        .show_action_message("the Workspace policy already grants that mount");
-                }
-                self.launch.mounts.push(mount);
-                self.driva_selected_mount = self.launch.mounts.len() - 1;
-            }
-            Err(problem) => self.show_action_message(problem),
-        }
-    }
-
-    /// Drop the selected extra mount from the launch policy.
-    pub fn remove_selected_launch_mount(&mut self) {
-        if !self.allow_launch_edit() {
-            return;
-        }
-        if self.launch.mounts.is_empty() {
-            // The cursor only ever sits on this launch's own mounts, so name
-            // the key that does reach a Workspace one rather than leaving the
-            // operator pressing `x` at a row it cannot touch.
-            return self.show_action_message(if self.workspace_launch.mounts.is_empty() {
-                "no added mount to remove"
-            } else {
-                "the Workspace policy's mounts are not this launch's to remove — press I to stop inheriting it"
-            });
-        }
-        let index = self.driva_selected_mount.min(self.launch.mounts.len() - 1);
-        let removed = self.launch.mounts.remove(index);
-        self.driva_selected_mount = index.min(self.launch.mounts.len().saturating_sub(1));
-        self.show_action_message(format!("removed {}", mount_label(&removed)));
-    }
-
-    pub fn driva_select_next_mount(&mut self) {
-        self.driva_selected_mount =
-            (self.driva_selected_mount + 1).min(self.launch.mounts.len().saturating_sub(1));
-    }
-
-    pub fn driva_select_prev_mount(&mut self) {
-        self.driva_selected_mount = self.driva_selected_mount.saturating_sub(1);
-    }
-
-    /// Toggle whether minor lifecycle events (thread/turn/usage) are shown.
-    pub fn toggle_minor(&mut self) {
-        self.show_minor = !self.show_minor;
-        self.reconcile_filtered_selection();
-    }
-
-    /// Toggle whether the main event list shows only operator/agent messages.
-    pub fn toggle_conversation_only(&mut self) {
-        self.conversation_only = !self.conversation_only;
-        self.reconcile_filtered_selection();
-    }
-
-    fn reconcile_filtered_selection(&mut self) {
-        if !self.entries.is_empty() && !self.is_visible(self.selected) {
-            if let Some(idx) = self
-                .seek_back(self.selected, Step::Line)
-                .or_else(|| self.seek_forward(self.selected, Step::Line))
-            {
-                self.selected = idx;
-                self.preview.reset();
-            }
-        }
-    }
-
-    /// Move to the next entry with an arrow (something beyond its bare
-    /// summary), skipping over ones with nothing else to show. See
-    /// [`Self::select_next_line`] to instead step one entry at a time.
-    pub fn select_next(&mut self) {
-        self.select_forward(Step::WithDetail);
-    }
-
-    /// Move to the previous entry with an arrow; see [`Self::select_next`].
-    pub fn select_prev(&mut self) {
-        self.select_backward(Step::WithDetail);
-    }
-
-    /// Move to the next visible entry regardless of whether it has anything
-    /// beyond its summary — a finer-grained step than [`Self::select_next`],
-    /// which skips entries with no arrow.
-    pub fn select_next_line(&mut self) {
-        self.select_forward(Step::Line);
-    }
-
-    /// Move to the previous visible entry; see [`Self::select_next_line`].
-    pub fn select_prev_line(&mut self) {
-        self.select_backward(Step::Line);
-    }
-
-    pub fn select_first(&mut self) {
-        if let Some(first) = self.seek_forward(0, Step::Line) {
-            self.selected = first;
-            self.preview.reset();
-        }
-        self.follow =
-            !self.entries.is_empty() && self.seek_forward(self.selected + 1, Step::Line).is_none();
-    }
-
-    pub fn select_last(&mut self) {
-        if self.entries.is_empty() {
-            return;
-        }
-        if let Some(last) = self.seek_back(self.entries.len() - 1, Step::Line) {
-            self.selected = last;
-            self.preview.reset();
-        }
-        self.follow = true;
-    }
-
-    // --- Expansion -----------------------------------------------------------
-
-    /// Whether an entry renders expanded. Conversation-only mode shows every
-    /// remaining line in full: with tool activity filtered away, what is left
-    /// is prose meant to be read, and folding it would leave the list nearly
-    /// empty. The per-entry flag is left untouched, so the previous folding
-    /// comes back as soon as the filter is turned off.
-    pub fn entry_expanded(&self, idx: usize) -> bool {
-        self.conversation_only || self.entries[idx].expanded
-    }
-
-    pub fn toggle_expand(&mut self) {
-        if let Some(entry) = self.entries.get_mut(self.selected) {
-            entry.expanded = !entry.expanded;
-        }
-    }
-
-    pub fn expand_only_selected(&mut self) {
-        for (index, entry) in self.entries.iter_mut().enumerate() {
-            entry.expanded = index == self.selected;
-        }
-    }
-
-    pub fn expand_all(&mut self) {
-        for entry in &mut self.entries {
-            entry.expanded = true;
-        }
-    }
-
-    pub fn collapse_all(&mut self) {
-        for entry in &mut self.entries {
-            entry.expanded = false;
-        }
-    }
-
-    pub fn selected_entry(&self) -> Option<&Entry> {
-        self.entries.get(self.selected)
     }
 
     /// Plain text for whatever the current view treats as "the selected
@@ -2108,86 +1121,15 @@ impl App {
     }
 
     // --- Message editing -----------------------------------------------------
-
-    pub fn input_char(&mut self, ch: char) {
-        self.reset_history_navigation();
-        self.input.push(ch);
-    }
-
-    pub fn input_backspace(&mut self) {
-        self.reset_history_navigation();
-        self.input.pop();
-    }
-
-    /// Delete the word immediately before the end of the buffer (`Ctrl-W`),
-    /// readline-style: trailing whitespace first, then non-whitespace back
-    /// to the previous word boundary (or the start of the buffer).
-    pub fn input_delete_word(&mut self) {
-        self.reset_history_navigation();
-        let trimmed = self.input.trim_end_matches(char::is_whitespace).len();
-        self.input.truncate(trimmed);
-        let word_start = self
-            .input
-            .rfind(char::is_whitespace)
-            .map(|idx| idx + 1)
-            .unwrap_or(0);
-        self.input.truncate(word_start);
-    }
-
-    pub fn input_newline(&mut self) {
-        self.reset_history_navigation();
-        self.input.push('\n');
-    }
-
-    /// Recall older submitted prompts, preserving the current draft so Down
-    /// can return to it after walking back to the newest history entry.
-    pub fn input_history_previous(&mut self) {
-        if self.prompt_history.is_empty() {
-            return;
-        }
-        let next = match self.history_cursor {
-            Some(index) => index.saturating_sub(1),
-            None => {
-                self.history_draft.clone_from(&self.input);
-                self.prompt_history.len() - 1
-            }
-        };
-        self.history_cursor = Some(next);
-        self.input.clone_from(&self.prompt_history[next]);
-    }
-
-    pub fn input_history_next(&mut self) {
-        let Some(index) = self.history_cursor else {
-            return;
-        };
-        if index + 1 < self.prompt_history.len() {
-            let next = index + 1;
-            self.history_cursor = Some(next);
-            self.input.clone_from(&self.prompt_history[next]);
-        } else {
-            self.history_cursor = None;
-            self.input.clone_from(&self.history_draft);
-            self.history_draft.clear();
-        }
-    }
-
-    fn reset_history_navigation(&mut self) {
-        self.history_cursor = None;
-        self.history_draft.clear();
-    }
+    //
+    // The buffer and its history are [`Composer`]'s; what is left here is the
+    // one part of sending that is not — a sent message leaves the box, and the
+    // rest of the client wants it.
 
     /// Take the trimmed message for sending, clearing the buffer. Returns
     /// `None` when the buffer holds only whitespace.
     pub fn take_message(&mut self) -> Option<String> {
-        let message = self.input.trim().to_owned();
-        self.input.clear();
-        if message.is_empty() {
-            None
-        } else {
-            self.prompt_history.push(message.clone());
-            self.reset_history_navigation();
-            Some(message)
-        }
+        self.composer.take()
     }
 
     /// Ask the event loop for something this screen cannot do itself; see
@@ -2205,6 +1147,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::launcher::LaunchColumn;
     use styra_server::agent::Effort;
 
     fn app() -> App {
@@ -2215,58 +1158,29 @@ mod tests {
     }
 
     #[test]
-    fn a_worktree_contributes_the_directories_holding_its_history() {
-        let base = std::env::temp_dir().join("styra-git-history-directories");
-        let _ = std::fs::remove_dir_all(&base);
-        let main = base.join("main");
-        let worktree_git = main.join(".git/worktrees/feature");
-        let worktree = base.join("feature");
-        std::fs::create_dir_all(&worktree_git).unwrap();
-        std::fs::create_dir_all(&worktree).unwrap();
-        std::fs::write(
-            worktree.join(".git"),
-            "gitdir: ../main/.git/worktrees/feature\n",
-        )
-        .unwrap();
-        std::fs::write(worktree_git.join("commondir"), "../..\n").unwrap();
-
-        let directories = git_history_directories(&worktree);
-
-        assert_eq!(
-            directories,
-            vec![
-                std::fs::canonicalize(&worktree_git).unwrap(),
-                std::fs::canonicalize(main.join(".git")).unwrap(),
-            ]
-        );
-        assert!(git_history_directories(&main).is_empty());
-        let _ = std::fs::remove_dir_all(&base);
-    }
-
-    #[test]
     fn following_tracks_the_newest_entry() {
         let mut app = app();
         app.push_event(AgentEvent::TurnStarted);
         app.push_event(AgentEvent::AgentMessage { text: "hi".into() });
-        assert!(app.follow);
-        assert_eq!(app.selected, 1);
+        assert!(app.timeline.follow);
+        assert_eq!(app.timeline.selected, 1);
     }
 
     #[test]
     fn following_ignores_hidden_minor_events() {
         let mut app = app();
         app.push_event(AgentEvent::AgentMessage { text: "hi".into() });
-        app.entries[0].expanded = true;
+        app.timeline.entries[0].expanded = true;
         app.preview.offset = 3;
 
         app.push_event(AgentEvent::TurnStarted);
 
-        assert!(app.follow);
-        assert_eq!(app.selected, 0);
+        assert!(app.timeline.follow);
+        assert_eq!(app.timeline.selected, 0);
         assert_eq!(app.preview.offset, 3);
-        assert!(app.is_visible(app.selected));
-        assert!(app.entries[0].expanded);
-        assert!(!app.entries[1].expanded);
+        assert!(app.timeline.is_visible(app.timeline.selected));
+        assert!(app.timeline.entries[0].expanded);
+        assert!(!app.timeline.entries[1].expanded);
     }
 
     #[test]
@@ -2275,15 +1189,15 @@ mod tests {
         app.push_event(AgentEvent::AgentMessage {
             text: "first".into(),
         });
-        app.entries[0].expanded = true;
+        app.timeline.entries[0].expanded = true;
 
         app.push_event(AgentEvent::AgentMessage {
             text: "second".into(),
         });
 
-        assert_eq!(app.selected, 1);
-        assert!(!app.entries[0].expanded);
-        assert!(app.entries[1].expanded);
+        assert_eq!(app.timeline.selected, 1);
+        assert!(!app.timeline.entries[0].expanded);
+        assert!(app.timeline.entries[1].expanded);
     }
 
     #[test]
@@ -2297,21 +1211,21 @@ mod tests {
             });
         }
         app.select_prev();
-        assert!(!app.follow);
-        assert_eq!(app.selected, 1);
+        assert!(!app.timeline.follow);
+        assert_eq!(app.timeline.selected, 1);
 
         // New events no longer move the selection while pinned.
         app.push_event(AgentEvent::AgentMessage {
             text: "x\nmore x".into(),
         });
-        assert_eq!(app.selected, 1);
+        assert_eq!(app.timeline.selected, 1);
 
         // Walking back down to the tail re-enables follow.
         app.select_next();
         app.select_next();
         app.select_next();
-        assert!(app.follow);
-        assert_eq!(app.selected, app.entries.len() - 1);
+        assert!(app.timeline.follow);
+        assert_eq!(app.timeline.selected, app.timeline.entries.len() - 1);
     }
 
     #[test]
@@ -2324,17 +1238,17 @@ mod tests {
             app.push_event(AgentEvent::AgentMessage { text: "x".into() });
         }
         app.select_prev_line();
-        assert!(!app.follow);
-        assert_eq!(app.selected, 1);
+        assert!(!app.timeline.follow);
+        assert_eq!(app.timeline.selected, 1);
 
         app.push_event(AgentEvent::AgentMessage { text: "x".into() });
-        assert_eq!(app.selected, 1);
+        assert_eq!(app.timeline.selected, 1);
 
         app.select_next_line();
         app.select_next_line();
         app.select_next_line();
-        assert!(app.follow);
-        assert_eq!(app.selected, app.entries.len() - 1);
+        assert!(app.timeline.follow);
+        assert_eq!(app.timeline.selected, app.timeline.entries.len() - 1);
     }
 
     #[test]
@@ -2354,9 +1268,9 @@ mod tests {
             tokens: Some(512),
         });
 
-        assert_eq!(app.entries.len(), 2);
+        assert_eq!(app.timeline.entries.len(), 2);
         assert_eq!(
-            app.entries[1].event,
+            app.timeline.entries[1].event,
             AgentEvent::Thinking {
                 text: "weigh the options".into(),
                 tokens: Some(512),
@@ -2369,7 +1283,7 @@ mod tests {
             text: String::new(),
             tokens: Some(8),
         });
-        assert_eq!(app.entries.len(), 4);
+        assert_eq!(app.timeline.entries.len(), 4);
     }
 
     #[test]
@@ -2379,14 +1293,14 @@ mod tests {
         app.push_event(AgentEvent::AgentMessage { text: "b".into() });
 
         app.select_first();
-        app.toggle_expand();
-        assert!(app.entries[0].expanded);
-        assert!(!app.entries[1].expanded);
+        app.timeline.toggle_expand();
+        assert!(app.timeline.entries[0].expanded);
+        assert!(!app.timeline.entries[1].expanded);
 
-        app.expand_all();
-        assert!(app.entries.iter().all(|entry| entry.expanded));
-        app.collapse_all();
-        assert!(app.entries.iter().all(|entry| !entry.expanded));
+        app.timeline.expand_all();
+        assert!(app.timeline.entries.iter().all(|entry| entry.expanded));
+        app.timeline.collapse_all();
+        assert!(app.timeline.entries.iter().all(|entry| !entry.expanded));
     }
 
     #[test]
@@ -2395,15 +1309,15 @@ mod tests {
         app.push_event(AgentEvent::AgentMessage { text: "a".into() });
         app.push_event(AgentEvent::AgentMessage { text: "b".into() });
         app.push_event(AgentEvent::AgentMessage { text: "c".into() });
-        app.expand_all();
+        app.timeline.expand_all();
 
         app.select_first();
         app.select_next_line();
-        app.expand_only_selected();
+        app.timeline.expand_only_selected();
 
-        assert!(!app.entries[0].expanded);
-        assert!(app.entries[1].expanded);
-        assert!(!app.entries[2].expanded);
+        assert!(!app.timeline.entries[0].expanded);
+        assert!(app.timeline.entries[1].expanded);
+        assert!(!app.timeline.entries[2].expanded);
     }
 
     #[test]
@@ -2606,9 +1520,9 @@ mod tests {
             output: "ok".into(),
         });
 
-        assert_eq!(app.entries.len(), 1);
+        assert_eq!(app.timeline.entries.len(), 1);
         assert_eq!(
-            app.entries[0].event,
+            app.timeline.entries[0].event,
             AgentEvent::ToolCompleted {
                 id: "toolu_1".into(),
                 name: "Bash".into(),
@@ -2641,9 +1555,9 @@ mod tests {
             output: String::new(),
         });
 
-        assert_eq!(app.entries.len(), 1);
+        assert_eq!(app.timeline.entries.len(), 1);
         assert!(matches!(
-            app.entries[0].event,
+            app.timeline.entries[0].event,
             AgentEvent::FileChanged { .. }
         ));
     }
@@ -2666,9 +1580,9 @@ mod tests {
             output: "old_string not found".into(),
         });
 
-        assert_eq!(app.entries.len(), 1);
+        assert_eq!(app.timeline.entries.len(), 1);
         assert_eq!(
-            app.entries[0].event,
+            app.timeline.entries[0].event,
             AgentEvent::Error {
                 message: "src/lib.rs: old_string not found".into(),
             }
@@ -2705,7 +1619,7 @@ mod tests {
         assert_eq!(app.status, Status::Pending);
         assert_eq!(app.focus, Focus::List);
         assert!(app.session_id.is_empty());
-        assert!(app.input.is_empty());
+        assert!(app.composer.text.is_empty());
         // The message box must not read "session ended" before anything ran.
         assert!(app.can_send());
     }
@@ -2714,7 +1628,7 @@ mod tests {
     fn set_input_prefills_the_message_box_for_the_operator_to_edit_or_send() {
         let mut app = App::pending(Selection::new(Provider::Codex));
         app.set_input("earlier session's transcript".into());
-        assert_eq!(app.input, "earlier session's transcript");
+        assert_eq!(app.composer.text, "earlier session's transcript");
         assert_eq!(
             app.take_message(),
             Some("earlier session's transcript".into())
@@ -2743,7 +1657,11 @@ mod tests {
         assert_eq!(launcher.selection().model, Provider::Claude.default_model());
         launcher.next();
         let models = Provider::Claude.models();
-        let model = models[row_of(models, &Provider::Claude.default_model()) + 1].to_owned();
+        let default = models
+            .iter()
+            .position(|model| *model == Provider::Claude.default_model())
+            .unwrap_or(0);
+        let model = models[default + 1].to_owned();
         assert_eq!(launcher.selection().model, model);
 
         // Effort column, likewise — the ladder itself, no extra row.
@@ -2763,7 +1681,7 @@ mod tests {
         // Nothing was launched or sent by the picking itself.
         assert_eq!(app.status, Status::Pending);
         assert!(app.session_id.is_empty());
-        assert!(app.entries.is_empty());
+        assert!(app.timeline.entries.is_empty());
     }
 
     #[test]
@@ -2826,67 +1744,6 @@ mod tests {
         assert_eq!(launcher.selection().model, selection.model);
     }
 
-    /// With no row standing for "whatever the agent is configured for", every
-    /// row of every column is a concrete choice — so whatever the picker is
-    /// opened on, confirming it pins both a model and an effort.
-    #[test]
-    fn the_picker_always_pins_a_model_and_an_effort() {
-        for provider in PROVIDERS {
-            let mut launcher = Launcher::from_selection(&Selection::new(provider), &[]);
-            // A selection always pins both, and the picker opens on the rows
-            // naming them.
-            let opened = launcher.selection();
-            assert_eq!(opened.model, provider.default_model());
-            assert_eq!(opened.effort, provider.default_effort());
-
-            // And no reachable row in either column yields an absent value.
-            for column in [LaunchColumn::Model, LaunchColumn::Effort] {
-                launcher.column = column;
-                for _ in 0..provider.models().len() + provider.efforts().len() {
-                    let selection = launcher.selection();
-                    assert!(
-                        provider.models().contains(&selection.model.as_str()),
-                        "{provider:?} {column:?} reached a model outside the catalog"
-                    );
-                    assert!(
-                        provider.efforts().contains(&selection.effort),
-                        "{provider:?} {column:?} reached an effort outside the ladder"
-                    );
-                    launcher.next();
-                }
-            }
-        }
-    }
-
-    /// The models the operator actually uses head the column; the rest keep
-    /// the catalog's own order, so the list does not reshuffle wholesale after
-    /// a single pick.
-    #[test]
-    fn the_model_column_lists_recently_selected_models_first() {
-        let catalog = Provider::Claude.models();
-        let recent = vec![
-            catalog[catalog.len() - 1].to_owned(),
-            "gpt-5.6-sol".to_owned(), // another agent's model: never a row here
-            catalog[1].to_owned(),
-        ];
-        let launcher = Launcher::from_selection(&Selection::new(Provider::Claude), &recent);
-
-        let rows = launcher.models();
-        assert_eq!(rows[0], catalog[catalog.len() - 1]);
-        assert_eq!(rows[1], catalog[1]);
-        assert_eq!(
-            rows[2..],
-            catalog[..1]
-                .iter()
-                .chain(&catalog[2..catalog.len() - 1])
-                .map(|model| (*model).to_owned())
-                .collect::<Vec<_>>()[..],
-            "the unused models keep the catalog's order"
-        );
-        // Ordering the rows does not change which one the picker opened on.
-        assert_eq!(launcher.selection().model, Provider::Claude.default_model());
-    }
-
     /// Confirming a model moves it to the front of the ordering, and the list
     /// never grows a duplicate of a model chosen twice.
     #[test]
@@ -2901,48 +1758,6 @@ mod tests {
             app.recent_models,
             vec!["claude-sonnet-5".to_owned(), "claude-opus-5".to_owned()]
         );
-    }
-
-    /// Switching agents drops the carried model with everything else: it named a
-    /// model of the agent the picker was opened on.
-    #[test]
-    fn changing_provider_drops_a_carried_model() {
-        let mut launcher = Launcher::from_selection(
-            &Selection::parse("claude:claude-opus-4-1-20250805").unwrap(),
-            &[],
-        );
-        assert!(launcher.carried_model.is_some());
-
-        launcher.prev(); // in the provider column, back towards codex
-        assert_eq!(launcher.carried_model, None);
-        // The new agent's own declared default stands in for it.
-        assert_eq!(
-            launcher.selection().model,
-            launcher.provider().default_model()
-        );
-        // And the column is back to just that agent's catalog.
-        launcher.next_column();
-        assert_eq!(launcher.model_rows(), launcher.provider().models().len());
-    }
-
-    /// The two agents' model catalogs and effort ladders are unrelated, so a
-    /// choice made for one must not carry an index across to the other.
-    #[test]
-    fn changing_provider_falls_back_to_the_new_agents_defaults() {
-        let mut launcher =
-            Launcher::from_selection(&Selection::parse("claude:claude-opus-5/max").unwrap(), &[]);
-        assert_eq!(launcher.selection().name(), "claude:claude-opus-5/max");
-
-        launcher.prev(); // in the provider column, back towards codex
-        let selection = launcher.selection();
-        assert_ne!(selection.provider, Provider::Claude);
-        // Neither the model nor the effort carries across by index: each falls
-        // back to the new agent's own declared default.
-        assert_eq!(selection.model, selection.provider.default_model());
-        assert_eq!(selection.effort, selection.provider.default_effort());
-        // And `max` is not offered at all under codex, so it cannot be reached
-        // by walking the column either.
-        assert!(!launcher.provider().efforts().contains(&Effort::Max));
     }
 
     /// Once a session is up, its agent and model are facts about a running
@@ -3228,8 +2043,8 @@ mod tests {
         // Step off the tail so the list is no longer following, landing on
         // the middle entry.
         app.select_prev_line();
-        assert_eq!(app.selected, 1);
-        assert!(!app.follow);
+        assert_eq!(app.timeline.selected, 1);
+        assert!(!app.timeline.follow);
 
         app.toggle_raw();
         assert_eq!(
@@ -3306,13 +2121,13 @@ mod tests {
         app.toggle_conversation_only();
 
         assert_eq!(app.view, View::Events);
-        assert!(app.conversation_only);
-        assert!(app.is_visible(0));
-        assert!(!app.is_visible(1));
+        assert!(app.timeline.conversation_only);
+        assert!(app.timeline.is_visible(0));
+        assert!(!app.timeline.is_visible(1));
 
         app.toggle_conversation_only();
-        assert!(!app.conversation_only);
-        assert!(app.is_visible(1));
+        assert!(!app.timeline.conversation_only);
+        assert!(app.timeline.is_visible(1));
     }
 
     #[test]
@@ -3337,11 +2152,11 @@ mod tests {
         });
 
         // Hidden by default; no toggle needed to get here.
-        assert!(!app.show_minor);
+        assert!(!app.timeline.show_minor);
 
         app.select_first();
         assert_eq!(
-            app.entries[app.selected].event,
+            app.timeline.entries[app.timeline.selected].event,
             AgentEvent::AgentMessage {
                 text: "a\nmore a".into()
             }
@@ -3349,7 +2164,7 @@ mod tests {
 
         app.select_next();
         assert_eq!(
-            app.entries[app.selected].event,
+            app.timeline.entries[app.timeline.selected].event,
             AgentEvent::AgentMessage {
                 text: "b\nmore b".into()
             }
@@ -3358,7 +2173,7 @@ mod tests {
         // No more visible entries after "b"; select_next is a no-op.
         app.select_next();
         assert_eq!(
-            app.entries[app.selected].event,
+            app.timeline.entries[app.timeline.selected].event,
             AgentEvent::AgentMessage {
                 text: "b\nmore b".into()
             }
@@ -3366,14 +2181,14 @@ mod tests {
 
         app.select_prev();
         assert_eq!(
-            app.entries[app.selected].event,
+            app.timeline.entries[app.timeline.selected].event,
             AgentEvent::AgentMessage {
                 text: "a\nmore a".into()
             }
         );
 
         app.toggle_minor();
-        assert!(app.show_minor);
+        assert!(app.timeline.show_minor);
     }
 
     #[test]
@@ -3390,34 +2205,37 @@ mod tests {
         app.push_event(AgentEvent::AgentMessage {
             text: "also no detail".into(),
         });
-        assert!(!app.entries[0].has_detail());
-        assert!(app.entries[1].has_detail());
-        assert!(!app.entries[2].has_detail());
+        assert!(!app.timeline.entries[0].has_detail());
+        assert!(app.timeline.entries[1].has_detail());
+        assert!(!app.timeline.entries[2].has_detail());
 
         // `select_first` (bound to `g`) is unaffected by the has-detail
         // restriction: it lands on the very first visible entry regardless.
         app.select_first();
-        assert_eq!(app.selected, 0);
+        assert_eq!(app.timeline.selected, 0);
 
         // The only entry with detail is index 1; select_next skips index 0's
         // lack of detail to land there, then has nothing further to skip to.
         app.select_next();
-        assert_eq!(app.selected, 1);
+        assert_eq!(app.timeline.selected, 1);
         app.select_next();
-        assert_eq!(app.selected, 1);
+        assert_eq!(app.timeline.selected, 1);
         // Equally, there is no navigable entry before it to skip back to.
         app.select_prev();
-        assert_eq!(app.selected, 1);
+        assert_eq!(app.timeline.selected, 1);
 
         // j/k ignore the has-detail restriction and move one line at a time.
         app.select_next_line();
-        assert_eq!(app.selected, 2);
+        assert_eq!(app.timeline.selected, 2);
         app.select_next_line();
-        assert_eq!(app.selected, 2, "already at the last visible entry");
+        assert_eq!(
+            app.timeline.selected, 2,
+            "already at the last visible entry"
+        );
         app.select_prev_line();
-        assert_eq!(app.selected, 1);
+        assert_eq!(app.timeline.selected, 1);
         app.select_prev_line();
-        assert_eq!(app.selected, 0);
+        assert_eq!(app.timeline.selected, 0);
     }
 
     #[test]
@@ -3436,13 +2254,13 @@ mod tests {
         app.push_event(AgentEvent::AgentMessage {
             text: "another plain summary".into(),
         });
-        assert!(!app.entries[1].has_detail());
+        assert!(!app.timeline.entries[1].has_detail());
 
         app.select_first();
         app.select_next();
-        assert_eq!(app.selected, 1);
+        assert_eq!(app.timeline.selected, 1);
         app.select_next();
-        assert_eq!(app.selected, 1);
+        assert_eq!(app.timeline.selected, 1);
     }
 
     #[test]
@@ -3460,7 +2278,7 @@ mod tests {
         assert_eq!(app.preview.offset, 10);
 
         app.select_next();
-        assert_eq!(app.selected, 1);
+        assert_eq!(app.timeline.selected, 1);
         assert_eq!(app.preview.offset, 0);
     }
 
@@ -3482,18 +2300,18 @@ mod tests {
     fn toggling_minor_off_moves_selection_off_a_hidden_entry() {
         let mut app = app();
         app.toggle_minor(); // show minor events so follow can land on one
-        assert!(app.show_minor);
+        assert!(app.timeline.show_minor);
 
         app.push_event(AgentEvent::AgentMessage { text: "a".into() });
         app.push_event(AgentEvent::TurnStarted);
         // Selection sits on the just-pushed minor entry via follow.
-        assert_eq!(app.selected, 1);
+        assert_eq!(app.timeline.selected, 1);
 
         app.toggle_minor(); // hide them again
-        assert!(!app.show_minor);
-        assert!(app.is_visible(app.selected));
+        assert!(!app.timeline.show_minor);
+        assert!(app.timeline.is_visible(app.timeline.selected));
         assert_eq!(
-            app.entries[app.selected].event,
+            app.timeline.entries[app.timeline.selected].event,
             AgentEvent::AgentMessage { text: "a".into() }
         );
     }
@@ -3517,7 +2335,7 @@ mod tests {
         app.push_event(AgentEvent::AgentMessage {
             text: "see README.md".into(),
         });
-        app.follow = false;
+        app.timeline.follow = false;
         app.push_event(AgentEvent::FileChanged {
             id: "1".into(),
             paths: vec!["src/lib.rs".into()],
@@ -3532,423 +2350,18 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    /// The driva view is a view like any other: reachable whether or not there
+    /// is a sandbox to describe, and toggled off by the same key.
     #[test]
-    fn driva_options_are_unset_until_the_host_records_them_and_the_view_toggles() {
-        use styra_server::DrivaOptions;
-        use styra_server::{Mount, MountAccess};
-
+    fn the_driva_view_toggles_whether_or_not_a_policy_has_been_recorded() {
         let mut app = app();
-        assert_eq!(app.driva_options, None);
-        app.set_driva_options(DrivaOptions {
-            isolation_backend: "bwrap".into(),
-            command: vec!["codex".into(), "app-server".into()],
-            working_directory: PathBuf::from("/tmp/styra/workspace"),
-            network: true,
-            mounts: vec![Mount::Bind {
-                source: PathBuf::from("/home/op/project"),
-                destination: PathBuf::from("/tmp/styra/workspace"),
-                access: MountAccess::ReadWrite,
-            }],
-        });
-        assert_eq!(
-            app.driva_options.as_ref().unwrap().isolation_backend,
-            "bwrap"
-        );
+        assert_eq!(app.launch.driva, None);
 
         assert_eq!(app.view, View::Events);
         app.toggle_view(View::Driva);
         assert_eq!(app.view, View::Driva);
         app.toggle_view(View::Driva);
         assert_eq!(app.view, View::Events);
-    }
-
-    #[test]
-    fn a_planned_launch_policy_is_asked_for_once_per_selection_and_yields_to_a_live_one() {
-        use styra_server::DrivaOptions;
-
-        fn options(backend: &str) -> DrivaOptions {
-            DrivaOptions {
-                isolation_backend: backend.into(),
-                command: vec!["codex".into()],
-                working_directory: PathBuf::from("/tmp/styra/workspace"),
-                network: false,
-                mounts: Vec::new(),
-            }
-        }
-
-        let mut app = App::pending(styra_server::agent::Selection::parse("codex").unwrap());
-        assert!(app.needs_driva_plan());
-        app.set_planned_driva_options(
-            app.selection.clone(),
-            app.effective_launch(),
-            Some(options("planned")),
-        );
-        assert!(app.driva_planned);
-        assert!(!app.needs_driva_plan());
-
-        // Switching model before launch changes the policy, so it is re-asked.
-        app.selection = styra_server::agent::Selection::parse("claude").unwrap();
-        assert!(app.needs_driva_plan());
-        // A failed plan still counts as asked: the server is not polled per frame.
-        app.set_planned_driva_options(app.selection.clone(), app.effective_launch(), None);
-        assert!(!app.needs_driva_plan());
-        assert_eq!(
-            app.driva_options.as_ref().unwrap().isolation_backend,
-            "planned"
-        );
-
-        // Once something is running, what it runs under replaces the plan and
-        // no further planning happens.
-        app.status = Status::Running;
-        app.set_driva_options(options("live"));
-        assert!(!app.driva_planned);
-        assert!(!app.needs_driva_plan());
-        app.selection = styra_server::agent::Selection::parse("codex").unwrap();
-        assert!(!app.needs_driva_plan());
-        assert_eq!(
-            app.driva_options.as_ref().unwrap().isolation_backend,
-            "live"
-        );
-    }
-
-    /// The reported flow: stop a session, add a mount, send a new message. The
-    /// mount has to reach the resume, and the view has to stop describing the
-    /// sandbox the stopped interaction ran in — otherwise the edit reads as
-    /// having been discarded and the old policy as having been restored.
-    #[test]
-    fn a_stopped_or_ended_session_re_plans_its_policy_before_the_resume() {
-        use styra_server::DrivaOptions;
-
-        let live = DrivaOptions {
-            isolation_backend: "bwrap".into(),
-            command: vec!["codex".into()],
-            working_directory: PathBuf::from("/tmp/styra/workspace"),
-            network: false,
-            mounts: Vec::new(),
-        };
-
-        for status in [
-            Status::Stopped,
-            Status::Ended {
-                exit_code: Some(0),
-                error: None,
-            },
-        ] {
-            let mut app = app();
-            app.set_driva_options(live.clone());
-            // While it runs, the record stands and nothing is asked.
-            assert!(!app.can_edit_launch());
-            assert!(!app.needs_driva_plan());
-
-            app.status = status;
-            assert!(app.can_edit_launch());
-            // Nothing has changed yet, but the record is the previous
-            // interaction's, so the sandbox a resume would use is asked for.
-            assert!(app.needs_driva_plan());
-            app.set_planned_driva_options(
-                app.selection.clone(),
-                app.effective_launch(),
-                Some(live.clone()),
-            );
-            assert!(!app.needs_driva_plan());
-
-            // The edit lands in the launch policy the resume sends...
-            app.launch.mounts.push(styra_server::LaunchMount {
-                source: PathBuf::from("/srv/data"),
-                destination: None,
-                writable: false,
-            });
-            assert_eq!(app.effective_launch().mounts.len(), 1);
-            // ...and is re-planned, so the view answers for it.
-            assert!(app.needs_driva_plan());
-        }
-    }
-
-    /// Editing the launch inputs changes what would be launched, so the plan
-    /// on screen has to be re-asked for — otherwise the view would keep
-    /// describing a sandbox the operator has just changed.
-    #[test]
-    fn editing_the_launch_inputs_re_asks_for_the_plan() {
-        use styra_server::DrivaOptions;
-
-        let mut app = App::pending(styra_server::agent::Selection::parse("codex").unwrap());
-        app.set_planned_driva_options(
-            app.selection.clone(),
-            app.effective_launch(),
-            Some(DrivaOptions {
-                isolation_backend: "bwrap".into(),
-                command: vec!["codex".into()],
-                working_directory: PathBuf::from("/tmp/styra/workspace"),
-                network: false,
-                mounts: Vec::new(),
-            }),
-        );
-        assert!(!app.needs_driva_plan());
-
-        app.cycle_launch_network();
-        assert_eq!(app.launch.network, Some(true));
-        assert!(app.needs_driva_plan());
-
-        app.set_planned_driva_options(app.selection.clone(), app.effective_launch(), None);
-        assert!(!app.needs_driva_plan());
-
-        app.set_launch_templates(vec!["rust".into()]);
-        assert!(app.needs_driva_plan());
-        app.set_planned_driva_options(app.selection.clone(), app.effective_launch(), None);
-
-        app.driva_prompt = Some("/srv/data:rw".into());
-        app.confirm_driva_prompt();
-        assert!(app.needs_driva_plan());
-    }
-
-    /// The launch policy is only editable while nothing has started: once an
-    /// interaction is running, the driva view is a record of the sandbox it is
-    /// confined to and changing it would mean a new session.
-    #[test]
-    fn the_launch_policy_cannot_be_edited_once_an_interaction_is_running() {
-        let mut app = app();
-        assert!(!app.can_edit_launch());
-
-        app.cycle_launch_network();
-        assert_eq!(app.launch.network, None);
-        app.set_launch_templates(vec!["rust".into()]);
-        assert!(app.launch.templates.is_empty());
-        app.open_driva_prompt();
-        assert!(app.driva_prompt.is_none());
-        app.toggle_launch_standalone();
-        assert!(!app.launch.standalone);
-
-        let mut pending = App::pending(styra_server::agent::Selection::parse("codex").unwrap());
-        assert!(pending.can_edit_launch());
-        pending.cycle_launch_network();
-        assert_eq!(pending.launch.network, Some(true));
-    }
-
-    fn workspace_policy() -> LaunchPolicy {
-        LaunchPolicy {
-            network: Some(true),
-            templates: vec!["rust".into()],
-            mounts: vec![LaunchMount {
-                source: PathBuf::from("/srv/corpus"),
-                destination: None,
-                writable: false,
-            }],
-            standalone: false,
-        }
-    }
-
-    fn pending_in_a_workspace_with_a_policy() -> App {
-        let mut app = App::pending(styra_server::agent::Selection::parse("codex").unwrap());
-        app.set_workspace_launch(workspace_policy());
-        app
-    }
-
-    /// The two halves are held apart, and only the launch's own is edited: what
-    /// the Workspace grants is added to, not replaced, and an edit that would
-    /// have overwritten it before now sits on top of it.
-    #[test]
-    fn an_edit_adds_to_the_workspace_policy_rather_than_replacing_it() {
-        let mut app = pending_in_a_workspace_with_a_policy();
-        assert_eq!(app.effective_launch(), workspace_policy());
-
-        app.set_launch_templates(vec!["rust".into(), "browser".into()]);
-        // Only the addition is this launch's; the Workspace keeps its own.
-        assert_eq!(app.launch.templates, vec!["browser"]);
-        assert!(!app.launch.standalone);
-        assert_eq!(
-            app.effective_launch().templates,
-            vec!["rust".to_owned(), "browser".to_owned()]
-        );
-
-        app.driva_prompt = Some("/srv/scratch:rw".into());
-        app.confirm_driva_prompt();
-        assert_eq!(app.launch.mounts.len(), 1);
-        assert_eq!(app.effective_launch().mounts.len(), 2);
-    }
-
-    /// Dropping a template the Workspace grants cannot be said by adding to it,
-    /// so the launch stops inheriting instead of silently doing nothing.
-    #[test]
-    fn deselecting_a_workspace_template_makes_the_launch_standalone() {
-        let mut app = pending_in_a_workspace_with_a_policy();
-        app.set_launch_templates(vec!["browser".into()]);
-
-        assert!(app.launch.standalone);
-        assert_eq!(app.launch.templates, vec!["browser"]);
-        let effective = app.effective_launch();
-        assert_eq!(effective.templates, vec!["browser"]);
-        // Standalone is the whole policy, so the Workspace's mounts and its
-        // network grant go with its templates.
-        assert!(effective.mounts.is_empty());
-        assert!(!effective.grants_network());
-    }
-
-    /// `w` states the opposite of what would otherwise be inherited, and then
-    /// returns to inheriting — there is no third state worth stopping on.
-    #[test]
-    fn network_toggles_against_the_workspace_policy_and_back_to_inheriting() {
-        let mut app = pending_in_a_workspace_with_a_policy();
-        assert!(app.effective_launch().grants_network());
-
-        app.cycle_launch_network();
-        assert_eq!(app.launch.network, Some(false));
-        assert!(!app.effective_launch().grants_network());
-
-        app.cycle_launch_network();
-        assert_eq!(app.launch.network, None);
-        assert!(app.effective_launch().grants_network());
-    }
-
-    /// A mount the Workspace already grants identically needs no overlay, and
-    /// one of its mounts is not this launch's to remove.
-    #[test]
-    fn the_workspace_policys_mounts_are_not_this_launchs_to_add_or_remove() {
-        let mut app = pending_in_a_workspace_with_a_policy();
-        app.driva_prompt = Some("/srv/corpus:ro".into());
-        app.confirm_driva_prompt();
-        assert!(app.launch.mounts.is_empty());
-
-        app.remove_selected_launch_mount();
-        assert_eq!(app.effective_launch().mounts, workspace_policy().mounts);
-
-        // Standalone is the way out, and it leaves the launch with nothing but
-        // its own inputs.
-        app.toggle_launch_standalone();
-        assert!(app.effective_launch().mounts.is_empty());
-    }
-
-    /// Storing the policy with the Workspace must not change what the next
-    /// launch runs under: the overlay is folded in, not layered onto itself.
-    #[test]
-    fn promoting_a_policy_to_the_workspace_leaves_the_effective_one_unchanged() {
-        let mut app = pending_in_a_workspace_with_a_policy();
-        app.set_launch_templates(vec!["rust".into(), "browser".into()]);
-        let before = app.effective_launch();
-
-        app.adopt_workspace_launch(before.clone());
-        assert!(app.launch.is_empty());
-        assert_eq!(app.effective_launch(), before);
-    }
-
-    /// Entering another Workspace re-plans: the policy a launch would run under
-    /// changed even though nothing the operator typed did.
-    #[test]
-    fn a_workspace_policy_change_re_asks_for_the_plan() {
-        let mut app = App::pending(styra_server::agent::Selection::parse("codex").unwrap());
-        app.set_planned_driva_options(app.selection.clone(), app.effective_launch(), None);
-        assert!(!app.needs_driva_plan());
-
-        app.set_workspace_launch(workspace_policy());
-        assert!(app.needs_driva_plan());
-    }
-
-    #[test]
-    fn added_mounts_are_selected_and_removed_one_at_a_time() {
-        let mut app = App::pending(styra_server::agent::Selection::parse("codex").unwrap());
-        for text in ["/srv/one", "/srv/two:rw", "/srv/three:/mnt/three:ro"] {
-            app.driva_prompt = Some(text.into());
-            app.confirm_driva_prompt();
-        }
-        assert_eq!(app.launch.mounts.len(), 3);
-        // Adding leaves the cursor on what was just added.
-        assert_eq!(app.driva_selected_mount, 2);
-
-        app.driva_select_prev_mount();
-        app.remove_selected_launch_mount();
-        assert_eq!(
-            app.launch
-                .mounts
-                .iter()
-                .map(|mount| mount.source.display().to_string())
-                .collect::<Vec<_>>(),
-            ["/srv/one", "/srv/three"]
-        );
-        // The cursor stays in range as the list shrinks under it.
-        app.driva_select_next_mount();
-        app.driva_select_next_mount();
-        assert_eq!(app.driva_selected_mount, 1);
-        app.remove_selected_launch_mount();
-        app.remove_selected_launch_mount();
-        assert!(app.launch.mounts.is_empty());
-        assert_eq!(app.driva_selected_mount, 0);
-        // Removing from an empty list says so rather than panicking.
-        app.remove_selected_launch_mount();
-    }
-
-    /// A duplicate is refused rather than silently layered twice, since the
-    /// server would then reject the whole policy for a conflicting destination.
-    #[test]
-    fn the_same_mount_is_not_added_twice() {
-        let mut app = App::pending(styra_server::agent::Selection::parse("codex").unwrap());
-        app.driva_prompt = Some("/srv/data".into());
-        app.confirm_driva_prompt();
-        app.driva_prompt = Some("/srv/data:ro".into());
-        app.confirm_driva_prompt();
-        assert_eq!(app.launch.mounts.len(), 1);
-    }
-
-    /// Text that is not a mount leaves the prompt open with what was typed, so
-    /// a typo is corrected rather than retyped.
-    #[test]
-    fn an_unparseable_mount_keeps_the_prompt_open() {
-        let mut app = App::pending(styra_server::agent::Selection::parse("codex").unwrap());
-        app.driva_prompt = Some("relative/path".into());
-        app.confirm_driva_prompt();
-        assert_eq!(app.driva_prompt.as_deref(), Some("relative/path"));
-        assert!(app.launch.mounts.is_empty());
-    }
-
-    #[test]
-    fn a_typed_mount_parses_its_paths_and_access() {
-        assert_eq!(
-            parse_launch_mount("/srv/data").unwrap(),
-            LaunchMount {
-                source: PathBuf::from("/srv/data"),
-                destination: None,
-                writable: false,
-            }
-        );
-        assert_eq!(
-            parse_launch_mount("  /srv/data:rw  ").unwrap(),
-            LaunchMount {
-                source: PathBuf::from("/srv/data"),
-                destination: None,
-                writable: true,
-            }
-        );
-        assert_eq!(
-            parse_launch_mount("/srv/data:/mnt/data").unwrap(),
-            LaunchMount {
-                source: PathBuf::from("/srv/data"),
-                destination: Some(PathBuf::from("/mnt/data")),
-                writable: false,
-            }
-        );
-        assert_eq!(
-            parse_launch_mount("/srv/data:/mnt/data:rw").unwrap(),
-            LaunchMount {
-                source: PathBuf::from("/srv/data"),
-                destination: Some(PathBuf::from("/mnt/data")),
-                writable: true,
-            }
-        );
-
-        // A directory that happens to be named `rw` is still a destination:
-        // only a trailing bare `ro`/`rw` after a path is an access mode.
-        assert_eq!(
-            parse_launch_mount("/srv/rw:/mnt/rw").unwrap(),
-            LaunchMount {
-                source: PathBuf::from("/srv/rw"),
-                destination: Some(PathBuf::from("/mnt/rw")),
-                writable: false,
-            }
-        );
-
-        assert!(parse_launch_mount("").is_err());
-        assert!(parse_launch_mount("data").is_err());
-        assert!(parse_launch_mount("/srv/data:relative").is_err());
-        assert!(parse_launch_mount("/a:/b:/c:rw").is_err());
-        assert!(parse_launch_mount("/srv/data:").is_err());
     }
 
     #[test]
@@ -3990,81 +2403,18 @@ mod tests {
     }
 
     #[test]
-    fn focus_toggles_and_input_edits() {
+    fn focus_toggles_and_a_typed_message_is_taken_for_sending() {
         let mut app = app();
         assert_eq!(app.focus, Focus::List);
         app.enter_input();
         assert_eq!(app.focus, Focus::Input);
 
-        app.input_char('h');
-        app.input_char('i');
-        app.input_newline();
-        app.input_char('!');
-        app.input_backspace();
-        assert_eq!(app.input, "hi\n");
+        app.composer.char('h');
+        app.composer.char('i');
+        assert_eq!(app.composer.text, "hi");
         assert_eq!(app.take_message(), Some("hi".into()));
-        assert!(app.input.is_empty());
+        assert!(app.composer.text.is_empty());
         assert_eq!(app.take_message(), None);
-    }
-
-    #[test]
-    fn input_delete_word_removes_the_trailing_word_readline_style() {
-        let mut app = app();
-        app.set_input("fix the flaky test".into());
-        app.input_delete_word();
-        assert_eq!(app.input, "fix the flaky ");
-        app.input_delete_word();
-        assert_eq!(app.input, "fix the ");
-
-        // Trailing whitespace with nothing after it is consumed first, along
-        // with the word before it, in one call — not two.
-        app.set_input("one two   ".into());
-        app.input_delete_word();
-        assert_eq!(app.input, "one ");
-
-        // Deleting past the first word empties the buffer rather than
-        // panicking or leaving a dangling boundary.
-        app.input_delete_word();
-        assert_eq!(app.input, "");
-        app.input_delete_word();
-        assert_eq!(app.input, "");
-
-        // Spans a newline like any other whitespace.
-        app.set_input("hello\nworld".into());
-        app.input_delete_word();
-        assert_eq!(app.input, "hello\n");
-    }
-
-    #[test]
-    fn input_history_moves_through_prompts_and_restores_the_draft() {
-        let mut app = app();
-        app.set_input("first".into());
-        assert_eq!(app.take_message(), Some("first".into()));
-        app.set_input("second".into());
-        assert_eq!(app.take_message(), Some("second".into()));
-        app.set_input("unfinished draft".into());
-
-        app.input_history_previous();
-        assert_eq!(app.input, "second");
-        app.input_history_previous();
-        assert_eq!(app.input, "first");
-        app.input_history_previous();
-        assert_eq!(app.input, "first");
-        app.input_history_next();
-        assert_eq!(app.input, "second");
-        app.input_history_next();
-        assert_eq!(app.input, "unfinished draft");
-    }
-
-    #[test]
-    fn editing_a_recalled_prompt_leaves_history_navigation() {
-        let mut app = app();
-        app.set_input("original".into());
-        app.take_message();
-        app.input_history_previous();
-        app.input_char('!');
-        app.input_history_next();
-        assert_eq!(app.input, "original!");
     }
 
     #[test]
@@ -4084,7 +2434,7 @@ mod tests {
     #[test]
     fn copy_text_falls_back_to_the_summary_when_there_is_no_detail() {
         let mut app = app();
-        app.show_minor = true;
+        app.timeline.show_minor = true;
         app.push_event(AgentEvent::TurnStarted);
         app.select_first();
         let text = app.copy_text().expect("a minor entry is selected");

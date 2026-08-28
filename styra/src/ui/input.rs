@@ -64,7 +64,7 @@ fn input_display(app: &App, width: u16) -> InputDisplay {
     }
     let preceding_rows = lines.len();
 
-    if app.input.is_empty() {
+    if app.composer.text.is_empty() {
         lines.push(Line::from(Span::styled(
             "type a message, Enter to send",
             Style::default().fg(Color::Gray),
@@ -76,7 +76,8 @@ fn input_display(app: &App, width: u16) -> InputDisplay {
         };
     }
 
-    let mut input_lines = wrapped_input_lines(&app.input, width, Style::default().fg(Color::White));
+    let mut input_lines =
+        wrapped_input_lines(&app.composer.text, width, Style::default().fg(Color::White));
     let mut cursor_col = input_lines
         .last()
         .map(|line| line.width())

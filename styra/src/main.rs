@@ -12,15 +12,21 @@ use std::process::Command;
 mod app;
 mod cli;
 mod clipboard;
+mod composer;
 mod config;
 mod event_loop;
+mod ingest;
 mod keymap;
 mod keys;
+mod launch;
+mod launcher;
+mod mount;
 mod notes;
 mod picker;
 mod preferences;
 mod session;
 mod terminal;
+mod timeline;
 mod ui;
 
 use app::{App, LaunchPolicy};
@@ -54,7 +60,7 @@ fn refresh_workspace_context(app: &mut App, client: &Client, active: &WorkspaceS
         });
     app.workspace_name = workspace.as_ref().map(session::workspace_display_name);
     if let Some(workspace) = workspace {
-        app.set_workspace_launch(workspace.launch);
+        app.launch.set_workspace(workspace.launch);
     }
 }
 
@@ -82,8 +88,8 @@ fn pending_app(
     workspace: &WorkspaceSummary,
 ) -> App {
     let mut app = App::pending(selection);
-    app.launch = launch;
-    app.set_workspace_launch(workspace.launch.clone());
+    app.launch.interaction = launch;
+    app.launch.set_workspace(workspace.launch.clone());
     app.workspace_id = Some(workspace.id.clone());
     app.set_workspace_root(workspace.host_path.clone());
     app
@@ -93,7 +99,7 @@ fn pending_app(
 /// Attaching rebuilds the [`App`] from the selected interaction, but this
 /// filter belongs to the operator's view rather than to either Session.
 fn carry_active_session_view(previous: &App, next: &mut App) {
-    next.conversation_only = previous.conversation_only;
+    next.timeline.conversation_only = previous.timeline.conversation_only;
 }
 
 /// What a new interaction starts from: the operator's saved defaults with this
@@ -162,7 +168,7 @@ fn open_start_screen(
         // anything about the interaction being attached to.
         Ok(Some(interaction)) => {
             session::attach_live_interaction(client, interaction).map(|(mut app, live)| {
-                app.launch = launch.clone();
+                app.launch.interaction = launch.clone();
                 (app, live)
             })
         }
@@ -329,7 +335,7 @@ fn main() -> Result<()> {
         // interaction if one happened to be serving the Session.
         let id = session::session_id_from_target(view)?;
         (app, live) = session::open_stored(&client, &id)?;
-        app.launch = launch.clone();
+        app.launch.interaction = launch.clone();
     } else {
         let selection = standing_selection;
         let prompt = cli.prompt.join(" ");
@@ -403,7 +409,7 @@ fn main() -> Result<()> {
                 match session_id {
                     Some(session_id) => match session::open_session(&client, &session_id) {
                         Ok((mut new_app, new_live)) => {
-                            new_app.launch = launch.clone();
+                            new_app.launch.interaction = launch.clone();
                             app = new_app;
                             live = new_live;
                         }
@@ -424,7 +430,7 @@ fn main() -> Result<()> {
             RunOutcome::OpenSession(session_id) => {
                 match session::open_session(&client, &session_id) {
                     Ok((mut new_app, new_live)) => {
-                        new_app.launch = launch.clone();
+                        new_app.launch.interaction = launch.clone();
                         app = new_app;
                         live = new_live;
                     }
@@ -439,7 +445,7 @@ fn main() -> Result<()> {
                 let id = interaction.id.clone();
                 match session::attach_live_interaction(&client, interaction) {
                     Ok((mut new_app, new_live)) => {
-                        new_app.launch = launch.clone();
+                        new_app.launch.interaction = launch.clone();
                         carry_active_session_view(&app, &mut new_app);
                         app = new_app;
                         live = new_live;
@@ -469,7 +475,7 @@ fn main() -> Result<()> {
                 // The sandbox policy is part of that inherited context: a new
                 // session started from here begins with whatever the operator
                 // had built up, rather than resetting to the saved default.
-                launch = app.launch.clone();
+                launch = app.launch.interaction.clone();
                 active_workspace =
                     workspace_for_new_session(&app, &active_workspace, &client.list_workspaces()?);
                 app = pending_app(selection, launch.clone(), &active_workspace);
@@ -637,7 +643,7 @@ mod cli_tests {
 
         carry_active_session_view(&previous, &mut next);
 
-        assert!(next.conversation_only);
+        assert!(next.timeline.conversation_only);
     }
 
     #[test]
@@ -649,7 +655,11 @@ mod cli_tests {
         app.workspace_id = Some(viewed.id.clone());
 
         let inherited = workspace_for_new_session(&app, &active, &[active.clone(), viewed.clone()]);
-        let pending = pending_app(selection.clone(), app.launch.clone(), &inherited);
+        let pending = pending_app(
+            selection.clone(),
+            app.launch.interaction.clone(),
+            &inherited,
+        );
 
         assert_eq!(inherited, viewed);
         assert_eq!(pending.workspace_id.as_deref(), Some("viewed"));
@@ -674,10 +684,10 @@ mod cli_tests {
 
         let pending = pending_app(selection, carried.clone(), &landed_in);
 
-        assert_eq!(pending.workspace_launch, landed_in.launch);
-        assert_eq!(pending.launch, carried);
+        assert_eq!(pending.launch.workspace, landed_in.launch);
+        assert_eq!(pending.launch.interaction, carried);
         assert_eq!(
-            pending.effective_launch().templates,
+            pending.launch.effective().templates,
             vec!["rust".to_owned(), "browser".to_owned()]
         );
     }

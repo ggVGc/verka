@@ -365,7 +365,7 @@ mod tests {
             output: "24 passed".into(),
         });
         // The preview must not depend on the entry being expanded in the list.
-        assert!(!app.entries[0].expanded);
+        assert!(!app.timeline.entries[0].expanded);
         assert!(!rendered(&app).contains("24 passed"));
 
         app.toggle_preview();
@@ -403,7 +403,7 @@ mod tests {
         assert!(shown.contains("cargo test"));
         assert!(shown.contains("24 passed"));
         // Still selecting the message; only the preview's target changed.
-        assert_eq!(app.selected, app.entries.len() - 1);
+        assert_eq!(app.timeline.selected, app.timeline.entries.len() - 1);
     }
 
     #[test]

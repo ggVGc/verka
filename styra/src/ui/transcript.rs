@@ -12,27 +12,28 @@ use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 /// Follows the event list's minor and conversation-only filters; since this
-/// recomputes from `app.entries` fresh every frame rather than caching
+/// recomputes from `app.timeline.entries` fresh every frame rather than caching
 /// anything, changing a filter re-renders it with no extra wiring needed.
 pub(crate) fn render_transcript_view(frame: &mut Frame, app: &App, area: Rect) {
     let mut block = view_block(app, Some("transcript"));
-    if app.conversation_only {
+    if app.timeline.conversation_only {
         block = conversation_only_title(block);
     }
 
-    if app.entries.is_empty() {
+    if app.timeline.entries.is_empty() {
         render_placeholder(frame, block, area, "  nothing to render yet");
         return;
     }
 
     let events = app
+        .timeline
         .entries
         .iter()
         .enumerate()
-        .filter(|(idx, _)| app.is_visible(*idx))
+        .filter(|(idx, _)| app.timeline.is_visible(*idx))
         .map(|(_, entry)| entry.event.clone())
         .collect::<Vec<_>>();
-    let text = styra_server::render::render_events(&events, false, app.show_minor);
+    let text = styra_server::render::render_events(&events, false, app.timeline.show_minor);
     let lines: Vec<Line<'static>> = text
         .lines()
         .map(|line| {
@@ -108,7 +109,7 @@ mod tests {
         });
         app.toggle_view(View::Transcript);
 
-        assert!(!app.show_minor);
+        assert!(!app.timeline.show_minor);
         assert!(!rendered(&app).contains("t-1"));
 
         // Toggling minor visibility while the transcript is already open must

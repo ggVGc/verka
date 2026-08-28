@@ -70,12 +70,15 @@ workspaces/<WORKSPACE-ID>/
 
 `workspace.json` also holds the Workspace's standing launch policy: the Driva
 templates, extra mounts, and network permission every launch there starts from.
-An individual launch adds its own on top — the driva view (`d`) edits that half
-and shows which grants come from which layer — so `W` keeps a policy for the
-Workspace and every client launching there picks it up, while `D` keeps one as
-this client's own starting point. A launch that asks for nothing runs under
-exactly the Workspace's policy; `I` makes one ignore it entirely, which is how a
-single interaction drops a grant the Workspace makes.
+An individual interaction adds its own on top. The driva view (`d`) shows the two
+as two panes and edits either one: `Tab` moves the keys between them, and the
+focused pane is the one `w`, `T`, `m`, `g` and `x` change. Edits to the Workspace
+pane are stored with the Workspace as they are made, so every client launching
+there picks them up; `D` keeps this interaction's own settings as this client's
+starting point instead, and `U` moves them up into the Workspace's policy. An
+interaction that asks for nothing runs under exactly the Workspace's policy; `I`
+makes one ignore it entirely, which is how a single interaction drops a grant the
+Workspace makes.
 
 ## Socket API
 

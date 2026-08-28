@@ -13,7 +13,11 @@ use tui_markdown::StyleSheet;
 
 /// Renders a detail block's full markdown buffer as styled lines, each
 /// prefixed with `indent`.
-pub(crate) fn markdown_block_lines(text: &str, base_style: Style, indent: &str) -> Vec<Line<'static>> {
+pub(crate) fn markdown_block_lines(
+    text: &str,
+    base_style: Style,
+    indent: &str,
+) -> Vec<Line<'static>> {
     let normalized = force_hard_line_breaks(text);
     let rendered = tui_markdown::from_str_with_options(
         &normalized,
@@ -47,7 +51,10 @@ pub(crate) fn markdown_block_lines(text: &str, base_style: Style, indent: &str) 
 
 fn bulletize(content: &str) -> Option<String> {
     let indent = content.strip_suffix("- ")?;
-    indent.chars().all(|c| c == ' ').then(|| format!("{indent}\u{2022} "))
+    indent
+        .chars()
+        .all(|c| c == ' ')
+        .then(|| format!("{indent}\u{2022} "))
 }
 
 /// Agent messages commonly separate paragraphs with a single `\n` rather
@@ -169,7 +176,10 @@ mod tests {
     }
 
     fn rendered_line(line: &Line<'_>) -> String {
-        line.spans.iter().map(|span| span.content.as_ref()).collect()
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect()
     }
 
     #[test]
@@ -205,7 +215,9 @@ mod tests {
         let rendered: Vec<String> = lines.iter().map(rendered_line).collect();
         assert!(rendered.iter().any(|line| line.contains('┌')));
         assert!(rendered.iter().any(|line| line.contains('│')));
-        assert!(rendered.iter().any(|line| line.contains('A') && line.contains('B')));
+        assert!(rendered
+            .iter()
+            .any(|line| line.contains('A') && line.contains('B')));
     }
 
     #[test]

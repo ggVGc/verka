@@ -135,8 +135,12 @@ pub(crate) const REFERENCE: &[ReferenceRow] = &[
     ReferenceRow::Blank,
     ReferenceRow::Section("Driva (launch policy, before an interaction starts)"),
     ReferenceRow::Binding {
+        keys: "Tab; j/k or ↓/↑",
+        action: "edit the Workspace's policy / this interaction's; its mounts",
+    },
+    ReferenceRow::Binding {
         keys: "w",
-        action: "permit/forbid agent networking",
+        action: "permit/forbid agent networking, in the focused layer",
     },
     ReferenceRow::Binding {
         keys: "T",
@@ -147,16 +151,12 @@ pub(crate) const REFERENCE: &[ReferenceRow] = &[
         action: "add a mount / the git history here (rw) / remove the selected one",
     },
     ReferenceRow::Binding {
-        keys: "j/k or ↓/↑",
-        action: "move among the mounts you added",
-    },
-    ReferenceRow::Binding {
         keys: "I",
-        action: "add to / ignore the Workspace policy",
+        action: "this interaction adds to / ignores the Workspace policy",
     },
     ReferenceRow::Binding {
-        keys: "D / W",
-        action: "save this policy for new clients / this Workspace",
+        keys: "U / D / W",
+        action: "move this interaction's up / save for new clients / store the Workspace's",
     },
     ReferenceRow::Blank,
     ReferenceRow::Section("Files"),
