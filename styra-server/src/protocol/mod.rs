@@ -14,9 +14,9 @@ mod types;
 
 pub use transport::{read_message, read_message_limited, write_message, MAX_REQUEST_BYTES};
 pub use types::{
-    Direction, DrivaOptions, InteractionActivity, InteractionEnd, InteractionSummary,
-    InteractionUpdate, LaunchMount, LaunchPolicy, LogEntry, LogLevel, RawLine, SessionOrigin,
-    SessionSummary, TemplateSummary, WorkspaceSummary,
+    Answer, AnswerValue, Contract, Direction, DrivaOptions, FileLocation, InteractionActivity,
+    InteractionEnd, InteractionSummary, InteractionUpdate, LaunchMount, LaunchPolicy, LogEntry,
+    LogLevel, RawLine, SessionOrigin, SessionSummary, TemplateSummary, WorkspaceSummary,
 };
 
 // These external vocabularies are serialized inside protocol payloads. Re-export
@@ -59,6 +59,12 @@ pub struct CreateSession {
     /// from `message` when possible.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// Apply a return contract to the seed `message`, exactly as
+    /// [`SendMessage::contract`] does for a later turn. This is what makes a
+    /// one-shot question a single request: create, ask, and type the answer in
+    /// one call. Ignored when there is no seed message to frame.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contract: Option<Contract>,
 }
 
 /// Ask what a new session in this Workspace *would* be launched under, without
@@ -133,6 +139,13 @@ pub struct SendMessage {
     /// interaction's current defaults.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selection: Option<Selection>,
+    /// Ask this turn's reply to come back in a named shape. The server frames
+    /// `text` with the contract's instructions before sending and records the
+    /// contract with the session, so [`Request::TurnAnswer`] can parse the
+    /// reply without the client restating it. Absent means an ordinary,
+    /// untyped turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contract: Option<Contract>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -288,6 +301,23 @@ pub enum Request {
     Shell {
         id: String,
     },
+    /// Parse the session's most recent agent message under the contract its
+    /// last typed turn was sent with, and return the typed value.
+    ///
+    /// Separate from sending, rather than a reply to it, because a turn takes
+    /// minutes: the client polls [`Request::Updates`] as it would for any
+    /// session and asks for the answer once the turn completes. It reads the
+    /// same journal the interface renders, so it works on a live interaction
+    /// and a stored session alike — an answer can be re-parsed long after the
+    /// interaction it came from has ended.
+    TurnAnswer {
+        id: String,
+        /// Parse under this contract instead of the session's recorded one.
+        /// Lets a client re-read an answer as another shape without asking
+        /// again, and read one from a session that was never typed at all.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        contract: Option<Contract>,
+    },
     /// Ask the server to remove its socket and exit. Any live interactions it owns die
     /// with it, so this is the deliberate counterpart to the daemon outliving
     /// its clients.
@@ -322,6 +352,7 @@ pub enum Response {
     StoredSessions(Vec<SessionSummary>),
     StoredSession(StoredSession),
     Shell(ShellInfo),
+    Answer(Answer),
 }
 
 /// Response envelope returned for every syntactically valid connection.
@@ -391,6 +422,7 @@ mod tests {
             launch: LaunchPolicy::default(),
             message: None,
             name: None,
+            contract: None,
         });
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(json["data"]["selection"]["provider"], "claude");
@@ -565,10 +597,9 @@ mod tests {
 
         // A branch that keeps the whole history under the same provider says
         // nothing beyond the source id.
-        let bare: Request = serde_json::from_str(
-            r#"{"operation":"branch_session","data":{"id":"styra-1"}}"#,
-        )
-        .unwrap();
+        let bare: Request =
+            serde_json::from_str(r#"{"operation":"branch_session","data":{"id":"styra-1"}}"#)
+                .unwrap();
         assert_eq!(
             bare,
             Request::BranchSession {
@@ -590,5 +621,98 @@ mod tests {
         assert_eq!(json["data"]["id"], "styra-1");
         assert_eq!(json["data"]["name"], "Fix session picker");
         assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
+    }
+
+    /// The contract rides on the message, not the request, so `send_message`
+    /// and `queue_message` carry it identically.
+    #[test]
+    fn a_turn_names_its_contract_on_the_message() {
+        let request = Request::SendMessage {
+            id: "styra-1".into(),
+            message: SendMessage {
+                text: "which files handle auth?".into(),
+                selection: None,
+                contract: Some(Contract::Files),
+            },
+        };
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["operation"], "send_message");
+        assert_eq!(json["data"]["message"]["contract"], "files");
+        assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
+    }
+
+    /// A client that predates typed turns omits the field, and its messages
+    /// must keep meaning exactly what they meant before: an untyped turn.
+    #[test]
+    fn an_absent_contract_is_an_ordinary_turn() {
+        let json = serde_json::json!({
+            "operation": "send_message",
+            "data": { "id": "styra-1", "message": { "text": "hello" } }
+        });
+        let Request::SendMessage { message, .. } = serde_json::from_value::<Request>(json).unwrap()
+        else {
+            panic!("the operation must decode as send_message");
+        };
+        assert_eq!(message.contract, None);
+        // And a typed turn does not appear in the JSON of an untyped one.
+        let round_tripped = serde_json::to_value(&message).unwrap();
+        assert!(round_tripped.get("contract").is_none());
+    }
+
+    #[test]
+    fn asking_for_an_answer_may_name_a_contract_to_reread_it_under() {
+        let request = Request::TurnAnswer {
+            id: "styra-1".into(),
+            contract: Some(Contract::Lines),
+        };
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["operation"], "turn_answer");
+        assert_eq!(json["data"]["contract"], "lines");
+        assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
+
+        let recorded = Request::TurnAnswer {
+            id: "styra-1".into(),
+            contract: None,
+        };
+        let json = serde_json::to_value(&recorded).unwrap();
+        assert!(json["data"].get("contract").is_none());
+        assert_eq!(serde_json::from_value::<Request>(json).unwrap(), recorded);
+    }
+
+    /// The value is tagged by the contract that produced it, so a client
+    /// dispatches on the answer alone without tracking what it asked for.
+    #[test]
+    fn an_answer_is_tagged_by_its_contract() {
+        let response = Response::Answer(Answer {
+            value: AnswerValue::Files(vec![FileLocation {
+                path: PathBuf::from("src/auth.rs"),
+                line: Some(12),
+                column: None,
+                description: "checks the token".into(),
+            }]),
+            source: "…".into(),
+        });
+        let json = serde_json::to_value(&response).unwrap();
+        assert_eq!(json["type"], "answer");
+        assert_eq!(json["data"]["value"]["contract"], "files");
+        assert_eq!(json["data"]["value"]["value"][0]["path"], "src/auth.rs");
+        assert_eq!(json["data"]["value"]["value"][0]["line"], 12);
+        // A location with no column carries none, rather than a zero that
+        // would name a position the agent never gave.
+        assert!(json["data"]["value"]["value"][0].get("column").is_none());
+        assert_eq!(serde_json::from_value::<Response>(json).unwrap(), response);
+    }
+
+    #[test]
+    fn every_contract_has_a_stable_wire_spelling() {
+        for (contract, spelling) in [
+            (Contract::Text, "text"),
+            (Contract::Lines, "lines"),
+            (Contract::Files, "files"),
+            (Contract::Json, "json"),
+        ] {
+            assert_eq!(serde_json::to_value(contract).unwrap(), spelling);
+            assert_eq!(contract.as_str(), spelling);
+        }
     }
 }

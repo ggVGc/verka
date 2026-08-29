@@ -1,9 +1,9 @@
 //! Blocking client for Styra's JSON protocol over a Unix domain socket.
 
 use crate::protocol::{
-    CreateSession, CreateWorkspace, DrivaOptions, Health, LaunchPolicy, PlanSession, RenameSession,
-    Request, Response, ResumeSession, SendMessage, SessionInfo, ShellInfo, StoredSession,
-    TemplateSummary, UpdateNotes, Updates, WireResponse,
+    Answer, Contract, CreateSession, CreateWorkspace, DrivaOptions, Health, LaunchPolicy,
+    PlanSession, RenameSession, Request, Response, ResumeSession, SendMessage, SessionInfo,
+    ShellInfo, StoredSession, TemplateSummary, UpdateNotes, Updates, WireResponse,
 };
 use crate::protocol::{InteractionSummary, SessionSummary, WorkspaceSummary};
 use anyhow::{bail, Context, Result};
@@ -172,6 +172,7 @@ impl Client {
             message: SendMessage {
                 text: text.to_owned(),
                 selection: None,
+                contract: None,
             },
         })? {
             Response::Accepted => Ok(()),
@@ -190,6 +191,7 @@ impl Client {
             message: SendMessage {
                 text: text.to_owned(),
                 selection: Some(selection.clone()),
+                contract: None,
             },
         })? {
             Response::Accepted => Ok(()),
@@ -224,6 +226,49 @@ impl Client {
         }
     }
 
+    /// Send a message asking its reply to come back in a named shape.
+    ///
+    /// The server frames the text with the contract's instructions and records
+    /// the contract with the session; the answer is read separately with
+    /// [`Self::turn_answer`] once the turn has completed, which the caller sees
+    /// on the update stream as it would for any turn.
+    pub fn send_typed_message(&self, id: &str, text: &str, contract: Contract) -> Result<()> {
+        match self.request(Request::SendMessage {
+            id: id.to_owned(),
+            message: SendMessage {
+                text: text.to_owned(),
+                selection: None,
+                contract: Some(contract),
+            },
+        })? {
+            Response::Accepted => Ok(()),
+            other => unexpected("accepted", other),
+        }
+    }
+
+    /// Parse the session's most recent agent message as a typed answer, under
+    /// the contract its last typed turn was sent with.
+    pub fn turn_answer(&self, id: &str) -> Result<Answer> {
+        self.answer(id, None)
+    }
+
+    /// Parse that same message under a contract of the caller's choosing,
+    /// whatever the session was sent with — how an answer is re-read as another
+    /// shape, and how an untyped turn is typed after the fact.
+    pub fn turn_answer_as(&self, id: &str, contract: Contract) -> Result<Answer> {
+        self.answer(id, Some(contract))
+    }
+
+    fn answer(&self, id: &str, contract: Option<Contract>) -> Result<Answer> {
+        match self.request(Request::TurnAnswer {
+            id: id.to_owned(),
+            contract,
+        })? {
+            Response::Answer(answer) => Ok(answer),
+            other => unexpected("answer", other),
+        }
+    }
+
     /// Durably queue an operator message on the server without sending it,
     /// so it survives the client disconnecting before the interaction is idle
     /// enough to accept it. Returns the new queue length.
@@ -233,6 +278,7 @@ impl Client {
             message: SendMessage {
                 text: text.to_owned(),
                 selection: None,
+                contract: None,
             },
         })? {
             Response::Queued(count) => Ok(count),

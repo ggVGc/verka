@@ -97,6 +97,9 @@ pub fn create_session(
         launch: launch.clone(),
         message: seed.map(str::to_owned),
         name: None,
+        // The interface opens ordinary conversations; a typed turn is asked
+        // for explicitly, per turn, not imposed on every session it starts.
+        contract: None,
     })
 }
 

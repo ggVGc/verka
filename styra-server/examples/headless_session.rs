@@ -34,6 +34,7 @@ fn main() -> anyhow::Result<()> {
         launch: Default::default(),
         message: Some(prompt),
         name: None,
+        contract: None,
     })?;
     println!("session {}", session.id);
 

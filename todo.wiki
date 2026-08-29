@@ -4,3 +4,24 @@
   - Possibly introduce MCP or other specific tooling to let the agent do git actions without actual access to the raw .git dir.
 - [ ] Should be able to specify some part of some file for a change.
   The node created for that work should be associated with the node which created that output.
+- [ ] View a typed turn answer in the Styra interface.
+  The server side exists: a turn sent with a `contract` is framed and recorded,
+  and `turn_answer` returns the parsed `AnswerValue` for a live or stored
+  session (`styra-server/src/contract.rs`, `protocol/README.md`). Nothing in
+  the interface asks for one or renders it, so a typed answer is currently only
+  reachable from a client like `examples/typed_answer.rs`.
+  - Ask for a shape: a way to attach a contract to the composer's message,
+    and some indication in the timeline that the turn was typed — the operator
+    should be able to see the instructions their message was actually sent
+    with (`contract::instructions`) rather than wondering what was appended.
+  - Render the answer per contract rather than as the prose it arrived in:
+    `files` as a navigable list (it already carries path, line, column and
+    description — the same fields a jump needs), `lines` as a list, `json`
+    pretty-printed, `text` as it is.
+  - Re-read an existing answer under another contract, which the protocol
+    already supports via `turn_answer`'s optional `contract` field. Cheap to
+    expose and it makes a mis-shaped answer recoverable without asking again.
+  - Decide what happens when the parse fails, which is the common case worth
+    designing for: the `Answer` carries the `source` message it was parsed
+    from, so the interface can show the reply verbatim and say why it did not
+    satisfy the contract, rather than reporting an error with nothing in it.

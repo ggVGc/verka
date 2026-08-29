@@ -4,12 +4,12 @@ use crate::agent::{MountSpec, SandboxLayout, Selection};
 use crate::interaction::{Interaction, InteractionSpec, ResolvedTemplate, SandboxBroker};
 use crate::journal::{self, Journal};
 use crate::protocol::{
-    CreateSession, CreateWorkspace, Health, Request, Response, ResumeSession, SequencedUpdate,
-    SessionInfo, ShellInfo, StoredSession, Updates, WireResponse, MAX_REQUEST_BYTES,
+    Answer, Contract, DrivaOptions, InteractionActivity, InteractionSummary, InteractionUpdate,
+    LaunchMount, LaunchPolicy, SessionOrigin, SessionSummary, TemplateSummary,
 };
 use crate::protocol::{
-    DrivaOptions, InteractionActivity, InteractionSummary, InteractionUpdate, LaunchMount,
-    LaunchPolicy, SessionOrigin, SessionSummary, TemplateSummary,
+    CreateSession, CreateWorkspace, Health, Request, Response, ResumeSession, SequencedUpdate,
+    SessionInfo, ShellInfo, StoredSession, Updates, WireResponse, MAX_REQUEST_BYTES,
 };
 use anyhow::{Context, Result};
 use std::collections::{HashMap, HashSet};
@@ -352,9 +352,8 @@ impl ServerState {
                             background_count_known = true;
                             background_work = running > 0;
                             if !background_work {
-                                let mut activity = activity
-                                    .lock()
-                                    .expect("interaction activity lock poisoned");
+                                let mut activity =
+                                    activity.lock().expect("interaction activity lock poisoned");
                                 if *activity == InteractionActivity::Background {
                                     *activity = InteractionActivity::Pending;
                                 }
@@ -425,7 +424,17 @@ impl ServerState {
             .map(str::trim)
             .filter(|message| !message.is_empty())
         {
-            if let Err(error) = managed.send(message) {
+            // The seed message is a turn like any other, so a contract on it is
+            // framed and recorded exactly as `SendMessage` does. Doing it here
+            // is what makes a typed one-shot a single request.
+            let message = match request.contract {
+                Some(contract) => {
+                    journal::store_session_contract(&managed.session_path, contract)?;
+                    crate::contract::frame(message, contract)
+                }
+                None => message.to_owned(),
+            };
+            if let Err(error) = managed.send(&message) {
                 managed.stop();
                 self.inner
                     .interactions
@@ -620,9 +629,8 @@ impl ServerState {
                             background_count_known = true;
                             background_work = running > 0;
                             if !background_work {
-                                let mut activity = activity
-                                    .lock()
-                                    .expect("interaction activity lock poisoned");
+                                let mut activity =
+                                    activity.lock().expect("interaction activity lock poisoned");
                                 if *activity == InteractionActivity::Background {
                                     *activity = InteractionActivity::Pending;
                                 }
@@ -907,6 +915,52 @@ impl ServerState {
         }
     }
 
+    /// Parse a session's most recent agent message as a typed answer.
+    ///
+    /// A live interaction is answered from the updates it has already
+    /// collected, which are the same events the interface is rendering; a
+    /// session with no live interaction is answered by replaying its journal.
+    /// Both paths reach the same decoded [`AgentEvent`]s, so an answer does not
+    /// depend on whether the session that produced it is still running.
+    fn turn_answer(&self, id: &str, contract: Option<Contract>) -> Result<Answer> {
+        let live = self
+            .inner
+            .interactions
+            .lock()
+            .expect("server interaction lock poisoned")
+            .get(id)
+            .cloned();
+        let (events, session_path) = match live {
+            Some(interaction) => {
+                let events = interaction
+                    .updates
+                    .lock()
+                    .expect("interaction update lock poisoned")
+                    .iter()
+                    .filter_map(|update| match &update.update {
+                        InteractionUpdate::Event(event) => Some(event.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                (events, interaction.session_path.clone())
+            }
+            None => {
+                let summary = self.stored_summary(id)?;
+                let meta = journal::read_session_meta(&summary.path)?;
+                (journal::replay(&summary.path, meta.protocol)?, summary.path)
+            }
+        };
+        // An explicit contract re-reads an existing answer as another shape,
+        // which is also the only way to type a turn that was sent untyped.
+        let contract = match contract {
+            Some(contract) => contract,
+            None => journal::read_session_contract(&session_path)?.with_context(|| {
+                format!("session {id:?} has no typed turn to answer; name a contract to parse its last message as one")
+            })?,
+        };
+        crate::contract::answer_from_events(&events, contract)
+    }
+
     fn stored_summary(&self, id: &str) -> Result<SessionSummary> {
         // Probe each Workspace for this exact id rather than listing every
         // Session in it: the directory name *is* the id, so a stat per
@@ -998,9 +1052,20 @@ impl ServerState {
                 if let Some(selection) = message.selection {
                     interaction.set_selection(selection)?;
                 }
+                // A typed turn is framed here, not by the client, so every
+                // caller asks for a shape in the same words. Recorded before
+                // sending: an answer that arrives against an unrecorded
+                // contract could not be parsed.
+                let text = match message.contract {
+                    Some(contract) => {
+                        journal::store_session_contract(&interaction.session_path, contract)?;
+                        crate::contract::frame(&message.text, contract)
+                    }
+                    None => message.text,
+                };
                 interaction
                     .interaction
-                    .send_with_selection(&message.text, Some(&interaction.selection()))?;
+                    .send_with_selection(&text, Some(&interaction.selection()))?;
                 Ok(Response::Accepted)
             }
             Request::SetSessionSelection { id, selection } => {
@@ -1100,6 +1165,9 @@ impl ServerState {
                 }))
             }
             Request::Shell { id } => Ok(Response::Shell(self.shell(&id)?)),
+            Request::TurnAnswer { id, contract } => {
+                Ok(Response::Answer(self.turn_answer(&id, contract)?))
+            }
             // Flag the shutdown; the connection thread acts on it once this
             // acknowledgement has gone back over the wire.
             Request::Shutdown => {
@@ -1260,7 +1328,9 @@ fn messages_up_to(
 /// does not parse — callers treat that as "keep it" rather than as an error,
 /// since one malformed timestamp should not fail an entire branch.
 fn parse_rfc3339_ms(timestamp: &str) -> Option<u64> {
-    let parsed = time::OffsetDateTime::parse(timestamp, &time::format_description::well_known::Rfc3339).ok()?;
+    let parsed =
+        time::OffsetDateTime::parse(timestamp, &time::format_description::well_known::Rfc3339)
+            .ok()?;
     u64::try_from(parsed.unix_timestamp_nanos() / 1_000_000).ok()
 }
 
@@ -1274,8 +1344,8 @@ fn native_session_destination(
     session_id: &str,
     cwd: &Path,
 ) -> Result<PathBuf> {
-    let home =
-        std::env::var_os("HOME").context("HOME is required to place a converted provider session")?;
+    let home = std::env::var_os("HOME")
+        .context("HOME is required to place a converted provider session")?;
     let home = PathBuf::from(home);
     match provider {
         crate::agent::Provider::Claude => Ok(home

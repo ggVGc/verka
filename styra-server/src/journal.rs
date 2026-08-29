@@ -16,7 +16,7 @@
 
 use crate::agent::{Profile, Selection, SessionMeta};
 use crate::event::{decode_line, AgentEvent, Protocol};
-use crate::protocol::{Direction, RawLine, SessionOrigin, SessionSummary};
+use crate::protocol::{Contract, Direction, RawLine, SessionOrigin, SessionSummary};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
@@ -35,6 +35,12 @@ struct StoredSessionMeta {
     provider_session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     origin: Option<SessionOrigin>,
+    /// The contract the session's most recent typed turn was sent under, so
+    /// its answer can be parsed without the client restating the shape — and
+    /// still can be after the interaction has ended and only the journal is
+    /// left. `None` for a session whose turns were all untyped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    contract: Option<Contract>,
     #[serde(flatten)]
     agent: SessionMeta,
 }
@@ -234,6 +240,7 @@ fn write_session_meta(
         notes: String::new(),
         provider_session_id: None,
         origin: None,
+        contract: None,
         agent: meta.clone(),
     };
     let json = serde_json::to_string_pretty(&stored).context("serializing session metadata")?;
@@ -380,6 +387,29 @@ pub fn store_session_origin(path: &Path, origin: SessionOrigin) -> Result<()> {
     };
     let mut stored = read_stored_session_meta(&directory)?;
     stored.origin = Some(origin);
+    write_stored_session_meta(&directory, &stored)
+}
+
+/// Read the contract a Session's most recent typed turn was sent under.
+pub fn read_session_contract(path: &Path) -> Result<Option<Contract>> {
+    Ok(read_stored_session_meta(path)?.contract)
+}
+
+/// Record the contract a turn was just sent under, replacing any earlier one.
+///
+/// Last-turn-wins: a session can mix typed and untyped turns freely, and the
+/// answer a client asks for is the one to the question it just asked.
+pub fn store_session_contract(path: &Path, contract: Contract) -> Result<()> {
+    let directory = if path.is_dir() {
+        path.to_path_buf()
+    } else {
+        path.parent().map(Path::to_path_buf).unwrap_or_default()
+    };
+    let mut stored = read_stored_session_meta(&directory)?;
+    if stored.contract == Some(contract) {
+        return Ok(());
+    }
+    stored.contract = Some(contract);
     write_stored_session_meta(&directory, &stored)
 }
 
@@ -750,6 +780,59 @@ mod tests {
 
         std::fs::remove_dir_all(&root).ok();
         std::fs::remove_dir_all(&host).ok();
+    }
+
+    /// The contract outlives the interaction that used it: an answer can be
+    /// parsed from a stored session long after the agent process is gone, and
+    /// a later turn's contract replaces an earlier one.
+    #[test]
+    fn the_last_typed_turns_contract_is_stored_with_the_session() {
+        let root = temp_dir("contract-store");
+        let host = temp_dir("contract-host");
+        let workspace = crate::workspace::create(&root, &host, Some("work".into())).unwrap();
+        let profile = test_profile("codex", Protocol::CodexJsonl);
+        let selection = crate::agent::Selection::new(crate::agent::Provider::Codex);
+        let (journal, _) =
+            Journal::create_in_workspace(&root, &workspace.id, &profile, &selection, None).unwrap();
+        let directory = journal.path().parent().unwrap();
+
+        assert_eq!(read_session_contract(directory).unwrap(), None);
+        store_session_contract(directory, Contract::Files).unwrap();
+        assert_eq!(
+            read_session_contract(directory).unwrap(),
+            Some(Contract::Files)
+        );
+        // A session mixes typed turns freely; the answer belongs to the last
+        // question asked, not the first.
+        store_session_contract(directory, Contract::Json).unwrap();
+        assert_eq!(
+            read_session_contract(directory).unwrap(),
+            Some(Contract::Json)
+        );
+        // Recording a contract must not disturb the rest of the metadata.
+        assert_eq!(read_session_workspace_id(directory).unwrap(), workspace.id);
+        assert_eq!(
+            read_session_meta(directory).unwrap().protocol,
+            Protocol::CodexJsonl
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::remove_dir_all(&host).ok();
+    }
+
+    /// Sessions written before typed turns existed have no `contract` field,
+    /// and must still load — as untyped, which is what they were.
+    #[test]
+    fn a_session_stored_without_a_contract_reads_as_untyped() {
+        let dir = temp_dir("contract-absent");
+        std::fs::write(
+            dir.join(SESSION_META_FILE),
+            r#"{"workspace_id":"w-1","protocol":"codex-jsonl","command":"codex",
+                "selection":{"provider":"codex","model":"gpt-5-codex","effort":"medium"}}"#,
+        )
+        .unwrap();
+        assert_eq!(read_session_contract(&dir).unwrap(), None);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

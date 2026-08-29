@@ -80,7 +80,11 @@ pub use genta::render;
 pub use driva::{Mount, MountAccess};
 
 // --- The client-facing interface ---
+// `contract` is here rather than with the session runner because both sides
+// need it: the server frames and parses with it, and a client uses it to name
+// a shape and to show an operator the instructions their message was sent with.
 pub mod client;
+pub mod contract;
 pub mod daemon;
 pub mod paths;
 pub mod protocol;
@@ -89,9 +93,9 @@ pub mod spawn;
 pub use client::Client;
 pub use daemon::{run, serve_if_requested, ServerConfig};
 pub use protocol::{
-    Direction, DrivaOptions, InteractionActivity, InteractionEnd, InteractionSummary,
-    InteractionUpdate, LaunchMount, LaunchPolicy, LogEntry, LogLevel, RawLine, SessionOrigin,
-    SessionSummary, TemplateSummary, WorkspaceSummary,
+    Answer, AnswerValue, Contract, Direction, DrivaOptions, FileLocation, InteractionActivity,
+    InteractionEnd, InteractionSummary, InteractionUpdate, LaunchMount, LaunchPolicy, LogEntry,
+    LogLevel, RawLine, SessionOrigin, SessionSummary, TemplateSummary, WorkspaceSummary,
 };
 pub use spawn::ensure_server;
 

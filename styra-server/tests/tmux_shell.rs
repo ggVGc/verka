@@ -185,6 +185,7 @@ done
             launch: Default::default(),
             message: None,
             name: None,
+            contract: None,
         })
         .unwrap();
     let shell = client.shell(&session.id).unwrap();

@@ -382,6 +382,89 @@ pub struct SessionSummary {
     pub origin: Option<SessionOrigin>,
 }
 
+/// The shape a client asks a turn's answer to come back in.
+///
+/// A contract is applied at both ends of one turn: it frames the message sent
+/// to the agent with instructions describing the shape, and it parses the
+/// agent's reply back into [`AnswerValue`]. Framing server-side is what keeps
+/// clients honest — every caller asks for a shape the same way, so the parser
+/// only has to understand one phrasing. See [`crate::contract`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Contract {
+    /// Prose. The weakest contract, and the one that cannot fail to parse.
+    Text,
+    /// One item per line.
+    Lines,
+    /// One file location per line, `path[:line[:column]][: description]`.
+    Files,
+    /// A single JSON value.
+    Json,
+}
+
+impl Contract {
+    /// The wire spelling, for diagnostics and client-side display.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Text => "text",
+            Self::Lines => "lines",
+            Self::Files => "files",
+            Self::Json => "json",
+        }
+    }
+}
+
+/// A place in the Workspace, as named by a [`Contract::Files`] answer.
+///
+/// `line` and `column` are 1-based and `None` when the agent named none, which
+/// is the difference between "this file" and "this position", and is why they
+/// are not zero-defaulted into a position that does not exist.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileLocation {
+    /// Relative to the Workspace root, as the agent was asked to report it.
+    pub path: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub column: Option<u32>,
+    /// The agent's note about this location; empty when it gave none.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+}
+
+/// A parsed answer. The variant always matches the [`Contract`] that produced
+/// it, so a client can dispatch on the value alone.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "contract", content = "value", rename_all = "snake_case")]
+pub enum AnswerValue {
+    Text(String),
+    Lines(Vec<String>),
+    Files(Vec<FileLocation>),
+    Json(serde_json::Value),
+}
+
+impl AnswerValue {
+    /// The contract this value was parsed under.
+    pub fn contract(&self) -> Contract {
+        match self {
+            Self::Text(_) => Contract::Text,
+            Self::Lines(_) => Contract::Lines,
+            Self::Files(_) => Contract::Files,
+            Self::Json(_) => Contract::Json,
+        }
+    }
+}
+
+/// One turn's typed answer, with enough provenance to show where it came from.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Answer {
+    pub value: AnswerValue,
+    /// The agent message the answer was parsed from, verbatim. Kept so a
+    /// client can show what was actually said when a parse looks wrong, and so
+    /// [`Contract::Text`] is not the only way to see the reply.
+    pub source: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
