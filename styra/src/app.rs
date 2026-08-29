@@ -21,7 +21,7 @@ use styra_server::agent::SandboxLayout;
 use styra_server::agent::{Provider, Selection};
 use styra_server::event::PresentationMode;
 use styra_server::event::{AgentEvent, DetailBlock, TokenUsage};
-use styra_server::{Answer, AnswerValue, Contract, FileLocation};
+use styra_server::{Answer, AnswerValue, Contract, FileLocation, QueuedMessage};
 use styra_server::{InteractionEnd, LogEntry, RawLine};
 
 use crate::composer::Composer;
@@ -258,7 +258,7 @@ pub struct App {
     pub composer: Composer,
     /// Messages submitted while the current turn is running. They remain
     /// visible until sent or the interaction is stopped.
-    queued_messages: VecDeque<String>,
+    queued_messages: VecDeque<QueuedMessage>,
     pub status: Status,
     /// Recent actions Styra performed without a direct operator command.
     /// Each is displayed for five seconds in the message panel.
@@ -765,19 +765,19 @@ impl App {
         self.status.is_active()
     }
 
-    pub fn queued_messages(&self) -> impl Iterator<Item = &str> {
-        self.queued_messages.iter().map(String::as_str)
+    pub fn queued_messages(&self) -> impl Iterator<Item = &QueuedMessage> {
+        self.queued_messages.iter()
     }
 
     pub fn queued_message_count(&self) -> usize {
         self.queued_messages.len()
     }
 
-    pub fn queue_message(&mut self, message: String) {
+    pub fn queue_message(&mut self, message: QueuedMessage) {
         self.queued_messages.push_back(message);
     }
 
-    pub fn take_queued_message(&mut self) -> Option<String> {
+    pub fn take_queued_message(&mut self) -> Option<QueuedMessage> {
         self.queued_messages.pop_front()
     }
 
@@ -1593,17 +1593,31 @@ mod tests {
     #[test]
     fn queued_messages_are_fifo_and_can_be_cleared() {
         let mut app = app();
-        app.queue_message("first".into());
-        app.queue_message("second".into());
+        app.queue_message(QueuedMessage::new("first"));
+        app.queue_message(QueuedMessage::new("second"));
 
         assert_eq!(app.queued_message_count(), 2);
-        assert_eq!(app.take_queued_message(), Some("first".into()));
-        assert_eq!(app.take_queued_message(), Some("second".into()));
+        assert_eq!(app.take_queued_message(), Some(QueuedMessage::new("first")));
+        assert_eq!(
+            app.take_queued_message(),
+            Some(QueuedMessage::new("second"))
+        );
         assert_eq!(app.take_queued_message(), None);
 
-        app.queue_message("keep until Esc".into());
+        app.queue_message(QueuedMessage::new("keep until Esc"));
         assert_eq!(app.clear_queued_messages(), 1);
         assert_eq!(app.queued_message_count(), 0);
+    }
+
+    /// A message queued while the agent was busy keeps the shape it was
+    /// composed with, so it still asks for one when the queue drains.
+    #[test]
+    fn a_queued_message_keeps_its_contract() {
+        let mut app = app();
+        app.queue_message(QueuedMessage::new("which files?").asking_for(Some(Contract::Files)));
+        let queued = app.take_queued_message().expect("the message was queued");
+        assert_eq!(queued.text, "which files?");
+        assert_eq!(queued.contract, Some(Contract::Files));
     }
 
     #[test]

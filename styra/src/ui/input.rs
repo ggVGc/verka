@@ -64,8 +64,15 @@ fn input_display(app: &App, width: u16) -> InputDisplay {
     let width = usize::from(width.max(1));
     let mut lines = Vec::new();
     for message in app.queued_messages() {
+        // A queued message keeps the shape it was composed with, so the line
+        // says so — otherwise the operator has no way to tell which of several
+        // waiting messages asked for what.
+        let prefix = match message.contract {
+            Some(contract) => format!("queued ({}): ", contract.as_str()),
+            None => "queued: ".to_owned(),
+        };
         lines.extend(wrapped_input_lines(
-            &format!("queued: {message}"),
+            &format!("{prefix}{}", message.text),
             width,
             Style::default().fg(Color::DarkGray),
         ));

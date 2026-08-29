@@ -382,6 +382,55 @@ pub struct SessionSummary {
     pub origin: Option<SessionOrigin>,
 }
 
+/// An operator message persisted but not yet sent.
+///
+/// Carries the contract it was queued under, so a message the operator asked
+/// for a shape while the agent was busy still asks for it when the queue
+/// drains. Without that the shape would be dropped at exactly the moment the
+/// operator could least do anything about it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct QueuedMessage {
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contract: Option<Contract>,
+}
+
+impl QueuedMessage {
+    pub fn new(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            contract: None,
+        }
+    }
+
+    pub fn asking_for(mut self, contract: Option<Contract>) -> Self {
+        self.contract = contract;
+        self
+    }
+}
+
+/// Queues written before contracts existed are arrays of bare strings. They
+/// are read as untyped messages rather than failing the resume that finds
+/// them, which would strand the operator's unsent work.
+impl<'de> Deserialize<'de> for QueuedMessage {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Stored {
+            Text(String),
+            Message {
+                text: String,
+                #[serde(default)]
+                contract: Option<Contract>,
+            },
+        }
+        Ok(match Stored::deserialize(deserializer)? {
+            Stored::Text(text) => Self::new(text),
+            Stored::Message { text, contract } => Self { text, contract },
+        })
+    }
+}
+
 /// The shape a client asks a turn's answer to come back in.
 ///
 /// A contract is applied at both ends of one turn: it frames the message sent

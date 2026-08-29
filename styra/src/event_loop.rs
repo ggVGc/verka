@@ -84,7 +84,10 @@ pub fn run(
         if let Live::Running { session_id, .. } = live {
             if app.status == Status::Idle {
                 if let Some(message) = app.take_queued_message() {
-                    match client.send_message_with_selection(session_id, &message, &app.selection) {
+                    // Sent as it was composed: a message queued asking for a
+                    // shape still asks for it when the agent frees up.
+                    let turn = session::turn(&message.text, app, message.contract);
+                    match client.send_turn(session_id, turn) {
                         Ok(()) => {
                             app.status = Status::Running;
                             let waiting = app.queued_message_count();

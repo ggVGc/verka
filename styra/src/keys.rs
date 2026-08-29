@@ -7,7 +7,7 @@ use crate::notes;
 use crate::preferences;
 use crate::session::{self, Live};
 use crate::terminal;
-use styra_server::{Client, Contract, LogEntry};
+use styra_server::{Client, Contract, LogEntry, QueuedMessage};
 
 /// Keys for the launch picker: `j`/`k` within a column, `Tab`/`h`/`l` between
 /// them, `Enter` to apply the choice to this workspace, `D` to also save it as
@@ -338,21 +338,16 @@ pub fn handle_input_key(
                 let contract = app.take_contract();
                 match live {
                     Live::Running { session_id, .. } if app.status == Status::Running => {
-                        // The durable queue stores text alone, so a contract
-                        // cannot ride it. Said plainly rather than dropped
-                        // quietly: the operator asked for a shape and would
-                        // otherwise get prose back with no explanation.
-                        if contract.is_some() {
-                            app.push_log(LogEntry::warn(
-                                "queued messages cannot ask for a shape; this one was queued untyped",
-                            ));
-                        }
-                        if let Err(error) = client.queue_message(session_id, &message) {
+                        // Queued as composed, contract included: the shape was
+                        // chosen for this question and is asked for whenever
+                        // the agent gets to it.
+                        let turn = session::turn(&message, app, contract);
+                        if let Err(error) = client.queue_turn(session_id, turn) {
                             app.push_log(LogEntry::error(format!(
                                 "could not persist queued message: {error:#}"
                             )));
                         }
-                        app.queue_message(message);
+                        app.queue_message(QueuedMessage::new(message).asking_for(contract));
                         app.push_log(LogEntry::info(format!(
                             "message queued ({} waiting)",
                             app.queued_message_count()

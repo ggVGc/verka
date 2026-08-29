@@ -5,7 +5,8 @@ use crate::interaction::{Interaction, InteractionSpec, ResolvedTemplate, Sandbox
 use crate::journal::{self, Journal};
 use crate::protocol::{
     Answer, Contract, DrivaOptions, InteractionActivity, InteractionSummary, InteractionUpdate,
-    LaunchMount, LaunchPolicy, SessionOrigin, SessionSummary, TemplateSummary,
+    LaunchMount, LaunchPolicy, QueuedMessage, SendMessage, SessionOrigin, SessionSummary,
+    TemplateSummary,
 };
 use crate::protocol::{
     CreateSession, CreateWorkspace, Health, Request, Response, ResumeSession, SequencedUpdate,
@@ -61,7 +62,7 @@ struct ManagedInteraction {
     /// Operator messages not yet sent to the agent, durably mirrored into
     /// `session_path` on every mutation so the queue survives the operator
     /// closing the Styra UI (or the daemon restarting) before it drains.
-    queue: Mutex<std::collections::VecDeque<String>>,
+    queue: Mutex<std::collections::VecDeque<QueuedMessage>>,
     /// The session's durable directory: its journal, metadata and queue.
     session_path: PathBuf,
 }
@@ -172,19 +173,21 @@ impl ManagedInteraction {
         self.interaction.stop();
     }
 
-    fn persist_queue(&self, queue: &std::collections::VecDeque<String>) -> Result<()> {
-        let messages: Vec<String> = queue.iter().cloned().collect();
+    fn persist_queue(&self, queue: &std::collections::VecDeque<QueuedMessage>) -> Result<()> {
+        let messages: Vec<QueuedMessage> = queue.iter().cloned().collect();
         journal::write_queued_messages(&self.session_path, &messages)
     }
 
-    fn queue_message(&self, text: &str) -> Result<usize> {
+    /// Queue a message as it was composed, contract and all: it is sent later
+    /// but asked for now, and the shape belongs to the question.
+    fn queue_message(&self, message: &SendMessage) -> Result<usize> {
         let mut queue = self.queue.lock().expect("interaction queue lock poisoned");
-        queue.push_back(text.to_owned());
+        queue.push_back(QueuedMessage::new(&message.text).asking_for(message.contract));
         self.persist_queue(&queue)?;
         Ok(queue.len())
     }
 
-    fn take_queued_message(&self) -> Result<Option<String>> {
+    fn take_queued_message(&self) -> Result<Option<QueuedMessage>> {
         let mut queue = self.queue.lock().expect("interaction queue lock poisoned");
         let next = queue.pop_front();
         if next.is_some() {
@@ -201,7 +204,7 @@ impl ManagedInteraction {
         Ok(count)
     }
 
-    fn queued_messages(&self) -> Vec<String> {
+    fn queued_messages(&self) -> Vec<QueuedMessage> {
         self.queue
             .lock()
             .expect("interaction queue lock poisoned")
@@ -1078,7 +1081,7 @@ impl ServerState {
                 Ok(Response::Accepted)
             }
             Request::QueueMessage { id, message } => Ok(Response::Queued(
-                self.interaction(&id)?.queue_message(&message.text)?,
+                self.interaction(&id)?.queue_message(&message)?,
             )),
             Request::TakeQueuedMessage { id } => Ok(Response::TakenQueuedMessage(
                 self.interaction(&id)?.take_queued_message()?,

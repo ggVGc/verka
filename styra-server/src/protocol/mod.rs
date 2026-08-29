@@ -16,7 +16,8 @@ pub use transport::{read_message, read_message_limited, write_message, MAX_REQUE
 pub use types::{
     Answer, AnswerValue, Contract, Direction, DrivaOptions, FileLocation, InteractionActivity,
     InteractionEnd, InteractionSummary, InteractionUpdate, LaunchMount, LaunchPolicy, LogEntry,
-    LogLevel, RawLine, SessionOrigin, SessionSummary, TemplateSummary, WorkspaceSummary,
+    LogLevel, QueuedMessage, RawLine, SessionOrigin, SessionSummary, TemplateSummary,
+    WorkspaceSummary,
 };
 
 // These external vocabularies are serialized inside protocol payloads. Re-export
@@ -122,7 +123,7 @@ pub struct SessionInfo {
     /// went idle), so a fresh client hydrates its input queue instead of
     /// silently dropping it.
     #[serde(default)]
-    pub queued: Vec<String>,
+    pub queued: Vec<QueuedMessage>,
 }
 
 /// Host-side tmux endpoint for the shell owned by a live session's sandbox.
@@ -368,8 +369,8 @@ pub enum Response {
     WorkspaceLaunchUpdated(WorkspaceSummary),
     Accepted,
     Queued(usize),
-    TakenQueuedMessage(Option<String>),
-    QueuedMessages(Vec<String>),
+    TakenQueuedMessage(Option<QueuedMessage>),
+    QueuedMessages(Vec<QueuedMessage>),
     Updates(Updates),
     Interactions(Vec<InteractionSummary>),
     StoredSessions(Vec<SessionSummary>),
@@ -745,6 +746,42 @@ mod tests {
         assert!(json["data"].get("value").is_none());
         assert_eq!(json["data"]["source"], "I had trouble with that.");
         assert_eq!(serde_json::from_value::<Response>(json).unwrap(), response);
+    }
+
+    /// A queued message carries the shape it was composed with, so waiting for
+    /// the agent does not quietly turn a typed turn into an untyped one.
+    #[test]
+    fn a_queued_message_carries_its_contract() {
+        let message = QueuedMessage::new("which files?").asking_for(Some(Contract::Files));
+        let json = serde_json::to_value(&message).unwrap();
+        assert_eq!(json["text"], "which files?");
+        assert_eq!(json["contract"], "files");
+        assert_eq!(
+            serde_json::from_value::<QueuedMessage>(json).unwrap(),
+            message
+        );
+
+        // An untyped one says nothing about a contract at all.
+        let plain = QueuedMessage::new("hello");
+        let json = serde_json::to_value(&plain).unwrap();
+        assert!(json.get("contract").is_none());
+        assert_eq!(
+            serde_json::from_value::<QueuedMessage>(json).unwrap(),
+            plain
+        );
+    }
+
+    /// Queues written before contracts existed are arrays of bare strings.
+    /// Reading them as untyped messages is what keeps a resume from stranding
+    /// the operator's unsent work.
+    #[test]
+    fn a_queue_stored_as_bare_strings_still_loads() {
+        let stored = serde_json::json!(["first", "second"]);
+        let queue: Vec<QueuedMessage> = serde_json::from_value(stored).unwrap();
+        assert_eq!(
+            queue,
+            vec![QueuedMessage::new("first"), QueuedMessage::new("second")]
+        );
     }
 
     #[test]

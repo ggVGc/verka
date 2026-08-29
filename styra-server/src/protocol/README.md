@@ -94,6 +94,12 @@ was never sent a typed turn — is a protocol error, since there is nothing to
 return. An agent that answered well but framed it badly has produced something
 worth showing, and a client handed only the complaint could not show it.
 
+A contract also survives the durable input queue: `queue_message` takes the same
+`SendMessage` as `send_message`, and `queued_messages` and `take_queued_message`
+return `{"text":…,"contract":…}` objects rather than bare strings. A queue file
+written before contracts existed is an array of strings and still loads, as
+untyped messages.
+
 ## Compatibility
 
 The Serde definitions in this directory are the structural wire contract.

@@ -13,12 +13,10 @@
   A reply that missed its contract is shown as the message plus the reason, not
   an error on its own — `Answer` carries `value: Option<_>` and `error` for
   exactly that.
-- [ ] Let a queued message carry a return contract.
-  The durable input queue stores text alone, so a contract chosen for a message
-  that lands in the queue (the agent was busy) cannot ride it. The interface
-  says so and queues it untyped, which is honest but a wart: the operator has
-  to wait for idle to ask for a shape. Needs a contract beside the text in the
-  server's queue, in `queued_messages`/`QueueMessage` and the file behind them.
+- [x] Let a queued message carry a return contract.
+  The queue holds `QueuedMessage { text, contract }` rather than bare strings,
+  so a shape chosen while the agent was busy is still asked for when the queue
+  drains. Queue files written before contracts existed load as untyped.
 - [ ] Decide what a typed turn should look like in the timeline.
   The server frames the message before recording it, so the event list shows
   the operator's text followed by the whole instruction block. That is honest —

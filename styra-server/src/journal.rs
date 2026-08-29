@@ -16,7 +16,7 @@
 
 use crate::agent::{Profile, Selection, SessionMeta};
 use crate::event::{decode_line, AgentEvent, Protocol};
-use crate::protocol::{Contract, Direction, RawLine, SessionOrigin, SessionSummary};
+use crate::protocol::{Contract, Direction, QueuedMessage, RawLine, SessionOrigin, SessionSummary};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
@@ -210,7 +210,7 @@ const QUEUE_FILE: &str = "queue.json";
 /// Read the operator messages a Session's interaction had queued but not yet
 /// sent, so the queue survives a client disconnect (closing the Styra UI) or a
 /// server restart. Absent file means an empty queue, not an error.
-pub fn read_queued_messages(directory: &Path) -> Result<Vec<String>> {
+pub fn read_queued_messages(directory: &Path) -> Result<Vec<QueuedMessage>> {
     let path = directory.join(QUEUE_FILE);
     if !path.exists() {
         return Ok(Vec::new());
@@ -221,7 +221,7 @@ pub fn read_queued_messages(directory: &Path) -> Result<Vec<String>> {
 }
 
 /// Persist the current queue of not-yet-sent operator messages for a Session.
-pub fn write_queued_messages(directory: &Path, messages: &[String]) -> Result<()> {
+pub fn write_queued_messages(directory: &Path, messages: &[QueuedMessage]) -> Result<()> {
     let path = directory.join(QUEUE_FILE);
     let json = serde_json::to_string_pretty(messages).context("serializing the message queue")?;
     std::fs::write(&path, json).with_context(|| format!("writing {}", path.display()))
@@ -818,6 +818,32 @@ mod tests {
 
         std::fs::remove_dir_all(&root).ok();
         std::fs::remove_dir_all(&host).ok();
+    }
+
+    #[test]
+    fn a_queued_message_keeps_its_contract_across_a_restart() {
+        let dir = temp_dir("queue-contract");
+        let queued = vec![
+            QueuedMessage::new("which files?").asking_for(Some(Contract::Files)),
+            QueuedMessage::new("and then?"),
+        ];
+        write_queued_messages(&dir, &queued).unwrap();
+        assert_eq!(read_queued_messages(&dir).unwrap(), queued);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A queue file written before contracts existed is an array of strings.
+    /// It has to load, or resuming that session throws away messages the
+    /// operator wrote and never got to send.
+    #[test]
+    fn a_queue_file_of_bare_strings_still_loads() {
+        let dir = temp_dir("queue-legacy");
+        std::fs::write(dir.join(QUEUE_FILE), r#"["first","second"]"#).unwrap();
+        assert_eq!(
+            read_queued_messages(&dir).unwrap(),
+            vec![QueuedMessage::new("first"), QueuedMessage::new("second")]
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// Sessions written before typed turns existed have no `contract` field,
