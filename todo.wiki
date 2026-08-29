@@ -4,24 +4,25 @@
   - Possibly introduce MCP or other specific tooling to let the agent do git actions without actual access to the raw .git dir.
 - [ ] Should be able to specify some part of some file for a change.
   The node created for that work should be associated with the node which created that output.
-- [ ] View a typed turn answer in the Styra interface.
-  The server side exists: a turn sent with a `contract` is framed and recorded,
-  and `turn_answer` returns the parsed `AnswerValue` for a live or stored
-  session (`styra-server/src/contract.rs`, `protocol/README.md`). Nothing in
-  the interface asks for one or renders it, so a typed answer is currently only
-  reachable from a client like `examples/typed_answer.rs`.
-  - Ask for a shape: a way to attach a contract to the composer's message,
-    and some indication in the timeline that the turn was typed — the operator
-    should be able to see the instructions their message was actually sent
-    with (`contract::instructions`) rather than wondering what was appended.
-  - Render the answer per contract rather than as the prose it arrived in:
-    `files` as a navigable list (it already carries path, line, column and
-    description — the same fields a jump needs), `lines` as a list, `json`
-    pretty-printed, `text` as it is.
-  - Re-read an existing answer under another contract, which the protocol
-    already supports via `turn_answer`'s optional `contract` field. Cheap to
-    expose and it makes a mis-shaped answer recoverable without asking again.
-  - Decide what happens when the parse fails, which is the common case worth
-    designing for: the `Answer` carries the `source` message it was parsed
-    from, so the interface can show the reply verbatim and say why it did not
-    satisfy the contract, rather than reporting an error with nothing in it.
+- [x] View a typed turn answer in the Styra interface.
+  `Ctrl-T` in the message box cycles the shape the next reply is asked for,
+  shown on the box while it applies; `X` opens the answer view, which renders
+  `files` as a navigable list (`e` opens the selected location), `lines` as a
+  list, `json` pretty-printed, and `text` as prose. `T`/`L`/`F`/`J` re-read the
+  same reply under another contract, `R` under the one the turn was sent with.
+  A reply that missed its contract is shown as the message plus the reason, not
+  an error on its own — `Answer` carries `value: Option<_>` and `error` for
+  exactly that.
+- [ ] Let a queued message carry a return contract.
+  The durable input queue stores text alone, so a contract chosen for a message
+  that lands in the queue (the agent was busy) cannot ride it. The interface
+  says so and queues it untyped, which is honest but a wart: the operator has
+  to wait for idle to ask for a shape. Needs a contract beside the text in the
+  server's queue, in `queued_messages`/`QueueMessage` and the file behind them.
+- [ ] Decide what a typed turn should look like in the timeline.
+  The server frames the message before recording it, so the event list shows
+  the operator's text followed by the whole instruction block. That is honest —
+  it is what was sent — but it is roughly ten lines of boilerplate per typed
+  turn. Either fold the instructions behind the entry's expansion, or record
+  the operator's own text and mark the entry as typed, showing the framing on
+  request (`contract::instructions` reproduces it exactly).

@@ -64,6 +64,10 @@ pub(crate) const REFERENCE: &[ReferenceRow] = &[
         keys: "f",
         action: "files mentioned by the focused entry",
     },
+    ReferenceRow::Binding {
+        keys: "X",
+        action: "the last turn's typed answer",
+    },
     ReferenceRow::Blank,
     ReferenceRow::Section("Events and previews"),
     ReferenceRow::Binding {
@@ -161,31 +165,33 @@ pub(crate) const REFERENCE: &[ReferenceRow] = &[
     ReferenceRow::Blank,
     ReferenceRow::Section("Files"),
     ReferenceRow::Binding {
-        keys: "j/k or ↓/↑",
-        action: "next/previous file",
+        keys: "j/k or ↓/↑; J/K",
+        action: "next/previous file; interaction-log entry",
     },
     ReferenceRow::Binding {
-        keys: "J/K",
-        action: "next/previous interaction-log entry",
+        keys: "e; p",
+        action: "open selected file in editor; toggle interaction preview",
     },
     ReferenceRow::Binding {
-        keys: "e",
-        action: "open selected file in editor",
+        keys: "a; y",
+        action: "focused-entry/all-session files; copy the path",
+    },
+    ReferenceRow::Blank,
+    ReferenceRow::Section("Typed answer"),
+    ReferenceRow::Binding {
+        keys: "j/k or ↓/↑; e; y",
+        action: "next/previous item; open location in editor; copy",
     },
     ReferenceRow::Binding {
-        keys: "p",
-        action: "toggle interaction preview",
-    },
-    ReferenceRow::Binding {
-        keys: "a",
-        action: "toggle focused-entry/all-session files",
-    },
-    ReferenceRow::Binding {
-        keys: "y",
-        action: "copy selected file's path to clipboard",
+        keys: "T/L/F/J; R",
+        action: "re-read as text/lines/files/json; as the turn asked",
     },
     ReferenceRow::Blank,
     ReferenceRow::Section("Message editor"),
+    ReferenceRow::Binding {
+        keys: "Ctrl+T",
+        action: "ask this message's reply for a shape (text/lines/files/json)",
+    },
     ReferenceRow::Binding {
         keys: "Enter",
         action: "send message",

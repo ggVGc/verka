@@ -166,18 +166,24 @@ impl Client {
         }
     }
 
-    pub fn send_message(&self, id: &str, text: &str) -> Result<()> {
+    /// Send one turn, however it is qualified.
+    ///
+    /// [`SendMessage`] is the unit a turn is described in — its text, the
+    /// selection to run it under, the shape its reply must take — so a caller
+    /// that wants two of those at once composes them here rather than looking
+    /// for a method per combination.
+    pub fn send_turn(&self, id: &str, message: SendMessage) -> Result<()> {
         match self.request(Request::SendMessage {
             id: id.to_owned(),
-            message: SendMessage {
-                text: text.to_owned(),
-                selection: None,
-                contract: None,
-            },
+            message,
         })? {
             Response::Accepted => Ok(()),
             other => unexpected("accepted", other),
         }
+    }
+
+    pub fn send_message(&self, id: &str, text: &str) -> Result<()> {
+        self.send_turn(id, SendMessage::new(text))
     }
 
     pub fn send_message_with_selection(
@@ -186,17 +192,7 @@ impl Client {
         text: &str,
         selection: &crate::agent::Selection,
     ) -> Result<()> {
-        match self.request(Request::SendMessage {
-            id: id.to_owned(),
-            message: SendMessage {
-                text: text.to_owned(),
-                selection: Some(selection.clone()),
-                contract: None,
-            },
-        })? {
-            Response::Accepted => Ok(()),
-            other => unexpected("accepted", other),
-        }
+        self.send_turn(id, SendMessage::new(text).under(selection.clone()))
     }
 
     pub fn set_interaction_working_directory(&self, id: &str, directory: PathBuf) -> Result<()> {
@@ -233,17 +229,7 @@ impl Client {
     /// [`Self::turn_answer`] once the turn has completed, which the caller sees
     /// on the update stream as it would for any turn.
     pub fn send_typed_message(&self, id: &str, text: &str, contract: Contract) -> Result<()> {
-        match self.request(Request::SendMessage {
-            id: id.to_owned(),
-            message: SendMessage {
-                text: text.to_owned(),
-                selection: None,
-                contract: Some(contract),
-            },
-        })? {
-            Response::Accepted => Ok(()),
-            other => unexpected("accepted", other),
-        }
+        self.send_turn(id, SendMessage::new(text).asking_for(contract))
     }
 
     /// Parse the session's most recent agent message as a typed answer, under

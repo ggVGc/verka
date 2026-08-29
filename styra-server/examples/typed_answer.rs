@@ -64,8 +64,16 @@ fn main() -> anyhow::Result<()> {
             match item.update {
                 InteractionUpdate::Event(AgentEvent::TurnCompleted { .. }) => {
                     let answer = client.turn_answer(&session.id)?;
-                    report(&answer.value);
                     client.stop_interaction(&session.id)?;
+                    // A reply that missed the contract still came back with
+                    // something in it, so show that rather than only the
+                    // complaint about its shape.
+                    let Some(value) = &answer.value else {
+                        eprintln!("{}", answer.error.unwrap_or_default());
+                        println!("{}", answer.source);
+                        std::process::exit(1);
+                    };
+                    report(value);
                     return Ok(());
                 }
                 InteractionUpdate::Event(event) => {
@@ -95,17 +103,10 @@ fn report(value: &AnswerValue) {
         // why this contract exists.
         AnswerValue::Files(files) => {
             for file in files {
-                let mut location = file.path.display().to_string();
-                if let Some(line) = file.line {
-                    location.push_str(&format!(":{line}"));
-                    if let Some(column) = file.column {
-                        location.push_str(&format!(":{column}"));
-                    }
-                }
                 if file.description.is_empty() {
-                    println!("{location}");
+                    println!("{}", file.located());
                 } else {
-                    println!("{location}: {}", file.description);
+                    println!("{}: {}", file.located(), file.description);
                 }
             }
         }

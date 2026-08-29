@@ -21,6 +21,7 @@ use styra_server::agent::SandboxLayout;
 use styra_server::agent::{Provider, Selection};
 use styra_server::event::PresentationMode;
 use styra_server::event::{AgentEvent, DetailBlock, TokenUsage};
+use styra_server::{Answer, AnswerValue, Contract, FileLocation};
 use styra_server::{InteractionEnd, LogEntry, RawLine};
 
 use crate::composer::Composer;
@@ -50,6 +51,8 @@ pub enum View {
     Transcript,
     Driva,
     Files,
+    /// The last turn's typed answer, rendered as the shape it was asked for.
+    Answer,
     Preview,
 }
 
@@ -247,6 +250,10 @@ pub struct App {
     pub view: View,
     /// Whether the full-screen keyboard shortcut reference is open.
     pub show_keybinds: bool,
+    /// Lines the keybind reference is scrolled down by. It is longer than a
+    /// short terminal, so without this the sections at the end are simply
+    /// unreachable rather than merely below the fold.
+    pub keybinds_scroll: u16,
     /// The message being typed and the ones already sent; see [`Composer`].
     pub composer: Composer,
     /// Messages submitted while the current turn is running. They remain
@@ -334,6 +341,21 @@ pub struct App {
     /// Selected file in the Files view and whether it aggregates the session.
     pub file_selected: usize,
     pub file_show_all: bool,
+    /// The shape the next message asks its reply to come back in, or `None` for
+    /// an ordinary turn. Set by the operator before sending and cleared once
+    /// the message it applies to has gone, so a contract never silently
+    /// outlives the question it was chosen for.
+    pub contract: Option<Contract>,
+    /// The typed answer last fetched for this session, and the selection
+    /// within it. `None` before anything has been asked for; an `Answer` whose
+    /// value is absent is a reply that missed its contract, which is shown
+    /// rather than discarded.
+    pub answer: Option<Answer>,
+    /// Why the last answer could not be fetched at all — no typed turn, no
+    /// reply yet, no session. Distinct from an answer that arrived and failed
+    /// to parse, which is an `Answer`.
+    pub answer_error: Option<String>,
+    pub answer_selected: usize,
     /// Set when the operator asks for something only the event loop can do;
     /// it takes the request and acts on it.
     pub request: Option<Request>,
@@ -384,6 +406,13 @@ pub enum Request {
     /// Tell the server the live interaction has been switched onto
     /// [`App::selection`], so the change lands now and outlives this client.
     ApplySelection,
+    /// Fetch the last turn's typed answer from the server, which parses it.
+    /// `contract` names a shape to read the reply under instead of the one the
+    /// turn was sent with, which is how a mis-shaped answer is recovered
+    /// without asking the agent again.
+    Answer {
+        contract: Option<Contract>,
+    },
 }
 
 impl App {
@@ -393,6 +422,7 @@ impl App {
             focus: Focus::List,
             view: View::Events,
             show_keybinds: false,
+            keybinds_scroll: 0,
             composer: Composer::default(),
             queued_messages: VecDeque::new(),
             status: Status::Running,
@@ -428,6 +458,10 @@ impl App {
             transcript_scroll: 0,
             file_selected: 0,
             file_show_all: false,
+            contract: None,
+            answer: None,
+            answer_error: None,
+            answer_selected: 0,
             request: None,
             notes: Notes::default(),
         }
@@ -896,6 +930,118 @@ impl App {
         }
     }
 
+    /// Move the keybind reference by `delta` lines, never above its start.
+    /// The lower bound is the renderer's, since only it knows the height it
+    /// has to fill.
+    pub fn scroll_keybinds(&mut self, delta: i16) {
+        self.keybinds_scroll = self
+            .keybinds_scroll
+            .saturating_add_signed(delta)
+            .min(u16::MAX);
+    }
+
+    // --- Typed turn answers ---------------------------------------------------
+
+    /// Contracts in the order `Ctrl-T` walks them, ending back at an untyped
+    /// turn so the operator can always get out of one without leaving the box.
+    pub const CONTRACTS: [Contract; 4] = [
+        Contract::Text,
+        Contract::Lines,
+        Contract::Files,
+        Contract::Json,
+    ];
+
+    /// Step to the next return contract for the message being typed.
+    pub fn cycle_contract(&mut self) {
+        let next = match self.contract {
+            None => Some(Self::CONTRACTS[0]),
+            Some(current) => {
+                let index = Self::CONTRACTS.iter().position(|c| *c == current);
+                index
+                    .and_then(|index| Self::CONTRACTS.get(index + 1))
+                    .copied()
+            }
+        };
+        self.contract = next;
+    }
+
+    /// Take the contract the message about to be sent asks for, clearing it.
+    ///
+    /// Taken rather than read: a contract belongs to the question it was chosen
+    /// for, and leaving it set would silently type the next message too.
+    pub fn take_contract(&mut self) -> Option<Contract> {
+        self.contract.take()
+    }
+
+    /// Show the answer view, asking the event loop to fetch under the
+    /// session's recorded contract; or leave it when already there.
+    pub fn toggle_answer(&mut self) {
+        if self.view == View::Answer {
+            self.view = View::Events;
+        } else {
+            self.view = View::Answer;
+            self.ask(Request::Answer { contract: None });
+        }
+    }
+
+    /// Re-read the same reply under another shape.
+    pub fn reread_answer(&mut self, contract: Contract) {
+        self.ask(Request::Answer {
+            contract: Some(contract),
+        });
+    }
+
+    /// Record a fetched answer, or why there was none to fetch.
+    pub fn set_answer(&mut self, answer: Result<Answer, String>) {
+        self.answer_selected = 0;
+        match answer {
+            Ok(answer) => {
+                self.answer = Some(answer);
+                self.answer_error = None;
+            }
+            Err(error) => {
+                self.answer = None;
+                self.answer_error = Some(error);
+            }
+        }
+    }
+
+    /// How many selectable rows the current answer has; 0 for shapes that are
+    /// read rather than navigated.
+    pub fn answer_rows(&self) -> usize {
+        match self
+            .answer
+            .as_ref()
+            .and_then(|answer| answer.value.as_ref())
+        {
+            Some(AnswerValue::Lines(lines)) => lines.len(),
+            Some(AnswerValue::Files(files)) => files.len(),
+            _ => 0,
+        }
+    }
+
+    pub fn answer_select_next(&mut self) {
+        let last = self.answer_rows().saturating_sub(1);
+        self.answer_selected = self.answer_selected.saturating_add(1).min(last);
+    }
+
+    pub fn answer_select_prev(&mut self) {
+        self.answer_selected = self.answer_selected.saturating_sub(1);
+    }
+
+    /// The file location the answer view's selection is on, if it is showing
+    /// files at all. What `e` opens, and what the footer names.
+    pub fn selected_answer_file(&self) -> Option<&FileLocation> {
+        match self
+            .answer
+            .as_ref()
+            .and_then(|answer| answer.value.as_ref())
+        {
+            Some(AnswerValue::Files(files)) => files.get(self.answer_selected),
+            _ => None,
+        }
+    }
+
     pub fn file_select_next(&mut self) {
         let last = self.file_paths().len().saturating_sub(1);
         self.file_selected = self.file_selected.saturating_add(1).min(last);
@@ -969,7 +1115,23 @@ impl App {
     }
 
     /// Resolve the selected Files-view entry to the corresponding host path.
+    ///
+    /// In the answer view it is the selected location of a `files` answer
+    /// instead, so `e` opens what the agent named without a second mechanism
+    /// for doing the same thing.
     pub fn selected_file_path(&self) -> Option<PathBuf> {
+        if self.view == View::Answer {
+            let file = self.selected_answer_file()?;
+            let root = self
+                .workspace_root
+                .clone()
+                .or_else(|| std::env::current_dir().ok())?;
+            return Some(if file.path.is_absolute() {
+                file.path.clone()
+            } else {
+                root.join(&file.path)
+            });
+        }
         let root = self
             .workspace_root
             .clone()
@@ -1106,6 +1268,20 @@ impl App {
             View::Files => self
                 .selected_file_path()
                 .map(|path| path.display().to_string()),
+            // A navigable answer copies the selected row; one that is read
+            // rather than navigated copies the whole value, which is what an
+            // operator reaching for `y` on a JSON or prose answer wants.
+            View::Answer => match self.answer.as_ref()?.value.as_ref() {
+                Some(AnswerValue::Lines(lines)) => lines.get(self.answer_selected).cloned(),
+                Some(AnswerValue::Files(_)) => {
+                    self.selected_answer_file().map(FileLocation::located)
+                }
+                Some(AnswerValue::Text(text)) => Some(text.clone()),
+                Some(AnswerValue::Json(json)) => serde_json::to_string_pretty(json).ok(),
+                // Nothing parsed, so the reply itself is the only thing there
+                // is to copy — and the thing worth looking at.
+                None => Some(self.answer.as_ref()?.source.clone()),
+            },
             View::Log | View::Transcript | View::Driva => None,
         }
     }
@@ -2348,6 +2524,123 @@ mod tests {
         app.toggle_file_scope();
         assert_eq!(app.file_paths(), vec!["README.md", "src/lib.rs"]);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// The cycle ends at "no contract" so an operator who opened one can get
+    /// back out of it without leaving the message box.
+    #[test]
+    fn cycling_contracts_returns_to_an_untyped_turn() {
+        let mut app = app();
+        assert_eq!(app.contract, None);
+        for expected in App::CONTRACTS {
+            app.cycle_contract();
+            assert_eq!(app.contract, Some(expected));
+        }
+        app.cycle_contract();
+        assert_eq!(app.contract, None);
+    }
+
+    /// A contract belongs to the message it was chosen for. Taking it is what
+    /// stops the next, unrelated message from being typed too.
+    #[test]
+    fn taking_a_contract_clears_it_for_the_following_message() {
+        let mut app = app();
+        app.cycle_contract();
+        assert_eq!(app.take_contract(), Some(Contract::Text));
+        assert_eq!(app.contract, None);
+        assert_eq!(app.take_contract(), None);
+    }
+
+    /// Opening the view asks for the answer; it cannot render one it never
+    /// fetched, and the operator should not have to press a second key.
+    #[test]
+    fn opening_the_answer_view_requests_the_answer() {
+        let mut app = app();
+        app.toggle_answer();
+        assert_eq!(app.view, View::Answer);
+        assert_eq!(app.take_request(), Some(Request::Answer { contract: None }));
+
+        app.toggle_answer();
+        assert_eq!(app.view, View::Events);
+        // Leaving asks for nothing: there is no answer to fetch for a view
+        // that is no longer showing one.
+        assert_eq!(app.take_request(), None);
+    }
+
+    #[test]
+    fn re_reading_names_the_contract_to_read_under() {
+        let mut app = app();
+        app.reread_answer(Contract::Lines);
+        assert_eq!(
+            app.take_request(),
+            Some(Request::Answer {
+                contract: Some(Contract::Lines)
+            })
+        );
+    }
+
+    /// A fresh answer is read from its start, not from wherever the previous
+    /// one happened to be scrolled to.
+    #[test]
+    fn a_new_answer_resets_the_selection() {
+        let mut app = app();
+        app.set_answer(Ok(Answer {
+            contract: Contract::Lines,
+            value: Some(AnswerValue::Lines(vec!["a".into(), "b".into()])),
+            error: None,
+            source: "…".into(),
+        }));
+        app.answer_select_next();
+        assert_eq!(app.answer_selected, 1);
+
+        app.set_answer(Ok(Answer {
+            contract: Contract::Lines,
+            value: Some(AnswerValue::Lines(vec!["c".into()])),
+            error: None,
+            source: "…".into(),
+        }));
+        assert_eq!(app.answer_selected, 0);
+    }
+
+    /// A failed fetch replaces the previous answer rather than leaving a stale
+    /// one on screen under an error that contradicts it.
+    #[test]
+    fn a_failed_fetch_clears_the_previous_answer() {
+        let mut app = app();
+        app.set_answer(Ok(Answer {
+            contract: Contract::Text,
+            value: Some(AnswerValue::Text("hello".into())),
+            error: None,
+            source: "…".into(),
+        }));
+        app.set_answer(Err("no typed turn to answer".into()));
+        assert!(app.answer.is_none());
+        assert_eq!(app.answer_error.as_deref(), Some("no typed turn to answer"));
+    }
+
+    /// `e` in the answer view opens what the agent named, so the location has
+    /// to resolve against the Workspace exactly as the Files view's does.
+    #[test]
+    fn a_files_answer_resolves_its_selection_against_the_workspace() {
+        let mut app = app();
+        app.set_workspace_root(PathBuf::from("/work"));
+        app.view = View::Answer;
+        app.set_answer(Ok(Answer {
+            contract: Contract::Files,
+            value: Some(AnswerValue::Files(vec![FileLocation {
+                path: PathBuf::from("src/auth.rs"),
+                line: Some(12),
+                column: None,
+                description: String::new(),
+            }])),
+            error: None,
+            source: "…".into(),
+        }));
+        assert_eq!(
+            app.selected_file_path(),
+            Some(PathBuf::from("/work/src/auth.rs"))
+        );
+        assert_eq!(app.copy_text().as_deref(), Some("src/auth.rs:12"));
     }
 
     /// The driva view is a view like any other: reachable whether or not there

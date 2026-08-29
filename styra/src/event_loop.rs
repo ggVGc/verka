@@ -126,11 +126,19 @@ pub fn run(
         // While the reference is open it is modal, so none of the commands
         // described by it can accidentally act on the session underneath.
         if app.show_keybinds {
-            if matches!(
-                key.code,
-                KeyCode::Char('?') | KeyCode::Esc | KeyCode::Char('q')
-            ) {
-                app.show_keybinds = false;
+            match key.code {
+                KeyCode::Char('?') | KeyCode::Esc | KeyCode::Char('q') => {
+                    app.show_keybinds = false;
+                    app.keybinds_scroll = 0;
+                }
+                // The reference is taller than a short terminal, so the
+                // sections at the end have to be reachable.
+                KeyCode::Char('j') | KeyCode::Down => app.scroll_keybinds(1),
+                KeyCode::Char('k') | KeyCode::Up => app.scroll_keybinds(-1),
+                KeyCode::PageDown => app.scroll_keybinds(10),
+                KeyCode::PageUp => app.scroll_keybinds(-10),
+                KeyCode::Char('g') => app.keybinds_scroll = 0,
+                _ => {}
             }
             continue;
         }
@@ -325,6 +333,21 @@ pub fn run(
                         "could not save the Workspace launch policy: {error:#}"
                     ))),
                 }
+            }
+            // Parsing is the server's, since it holds the session's recorded
+            // contract and the journal the answer is read from; this client
+            // only asks and renders.
+            Some(Request::Answer { contract }) => {
+                let id = app.session_id.clone();
+                if id.is_empty() {
+                    app.set_answer(Err("no session to answer from yet".into()));
+                    continue;
+                }
+                let answer = match contract {
+                    Some(contract) => client.turn_answer_as(&id, contract),
+                    None => client.turn_answer(&id),
+                };
+                app.set_answer(answer.map_err(|error| format!("{error:#}")));
             }
             Some(Request::EditFile) => {
                 let Some(path) = app.selected_file_path() else {

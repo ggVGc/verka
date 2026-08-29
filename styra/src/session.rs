@@ -5,10 +5,11 @@ use crate::app::{App, LaunchPolicy, Status};
 use crate::launch;
 use styra_server::agent::Selection;
 use styra_server::protocol::{
-    CreateSession, CreateWorkspace, PlanSession, ResumeSession, SessionInfo,
+    CreateSession, CreateWorkspace, PlanSession, ResumeSession, SendMessage, SessionInfo,
 };
 use styra_server::{
-    Client, InteractionSummary, InteractionUpdate, LogEntry, SessionSummary, WorkspaceSummary,
+    Client, Contract, InteractionSummary, InteractionUpdate, LogEntry, SessionSummary,
+    WorkspaceSummary,
 };
 
 /// The live-agent side of the interactive loop: no process yet (awaiting the
@@ -84,12 +85,26 @@ pub fn all_sessions(client: &Client) -> Result<Vec<SessionSummary>> {
 /// Ask the server for a session. `launch` is this launch's own policy only:
 /// the Workspace's standing one is added on the server, so the client cannot
 /// launch under a policy it never showed.
+/// One turn as this client describes it: the operator's text, the selection it
+/// should run under, and the shape it asks its reply to take.
+pub fn turn(message: &str, app: &App, contract: Option<Contract>) -> SendMessage {
+    let turn = SendMessage::new(message).under(app.selection.clone());
+    match contract {
+        Some(contract) => turn.asking_for(contract),
+        None => turn,
+    }
+}
+
+/// `contract` types the seed message, when the operator asked the very first
+/// turn for a shape. A session is not typed as a whole — every later turn
+/// chooses for itself.
 pub fn create_session(
     client: &Client,
     launch: &LaunchPolicy,
     workspace_id: &str,
     selection: &Selection,
     seed: Option<&str>,
+    contract: Option<Contract>,
 ) -> Result<SessionInfo> {
     client.create_session(&CreateSession {
         workspace_id: workspace_id.to_owned(),
@@ -97,9 +112,7 @@ pub fn create_session(
         launch: launch.clone(),
         message: seed.map(str::to_owned),
         name: None,
-        // The interface opens ordinary conversations; a typed turn is asked
-        // for explicitly, per turn, not imposed on every session it starts.
-        contract: None,
+        contract,
     })
 }
 
@@ -154,7 +167,9 @@ pub fn launch_live_session(
     selection: &Selection,
     seed: Option<&str>,
 ) -> Result<(App, SessionInfo)> {
-    let info = create_session(client, launch, workspace_id, selection, seed)?;
+    // The CLI's trailing prompt opens a conversation, not a typed question;
+    // asking for a shape is a per-turn choice made in the interface.
+    let info = create_session(client, launch, workspace_id, selection, seed, None)?;
     let mut app = App::new(info.selection.clone(), info.id.clone());
     app.launch.interaction = launch.clone();
     app.session_name = info.name.clone();
@@ -255,8 +270,15 @@ pub fn session_id_from_target(target: &Path) -> Result<String> {
 }
 
 /// Resume `app.session_id` through its provider's native mechanism, then
-/// deliver `message` to the freshly revived agent.
-pub fn resume_and_send(app: &mut App, client: &Client, live: &mut Live, message: String) {
+/// deliver `message` to the freshly revived agent, under `contract` when the
+/// operator asked this turn for a shape.
+pub fn resume_and_send(
+    app: &mut App,
+    client: &Client,
+    live: &mut Live,
+    message: String,
+    contract: Option<Contract>,
+) {
     if app.session_id.is_empty() {
         app.push_log(LogEntry::warn("not sent: no Session to resume"));
         return;
@@ -280,9 +302,7 @@ pub fn resume_and_send(app: &mut App, client: &Client, live: &mut Live, message:
                 session_id: session_id.clone(),
                 cursor: info.updates_after,
             };
-            if let Err(error) =
-                client.send_message_with_selection(&session_id, &message, &app.selection)
-            {
+            if let Err(error) = client.send_turn(&session_id, turn(&message, app, contract)) {
                 app.push_log(LogEntry::error(format!("send failed: {error:#}")));
             }
         }

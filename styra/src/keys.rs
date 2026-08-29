@@ -7,7 +7,7 @@ use crate::notes;
 use crate::preferences;
 use crate::session::{self, Live};
 use crate::terminal;
-use styra_server::{Client, LogEntry};
+use styra_server::{Client, Contract, LogEntry};
 
 /// Keys for the launch picker: `j`/`k` within a column, `Tab`/`h`/`l` between
 /// them, `Enter` to apply the choice to this workspace, `D` to also save it as
@@ -112,6 +112,7 @@ pub fn handle_list_key(
         KeyCode::Char('t') => return app.toggle_view(View::Transcript),
         KeyCode::Char('d') => return app.toggle_view(View::Driva),
         KeyCode::Char('f') => return app.toggle_files(),
+        KeyCode::Char('X') => return app.toggle_answer(),
         KeyCode::Char('P') => return app.toggle_view(View::Preview),
         KeyCode::Char('L') => return app.open_launcher(),
         KeyCode::Char('E') => return notes::open(app),
@@ -223,6 +224,24 @@ pub fn handle_list_key(
             KeyCode::Char('k') | KeyCode::Up => launch::select_prev_mount(app),
             _ => {}
         },
+        // Re-reading is on the capitals so `j` and `k` stay navigation, as
+        // they are in every other view.
+        View::Answer => match key.code {
+            KeyCode::Char('T') => app.reread_answer(Contract::Text),
+            KeyCode::Char('L') => app.reread_answer(Contract::Lines),
+            KeyCode::Char('F') => app.reread_answer(Contract::Files),
+            KeyCode::Char('J') => app.reread_answer(Contract::Json),
+            KeyCode::Char('R') => app.ask(Request::Answer { contract: None }),
+            KeyCode::Char('e') if app.selected_answer_file().is_some() => {
+                app.ask(Request::EditFile)
+            }
+            KeyCode::Char('j') | KeyCode::Down => app.answer_select_next(),
+            KeyCode::Char('k') | KeyCode::Up => app.answer_select_prev(),
+            KeyCode::Char('g') => app.answer_selected = 0,
+            KeyCode::Char('G') => app.answer_selected = app.answer_rows().saturating_sub(1),
+            KeyCode::Char('y') => copy_selection(app),
+            _ => {}
+        },
         View::Files => match key.code {
             KeyCode::Char('e') if app.selected_file_path().is_some() => app.ask(Request::EditFile),
             KeyCode::Char('j') | KeyCode::Down => app.file_select_next(),
@@ -286,6 +305,9 @@ pub fn handle_input_key(
 ) {
     match key.code {
         KeyCode::Esc => app.enter_list(),
+        // Choosing a shape is part of writing the message, so it lives in the
+        // box rather than being a mode entered from outside it.
+        KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::CONTROL) => app.cycle_contract(),
         KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => app.composer.newline(),
         KeyCode::Enter => {
             if let Some(message) = app.take_message() {
@@ -311,8 +333,20 @@ pub fn handle_input_key(
                     }
                     return;
                 }
+                // The contract belongs to this message, so it is taken here
+                // and travels with it down whichever send path applies.
+                let contract = app.take_contract();
                 match live {
                     Live::Running { session_id, .. } if app.status == Status::Running => {
+                        // The durable queue stores text alone, so a contract
+                        // cannot ride it. Said plainly rather than dropped
+                        // quietly: the operator asked for a shape and would
+                        // otherwise get prose back with no explanation.
+                        if contract.is_some() {
+                            app.push_log(LogEntry::warn(
+                                "queued messages cannot ask for a shape; this one was queued untyped",
+                            ));
+                        }
                         if let Err(error) = client.queue_message(session_id, &message) {
                             app.push_log(LogEntry::error(format!(
                                 "could not persist queued message: {error:#}"
@@ -327,11 +361,8 @@ pub fn handle_input_key(
                     Live::Running { session_id, .. }
                         if matches!(app.status, Status::Idle | Status::Background) =>
                     {
-                        match client.send_message_with_selection(
-                            session_id,
-                            &message,
-                            &app.selection,
-                        ) {
+                        let turn = session::turn(&message, app, contract);
+                        match client.send_turn(session_id, turn) {
                             Ok(()) => app.status = Status::Running,
                             Err(error) => {
                                 app.push_log(LogEntry::error(format!("send failed: {error:#}")))
@@ -339,7 +370,7 @@ pub fn handle_input_key(
                         }
                     }
                     Live::Running { .. } | Live::Viewing => {
-                        session::resume_and_send(app, client, live, message)
+                        session::resume_and_send(app, client, live, message, contract)
                     }
                     Live::Pending => {
                         let selection = app.selection.clone();
@@ -350,6 +381,7 @@ pub fn handle_input_key(
                             workspace_id,
                             &selection,
                             Some(&message),
+                            contract,
                         ) {
                             Ok(info) => {
                                 app.selection = info.selection;

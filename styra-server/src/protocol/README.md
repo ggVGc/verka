@@ -62,6 +62,7 @@ would for any turn, and after `turn.completed` issues `turn_answer`:
 
 ```json
 {"status":"ok","response":{"type":"answer","data":{
+  "contract":"files",
   "value":{"contract":"files","value":[{"path":"src/auth.rs","line":12}]},
   "source":"…the agent message it was parsed from…"}}}
 ```
@@ -76,6 +77,22 @@ The value is tagged by the contract that produced it, so a client dispatches on
 the answer alone. `line` and `column` in a `files` answer are 1-based and absent
 when the agent named none — the difference between naming a file and naming a
 position in it.
+
+A reply that did not satisfy its contract is an answer too, not an error in
+place of one: `value` is absent, `error` says what was wrong, and `source`
+still carries what the agent said.
+
+```json
+{"status":"ok","response":{"type":"answer","data":{
+  "contract":"json",
+  "error":"the answer block is not valid JSON",
+  "source":"I had trouble with that one."}}}
+```
+
+Only the absence of any reply to read — a session that has not answered yet, or
+was never sent a typed turn — is a protocol error, since there is nothing to
+return. An agent that answered well but framed it badly has produced something
+worth showing, and a client handed only the complaint could not show it.
 
 ## Compatibility
 

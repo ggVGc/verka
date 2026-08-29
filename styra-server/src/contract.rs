@@ -70,11 +70,15 @@ fn shape(contract: Contract) -> &'static str {
     }
 }
 
-/// Parse the last agent message in an event stream under `contract`.
+/// Read the last agent message in an event stream under `contract`.
 ///
 /// Answering from the last message rather than the last event is what lets a
 /// contract survive a turn that used tools: the agent's closing message is the
 /// answer, and everything it did to get there is passed over.
+///
+/// A reply that does not satisfy the contract is reported inside the [`Answer`]
+/// rather than as an error, so the caller still has the message to show. Only
+/// the absence of any reply to read is an error — there is nothing to return.
 pub fn answer_from_events(events: &[AgentEvent], contract: Contract) -> Result<Answer> {
     let source = events
         .iter()
@@ -84,10 +88,21 @@ pub fn answer_from_events(events: &[AgentEvent], contract: Contract) -> Result<A
             _ => None,
         })
         .context("the session has no agent message to answer from yet")?;
-    Ok(Answer {
-        value: parse(source, contract)?,
-        source: source.clone(),
-    })
+    Ok(read(source, contract))
+}
+
+/// Read one agent message as a typed answer, keeping the message either way.
+pub fn read(message: &str, contract: Contract) -> Answer {
+    let (value, error) = match parse(message, contract) {
+        Ok(value) => (Some(value), None),
+        Err(error) => (None, Some(format!("{error:#}"))),
+    };
+    Answer {
+        contract,
+        value,
+        error,
+        source: message.to_owned(),
+    }
 }
 
 /// Read one agent message as a typed answer.
@@ -344,14 +359,30 @@ mod tests {
         let answer = answer_from_events(&events, Contract::Files).unwrap();
         assert_eq!(
             answer.value,
-            AnswerValue::Files(vec![FileLocation {
+            Some(AnswerValue::Files(vec![FileLocation {
                 path: PathBuf::from("src/auth.rs"),
                 line: Some(12),
                 column: None,
                 description: String::new(),
-            }])
+            }]))
         );
+        assert_eq!(answer.error, None);
         assert!(answer.source.contains("src/auth.rs"));
+    }
+
+    /// A reply that ignored the contract is still an answer: the operator needs
+    /// to see what was said, and why it did not satisfy what was asked.
+    #[test]
+    fn a_reply_that_misses_the_contract_keeps_the_message_and_says_why() {
+        let events = vec![AgentEvent::AgentMessage {
+            text: "I could not determine that.".into(),
+        }];
+        let answer = answer_from_events(&events, Contract::Files).unwrap();
+        assert_eq!(answer.contract, Contract::Files);
+        assert_eq!(answer.value, None);
+        assert!(!answer.is_parsed());
+        assert!(answer.error.unwrap().contains(OPEN));
+        assert_eq!(answer.source, "I could not determine that.");
     }
 
     #[test]

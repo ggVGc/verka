@@ -5,6 +5,7 @@
 //! over the center while active.
 //! Rendering is a pure function of `App`; all state lives in [`crate::app`].
 
+mod answer;
 mod driva;
 mod files;
 mod footer;
@@ -21,6 +22,7 @@ mod preview;
 mod raw;
 mod transcript;
 
+use answer::render_answer;
 use driva::render_driva;
 use files::render_files;
 use footer::render_footer;
@@ -59,10 +61,10 @@ const DETAIL_INDENT: &str = "    ";
 /// Backdrop painted behind a selected list row (including its expanded detail
 /// lines, if any). Its muted yellow tint keeps the current line easy to find
 /// without competing with the content or status colors.
-const SELECTION_BG: Color = Color::Rgb(44, 42, 30);
+pub(crate) const SELECTION_BG: Color = Color::Rgb(44, 42, 30);
 /// Foreground used for the small current-line marker at the left edge of a
 /// selectable row.
-const SELECTION_MARKER: Color = Color::Yellow;
+pub(crate) const SELECTION_MARKER: Color = Color::Yellow;
 /// Foreground for the liveness dot: a Workspace or Session the server still
 /// accepts input for. Green reads as "in flight" wherever it appears.
 const LIVE_MARKER: Color = Color::Green;
@@ -276,7 +278,7 @@ fn workspace_title(app: &App) -> Option<Line<'static>> {
 
 pub fn render(frame: &mut Frame, app: &App) {
     if app.show_keybinds {
-        render_keybinds(frame, frame.area());
+        render_keybinds(frame, frame.area(), app.keybinds_scroll);
         return;
     }
 
@@ -322,6 +324,7 @@ pub fn render(frame: &mut Frame, app: &App) {
         View::Transcript => render_transcript_view(frame, app, chunks[0]),
         View::Driva => render_driva(frame, app, chunks[0]),
         View::Files => render_files(frame, app, chunks[0]),
+        View::Answer => render_answer(frame, app, chunks[0]),
         View::Preview => unreachable!("handled above"),
     }
     if message_height > 0 {

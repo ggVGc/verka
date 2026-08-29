@@ -148,6 +148,29 @@ pub struct SendMessage {
     pub contract: Option<Contract>,
 }
 
+impl SendMessage {
+    /// A plain turn: text alone, under whatever the session already runs.
+    pub fn new(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            selection: None,
+            contract: None,
+        }
+    }
+
+    /// Run this turn under `selection`, switching the session onto it.
+    pub fn under(mut self, selection: Selection) -> Self {
+        self.selection = Some(selection);
+        self
+    }
+
+    /// Ask this turn's reply to come back in `contract`'s shape.
+    pub fn asking_for(mut self, contract: Contract) -> Self {
+        self.contract = Some(contract);
+        self
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SequencedUpdate {
     pub sequence: u64,
@@ -684,12 +707,14 @@ mod tests {
     #[test]
     fn an_answer_is_tagged_by_its_contract() {
         let response = Response::Answer(Answer {
-            value: AnswerValue::Files(vec![FileLocation {
+            contract: Contract::Files,
+            value: Some(AnswerValue::Files(vec![FileLocation {
                 path: PathBuf::from("src/auth.rs"),
                 line: Some(12),
                 column: None,
                 description: "checks the token".into(),
-            }]),
+            }])),
+            error: None,
             source: "…".into(),
         });
         let json = serde_json::to_value(&response).unwrap();
@@ -700,6 +725,25 @@ mod tests {
         // A location with no column carries none, rather than a zero that
         // would name a position the agent never gave.
         assert!(json["data"]["value"]["value"][0].get("column").is_none());
+        assert!(json["data"].get("error").is_none());
+        assert_eq!(serde_json::from_value::<Response>(json).unwrap(), response);
+    }
+
+    /// A reply that missed its contract crosses the wire as an answer with no
+    /// value, not as a protocol error — the source is the point of sending it.
+    #[test]
+    fn an_unsatisfied_contract_is_still_an_answer() {
+        let response = Response::Answer(Answer {
+            contract: Contract::Json,
+            value: None,
+            error: Some("the answer block is not valid JSON".into()),
+            source: "I had trouble with that.".into(),
+        });
+        let json = serde_json::to_value(&response).unwrap();
+        assert_eq!(json["type"], "answer");
+        assert_eq!(json["data"]["contract"], "json");
+        assert!(json["data"].get("value").is_none());
+        assert_eq!(json["data"]["source"], "I had trouble with that.");
         assert_eq!(serde_json::from_value::<Response>(json).unwrap(), response);
     }
 

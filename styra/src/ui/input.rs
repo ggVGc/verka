@@ -25,10 +25,18 @@ pub(crate) fn render_input(frame: &mut Frame, app: &App, area: Rect) {
     } else {
         " message (resumes on send) ".to_owned()
     };
-    let block = Block::default()
+    let mut block = Block::default()
         .borders(Borders::ALL)
         .border_style(border_style)
         .title(Span::styled(title, Style::default().fg(Color::Gray)));
+    // A contract changes what the agent is asked for, so it is shown on the
+    // box the whole time it applies rather than only in the sent message.
+    if let Some(contract) = app.contract {
+        block = block.title(Span::styled(
+            format!(" asking for {} ", contract.as_str()),
+            Style::default().fg(Color::Cyan),
+        ));
+    }
     let inner = block.inner(area);
     let display = input_display(app, inner.width);
     let visible_rows = inner.height;

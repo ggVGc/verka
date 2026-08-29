@@ -432,6 +432,23 @@ pub struct FileLocation {
     pub description: String,
 }
 
+impl FileLocation {
+    /// `path`, `path:line`, or `path:line:column` — the spelling the agent was
+    /// asked for, and the one an editor's jump-to-location expects back.
+    pub fn located(&self) -> String {
+        let mut text = self.path.display().to_string();
+        if let Some(line) = self.line {
+            text.push(':');
+            text.push_str(&line.to_string());
+            if let Some(column) = self.column {
+                text.push(':');
+                text.push_str(&column.to_string());
+            }
+        }
+        text
+    }
+}
+
 /// A parsed answer. The variant always matches the [`Contract`] that produced
 /// it, so a client can dispatch on the value alone.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -455,14 +472,32 @@ impl AnswerValue {
     }
 }
 
-/// One turn's typed answer, with enough provenance to show where it came from.
+/// One turn's typed answer.
+///
+/// A reply that did not satisfy its contract is an [`Answer`] too, not an error
+/// in place of one: `value` is absent, `error` says what was wrong, and
+/// `source` still carries what the agent actually said. An agent that answered
+/// well but framed it badly has produced something worth reading, and a client
+/// that was handed only "no answer block" could not show it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Answer {
-    pub value: AnswerValue,
-    /// The agent message the answer was parsed from, verbatim. Kept so a
-    /// client can show what was actually said when a parse looks wrong, and so
-    /// [`Contract::Text`] is not the only way to see the reply.
+    /// The contract the reply was read under, whether or not it satisfied it.
+    pub contract: Contract,
+    /// The parsed value; absent when the reply did not satisfy `contract`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<AnswerValue>,
+    /// Why the reply could not be read as `contract`; absent on success.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// The agent message this was read from, verbatim.
     pub source: String,
+}
+
+impl Answer {
+    /// Whether the reply satisfied its contract.
+    pub fn is_parsed(&self) -> bool {
+        self.value.is_some()
+    }
 }
 
 #[cfg(test)]
