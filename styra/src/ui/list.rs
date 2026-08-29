@@ -789,6 +789,14 @@ pub(crate) fn summary_line(
             summary_style,
         ));
     }
+    // The framing this turn was sent with is stripped from the message, so the
+    // row says what was asked of it instead of showing ten lines saying so.
+    if let Some(contract) = entry.contract {
+        spans.push(Span::styled(
+            format!(" ⟨{}⟩", contract.as_str()),
+            Style::default().fg(Color::Cyan),
+        ));
+    }
     if has_detail {
         spans.push(Span::styled(
             format!(" {marker}"),
@@ -1010,6 +1018,28 @@ mod tests {
         assert_eq!(format_duration(Duration::from_secs(3599)), "59m59s");
         assert_eq!(format_duration(Duration::from_secs(3600)), "1h00m");
         assert_eq!(format_duration(Duration::from_secs(7_500)), "2h05m");
+    }
+
+    /// The row carries the message as written plus a mark saying what it asked
+    /// for. The instruction block the server appended appears nowhere in the
+    /// list — it is ten lines of boilerplate that say the same thing.
+    #[test]
+    fn a_typed_turn_shows_its_shape_rather_than_its_framing() {
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
+        app.push_event(AgentEvent::UserMessage {
+            text: styra_server::contract::frame(
+                "which files handle auth?",
+                styra_server::Contract::Files,
+            ),
+        });
+
+        let screen = rendered(&app);
+        assert!(screen.contains("which files handle auth?"), "{screen}");
+        assert!(screen.contains("⟨files⟩"), "{screen}");
+        assert!(!screen.contains("answer block"), "{screen}");
     }
 
     #[test]
@@ -1601,6 +1631,7 @@ mod tests {
             },
             expanded: true,
             raw_index: None,
+            contract: None,
         };
         let item = entry_item_with_max_rows(&entry, true, 78, 1, Protocol::CodexAppServer, false);
 

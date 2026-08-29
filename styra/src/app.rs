@@ -942,14 +942,11 @@ impl App {
 
     // --- Typed turn answers ---------------------------------------------------
 
-    /// Contracts in the order `Ctrl-T` walks them, ending back at an untyped
-    /// turn so the operator can always get out of one without leaving the box.
-    pub const CONTRACTS: [Contract; 4] = [
-        Contract::Text,
-        Contract::Lines,
-        Contract::Files,
-        Contract::Json,
-    ];
+    /// Contracts in the order `Ctrl-T` walks them, taken from the server's own
+    /// list so a contract added there is offered here without a second edit.
+    /// The cycle ends back at an untyped turn, so the operator can always get
+    /// out of one without leaving the message box.
+    pub const CONTRACTS: [Contract; 4] = styra_server::contract::CONTRACTS;
 
     /// Step to the next return contract for the message being typed.
     pub fn cycle_contract(&mut self) {
@@ -1513,6 +1510,37 @@ mod tests {
             text: "more".into(),
         });
         assert_eq!(app.status, Status::Running);
+    }
+
+    /// A typed turn arrives framed, since the server appends the contract's
+    /// instructions before sending. The list shows the operator's own message
+    /// and records what it asked for, rather than a screen of boilerplate.
+    #[test]
+    fn a_framed_operator_message_is_shown_as_it_was_written() {
+        let mut app = app();
+        app.push_event(AgentEvent::UserMessage {
+            text: styra_server::contract::frame("which files handle auth?", Contract::Files),
+        });
+        let entry = app.timeline.entries.last().expect("the message was pushed");
+        assert_eq!(
+            entry.event,
+            AgentEvent::UserMessage {
+                text: "which files handle auth?".into()
+            }
+        );
+        assert_eq!(entry.contract, Some(Contract::Files));
+    }
+
+    /// An ordinary message is not framed and must be left exactly as it is,
+    /// including one that happens to talk about answer blocks.
+    #[test]
+    fn an_unframed_operator_message_is_untouched() {
+        let mut app = app();
+        let text = "explain the <styra:answer> convention";
+        app.push_event(AgentEvent::UserMessage { text: text.into() });
+        let entry = app.timeline.entries.last().expect("the message was pushed");
+        assert_eq!(entry.event, AgentEvent::UserMessage { text: text.into() });
+        assert_eq!(entry.contract, None);
     }
 
     #[test]

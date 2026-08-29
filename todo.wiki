@@ -17,10 +17,8 @@
   The queue holds `QueuedMessage { text, contract }` rather than bare strings,
   so a shape chosen while the agent was busy is still asked for when the queue
   drains. Queue files written before contracts existed load as untyped.
-- [ ] Decide what a typed turn should look like in the timeline.
-  The server frames the message before recording it, so the event list shows
-  the operator's text followed by the whole instruction block. That is honest —
-  it is what was sent — but it is roughly ten lines of boilerplate per typed
-  turn. Either fold the instructions behind the entry's expansion, or record
-  the operator's own text and mark the entry as typed, showing the framing on
-  request (`contract::instructions` reproduces it exactly).
+- [x] Decide what a typed turn should look like in the timeline.
+  Ingest unframes an operator message with `contract::unframe` — the exact
+  inverse of the framing — so the event list and transcript show the message as
+  it was written, marked `⟨files⟩` with the shape it asked for. The line as it
+  actually went to the agent is untouched in the journal and the raw view.

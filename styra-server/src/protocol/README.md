@@ -52,6 +52,12 @@ records the contract with the session. Framing is server-side so every client
 asks for a shape in the same words; a client that framed its own message would
 be sending an answer the parser has never been taught to read.
 
+Because the framing is appended server-side, the message a client sees echoed
+back in the event stream is the framed one. `contract::unframe` is the exact
+inverse of the framing and recovers the operator's own text and the contract
+from it, so a client can show what they wrote rather than the boilerplate; the
+verbatim line is still in the journal and the raw stream either way.
+
 The answer is fetched separately, not returned by `send_message`: a turn takes
 minutes, and a connection carries one request. The client polls `updates` as it
 would for any turn, and after `turn.completed` issues `turn_answer`:

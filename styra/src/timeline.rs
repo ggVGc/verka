@@ -13,6 +13,7 @@
 
 use std::cell::Cell;
 use styra_server::event::{AgentEvent, DetailBlock};
+use styra_server::Contract;
 
 /// One event in the list, with its fold state.
 #[derive(Clone, Debug, PartialEq)]
@@ -26,6 +27,12 @@ pub struct Entry {
     /// encoded wire line is journaled, so for it this points at whatever line
     /// came just before instead of its own.
     pub raw_index: Option<usize>,
+    /// The shape this turn asked its reply to come back in, for an operator
+    /// message the server framed. Set at ingest, where the framing is
+    /// recognised and removed from `event`, so the list shows the message as
+    /// it was written and still says what was asked of it. The verbatim line
+    /// including the framing remains in the raw view.
+    pub contract: Option<Contract>,
 }
 
 impl Entry {
@@ -306,6 +313,7 @@ mod tests {
                     event,
                     expanded: false,
                     raw_index: None,
+                    contract: None,
                 })
                 .collect(),
             ..Timeline::default()

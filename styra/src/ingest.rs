@@ -8,11 +8,19 @@
 
 use crate::app::{App, Status};
 use crate::timeline::{Entry, Step};
+use styra_server::contract;
 use styra_server::event::{AgentEvent, TokenUsage};
+use styra_server::Contract;
 use styra_server::InteractionEnd;
 
 /// Append a decoded event, advancing status and, while following, selection.
 pub fn push_event(app: &mut App, event: AgentEvent) {
+    // A typed turn was framed by the server before it was sent, so the
+    // message that comes back carries the operator's text followed by the
+    // contract's instructions. Show what they wrote and note what they asked
+    // for; the framing is boilerplate the list repeating adds nothing, and
+    // the raw view still holds the line exactly as it went out.
+    let (event, contract) = unframed(event);
     // Set before the replacement paths below, all of which return early:
     // a command or tool finishing is activity like any other.
     app.note_event_received();
@@ -160,10 +168,29 @@ pub fn push_event(app: &mut App, event: AgentEvent) {
         event,
         expanded: transfer_expansion,
         raw_index,
+        contract,
     });
     // Follow the tail of what is actually rendered. Hidden minor events
     // must not move the selection (and therefore the list viewport).
     follow_visible_tail(app);
+}
+
+/// Strip the server's contract framing from an operator message, returning the
+/// text as it was written and the shape it asked for. Anything else is passed
+/// through untouched — only a message this server framed can be unframed.
+fn unframed(event: AgentEvent) -> (AgentEvent, Option<Contract>) {
+    let AgentEvent::UserMessage { text } = &event else {
+        return (event, None);
+    };
+    match contract::unframe(text) {
+        Some((written, contract)) => (
+            AgentEvent::UserMessage {
+                text: written.to_owned(),
+            },
+            Some(contract),
+        ),
+        None => (event, None),
+    }
 }
 
 /// Fold a thinking update into the line already showing one, if that is what

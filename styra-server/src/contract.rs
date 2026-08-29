@@ -49,6 +49,31 @@ pub fn instructions(contract: Contract) -> String {
     )
 }
 
+/// Split a framed message back into the operator's own text and the contract
+/// it was framed with, or `None` if it was never framed.
+///
+/// The exact inverse of [`frame`], and only that: it matches each contract's
+/// instructions as a literal suffix rather than guessing from anything the
+/// text resembles. A client uses it to show the operator's message as they
+/// wrote it, without the boilerplate the server appended — the verbatim wire
+/// line is still in the journal for anyone who wants to see what was sent.
+pub fn unframe(message: &str) -> Option<(&str, Contract)> {
+    for contract in CONTRACTS {
+        if let Some(text) = message.strip_suffix(&instructions(contract)) {
+            return Some((text.trim_end(), contract));
+        }
+    }
+    None
+}
+
+/// Every contract, for callers that offer or test them all.
+pub const CONTRACTS: [Contract; 4] = [
+    Contract::Text,
+    Contract::Lines,
+    Contract::Files,
+    Contract::Json,
+];
+
 /// The one sentence describing a contract's shape, inside [`instructions`].
 fn shape(contract: Contract) -> &'static str {
     match contract {
@@ -199,6 +224,31 @@ mod tests {
         assert!(framed.contains(OPEN));
         assert!(framed.contains(CLOSE));
         assert!(framed.contains("one file location per line"));
+    }
+
+    /// Framing and unframing are one agreement read in two directions, so
+    /// every contract has to survive the round trip exactly.
+    #[test]
+    fn unframing_recovers_the_operator_message_and_its_contract() {
+        for contract in CONTRACTS {
+            let framed = frame("which files handle auth?", contract);
+            assert_eq!(
+                unframe(&framed),
+                Some(("which files handle auth?", contract)),
+                "{contract:?} did not survive the round trip"
+            );
+        }
+    }
+
+    /// Only a message this server framed unframes. A message that merely
+    /// talks about answer blocks is the operator's own text, all of it.
+    #[test]
+    fn an_unframed_message_is_left_alone() {
+        assert_eq!(unframe("just a question"), None);
+        assert_eq!(unframe("explain the <styra:answer> convention to me"), None);
+        // Including one that quotes the instructions without ending in them.
+        let quoted = format!("{}\nand then explain why", frame("go", Contract::Text));
+        assert_eq!(unframe(&quoted), None);
     }
 
     #[test]
