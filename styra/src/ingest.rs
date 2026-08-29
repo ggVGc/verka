@@ -94,6 +94,15 @@ pub fn push_event(app: &mut App, event: AgentEvent) {
             return;
         }
     }
+    // A task's start, its progress reports, and its end all name the same
+    // task id: they describe one piece of delegated work, so they refresh one
+    // row that shows its latest state rather than a line per report. Claude
+    // ends a task twice — a notification carrying a human summary, and a
+    // status patch that may carry the error — so a second ending merges into
+    // the one already shown instead of appearing again.
+    if event.task_id().is_some() && refresh_task(app, &event) {
+        return;
+    }
     // Claude reports extended thinking as a stream of lines — prose blocks
     // and a running token count — many per turn. They all describe the
     // same ongoing reasoning, so a run of them refreshes one line in place
@@ -133,6 +142,9 @@ pub fn push_event(app: &mut App, event: AgentEvent) {
             app.reported_model = Some((model.clone(), known));
         }
         AgentEvent::UserMessage { .. }
+        | AgentEvent::TaskStarted { .. }
+        | AgentEvent::TaskProgress { .. }
+        | AgentEvent::TaskCompleted { .. }
         | AgentEvent::TurnStarted
         | AgentEvent::CommandStarted { .. }
         | AgentEvent::ToolStarted { .. }
@@ -191,6 +203,60 @@ fn unframed(event: AgentEvent) -> (AgentEvent, Option<Contract>) {
         ),
         None => (event, None),
     }
+}
+
+/// Fold a task report into the row already showing that task, if there is one.
+/// Whether there was is what comes back: a task the list has not seen yet is an
+/// ordinary appended row.
+fn refresh_task(app: &mut App, event: &AgentEvent) -> bool {
+    let raw_index = app.raw.len().checked_sub(1);
+    let id = event.task_id();
+    let Some(entry) = app
+        .timeline
+        .entries
+        .iter_mut()
+        .rev()
+        .find(|entry| entry.event.task_id() == id)
+    else {
+        return false;
+    };
+    match (event, &mut entry.event) {
+        // Both of Claude's endings are partial: the notification names what
+        // the task was and the patch says why it failed. Keep whichever
+        // details have arrived rather than letting the later one blank them.
+        (
+            AgentEvent::TaskCompleted {
+                status,
+                summary,
+                error,
+                ..
+            },
+            AgentEvent::TaskCompleted {
+                status: shown,
+                summary: named,
+                error: reason,
+                ..
+            },
+        ) => {
+            *shown = status.clone();
+            if !summary.is_empty() {
+                *named = summary.clone();
+            }
+            if error.is_some() {
+                *reason = error.clone();
+            }
+        }
+        // A task that has already ended is finished; a progress report that
+        // arrives after its ending must not put it back to running.
+        (AgentEvent::TaskProgress { .. }, AgentEvent::TaskCompleted { .. }) => {}
+        _ => entry.event = event.clone(),
+    }
+    entry.raw_index = raw_index;
+    if app.status.is_active() {
+        app.status = Status::Running;
+    }
+    follow_visible_tail(app);
+    true
 }
 
 /// Fold a thinking update into the line already showing one, if that is what

@@ -1460,6 +1460,86 @@ mod tests {
     }
 
     #[test]
+    fn a_task_keeps_one_row_from_its_start_to_its_end() {
+        let mut app = app();
+        app.push_event(AgentEvent::AgentMessage { text: "a".into() });
+        app.push_event(AgentEvent::TaskStarted {
+            id: "t-1".into(),
+            description: "Rebuild and run tests".into(),
+            kind: "local_agent".into(),
+            agent: Some("Explore".into()),
+        });
+        // Another task's reports interleave with this one's; each keeps to
+        // its own row.
+        app.push_event(AgentEvent::TaskStarted {
+            id: "t-2".into(),
+            description: "Sweep the docs".into(),
+            kind: "local_bash".into(),
+            agent: None,
+        });
+        for tool_uses in ["Bash", "Read"] {
+            app.push_event(AgentEvent::TaskProgress {
+                id: "t-1".into(),
+                description: format!("Running {tool_uses}"),
+                agent: Some("Explore".into()),
+                tool: Some(tool_uses.into()),
+                tokens: Some(10_000),
+            });
+        }
+        assert_eq!(app.timeline.entries.len(), 3);
+        assert_eq!(
+            app.timeline.entries[1].event,
+            AgentEvent::TaskProgress {
+                id: "t-1".into(),
+                description: "Running Read".into(),
+                agent: Some("Explore".into()),
+                tool: Some("Read".into()),
+                tokens: Some(10_000),
+            }
+        );
+
+        // Claude ends a task twice, and neither ending is complete on its
+        // own: the notification names the task, the patch says why it failed.
+        app.push_event(AgentEvent::TaskCompleted {
+            id: "t-1".into(),
+            status: "failed".into(),
+            summary: "Rebuild and run tests".into(),
+            error: None,
+        });
+        app.push_event(AgentEvent::TaskCompleted {
+            id: "t-1".into(),
+            status: "failed".into(),
+            summary: String::new(),
+            error: Some("exit code 101".into()),
+        });
+        assert_eq!(app.timeline.entries.len(), 3);
+        assert_eq!(
+            app.timeline.entries[1].event,
+            AgentEvent::TaskCompleted {
+                id: "t-1".into(),
+                status: "failed".into(),
+                summary: "Rebuild and run tests".into(),
+                error: Some("exit code 101".into()),
+            }
+        );
+
+        // A progress report that arrives after the ending must not put a
+        // finished task back to running.
+        app.push_event(AgentEvent::TaskProgress {
+            id: "t-1".into(),
+            description: "Running Bash".into(),
+            agent: Some("Explore".into()),
+            tool: Some("Bash".into()),
+            tokens: Some(20_000),
+        });
+        assert!(matches!(
+            app.timeline.entries[1].event,
+            AgentEvent::TaskCompleted { .. }
+        ));
+        assert_eq!(app.timeline.entries.len(), 3);
+    }
+
+    #[test]
     fn expansion_is_per_entry_and_bulk_toggles_work() {
         let mut app = app();
         app.push_event(AgentEvent::AgentMessage { text: "a".into() });

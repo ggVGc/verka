@@ -156,6 +156,47 @@ pub enum AgentEvent {
     Error {
         message: String,
     },
+    /// A task the agent started alongside its own work: a backgrounded shell
+    /// command or a subagent. Claude keys these by a task id that its later
+    /// progress and completion lines repeat, so a client shows one row per
+    /// task rather than one per report — see [`AgentEvent::task_id`].
+    TaskStarted {
+        id: String,
+        description: String,
+        /// The provider's own name for the kind of task (Claude: `local_bash`
+        /// for a backgrounded command, `local_agent` for a subagent).
+        kind: String,
+        /// The subagent type, when the task runs an agent rather than a command.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent: Option<String>,
+    },
+    /// What a running task is doing now, reported repeatedly while it runs.
+    /// `description` is the task's current activity, not the description it
+    /// started with.
+    TaskProgress {
+        id: String,
+        description: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent: Option<String>,
+        /// The tool the task most recently used.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tool: Option<String>,
+        /// Tokens the task has spent so far.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tokens: Option<u64>,
+    },
+    /// A task reached a terminal state. Claude reports this twice for the same
+    /// task — once as a notification carrying a human summary, once as a status
+    /// patch that may carry the error — so clients merge both into one row.
+    TaskCompleted {
+        id: String,
+        /// `completed`, `failed`, `stopped`, or `killed`.
+        status: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        summary: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
     /// The authoritative count of background tasks the agent currently has
     /// running, as reported by the provider whenever that set changes.
     BackgroundTasks {
@@ -240,6 +281,18 @@ impl AgentEvent {
                 || output.contains("success"))
     }
 
+    /// The task this event reports on, if it reports on one. Every task line
+    /// repeats the id, which is what lets a client fold a task's whole life —
+    /// start, progress, end — into the single row it is about.
+    pub fn task_id(&self) -> Option<&str> {
+        match self {
+            AgentEvent::TaskStarted { id, .. }
+            | AgentEvent::TaskProgress { id, .. }
+            | AgentEvent::TaskCompleted { id, .. } => Some(id),
+            _ => None,
+        }
+    }
+
     /// The short tag shown at the head of the collapsed list line.
     pub fn tag(&self) -> &'static str {
         match self {
@@ -259,6 +312,9 @@ impl AgentEvent {
             AgentEvent::AgentMessage { .. } => "agent",
             AgentEvent::Thinking { .. } => "thinking",
             AgentEvent::Error { .. } => "error",
+            AgentEvent::TaskStarted { .. }
+            | AgentEvent::TaskProgress { .. }
+            | AgentEvent::TaskCompleted { .. } => "task",
             AgentEvent::BackgroundTasks { .. } => "tasks",
             AgentEvent::Unknown { .. } => "unknown",
             AgentEvent::Malformed { .. } => "malformed",
@@ -346,6 +402,36 @@ impl AgentEvent {
                 (line, None) => line,
             },
             AgentEvent::Error { message } => first_line(message),
+            AgentEvent::TaskStarted {
+                description, agent, ..
+            } => match agent {
+                Some(agent) => format!("{agent}: {} (running)", first_line(description)),
+                None => format!("{} (running)", first_line(description)),
+            },
+            AgentEvent::TaskProgress {
+                description,
+                agent,
+                tokens,
+                ..
+            } => {
+                let line = match agent {
+                    Some(agent) => format!("{agent}: {}", first_line(description)),
+                    None => first_line(description),
+                };
+                match tokens {
+                    Some(tokens) => format!("{line} · {tokens} tokens"),
+                    None => line,
+                }
+            }
+            AgentEvent::TaskCompleted {
+                id,
+                status,
+                summary,
+                ..
+            } if summary.is_empty() => format!("task {id} ({status})"),
+            AgentEvent::TaskCompleted {
+                status, summary, ..
+            } => format!("{} ({status})", first_line(summary)),
             AgentEvent::BackgroundTasks { running } => match running {
                 0 => "no background tasks running".into(),
                 1 => "1 background task running".into(),
@@ -464,6 +550,55 @@ impl AgentEvent {
                 _ => markdown_blocks(text),
             },
             AgentEvent::Error { message } => vec![DetailBlock::Text(message.clone())],
+            AgentEvent::TaskStarted {
+                id,
+                description,
+                kind,
+                agent,
+            } => {
+                let mut lines = vec![description.clone(), format!("task id: {id}")];
+                lines.push(format!("kind: {kind}"));
+                if let Some(agent) = agent {
+                    lines.push(format!("agent: {agent}"));
+                }
+                vec![DetailBlock::Text(lines.join("\n"))]
+            }
+            AgentEvent::TaskProgress {
+                id,
+                description,
+                agent,
+                tool,
+                tokens,
+            } => {
+                let mut lines = vec![description.clone(), format!("task id: {id}")];
+                if let Some(agent) = agent {
+                    lines.push(format!("agent: {agent}"));
+                }
+                if let Some(tool) = tool {
+                    lines.push(format!("last tool: {tool}"));
+                }
+                if let Some(tokens) = tokens {
+                    lines.push(format!("tokens: {tokens}"));
+                }
+                vec![DetailBlock::Text(lines.join("\n"))]
+            }
+            AgentEvent::TaskCompleted {
+                id,
+                status,
+                summary,
+                error,
+            } => {
+                let mut lines = Vec::new();
+                if !summary.is_empty() {
+                    lines.push(summary.clone());
+                }
+                lines.push(format!("task id: {id}"));
+                lines.push(format!("status: {status}"));
+                if let Some(error) = error {
+                    lines.push(error.clone());
+                }
+                vec![DetailBlock::Text(lines.join("\n"))]
+            }
             AgentEvent::BackgroundTasks { .. } => vec![DetailBlock::Text(self.summary())],
             AgentEvent::Unknown { wire_type } => {
                 vec![DetailBlock::Text(format!(
@@ -858,6 +993,8 @@ fn decode_claude_value(value: &Value) -> AgentEvent {
                         wire_type: "system:thinking_tokens".into(),
                     },
                 }
+            } else if let Some(event) = decode_claude_task(value, subtype) {
+                event
             } else if subtype == "background_tasks_changed" {
                 // The whole set of live background tasks, resent on every
                 // change. Its length is the authoritative running count.
@@ -885,6 +1022,54 @@ fn decode_claude_value(value: &Value) -> AgentEvent {
 /// Choose the salient block of an assistant message: a tool call is the action
 /// worth surfacing, then visible prose, then reasoning. The full message stays
 /// available verbatim in the raw view.
+/// Decode Claude's task lifecycle lines, or `None` when the subtype is not one
+/// of them. Claude runs backgrounded commands and subagents as tasks and
+/// reports each one's start, repeated progress, and end on its own `system`
+/// lines, all keyed by `task_id`; `task_notification` and the `task_updated`
+/// status patch both report the same ending, from different angles, and both
+/// decode to `TaskCompleted` for the host to merge.
+fn decode_claude_task(value: &Value, subtype: &str) -> Option<AgentEvent> {
+    let id = || clean_terminal_text(string(value, "task_id").unwrap_or_default());
+    let agent = || string(value, "subagent_type").map(clean_terminal_text);
+    match subtype {
+        "task_started" => Some(AgentEvent::TaskStarted {
+            id: id(),
+            description: clean_terminal_text(string(value, "description").unwrap_or_default()),
+            kind: clean_terminal_text(string(value, "task_type").unwrap_or_default()),
+            agent: agent(),
+        }),
+        "task_progress" => Some(AgentEvent::TaskProgress {
+            id: id(),
+            description: clean_terminal_text(string(value, "description").unwrap_or_default()),
+            agent: agent(),
+            tool: string(value, "last_tool_name").map(clean_terminal_text),
+            tokens: value
+                .get("usage")
+                .and_then(|usage| usage.get("total_tokens"))
+                .and_then(Value::as_u64),
+        }),
+        "task_notification" => Some(AgentEvent::TaskCompleted {
+            id: id(),
+            status: clean_terminal_text(string(value, "status").unwrap_or_default()),
+            summary: clean_terminal_text(string(value, "summary").unwrap_or_default()),
+            error: None,
+        }),
+        // A patch is whatever changed about the task. Only a status change is
+        // an event in its own right; the rest (e.g. a command being moved to
+        // the background) says nothing the task's own row does not show.
+        "task_updated" => {
+            let patch = value.get("patch")?;
+            Some(AgentEvent::TaskCompleted {
+                id: id(),
+                status: clean_terminal_text(string(patch, "status")?),
+                summary: String::new(),
+                error: string(patch, "error").map(clean_terminal_text),
+            })
+        }
+        _ => None,
+    }
+}
+
 /// The thinking-token count from a `system:thinking_tokens` line, under any of
 /// the keys Claude has used for it.
 fn claude_thinking_tokens(value: &Value) -> Option<u64> {
@@ -1608,6 +1793,80 @@ mod tests {
         };
         assert!(!completed.finishes_background_task());
         assert_eq!(completed.background_tasks_running(), None);
+    }
+
+    #[test]
+    fn claude_task_lifecycle_decodes_to_one_task_id() {
+        let started = decode_line(
+            Protocol::ClaudeJsonl,
+            r#"{"type":"system","subtype":"task_started","task_id":"t-1","tool_use_id":"toolu_1","description":"Rebuild and run tests","task_type":"local_bash"}"#,
+        );
+        assert_eq!(
+            started,
+            AgentEvent::TaskStarted {
+                id: "t-1".into(),
+                description: "Rebuild and run tests".into(),
+                kind: "local_bash".into(),
+                agent: None,
+            }
+        );
+        let progress = decode_line(
+            Protocol::ClaudeJsonl,
+            r#"{"type":"system","subtype":"task_progress","task_id":"t-1","description":"Running cargo test","subagent_type":"Explore","last_tool_name":"Bash","usage":{"total_tokens":10469}}"#,
+        );
+        assert_eq!(
+            progress,
+            AgentEvent::TaskProgress {
+                id: "t-1".into(),
+                description: "Running cargo test".into(),
+                agent: Some("Explore".into()),
+                tool: Some("Bash".into()),
+                tokens: Some(10469),
+            }
+        );
+        let ended = decode_line(
+            Protocol::ClaudeJsonl,
+            r#"{"type":"system","subtype":"task_notification","task_id":"t-1","status":"completed","summary":"Rebuild and run tests","output_file":""}"#,
+        );
+        assert_eq!(
+            ended,
+            AgentEvent::TaskCompleted {
+                id: "t-1".into(),
+                status: "completed".into(),
+                summary: "Rebuild and run tests".into(),
+                error: None,
+            }
+        );
+        assert!([&started, &progress, &ended]
+            .iter()
+            .all(|event| event.task_id() == Some("t-1")));
+    }
+
+    #[test]
+    fn claude_task_update_ends_a_task_only_when_it_patches_the_status() {
+        assert_eq!(
+            decode_line(
+                Protocol::ClaudeJsonl,
+                r#"{"type":"system","subtype":"task_updated","task_id":"t-2","patch":{"status":"failed","end_time":1,"error":"terminated early"}}"#,
+            ),
+            AgentEvent::TaskCompleted {
+                id: "t-2".into(),
+                status: "failed".into(),
+                summary: String::new(),
+                error: Some("terminated early".into()),
+            }
+        );
+        // Backgrounding a running command changes nothing the task's own row
+        // does not already show.
+        assert_eq!(
+            decode_line(
+                Protocol::ClaudeJsonl,
+                r#"{"type":"system","subtype":"task_updated","task_id":"t-2","patch":{"is_backgrounded":true}}"#,
+            ),
+            AgentEvent::Unknown {
+                wire_type: "system:task_updated".into()
+            }
+        );
     }
 
     #[test]

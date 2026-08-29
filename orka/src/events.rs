@@ -166,12 +166,36 @@ pub fn event_blocks(event: &AgentEvent) -> Vec<WorkLogBlock> {
         AgentEvent::Malformed { error } => WorkLogBlock::Error {
             message: format!("malformed agent event: {}", clean(error)),
         },
+        // A task is work the agent delegated, so a finished run's log reads it
+        // as the tool call it was: what was started, and how it ended.
+        AgentEvent::TaskStarted {
+            description, agent, ..
+        } => WorkLogBlock::ToolStarted {
+            name: agent.clone().unwrap_or_else(|| "Task".into()),
+            detail: clean(description),
+        },
+        // The ending's summary repeats what the task was started with, so the
+        // log keeps only how it ended — and, when it failed with one, why.
+        AgentEvent::TaskCompleted { status, error, .. } => {
+            let mut blocks = vec![WorkLogBlock::ToolCompleted {
+                name: "Task".into(),
+                status: clean(status),
+            }];
+            if let Some(error) = error {
+                blocks.push(WorkLogBlock::Error {
+                    message: clean(error),
+                });
+            }
+            return blocks;
+        }
         // Unknown provider events have no presentation; a UserMessage is a
         // host echo of the operator's own input, which Orka's batch runs never
-        // produce and its views do not render; a background-task count is
-        // bookkeeping for live views, not part of a finished run's log.
+        // produce and its views do not render; a background-task count and a
+        // running task's progress are bookkeeping for live views, not part of
+        // a finished run's log.
         AgentEvent::Unknown { .. }
         | AgentEvent::UserMessage { .. }
+        | AgentEvent::TaskProgress { .. }
         | AgentEvent::BackgroundTasks { .. } => return Vec::new(),
     };
     vec![block]
