@@ -1425,7 +1425,7 @@ mod tests {
     }
 
     #[test]
-    fn thinking_updates_fold_into_one_line_that_shows_the_latest_count() {
+    fn thinking_updates_fold_into_one_line_that_adds_up_what_they_spent() {
         let mut app = app();
         app.push_event(AgentEvent::AgentMessage { text: "a".into() });
         app.push_event(AgentEvent::Thinking {
@@ -1441,12 +1441,15 @@ mod tests {
             tokens: Some(512),
         });
 
+        // Each tick reports only its own spend, so the one line shows the
+        // total for the run rather than whatever the last tick happened to
+        // report — a number that only goes up while the agent thinks.
         assert_eq!(app.timeline.entries.len(), 2);
         assert_eq!(
             app.timeline.entries[1].event,
             AgentEvent::Thinking {
                 text: "weigh the options".into(),
-                tokens: Some(512),
+                tokens: Some(576),
             }
         );
 

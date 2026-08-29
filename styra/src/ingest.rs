@@ -104,10 +104,10 @@ pub fn push_event(app: &mut App, event: AgentEvent) {
         return;
     }
     // Claude reports extended thinking as a stream of lines — prose blocks
-    // and a running token count — many per turn. They all describe the
-    // same ongoing reasoning, so a run of them refreshes one line in place
-    // (keeping the last prose seen when only the count moved) instead of
-    // filling the list with a line per tick.
+    // and its token spend — many per turn. They all describe the same
+    // ongoing reasoning, so a run of them refreshes one line in place
+    // (keeping the last prose seen, and adding up what each tick spent)
+    // instead of filling the list with a line per tick.
     if event.updates_thinking() && refresh_thinking(app, &event) {
         return;
     }
@@ -260,7 +260,8 @@ fn refresh_task(app: &mut App, event: &AgentEvent) -> bool {
 }
 
 /// Fold a thinking update into the line already showing one, if that is what
-/// the last row is. Whether it was is what comes back: if not, the event is an
+/// the last row is: its prose becomes the latest seen and its token count the
+/// running total for the whole run of thinking. Whether it was is what comes back: if not, the event is an
 /// ordinary appended row.
 fn refresh_thinking(app: &mut App, event: &AgentEvent) -> bool {
     let raw_index = app.raw.len().checked_sub(1);
@@ -281,8 +282,11 @@ fn refresh_thinking(app: &mut App, event: &AgentEvent) -> bool {
         if !text.is_empty() {
             *shown = text.clone();
         }
-        if tokens.is_some() {
-            *counted = *tokens;
+        // Each update reports only what it spent, and Claude's own count
+        // restarts at every block of reasoning, so the line adds them up:
+        // one number for the run, going up while the agent thinks.
+        if let Some(tokens) = tokens {
+            *counted = Some(counted.unwrap_or_default() + tokens);
         }
     }
     // The refreshed line stands for the newest wire message.

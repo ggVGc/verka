@@ -144,12 +144,16 @@ pub enum AgentEvent {
     },
     /// Claude's extended-thinking prose, surfaced only when a message carries
     /// no visible text alongside it — see [`AgentEvent::is_minor`]. Claude also
-    /// reports a running thinking-token count on its own, with no prose; such
+    /// reports its thinking-token spend on its own lines, with no prose; such
     /// an update carries only `tokens`, and clients fold consecutive thinking
     /// events into one line rather than showing every tick (see
     /// [`AgentEvent::updates_thinking`]).
     Thinking {
         text: String,
+        /// The thinking tokens *this* update reports, not a running total:
+        /// Claude's count restarts with each block of reasoning, so a client
+        /// folding a run of these into one line adds them up to show what the
+        /// whole run of thinking cost.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tokens: Option<u64>,
     },
@@ -980,10 +984,10 @@ fn decode_claude_value(value: &Value) -> AgentEvent {
                     effort: None,
                 }
             } else if subtype == "thinking_tokens" {
-                // Claude reports the running extended-thinking token count as
-                // its own line, repeatedly, with no prose. Field naming has
-                // varied across releases, so take whichever count is present;
-                // a line with none stays an unrecognised system event.
+                // Claude reports its extended-thinking token spend on its own
+                // line, repeatedly, with no prose. Field naming has varied
+                // across releases, so take whichever count is present; a line
+                // with none stays an unrecognised system event.
                 match claude_thinking_tokens(value) {
                     Some(tokens) => AgentEvent::Thinking {
                         text: String::new(),
@@ -1070,10 +1074,18 @@ fn decode_claude_task(value: &Value, subtype: &str) -> Option<AgentEvent> {
     }
 }
 
-/// The thinking-token count from a `system:thinking_tokens` line, under any of
+/// The thinking tokens a `system:thinking_tokens` line reports, under any of
 /// the keys Claude has used for it.
+///
+/// The delta comes first because the count beside it is not a running total:
+/// it restarts at each block of reasoning, so summing the whole turn's deltas
+/// is the only way to a figure that only goes up. A release that reports a
+/// count alone is read as that block's spend.
 fn claude_thinking_tokens(value: &Value) -> Option<u64> {
     [
+        "estimated_tokens_delta",
+        "thinking_tokens_delta",
+        "estimated_tokens",
         "thinking_tokens",
         "tokens",
         "count",
@@ -1870,21 +1882,35 @@ mod tests {
     }
 
     #[test]
-    fn claude_system_thinking_tokens_carries_the_running_count() {
+    fn claude_system_thinking_tokens_carries_what_this_update_spent() {
+        // The delta, not the count beside it: that count restarts at each
+        // block of reasoning, so only the deltas add up across a turn.
         let event = decode_line(
             Protocol::ClaudeJsonl,
-            r#"{"type":"system","subtype":"thinking_tokens","thinking_tokens":1280}"#,
+            r#"{"type":"system","subtype":"thinking_tokens","estimated_tokens":150,"estimated_tokens_delta":100}"#,
         );
         assert_eq!(
             event,
             AgentEvent::Thinking {
                 text: String::new(),
-                tokens: Some(1280),
+                tokens: Some(100),
             }
         );
         assert!(event.is_minor());
         assert!(event.updates_thinking());
-        assert_eq!(event.summary(), "thinking · 1280 tokens");
+        assert_eq!(event.summary(), "thinking · 100 tokens");
+
+        // A release that reports only a count is read as that block's spend.
+        assert_eq!(
+            decode_line(
+                Protocol::ClaudeJsonl,
+                r#"{"type":"system","subtype":"thinking_tokens","thinking_tokens":1280}"#,
+            ),
+            AgentEvent::Thinking {
+                text: String::new(),
+                tokens: Some(1280),
+            }
+        );
     }
 
     #[test]
