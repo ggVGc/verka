@@ -1,3 +1,5 @@
+- Group driva options based on source
+- Svara: Structured request for files matching some question. Loads into location list (quickfix?)
 - Reviewing code changes is less useful than reviewing architectural changes:
   - Design for a workflow where I can easily get an overview of which files changed, and which interfaces and other boundaries were modified.
 - Driva should provide some way of constructing a runtime through the use of the local package manager:
