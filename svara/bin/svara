@@ -1,0 +1,24 @@
+#!/usr/bin/env -S nvim --headless -l
+
+local script = arg[0]
+local bin = script:match("^(.*)/[^/]+$") or "."
+local root = bin .. "/.."
+package.path = root .. "/lua/?.lua;" .. root .. "/lua/?/init.lua;" .. package.path
+
+local function fail(message)
+  io.stderr:write(message .. "\n")
+  os.exit(1)
+end
+
+if #arg < 2 then
+  fail("usage: svara SESSION_ID MESSAGE...")
+end
+
+local session_id = arg[1]
+local message = table.concat(arg, " ", 2)
+local sent, err = require("svara").send_message(session_id, message)
+if not sent then
+  fail("svara: " .. err)
+end
+
+print("message sent")
