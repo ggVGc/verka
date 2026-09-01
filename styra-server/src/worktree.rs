@@ -6,12 +6,11 @@
 //! host-side tool call appears immediately without changing Driva's mount table.
 
 use crate::agent::MountSpec;
-use crate::git::Repository;
+use crate::git::{self, Repository};
 use anyhow::{Context, Result};
 use genta::appserver::DynamicTool;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
 
 pub const CREATE_WORKTREE_TOOL: &str = "create_worktree";
 
@@ -109,16 +108,7 @@ impl Worktrees {
             anyhow::bail!("a worktree location already exists for branch {name:?}");
         }
 
-        let output = Command::new("git")
-            .arg("-C")
-            .arg(&self.repository.root)
-            .args(["worktree", "add", "-b"])
-            .arg(name)
-            .arg("--")
-            .arg(&host_path)
-            .output()
-            .context("running git to create a linked worktree")?;
-        require_success(output, "create the branch and worktree")?;
+        git::create_worktree(&self.repository.root, name, &host_path)?;
 
         Ok(CreatedWorktree {
             branch: name.to_owned(),
@@ -141,14 +131,7 @@ fn validate_branch_name(repository: &Path, name: &str) -> Result<()> {
             "worktree name must be a non-empty Git branch name without surrounding whitespace"
         );
     }
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(repository)
-        .args(["check-ref-format", "--branch"])
-        .arg(name)
-        .output()
-        .context("running git to validate the branch name")?;
-    if !output.status.success() || String::from_utf8_lossy(&output.stdout).trim() != name {
+    if !git::branch_name_is_valid(repository, name)? {
         anyhow::bail!("invalid Git branch name {name:?}");
     }
     Ok(())
@@ -171,20 +154,6 @@ fn encoded_directory_name(name: &str) -> String {
     encoded
 }
 
-fn require_success(output: Output, action: &str) -> Result<()> {
-    if output.status.success() {
-        return Ok(());
-    }
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let detail = if stderr.trim().is_empty() {
-        stdout.trim()
-    } else {
-        stderr.trim()
-    };
-    anyhow::bail!("git could not {action}: {detail}")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -198,35 +167,12 @@ mod tests {
         ))
     }
 
-    fn git_command(directory: &Path, arguments: &[&str]) {
-        let status = Command::new("git")
-            .arg("-C")
-            .arg(directory)
-            .args(arguments)
-            .status()
-            .unwrap();
-        assert!(status.success(), "git {arguments:?} failed");
-    }
-
     fn repository(tag: &str) -> (PathBuf, Repository) {
         let root = temporary_directory(tag);
         let checkout = root.join("checkout");
         std::fs::create_dir_all(&checkout).unwrap();
-        git_command(&checkout, &["init", "--quiet"]);
-        git_command(
-            &checkout,
-            &[
-                "-c",
-                "user.name=Styra",
-                "-c",
-                "user.email=styra@example.invalid",
-                "commit",
-                "--quiet",
-                "--allow-empty",
-                "-m",
-                "initial",
-            ],
-        );
+        git::fixture::init(&checkout);
+        git::fixture::commit_empty(&checkout, "initial");
         let repository = git::discover(&checkout).unwrap().unwrap();
         (root, repository)
     }
@@ -248,15 +194,9 @@ mod tests {
             created.sandbox_path,
             PathBuf::from("/tmp/styra/worktrees/feature%2Ftool")
         );
-        let branch = Command::new("git")
-            .arg("-C")
-            .arg(&created.host_path)
-            .args(["branch", "--show-current"])
-            .output()
-            .unwrap();
         assert_eq!(
-            String::from_utf8_lossy(&branch.stdout).trim(),
-            "feature/tool"
+            git::current_branch(&created.host_path).unwrap().as_deref(),
+            Some("feature/tool")
         );
         assert!(created.host_path.join(".git").is_file());
 
