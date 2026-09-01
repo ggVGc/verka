@@ -1,6 +1,6 @@
-//! Host mounts an operator asks a launch for: how one is written, how one is
-//! read back, and where the git history of the checkout they are working in
-//! actually lives.
+//! Host mounts an operator asks a launch for: how one is written and how one
+//! is read back. Where the git history of a checkout actually lives is
+//! [`styra_server::git`]'s question, not this module's.
 //!
 //! Nothing here touches [`crate::app::App`] — these are the pure parts of the
 //! launch policy, kept apart from the state machine in [`crate::launch`] so
