@@ -1,5 +1,6 @@
 //! The one-line footer with the keyboard shortcut reference and workspace.
 
+use super::palette;
 use crate::app::App;
 use crate::keymap::HELP;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -24,11 +25,11 @@ pub(crate) fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
 
     let keybinds = Paragraph::new(Line::from(Span::styled(
         format!(" {HELP} keybinds"),
-        Style::default().fg(Color::Gray),
+        Style::default().fg(palette::MUTED_TEXT),
     )));
     let directory = Paragraph::new(Line::from(Span::styled(
         working_directory,
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(palette::ADDITIONAL_INFO),
     )))
     .right_aligned();
     frame.render_widget(keybinds, chunks[0]);
@@ -37,13 +38,13 @@ pub(crate) fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
 
 pub(crate) fn tag_color(tag: &str) -> Color {
     match tag {
-        "agent" => Color::Rgb(211, 158, 96),
-        "user" => Color::Rgb(115, 190, 137),
-        "shell" => Color::Rgb(184, 124, 0),
-        "tool" => Color::Magenta,
-        "plan" | "files" => Color::Blue,
-        "error" | "malformed" => Color::Red,
-        _ => Color::DarkGray,
+        "agent" => palette::AGENT_TAG,
+        "user" => palette::USER_TAG,
+        "shell" => palette::SHELL_TAG,
+        "tool" => palette::SPECIAL,
+        "plan" | "files" => palette::INFO,
+        "error" | "malformed" => palette::ERROR,
+        _ => palette::ADDITIONAL_INFO,
     }
 }
 
@@ -52,9 +53,9 @@ pub(crate) fn tag_color(tag: &str) -> Color {
 /// the stronger colors reserved for status and errors.
 pub(crate) fn message_text_color(tag: &str) -> Color {
     match tag {
-        "agent" => Color::Rgb(238, 219, 193),
-        "user" => Color::Rgb(207, 233, 214),
-        _ => Color::White,
+        "agent" => palette::AGENT_TEXT,
+        "user" => palette::USER_TEXT,
+        _ => palette::TEXT,
     }
 }
 

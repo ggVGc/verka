@@ -2,7 +2,7 @@
 //! uncapped expanded content of the selected entry, regardless of whether it
 //! is folded in the list.
 
-use super::{message_text_color, summary_line, wrap_line, DETAIL_INDENT};
+use super::{message_text_color, palette, summary_line, wrap_line, DETAIL_INDENT};
 use crate::app::{App, PreviewTarget};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
@@ -28,8 +28,11 @@ pub(crate) fn render_preview(frame: &mut Frame, app: &App, area: Rect) {
     };
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray))
-        .title(Span::styled(title, Style::default().fg(Color::Gray)));
+        .border_style(Style::default().fg(palette::INACTIVE))
+        .title(Span::styled(
+            title,
+            Style::default().fg(palette::MUTED_TEXT),
+        ));
     let lines = wrap_preview_lines(
         preview_lines(app),
         usize::from(area.width.saturating_sub(2)),
@@ -125,7 +128,7 @@ pub(crate) fn preview_lines(app: &App) -> Vec<Line<'static>> {
     let Some(entry) = app.preview_entry() else {
         return vec![Line::from(Span::styled(
             "  no entry selected",
-            Style::default().fg(Color::Gray),
+            Style::default().fg(palette::MUTED_TEXT),
         ))];
     };
 
@@ -170,17 +173,17 @@ fn presented_block_lines(
             if language.as_deref() == Some("bash") {
                 let mut spans = vec![Span::styled(
                     DETAIL_INDENT.to_owned(),
-                    Style::default().fg(Color::White),
+                    Style::default().fg(palette::TEXT),
                 )];
                 spans.extend(bash_spans(line));
                 return Line::from(spans);
             }
             let color = if line.starts_with('+') && !line.starts_with("+++") {
-                Color::Green
+                palette::SUCCESS
             } else if line.starts_with('-') && !line.starts_with("---") {
-                Color::Red
+                palette::ERROR
             } else if line.starts_with("@@") {
-                Color::Cyan
+                palette::ACCENT
             } else {
                 text_color
             };
@@ -201,7 +204,7 @@ fn bash_spans(line: &str) -> Vec<Span<'static>> {
         if rest.starts_with('#') {
             spans.push(Span::styled(
                 rest.to_owned(),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(palette::ADDITIONAL_INFO),
             ));
             break;
         }
@@ -211,27 +214,27 @@ fn bash_spans(line: &str) -> Vec<Span<'static>> {
                 .find(first)
                 .map(|offset| offset + 2)
                 .unwrap_or(rest.len());
-            (end, Color::Green)
+            (end, palette::SUCCESS)
         } else if first.is_whitespace() {
             (
                 rest.find(|ch: char| !ch.is_whitespace())
                     .unwrap_or(rest.len()),
-                Color::White,
+                palette::TEXT,
             )
         } else {
             let end = rest
                 .find(|ch: char| ch.is_whitespace() || "|&;<>".contains(ch))
                 .unwrap_or(rest.len());
             if end == 0 {
-                (first.len_utf8(), Color::Magenta)
+                (first.len_utf8(), palette::SPECIAL)
             } else {
                 let token = &rest[..end];
                 let color = if token.starts_with('-') {
-                    Color::Cyan
+                    palette::ACCENT
                 } else if token.contains('$') {
-                    Color::Yellow
+                    palette::WARNING
                 } else {
-                    Color::White
+                    palette::TEXT
                 };
                 (end, color)
             }
@@ -331,7 +334,7 @@ mod tests {
         assert!(pretty
             .iter()
             .flat_map(|line| &line.spans)
-            .any(|span| span.style.fg == Some(Color::Yellow)));
+            .any(|span| span.style.fg == Some(palette::WARNING)));
 
         app.toggle_preview_mode();
         let raw: String = preview_lines(&app)
@@ -515,7 +518,7 @@ mod tests {
         assert!(pretty
             .iter()
             .flat_map(|line| &line.spans)
-            .any(|span| span.style.fg == Some(Color::Cyan)));
+            .any(|span| span.style.fg == Some(palette::ACCENT)));
 
         app.toggle_preview_mode();
         let raw = preview_lines(&app)
@@ -547,7 +550,7 @@ mod tests {
         assert!(pretty
             .iter()
             .flat_map(|line| &line.spans)
-            .any(|span| span.style.fg == Some(Color::Cyan)));
+            .any(|span| span.style.fg == Some(palette::ACCENT)));
 
         app.toggle_preview_mode();
         let raw = preview_lines(&app)
@@ -691,13 +694,13 @@ mod tests {
 
         // The preview occupies the right ~40% of the frame (the list's own
         // selection highlight lives to the left of that and is unaffected).
-        // `Style::default()` renders as `Some(Color::Reset)`, not `None`, so
+        // `Style::default()` renders with the palette's reset color, not `None`, so
         // check for the specific highlight color rather than any `Some` bg.
         let preview_columns = 50..buffer.area.width;
         let has_highlight = preview_columns
             .flat_map(|x| (0..buffer.area.height).map(move |y| (x, y)))
             .any(|(x, y)| {
-                buffer.cell((x, y)).unwrap().style().bg == Some(super::super::SELECTION_BG)
+                buffer.cell((x, y)).unwrap().style().bg == Some(palette::SELECTION_BACKGROUND)
             });
         assert!(
             !has_highlight,
@@ -729,7 +732,7 @@ mod tests {
 
         let (x, y) = find_column(&buffer, "preview");
         let cell = buffer.cell((x, y)).unwrap();
-        assert_ne!(cell.style().fg, Some(Color::DarkGray));
+        assert_ne!(cell.style().fg, Some(palette::INACTIVE));
     }
 
     #[test]

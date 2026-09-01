@@ -18,6 +18,7 @@ mod log;
 mod markdown;
 mod messages;
 mod notes;
+mod palette;
 mod picker;
 mod preview;
 mod raw;
@@ -60,17 +61,6 @@ use std::time::Duration;
 /// cannot bury the rest of the session.
 const MAX_DETAIL_LINES: usize = 40;
 const DETAIL_INDENT: &str = "    ";
-/// Backdrop painted behind a selected list row (including its expanded detail
-/// lines, if any). Its muted yellow tint keeps the current line easy to find
-/// without competing with the content or status colors.
-pub(crate) const SELECTION_BG: Color = Color::Rgb(44, 42, 30);
-/// Foreground used for the small current-line marker at the left edge of a
-/// selectable row.
-pub(crate) const SELECTION_MARKER: Color = Color::Yellow;
-/// Foreground for the liveness dot: a Workspace or Session the server still
-/// accepts input for. Green reads as "in flight" wherever it appears.
-const LIVE_MARKER: Color = Color::Green;
-
 /// A duration in the compact form the status line and tail use: `12s`,
 /// `2m14s`, `1h04m`. Seconds are dropped past an hour, where they no longer
 /// tell the operator anything they are waiting on.
@@ -89,13 +79,13 @@ pub(crate) fn format_duration(duration: Duration) -> String {
 /// a glance instead of requiring the operator to read the label text.
 fn status_color(status: &Status) -> Color {
     match status {
-        Status::Pending => Color::Blue,
-        Status::Running => Color::Yellow,
-        Status::Idle => Color::Green,
-        Status::Background => Color::Yellow,
-        Status::Stopped => Color::DarkGray,
-        Status::Ended { error: Some(_), .. } => Color::Red,
-        Status::Ended { .. } => Color::DarkGray,
+        Status::Pending => palette::INFO,
+        Status::Running => palette::WARNING,
+        Status::Idle => palette::SUCCESS,
+        Status::Background => palette::WARNING,
+        Status::Stopped => palette::INACTIVE,
+        Status::Ended { error: Some(_), .. } => palette::ERROR,
+        Status::Ended { .. } => palette::INACTIVE,
     }
 }
 
@@ -121,12 +111,12 @@ fn title_line(
     suffix: Option<&str>,
 ) -> Line<'static> {
     let color = status_color(status);
-    let text_style = Style::default().fg(Color::Gray);
+    let text_style = Style::default().fg(palette::MUTED_TEXT);
     let value_style = |reported: bool| {
         if reported {
-            Style::default().fg(Color::White)
+            Style::default().fg(palette::TEXT)
         } else {
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(palette::ADDITIONAL_INFO)
         }
     };
     let mut spans = vec![Span::styled(
@@ -188,9 +178,9 @@ fn status_elapsed(app: &App) -> Option<String> {
 /// which is the default view and so needs no name.
 fn view_block(app: &App, suffix: Option<&str>) -> Block<'static> {
     let border_style = if app.focus == Focus::List {
-        Style::default().fg(Color::Cyan)
+        Style::default().fg(palette::ACCENT)
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(palette::INACTIVE)
     };
     let mut block = Block::default()
         .borders(Borders::ALL)
@@ -217,7 +207,7 @@ fn notes_title(app: &App) -> Option<Line<'static>> {
     app.notes.any().then(|| {
         Line::from(Span::styled(
             " ✎ notes · E ",
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(palette::WARNING),
         ))
         .right_aligned()
     })
@@ -228,7 +218,7 @@ fn notes_title(app: &App) -> Option<Line<'static>> {
 fn render_placeholder(frame: &mut Frame, block: Block<'static>, area: Rect, text: &str) {
     let paragraph = Paragraph::new(Line::from(Span::styled(
         text.to_owned(),
-        Style::default().fg(Color::Gray),
+        Style::default().fg(palette::MUTED_TEXT),
     )))
     .block(block);
     frame.render_widget(paragraph, area);
@@ -241,7 +231,7 @@ fn conversation_only_title(block: Block<'static>) -> Block<'static> {
     block.title_bottom(Line::from(Span::styled(
         " conversation only ",
         Style::default()
-            .fg(Color::Cyan)
+            .fg(palette::ACCENT)
             .add_modifier(Modifier::BOLD),
     )))
 }
@@ -260,17 +250,20 @@ fn workspace_title(app: &App) -> Option<Line<'static>> {
     if let Some(workspace) = workspace {
         spans.push(Span::styled(
             workspace.to_owned(),
-            Style::default().fg(Color::Cyan),
+            Style::default().fg(palette::ACCENT),
         ));
     }
     if let Some(session) = session {
         if workspace.is_some() {
-            spans.push(Span::styled(" · ", Style::default().fg(Color::DarkGray)));
+            spans.push(Span::styled(
+                " · ",
+                Style::default().fg(palette::ADDITIONAL_INFO),
+            ));
         }
         spans.push(Span::styled(
             session.to_owned(),
             Style::default()
-                .fg(Color::Cyan)
+                .fg(palette::ACCENT)
                 .add_modifier(Modifier::BOLD),
         ));
     }
@@ -342,7 +335,7 @@ pub fn render(frame: &mut Frame, app: &App) {
         frame.render_widget(
             Block::default().style(
                 Style::default()
-                    .fg(Color::DarkGray)
+                    .fg(palette::MODAL_BACKDROP)
                     .add_modifier(Modifier::DIM),
             ),
             frame.area(),
@@ -467,13 +460,13 @@ mod tests {
             "s1",
         );
         assert!(rendered(&app).contains('●'));
-        assert_eq!(status_color(&app.status), Color::Yellow);
+        assert_eq!(status_color(&app.status), palette::WARNING);
 
         app.push_event(AgentEvent::TurnCompleted {
             usage: TokenUsage::default(),
         });
         assert!(rendered(&app).contains("idle"));
-        assert_eq!(status_color(&app.status), Color::Green);
+        assert_eq!(status_color(&app.status), palette::SUCCESS);
     }
 
     #[test]
@@ -486,7 +479,7 @@ mod tests {
             "s1",
         );
         let title = title_line(&app.launch_label(), &app.status, None, None);
-        assert_eq!(title.spans[0].style.fg, Some(Color::Gray));
+        assert_eq!(title.spans[0].style.fg, Some(palette::MUTED_TEXT));
     }
 
     #[test]
@@ -524,12 +517,12 @@ mod tests {
 
         let (view_x, view_y) = find_column(buffer, "styra");
         let view_style = buffer.cell((view_x, view_y)).unwrap().style();
-        assert_eq!(view_style.fg, Some(Color::DarkGray));
+        assert_eq!(view_style.fg, Some(palette::MODAL_BACKDROP));
         assert!(view_style.add_modifier.contains(Modifier::DIM));
 
         let (input_x, input_y) = find_column(buffer, "type a message, Enter to send");
         let input_style = buffer.cell((input_x, input_y)).unwrap().style();
-        assert_eq!(input_style.fg, Some(Color::Gray));
+        assert_eq!(input_style.fg, Some(palette::MUTED_TEXT));
         assert!(!input_style.add_modifier.contains(Modifier::DIM));
     }
 
@@ -586,7 +579,7 @@ mod tests {
         terminal.draw(|frame| render(frame, &app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
         let (x, y) = find_column(&buffer, "opus");
-        assert_eq!(buffer.cell((x, y)).unwrap().fg, Color::DarkGray);
+        assert_eq!(buffer.cell((x, y)).unwrap().fg, palette::ADDITIONAL_INFO);
 
         app.push_event(AgentEvent::ThreadStarted {
             thread_id: "s-1".into(),
@@ -597,11 +590,11 @@ mod tests {
         terminal.draw(|frame| render(frame, &app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
         let (x, y) = find_column(&buffer, "claude-opus-4-8");
-        assert_eq!(buffer.cell((x, y)).unwrap().fg, Color::White);
+        assert_eq!(buffer.cell((x, y)).unwrap().fg, palette::TEXT);
         // The launch's own effort stays alongside the reported model, still
         // dimmed: Claude Code never reports one, so it remains only what was
         // asked for.
         let (x, y) = find_column(&buffer, "max");
-        assert_eq!(buffer.cell((x, y)).unwrap().fg, Color::DarkGray);
+        assert_eq!(buffer.cell((x, y)).unwrap().fg, palette::ADDITIONAL_INFO);
     }
 }

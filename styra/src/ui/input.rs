@@ -1,9 +1,10 @@
 //! The message input box: wraps typed text and queued messages to the panel
 //! width and keeps the terminal cursor positioned within them.
 
+use super::palette;
 use crate::app::{App, Focus};
 use ratatui::layout::{Position, Rect};
-use ratatui::style::{Color, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
@@ -12,9 +13,9 @@ use unicode_width::UnicodeWidthChar;
 pub(crate) fn render_input(frame: &mut Frame, app: &App, area: Rect) {
     let focused = app.focus == Focus::Input;
     let border_style = if focused {
-        Style::default().fg(Color::Cyan)
+        Style::default().fg(palette::ACCENT)
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(palette::INACTIVE)
     };
     let title = if app.can_send() {
         if app.queued_message_count() == 0 {
@@ -28,13 +29,16 @@ pub(crate) fn render_input(frame: &mut Frame, app: &App, area: Rect) {
     let mut block = Block::default()
         .borders(Borders::ALL)
         .border_style(border_style)
-        .title(Span::styled(title, Style::default().fg(Color::Gray)));
+        .title(Span::styled(
+            title,
+            Style::default().fg(palette::MUTED_TEXT),
+        ));
     // A contract changes what the agent is asked for, so it is shown on the
     // box the whole time it applies rather than only in the sent message.
     if let Some(contract) = app.contract {
         block = block.title(Span::styled(
             format!(" asking for {} ", contract.as_str()),
-            Style::default().fg(Color::Cyan),
+            Style::default().fg(palette::ACCENT),
         ));
     }
     let inner = block.inner(area);
@@ -74,7 +78,7 @@ fn input_display(app: &App, width: u16) -> InputDisplay {
         lines.extend(wrapped_input_lines(
             &format!("{prefix}{}", message.text),
             width,
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(palette::ADDITIONAL_INFO),
         ));
     }
     let preceding_rows = lines.len();
@@ -82,7 +86,7 @@ fn input_display(app: &App, width: u16) -> InputDisplay {
     if app.composer.text.is_empty() {
         lines.push(Line::from(Span::styled(
             "type a message, Enter to send",
-            Style::default().fg(Color::Gray),
+            Style::default().fg(palette::MUTED_TEXT),
         )));
         return InputDisplay {
             lines,
@@ -91,8 +95,11 @@ fn input_display(app: &App, width: u16) -> InputDisplay {
         };
     }
 
-    let mut input_lines =
-        wrapped_input_lines(&app.composer.text, width, Style::default().fg(Color::White));
+    let mut input_lines = wrapped_input_lines(
+        &app.composer.text,
+        width,
+        Style::default().fg(palette::TEXT),
+    );
     let mut cursor_col = input_lines
         .last()
         .map(|line| line.width())
@@ -196,6 +203,23 @@ mod tests {
         assert_eq!(display.lines.len(), 2);
         assert_eq!(display.cursor_col, 0);
         assert_eq!(display.cursor_row, 1);
+    }
+
+    #[test]
+    fn queued_messages_use_the_additional_information_color() {
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex").unwrap(),
+            "s1",
+        );
+        app.queue_message(styra_server::QueuedMessage::new("send this later"));
+
+        let display = input_display(&app, 40);
+        let queued = display.lines[0]
+            .spans
+            .iter()
+            .find(|span| span.content.contains("queued:"))
+            .expect("queued message span");
+        assert_eq!(queued.style.fg, Some(palette::ADDITIONAL_INFO));
     }
 
     #[test]

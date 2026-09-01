@@ -3,14 +3,13 @@
 
 use super::markdown::markdown_block_lines;
 use super::{
-    conversation_only_title, format_duration, message_text_color, render_placeholder,
-    render_preview, tag_color, view_block, DETAIL_INDENT, MAX_DETAIL_LINES, SELECTION_BG,
-    SELECTION_MARKER,
+    conversation_only_title, format_duration, message_text_color, palette, render_placeholder,
+    render_preview, tag_color, view_block, DETAIL_INDENT, MAX_DETAIL_LINES,
 };
 use crate::app::{App, Progress, Status, View};
 use crate::timeline::Entry;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
@@ -56,21 +55,26 @@ pub(crate) fn render_list(frame: &mut Frame, app: &App, area: Rect) {
         let lines = if app.can_configure_launch() {
             vec![
                 Line::from(vec![
-                    Span::styled("  launching with ", Style::default().fg(Color::Gray)),
+                    Span::styled(
+                        "  launching with ",
+                        Style::default().fg(palette::MUTED_TEXT),
+                    ),
                     Span::styled(
                         app.selection.name(),
-                        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                        Style::default()
+                            .fg(palette::ACCENT)
+                            .add_modifier(Modifier::BOLD),
                     ),
                 ]),
                 Line::from(Span::styled(
                     "  press L to choose the default agent, model, and effort — or i to write the first message",
-                    Style::default().fg(Color::Gray),
+                    Style::default().fg(palette::MUTED_TEXT),
                 )),
             ]
         } else {
             vec![Line::from(Span::styled(
                 "  waiting for the agent — press i to send a message",
-                Style::default().fg(Color::Gray),
+                Style::default().fg(palette::MUTED_TEXT),
             ))]
         };
         frame.render_widget(Paragraph::new(lines).block(block), area);
@@ -305,22 +309,22 @@ fn status_tail(app: &App) -> Line<'static> {
     let (text, color) = match app.status {
         Status::Pending => (
             "  … waiting for your first message".to_string(),
-            Color::DarkGray,
+            palette::INACTIVE,
         ),
-        Status::Running => (running_tail(&progress), Color::Yellow),
+        Status::Running => (running_tail(&progress), palette::WARNING),
         // Idle carries no elapsed figure: nothing is happening, so a
         // climbing counter only draws the eye to a number that means nothing.
         Status::Idle => (
             "  ── idle · waiting for your message ──".to_string(),
-            Color::Green,
+            palette::SUCCESS,
         ),
         Status::Background => (
             format!("  ── idle {elapsed} · background work still running ──"),
-            Color::Yellow,
+            palette::WARNING,
         ),
         Status::Stopped => (
             format!("  ── paused {elapsed} · waiting for your next message ──"),
-            Color::DarkGray,
+            palette::INACTIVE,
         ),
         _ => return Line::default(),
     };
@@ -406,7 +410,7 @@ fn entry_item_with_max_rows(
             0,
             Line::from(Span::styled(
                 format!("{DETAIL_INDENT}reported success; output contains an error diagnostic"),
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(palette::WARNING),
             )),
         );
     }
@@ -415,7 +419,7 @@ fn entry_item_with_max_rows(
         detail.truncate(MAX_DETAIL_LINES);
         detail.push(Line::from(Span::styled(
             format!("{DETAIL_INDENT}… {hidden} more lines"),
-            Style::default().fg(Color::Gray),
+            Style::default().fg(palette::MUTED_TEXT),
         )));
     }
     lines.extend(detail);
@@ -440,14 +444,14 @@ fn entry_item_with_max_rows(
             if let Some(summary) = wrapped.first_mut() {
                 summary
                     .spans
-                    .push(Span::styled(" …", Style::default().fg(Color::Gray)));
+                    .push(Span::styled(" …", Style::default().fg(palette::MUTED_TEXT)));
             }
         } else {
             let hidden = wrapped.len() - (max_rows - 1);
             wrapped.truncate(max_rows - 1);
             wrapped.push(Line::from(Span::styled(
                 format!("{DETAIL_INDENT}… {hidden} more rows — press p for the full entry"),
-                Style::default().fg(Color::Gray),
+                Style::default().fg(palette::MUTED_TEXT),
             )));
         }
     }
@@ -458,7 +462,7 @@ fn entry_item_with_max_rows(
 }
 
 /// Mark the selection by backing its first row — and only that row — with
-/// [`SELECTION_BG`]. An expanded entry's detail body keeps the plain
+/// [`palette::SELECTION_BACKGROUND`]. An expanded entry's detail body keeps the plain
 /// background, so the highlight reads as one line rather than as a block.
 /// The style sits on the [`Line`], not on its spans, so the fill runs to the
 /// full width of the row instead of stopping at the end of the text.
@@ -466,7 +470,7 @@ fn with_selection_backdrop(line: Line<'static>, selected: bool) -> Line<'static>
     if !selected {
         return line;
     }
-    let style = line.style.bg(SELECTION_BG);
+    let style = line.style.bg(palette::SELECTION_BACKGROUND);
     line.style(style)
 }
 
@@ -483,10 +487,10 @@ fn selected_summary_line(
     }
     if is_conversation {
         if let Some(glyph) = line.spans.get_mut(1) {
-            glyph.style = glyph.style.fg(SELECTION_MARKER);
+            glyph.style = glyph.style.fg(palette::SELECTION_MARKER);
         }
     } else if let Some(lead) = line.spans.get_mut(0) {
-        *lead = Span::styled("• ", Style::default().fg(SELECTION_MARKER));
+        *lead = Span::styled("• ", Style::default().fg(palette::SELECTION_MARKER));
     }
     line
 }
@@ -537,7 +541,10 @@ fn truncate_line(line: Line<'static>, width: usize, has_marker: bool) -> Line<'s
         }
         break;
     }
-    kept.push(Span::styled("…", Style::default().fg(Color::DarkGray)));
+    kept.push(Span::styled(
+        "…",
+        Style::default().fg(palette::ADDITIONAL_INFO),
+    ));
     kept.extend(marker);
     Line::from(kept)
 }
@@ -703,7 +710,7 @@ pub(crate) fn summary_line(
             (
                 Style::default().fg(tag_color(tag)),
                 "✗ ",
-                Style::default().fg(Color::Red),
+                Style::default().fg(palette::ERROR),
             )
         }
         AgentEvent::ToolCompleted { .. } | AgentEvent::CommandCompleted { .. }
@@ -712,7 +719,7 @@ pub(crate) fn summary_line(
             (
                 Style::default().fg(tag_color(tag)),
                 "⚠ ",
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(palette::WARNING),
             )
         }
         AgentEvent::ToolCompleted { .. } | AgentEvent::CommandCompleted { .. }
@@ -721,7 +728,7 @@ pub(crate) fn summary_line(
             (
                 Style::default().fg(tag_color(tag)),
                 "✓ ",
-                Style::default().fg(Color::Green),
+                Style::default().fg(palette::SUCCESS),
             )
         }
         _ if tag == "shell" => (Style::default().fg(tag_color(tag)), "", Style::default()),
@@ -729,15 +736,15 @@ pub(crate) fn summary_line(
             if status == "error" =>
         {
             (
-                Style::default().fg(Color::Red),
+                Style::default().fg(palette::ERROR),
                 "✗ ",
-                Style::default().fg(Color::Red),
+                Style::default().fg(palette::ERROR),
             )
         }
         AgentEvent::ToolCompleted { .. } | AgentEvent::CommandCompleted { .. } => (
-            Style::default().fg(Color::White),
+            Style::default().fg(palette::TEXT),
             "✓ ",
-            Style::default().fg(Color::Green),
+            Style::default().fg(palette::SUCCESS),
         ),
         _ => (
             Style::default().fg(message_text_color(tag)),
@@ -794,13 +801,13 @@ pub(crate) fn summary_line(
     if let Some(contract) = entry.contract {
         spans.push(Span::styled(
             format!(" ⟨{}⟩", contract.as_str()),
-            Style::default().fg(Color::Cyan),
+            Style::default().fg(palette::ACCENT),
         ));
     }
     if has_detail {
         spans.push(Span::styled(
             format!(" {marker}"),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(palette::ADDITIONAL_INFO),
         ));
     }
     Line::from(spans)
@@ -901,9 +908,9 @@ pub(crate) fn detail_lines(
             DetailBlock::Code { text, .. } => {
                 for line in text.lines() {
                     let color = if suspicious_shell && is_error_diagnostic(line) {
-                        Color::Red
+                        palette::ERROR
                     } else {
-                        Color::White
+                        palette::TEXT
                     };
                     lines.push(Line::from(vec![Span::styled(
                         format!("{DETAIL_INDENT}{line}"),
@@ -919,7 +926,7 @@ pub(crate) fn detail_lines(
             lines.truncate(cap);
             lines.push(Line::from(Span::styled(
                 format!("{DETAIL_INDENT}… {hidden} more lines"),
-                Style::default().fg(Color::Gray),
+                Style::default().fg(palette::MUTED_TEXT),
             )));
         }
     }
@@ -1113,14 +1120,14 @@ mod tests {
             .unwrap();
         let buffer = terminal.backend().buffer().clone();
 
-        let backgrounds: Vec<Color> = buffer
+        let backgrounds: Vec<_> = buffer
             .content()
             .iter()
-            .map(|cell| cell.style().bg.unwrap_or(Color::Reset))
+            .map(|cell| cell.style().bg.unwrap_or(palette::RESET))
             .collect();
 
-        assert!(!backgrounds.contains(&Color::White));
-        assert!(backgrounds.contains(&SELECTION_BG));
+        assert!(!backgrounds.contains(&palette::TEXT));
+        assert!(backgrounds.contains(&palette::SELECTION_BACKGROUND));
     }
 
     #[test]
@@ -1196,8 +1203,9 @@ mod tests {
                 .unwrap_or_else(|| panic!("no row contains {text:?}"))
         };
         let row_has_selection_backdrop = |y: u16| {
-            (0..buffer.area.width)
-                .any(|x| buffer.cell((x, y)).unwrap().style().bg == Some(SELECTION_BG))
+            (0..buffer.area.width).any(|x| {
+                buffer.cell((x, y)).unwrap().style().bg == Some(palette::SELECTION_BACKGROUND)
+            })
         };
 
         assert!(row_has_selection_backdrop(row_containing("three")));
@@ -1428,7 +1436,7 @@ mod tests {
             .iter()
             .find(|span| span.content.contains('⚠'))
             .expect("warning marker");
-        assert_eq!(warning.style.fg, Some(Color::Yellow));
+        assert_eq!(warning.style.fg, Some(palette::WARNING));
         assert!(!rendered(&app).contains('✓'));
 
         app.timeline.expand_all();
@@ -1453,7 +1461,7 @@ mod tests {
             .flat_map(|line| &line.spans)
             .find(|span| span.content.contains("error: failed to open"))
             .expect("diagnostic output line");
-        assert_eq!(diagnostic.style.fg, Some(Color::Red));
+        assert_eq!(diagnostic.style.fg, Some(palette::ERROR));
     }
 
     #[test]

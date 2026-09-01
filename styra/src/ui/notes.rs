@@ -8,12 +8,13 @@
 use crate::app::App;
 use crate::notes::{Editor, Scope};
 use ratatui::layout::{Position, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
 
 use super::input::wrapped_input_lines;
+use super::palette;
 
 /// Where the editor's box sits: centered, wide enough for prose and tall
 /// enough to hold a screenful of it, without ever covering the whole terminal.
@@ -52,7 +53,7 @@ pub(crate) fn render_notes(frame: &mut Frame, app: &App, editor: &Editor) {
     frame.render_widget(
         Block::default().style(
             Style::default()
-                .fg(Color::DarkGray)
+                .fg(palette::MODAL_BACKDROP)
                 .add_modifier(Modifier::DIM),
         ),
         frame.area(),
@@ -61,16 +62,16 @@ pub(crate) fn render_notes(frame: &mut Frame, app: &App, editor: &Editor) {
     let area = notes_area(frame.area());
     let mut block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Yellow))
+        .border_style(Style::default().fg(palette::WARNING))
         .title(Span::styled(
             title(editor),
-            Style::default().fg(Color::Gray),
+            Style::default().fg(palette::MUTED_TEXT),
         ));
     if let Some(name) = scope_subject(app, editor) {
         block = block.title(
             Line::from(Span::styled(
                 format!(" {name} "),
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(palette::ACCENT),
             ))
             .right_aligned(),
         );
@@ -81,13 +82,13 @@ pub(crate) fn render_notes(frame: &mut Frame, app: &App, editor: &Editor) {
     let mut lines = if text.is_empty() {
         vec![Line::from(Span::styled(
             "No notes yet — type to add some.",
-            Style::default().fg(Color::Gray),
+            Style::default().fg(palette::MUTED_TEXT),
         ))]
     } else {
         wrapped_input_lines(
             text,
             usize::from(inner.width.max(1)),
-            Style::default().fg(Color::White),
+            Style::default().fg(palette::TEXT),
         )
     };
 
@@ -134,7 +135,7 @@ pub fn render_notes_pane(frame: &mut Frame, scope: Scope, notes: Option<&str>, a
         Paragraph::new(text).wrap(Wrap { trim: false }).block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Yellow))
+                .border_style(Style::default().fg(palette::WARNING))
                 .title(format!(" {} ", scope.label())),
         ),
         area,
@@ -158,7 +159,7 @@ pub fn render_notes_prompt(frame: &mut Frame, scope: Scope, value: &str) {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Yellow))
+                    .border_style(Style::default().fg(palette::WARNING))
                     .title(format!(
                         " {} · Ctrl+S save · Enter newline · Esc cancel ",
                         scope.label()

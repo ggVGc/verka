@@ -4,12 +4,9 @@
 //! data rather than app state.
 
 use super::notes::render_notes_pane;
-use super::{
-    log_line, message_text_color, render_placeholder, status_color, tag_color, LIVE_MARKER,
-    SELECTION_BG, SELECTION_MARKER,
-};
+use super::{log_line, message_text_color, palette, render_placeholder, status_color, tag_color};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
@@ -44,7 +41,7 @@ pub fn render_picker(
         .split(area);
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan))
+        .border_style(Style::default().fg(palette::ACCENT))
         .title(" styra · choose a session · Enter open · r rename · e Session notes · x convert provider · q cancel ");
 
     if sessions.is_empty() {
@@ -61,7 +58,7 @@ pub fn render_picker(
         .collect();
     let list = List::new(items).block(block).highlight_style(
         Style::default()
-            .bg(SELECTION_BG)
+            .bg(palette::SELECTION_BACKGROUND)
             .add_modifier(Modifier::BOLD),
     );
     let mut state = ListState::default();
@@ -112,7 +109,7 @@ pub fn render_message_popup(frame: &mut Frame, title: &str, message: &str) {
         Paragraph::new(message.to_owned()).block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Red))
+                .border_style(Style::default().fg(palette::ERROR))
                 .title(format!(" {title} · press any key ")),
         ),
         popup,
@@ -133,7 +130,7 @@ pub fn render_name_prompt(frame: &mut Frame, value: &str) {
         Paragraph::new(value.to_owned()).block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan))
+                .border_style(Style::default().fg(palette::ACCENT))
                 .title(" Session name · Enter save · Esc cancel "),
         ),
         popup,
@@ -170,7 +167,7 @@ pub fn render_workspace_picker(
         .split(panes[1]);
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan))
+        .border_style(Style::default().fg(palette::ACCENT))
         .title(
             " styra \u{b7} choose a Workspace \u{b7} Enter open \u{b7} e Workspace notes \u{b7} c create \u{b7} q cancel ",
         );
@@ -193,7 +190,7 @@ pub fn render_workspace_picker(
         .collect();
     let list = List::new(items).block(block).highlight_style(
         Style::default()
-            .bg(SELECTION_BG)
+            .bg(palette::SELECTION_BACKGROUND)
             .add_modifier(Modifier::BOLD),
     );
     let mut state = ListState::default();
@@ -223,34 +220,34 @@ fn workspace_item(
         Span::styled(
             if selected { "\u{2022} " } else { "  " },
             Style::default().fg(if selected {
-                SELECTION_MARKER
+                palette::SELECTION_MARKER
             } else {
-                Color::Cyan
+                palette::ACCENT
             }),
         ),
         Span::styled(
             format!("{name:<19} "),
             Style::default()
-                .fg(Color::Cyan)
+                .fg(palette::ACCENT)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             format!("{:>3} sessions  ", workspace.session_count),
-            Style::default().fg(Color::Gray),
+            Style::default().fg(palette::MUTED_TEXT),
         ),
         Span::styled(
             format!("{:<9}", live_label(live)),
             Style::default()
-                .fg(LIVE_MARKER)
+                .fg(palette::LIVE_MARKER)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             format!("{:<10} ", workspace.age),
-            Style::default().fg(Color::Gray),
+            Style::default().fg(palette::MUTED_TEXT),
         ),
         Span::styled(
             workspace.host_path.display().to_string(),
-            Style::default().fg(Color::White),
+            Style::default().fg(palette::TEXT),
         ),
     ]))
 }
@@ -292,7 +289,7 @@ fn render_sessions_preview(
     };
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray))
+        .border_style(Style::default().fg(palette::INACTIVE))
         .title(title);
     let sessions = match preview {
         SessionsPreview::Loading => {
@@ -328,17 +325,20 @@ fn preview_session_item(session: &SessionSummary, live: bool) -> ListItem<'stati
     ListItem::new(Line::from(vec![
         Span::styled(
             if live { "\u{25cf} " } else { "  " },
-            Style::default().fg(LIVE_MARKER),
+            Style::default().fg(palette::LIVE_MARKER),
         ),
         Span::styled(
             format!("{:<8} ", session.selection.provider.as_str()),
-            Style::default().fg(Color::Cyan),
+            Style::default().fg(palette::ACCENT),
         ),
         Span::styled(
             format!("{display_name:<20} "),
-            Style::default().fg(Color::White),
+            Style::default().fg(palette::TEXT),
         ),
-        Span::styled(session.age.clone(), Style::default().fg(Color::Gray)),
+        Span::styled(
+            session.age.clone(),
+            Style::default().fg(palette::MUTED_TEXT),
+        ),
     ]))
 }
 
@@ -357,11 +357,11 @@ pub fn render_template_picker(
     let area = frame.area();
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan))
+        .border_style(Style::default().fg(palette::ACCENT))
         .title(" styra · Driva templates · Space toggle · Enter apply · q cancel ")
         .title_bottom(Line::from(Span::styled(
             " layered in the order chosen; a later template wins on conflict ",
-            Style::default().fg(Color::Gray),
+            Style::default().fg(palette::MUTED_TEXT),
         )));
     if templates.is_empty() {
         render_placeholder(frame, block, area, "  no Driva templates are available");
@@ -381,18 +381,18 @@ pub fn render_template_picker(
                 Span::styled(
                     if index == cursor { "• " } else { "  " },
                     Style::default().fg(if index == cursor {
-                        SELECTION_MARKER
+                        palette::SELECTION_MARKER
                     } else {
-                        Color::Cyan
+                        palette::ACCENT
                     }),
                 ),
                 Span::styled(
                     marker,
                     Style::default()
                         .fg(if position.is_some() {
-                            Color::Yellow
+                            palette::WARNING
                         } else {
-                            Color::DarkGray
+                            palette::INACTIVE
                         })
                         .add_modifier(Modifier::BOLD),
                 ),
@@ -400,22 +400,22 @@ pub fn render_template_picker(
                     format!("{:<16} ", template.name),
                     Style::default()
                         .fg(if position.is_some() {
-                            Color::Cyan
+                            palette::ACCENT
                         } else {
-                            Color::Gray
+                            palette::MUTED_TEXT
                         })
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
                     template.description.clone(),
-                    Style::default().fg(Color::White),
+                    Style::default().fg(palette::TEXT),
                 ),
             ]))
         })
         .collect();
     let list = List::new(items).block(block).highlight_style(
         Style::default()
-            .bg(SELECTION_BG)
+            .bg(palette::SELECTION_BACKGROUND)
             .add_modifier(Modifier::BOLD),
     );
     let mut state = ListState::default();
@@ -454,7 +454,7 @@ pub fn render_interactions_picker(
     let grouping = if view.grouped { " · grouped" } else { "" };
     let interactions_block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan))
+        .border_style(Style::default().fg(palette::ACCENT))
         .title(format!(
             " styra · current interactions{scope}{grouping} · Enter attach · X convert · S stop · D delete · w scope · g group · q cancel "
         ));
@@ -495,7 +495,7 @@ pub fn render_interactions_picker(
         .collect();
     let list = List::new(items).block(interactions_block).highlight_style(
         Style::default()
-            .bg(SELECTION_BG)
+            .bg(palette::SELECTION_BACKGROUND)
             .add_modifier(Modifier::BOLD),
     );
     let mut state = ListState::default();
@@ -515,7 +515,7 @@ fn workspace_heading_item(name: &str) -> ListItem<'static> {
     ListItem::new(Line::from(Span::styled(
         format!(" {name}"),
         Style::default()
-            .fg(Color::Yellow)
+            .fg(palette::WARNING)
             .add_modifier(Modifier::BOLD),
     )))
 }
@@ -532,7 +532,7 @@ fn render_log_preview(
         .unwrap_or_else(|| " conversation ".into());
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray))
+        .border_style(Style::default().fg(palette::INACTIVE))
         .title(title);
 
     let updates = match preview {
@@ -622,13 +622,13 @@ fn interaction_preview_line(
         InteractionUpdate::Log(entry) => log_line(entry),
         InteractionUpdate::WorkingDirectoryChanged(directory) => Line::from(Span::styled(
             format!("working directory: {}", directory.display()),
-            Style::default().fg(Color::Cyan),
+            Style::default().fg(palette::ACCENT),
         )),
         InteractionUpdate::Ended(end) => {
             let (message, color) = match (&end.error, end.exit_code) {
-                (Some(error), _) => (format!("failed: {error}"), Color::Red),
-                (None, Some(code)) => (format!("ended with exit code {code}"), Color::DarkGray),
-                (None, None) => ("ended".into(), Color::DarkGray),
+                (Some(error), _) => (format!("failed: {error}"), palette::ERROR),
+                (None, Some(code)) => (format!("ended with exit code {code}"), palette::INACTIVE),
+                (None, None) => ("ended".into(), palette::INACTIVE),
             };
             Line::from(Span::styled(message, Style::default().fg(color)))
         }
@@ -657,15 +657,15 @@ fn interaction_item(
         Span::styled(
             if selected { "•" } else { " " },
             Style::default().fg(if selected {
-                SELECTION_MARKER
+                palette::SELECTION_MARKER
             } else {
-                Color::Cyan
+                palette::ACCENT
             }),
         ),
         Span::styled(
             format!("{:<6} ", interaction.selection.provider.as_str()),
             Style::default()
-                .fg(Color::Cyan)
+                .fg(palette::ACCENT)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
@@ -676,14 +676,14 @@ fn interaction_item(
             workspace_name
                 .map(|name| format!("{name} · "))
                 .unwrap_or_default(),
-            Style::default().fg(Color::Gray),
+            Style::default().fg(palette::MUTED_TEXT),
         ),
         Span::styled(
             interaction
                 .name
                 .clone()
                 .unwrap_or_else(|| interaction.id.clone()),
-            Style::default().fg(Color::White),
+            Style::default().fg(palette::TEXT),
         ),
         Span::styled(
             interaction
@@ -691,7 +691,7 @@ fn interaction_item(
                 .as_ref()
                 .map(|_| format!(" · {}", short_id(&interaction.id)))
                 .unwrap_or_default(),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(palette::ADDITIONAL_INFO),
         ),
     ]);
     let mut lines = vec![main];
@@ -700,7 +700,7 @@ fn interaction_item(
         // of its own line so it never crowds out the identifying fields.
         lines.push(Line::from(Span::styled(
             format!("  « {text}"),
-            Style::default().fg(Color::Gray),
+            Style::default().fg(palette::MUTED_TEXT),
         )));
     }
     ListItem::new(lines)
@@ -714,28 +714,34 @@ fn session_item(session: &SessionSummary, selected: bool) -> ListItem<'static> {
             Span::styled(
                 if selected { "• " } else { "  " },
                 Style::default().fg(if selected {
-                    SELECTION_MARKER
+                    palette::SELECTION_MARKER
                 } else {
-                    Color::White
+                    palette::TEXT
                 }),
             ),
             Span::styled(
                 display_name.to_owned(),
                 Style::default()
-                    .fg(Color::White)
+                    .fg(palette::TEXT)
                     .add_modifier(Modifier::BOLD),
             ),
         ]),
         Line::from(vec![
-            Span::styled(format!("{provider:<14} "), Style::default().fg(Color::Cyan)),
-            Span::styled(session.age.clone(), Style::default().fg(Color::Gray)),
+            Span::styled(
+                format!("{provider:<14} "),
+                Style::default().fg(palette::ACCENT),
+            ),
+            Span::styled(
+                session.age.clone(),
+                Style::default().fg(palette::MUTED_TEXT),
+            ),
             Span::styled(
                 session
                     .name
                     .as_ref()
                     .map(|_| format!(" · {}", short_id(&session.id)))
                     .unwrap_or_default(),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(palette::ADDITIONAL_INFO),
             ),
         ]),
     ];
@@ -751,7 +757,7 @@ fn session_item(session: &SessionSummary, selected: bool) -> ListItem<'static> {
                 short_id(&origin.session_id),
                 origin.provider.as_str()
             ),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(palette::ADDITIONAL_INFO),
         )));
     }
     ListItem::new(lines)
@@ -1285,8 +1291,9 @@ mod tests {
                 .unwrap_or_else(|| panic!("no row contains {text:?}"))
         };
         let row_has_selection_backdrop = |y: u16| {
-            (0..buffer.area.width)
-                .any(|x| buffer.cell((x, y)).unwrap().style().bg == Some(SELECTION_BG))
+            (0..buffer.area.width).any(|x| {
+                buffer.cell((x, y)).unwrap().style().bg == Some(palette::SELECTION_BACKGROUND)
+            })
         };
 
         assert!(!row_has_selection_backdrop(row_containing("s-1")));

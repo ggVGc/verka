@@ -1,9 +1,9 @@
 //! The log view: Styra's own diagnostic/stderr log for the current session.
 
-use super::{render_placeholder, view_block};
+use super::{palette, render_placeholder, view_block};
 use crate::app::App;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
@@ -27,16 +27,16 @@ pub(crate) fn render_log(frame: &mut Frame, app: &App, area: Rect) {
 
 pub(crate) fn log_line(entry: &styra_server::LogEntry) -> Line<'static> {
     let (label, color) = match entry.level {
-        LogLevel::Info => ("info ", Color::Gray),
-        LogLevel::Warn => ("warn ", Color::Yellow),
-        LogLevel::Error => ("error", Color::Red),
+        LogLevel::Info => ("info ", palette::MUTED_TEXT),
+        LogLevel::Warn => ("warn ", palette::WARNING),
+        LogLevel::Error => ("error", palette::ERROR),
     };
     Line::from(vec![
         Span::styled(
             format!("{label} "),
             Style::default().fg(color).add_modifier(Modifier::BOLD),
         ),
-        Span::styled(entry.message.clone(), Style::default().fg(Color::White)),
+        Span::styled(entry.message.clone(), Style::default().fg(palette::TEXT)),
     ])
 }
 

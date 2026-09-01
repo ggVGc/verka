@@ -3,10 +3,10 @@
 //! `render_events`. Unlike the raw/log views, it reads as a document from the
 //! start rather than anchoring to the tail.
 
-use super::{conversation_only_title, render_placeholder, view_block};
+use super::{conversation_only_title, palette, render_placeholder, view_block};
 use crate::app::App;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
@@ -39,7 +39,7 @@ pub(crate) fn render_transcript_view(frame: &mut Frame, app: &App, area: Rect) {
         .map(|line| {
             Line::from(Span::styled(
                 line.to_owned(),
-                Style::default().fg(Color::White),
+                Style::default().fg(palette::TEXT),
             ))
         })
         .collect();

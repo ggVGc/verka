@@ -6,10 +6,17 @@
 //! lighter-weight `pulldown-cmark`-based inline renderer below, since
 //! `tui-markdown` has no single-line-only mode.
 
+use super::palette;
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use tui_markdown::StyleSheet;
+use std::sync::LazyLock;
+use tui_markdown::{AlertKind, CodeTheme, StyleSheet};
+
+static MARKDOWN_CODE_THEME: LazyLock<CodeTheme> = LazyLock::new(|| {
+    CodeTheme::from_textmate(palette::MARKDOWN_CODE_THEME)
+        .expect("Styra's embedded Markdown code theme must be valid")
+});
 
 /// Renders a detail block's full markdown buffer as styled lines, each
 /// prefixed with `indent`.
@@ -19,10 +26,9 @@ pub(crate) fn markdown_block_lines(
     indent: &str,
 ) -> Vec<Line<'static>> {
     let normalized = force_hard_line_breaks(text);
-    let rendered = tui_markdown::from_str_with_options(
-        &normalized,
-        &tui_markdown::Options::new(StyraStyleSheet),
-    );
+    let options = tui_markdown::Options::new(StyraStyleSheet)
+        .code_theme(CodeTheme::clone(&MARKDOWN_CODE_THEME));
+    let rendered = tui_markdown::from_str_with_options(&normalized, &options);
     rendered
         .lines
         .into_iter()
@@ -95,19 +101,93 @@ fn force_hard_line_breaks(text: &str) -> String {
 
 /// Styra's palette overrides for `tui-markdown`'s default style sheet.
 ///
-/// Headings keep the library's default colors but drop the leading `#`
-/// marker, since pretty mode strips markdown syntax rather than showing it
-/// styled.
+/// Every colored Markdown construct is mapped onto Styra's palette. The
+/// leading heading marker is omitted because pretty mode strips Markdown
+/// syntax rather than showing it styled.
 #[derive(Clone, Copy, Debug, Default)]
 struct StyraStyleSheet;
 
 impl StyleSheet for StyraStyleSheet {
+    fn heading(&self, level: u8) -> Style {
+        match level {
+            1 => Style::new()
+                .fg(palette::TEXT)
+                .bg(palette::ACCENT)
+                .bold()
+                .underlined(),
+            2 => Style::new().fg(palette::ACCENT).bold(),
+            3 => Style::new().fg(palette::ACCENT).bold().italic(),
+            _ => Style::new().fg(palette::LIGHT_ACCENT).italic(),
+        }
+    }
+
     fn heading_marker(&self, _level: u8) -> &str {
         ""
     }
 
     fn code(&self) -> Style {
-        Style::new().fg(Color::Yellow)
+        Style::new()
+            .fg(palette::WARNING)
+            .bg(palette::CODE_BACKGROUND)
+    }
+
+    fn link(&self) -> Style {
+        Style::new().fg(palette::INFO).underlined()
+    }
+
+    fn blockquote(&self) -> Style {
+        Style::new().fg(palette::SUCCESS)
+    }
+
+    fn heading_meta(&self) -> Style {
+        Style::new().fg(palette::ADDITIONAL_INFO).dim()
+    }
+
+    fn metadata_block(&self) -> Style {
+        Style::new().fg(palette::MUTED_WARNING)
+    }
+
+    fn html(&self) -> Style {
+        Style::new().fg(palette::ADDITIONAL_INFO).dim()
+    }
+
+    fn math_inline(&self) -> Style {
+        Style::new().fg(palette::SPECIAL).italic()
+    }
+
+    fn math_display(&self) -> Style {
+        Style::new().fg(palette::SPECIAL)
+    }
+
+    fn footnote_ref(&self) -> Style {
+        Style::new().fg(palette::ADDITIONAL_INFO).dim().italic()
+    }
+
+    fn footnote_def(&self) -> Style {
+        Style::new().fg(palette::ADDITIONAL_INFO).dim()
+    }
+
+    fn alert(&self, kind: AlertKind) -> Style {
+        let color = match kind {
+            AlertKind::Note => palette::INFO,
+            AlertKind::Tip => palette::SUCCESS,
+            AlertKind::Important => palette::SPECIAL,
+            AlertKind::Warning => palette::WARNING,
+            AlertKind::Caution => palette::ERROR,
+        };
+        Style::new().fg(color)
+    }
+
+    fn table_header(&self) -> Style {
+        Style::new().fg(palette::ACCENT).bold()
+    }
+
+    fn table_border(&self) -> Style {
+        Style::new().fg(palette::INACTIVE)
+    }
+
+    fn image_alt(&self) -> Style {
+        Style::new().fg(palette::ADDITIONAL_INFO).dim().italic()
     }
 }
 
@@ -147,7 +227,7 @@ fn render_spans(text: &str, base_style: Style) -> Vec<Span<'static>> {
             }
             Event::Code(code) => spans.push(Span::styled(
                 code.into_string(),
-                current_style(&styles).fg(Color::Yellow),
+                current_style(&styles).fg(palette::WARNING),
             )),
             Event::SoftBreak | Event::HardBreak => {
                 spans.push(Span::styled(" ", current_style(&styles)))
@@ -197,11 +277,11 @@ mod tests {
 
     #[test]
     fn block_lines_strip_the_heading_marker_and_style_the_heading() {
-        let base = Style::default().fg(Color::White);
+        let base = Style::default().fg(palette::TEXT);
         let lines = markdown_block_lines("# Title", base, "  ");
 
         assert_eq!(rendered_line(&lines[0]), "  Title");
-        assert_eq!(lines[0].style.bg, Some(Color::Cyan));
+        assert_eq!(lines[0].style.bg, Some(palette::ACCENT));
         assert!(lines[0].style.add_modifier.contains(Modifier::BOLD));
     }
 
@@ -258,5 +338,17 @@ mod tests {
 
         let rendered: Vec<String> = lines.iter().map(rendered_line).collect();
         assert!(rendered.iter().any(|line| line == "fn f() {}"));
+    }
+
+    #[test]
+    fn fenced_code_highlighting_uses_the_embedded_palette_theme() {
+        let lines = markdown_block_lines("```rust\nfn main() {}\n```", Style::default(), "");
+        let keyword = lines
+            .iter()
+            .flat_map(|line| &line.spans)
+            .find(|span| span.content == "fn")
+            .expect("highlighted Rust keyword");
+
+        assert_eq!(keyword.style.fg, Some(palette::MARKDOWN_CODE_KEYWORD));
     }
 }

@@ -19,12 +19,12 @@
 //! actually gets — including the parts neither pane can change: the workspace
 //! mount, the profile's credential mounts, the broker's control mount.
 
-use super::{render_placeholder, view_block};
+use super::{palette, render_placeholder, view_block};
 use crate::app::App;
 use crate::launch::LaunchScope;
 use crate::mount;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
@@ -118,7 +118,7 @@ fn summary_lines(app: &App, options: &DrivaOptions) -> Vec<Line<'static>> {
     if app.launch.planned {
         lines.push(Line::from(Span::styled(
             "  planned — applied when the next interaction starts",
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(palette::WARNING),
         )));
         lines.push(Line::from(""));
     }
@@ -145,7 +145,7 @@ fn summary_lines(app: &App, options: &DrivaOptions) -> Vec<Line<'static>> {
                 "mounts"
             },
             Style::default()
-                .fg(Color::Cyan)
+                .fg(palette::ACCENT)
                 .add_modifier(Modifier::BOLD),
         )),
     ]);
@@ -169,7 +169,7 @@ fn grouped_mount_lines(mounts: &[AttributedMount]) -> Vec<Line<'static>> {
             current = Some(attributed.origin);
             lines.push(Line::from(Span::styled(
                 format!("  {}", attributed.origin.label()),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(palette::ADDITIONAL_INFO),
             )));
         }
         lines.push(mount_line(&attributed.mount));
@@ -247,25 +247,25 @@ fn pane_style(app: &App, scope: LaunchScope) -> PaneStyle {
     let focused = app.launch.scope == scope;
     let ignored = scope == LaunchScope::Workspace && app.launch.interaction.standalone;
     let mut value = if focused {
-        Style::default().fg(Color::White)
+        Style::default().fg(palette::TEXT)
     } else {
-        Style::default().fg(Color::Gray)
+        Style::default().fg(palette::MUTED_TEXT)
     };
     if ignored {
         value = Style::default()
-            .fg(Color::DarkGray)
+            .fg(palette::INACTIVE)
             .add_modifier(Modifier::CROSSED_OUT);
     }
     PaneStyle {
         label: if focused {
             Style::default()
-                .fg(Color::Cyan)
+                .fg(palette::ACCENT)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(palette::INACTIVE)
         },
         value,
-        marker: Style::default().fg(Color::Yellow),
+        marker: Style::default().fg(palette::WARNING),
         cursor: focused,
     }
 }
@@ -386,9 +386,9 @@ fn render_pane(
     }
     let focused = app.launch.scope == scope;
     let title = Style::default().fg(if focused {
-        Color::Cyan
+        palette::ACCENT
     } else {
-        Color::DarkGray
+        palette::INACTIVE
     });
     let spans = vec![
         Span::styled(if focused { " ▸ " } else { "   " }, title),
@@ -405,15 +405,15 @@ fn render_pane(
                 LaunchScope::Workspace => " · every launch here ",
                 LaunchScope::Interaction => " · over the Workspace policy ",
             },
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(palette::ADDITIONAL_INFO),
         ),
     ];
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(if focused {
-            Color::Cyan
+            palette::ACCENT
         } else {
-            Color::DarkGray
+            palette::INACTIVE
         }))
         .title(Line::from(spans));
     frame.render_widget(Paragraph::new(rows).block(block), area);
@@ -422,7 +422,7 @@ fn render_pane(
 /// The keys, named against the pane they would act on. Two lines: what every
 /// pane answers to, then what is particular to the focused one.
 fn hint_lines(app: &App) -> Vec<Line<'static>> {
-    let muted = Style::default().fg(Color::DarkGray);
+    let muted = Style::default().fg(palette::ADDITIONAL_INFO);
     let mut lines = vec![Line::from(Span::styled(
         format!(
             "  Tab {} · m mount · g .git · x remove · T templates · w network",
@@ -468,18 +468,18 @@ fn render_prompt(frame: &mut Frame, app: &App, area: Rect) {
     // wide as the box.
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan))
+        .border_style(Style::default().fg(palette::ACCENT))
         .title(" mount · source[:destination][:ro|rw] · Enter add · Esc cancel ")
         .title_bottom(Line::from(Span::styled(
             format!(" for {} ", app.launch.scope.phrase()),
-            Style::default().fg(Color::Cyan),
+            Style::default().fg(palette::ACCENT),
         )));
     frame.render_widget(Clear, prompt);
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(" ", Style::default()),
-            Span::styled(text.clone(), Style::default().fg(Color::White)),
-            Span::styled("▏", Style::default().fg(Color::Yellow)),
+            Span::styled(text.clone(), Style::default().fg(palette::TEXT)),
+            Span::styled("▏", Style::default().fg(palette::WARNING)),
         ]))
         .block(block),
         prompt,
@@ -491,10 +491,10 @@ fn driva_field_line(label: &str, value: &str) -> Line<'static> {
         Span::styled(
             format!("  {label:<8} "),
             Style::default()
-                .fg(Color::Cyan)
+                .fg(palette::ACCENT)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(value.to_owned(), Style::default().fg(Color::White)),
+        Span::styled(value.to_owned(), Style::default().fg(palette::TEXT)),
     ])
 }
 
@@ -506,8 +506,8 @@ fn mount_line(mount: &Mount) -> Line<'static> {
             access,
         } => {
             let (label, color) = match access {
-                MountAccess::ReadWrite => ("rw", Color::Yellow),
-                MountAccess::ReadOnly => ("ro", Color::Gray),
+                MountAccess::ReadWrite => ("rw", palette::WARNING),
+                MountAccess::ReadOnly => ("ro", palette::MUTED_TEXT),
             };
             Line::from(vec![
                 Span::styled(
@@ -516,7 +516,7 @@ fn mount_line(mount: &Mount) -> Line<'static> {
                 ),
                 Span::styled(
                     format!("{} → {}", source.display(), destination.display()),
-                    Style::default().fg(Color::White),
+                    Style::default().fg(palette::TEXT),
                 ),
             ])
         }
@@ -524,12 +524,12 @@ fn mount_line(mount: &Mount) -> Line<'static> {
             Span::styled(
                 "    tmp ",
                 Style::default()
-                    .fg(Color::Blue)
+                    .fg(palette::INFO)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
                 destination.display().to_string(),
-                Style::default().fg(Color::White),
+                Style::default().fg(palette::TEXT),
             ),
         ]),
         Mount::Overlay {
@@ -539,12 +539,12 @@ fn mount_line(mount: &Mount) -> Line<'static> {
             Span::styled(
                 "    ovl ",
                 Style::default()
-                    .fg(Color::Magenta)
+                    .fg(palette::SPECIAL)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
                 format!("{} → {}", source.display(), destination.display()),
-                Style::default().fg(Color::White),
+                Style::default().fg(palette::TEXT),
             ),
         ]),
     }

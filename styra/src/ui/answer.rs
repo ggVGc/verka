@@ -9,10 +9,10 @@
 //! about its shape is one line, and the message itself is the rest. The agent
 //! usually answered; it just did not frame the answer as asked.
 
-use super::{render_placeholder, view_block, SELECTION_BG, SELECTION_MARKER};
+use super::{palette, render_placeholder, view_block};
 use crate::app::App;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
@@ -96,12 +96,12 @@ fn value_lines(value: &AnswerValue, selected: usize) -> Vec<Line<'static>> {
 fn file_spans(file: &FileLocation) -> Vec<Span<'static>> {
     let mut spans = vec![Span::styled(
         file.located(),
-        Style::default().fg(Color::Cyan),
+        Style::default().fg(palette::ACCENT),
     )];
     if !file.description.is_empty() {
         spans.push(Span::styled(
             format!("  {}", file.description),
-            Style::default().fg(Color::Gray),
+            Style::default().fg(palette::MUTED_TEXT),
         ));
     }
     spans
@@ -114,14 +114,14 @@ fn row(selected: bool, mut spans: Vec<Span<'static>>) -> Line<'static> {
     let mut line = vec![Span::styled(
         marker,
         Style::default().fg(if selected {
-            SELECTION_MARKER
+            palette::SELECTION_MARKER
         } else {
-            Color::DarkGray
+            palette::INACTIVE
         }),
     )];
     line.append(&mut spans);
     let style = if selected {
-        Style::default().bg(SELECTION_BG)
+        Style::default().bg(palette::SELECTION_BACKGROUND)
     } else {
         Style::default()
     };
@@ -138,12 +138,12 @@ fn unsatisfied_lines(answer: &Answer) -> Vec<Line<'static>> {
                 .clone()
                 .unwrap_or_else(|| "the reply did not satisfy the contract".to_owned()),
             Style::default()
-                .fg(Color::Yellow)
+                .fg(palette::WARNING)
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::styled(
             "the agent replied:",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(palette::ADDITIONAL_INFO),
         )),
         Line::default(),
     ];

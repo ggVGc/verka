@@ -1,8 +1,9 @@
 //! Full-screen keyboard shortcut reference.
 
+use super::palette;
 use crate::keymap::{ReferenceRow, CLOSE_REFERENCE, REFERENCE};
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Frame;
@@ -11,12 +12,12 @@ use ratatui::Frame;
 /// down it the operator has moved. [`reference_height`] is what bounds that.
 pub(crate) fn render_keybinds(frame: &mut Frame, area: Rect, scroll: u16) {
     let heading = Style::default()
-        .fg(Color::Cyan)
+        .fg(palette::ACCENT)
         .add_modifier(Modifier::BOLD);
     let key = Style::default()
-        .fg(Color::Yellow)
+        .fg(palette::WARNING)
         .add_modifier(Modifier::BOLD);
-    let muted = Style::default().fg(Color::Gray);
+    let muted = Style::default().fg(palette::MUTED_TEXT);
 
     let section = |name: &'static str| Line::from(Span::styled(name, heading));
     let bindings = |keys: &'static str, action: &'static str| {
@@ -44,7 +45,7 @@ pub(crate) fn render_keybinds(frame: &mut Frame, area: Rect, scroll: u16) {
     let scroll = scroll.min(reference_height().saturating_sub(visible));
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan))
+        .border_style(Style::default().fg(palette::ACCENT))
         .title(" styra · keybinds ");
     frame.render_widget(
         Paragraph::new(Text::from(lines))

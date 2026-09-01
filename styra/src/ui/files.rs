@@ -2,7 +2,7 @@
 
 use crate::app::App;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Frame;
@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use styra_server::agent::SandboxLayout;
 
-use super::{render_list, render_placeholder, render_preview, SELECTION_BG, SELECTION_MARKER};
+use super::{palette, render_list, render_placeholder, render_preview};
 
 struct FileItem {
     reported: String,
@@ -95,10 +95,10 @@ pub(crate) fn render_files(frame: &mut Frame, app: &App, area: Rect) {
     }
     let tree_block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan))
+        .border_style(Style::default().fg(palette::ACCENT))
         .title(Span::styled(
             format!(" {scope} "),
-            Style::default().fg(Color::Gray),
+            Style::default().fg(palette::MUTED_TEXT),
         ));
     if files.is_empty() {
         render_placeholder(
@@ -143,7 +143,7 @@ fn render_tree(
             lines.push(Line::from(Span::styled(
                 file.root.display().to_string(),
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(palette::ACCENT)
                     .add_modifier(Modifier::BOLD),
             )));
             last_root = Some(&file.root);
@@ -164,7 +164,7 @@ fn render_tree(
                         "  ".repeat(depth + 1),
                         component.as_os_str().to_string_lossy()
                     ),
-                    Style::default().fg(Color::Gray),
+                    Style::default().fg(palette::MUTED_TEXT),
                 )));
             }
         }
@@ -175,11 +175,11 @@ fn render_tree(
             .to_string_lossy();
         let style = if index == selected {
             Style::default()
-                .fg(Color::White)
-                .bg(SELECTION_BG)
+                .fg(palette::TEXT)
+                .bg(palette::SELECTION_BACKGROUND)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::White)
+            Style::default().fg(palette::TEXT)
         };
         let indent = "  ".repeat(components.len());
         let marker = if index == selected { "›" } else { " " };
@@ -188,7 +188,9 @@ fn render_tree(
             Span::styled(
                 marker,
                 if index == selected {
-                    Style::default().fg(SELECTION_MARKER).bg(SELECTION_BG)
+                    Style::default()
+                        .fg(palette::SELECTION_MARKER)
+                        .bg(palette::SELECTION_BACKGROUND)
                 } else {
                     style
                 },
@@ -209,17 +211,17 @@ fn render_content(frame: &mut Frame, file: &FileItem, area: Rect) {
     let title = format!(" {} ", file.reported);
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray))
-        .title(Span::styled(title, Style::default().fg(Color::Cyan)));
+        .border_style(Style::default().fg(palette::INACTIVE))
+        .title(Span::styled(title, Style::default().fg(palette::ACCENT)));
     let text = match std::fs::read_to_string(&file.resolved) {
         Ok(content) if content.is_empty() => Text::from(Line::from(Span::styled(
             "(empty file)",
-            Style::default().fg(Color::Gray),
+            Style::default().fg(palette::MUTED_TEXT),
         ))),
         Ok(content) => Text::from(content.replace('\t', "    ")),
         Err(error) => Text::from(Line::from(Span::styled(
             format!("could not read file: {error}"),
-            Style::default().fg(Color::Red),
+            Style::default().fg(palette::ERROR),
         ))),
     };
     frame.render_widget(
@@ -231,10 +233,10 @@ fn render_content(frame: &mut Frame, file: &FileItem, area: Rect) {
 fn render_empty_content(frame: &mut Frame, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray))
+        .border_style(Style::default().fg(palette::INACTIVE))
         .title(Span::styled(
             " file preview ",
-            Style::default().fg(Color::Gray),
+            Style::default().fg(palette::MUTED_TEXT),
         ));
     render_placeholder(frame, block, area, "no file selected");
 }
@@ -299,7 +301,7 @@ mod tests {
         );
         assert_eq!(
             buffer.cell((tree_x, tree_y)).unwrap().style().bg,
-            Some(SELECTION_BG),
+            Some(palette::SELECTION_BACKGROUND),
             "the selected file uses the shared current-line highlight"
         );
         let (_, preview_y) = find("preview · pretty", 54, 90, 0).unwrap();

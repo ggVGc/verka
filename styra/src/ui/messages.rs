@@ -1,8 +1,9 @@
 //! Short-lived status messages shown below the main event area.
 
+use super::palette;
 use crate::app::App;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
@@ -18,14 +19,14 @@ pub(crate) fn message_area_height(app: &App) -> u16 {
 pub(crate) fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
     let lines = app.action_messages.iter().map(|message| {
         Line::from(vec![
-            Span::styled("● ", Style::default().fg(Color::Cyan)),
-            Span::styled(message.text.clone(), Style::default().fg(Color::White)),
+            Span::styled("● ", Style::default().fg(palette::ACCENT)),
+            Span::styled(message.text.clone(), Style::default().fg(palette::TEXT)),
         ])
     });
     let panel = Paragraph::new(lines.collect::<Vec<_>>()).block(
         Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray))
+            .border_style(Style::default().fg(palette::INACTIVE))
             .title(" Status "),
     );
     frame.render_widget(panel, area);

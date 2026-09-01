@@ -4,7 +4,7 @@
 //! in full — the two together give both the overview and the detail that a
 //! single wrapped-line-per-row view couldn't.
 
-use super::{preview_scroll_limit, render_placeholder, view_block, SELECTION_BG};
+use super::{palette, preview_scroll_limit, render_placeholder, view_block};
 use crate::app::App;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Style};
@@ -44,7 +44,7 @@ pub(crate) fn render_raw(frame: &mut Frame, app: &App, area: Rect) {
         .collect();
     let list = List::new(items)
         .block(block)
-        .highlight_style(Style::default().bg(SELECTION_BG));
+        .highlight_style(Style::default().bg(palette::SELECTION_BACKGROUND));
     let mut state = ListState::default();
     state.select(Some(app.raw_selected));
     frame.render_stateful_widget(list, area, &mut state);
@@ -56,8 +56,11 @@ pub(crate) fn render_raw(frame: &mut Frame, app: &App, area: Rect) {
 fn render_raw_preview(frame: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray))
-        .title(Span::styled(" entry ", Style::default().fg(Color::Gray)));
+        .border_style(Style::default().fg(palette::INACTIVE))
+        .title(Span::styled(
+            " entry ",
+            Style::default().fg(palette::MUTED_TEXT),
+        ));
     let lines = raw_preview_lines(app);
     let scroll_limit = preview_scroll_limit(
         &lines,
@@ -77,7 +80,7 @@ fn raw_preview_lines(app: &App) -> Vec<Line<'static>> {
     let Some(line) = app.raw.get(app.raw_selected) else {
         return vec![Line::from(Span::styled(
             "  no wire traffic yet",
-            Style::default().fg(Color::Gray),
+            Style::default().fg(palette::MUTED_TEXT),
         ))];
     };
     match serde_json::from_str::<serde_json::Value>(&line.text) {
@@ -88,7 +91,7 @@ fn raw_preview_lines(app: &App) -> Vec<Line<'static>> {
             .map(|text| {
                 Line::from(Span::styled(
                     text.to_owned(),
-                    Style::default().fg(Color::White),
+                    Style::default().fg(palette::TEXT),
                 ))
             })
             .collect(),
@@ -97,16 +100,16 @@ fn raw_preview_lines(app: &App) -> Vec<Line<'static>> {
 
 fn raw_line(line: &styra_server::RawLine, selected: bool) -> Line<'static> {
     let (marker, marker_color) = match line.direction {
-        WireDirection::ToAgent => ("» ", Color::Cyan),
-        WireDirection::FromAgent => ("« ", Color::Green),
+        WireDirection::ToAgent => ("» ", palette::ACCENT),
+        WireDirection::FromAgent => ("« ", palette::SUCCESS),
     };
     let text_color = if selected {
-        Color::Yellow
+        palette::WARNING
     } else {
-        Color::White
+        palette::TEXT
     };
     let marker_color = if selected {
-        Color::Yellow
+        palette::WARNING
     } else {
         marker_color
     };
@@ -115,12 +118,6 @@ fn raw_line(line: &styra_server::RawLine, selected: bool) -> Line<'static> {
         Span::styled(line.text.clone(), Style::default().fg(text_color)),
     ])
 }
-
-const JSON_KEY: Color = Color::Cyan;
-const JSON_STRING: Color = Color::Green;
-const JSON_NUMBER: Color = Color::Rgb(184, 124, 0);
-const JSON_LITERAL: Color = Color::Magenta;
-const JSON_PUNCT: Color = Color::DarkGray;
 
 /// Pretty-print and syntax-highlight a JSON value for the raw view's entry
 /// panel: keys, strings, numbers, and `true`/`false`/`null` each get their
@@ -158,10 +155,10 @@ impl JsonWriter {
 
     fn write_value(&mut self, value: &serde_json::Value, indent: usize) {
         match value {
-            serde_json::Value::Null => self.push("null", JSON_LITERAL),
-            serde_json::Value::Bool(b) => self.push(b.to_string(), JSON_LITERAL),
-            serde_json::Value::Number(n) => self.push(n.to_string(), JSON_NUMBER),
-            serde_json::Value::String(s) => self.push(format!("{s:?}"), JSON_STRING),
+            serde_json::Value::Null => self.push("null", palette::JSON_LITERAL),
+            serde_json::Value::Bool(b) => self.push(b.to_string(), palette::JSON_LITERAL),
+            serde_json::Value::Number(n) => self.push(n.to_string(), palette::JSON_NUMBER),
+            serde_json::Value::String(s) => self.push(format!("{s:?}"), palette::JSON_STRING),
             serde_json::Value::Array(items) => self.write_seq(
                 items.iter(),
                 items.len(),
@@ -177,8 +174,8 @@ impl JsonWriter {
                 '{',
                 '}',
                 |w, (key, val), indent| {
-                    w.push(format!("{key:?}"), JSON_KEY);
-                    w.push(": ", JSON_PUNCT);
+                    w.push(format!("{key:?}"), palette::JSON_KEY);
+                    w.push(": ", palette::JSON_PUNCTUATION);
                     w.write_value(val, indent);
                 },
             ),
@@ -199,21 +196,24 @@ impl JsonWriter {
         mut write_item: impl FnMut(&mut Self, T, usize),
     ) {
         if len == 0 {
-            self.push(format!("{open}{close}"), JSON_PUNCT);
+            self.push(format!("{open}{close}"), palette::JSON_PUNCTUATION);
             return;
         }
-        self.push(open.to_string(), JSON_PUNCT);
+        self.push(open.to_string(), palette::JSON_PUNCTUATION);
         self.newline();
         let item_indent = "  ".repeat(indent + 1);
         for (i, item) in items.enumerate() {
-            self.push(item_indent.clone(), JSON_PUNCT);
+            self.push(item_indent.clone(), palette::JSON_PUNCTUATION);
             write_item(self, item, indent + 1);
             if i + 1 < len {
-                self.push(",", JSON_PUNCT);
+                self.push(",", palette::JSON_PUNCTUATION);
             }
             self.newline();
         }
-        self.push(format!("{}{close}", "  ".repeat(indent)), JSON_PUNCT);
+        self.push(
+            format!("{}{close}", "  ".repeat(indent)),
+            palette::JSON_PUNCTUATION,
+        );
     }
 }
 
@@ -355,12 +355,12 @@ mod tests {
         assert!(selected
             .spans
             .iter()
-            .all(|span| span.style.fg == Some(Color::Yellow)));
+            .all(|span| span.style.fg == Some(palette::WARNING)));
 
         let unselected = raw_line(&line, false);
         assert!(!unselected
             .spans
             .iter()
-            .any(|span| span.style.fg == Some(Color::Yellow)));
+            .any(|span| span.style.fg == Some(palette::WARNING)));
     }
 }

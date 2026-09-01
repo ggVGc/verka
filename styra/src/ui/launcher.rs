@@ -2,10 +2,10 @@
 //! the resulting selection spelled out along the bottom border so the
 //! operator sees exactly what it is selecting.
 
-use super::{SELECTION_BG, SELECTION_MARKER};
+use super::palette;
 use crate::launcher::{LaunchColumn, Launcher};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
 use ratatui::Frame;
@@ -19,19 +19,22 @@ pub(crate) fn render_launcher(frame: &mut Frame, launcher: &Launcher, area: Rect
     // than on a column, where a narrow terminal would clip them.
     let frame_block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan))
+        .border_style(Style::default().fg(palette::ACCENT))
         .title(Line::from(vec![
-            Span::styled(" styra · launch · ", Style::default().fg(Color::Gray)),
+            Span::styled(
+                " styra · launch · ",
+                Style::default().fg(palette::MUTED_TEXT),
+            ),
             Span::styled(
                 format!("{} ", selection.name()),
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(palette::ACCENT)
                     .add_modifier(Modifier::BOLD),
             ),
         ]))
         .title_bottom(Line::from(Span::styled(
             hint,
-            Style::default().fg(Color::Gray),
+            Style::default().fg(palette::MUTED_TEXT),
         )));
     let inner = frame_block.inner(area);
     frame.render_widget(frame_block, area);
@@ -93,16 +96,16 @@ fn render_launcher_column(
     focused: bool,
 ) {
     let border_style = if focused {
-        Style::default().fg(Color::Cyan)
+        Style::default().fg(palette::ACCENT)
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(palette::INACTIVE)
     };
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(border_style)
         .title(Span::styled(
             title.to_owned(),
-            Style::default().fg(Color::Gray),
+            Style::default().fg(palette::MUTED_TEXT),
         ));
     let items: Vec<ListItem> = rows
         .iter()
@@ -112,18 +115,18 @@ fn render_launcher_column(
                 Span::styled(
                     if index == selected { "• " } else { "  " },
                     Style::default().fg(if index == selected {
-                        SELECTION_MARKER
+                        palette::SELECTION_MARKER
                     } else {
-                        Color::White
+                        palette::TEXT
                     }),
                 ),
-                Span::styled(row.clone(), Style::default().fg(Color::White)),
+                Span::styled(row.clone(), Style::default().fg(palette::TEXT)),
             ]))
         })
         .collect();
     let list = List::new(items).block(block).highlight_style(
         Style::default()
-            .bg(SELECTION_BG)
+            .bg(palette::SELECTION_BACKGROUND)
             .add_modifier(Modifier::BOLD),
     );
     let mut state = ListState::default();

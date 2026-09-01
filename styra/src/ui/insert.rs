@@ -4,10 +4,11 @@
 //! other's answer: one is a text field with a cursor in it, the other a short
 //! list of single-key answers about a path that is already decided.
 
+use super::palette;
 use crate::app::App;
 use crate::insert::Insert;
 use ratatui::layout::{Position, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
@@ -36,14 +37,14 @@ fn render_typing(frame: &mut Frame, text: &str, area: Rect) {
     let prompt = floating(area, 3);
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan))
+        .border_style(Style::default().fg(palette::ACCENT))
         .title(" path · Tab complete · Enter insert · Esc cancel ");
     let inner = block.inner(prompt);
     frame.render_widget(Clear, prompt);
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             text.to_owned(),
-            Style::default().fg(Color::White),
+            Style::default().fg(palette::TEXT),
         )))
         .block(block),
         prompt,
@@ -66,28 +67,28 @@ fn render_grant(frame: &mut Frame, host: &str, area: Rect) {
     let prompt = floating(area, 5);
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Yellow))
+        .border_style(Style::default().fg(palette::WARNING))
         .title(Span::styled(
             " outside the sandbox ",
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(palette::WARNING),
         ))
         .title_bottom(Line::from(Span::styled(
             " for this interaction ",
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(palette::WARNING),
         )));
     let key = |ch: &'static str| {
         Span::styled(
             ch,
             Style::default()
-                .fg(Color::Cyan)
+                .fg(palette::ACCENT)
                 .add_modifier(Modifier::BOLD),
         )
     };
-    let muted = Style::default().fg(Color::Gray);
+    let muted = Style::default().fg(palette::MUTED_TEXT);
     let lines = vec![
         Line::from(Span::styled(
             host.to_owned(),
-            Style::default().fg(Color::White),
+            Style::default().fg(palette::TEXT),
         )),
         Line::default(),
         Line::from(vec![
