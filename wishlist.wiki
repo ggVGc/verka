@@ -1,3 +1,6 @@
+- Sessions can be paused (stopped) for various reasons: Actually done from user perspective, interrupted, machine shutdown:
+  - Should be possible to mark a session done, so the conclusion is clear. Done sessions can still be re-opened.
+- Make styra sessions aware of if they are associated with a branch or worktree, so that it can be cleaned up after session is considered done, and we can sort on sessions associated with current branch, or no branch etc.
 - Some kind of snippet mechanism. Global and per workspace:
   - Quick way of inserting common prompts
   - Maybe some kind of prompt builder interface in the input window where I can put together blocks and make some of them sticky for next inputs in same interaction.
