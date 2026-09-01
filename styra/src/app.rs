@@ -107,6 +107,25 @@ impl Status {
         }
     }
 
+    /// A single character standing in for the state, for lists that mark every
+    /// row with it in a one-column gutter. It carries the same color the label
+    /// does, so the glyph and the word never disagree.
+    ///
+    /// Deliberately ASCII: these are exactly one cell wide in every terminal
+    /// and font, so nothing to the right of the gutter can drift out of
+    /// alignment the way it can behind a double-width or missing glyph.
+    pub fn glyph(&self) -> char {
+        match self {
+            Status::Pending => '.',
+            Status::Running => '>',
+            Status::Idle => 'o',
+            Status::Background => '*',
+            Status::Stopped => '#',
+            Status::Ended { error: Some(_), .. } => '!',
+            Status::Ended { .. } => 'x',
+        }
+    }
+
     pub fn is_active(&self) -> bool {
         matches!(
             self,

@@ -82,7 +82,9 @@ fn status_color(status: &Status) -> Color {
         Status::Pending => palette::INFO,
         Status::Running => palette::WARNING,
         Status::Idle => palette::SUCCESS,
-        Status::Background => palette::WARNING,
+        // Idle, but with work still running behind it: closer to idle than to
+        // a turn in flight, and distinct from both.
+        Status::Background => palette::MUTED_WARNING,
         Status::Stopped => palette::INACTIVE,
         Status::Ended { error: Some(_), .. } => palette::ERROR,
         Status::Ended { .. } => palette::INACTIVE,

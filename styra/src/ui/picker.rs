@@ -88,6 +88,7 @@ fn render_session_preview(
         frame,
         session.map(|item| item.id.as_str()),
         session.map(|item| item.selection.provider.protocol()),
+        None,
         preview,
         panes[1],
     );
@@ -474,10 +475,13 @@ pub fn render_interactions_picker(
                 "  no live interactions on the server"
             },
         );
-        render_log_preview(frame, None, None, Preview::Ready(updates), panes[1]);
+        render_log_preview(frame, None, None, None, Preview::Ready(updates), panes[1]);
         return;
     }
 
+    // The list sits inside a bordered block, so a row spans the pane less its
+    // two border columns.
+    let row_width = panes[0].width.saturating_sub(2);
     let items: Vec<ListItem> = rows
         .iter()
         .enumerate()
@@ -490,6 +494,7 @@ pub fn render_interactions_picker(
                 (!view.grouped)
                     .then(|| workspace_name(workspaces, &interactions[*index].workspace_id)),
                 Some(row) == selected_row,
+                row_width,
             ),
         })
         .collect();
@@ -505,6 +510,7 @@ pub fn render_interactions_picker(
         frame,
         selected_index.map(|item| item.id.as_str()),
         selected_index.map(|item| item.selection.provider.protocol()),
+        selected_index.map(interaction_status),
         Preview::Ready(updates),
         panes[1],
     );
@@ -524,16 +530,29 @@ fn render_log_preview(
     frame: &mut Frame,
     id: Option<&str>,
     protocol: Option<styra_server::event::Protocol>,
+    status: Option<crate::app::Status>,
     preview: Preview<'_>,
     area: Rect,
 ) {
-    let title = id
-        .map(|id| format!(" conversation · {id} "))
-        .unwrap_or_else(|| " conversation ".into());
+    // The header names the interaction the preview is showing and spells out
+    // its state — the list rows only carry the state as a gutter glyph.
+    let mut title = vec![Span::styled(
+        id.map(|id| format!(" conversation · {id} "))
+            .unwrap_or_else(|| " conversation ".into()),
+        Style::default().fg(palette::TEXT),
+    )];
+    if let Some(status) = &status {
+        title.push(Span::styled(
+            format!("· {} ", status.label()),
+            Style::default()
+                .fg(status_color(status))
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(palette::INACTIVE))
-        .title(title);
+        .title(Line::from(title));
 
     let updates = match preview {
         // Nothing has been asked of the server yet, or the answer is still on
@@ -636,55 +655,71 @@ fn interaction_preview_line(
     }
 }
 
-fn interaction_item(
-    interaction: &InteractionSummary,
-    workspace_name: Option<String>,
-    selected: bool,
-) -> ListItem<'static> {
-    // Status colors come from the same table the main interaction view uses,
-    // so a given state reads identically in both places.
-    let status = if interaction.accepting {
+/// An interaction's state. Status colors come from the same table the main
+/// interaction view uses, so a given state reads identically everywhere.
+fn interaction_status(interaction: &InteractionSummary) -> crate::app::Status {
+    if interaction.accepting {
         crate::app::Status::from(interaction.activity)
     } else {
         crate::app::Status::Ended {
             exit_code: None,
             error: None,
         }
-    };
+    }
+}
+
+fn interaction_item(
+    interaction: &InteractionSummary,
+    workspace_name: Option<String>,
+    selected: bool,
+    width: u16,
+) -> ListItem<'static> {
+    let status = interaction_status(interaction);
     let color = status_color(&status);
-    let state = status.label();
     let main = Line::from(vec![
+        // Every row carries a dot, so the list reads as a column of items even
+        // where a response line sits between two of them; only the selected
+        // one is yellow.
         Span::styled(
-            if selected { "•" } else { " " },
+            "• ",
             Style::default().fg(if selected {
                 palette::SELECTION_MARKER
             } else {
-                palette::ACCENT
+                palette::INACTIVE
             }),
         ),
+        // A one-column state gutter: the same color as the state word further
+        // along the line, so the states are scannable straight down the left.
         Span::styled(
-            format!("{:<6} ", interaction.selection.provider.as_str()),
+            format!("{} ", status.glyph()),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(
+                "{} ",
+                interaction
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| interaction.id.clone())
+            ),
+            Style::default().fg(palette::TEXT),
+        ),
+        // The Workspace follows its own prompt on each line, in the same yellow
+        // the grouped view's Workspace headings use.
+        Span::styled(
+            workspace_name.unwrap_or_default(),
+            Style::default()
+                .fg(palette::WARNING)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(" · {}", interaction.selection.provider.as_str()),
             Style::default()
                 .fg(palette::ACCENT)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(
-            format!("{state:<8} "),
-            Style::default().fg(color).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            workspace_name
-                .map(|name| format!("{name} · "))
-                .unwrap_or_default(),
-            Style::default().fg(palette::MUTED_TEXT),
-        ),
-        Span::styled(
-            interaction
-                .name
-                .clone()
-                .unwrap_or_else(|| interaction.id.clone()),
-            Style::default().fg(palette::TEXT),
-        ),
+        // The state is not spelled out here: the gutter glyph carries it for
+        // every row, and the preview header spells it out for the selected one.
         Span::styled(
             interaction
                 .name
@@ -697,10 +732,16 @@ fn interaction_item(
     let mut lines = vec![main];
     if let Some(text) = &interaction.last_message {
         // Keep the response visually subordinate, but give it the full width
-        // of its own line so it never crowds out the identifying fields.
+        // of its own line so it never crowds out the identifying fields. The
+        // line is padded out to the list width so its darker tint reads as a
+        // band under the row rather than as a highlight on the text itself.
+        let body = format!("    « {text}");
+        let padding = (width as usize).saturating_sub(body.chars().count());
         lines.push(Line::from(Span::styled(
-            format!("  « {text}"),
-            Style::default().fg(palette::MUTED_TEXT),
+            format!("{body}{}", " ".repeat(padding)),
+            Style::default()
+                .fg(palette::SUBORDINATE_TEXT)
+                .bg(palette::SUBORDINATE_BACKGROUND),
         )));
     }
     ListItem::new(lines)
@@ -1117,12 +1158,13 @@ mod tests {
         assert!(screen.contains("X convert"));
         assert!(screen.contains("conversation"));
         assert!(screen.contains("codex"));
-        assert!(screen.contains("running"));
-        assert!(screen.contains("s-1"));
         assert!(screen.contains("payments"));
         assert!(screen.contains("claude"));
-        assert!(screen.contains("ended"));
-        assert!(screen.contains("s-2"));
+        // Each row states its activity with a gutter glyph...
+        assert!(screen.contains("> s-1"), "{screen}");
+        assert!(screen.contains("x s-2"), "{screen}");
+        // ...and the preview header spells out the selected one's state.
+        assert!(screen.contains("running"));
 
         let pending = rendered_interactions_picker(
             &[interaction_summary("s-3", "codex", true)],
@@ -1131,6 +1173,42 @@ mod tests {
             &[],
         );
         assert!(pending.contains("idle"));
+    }
+
+    /// The prompt leads the row, its Workspace follows it, then the provider.
+    /// The state is not spelled out on the row at all — only in the gutter and
+    /// in the preview header.
+    #[test]
+    fn interactions_picker_orders_the_row_prompt_workspace_provider() {
+        let mut running = interaction_summary("s-1", "codex", true);
+        running.activity = styra_server::InteractionActivity::Running;
+        running.name = Some("fix the parser".into());
+        let workspaces = vec![WorkspaceSummary {
+            id: "w-1".into(),
+            name: Some("payments".into()),
+            notes: String::new(),
+            host_path: PathBuf::from("/home/op/project"),
+            path: PathBuf::from("/state/workspaces/w-1"),
+            session_count: 1,
+            age: "2m ago".into(),
+            created_at_ms: 1,
+            last_accessed_at_ms: 1,
+            launch: Default::default(),
+        }];
+
+        let screen = rendered_interactions_picker(&[running], &workspaces, 0, &[]);
+        let prompt = screen.find("fix the parser").expect("prompt");
+        let workspace = screen.find("payments").expect("workspace");
+        let provider = screen.find("codex").expect("provider");
+        // The state is spelled out only in the preview header, below the list.
+        let state = screen.find("· running").expect("state in preview header");
+
+        assert!(
+            prompt < workspace && workspace < provider && provider < state,
+            "{screen}"
+        );
+        // The row itself carries the state only as a gutter glyph.
+        assert!(screen.contains("> fix the parser"), "{screen}");
     }
 
     #[test]
