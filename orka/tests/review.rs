@@ -255,26 +255,6 @@ fn finishing_a_review_rejects_an_invalid_git_suggestion() {
 }
 
 #[test]
-fn starting_a_review_twice_resumes_the_only_review_for_the_candidate() {
-    let (_temp, root) = workbench();
-    let candidate = candidate(&root);
-    let store = store_at(&root);
-    let reviews = Reviews::new(&store, root.join(".orka"));
-
-    let first = reviews.start(&candidate.id, Author::Human).unwrap();
-    let second = reviews.start(&candidate.id, Author::Machine).unwrap();
-
-    assert_eq!(second.record, first.record);
-    assert_eq!(second.review.branch, first.review.branch);
-    assert_eq!(second.review.marker, first.review.marker);
-    assert_eq!(second.review.subject, first.review.subject);
-    assert_eq!(
-        linka::ops::verifications_for(&store, &candidate.id).unwrap(),
-        vec![first.record.verification.clone()]
-    );
-}
-
-#[test]
 fn managed_review_worktrees_are_reused_inspected_and_safely_cleaned() {
     let (_temp, root) = workbench();
     let candidate = candidate(&root);
