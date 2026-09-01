@@ -6,6 +6,59 @@ use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// The checkout and shared metadata Git associates with a directory.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Repository {
+    pub root: PathBuf,
+    pub common_dir: PathBuf,
+}
+
+/// Discover the Git checkout containing `start`, if any.
+pub fn discover(start: &Path) -> Result<Option<Repository>> {
+    let start = start
+        .canonicalize()
+        .with_context(|| format!("repository search path {} must exist", start.display()))?;
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(&start)
+        .args(["rev-parse", "--is-inside-work-tree"])
+        .output()
+        .context("running git to detect a repository")?;
+    if !output.status.success() || String::from_utf8_lossy(&output.stdout).trim() != "true" {
+        return Ok(None);
+    }
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(&start)
+        .args([
+            "rev-parse",
+            "--path-format=absolute",
+            "--show-toplevel",
+            "--git-common-dir",
+        ])
+        .output()
+        .context("running git to describe a repository")?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "git could not describe repository: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    let described = String::from_utf8(output.stdout).context("Git returned a non-UTF-8 path")?;
+    let mut lines = described.lines();
+    let root = lines
+        .next()
+        .filter(|line| !line.is_empty())
+        .map(PathBuf::from)
+        .context("git did not report a checkout root")?;
+    let common_dir = lines
+        .next()
+        .filter(|line| !line.is_empty())
+        .map(PathBuf::from)
+        .context("git did not report a common directory")?;
+    Ok(Some(Repository { root, common_dir }))
+}
+
 /// Resolve `path` to the root of its nearest enclosing Git checkout.
 pub fn repository_root(path: &Path) -> Result<PathBuf> {
     let path = path
