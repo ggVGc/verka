@@ -11,7 +11,7 @@ pub(crate) const MUTED_TEXT: Color = Color::Gray;
 /// Low-emphasis supporting information, such as ids, origins, queued text,
 /// and explanatory suffixes. The deliberately desaturated red replaces the
 /// dark gray that previously made this information look disabled.
-pub(crate) const ADDITIONAL_INFO: Color = Color::Rgb(112, 72, 72);
+pub(crate) const ADDITIONAL_INFO: Color = Color::Rgb(211, 158, 96);
 
 pub(crate) const ACCENT: Color = Color::Cyan;
 pub(crate) const LIGHT_ACCENT: Color = Color::LightCyan;
