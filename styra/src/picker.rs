@@ -731,6 +731,7 @@ mod tests {
             },
             accepting,
             activity,
+            last_message: None,
         }
     }
 

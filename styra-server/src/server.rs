@@ -89,7 +89,36 @@ impl ManagedInteraction {
                 .activity
                 .lock()
                 .expect("interaction activity lock poisoned"),
+            last_message: self.last_message(),
         }
+    }
+
+    /// The last thing the agent said, as one clipped line. Scanned from the
+    /// tail so a long-running interaction pays for the trailing tool traffic
+    /// only, not for its whole history.
+    fn last_message(&self) -> Option<String> {
+        let updates = self.updates.lock().expect("interaction updates poisoned");
+        updates
+            .iter()
+            .rev()
+            .find_map(|sequenced| match &sequenced.update {
+                InteractionUpdate::Event(crate::event::AgentEvent::AgentMessage { text }) => {
+                    Some(one_line(text))
+                }
+                _ => None,
+            })
+    }
+}
+
+/// Collapse a message to a single display line: whitespace runs (including the
+/// newlines of a multi-paragraph answer) become single spaces, and the result
+/// is clipped so one verbose agent cannot cost every listing its bandwidth.
+fn one_line(text: &str) -> String {
+    const LIMIT: usize = 200;
+    let flattened = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    match flattened.char_indices().nth(LIMIT) {
+        Some((end, _)) => format!("{}…", &flattened[..end]),
+        None => flattened,
     }
 }
 

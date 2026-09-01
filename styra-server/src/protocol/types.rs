@@ -333,6 +333,11 @@ pub struct InteractionSummary {
     /// Whether the live interaction is working or waiting for user input.
     #[serde(default)]
     pub activity: InteractionActivity,
+    /// The most recent message the agent sent, flattened to a single line and
+    /// clipped, so a list of interactions says what each one is actually
+    /// talking about. `None` before the agent has said anything.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_message: Option<String>,
 }
 
 /// Where a Session came from, when it was not launched fresh but branched

@@ -693,6 +693,17 @@ fn interaction_item(
                 .unwrap_or_default(),
             Style::default().fg(Color::DarkGray),
         ),
+        // What the agent last said, dimmed and last on the row: it is the
+        // reason the operator recognises the interaction, but it must not
+        // crowd out the fixed columns identifying it. The row clips it.
+        Span::styled(
+            interaction
+                .last_message
+                .as_ref()
+                .map(|text| format!("  « {text}"))
+                .unwrap_or_default(),
+            Style::default().fg(Color::Gray),
+        ),
     ]))
 }
 
@@ -1022,6 +1033,7 @@ mod tests {
             },
             accepting,
             activity: styra_server::InteractionActivity::Pending,
+            last_message: None,
         }
     }
 
