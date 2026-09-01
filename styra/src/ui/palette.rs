@@ -34,8 +34,9 @@ pub(crate) const LIVE_MARKER: Color = Color::Green;
 pub(crate) const AGENT_TAG: Color = Color::Rgb(211, 158, 96);
 pub(crate) const USER_TAG: Color = Color::Rgb(115, 190, 137);
 pub(crate) const SHELL_TAG: Color = Color::Rgb(184, 124, 0);
-pub(crate) const AGENT_TEXT: Color = Color::Rgb(238, 219, 193);
-pub(crate) const USER_TEXT: Color = Color::Rgb(207, 233, 214);
+// pub(crate) const AGENT_TEXT: Color = Color::Rgb(238, 219, 193);
+pub(crate) const AGENT_TEXT: Color = Color::White;
+pub(crate) const USER_TEXT: Color = Color::Rgb(207, 243, 214);
 
 pub(crate) const JSON_KEY: Color = Color::Cyan;
 pub(crate) const JSON_STRING: Color = Color::Green;

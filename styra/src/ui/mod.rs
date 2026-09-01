@@ -90,7 +90,12 @@ fn status_color(status: &Status) -> Color {
 }
 
 /// Build a block title of the form
-/// " styra · agent · model · effort · ● status[ · suffix] ".
+/// " workspace · agent · model · effort · ● status[ · suffix] ".
+///
+/// The leading slot names the Workspace rather than the program: which
+/// Workspace this session belongs to is what an operator running several at
+/// once needs from a glance at the top-left, and the program's own name told
+/// them nothing they did not already know.
 ///
 /// The model and effort are named in every view's title because they are what
 /// the session is actually spending: the agent alone does not say it (a bare
@@ -106,6 +111,7 @@ fn status_color(status: &Status) -> Color {
 /// become hard to read.
 fn title_line(
     label: &LaunchLabel,
+    workspace: Option<&str>,
     status: &Status,
     elapsed: Option<String>,
     suffix: Option<&str>,
@@ -119,10 +125,20 @@ fn title_line(
             Style::default().fg(palette::ADDITIONAL_INFO)
         }
     };
-    let mut spans = vec![Span::styled(
-        format!(" styra · {} · ", label.agent),
-        text_style,
-    )];
+    // Bold near-white rather than the cyan the Workspace name used to wear at
+    // the top right: on the border line, cyan on black is the least legible
+    // thing in the title, and this is now the first word of it.
+    let mut spans = vec![Span::raw(" ")];
+    if let Some(workspace) = workspace {
+        spans.push(Span::styled(
+            workspace.to_owned(),
+            Style::default()
+                .fg(palette::TEXT)
+                .add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::styled(" · ", text_style));
+    }
+    spans.push(Span::styled(format!("{} · ", label.agent), text_style));
     // Launch profiles always name a model; retain a plain fallback for a
     // malformed in-memory label rather than leaving the title empty.
     let model = label
@@ -173,9 +189,10 @@ fn status_elapsed(app: &App) -> Option<String> {
 }
 
 /// The chrome every full-region view wears: a border that brightens when the
-/// list has focus, the session's status title, and the Workspace name at the
-/// top right. `suffix` names the view in the title; `None` is the event list,
-/// which is the default view and so needs no name.
+/// list has focus, the session's status title (opening with the Workspace
+/// name), and the Session name at the top right. `suffix` names the view in
+/// the title; `None` is the event list, which is the default view and so
+/// needs no name.
 fn view_block(app: &App, suffix: Option<&str>) -> Block<'static> {
     let border_style = if app.focus == Focus::List {
         Style::default().fg(palette::ACCENT)
@@ -187,11 +204,12 @@ fn view_block(app: &App, suffix: Option<&str>) -> Block<'static> {
         .border_style(border_style)
         .title(title_line(
             &app.launch_label(),
+            app.workspace_name.as_deref(),
             &app.status,
             status_elapsed(app),
             suffix,
         ));
-    if let Some(title) = workspace_title(app) {
+    if let Some(title) = session_title(app) {
         block = block.title(title);
     }
     if let Some(title) = notes_title(app) {
@@ -236,39 +254,25 @@ fn conversation_only_title(block: Block<'static>) -> Block<'static> {
     )))
 }
 
-/// Right-aligned title for the primary panel's top border: the Workspace name,
-/// and the Session name after it once the Session has earned one. The Workspace
-/// stays visible either way — a named Session used to replace it, which left no
-/// way to tell which Workspace the Session was running in.
-fn workspace_title(app: &App) -> Option<Line<'static>> {
-    let workspace = app.workspace_name.as_deref();
-    let session = app.session_name.as_deref();
-    if workspace.is_none() && session.is_none() {
-        return None;
-    }
-    let mut spans = vec![Span::raw(" ")];
-    if let Some(workspace) = workspace {
-        spans.push(Span::styled(
-            workspace.to_owned(),
-            Style::default().fg(palette::ACCENT),
-        ));
-    }
-    if let Some(session) = session {
-        if workspace.is_some() {
-            spans.push(Span::styled(
-                " · ",
-                Style::default().fg(palette::ADDITIONAL_INFO),
-            ));
-        }
-        spans.push(Span::styled(
-            session.to_owned(),
-            Style::default()
-                .fg(palette::ACCENT)
-                .add_modifier(Modifier::BOLD),
-        ));
-    }
-    spans.push(Span::raw(" "));
-    Some(Line::from(spans).right_aligned())
+/// Right-aligned title for the primary panel's top border: the Session name,
+/// once the Session has earned one. The Workspace name used to lead this title
+/// but now opens the left-hand one, so repeating it here would only spend
+/// border width saying the same thing twice.
+fn session_title(app: &App) -> Option<Line<'static>> {
+    let session = app.session_name.as_deref()?;
+    Some(
+        Line::from(vec![
+            Span::raw(" "),
+            Span::styled(
+                session.to_owned(),
+                Style::default()
+                    .fg(palette::ACCENT)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" "),
+        ])
+        .right_aligned(),
+    )
 }
 
 pub fn render(frame: &mut Frame, app: &App) {
@@ -410,13 +414,13 @@ mod tests {
             "s1",
         );
         let screen = rendered(&app);
-        assert!(screen.contains("styra"));
+        assert!(!screen.contains("styra"), "{screen}");
         assert!(screen.contains("codex"));
         assert!(screen.contains("running"));
     }
 
     #[test]
-    fn header_shows_workspace_name_at_the_top_right() {
+    fn header_opens_with_the_workspace_name_at_the_top_left() {
         let mut app = App::new(
             styra_server::agent::Selection::parse("codex").unwrap(),
             "s1",
@@ -427,8 +431,11 @@ mod tests {
         let buffer = terminal.backend().buffer();
 
         let (x, y) = find_column(buffer, "payments");
-        assert_eq!(y, 0);
-        assert_eq!(x, 80 - "payments".len() as u16 - 2);
+        assert_eq!((x, y), (1, 0));
+        // Readable against the border line, unlike the cyan it used to wear.
+        let cell = buffer.cell((x, y)).unwrap();
+        assert_eq!(cell.fg, palette::TEXT);
+        assert!(cell.modifier.contains(Modifier::BOLD));
     }
 
     #[test]
@@ -478,8 +485,15 @@ mod tests {
             styra_server::agent::Selection::parse("codex").unwrap(),
             "s1",
         );
-        let title = title_line(&app.launch_label(), &app.status, None, None);
-        assert_eq!(title.spans[0].style.fg, Some(palette::MUTED_TEXT));
+        let title = title_line(
+            &app.launch_label(),
+            Some("payments"),
+            &app.status,
+            None,
+            None,
+        );
+        assert_eq!(title.spans[1].style.fg, Some(palette::TEXT));
+        assert_eq!(title.spans[2].style.fg, Some(palette::MUTED_TEXT));
     }
 
     #[test]
@@ -495,7 +509,7 @@ mod tests {
         let buffer = terminal.backend().buffer();
 
         let (_, input_y) = find_column(buffer, "type a message, Enter to send");
-        let (_, view_y) = find_column(buffer, "styra");
+        let (_, view_y) = find_column(buffer, "codex");
         assert_eq!(input_y, 9);
         assert!(
             input_y > view_y,
@@ -515,7 +529,7 @@ mod tests {
         terminal.draw(|frame| render(frame, &app)).unwrap();
         let buffer = terminal.backend().buffer();
 
-        let (view_x, view_y) = find_column(buffer, "styra");
+        let (view_x, view_y) = find_column(buffer, "codex");
         let view_style = buffer.cell((view_x, view_y)).unwrap().style();
         assert_eq!(view_style.fg, Some(palette::MODAL_BACKDROP));
         assert!(view_style.add_modifier.contains(Modifier::DIM));
@@ -535,7 +549,7 @@ mod tests {
             styra_server::agent::Selection::parse("codex").unwrap(),
             "s-1",
         );
-        assert!(rendered(&app).contains("styra · codex · gpt-5.6-sol · high"));
+        assert!(rendered(&app).contains(" codex · gpt-5.6-sol · high"));
 
         app.push_event(AgentEvent::ThreadStarted {
             thread_id: "t-9".into(),
@@ -544,7 +558,7 @@ mod tests {
         });
         let screen = rendered(&app);
         assert!(
-            screen.contains("styra · codex · gpt-5.6-sol · high · ● running"),
+            screen.contains(" codex · gpt-5.6-sol · high · ● running"),
             "{screen}"
         );
 

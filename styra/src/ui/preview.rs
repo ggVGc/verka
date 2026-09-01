@@ -597,13 +597,13 @@ mod tests {
         // No chrome at all: no title bar, no message box, no footer hints —
         // just the entry's text, so it can be selected and copied cleanly.
         assert!(shown.contains("24 passed"));
-        assert!(!shown.contains("styra"));
+        assert!(!shown.contains("codex"));
         assert!(!shown.contains("message"));
         assert!(!shown.contains("quit"));
 
         app.toggle_view(View::Preview);
         let restored = rendered(&app);
-        assert!(restored.contains("styra"));
+        assert!(restored.contains("codex"));
         assert!(restored.contains("Shell"));
     }
 
