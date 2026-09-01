@@ -15,6 +15,7 @@
 
 use crate::event::{decode_line, AgentEvent, Protocol};
 use serde_json::{json, Value};
+use std::sync::Arc;
 use std::sync::Mutex;
 
 /// Request id for `initialize`.
@@ -37,6 +38,44 @@ pub enum Action {
     Error(String),
 }
 
+/// A function the app-server advertises to Codex and asks its host to execute.
+///
+/// The callback stays in the embedding application. Genta only translates the
+/// app-server's `dynamicTools` and `item/tool/call` protocol, so a host can add
+/// capabilities without putting application-specific behavior in this crate.
+#[derive(Clone)]
+pub struct DynamicTool {
+    name: String,
+    description: String,
+    input_schema: Value,
+    handler: Arc<dyn Fn(&Value) -> Result<String, String> + Send + Sync>,
+}
+
+impl DynamicTool {
+    pub fn new(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        input_schema: Value,
+        handler: impl Fn(&Value) -> Result<String, String> + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            description: description.into(),
+            input_schema,
+            handler: Arc::new(handler),
+        }
+    }
+
+    fn specification(&self) -> Value {
+        json!({
+            "type": "function",
+            "name": self.name,
+            "description": self.description,
+            "inputSchema": self.input_schema,
+        })
+    }
+}
+
 struct State {
     thread_id: Option<String>,
     active_turn_id: Option<String>,
@@ -51,6 +90,7 @@ pub struct AppServer {
     cwd: Mutex<String>,
     sandbox: String,
     resume_thread_id: Option<String>,
+    dynamic_tools: Vec<DynamicTool>,
     state: Mutex<State>,
 }
 
@@ -72,6 +112,7 @@ impl AppServer {
             cwd: Mutex::new(cwd),
             sandbox: "danger-full-access".into(),
             resume_thread_id,
+            dynamic_tools: Vec::new(),
             state: Mutex::new(State {
                 thread_id: None,
                 active_turn_id: None,
@@ -80,6 +121,12 @@ impl AppServer {
                 pending: Vec::new(),
             }),
         }
+    }
+
+    /// Add host-executed functions to the thread opened by this client.
+    pub fn with_dynamic_tools(mut self, tools: Vec<DynamicTool>) -> Self {
+        self.dynamic_tools = tools;
+        self
     }
 
     /// Begin the handshake by sending `initialize`.
@@ -104,30 +151,38 @@ impl AppServer {
         let method = value.get("method").and_then(Value::as_str);
         let id = value.get("id").and_then(Value::as_i64);
 
+        if method == Some("item/tool/call") && value.get("id").is_some() {
+            return vec![self.handle_dynamic_tool_call(&value)];
+        }
+
         match (method, id) {
             // A response to one of our requests: advance the handshake.
             (None, Some(INIT_ID)) => {
-                let open_thread = match &self.resume_thread_id {
-                    Some(thread_id) => send(&json!({
-                        "id": THREAD_START_ID,
-                        "method": "thread/resume",
-                        "params": {
-                            "threadId": thread_id,
-                            "cwd": self.current_cwd(),
-                            "approvalPolicy": "never",
-                            "sandbox": self.sandbox
-                        }
-                    })),
-                    None => send(&json!({
-                        "id": THREAD_START_ID,
-                        "method": "thread/start",
-                        "params": {
-                            "cwd": self.current_cwd(),
-                            "approvalPolicy": "never",
-                            "sandbox": self.sandbox
-                        }
-                    })),
+                let mut params = json!({
+                    "cwd": self.current_cwd(),
+                    "approvalPolicy": "never",
+                    "sandbox": self.sandbox
+                });
+                if !self.dynamic_tools.is_empty() {
+                    params["dynamicTools"] = Value::Array(
+                        self.dynamic_tools
+                            .iter()
+                            .map(DynamicTool::specification)
+                            .collect(),
+                    );
+                }
+                let (method, params) = match &self.resume_thread_id {
+                    Some(thread_id) => {
+                        params["threadId"] = json!(thread_id);
+                        ("thread/resume", params)
+                    }
+                    None => ("thread/start", params),
                 };
+                let open_thread = send(&json!({
+                    "id": THREAD_START_ID,
+                    "method": method,
+                    "params": params,
+                }));
                 vec![send(&json!({ "method": "initialized" })), open_thread]
             }
             (None, Some(THREAD_START_ID)) => {
@@ -218,6 +273,31 @@ impl AppServer {
                 actions
             }
         }
+    }
+
+    fn handle_dynamic_tool_call(&self, request: &Value) -> Action {
+        let request_id = request.get("id").cloned().unwrap_or(Value::Null);
+        let params = request.get("params").unwrap_or(&Value::Null);
+        let name = params.get("tool").and_then(Value::as_str);
+        let arguments = params.get("arguments").unwrap_or(&Value::Null);
+        let result = name
+            .and_then(|name| self.dynamic_tools.iter().find(|tool| tool.name == name))
+            .ok_or_else(|| match name {
+                Some(name) => format!("unknown dynamic tool {name:?}"),
+                None => "dynamic tool call did not name a tool".into(),
+            })
+            .and_then(|tool| (tool.handler)(arguments));
+        let (success, text) = match result {
+            Ok(output) => (true, output),
+            Err(error) => (false, error),
+        };
+        send(&json!({
+            "id": request_id,
+            "result": {
+                "contentItems": [{ "type": "inputText", "text": text }],
+                "success": success,
+            }
+        }))
     }
 
     /// Send an operator message as a new turn, or queue it until the thread is
