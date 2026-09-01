@@ -5,6 +5,7 @@ use ratatui::Terminal;
 use std::io::Stdout;
 use std::time::{Duration, Instant};
 
+use styra_server::protocol::ResumeSession;
 use styra_server::{Client, InteractionSummary, InteractionUpdate, LogEntry, WorkspaceSummary};
 
 use crate::notes;
@@ -335,7 +336,8 @@ pub enum InteractionRow {
 }
 
 /// The current-interactions picker loop: j/k or arrows to move, Enter to attach
-/// to a live interaction, `S` to stop the selected one, `D` to delete a stopped
+/// to a live interaction, `X` to convert the selected active interaction to the
+/// other provider, `S` to stop the selected one, `D` to delete a stopped
 /// one, `w` to restrict the list to the current Workspace, `g` to group it per
 /// Workspace, Esc or q to back out. Mirrors [`run_session_picker`] but over the
 /// server's live interactions rather than the stored-session store.
@@ -349,7 +351,7 @@ pub fn run_interactions_picker(
     workspaces: &[WorkspaceSummary],
     current_workspace_id: Option<&str>,
     view: InteractionsView,
-) -> Result<Option<InteractionSummary>> {
+) -> Result<Option<(InteractionSummary, Option<String>)>> {
     sort_interactions(interactions);
     // Without a Workspace to compare against, the restricted view has nothing
     // to restrict to, so the picker stays on the whole list.
@@ -454,7 +456,116 @@ pub fn run_interactions_picker(
             KeyCode::Char('k') | KeyCode::Up => selected = selected.saturating_sub(1),
             KeyCode::Enter => {
                 if let Some(index) = selected_index {
-                    return Ok(Some(interactions[index].clone()));
+                    return Ok(Some((interactions[index].clone(), None)));
+                }
+            }
+            // Resume the converted sibling before stopping the source, so a
+            // resume failure never stops the operator's active interaction.
+            KeyCode::Char('X') => {
+                let Some(index) = selected_index else {
+                    continue;
+                };
+                let source = interactions[index].clone();
+                if !source.accepting {
+                    show_interactions_message(
+                        terminal,
+                        &InteractionsList {
+                            interactions,
+                            workspaces,
+                            rows: &rows,
+                            selected_row,
+                            view,
+                        },
+                        "interaction is not active",
+                        "Only an active interaction can be converted.",
+                    )?;
+                    continue;
+                }
+                let converted = match client.convert_session_provider(&source.id) {
+                    Ok(converted) => converted,
+                    Err(error) => {
+                        show_interactions_message(
+                            terminal,
+                            &InteractionsList {
+                                interactions,
+                                workspaces,
+                                rows: &rows,
+                                selected_row,
+                                view,
+                            },
+                            "could not convert interaction",
+                            &format!("{error:#}"),
+                        )?;
+                        continue;
+                    }
+                };
+                if let Err(error) = client.resume_session(&ResumeSession {
+                    id: converted.id.clone(),
+                    launch: Default::default(),
+                }) {
+                    show_interactions_message(
+                        terminal,
+                        &InteractionsList {
+                            interactions,
+                            workspaces,
+                            rows: &rows,
+                            selected_row,
+                            view,
+                        },
+                        "could not activate converted interaction",
+                        &format!("{error:#}"),
+                    )?;
+                    continue;
+                }
+                if let Err(error) = client.stop_interaction(&source.id) {
+                    // Do not leave two active conversations after a failed
+                    // handoff. The converted Session remains available for a
+                    // later retry, while the source continues untouched.
+                    let _ = client.stop_interaction(&converted.id);
+                    show_interactions_message(
+                        terminal,
+                        &InteractionsList {
+                            interactions,
+                            workspaces,
+                            rows: &rows,
+                            selected_row,
+                            view,
+                        },
+                        "could not stop original interaction",
+                        &format!("{error:#}"),
+                    )?;
+                    continue;
+                }
+                match client.list_interactions().and_then(|interactions| {
+                    interactions
+                        .into_iter()
+                        .find(|interaction| interaction.id == converted.id)
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("the converted interaction did not become active")
+                        })
+                }) {
+                    Ok(interaction) => {
+                        return Ok(Some((
+                            interaction,
+                            Some(format!(
+                                "converted {} session to {}",
+                                source.selection.provider.as_str(),
+                                converted.selection.provider.as_str(),
+                            )),
+                        )));
+                    }
+                    Err(error) => show_interactions_message(
+                        terminal,
+                        &InteractionsList {
+                            interactions,
+                            workspaces,
+                            rows: &rows,
+                            selected_row,
+                            view,
+                        },
+                        "could not open converted interaction",
+                        &format!("{error:#}"),
+                    )?,
                 }
             }
             KeyCode::Char('w') if current_workspace_id.is_some() => {

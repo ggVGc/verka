@@ -165,18 +165,23 @@ impl Provider {
     /// `claude-opus-5` instead.
     pub fn default_model(&self) -> &'static str {
         match self {
-            // What codex-cli 0.145 itself resolves to with no override.
-            Provider::Codex | Provider::CodexExec => "gpt-5.6-sol",
+            // Styra's interactive Codex sessions default to the balanced
+            // Terra profile. Batch Codex execution keeps its own explicit
+            // defaults below.
+            Provider::Codex => "gpt-5.6-terra",
+            Provider::CodexExec => "gpt-5.6-sol",
             Provider::Claude => "claude-opus-5",
         }
     }
 
-    /// The reasoning effort a [`Selection`] takes when a profile name omits one:
-    /// `high`, which both agents document as their own default, so a launch that
-    /// names no level thinks neither harder nor less hard than the agent would on
-    /// its own.
+    /// The reasoning effort a [`Selection`] takes when a profile name omits one.
+    /// Interactive Codex uses `medium`; the other providers retain their own
+    /// declared `high` default.
     pub fn default_effort(&self) -> Effort {
-        Effort::High
+        match self {
+            Provider::Codex => Effort::Medium,
+            Provider::CodexExec | Provider::Claude => Effort::High,
+        }
     }
 }
 
@@ -240,7 +245,7 @@ impl Effort {
 /// standing for "unset".
 ///
 /// A selection round-trips through one string, [`Selection::name`], of the form
-/// `provider:model/effort` — `codex:gpt-5.6-sol/high`,
+/// `provider:model/effort` — `codex:gpt-5.6-terra/medium`,
 /// `claude:claude-opus-5/xhigh`. That string is the profile name, so it is also
 /// what a journal records and a status line shows: a stored session states which
 /// model and effort ran, and re-parsing it reproduces the launch. Parsing accepts
@@ -356,7 +361,7 @@ impl Profile {
     /// pins both a model and a reasoning effort — a name that omits either takes
     /// the provider's declared default ([`Provider::default_model`],
     /// [`Provider::default_effort`]), so the resolved profile's own name states
-    /// what it launched. `codex:gpt-5.6-sol/xhigh` pins both explicitly.
+    /// what it launched. `codex:gpt-5.6-terra/xhigh` pins both explicitly.
     pub fn builtin(name: &str, layout: &SandboxLayout) -> Result<Profile> {
         Selection::parse(name)?.resolve(layout)
     }
@@ -947,7 +952,7 @@ mod tests {
         assert!(profile
             .command
             .iter()
-            .any(|arg| arg == r#"model_reasoning_effort="high""#));
+            .any(|arg| arg == r#"model_reasoning_effort="medium""#));
         assert!(profile.network);
         // Isolation policy is shared with the exec profile.
         assert!(profile
@@ -1137,7 +1142,7 @@ mod tests {
     #[test]
     fn a_shorter_profile_name_takes_the_declared_defaults() {
         for (short, full) in [
-            ("codex", "codex:gpt-5.6-sol/high"),
+            ("codex", "codex:gpt-5.6-terra/medium"),
             ("claude", "claude:claude-opus-5/high"),
             ("codex-exec", "codex-exec:gpt-5.6-sol/high"),
             // Whichever half is given is kept; only the missing half defaults.
@@ -1145,7 +1150,7 @@ mod tests {
                 "claude:claude-haiku-4-5-20251001",
                 "claude:claude-haiku-4-5-20251001/high",
             ),
-            ("codex/minimal", "codex:gpt-5.6-sol/minimal"),
+            ("codex/minimal", "codex:gpt-5.6-terra/minimal"),
         ] {
             let parsed = Selection::parse(short).unwrap();
             assert_eq!(parsed.name(), full, "{short:?} should fill out to {full:?}");
@@ -1162,8 +1167,7 @@ mod tests {
         }
     }
 
-    /// Each declared default must be launchable as a model id, and `high` must
-    /// exist on every ladder that claims it.
+    /// Each declared default must be launchable as a model id and effort.
     #[test]
     fn the_declared_defaults_are_offered_by_their_provider() {
         for provider in Provider::ALL {

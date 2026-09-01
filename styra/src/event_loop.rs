@@ -27,7 +27,10 @@ pub enum RunOutcome {
         session_id: Option<String>,
     },
     OpenSession(String),
-    Attach(InteractionSummary),
+    Attach {
+        interaction: InteractionSummary,
+        notice: Option<String>,
+    },
     Reset,
     NewSession,
 }
@@ -248,7 +251,7 @@ pub fn run(
                     continue;
                 }
                 let workspaces = client.list_workspaces()?;
-                if let Some(interaction) = picker::run_interactions_picker(
+                if let Some((interaction, notice)) = picker::run_interactions_picker(
                     terminal,
                     client,
                     &mut interactions,
@@ -256,7 +259,10 @@ pub fn run(
                     Some(workspace_id),
                     picker::InteractionsView::default(),
                 )? {
-                    return Ok(RunOutcome::Attach(interaction));
+                    return Ok(RunOutcome::Attach {
+                        interaction,
+                        notice,
+                    });
                 }
             }
             Some(Request::Reset) => return Ok(RunOutcome::Reset),

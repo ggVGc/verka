@@ -456,7 +456,7 @@ pub fn render_interactions_picker(
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
         .title(format!(
-            " styra · current interactions{scope}{grouping} · Enter attach · S stop · D delete · w scope · g group · q cancel "
+            " styra · current interactions{scope}{grouping} · Enter attach · X convert · S stop · D delete · w scope · g group · q cancel "
         ));
 
     let selected_index = selected_row.and_then(|row| match rows.get(row) {
@@ -1109,6 +1109,7 @@ mod tests {
         }];
         let screen = rendered_interactions_picker(&interactions, &workspaces, 0, &[]);
         assert!(screen.contains("current interactions"));
+        assert!(screen.contains("X convert"));
         assert!(screen.contains("conversation"));
         assert!(screen.contains("codex"));
         assert!(screen.contains("running"));
