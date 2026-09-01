@@ -166,9 +166,9 @@ The defaults are declared rather than derived from the front of the catalog, so
 reordering the catalog cannot silently move every unpinned launch to another
 model. Claude Code's differs from its catalog's lead deliberately: the catalog
 starts at `claude-fable-5`, priced above the Opus tier, so an operator who named
-no model gets `claude-opus-5`. The effort default is `high` for both agents — the
-level each documents as its own — so naming no level thinks neither harder nor
-less hard than the agent would alone.
+no model gets `claude-opus-5`. Interactive Codex defaults to `medium`; Claude
+Code defaults to `high`. Naming no level therefore applies Styra's declared
+provider default explicitly.
 
 Both parts reach each agent its own way — codex as `-c model=…` and
 `-c model_reasoning_effort=…` on the process it launches, Claude Code as `--model`
@@ -604,6 +604,9 @@ Two client-facing shortcuts:
   immediately on success, or shows the failure (most commonly a stored
   Session with no provider id, so nothing native exists to convert) without
   leaving the list.
+- `X` in the current-Interactions picker converts the selected active
+  Interaction, starts its converted sibling idle, stops the original, and
+  attaches to the new Interaction.
 - `b` in the event list branches the current Session under the *same*
   provider, seeded with history up to the selected entry (a checkpoint), or
   the whole history when the list is following the newest entry or the
