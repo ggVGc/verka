@@ -145,12 +145,11 @@ fn open_start_screen(
     launch: LaunchPolicy,
     active_workspace: &WorkspaceSummary,
 ) -> Result<(App, Live)> {
-    let mut interactions: Vec<_> = client
-        .list_interactions()?
-        .into_iter()
-        .filter(|interaction| interaction.workspace_id == active_workspace.id)
-        .collect();
-    if interactions.is_empty() {
+    let mut interactions = client.list_interactions()?;
+    if !interactions
+        .iter()
+        .any(|interaction| interaction.workspace_id == active_workspace.id)
+    {
         return Ok((
             pending_app(selection, launch, active_workspace),
             Live::Pending,
@@ -162,7 +161,19 @@ fn open_start_screen(
         None => terminal::setup()?,
     };
     let workspaces = client.list_workspaces()?;
-    let choice = picker::run_interactions_picker(&mut term, client, &mut interactions, &workspaces);
+    // The start screen is about the Workspace being opened, so the picker
+    // starts restricted to it — `w` widens it to the whole server.
+    let choice = picker::run_interactions_picker(
+        &mut term,
+        client,
+        &mut interactions,
+        &workspaces,
+        Some(&active_workspace.id),
+        picker::InteractionsView {
+            only_current_workspace: true,
+            grouped: false,
+        },
+    );
     let outcome = match choice {
         // Attaching adopts the standing launch inputs too: they describe what
         // *this client* would start next (and what a resume sends), not

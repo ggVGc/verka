@@ -253,6 +253,8 @@ pub fn run(
                     client,
                     &mut interactions,
                     &workspaces,
+                    Some(workspace_id),
+                    picker::InteractionsView::default(),
                 )? {
                     return Ok(RunOutcome::Attach(interaction));
                 }

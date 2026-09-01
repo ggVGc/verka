@@ -305,58 +305,134 @@ pub fn run_workspace_picker(
     }
 }
 
-/// The current-interactions picker loop: j/k or arrows to move, Enter to attach to a
-/// live interaction, `d` to close the selected one, Esc or q to back out. Mirrors
-/// [`run_session_picker`] but over the server's live interactions rather than the
-/// stored-session store.
+/// How the interactions picker is showing the server's live interactions: over
+/// every Workspace or only the one this client is attached to, in one flat list
+/// or split under a heading per Workspace. Both are toggled from inside the
+/// picker, so this is only where it starts.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct InteractionsView {
+    pub only_current_workspace: bool,
+    pub grouped: bool,
+}
+
+/// Everything the interactions picker draws besides the conversation preview:
+/// the interactions themselves, the Workspaces they are named by, and the rows
+/// and selection the current [`InteractionsView`] lays them out as.
+pub struct InteractionsList<'a> {
+    pub interactions: &'a [InteractionSummary],
+    pub workspaces: &'a [WorkspaceSummary],
+    pub rows: &'a [InteractionRow],
+    pub selected_row: Option<usize>,
+    pub view: InteractionsView,
+}
+
+/// One row of the interactions picker: a Workspace heading in grouped mode, or
+/// one of the interactions, by its index in the picker's list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InteractionRow {
+    Workspace(String),
+    Interaction(usize),
+}
+
+/// The current-interactions picker loop: j/k or arrows to move, Enter to attach
+/// to a live interaction, `S` to stop the selected one, `D` to delete a stopped
+/// one, `w` to restrict the list to the current Workspace, `g` to group it per
+/// Workspace, Esc or q to back out. Mirrors [`run_session_picker`] but over the
+/// server's live interactions rather than the stored-session store.
+///
+/// Deleting is only offered for an interaction that has already stopped: a
+/// running agent is asked to stop first, so `D` never discards work in flight.
 pub fn run_interactions_picker(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     client: &Client,
     interactions: &mut Vec<InteractionSummary>,
     workspaces: &[WorkspaceSummary],
+    current_workspace_id: Option<&str>,
+    view: InteractionsView,
 ) -> Result<Option<InteractionSummary>> {
     sort_interactions(interactions);
+    // Without a Workspace to compare against, the restricted view has nothing
+    // to restrict to, so the picker stays on the whole list.
+    let mut view = InteractionsView {
+        only_current_workspace: view.only_current_workspace && current_workspace_id.is_some(),
+        ..view
+    };
     let mut selected = 0usize;
+    // Set when a toggle reorders or refilters the list under the cursor: the
+    // row the operator was looking at is found again by id rather than by
+    // position, so `w` and `g` do not move the selection off it.
+    let mut refocus: Option<String> = None;
     let mut preview_id = String::new();
     let mut preview_cursor = 0u64;
     let mut preview_updates = Vec::new();
     loop {
-        let selected_interaction = &interactions[selected];
-        if preview_id != selected_interaction.id {
-            preview_id.clone_from(&selected_interaction.id);
-            preview_cursor = 0;
-            preview_updates.clear();
-        }
-
-        match client.updates(&preview_id, preview_cursor) {
-            Ok(batch) => {
-                preview_cursor = batch.next;
-                preview_updates.extend(batch.updates.into_iter().filter_map(|sequenced| {
-                    match sequenced.update {
-                        InteractionUpdate::Raw(_) => None,
-                        update => Some(update),
-                    }
-                }));
+        let rows = interaction_rows(interactions, workspaces, current_workspace_id, view);
+        let visible: Vec<usize> = rows
+            .iter()
+            .filter_map(|row| match row {
+                InteractionRow::Interaction(index) => Some(*index),
+                InteractionRow::Workspace(_) => None,
+            })
+            .collect();
+        if let Some(id) = refocus.take() {
+            if let Some(position) = visible
+                .iter()
+                .position(|index| interactions[*index].id == id)
+            {
+                selected = position;
             }
-            Err(error) => {
-                let message = format!("could not load current log: {error:#}");
-                if !preview_updates
-                    .last()
-                    .is_some_and(
-                        |update| matches!(update, InteractionUpdate::Log(entry) if entry.message == message),
-                    )
-                {
-                    preview_updates.push(InteractionUpdate::Log(LogEntry::error(message)));
+        }
+        selected = selected.min(visible.len().saturating_sub(1));
+        let selected_index = visible.get(selected).copied();
+
+        match selected_index {
+            Some(index) => {
+                if preview_id != interactions[index].id {
+                    preview_id.clone_from(&interactions[index].id);
+                    preview_cursor = 0;
+                    preview_updates.clear();
+                }
+                match client.updates(&preview_id, preview_cursor) {
+                    Ok(batch) => {
+                        preview_cursor = batch.next;
+                        preview_updates.extend(batch.updates.into_iter().filter_map(|sequenced| {
+                            match sequenced.update {
+                                InteractionUpdate::Raw(_) => None,
+                                update => Some(update),
+                            }
+                        }));
+                    }
+                    Err(error) => {
+                        let message = format!("could not load current log: {error:#}");
+                        if !preview_updates
+                            .last()
+                            .is_some_and(
+                                |update| matches!(update, InteractionUpdate::Log(entry) if entry.message == message),
+                            )
+                        {
+                            preview_updates.push(InteractionUpdate::Log(LogEntry::error(message)));
+                        }
+                    }
                 }
             }
+            None => {
+                preview_id.clear();
+                preview_cursor = 0;
+                preview_updates.clear();
+            }
         }
 
+        let selected_row = selected_row(&rows, selected_index);
         terminal.draw(|frame| {
             ui::render_interactions_picker(
                 frame,
-                interactions,
-                workspaces,
-                selected,
+                &InteractionsList {
+                    interactions,
+                    workspaces,
+                    rows: &rows,
+                    selected_row,
+                    view,
+                },
                 &preview_updates,
             )
         })?;
@@ -373,26 +449,170 @@ pub fn run_interactions_picker(
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => return Ok(None),
             KeyCode::Char('j') | KeyCode::Down => {
-                selected = (selected + 1).min(interactions.len() - 1);
+                selected = (selected + 1).min(visible.len().saturating_sub(1));
             }
             KeyCode::Char('k') | KeyCode::Up => selected = selected.saturating_sub(1),
-            KeyCode::Enter => return Ok(Some(interactions[selected].clone())),
-            // Close the interaction: the server stops it and forgets it, so the
-            // Session drops out of this list and becomes stored history like
-            // every other session on disk.
-            KeyCode::Char('d') => {
+            KeyCode::Enter => {
+                if let Some(index) = selected_index {
+                    return Ok(Some(interactions[index].clone()));
+                }
+            }
+            KeyCode::Char('w') if current_workspace_id.is_some() => {
+                refocus = selected_index.map(|index| interactions[index].id.clone());
+                view.only_current_workspace = !view.only_current_workspace;
+            }
+            KeyCode::Char('g') => {
+                refocus = selected_index.map(|index| interactions[index].id.clone());
+                view.grouped = !view.grouped;
+            }
+            // Stopping ends the agent but leaves the row in place: the operator
+            // can still read its log, and the interaction is only forgotten
+            // when they delete it.
+            KeyCode::Char('S') => {
+                let Some(index) = selected_index else {
+                    continue;
+                };
+                if !interactions[index].accepting {
+                    continue;
+                }
+                match client.stop_interaction(&interactions[index].id) {
+                    Ok(()) => interactions[index].accepting = false,
+                    Err(error) => show_interactions_message(
+                        terminal,
+                        &InteractionsList {
+                            interactions,
+                            workspaces,
+                            rows: &rows,
+                            selected_row,
+                            view,
+                        },
+                        "could not stop interaction",
+                        &format!("{error:#}"),
+                    )?,
+                }
+            }
+            // Delete the interaction: the server forgets it, so the Session
+            // drops out of this list and becomes stored history like every
+            // other session on disk. Only offered once it has stopped.
+            KeyCode::Char('D') => {
+                let Some(index) = selected_index else {
+                    continue;
+                };
+                if interactions[index].accepting {
+                    show_interactions_message(
+                        terminal,
+                        &InteractionsList {
+                            interactions,
+                            workspaces,
+                            rows: &rows,
+                            selected_row,
+                            view,
+                        },
+                        "interaction is still running",
+                        "Stop it with S before deleting it.",
+                    )?;
+                    continue;
+                }
                 // A failure here means the server no longer knows the
                 // interaction, which is the state this key asks for anyway, so
                 // the row leaves the list either way.
-                client.close_interaction(&interactions[selected].id).ok();
-                interactions.remove(selected);
+                client.close_interaction(&interactions[index].id).ok();
+                interactions.remove(index);
                 if interactions.is_empty() {
                     return Ok(None);
                 }
-                selected = selected.min(interactions.len() - 1);
                 preview_id.clear();
             }
             _ => {}
+        }
+    }
+}
+
+/// Which row of the rendered list the cursor sits on: the row carrying the
+/// selected interaction, or none when the view is empty.
+fn selected_row(rows: &[InteractionRow], selected_index: Option<usize>) -> Option<usize> {
+    let index = selected_index?;
+    rows.iter()
+        .position(|row| matches!(row, InteractionRow::Interaction(other) if *other == index))
+}
+
+/// Lay the interactions out as picker rows, honouring the current view: the
+/// restricted view drops every interaction outside the current Workspace, and
+/// the grouped view gathers what is left under a heading per Workspace.
+///
+/// Grouping preserves the order [`sort_interactions`] established — Workspaces
+/// appear in the order their first interaction does, and so do the rows within
+/// each — so the Workspace holding the most urgent interaction leads.
+fn interaction_rows(
+    interactions: &[InteractionSummary],
+    workspaces: &[WorkspaceSummary],
+    current_workspace_id: Option<&str>,
+    view: InteractionsView,
+) -> Vec<InteractionRow> {
+    let included: Vec<usize> = interactions
+        .iter()
+        .enumerate()
+        .filter(|(_, interaction)| match current_workspace_id {
+            Some(id) if view.only_current_workspace => interaction.workspace_id == id,
+            _ => true,
+        })
+        .map(|(index, _)| index)
+        .collect();
+    if !view.grouped {
+        return included
+            .into_iter()
+            .map(InteractionRow::Interaction)
+            .collect();
+    }
+
+    let mut rows = Vec::new();
+    let mut placed = vec![false; interactions.len()];
+    for leader in &included {
+        if placed[*leader] {
+            continue;
+        }
+        let workspace_id = &interactions[*leader].workspace_id;
+        rows.push(InteractionRow::Workspace(workspace_name(
+            workspaces,
+            workspace_id,
+        )));
+        for index in &included {
+            if !placed[*index] && &interactions[*index].workspace_id == workspace_id {
+                placed[*index] = true;
+                rows.push(InteractionRow::Interaction(*index));
+            }
+        }
+    }
+    rows
+}
+
+/// The Workspace's display name, falling back to its id when this client has
+/// no summary for it — the server may know Workspaces this list does not.
+pub fn workspace_name(workspaces: &[WorkspaceSummary], workspace_id: &str) -> String {
+    workspaces
+        .iter()
+        .find(|workspace| workspace.id == workspace_id)
+        .map(crate::session::workspace_display_name)
+        .unwrap_or_else(|| workspace_id.to_owned())
+}
+
+/// Show a dismissable notice over the interactions picker, so an error or a
+/// refused action is seen rather than lost.
+fn show_interactions_message(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    list: &InteractionsList<'_>,
+    title: &str,
+    message: &str,
+) -> Result<()> {
+    loop {
+        terminal.draw(|frame| {
+            ui::render_interactions_picker(frame, list, &[]);
+            ui::render_message_popup(frame, title, message);
+        })?;
+        if let Event::Key(key) = event::read()? {
+            if key.kind == KeyEventKind::Press {
+                return Ok(());
+            }
         }
     }
 }

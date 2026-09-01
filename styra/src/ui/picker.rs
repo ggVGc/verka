@@ -15,6 +15,7 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragra
 use ratatui::Frame;
 
 use crate::notes;
+use crate::picker::{workspace_name, InteractionRow, InteractionsList};
 use styra_server::{InteractionSummary, InteractionUpdate, SessionSummary, WorkspaceSummary};
 
 /// Whether the picker has the selected session's conversation yet. Loading is
@@ -430,41 +431,66 @@ pub fn render_template_picker(
 /// refreshes `updates`, while this function remains a pure renderer.
 pub fn render_interactions_picker(
     frame: &mut Frame,
-    interactions: &[InteractionSummary],
-    workspaces: &[WorkspaceSummary],
-    selected: usize,
+    list: &InteractionsList<'_>,
     updates: &[InteractionUpdate],
 ) {
+    let InteractionsList {
+        interactions,
+        workspaces,
+        rows,
+        selected_row,
+        view,
+    } = *list;
     let area = frame.area();
     let panes = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Percentage(25), Constraint::Percentage(75)])
         .split(area);
+    let scope = if view.only_current_workspace {
+        " · this workspace"
+    } else {
+        " · all workspaces"
+    };
+    let grouping = if view.grouped { " · grouped" } else { "" };
     let interactions_block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
-        .title(" styra · current interactions · Enter attach · d close · q cancel ");
+        .title(format!(
+            " styra · current interactions{scope}{grouping} · Enter attach · S stop · D delete · w scope · g group · q cancel "
+        ));
 
-    if interactions.is_empty() {
+    let selected_index = selected_row.and_then(|row| match rows.get(row) {
+        Some(InteractionRow::Interaction(index)) => interactions.get(*index),
+        _ => None,
+    });
+    if rows.is_empty() {
         render_placeholder(
             frame,
             interactions_block,
             panes[0],
-            "  no live interactions on the server",
+            if view.only_current_workspace {
+                "  no live interactions in this Workspace — w for all of them"
+            } else {
+                "  no live interactions on the server"
+            },
         );
         render_log_preview(frame, None, None, Preview::Ready(updates), panes[1]);
         return;
     }
 
-    let items: Vec<ListItem> = interactions
+    let items: Vec<ListItem> = rows
         .iter()
         .enumerate()
-        .map(|(index, interaction)| {
-            interaction_item(
-                interaction,
-                workspaces,
-                index == selected.min(interactions.len() - 1),
-            )
+        .map(|(row, entry)| match entry {
+            InteractionRow::Workspace(name) => workspace_heading_item(name),
+            // In grouped mode the heading already says which Workspace the row
+            // belongs to, so the row itself does not repeat it.
+            InteractionRow::Interaction(index) => interaction_item(
+                &interactions[*index],
+                (!view.grouped)
+                    .then(|| workspace_name(workspaces, &interactions[*index].workspace_id)),
+                Some(row) == selected_row,
+            ),
         })
         .collect();
     let list = List::new(items).block(interactions_block).highlight_style(
@@ -473,17 +499,25 @@ pub fn render_interactions_picker(
             .add_modifier(Modifier::BOLD),
     );
     let mut state = ListState::default();
-    let selected = selected.min(interactions.len() - 1);
-    state.select(Some(selected));
+    state.select(selected_row);
     frame.render_stateful_widget(list, panes[0], &mut state);
-    let interaction = interactions.get(selected);
     render_log_preview(
         frame,
-        interaction.map(|item| item.id.as_str()),
-        interaction.map(|item| item.selection.provider.protocol()),
+        selected_index.map(|item| item.id.as_str()),
+        selected_index.map(|item| item.selection.provider.protocol()),
         Preview::Ready(updates),
         panes[1],
     );
+}
+
+/// The heading a grouped interactions list puts above each Workspace's rows.
+fn workspace_heading_item(name: &str) -> ListItem<'static> {
+    ListItem::new(Line::from(Span::styled(
+        format!(" {name}"),
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+    )))
 }
 
 fn render_log_preview(
@@ -604,7 +638,7 @@ fn interaction_preview_line(
 
 fn interaction_item(
     interaction: &InteractionSummary,
-    workspaces: &[WorkspaceSummary],
+    workspace_name: Option<String>,
     selected: bool,
 ) -> ListItem<'static> {
     // Status colors come from the same table the main interaction view uses,
@@ -619,11 +653,6 @@ fn interaction_item(
     };
     let color = status_color(&status);
     let state = status.label();
-    let workspace_name = workspaces
-        .iter()
-        .find(|workspace| workspace.id == interaction.workspace_id)
-        .map(crate::session::workspace_display_name)
-        .unwrap_or_else(|| interaction.workspace_id.clone());
     ListItem::new(Line::from(vec![
         Span::styled(
             if selected { "•" } else { " " },
@@ -644,7 +673,9 @@ fn interaction_item(
             Style::default().fg(color).add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            format!("{workspace_name} · "),
+            workspace_name
+                .map(|name| format!("{name} · "))
+                .unwrap_or_default(),
             Style::default().fg(Color::Gray),
         ),
         Span::styled(
@@ -723,6 +754,7 @@ fn short_id(id: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::picker::InteractionsView;
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
     use std::path::PathBuf;
@@ -999,10 +1031,41 @@ mod tests {
         selected: usize,
         updates: &[InteractionUpdate],
     ) -> String {
+        let rows: Vec<InteractionRow> = (0..interactions.len())
+            .map(InteractionRow::Interaction)
+            .collect();
+        rendered_interactions_rows(
+            interactions,
+            workspaces,
+            &rows,
+            (!rows.is_empty()).then_some(selected),
+            InteractionsView::default(),
+            updates,
+        )
+    }
+
+    fn rendered_interactions_rows(
+        interactions: &[InteractionSummary],
+        workspaces: &[WorkspaceSummary],
+        rows: &[InteractionRow],
+        selected_row: Option<usize>,
+        view: InteractionsView,
+        updates: &[InteractionUpdate],
+    ) -> String {
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
         terminal
             .draw(|frame| {
-                render_interactions_picker(frame, interactions, workspaces, selected, updates)
+                render_interactions_picker(
+                    frame,
+                    &InteractionsList {
+                        interactions,
+                        workspaces,
+                        rows,
+                        selected_row,
+                        view,
+                    },
+                    updates,
+                )
             })
             .unwrap();
         terminal
@@ -1056,6 +1119,56 @@ mod tests {
     fn interactions_picker_shows_a_placeholder_when_there_are_no_live_interactions() {
         let screen = rendered_interactions_picker(&[], &[], 0, &[]);
         assert!(screen.contains("no live interactions"));
+    }
+
+    #[test]
+    fn a_workspace_restricted_view_that_is_empty_says_how_to_widen_it() {
+        let screen = rendered_interactions_rows(
+            &[],
+            &[],
+            &[],
+            None,
+            InteractionsView {
+                only_current_workspace: true,
+                grouped: false,
+            },
+            &[],
+        );
+        assert!(screen.contains("this Workspace"), "{screen}");
+        assert!(screen.contains("w for all"), "{screen}");
+    }
+
+    #[test]
+    fn a_grouped_view_heads_each_workspace_and_drops_the_per_row_name() {
+        let mut other = interaction_summary("s-2", "claude", true);
+        other.workspace_id = "w-2".into();
+        let interactions = vec![interaction_summary("s-1", "codex", true), other];
+        let workspaces = vec![
+            workspace_summary("w-1", "payments", 1),
+            workspace_summary("w-2", "ledger", 1),
+        ];
+        let rows = vec![
+            InteractionRow::Workspace("payments".into()),
+            InteractionRow::Interaction(0),
+            InteractionRow::Workspace("ledger".into()),
+            InteractionRow::Interaction(1),
+        ];
+        let screen = rendered_interactions_rows(
+            &interactions,
+            &workspaces,
+            &rows,
+            Some(1),
+            InteractionsView {
+                only_current_workspace: false,
+                grouped: true,
+            },
+            &[],
+        );
+        assert!(screen.contains("grouped"), "{screen}");
+        assert!(screen.contains("payments"), "{screen}");
+        assert!(screen.contains("ledger"), "{screen}");
+        // The heading carries the Workspace, so the row no longer repeats it.
+        assert!(!screen.contains("payments ·"), "{screen}");
     }
 
     #[test]
