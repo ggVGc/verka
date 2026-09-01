@@ -193,7 +193,11 @@ pub fn event_blocks(event: &AgentEvent) -> Vec<WorkLogBlock> {
         // produce and its views do not render; a background-task count and a
         // running task's progress are bookkeeping for live views, not part of
         // a finished run's log.
+        // An Orka attempt runs on the model its recorded request names and
+        // has no operator to switch it mid-run, so a model change has nothing
+        // to say in the work log.
         AgentEvent::Unknown { .. }
+        | AgentEvent::ModelChanged { .. }
         | AgentEvent::UserMessage { .. }
         | AgentEvent::TaskProgress { .. }
         | AgentEvent::BackgroundTasks { .. } => return Vec::new(),

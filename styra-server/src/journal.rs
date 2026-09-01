@@ -62,6 +62,17 @@ enum Record {
     },
     /// A message the operator sent to the agent.
     User { at_ms: u64, text: String },
+    /// A model (or effort) change the operator made mid-session. No provider
+    /// puts this on the wire, so it is journaled in its own right; without it
+    /// a replayed session would show the whole conversation as if it had run
+    /// on the model it ended on.
+    ModelChange {
+        at_ms: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        effort: Option<String>,
+    },
 }
 
 /// A live, append-only handle to one session's journal file.
@@ -160,7 +171,9 @@ impl Journal {
             let record: Record = serde_json::from_str(&line)
                 .with_context(|| format!("parsing source journal {}", file_path.display()))?;
             let at_ms = match &record {
-                Record::Agent { at_ms, .. } | Record::User { at_ms, .. } => *at_ms,
+                Record::Agent { at_ms, .. }
+                | Record::User { at_ms, .. }
+                | Record::ModelChange { at_ms, .. } => *at_ms,
             };
             if through_ms.is_some_and(|cutoff| at_ms > cutoff) {
                 break;
@@ -175,7 +188,7 @@ impl Journal {
                     raw,
                     protocol: protocol.or(Some(source_protocol)),
                 },
-                user @ Record::User { .. } => user,
+                other @ (Record::User { .. } | Record::ModelChange { .. }) => other,
             };
             self.write(&record)?;
         }
@@ -187,6 +200,17 @@ impl Journal {
         self.write(&Record::User {
             at_ms: now_ms(),
             text: text.to_owned(),
+        })
+    }
+
+    /// Record the operator moving the session onto a different model or
+    /// reasoning effort. Each argument is `Some` only if that setting changed,
+    /// so a replay can say what moved rather than restating the selection.
+    pub fn record_model_change(&mut self, model: Option<&str>, effort: Option<&str>) -> Result<()> {
+        self.write(&Record::ModelChange {
+            at_ms: now_ms(),
+            model: model.map(str::to_owned),
+            effort: effort.map(str::to_owned),
         })
     }
 
@@ -529,6 +553,9 @@ pub fn replay(path: &Path, protocol: Protocol) -> Result<Vec<AgentEvent>> {
                 ..
             }) => events.push(decode_line(record_protocol.unwrap_or(protocol), &raw)),
             Ok(Record::User { text, .. }) => events.push(AgentEvent::UserMessage { text }),
+            Ok(Record::ModelChange { model, effort, .. }) => {
+                events.push(AgentEvent::ModelChanged { model, effort })
+            }
             Err(error) => events.push(AgentEvent::Malformed {
                 error: format!("unreadable journal record: {error}"),
             }),
@@ -566,6 +593,10 @@ pub fn replay_raw(path: &Path) -> Result<Vec<RawLine>> {
                 text,
                 at_ms,
             }),
+            // The raw view is the wire; a model change is a host-side record
+            // with no line of its own, and the control request it produces is
+            // journaled separately when the provider takes one.
+            Ok(Record::ModelChange { .. }) => {}
             Err(_) => {}
         }
     }
@@ -627,6 +658,45 @@ mod tests {
                 },
             ]
         );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_model_change_replays_in_place_among_the_turns() {
+        let dir = temp_dir("model-change");
+        {
+            let mut journal = Journal::create(&dir).unwrap();
+            journal.record_user_message("start on sonnet").unwrap();
+            // Model alone moved: the effort stays out of the record, so the
+            // replayed line can say it did not change.
+            journal
+                .record_model_change(Some("claude-opus-5"), None)
+                .unwrap();
+            journal.record_user_message("now the hard part").unwrap();
+        }
+
+        let events = replay(&dir, Protocol::ClaudeJsonl).unwrap();
+        assert_eq!(
+            events,
+            vec![
+                AgentEvent::UserMessage {
+                    text: "start on sonnet".into()
+                },
+                AgentEvent::ModelChanged {
+                    model: Some("claude-opus-5".into()),
+                    effort: None,
+                },
+                AgentEvent::UserMessage {
+                    text: "now the hard part".into()
+                },
+            ]
+        );
+
+        // It is a host-side record, not a wire line, so the raw view of the
+        // session shows only what actually crossed the pipe.
+        let raw = replay_raw(&dir).unwrap();
+        assert_eq!(raw.len(), 2);
 
         std::fs::remove_dir_all(&dir).ok();
     }

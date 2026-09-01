@@ -124,7 +124,7 @@ impl ManagedInteraction {
         {
             anyhow::bail!("Claude Code fixes reasoning effort for the life of a session");
         }
-        self.interaction.set_selection(&selection)?;
+        self.interaction.set_selection(&selection, &current)?;
         journal::store_session_selection(&self.session_path, &selection)?;
         *current = selection;
         Ok(())

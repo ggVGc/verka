@@ -160,6 +160,23 @@ pub enum AgentEvent {
     Error {
         message: String,
     },
+    /// The operator moved the session onto a different model or reasoning
+    /// effort mid-conversation. No provider reports this on the wire — the
+    /// host synthesizes it when it applies the change — but it belongs in the
+    /// log beside the messages, because which model answered is part of
+    /// reading the conversation back.
+    ///
+    /// Each field is `Some` only if *that* setting changed, so the line states
+    /// the change rather than restating the whole selection: an operator who
+    /// switched model alone should not have to remember what the effort was to
+    /// see that it stayed put. At least one is always `Some` — a selection
+    /// equal to the current one is not a change and produces no event.
+    ModelChanged {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        effort: Option<String>,
+    },
     /// A task the agent started alongside its own work: a backgrounded shell
     /// command or a subagent. Claude keys these by a task id that its later
     /// progress and completion lines repeat, so a client shows one row per
@@ -316,6 +333,7 @@ impl AgentEvent {
             AgentEvent::AgentMessage { .. } => "agent",
             AgentEvent::Thinking { .. } => "thinking",
             AgentEvent::Error { .. } => "error",
+            AgentEvent::ModelChanged { .. } => "model",
             AgentEvent::TaskStarted { .. }
             | AgentEvent::TaskProgress { .. }
             | AgentEvent::TaskCompleted { .. } => "task",
@@ -406,6 +424,15 @@ impl AgentEvent {
                 (line, None) => line,
             },
             AgentEvent::Error { message } => first_line(message),
+            // An arrow marks what moved; a bare parenthetical says what did
+            // not, so the line is read at a glance rather than parsed.
+            AgentEvent::ModelChanged { model, effort } => match (model, effort) {
+                (Some(model), Some(effort)) => format!("model → {model} · effort → {effort}"),
+                (Some(model), None) => format!("model → {model} (same effort)"),
+                (None, Some(effort)) => format!("effort → {effort} (same model)"),
+                // Not emitted; a selection that changed nothing is not an event.
+                (None, None) => "selection unchanged".into(),
+            },
             AgentEvent::TaskStarted {
                 description, agent, ..
             } => match agent {
@@ -554,6 +581,22 @@ impl AgentEvent {
                 _ => markdown_blocks(text),
             },
             AgentEvent::Error { message } => vec![DetailBlock::Text(message.clone())],
+            AgentEvent::ModelChanged { model, effort } => {
+                // Name what did *not* change too: the detail is where an
+                // operator checks what the session is now running under, and
+                // a missing line reads as an omission rather than as "same as
+                // before".
+                let mut lines = Vec::new();
+                match model {
+                    Some(model) => lines.push(format!("model: {model}")),
+                    None => lines.push("model: unchanged".into()),
+                }
+                match effort {
+                    Some(effort) => lines.push(format!("reasoning effort: {effort}")),
+                    None => lines.push("reasoning effort: unchanged".into()),
+                }
+                vec![DetailBlock::Text(lines.join("\n"))]
+            }
             AgentEvent::TaskStarted {
                 id,
                 description,
@@ -748,9 +791,7 @@ fn decode_appserver_notification(method: &str, params: &Value) -> AgentEvent {
         "item/started" => decode_appserver_item(params.get("item").unwrap_or(&Value::Null), false),
         "item/completed" => decode_appserver_item(params.get("item").unwrap_or(&Value::Null), true),
         "error" | "warning" | "guardianWarning" | "configWarning" => AgentEvent::Error {
-            message: clean_terminal_text(
-                string(params, "message").unwrap_or("agent reported an error"),
-            ),
+            message: clean_terminal_text(&error_message(params)),
         },
         other => AgentEvent::Unknown {
             wire_type: clean_terminal_text(other),
@@ -883,7 +924,7 @@ fn decode_codex_value(value: &Value) -> AgentEvent {
                 .unwrap_or_default(),
         },
         "turn.failed" | "error" => AgentEvent::Error {
-            message: clean_terminal_text(error_message(value)),
+            message: clean_terminal_text(&error_message(value)),
         },
         "item.started" | "item.updated" | "item.completed" => {
             decode_codex_item(wire_type, value.get("item").unwrap_or(&Value::Null))
@@ -1270,11 +1311,7 @@ fn decode_claude_result(value: &Value) -> AgentEvent {
         .unwrap_or(false);
     if is_error || subtype.starts_with("error") {
         return AgentEvent::Error {
-            message: clean_terminal_text(
-                string(value, "result")
-                    .or_else(|| string(value, "error"))
-                    .unwrap_or("agent reported an error"),
-            ),
+            message: clean_terminal_text(&error_message(value)),
         };
     }
     AgentEvent::TurnCompleted {
@@ -1357,12 +1394,90 @@ fn tool_output(item: &Value) -> &str {
         .unwrap_or_default()
 }
 
-fn error_message(value: &Value) -> &str {
-    value
-        .get("error")
-        .and_then(|error| error.as_str().or_else(|| string(error, "message")))
-        .or_else(|| string(value, "message"))
-        .unwrap_or("agent reported an error")
+/// Keys that, across the three protocols, have been seen to carry the prose of
+/// a failure. Ordered most specific first so `message` wins over a bare
+/// `reason` when a payload carries both.
+const ERROR_TEXT_KEYS: [&str; 6] = [
+    "message",
+    "error",
+    "result",
+    "detail",
+    "reason",
+    "description",
+];
+
+/// Keys whose value labels a failure without describing it (`subtype`,
+/// `code`, …). Used only when no prose was found, so an operator still sees
+/// *which* error instead of a generic sentence.
+const ERROR_LABEL_KEYS: [&str; 4] = ["subtype", "code", "type", "status"];
+
+/// Pull the human-readable text out of a failure payload.
+///
+/// The shape varies widely — codex nests it under `error`, the app-server puts
+/// it on `params.message`, Claude on `result`, and some transports wrap it once
+/// more (`error.error.message`, `data.message`). A payload that stated its
+/// problem only in a nested object used to render as the generic "agent
+/// reported an error", which hid real and actionable failures such as a
+/// workspace running out of credits. So search a bounded depth for the first
+/// key that carries prose, and fall back to a label rather than to nothing.
+fn error_message(value: &Value) -> String {
+    if let Some(text) = error_text(value, 4) {
+        return text;
+    }
+    if let Some(label) = error_label(value) {
+        return format!("agent reported an error ({label})");
+    }
+    "agent reported an error".to_owned()
+}
+
+/// First non-empty prose string reachable from `value` via the known error
+/// keys, descending into nested objects up to `depth`.
+fn error_text(value: &Value, depth: usize) -> Option<String> {
+    let nonempty = |text: &str| {
+        let text = text.trim();
+        (!text.is_empty()).then(|| text.to_owned())
+    };
+    if let Value::String(text) = value {
+        return nonempty(text);
+    }
+    let object = value.as_object()?;
+    if depth == 0 {
+        return None;
+    }
+    for key in ERROR_TEXT_KEYS {
+        if let Some(text) = object
+            .get(key)
+            .and_then(|child| error_text(child, depth - 1))
+        {
+            return Some(text);
+        }
+    }
+    // A wrapper layer (`data`, `params`, `body`, …) that itself says nothing:
+    // look through it for the keys above rather than giving up at its edge.
+    for key in ["data", "params", "payload", "body", "response"] {
+        if let Some(text) = object
+            .get(key)
+            .and_then(|child| error_text(child, depth - 1))
+        {
+            return Some(text);
+        }
+    }
+    None
+}
+
+fn error_label(value: &Value) -> Option<String> {
+    let object = value.as_object()?;
+    ERROR_LABEL_KEYS
+        .iter()
+        .find_map(|key| string(value, key).map(str::to_owned))
+        .or_else(|| {
+            object
+                .get("error")
+                .and_then(|error| ERROR_LABEL_KEYS.iter().find_map(|key| string(error, key)))
+                .map(str::to_owned)
+        })
+        .map(|label| clean_terminal_text(&label))
+        .filter(|label| !label.is_empty())
 }
 
 fn string<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
@@ -2087,6 +2202,73 @@ mod tests {
             AgentEvent::Error {
                 message: "hit the turn limit".into()
             }
+        );
+    }
+
+    #[test]
+    fn nested_error_prose_survives_decoding() {
+        // The app-server states some failures only inside a nested `error`
+        // object; the prose there is what the operator needs to see.
+        assert_eq!(
+            decode_line(
+                Protocol::CodexAppServer,
+                r#"{"method":"error","params":{"error":{"code":"out_of_credits","message":"This workspace is out of credits."}}}"#,
+            ),
+            AgentEvent::Error {
+                message: "This workspace is out of credits.".into()
+            }
+        );
+
+        assert_eq!(
+            decode_line(
+                Protocol::CodexJsonl,
+                r#"{"type":"turn.failed","error":{"error":{"message":"You have run out of credits."}}}"#,
+            ),
+            AgentEvent::Error {
+                message: "You have run out of credits.".into()
+            }
+        );
+    }
+
+    #[test]
+    fn an_error_without_prose_names_itself() {
+        assert_eq!(
+            decode_line(
+                Protocol::ClaudeJsonl,
+                r#"{"type":"result","subtype":"error_during_execution","is_error":true}"#,
+            ),
+            AgentEvent::Error {
+                message: "agent reported an error (error_during_execution)".into()
+            }
+        );
+    }
+
+    #[test]
+    fn a_model_change_says_which_settings_moved() {
+        let changed = |model: Option<&str>, effort: Option<&str>| AgentEvent::ModelChanged {
+            model: model.map(str::to_owned),
+            effort: effort.map(str::to_owned),
+        };
+
+        assert_eq!(
+            changed(Some("gpt-5"), Some("high")).summary(),
+            "model → gpt-5 · effort → high"
+        );
+        // The operator switched model only; the line has to say the effort
+        // stayed as it was rather than leaving it unmentioned.
+        assert_eq!(
+            changed(Some("gpt-5"), None).summary(),
+            "model → gpt-5 (same effort)"
+        );
+        assert_eq!(
+            changed(None, Some("low")).summary(),
+            "effort → low (same model)"
+        );
+        assert_eq!(
+            changed(Some("gpt-5"), None).detail(),
+            vec![DetailBlock::Text(
+                "model: gpt-5\nreasoning effort: unchanged".into()
+            )]
         );
     }
 

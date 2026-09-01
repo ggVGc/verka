@@ -387,7 +387,13 @@ impl Interaction {
     /// it is issued here; the app-server carries model and effort as options
     /// on each turn, so for it the caller's stored selection is the whole
     /// change and there is nothing to send.
-    pub fn set_selection(&self, selection: &Selection) -> Result<()> {
+    /// The change is journaled and echoed to the UI whichever provider it is
+    /// for: it is an operator action that shapes every following turn, and
+    /// nothing on the wire records it — the app-server takes it as per-turn
+    /// options, and Claude's control request is not an event. `previous` is
+    /// what the session was running under, so the record names only what
+    /// actually moved; a call that changes neither is silent.
+    pub fn set_selection(&self, selection: &Selection, previous: &Selection) -> Result<()> {
         if let Some(client) = &self.claude_stream {
             apply_appserver_actions(
                 client.set_model(&selection.model),
@@ -395,6 +401,21 @@ impl Interaction {
                 &self.updates,
             );
         }
+        let model = (selection.model != previous.model).then(|| selection.model.clone());
+        let effort =
+            (selection.effort != previous.effort).then(|| selection.effort.as_str().to_owned());
+        if model.is_none() && effort.is_none() {
+            return Ok(());
+        }
+        if let Ok(mut journal) = self.journal.lock() {
+            let _ = journal.record_model_change(model.as_deref(), effort.as_deref());
+        }
+        let _ = self
+            .updates
+            .send(InteractionUpdate::Event(AgentEvent::ModelChanged {
+                model,
+                effort,
+            }));
         Ok(())
     }
 

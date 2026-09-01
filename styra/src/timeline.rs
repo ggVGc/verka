@@ -114,7 +114,16 @@ impl Timeline {
             && (!self.conversation_only
                 || matches!(
                     event,
-                    AgentEvent::UserMessage { .. } | AgentEvent::AgentMessage { .. }
+                    AgentEvent::UserMessage { .. }
+                        | AgentEvent::AgentMessage { .. }
+                        // A failure ends the exchange the operator is reading;
+                        // hiding it behind a filter leaves the conversation
+                        // looking as if the agent simply stopped replying.
+                        | AgentEvent::Error { .. }
+                        // Which model answered is part of reading a
+                        // conversation back, and the change is an operator
+                        // action like a message.
+                        | AgentEvent::ModelChanged { .. }
                 ))
     }
 

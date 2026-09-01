@@ -2440,6 +2440,26 @@ mod tests {
     }
 
     #[test]
+    fn conversation_only_still_shows_errors_and_model_changes() {
+        let mut app = app();
+        app.push_event(AgentEvent::Error {
+            message: "workspace is out of credits".into(),
+        });
+        app.push_event(AgentEvent::ModelChanged {
+            model: Some("claude-opus-5".into()),
+            effort: None,
+        });
+
+        assert!(app.timeline.conversation_only);
+        assert!(app.timeline.is_visible(0));
+        assert!(app.timeline.is_visible(1));
+        assert_eq!(
+            app.timeline.entries[1].event.summary(),
+            "model → claude-opus-5 (same effort)"
+        );
+    }
+
+    #[test]
     fn minor_events_are_hidden_and_skipped_by_navigation() {
         let mut app = app();
         app.push_event(AgentEvent::ThreadStarted {
