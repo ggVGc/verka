@@ -451,7 +451,6 @@ mod tests {
             styra_server::agent::Selection::parse("codex").unwrap(),
             "s1",
         );
-        app.toggle_conversation_only();
         assert!(rendered(&app).contains("conversation only"));
     }
 

@@ -2419,8 +2419,6 @@ mod tests {
             command: "cargo test".into(),
         });
 
-        app.toggle_conversation_only();
-
         assert_eq!(app.view, View::Events);
         assert!(app.timeline.conversation_only);
         assert!(app.timeline.is_visible(0));
@@ -2429,6 +2427,10 @@ mod tests {
         app.toggle_conversation_only();
         assert!(!app.timeline.conversation_only);
         assert!(app.timeline.is_visible(1));
+
+        app.toggle_conversation_only();
+        assert!(app.timeline.conversation_only);
+        assert!(!app.timeline.is_visible(1));
     }
 
     #[test]

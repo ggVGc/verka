@@ -453,6 +453,7 @@ rewritten in place; the line only breaks when other work intervenes.
 `c` toggles a conversation-only filter in the main event list, hiding tools,
 thinking, plans, and lifecycle events while retaining the operator's messages
 and the agent's replies. Like the minor-event filter, it does not switch views.
+The filter is on by default.
 
 ### Two focuses, like vim modes
 

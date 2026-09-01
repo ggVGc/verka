@@ -1306,6 +1306,9 @@ mod tests {
         app.push_event(AgentEvent::AgentMessage {
             text: "z".repeat(500),
         });
+
+        // Start from the filter off, so the entry's own collapsed state shows.
+        app.toggle_conversation_only();
         let collapsed = rendered(&app);
         assert!(collapsed.contains('▸'));
         assert!(collapsed.chars().filter(|&c| c == 'z').count() < 500);

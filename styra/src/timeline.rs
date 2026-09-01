@@ -100,7 +100,7 @@ impl Default for Timeline {
             // A fresh list is at its own tail, so it follows what arrives.
             follow: true,
             show_minor: false,
-            conversation_only: false,
+            conversation_only: true,
             list_offset: Cell::new(0),
         }
     }

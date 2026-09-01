@@ -134,7 +134,6 @@ mod tests {
         app.push_event(AgentEvent::AgentMessage {
             text: "keep this reply".into(),
         });
-        app.toggle_conversation_only();
         app.toggle_view(View::Transcript);
 
         let screen = rendered(&app);

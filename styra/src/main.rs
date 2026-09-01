@@ -643,7 +643,7 @@ mod cli_tests {
 
         carry_active_session_view(&previous, &mut next);
 
-        assert!(next.timeline.conversation_only);
+        assert!(!next.timeline.conversation_only);
     }
 
     #[test]
