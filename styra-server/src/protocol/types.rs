@@ -150,7 +150,10 @@ impl DrivaOptions {
     /// The mounts alone, for the questions that only care about what the
     /// sandbox holds and not about who asked for it.
     pub fn plain_mounts(&self) -> Vec<Mount> {
-        self.mounts.iter().map(|mount| mount.mount.clone()).collect()
+        self.mounts
+            .iter()
+            .map(|mount| mount.mount.clone())
+            .collect()
     }
 }
 

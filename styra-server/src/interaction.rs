@@ -579,8 +579,6 @@ fn apply_appserver_actions(
     }
 }
 
-/// Translate a [`InteractionSpec`] into a validated-shape Driva request. Mount and
-/// policy translation mirrors Orka's Driva adapter.
 /// Every mount the sandbox will hold, each carrying the layer that asked for
 /// it. This is the one place the effective mount list is assembled — the
 /// request Driva executes takes the same list with the attribution dropped —
@@ -630,10 +628,16 @@ fn attributed_mounts(spec: &InteractionSpec) -> Vec<AttributedMount> {
         });
     }
     if let Some(template) = &spec.template {
-        mounts.extend(template.mounts.iter().cloned().map(|mount| AttributedMount {
-            origin: MountOrigin::Template,
-            mount,
-        }));
+        mounts.extend(
+            template
+                .mounts
+                .iter()
+                .cloned()
+                .map(|mount| AttributedMount {
+                    origin: MountOrigin::Template,
+                    mount,
+                }),
+        );
     }
     mounts
 }
@@ -651,7 +655,6 @@ fn build_request(spec: &InteractionSpec) -> ExecutionRequest {
         .collect();
     let mut network = spec.profile.network;
     if let Some(template) = &spec.template {
-        mounts.extend(template.mounts.iter().cloned());
         environment.extend(
             template
                 .environment

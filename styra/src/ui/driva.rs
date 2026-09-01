@@ -548,7 +548,7 @@ fn mount_line(mount: &Mount) -> Line<'static> {
             destination,
         } => Line::from(vec![
             Span::styled(
-                "  ovl ",
+                "    ovl ",
                 Style::default()
                     .fg(Color::Magenta)
                     .add_modifier(Modifier::BOLD),

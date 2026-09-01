@@ -14,10 +14,10 @@ mod types;
 
 pub use transport::{read_message, read_message_limited, write_message, MAX_REQUEST_BYTES};
 pub use types::{
-    Answer, AnswerValue, AttributedMount, Contract, Direction, DrivaOptions, FileLocation, InteractionActivity,
-    InteractionEnd, InteractionSummary, InteractionUpdate, LaunchMount, LaunchPolicy, LogEntry,
-    LogLevel, MountOrigin, QueuedMessage, RawLine, SessionOrigin, SessionSummary, TemplateSummary,
-    WorkspaceSummary,
+    Answer, AnswerValue, AttributedMount, Contract, Direction, DrivaOptions, FileLocation,
+    InteractionActivity, InteractionEnd, InteractionSummary, InteractionUpdate, LaunchMount,
+    LaunchPolicy, LogEntry, LogLevel, MountOrigin, QueuedMessage, RawLine, SessionOrigin,
+    SessionSummary, TemplateSummary, WorkspaceSummary,
 };
 
 // These external vocabularies are serialized inside protocol payloads. Re-export
