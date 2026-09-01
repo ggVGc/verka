@@ -18,8 +18,8 @@ use anyhow::{bail, Context, Result};
 use linka::ops::{self, SubmissionError};
 use linka::{
     ArtifactStore, Author, BranchStore, CandidateId, CandidateStore, ConsumedNode,
-    ExternalIdentity, GitVcs, NewCandidate, NewNodeAttachment, NodeId, Outcome,
-    ProducerEvidence, ProjectPath, ResultVersion, Store, SubmissionConflict,
+    ExternalIdentity, GitVcs, NewCandidate, NewNodeAttachment, NodeId, Outcome, ProducerEvidence,
+    ProjectPath, ResultVersion, Store, SubmissionConflict,
 };
 use std::path::{Path, PathBuf};
 
@@ -135,9 +135,9 @@ impl<'a> LinkaWork<'a> {
             }
             for part in OUTPUT_EVIDENCE_PARTS {
                 let key = format!("{}/{}", external.id, part);
-                let attachment =
-                    self.store
-                        .read_node_attachment(&candidate.node, "orka", &key)?;
+                let attachment = self
+                    .store
+                    .read_node_attachment(&candidate.node, "orka", &key)?;
                 if attachment.is_none() {
                     problems.push(format!(
                         "{}: missing node attachment orka/{key}",
@@ -252,12 +252,12 @@ impl<'a> LinkaWork<'a> {
     /// not ready — snapshotting is Linka's readiness gate.
     pub fn prepare_input(&self, node: &NodeId) -> Result<AttemptInput> {
         let vcs = self.vcs();
-        let snapshot = ops::snapshot_work(self.store, &vcs, &node, &[])
+        let snapshot = ops::snapshot_work(self.store, &vcs, node, &[])
             .with_context(|| format!("snapshotting `{node}`"))?;
         let target_branch = vcs
             .current_branch()?
             .context("project HEAD is detached; check out a target branch before running Orka")?;
-        let (_, description) = self.store.read_node(&node)?;
+        let (_, description) = self.store.read_node(node)?;
         let dependency_context = self.context_for(&snapshot.dependencies)?;
         let lineage_context = self.context_for(&snapshot.lineage)?;
         Ok(AttemptInput {
@@ -278,7 +278,7 @@ impl<'a> LinkaWork<'a> {
         node: &NodeId,
         attempt_id: &str,
     ) -> Result<Option<RecordedResult>> {
-        let Some((result, _)) = self.store.read_result(&node)? else {
+        let Some((result, _)) = self.store.read_result(node)? else {
             return Ok(None);
         };
         let Some(producer) = &result.producer else {
@@ -297,7 +297,7 @@ impl<'a> LinkaWork<'a> {
         Ok(Some(RecordedResult {
             outcome,
             output_commit: result.output.map(|artifact| artifact.id),
-            version: self.store.result_version(&node)?,
+            version: self.store.result_version(node)?,
         }))
     }
 

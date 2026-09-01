@@ -1022,8 +1022,7 @@ mod tests {
             profile
                 .command
                 .windows(2)
-                .any(|pair| pair[0] == "--append-system-prompt"
-                    && pair[1] == DEDICATED_FILE_TOOLS),
+                .any(|pair| pair[0] == "--append-system-prompt" && pair[1] == DEDICATED_FILE_TOOLS),
             "the bypass-mode file-tool guidance is countermanded in-band"
         );
         // A bare `claude` pins the provider's declared default rather than

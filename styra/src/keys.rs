@@ -213,10 +213,6 @@ pub fn handle_list_key(
                     }
                 }
             }
-            // Edits to the Workspace's layer are stored as they are made, so
-            // this is only ever a retry after one of those failed to reach the
-            // server. Needs the client, so the event loop does the asking.
-            KeyCode::Char('W') => launch::store_workspace(app),
             // Move what this interaction added up into the Workspace's standing
             // policy, once it turns out not to be particular to this
             // conversation after all.

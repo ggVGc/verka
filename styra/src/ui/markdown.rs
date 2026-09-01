@@ -136,14 +136,12 @@ fn render_spans(text: &str, base_style: Style) -> Vec<Span<'static>> {
                 }
                 _ => {}
             },
-            Event::End(tag) => match tag {
-                TagEnd::Strong | TagEnd::Emphasis | TagEnd::Strikethrough => {
-                    if styles.len() > 1 {
-                        styles.pop();
-                    }
+            Event::End(TagEnd::Strong | TagEnd::Emphasis | TagEnd::Strikethrough) => {
+                if styles.len() > 1 {
+                    styles.pop();
                 }
-                _ => {}
-            },
+            }
+            Event::End(_) => {}
             Event::Text(text) => {
                 spans.push(Span::styled(text.into_string(), current_style(&styles)))
             }

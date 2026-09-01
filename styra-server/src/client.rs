@@ -4,6 +4,7 @@ use crate::protocol::{
     Answer, Contract, CreateSession, CreateWorkspace, DrivaOptions, Health, LaunchPolicy,
     PlanSession, QueuedMessage, RenameSession, Request, Response, ResumeSession, SendMessage,
     SessionInfo, ShellInfo, StoredSession, TemplateSummary, UpdateNotes, Updates, WireResponse,
+    WorkspaceLaunchChange,
 };
 use crate::protocol::{InteractionSummary, SessionSummary, WorkspaceSummary};
 use anyhow::{bail, Context, Result};
@@ -129,16 +130,16 @@ impl Client {
         }
     }
 
-    /// Replace the Workspace's standing sandbox policy — the templates,
-    /// mounts and network permission every launch in it starts from.
-    pub fn set_workspace_launch(
+    /// Apply an edit to the server's latest Workspace launch policy and return
+    /// the authoritative policy after the edit.
+    pub fn change_workspace_launch(
         &self,
         workspace_id: &str,
-        launch: &LaunchPolicy,
-    ) -> Result<WorkspaceSummary> {
-        match self.request(Request::SetWorkspaceLaunch {
+        change: WorkspaceLaunchChange,
+    ) -> Result<LaunchPolicy> {
+        match self.request(Request::ChangeWorkspaceLaunch {
             workspace_id: workspace_id.to_owned(),
-            launch: launch.clone(),
+            change,
         })? {
             Response::WorkspaceLaunchUpdated(value) => Ok(value),
             other => unexpected("workspace_launch_updated", other),
@@ -163,6 +164,17 @@ impl Client {
         match self.request(Request::Workspace { id: id.to_owned() })? {
             Response::Workspace(value) => Ok(value),
             other => unexpected("workspace", other),
+        }
+    }
+
+    /// Fetch the server-owned launch policy without recording a Workspace
+    /// access. The UI uses this to observe edits made by other clients.
+    pub fn workspace_launch(&self, workspace_id: &str) -> Result<LaunchPolicy> {
+        match self.request(Request::WorkspaceLaunch {
+            workspace_id: workspace_id.to_owned(),
+        })? {
+            Response::WorkspaceLaunch(value) => Ok(value),
+            other => unexpected("workspace_launch", other),
         }
     }
 

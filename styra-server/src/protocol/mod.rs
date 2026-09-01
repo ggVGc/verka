@@ -95,6 +95,21 @@ pub struct UpdateNotes {
     pub notes: String,
 }
 
+/// One server-owned edit to a Workspace's standing launch policy.
+///
+/// Clients send intent instead of replacing a locally cached copy. This lets
+/// the server apply the edit to the latest stored policy and return the
+/// authoritative result, avoiding lost updates between multiple Styra UIs.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "change", content = "value", rename_all = "snake_case")]
+pub enum WorkspaceLaunchChange {
+    SetNetwork(Option<bool>),
+    SetTemplates(Vec<String>),
+    AddMounts(Vec<LaunchMount>),
+    RemoveMount(LaunchMount),
+    Replace(LaunchPolicy),
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ResumeSession {
@@ -208,6 +223,12 @@ pub enum Request {
     Workspace {
         id: String,
     },
+    /// Read the server-owned Workspace launch policy without touching the
+    /// Workspace's last-accessed timestamp. Used as a lightweight change feed
+    /// by clients displaying the Driva options view.
+    WorkspaceLaunch {
+        workspace_id: String,
+    },
     CreateSession(CreateSession),
     /// Report the Driva policy a `CreateSession` with these inputs would run
     /// under. Creates nothing and touches no session state.
@@ -245,12 +266,12 @@ pub enum Request {
     RenameSession(RenameSession),
     UpdateSessionNotes(UpdateNotes),
     UpdateWorkspaceNotes(UpdateNotes),
-    /// Replace a Workspace's standing sandbox policy: the templates, mounts and
-    /// network permission every launch in it starts from. Applies to launches
-    /// made after it, not to interactions already running under the old one.
-    SetWorkspaceLaunch {
+    /// Apply one edit to the latest stored Workspace sandbox policy. Applies to
+    /// launches made after it, not to interactions already running under the
+    /// old one.
+    ChangeWorkspaceLaunch {
         workspace_id: String,
-        launch: LaunchPolicy,
+        change: WorkspaceLaunchChange,
     },
     SendMessage {
         id: String,
@@ -357,6 +378,7 @@ pub enum Response {
     WorkspaceCreated(WorkspaceSummary),
     Workspaces(Vec<WorkspaceSummary>),
     Workspace(WorkspaceSummary),
+    WorkspaceLaunch(LaunchPolicy),
     SessionCreated(SessionInfo),
     SessionPlan(DrivaOptions),
     Templates(Vec<TemplateSummary>),
@@ -366,7 +388,7 @@ pub enum Response {
     SessionRenamed(SessionSummary),
     SessionNotesUpdated(SessionSummary),
     WorkspaceNotesUpdated(WorkspaceSummary),
-    WorkspaceLaunchUpdated(WorkspaceSummary),
+    WorkspaceLaunchUpdated(LaunchPolicy),
     Accepted,
     Queued(usize),
     TakenQueuedMessage(Option<QueuedMessage>),
@@ -382,6 +404,9 @@ pub enum Response {
 /// Response envelope returned for every syntactically valid connection.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
+// One envelope is built per request and immediately serialised, so boxing the
+// success payload would only trade a stack copy for an allocation.
+#[allow(clippy::large_enum_variant)]
 pub enum WireResponse {
     Ok { response: Response },
     Error { error: String },

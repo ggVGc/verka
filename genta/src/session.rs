@@ -478,7 +478,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            parse(&converted, SessionFormat::Codex).unwrap().messages.len(),
+            parse(&converted, SessionFormat::Codex)
+                .unwrap()
+                .messages
+                .len(),
             2
         );
     }

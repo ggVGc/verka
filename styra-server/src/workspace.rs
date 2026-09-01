@@ -4,7 +4,7 @@
 //! directory and owns any number of durable provider Sessions beneath
 //! `workspaces/<workspace-id>/sessions/`.
 
-use crate::protocol::{LaunchPolicy, WorkspaceSummary};
+use crate::protocol::{LaunchPolicy, WorkspaceLaunchChange, WorkspaceSummary};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -171,27 +171,51 @@ pub fn store_notes(store_root: &Path, id: &str, notes: String) -> Result<Workspa
     summary_from_meta(&path, meta, now_ms())
 }
 
-/// Replace a Workspace's standing sandbox policy.
+/// Read a Workspace's standing sandbox policy without marking it accessed.
+pub fn launch(store_root: &Path, id: &str) -> Result<LaunchPolicy> {
+    let path = workspace_dir(store_root, id);
+    if !path.is_dir() {
+        anyhow::bail!("Workspace {id:?} was not found");
+    }
+    Ok(read_meta(&path)?.launch)
+}
+
+/// Apply an edit to a Workspace's standing sandbox policy.
 ///
 /// Stored with the Workspace rather than with the client that set it, so every
 /// launch in this Workspace — from any client, on any machine sharing the store
 /// — starts from the same grants. Interactions already running keep the policy
 /// they were spawned under; a policy is applied at launch, not enforced live.
-pub fn store_launch(store_root: &Path, id: &str, launch: LaunchPolicy) -> Result<WorkspaceSummary> {
+pub fn change_launch(
+    store_root: &Path,
+    id: &str,
+    change: WorkspaceLaunchChange,
+) -> Result<LaunchPolicy> {
     let path = workspace_dir(store_root, id);
     if !path.is_dir() {
         anyhow::bail!("Workspace {id:?} was not found");
     }
     let mut meta = read_meta(&path)?;
+    match change {
+        WorkspaceLaunchChange::SetNetwork(network) => meta.launch.network = network,
+        WorkspaceLaunchChange::SetTemplates(templates) => meta.launch.templates = templates,
+        WorkspaceLaunchChange::AddMounts(mounts) => {
+            for mount in mounts {
+                if !meta.launch.mounts.contains(&mount) {
+                    meta.launch.mounts.push(mount);
+                }
+            }
+        }
+        WorkspaceLaunchChange::RemoveMount(mount) => {
+            meta.launch.mounts.retain(|candidate| candidate != &mount);
+        }
+        WorkspaceLaunchChange::Replace(launch) => meta.launch = launch,
+    }
     // `standalone` says "ignore the layer below me", and a Workspace policy has
-    // no layer below it. Storing it would be storing a contradiction, so it is
-    // dropped here rather than quietly carried and ignored at merge time.
-    meta.launch = LaunchPolicy {
-        standalone: false,
-        ..launch
-    };
+    // no layer below it.
+    meta.launch.standalone = false;
     write_meta(&path, &meta)?;
-    summary_from_meta(&path, meta, now_ms())
+    Ok(meta.launch)
 }
 
 fn write_meta(directory: &Path, meta: &WorkspaceMeta) -> Result<()> {

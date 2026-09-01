@@ -1,11 +1,11 @@
 use anyhow::{Context, Result};
 use clap::Parser;
-use linka_tui::{app::App, ui};
 use crossterm::{
     event::{self, Event},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use linka_tui::{app::App, ui};
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::{io, path::PathBuf, time::Duration};
 

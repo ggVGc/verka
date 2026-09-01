@@ -62,9 +62,7 @@ pub fn parse(text: &str) -> Result<LaunchMount, String> {
         return Err(format!("{} must be an absolute path", source.display()));
     }
     let destination = match destination {
-        Some(destination) if destination.is_empty() => {
-            return Err("the destination cannot be empty".into())
-        }
+        Some("") => return Err("the destination cannot be empty".into()),
         Some(destination) => {
             let destination = expand_home(destination);
             if !destination.is_absolute() {

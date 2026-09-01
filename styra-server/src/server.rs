@@ -4,9 +4,9 @@ use crate::agent::{MountSpec, SandboxLayout, Selection};
 use crate::interaction::{Interaction, InteractionSpec, ResolvedTemplate, SandboxBroker};
 use crate::journal::{self, Journal};
 use crate::protocol::{
-    Answer, AttributedMount, Contract, DrivaOptions, InteractionActivity, InteractionSummary,
-    InteractionUpdate, LaunchMount, LaunchPolicy, MountOrigin, QueuedMessage, SendMessage,
-    SessionOrigin, SessionSummary, TemplateSummary,
+    Answer, Contract, DrivaOptions, InteractionActivity, InteractionSummary, InteractionUpdate,
+    LaunchMount, LaunchPolicy, QueuedMessage, SendMessage, SessionOrigin, SessionSummary,
+    TemplateSummary,
 };
 use crate::protocol::{
     CreateSession, CreateWorkspace, Health, Request, Response, ResumeSession, SequencedUpdate,
@@ -1026,6 +1026,9 @@ impl ServerState {
                 &self.inner.store_root,
                 &id,
             )?)),
+            Request::WorkspaceLaunch { workspace_id } => Ok(Response::WorkspaceLaunch(
+                crate::workspace::launch(&self.inner.store_root, &workspace_id)?,
+            )),
             Request::CreateSession(request) => {
                 Ok(Response::SessionCreated(self.create_session(request)?))
             }
@@ -1070,11 +1073,11 @@ impl ServerState {
             Request::UpdateWorkspaceNotes(request) => Ok(Response::WorkspaceNotesUpdated(
                 crate::workspace::store_notes(&self.inner.store_root, &request.id, request.notes)?,
             )),
-            Request::SetWorkspaceLaunch {
+            Request::ChangeWorkspaceLaunch {
                 workspace_id,
-                launch,
+                change,
             } => Ok(Response::WorkspaceLaunchUpdated(
-                crate::workspace::store_launch(&self.inner.store_root, &workspace_id, launch)?,
+                crate::workspace::change_launch(&self.inner.store_root, &workspace_id, change)?,
             )),
             Request::SendMessage { id, message } => {
                 let interaction = self.interaction(&id)?;
@@ -1529,6 +1532,7 @@ fn serve_connection(mut stream: UnixStream, state: &ServerState) -> Result<()> {
 mod tests {
     use super::*;
     use crate::client::Client;
+    use crate::protocol::{AttributedMount, MountOrigin};
 
     fn temp_path(tag: &str) -> PathBuf {
         std::env::temp_dir().join(format!("styra-server-{tag}-{}.sock", std::process::id(),))

@@ -269,7 +269,7 @@ impl<'a> Reviews<'a> {
             .map(|entry| entry.commit.as_str())
             .unwrap_or(&review.marker)
             .to_string();
-        if let Some((result, notes)) = self.linka.read_result(&verification)? {
+        if let Some((result, notes)) = self.linka.read_result(verification)? {
             if result.outcome == linka::ResultOutcome::Verification(outcome)
                 && matching_result(&result.producer, &record, outcome, &head)
             {
@@ -312,7 +312,7 @@ impl<'a> Reviews<'a> {
     ) -> Result<AbandonOutcome> {
         let record = self.load(verification)?;
         self.validate_binding(&record)?;
-        if let Some((result, _)) = self.linka.read_result(&verification)? {
+        if let Some((result, _)) = self.linka.read_result(verification)? {
             if result.outcome == linka::ResultOutcome::Verification(VerificationOutcome::Abandoned)
                 && matching_abandonment(&result.producer, &record)
             {

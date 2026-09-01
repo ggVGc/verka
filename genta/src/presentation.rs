@@ -213,8 +213,8 @@ fn parse_shell_word(input: &str) -> Option<String> {
     let mut quote = Quote::None;
     let mut escaped = false;
     let mut output = String::new();
-    let mut chars = input.char_indices();
-    while let Some((index, ch)) = chars.next() {
+    let chars = input.char_indices();
+    for (index, ch) in chars {
         if escaped {
             output.push(ch);
             escaped = false;

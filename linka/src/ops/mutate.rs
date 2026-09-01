@@ -464,11 +464,15 @@ pub fn record_node_attachments(
     Ok(attachments)
 }
 
+/// The attachments a batch will end up with, paired with the subset whose
+/// bytes still have to be written.
+pub(super) type PreparedNodeAttachments = (Vec<NodeAttachment>, Vec<(NodeAttachment, Vec<u8>)>);
+
 pub(super) fn prepare_node_attachments(
     store: &Store,
     id: &NodeId,
     new: Vec<NewNodeAttachment>,
-) -> Result<(Vec<NodeAttachment>, Vec<(NodeAttachment, Vec<u8>)>)> {
+) -> Result<PreparedNodeAttachments> {
     let mut identities = std::collections::HashSet::new();
     let mut attachments = Vec::with_capacity(new.len());
     let mut pending = Vec::new();

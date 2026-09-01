@@ -325,7 +325,7 @@ fn list_sessions_at(dir: &Path, workspace_id: &str) -> Result<Vec<SessionSummary
         return Ok(Vec::new());
     }
     let mut sessions = Vec::new();
-    for entry in std::fs::read_dir(&dir).with_context(|| format!("reading {}", dir.display()))? {
+    for entry in std::fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
         let entry = entry.with_context(|| format!("reading an entry in {}", dir.display()))?;
         if !entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
             continue;

@@ -57,7 +57,7 @@ fn decode_message<T: DeserializeOwned>(read: usize, bytes: &[u8]) -> Result<T> {
     if read == 0 {
         bail!("peer closed the socket without a protocol message");
     }
-    serde_json::from_slice(&bytes).context("decoding the Styra protocol message")
+    serde_json::from_slice(bytes).context("decoding the Styra protocol message")
 }
 
 #[cfg(test)]

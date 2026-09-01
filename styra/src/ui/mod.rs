@@ -453,7 +453,7 @@ mod tests {
 
     #[test]
     fn event_list_header_indicates_conversation_only_filter() {
-        let mut app = App::new(
+        let app = App::new(
             styra_server::agent::Selection::parse("codex").unwrap(),
             "s1",
         );

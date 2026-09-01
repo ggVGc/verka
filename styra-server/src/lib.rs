@@ -98,6 +98,7 @@ pub use protocol::{
     LaunchPolicy, LogEntry, LogLevel, MountOrigin, QueuedMessage, RawLine, SessionOrigin,
     SessionSummary, TemplateSummary, WorkspaceSummary,
 };
+pub use protocol::WorkspaceLaunchChange;
 pub use spawn::ensure_server;
 
 // --- The session runner ---

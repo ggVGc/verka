@@ -459,7 +459,7 @@ fn work_log_from_linka(
     let key = format!("{id}/agent-output");
     let (attachment, data) = app
         .store
-        .read_node_attachment(&node, "orka", &key)?
+        .read_node_attachment(node, "orka", &key)?
         .with_context(|| {
             format!("attempt `{id}` has no local work log and none stored in Linka")
         })?;
@@ -475,7 +475,7 @@ fn work_log_from_linka(
         })?;
     let file_changes = app
         .store
-        .read_node_attachment(&node, "orka", &format!("{id}/file-changes"))?
+        .read_node_attachment(node, "orka", &format!("{id}/file-changes"))?
         .map(|(_, data)| data);
     work_log_from_raw(protocol, &data, file_changes.as_deref())
 }

@@ -61,6 +61,14 @@ pub fn run(
     loop {
         app.expire_action_messages();
         notes::ensure_loaded(app, client, workspace_id);
+        // Workspace launch policy is a server-owned read model. Refresh it
+        // independently of input so edits from another Styra client flow into
+        // this Driva view and invalidate its planned options.
+        if let Ok(policy) = client.workspace_launch(workspace_id) {
+            if policy != app.launch.workspace {
+                app.launch.sync_workspace(policy);
+            }
+        }
         session::ensure_driva_plan(app, client, workspace_id);
         let mut disconnected = false;
         if let Live::Running { session_id, cursor } = live {
@@ -310,45 +318,20 @@ pub fn run(
                     launch::set_templates(app, chosen);
                 }
             }
-            Some(Request::StoreWorkspaceLaunch { announce }) => {
-                // The Workspace's own layer, as edited in the driva view, sent
-                // to the server that owns it. Raised by each such edit, so the
-                // policy on screen is the policy the next launch merges — the
-                // launch paths send only the overlay and read this from the
-                // Workspace, so a change kept here alone would not be applied.
-                let policy = app.launch.workspace.clone();
-                match client.set_workspace_launch(workspace_id, &policy) {
-                    Ok(workspace) => {
-                        app.launch.workspace_stored(workspace.launch);
-                        if announce {
-                            app.show_action_message(
-                                "stored with the Workspace — every launch here starts from it",
-                            );
-                        }
-                    }
-                    // The edit stays on screen, marked as not stored: it is what
-                    // the operator asked for, and `W` retries. What it is not is
-                    // part of the effective policy, which the view says.
-                    Err(error) => app.push_log(LogEntry::error(format!(
-                        "could not save the Workspace launch policy: {error:#}"
-                    ))),
-                }
-            }
-            Some(Request::PromoteLaunchToWorkspace) => {
-                // What is stored is the merge, not the overlay: the operator is
-                // keeping the policy the view shows. The overlay is then
-                // redundant and `Launch::adopt_workspace` clears it, so the
-                // effective policy is unchanged by the act of storing it.
-                let policy = app.launch.effective();
-                match client.set_workspace_launch(workspace_id, &policy) {
-                    Ok(workspace) => {
-                        app.launch.adopt_workspace(workspace.launch);
+            Some(Request::ChangeWorkspaceLaunch {
+                change,
+                clear_interaction,
+            }) => {
+                match client.change_workspace_launch(workspace_id, change) {
+                    Ok(policy) if clear_interaction => {
+                        app.launch.adopt_workspace(policy);
                         app.show_action_message(
                             "moved into this Workspace's policy — every launch here starts from it",
                         );
                     }
+                    Ok(policy) => app.launch.sync_workspace(policy),
                     Err(error) => app.push_log(LogEntry::error(format!(
-                        "could not save the Workspace launch policy: {error:#}"
+                        "could not change the Workspace launch policy: {error:#}"
                     ))),
                 }
             }

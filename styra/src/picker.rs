@@ -22,6 +22,9 @@ const PREVIEW_SETTLE: Duration = Duration::from_millis(120);
 const LIVENESS_REFRESH: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+// The picker yields at most one of these per run, so the size difference never
+// costs anything worth an extra allocation.
+#[allow(clippy::large_enum_variant)]
 pub enum WorkspaceChoice {
     Existing(WorkspaceSummary),
     CreateCurrentDirectory,

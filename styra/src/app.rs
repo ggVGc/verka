@@ -396,18 +396,13 @@ pub enum Request {
     /// list of them lives on the server, so the event loop fetches it and runs
     /// the picker.
     Templates,
-    /// Send the Workspace's standing policy, as edited here, to the server that
-    /// owns it — so every launch here, from this client or any other, starts
-    /// from it. Raised by each edit to that layer; `announce` is set only for
-    /// the explicit `W`, since an automatic store has nothing to report that
-    /// the edit's own message did not already say.
-    StoreWorkspaceLaunch {
-        announce: bool,
+    /// Send an edit operation to the server which owns the Workspace policy.
+    /// The UI never applies this optimistically; it adopts the policy returned
+    /// by the server after the edit is durably stored.
+    ChangeWorkspaceLaunch {
+        change: styra_server::WorkspaceLaunchChange,
+        clear_interaction: bool,
     },
-    /// Move this interaction's own settings up into the Workspace's standing
-    /// policy: the merge is stored as the Workspace's and the overlay emptied,
-    /// so what the next launch runs under does not change.
-    PromoteLaunchToWorkspace,
     /// Tell the server the live interaction has been switched onto
     /// [`App::selection`], so the change lands now and outlives this client.
     ApplySelection,
@@ -940,10 +935,7 @@ impl App {
     /// The lower bound is the renderer's, since only it knows the height it
     /// has to fill.
     pub fn scroll_keybinds(&mut self, delta: i16) {
-        self.keybinds_scroll = self
-            .keybinds_scroll
-            .saturating_add_signed(delta)
-            .min(u16::MAX);
+        self.keybinds_scroll = self.keybinds_scroll.saturating_add_signed(delta);
     }
 
     // --- Typed turn answers ---------------------------------------------------

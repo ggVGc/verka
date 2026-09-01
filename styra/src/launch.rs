@@ -24,7 +24,7 @@ use crate::app::{App, Request, Status};
 use crate::mount;
 use std::path::PathBuf;
 use styra_server::agent::Selection;
-use styra_server::{DrivaOptions, LaunchMount, LaunchPolicy};
+use styra_server::{DrivaOptions, LaunchMount, LaunchPolicy, WorkspaceLaunchChange};
 
 /// Which of the two policy layers the Driva view's keys are editing.
 ///
@@ -95,12 +95,6 @@ pub struct Launch {
     pub interaction: LaunchPolicy,
     /// Which of the two the keys act on.
     pub scope: LaunchScope,
-    /// Set while an edit to `workspace` has not been accepted by the server.
-    /// Every such edit is sent immediately, so this is normally false; it stays
-    /// true when the send failed, because the launch paths merge the *stored*
-    /// Workspace policy and a change only this client knows about would
-    /// otherwise be shown as part of a policy nothing will apply.
-    pub workspace_unsaved: bool,
     /// The mount cursor into each layer, kept per layer rather than shared so
     /// moving between the panes returns to where each was left.
     selected: (usize, usize),
@@ -213,9 +207,6 @@ impl Launch {
         // describe what is on screen. The store is one loop iteration away;
         // when it lands, the plan is re-asked because the key kept here is
         // still the one from before the edit.
-        if self.workspace_unsaved {
-            return false;
-        }
         match &self.plan_key {
             Some((planned, effective)) => planned != selection || effective != &self.effective(),
             None => true,
@@ -230,16 +221,14 @@ impl Launch {
     /// travels.
     pub fn set_workspace(&mut self, workspace: LaunchPolicy) {
         self.workspace = workspace;
-        self.workspace_unsaved = false;
         self.selected = (0, 0);
     }
 
-    /// The server has accepted this client's edit to the Workspace's standing
-    /// policy: take its answer as the truth, and leave the cursor where the
-    /// operator is working rather than resetting it as a Workspace switch does.
-    pub fn workspace_stored(&mut self, workspace: LaunchPolicy) {
+    /// Adopt the latest server-owned Workspace policy without disturbing UI
+    /// navigation state. This is used both for edit responses and change-feed
+    /// polling; the client never manufactures this policy itself.
+    pub fn sync_workspace(&mut self, workspace: LaunchPolicy) {
         self.workspace = workspace;
-        self.workspace_unsaved = false;
         self.selected.0 = self.cursor(LaunchScope::Workspace);
     }
 
@@ -249,7 +238,6 @@ impl Launch {
     pub fn adopt_workspace(&mut self, workspace: LaunchPolicy) {
         self.workspace = workspace;
         self.interaction = LaunchPolicy::default();
-        self.workspace_unsaved = false;
         self.selected = (0, 0);
     }
 
@@ -428,8 +416,16 @@ pub fn cycle_network(app: &mut App) {
     if !app.allow_launch_edit() {
         return;
     }
+    if app.launch.scope == LaunchScope::Workspace {
+        let on = !app.launch.workspace.grants_network();
+        workspace_change(app, WorkspaceLaunchChange::SetNetwork(Some(on)));
+        return app.show_action_message(if on {
+            "network on for every launch in this Workspace"
+        } else {
+            "network off for every launch here — a profile or template may still permit it"
+        });
+    }
     let message = app.launch.cycle_network();
-    workspace_edit(app);
     app.show_action_message(message);
 }
 
@@ -459,8 +455,11 @@ pub fn set_templates(app: &mut App, chosen: Vec<String>) {
     if !app.allow_launch_edit() {
         return;
     }
+    if app.launch.scope == LaunchScope::Workspace {
+        workspace_change(app, WorkspaceLaunchChange::SetTemplates(chosen));
+        return;
+    }
     let note = app.launch.set_templates(chosen);
-    workspace_edit(app);
     if let Some(note) = note {
         app.show_action_message(note);
     }
@@ -496,6 +495,7 @@ pub fn add_git_history(app: &mut App) {
     }
 
     let mut added = Vec::new();
+    let mut workspace_mounts = Vec::new();
     let mut skipped = Vec::new();
     for source in sources {
         let request = LaunchMount {
@@ -504,12 +504,24 @@ pub fn add_git_history(app: &mut App) {
             writable: true,
         };
         let label = mount::label(&request);
-        match app.launch.add_mount(request) {
+        let result = if app.launch.scope == LaunchScope::Workspace {
+            if app.launch.workspace.mounts.contains(&request) {
+                Err("the Workspace policy already grants that mount")
+            } else {
+                workspace_mounts.push(request);
+                Ok(())
+            }
+        } else {
+            app.launch.add_mount(request)
+        };
+        match result {
             Ok(()) => added.push(label),
             Err(reason) => skipped.push(reason),
         }
     }
-    workspace_edit(app);
+    if !workspace_mounts.is_empty() {
+        workspace_change(app, WorkspaceLaunchChange::AddMounts(workspace_mounts));
+    }
 
     match (added.is_empty(), skipped.first()) {
         (true, Some(reason)) => app.show_action_message(*reason),
@@ -546,10 +558,16 @@ pub fn confirm_prompt(app: &mut App) {
     };
     app.launch.prompt = None;
     let label = mount::label(&parsed);
+    if app.launch.scope == LaunchScope::Workspace {
+        if app.launch.workspace.mounts.contains(&parsed) {
+            return app.show_action_message("the Workspace policy already grants that mount");
+        }
+        workspace_change(app, WorkspaceLaunchChange::AddMounts(vec![parsed]));
+        return app.show_action_message(format!("added {label} to every launch in this Workspace"));
+    }
     match app.launch.add_mount(parsed) {
         Ok(()) => {
             let scope = app.launch.scope;
-            workspace_edit(app);
             app.show_action_message(format!("added {label} to {}", scope.subject()));
         }
         Err(reason) => app.show_action_message(reason),
@@ -562,9 +580,24 @@ pub fn remove_selected_mount(app: &mut App) {
         return;
     }
     let scope = app.launch.scope;
+    if scope == LaunchScope::Workspace {
+        let Some(removed) = app
+            .launch
+            .workspace
+            .mounts
+            .get(app.launch.cursor(scope))
+            .cloned()
+        else {
+            return app.show_action_message("the Workspace policy has no mounts to remove");
+        };
+        workspace_change(app, WorkspaceLaunchChange::RemoveMount(removed.clone()));
+        return app.show_action_message(format!(
+            "removed {} from every launch in this Workspace",
+            mount::label(&removed)
+        ));
+    }
     match app.launch.remove_mount() {
         Ok(removed) => {
-            workspace_edit(app);
             app.show_action_message(format!(
                 "removed {} from {}",
                 mount::label(&removed),
@@ -583,14 +616,6 @@ pub fn select_prev_mount(app: &mut App) {
     app.launch.select_prev_mount();
 }
 
-/// Send the Workspace policy again after a failed store, saying so this time.
-/// Bound to `W`, which is otherwise never needed.
-pub fn store_workspace(app: &mut App) {
-    if app.allow_launch_edit() {
-        app.ask(Request::StoreWorkspaceLaunch { announce: true });
-    }
-}
-
 /// Keep what this interaction added as the Workspace's own standing policy.
 /// Bound to `U`, for moving a setting up a layer once it turns out to be a
 /// property of the work rather than of one conversation about it.
@@ -601,7 +626,11 @@ pub fn promote_to_workspace(app: &mut App) {
     if app.launch.interaction.is_empty() {
         return app.show_action_message("this interaction adds nothing to the Workspace policy");
     }
-    app.ask(Request::PromoteLaunchToWorkspace);
+    let policy = app.launch.effective();
+    app.ask(Request::ChangeWorkspaceLaunch {
+        change: WorkspaceLaunchChange::Replace(policy),
+        clear_interaction: true,
+    });
 }
 
 /// Note that the Workspace's standing policy has just been changed here, and ask
@@ -613,12 +642,11 @@ pub fn promote_to_workspace(app: &mut App) {
 /// server. A Workspace edit kept in this client alone would show on screen as
 /// part of the effective policy — and the plan, and the launch, would quietly
 /// ignore it.
-fn workspace_edit(app: &mut App) {
-    if app.launch.scope != LaunchScope::Workspace {
-        return;
-    }
-    app.launch.workspace_unsaved = true;
-    app.ask(Request::StoreWorkspaceLaunch { announce: false });
+fn workspace_change(app: &mut App, change: WorkspaceLaunchChange) {
+    app.ask(Request::ChangeWorkspaceLaunch {
+        change,
+        clear_interaction: false,
+    });
 }
 
 /// While nothing is running there is no sandbox to describe, but there is one

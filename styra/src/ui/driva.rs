@@ -390,7 +390,7 @@ fn render_pane(
     } else {
         Color::DarkGray
     });
-    let mut spans = vec![
+    let spans = vec![
         Span::styled(if focused { " ▸ " } else { "   " }, title),
         Span::styled(
             scope.title(),
@@ -408,14 +408,6 @@ fn render_pane(
             Style::default().fg(Color::DarkGray),
         ),
     ];
-    // A Workspace edit is the server's to keep, and only a stored one is
-    // applied — so an unstored one is called out where it is being made.
-    if scope == LaunchScope::Workspace && app.launch.workspace_unsaved {
-        spans.push(Span::styled(
-            "· not stored · W retries ",
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-        ));
-    }
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(if focused {
@@ -440,11 +432,8 @@ fn hint_lines(app: &App) -> Vec<Line<'static>> {
     ))];
     lines.push(Line::from(Span::styled(
         match app.launch.scope {
-            LaunchScope::Workspace if app.launch.workspace_unsaved => {
-                "  W store it with the Workspace — only a stored policy is applied".to_owned()
-            }
             LaunchScope::Workspace => {
-                "  stored with the Workspace as you edit it — shared by every client".to_owned()
+                "  changes are stored by the server and shared by every client".to_owned()
             }
             LaunchScope::Interaction => format!(
                 "  I {} · U move up into it · D save as default",

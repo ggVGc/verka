@@ -92,6 +92,9 @@ impl FileChangeRecorder {
     }
 }
 
+// The recorder thread is handed its whole world at spawn; grouping these into a
+// struct would only move the same fields behind another name.
+#[allow(clippy::too_many_arguments)]
 fn follow_and_checkpoint(
     workspace: &Path,
     isolated_workspace: &Path,
