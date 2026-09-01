@@ -17,7 +17,8 @@ use crate::agent::{MountSpec, Profile, Selection};
 use crate::event::{decode_line, AgentEvent};
 use crate::journal::Journal;
 use crate::protocol::{
-    Direction, DrivaOptions, InteractionEnd, InteractionUpdate, LogEntry, RawLine,
+    AttributedMount, Direction, DrivaOptions, InteractionEnd, InteractionUpdate, LogEntry,
+    MountOrigin, RawLine,
 };
 use anyhow::{Context, Result};
 use driva::{ExecutionIo, ExecutionRequest, Isolation, Mount, MountAccess, WritableMountMode};
@@ -111,7 +112,7 @@ impl DrivaOptions {
             command: spec.profile.command.clone(),
             working_directory: request.working_directory,
             network: request.network,
-            mounts: request.mounts,
+            mounts: attributed_mounts(spec),
         }
     }
 }
@@ -580,18 +581,14 @@ fn apply_appserver_actions(
 
 /// Translate a [`InteractionSpec`] into a validated-shape Driva request. Mount and
 /// policy translation mirrors Orka's Driva adapter.
-fn build_request(spec: &InteractionSpec) -> ExecutionRequest {
-    let mut mounts: Vec<Mount> = spec
-        .temporary_mounts
-        .iter()
-        .cloned()
-        .map(|destination| Mount::Temporary { destination })
-        .collect();
-    for mount in std::iter::once(&spec.workspace)
-        .chain(spec.profile.mounts.iter())
-        .chain(spec.extra_mounts.iter())
-    {
-        mounts.push(Mount::Bind {
+/// Every mount the sandbox will hold, each carrying the layer that asked for
+/// it. This is the one place the effective mount list is assembled — the
+/// request Driva executes takes the same list with the attribution dropped —
+/// so what an operator is shown cannot fall out of step with what is enforced.
+fn attributed_mounts(spec: &InteractionSpec) -> Vec<AttributedMount> {
+    let bind = |origin, mount: &MountSpec| AttributedMount {
+        origin,
+        mount: Mount::Bind {
             source: mount.source.clone(),
             destination: mount.destination.clone(),
             access: if mount.writable {
@@ -599,15 +596,53 @@ fn build_request(spec: &InteractionSpec) -> ExecutionRequest {
             } else {
                 MountAccess::ReadOnly
             },
-        });
-    }
+        },
+    };
+    let mut mounts: Vec<AttributedMount> = spec
+        .temporary_mounts
+        .iter()
+        .cloned()
+        .map(|destination| AttributedMount {
+            origin: MountOrigin::Scratch,
+            mount: Mount::Temporary { destination },
+        })
+        .collect();
+    mounts.push(bind(MountOrigin::Workspace, &spec.workspace));
+    mounts.extend(
+        spec.profile
+            .mounts
+            .iter()
+            .map(|mount| bind(MountOrigin::Profile, mount)),
+    );
+    mounts.extend(
+        spec.extra_mounts
+            .iter()
+            .map(|mount| bind(MountOrigin::Operator, mount)),
+    );
     if let Some(broker) = &spec.broker {
-        mounts.push(Mount::Bind {
-            source: broker.control.source.clone(),
-            destination: broker.control.destination.clone(),
-            access: MountAccess::ReadWrite,
+        mounts.push(AttributedMount {
+            origin: MountOrigin::Broker,
+            mount: Mount::Bind {
+                source: broker.control.source.clone(),
+                destination: broker.control.destination.clone(),
+                access: MountAccess::ReadWrite,
+            },
         });
     }
+    if let Some(template) = &spec.template {
+        mounts.extend(template.mounts.iter().cloned().map(|mount| AttributedMount {
+            origin: MountOrigin::Template,
+            mount,
+        }));
+    }
+    mounts
+}
+
+fn build_request(spec: &InteractionSpec) -> ExecutionRequest {
+    let mounts: Vec<Mount> = attributed_mounts(spec)
+        .into_iter()
+        .map(|attributed| attributed.mount)
+        .collect();
     let mut environment: BTreeMap<OsString, OsString> = spec
         .profile
         .environment
@@ -1005,9 +1040,12 @@ mod tests {
         assert_eq!(options.command, command);
         assert_eq!(options.working_directory, dir);
         assert!(!options.network);
-        assert!(options.mounts.iter().any(|mount| matches!(
-            mount,
-            Mount::Bind { destination, .. } if destination == &dir
+        assert!(options.mounts.iter().any(|attributed| matches!(
+            attributed,
+            AttributedMount {
+                origin: MountOrigin::Workspace,
+                mount: Mount::Bind { destination, .. },
+            } if destination == &dir
         )));
     }
 }

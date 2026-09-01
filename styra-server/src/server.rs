@@ -4,9 +4,9 @@ use crate::agent::{MountSpec, SandboxLayout, Selection};
 use crate::interaction::{Interaction, InteractionSpec, ResolvedTemplate, SandboxBroker};
 use crate::journal::{self, Journal};
 use crate::protocol::{
-    Answer, Contract, DrivaOptions, InteractionActivity, InteractionSummary, InteractionUpdate,
-    LaunchMount, LaunchPolicy, QueuedMessage, SendMessage, SessionOrigin, SessionSummary,
-    TemplateSummary,
+    Answer, AttributedMount, Contract, DrivaOptions, InteractionActivity, InteractionSummary,
+    InteractionUpdate, LaunchMount, LaunchPolicy, MountOrigin, QueuedMessage, SendMessage,
+    SessionOrigin, SessionSummary, TemplateSummary,
 };
 use crate::protocol::{
     CreateSession, CreateWorkspace, Health, Request, Response, ResumeSession, SequencedUpdate,
@@ -1474,8 +1474,8 @@ fn resolve_launch_mounts(mounts: &[LaunchMount]) -> Result<Vec<MountSpec>> {
 /// still being chosen, rather than as a failed launch afterwards.
 fn ensure_distinct_destinations(options: &DrivaOptions) -> Result<()> {
     let mut seen = HashSet::new();
-    for mount in &options.mounts {
-        let destination = match mount {
+    for attributed in &options.mounts {
+        let destination = match &attributed.mount {
             driva::Mount::Bind { destination, .. }
             | driva::Mount::Overlay { destination, .. }
             | driva::Mount::Temporary { destination } => destination,
@@ -1618,15 +1618,21 @@ mod tests {
             working_directory: PathBuf::from("/tmp/styra/workspace"),
             network: false,
             mounts: vec![
-                driva::Mount::Bind {
-                    source: PathBuf::from("/srv/one"),
-                    destination: PathBuf::from("/tmp/styra/workspace"),
-                    access: driva::MountAccess::ReadWrite,
+                AttributedMount {
+                    origin: MountOrigin::Workspace,
+                    mount: driva::Mount::Bind {
+                        source: PathBuf::from("/srv/one"),
+                        destination: PathBuf::from("/tmp/styra/workspace"),
+                        access: driva::MountAccess::ReadWrite,
+                    },
                 },
-                driva::Mount::Bind {
-                    source: PathBuf::from("/srv/two"),
-                    destination: PathBuf::from("/tmp/styra/workspace"),
-                    access: driva::MountAccess::ReadOnly,
+                AttributedMount {
+                    origin: MountOrigin::Operator,
+                    mount: driva::Mount::Bind {
+                        source: PathBuf::from("/srv/two"),
+                        destination: PathBuf::from("/tmp/styra/workspace"),
+                        access: driva::MountAccess::ReadOnly,
+                    },
                 },
             ],
         };

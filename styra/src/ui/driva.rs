@@ -28,7 +28,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
-use styra_server::{DrivaOptions, Mount, MountAccess};
+use styra_server::{AttributedMount, DrivaOptions, Mount, MountAccess, MountOrigin};
 
 /// Rows the effective-policy summary keeps for itself before either settings
 /// pane is given any height. Enough for the banner and the fields that say what
@@ -149,7 +149,31 @@ fn summary_lines(app: &App, options: &DrivaOptions) -> Vec<Line<'static>> {
                 .add_modifier(Modifier::BOLD),
         )),
     ]);
-    lines.extend(options.mounts.iter().map(mount_line));
+    lines.extend(grouped_mount_lines(&options.mounts));
+    lines
+}
+
+/// The effective mounts under a heading per layer that contributed them.
+///
+/// Flat, the list answers "what can the agent touch" but not "why", and the two
+/// questions are asked together: a grant an operator does not recognize is
+/// either the profile's doing, a template's, or their own, and only the last of
+/// those is theirs to take back with `x`. Groups appear in the order the mounts
+/// themselves do, so this only ever inserts headings — the sequence Driva was
+/// handed is still readable down the column.
+fn grouped_mount_lines(mounts: &[AttributedMount]) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    let mut current: Option<MountOrigin> = None;
+    for attributed in mounts {
+        if current != Some(attributed.origin) {
+            current = Some(attributed.origin);
+            lines.push(Line::from(Span::styled(
+                format!("  {}", attributed.origin.label()),
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+        lines.push(mount_line(&attributed.mount));
+    }
     lines
 }
 
@@ -498,7 +522,7 @@ fn mount_line(mount: &Mount) -> Line<'static> {
             };
             Line::from(vec![
                 Span::styled(
-                    format!("  {label} "),
+                    format!("    {label} "),
                     Style::default().fg(color).add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
@@ -509,7 +533,7 @@ fn mount_line(mount: &Mount) -> Line<'static> {
         }
         Mount::Temporary { destination } => Line::from(vec![
             Span::styled(
-                "  tmp ",
+                "    tmp ",
                 Style::default()
                     .fg(Color::Blue)
                     .add_modifier(Modifier::BOLD),
@@ -578,10 +602,13 @@ mod tests {
             command: vec!["codex".into(), "app-server".into()],
             working_directory: PathBuf::from("/tmp/styra/workspace"),
             network: false,
-            mounts: vec![Mount::Bind {
-                source: PathBuf::from("/home/op/project"),
-                destination: PathBuf::from("/tmp/styra/workspace"),
-                access: MountAccess::ReadWrite,
+            mounts: vec![AttributedMount {
+                origin: MountOrigin::Workspace,
+                mount: Mount::Bind {
+                    source: PathBuf::from("/home/op/project"),
+                    destination: PathBuf::from("/tmp/styra/workspace"),
+                    access: MountAccess::ReadWrite,
+                },
             }],
         });
         let screen = rendered(&app);
@@ -591,7 +618,54 @@ mod tests {
         assert!(screen.contains("off"));
         assert!(screen.contains("/home/op/project"));
         assert!(screen.contains("/tmp/styra/workspace"));
+        assert!(screen.contains("workspace"));
         assert!(!screen.contains("planned"));
+    }
+
+    #[test]
+    fn driva_groups_effective_mounts_by_their_origin() {
+        let mounts = vec![
+            AttributedMount {
+                origin: MountOrigin::Workspace,
+                mount: Mount::Bind {
+                    source: PathBuf::from("/host/project"),
+                    destination: PathBuf::from("/workspace"),
+                    access: MountAccess::ReadWrite,
+                },
+            },
+            AttributedMount {
+                origin: MountOrigin::Profile,
+                mount: Mount::Bind {
+                    source: PathBuf::from("/host/credentials"),
+                    destination: PathBuf::from("/root/.config"),
+                    access: MountAccess::ReadOnly,
+                },
+            },
+            AttributedMount {
+                origin: MountOrigin::Operator,
+                mount: Mount::Bind {
+                    source: PathBuf::from("/host/data"),
+                    destination: PathBuf::from("/data"),
+                    access: MountAccess::ReadOnly,
+                },
+            },
+        ];
+        let lines = grouped_mount_lines(&mounts)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            lines,
+            vec![
+                "  workspace",
+                "    rw /host/project → /workspace",
+                "  agent profile",
+                "    ro /host/credentials → /root/.config",
+                "  your mounts",
+                "    ro /host/data → /data",
+            ]
+        );
     }
 
     #[test]

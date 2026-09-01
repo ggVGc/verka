@@ -143,7 +143,61 @@ pub struct DrivaOptions {
     pub command: Vec<String>,
     pub working_directory: PathBuf,
     pub network: bool,
-    pub mounts: Vec<Mount>,
+    pub mounts: Vec<AttributedMount>,
+}
+
+impl DrivaOptions {
+    /// The mounts alone, for the questions that only care about what the
+    /// sandbox holds and not about who asked for it.
+    pub fn plain_mounts(&self) -> Vec<Mount> {
+        self.mounts.iter().map(|mount| mount.mount.clone()).collect()
+    }
+}
+
+/// Which layer of the launch policy put a mount in the sandbox.
+///
+/// The effective policy is one flat list by the time Driva runs it, but the
+/// layers that produced it are not interchangeable to an operator: a grant from
+/// the agent profile is a property of the agent they picked, one from a
+/// template is a property of the template, and one they typed is theirs to take
+/// back. Recording the layer at the point the list is built is the only place
+/// the answer is known for certain — afterwards a mount is just a path pair.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MountOrigin {
+    /// The operator's project, bound writable as the agent's workspace.
+    Workspace,
+    /// An empty writable filesystem discarded when the run ends.
+    Scratch,
+    /// Granted by the agent profile — its credentials, tools, and caches.
+    Profile,
+    /// Granted by one of the selected Driva templates.
+    Template,
+    /// Asked for by hand, through the launch policy's mount key.
+    Operator,
+    /// The hidden control mount the sandbox broker needs for its tmux shell.
+    Broker,
+}
+
+impl MountOrigin {
+    /// How the origin reads as a heading over the mounts it contributed.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Workspace => "workspace",
+            Self::Scratch => "scratch",
+            Self::Profile => "agent profile",
+            Self::Template => "templates",
+            Self::Operator => "your mounts",
+            Self::Broker => "broker control",
+        }
+    }
+}
+
+/// A resolved mount together with the layer that asked for it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttributedMount {
+    pub origin: MountOrigin,
+    pub mount: Mount,
 }
 
 /// One extra host directory the operator asked to be bound into the sandbox,

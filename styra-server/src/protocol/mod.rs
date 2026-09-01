@@ -14,9 +14,9 @@ mod types;
 
 pub use transport::{read_message, read_message_limited, write_message, MAX_REQUEST_BYTES};
 pub use types::{
-    Answer, AnswerValue, Contract, Direction, DrivaOptions, FileLocation, InteractionActivity,
+    Answer, AnswerValue, AttributedMount, Contract, Direction, DrivaOptions, FileLocation, InteractionActivity,
     InteractionEnd, InteractionSummary, InteractionUpdate, LaunchMount, LaunchPolicy, LogEntry,
-    LogLevel, QueuedMessage, RawLine, SessionOrigin, SessionSummary, TemplateSummary,
+    LogLevel, MountOrigin, QueuedMessage, RawLine, SessionOrigin, SessionSummary, TemplateSummary,
     WorkspaceSummary,
 };
 

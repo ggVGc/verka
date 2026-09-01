@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 
 use crate::app::App;
 use crate::mount;
-use styra_server::LaunchMount;
+use styra_server::{DrivaOptions, LaunchMount};
 
 /// The open path prompt, and which of its two questions is being answered.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -133,7 +133,7 @@ fn confirm(app: &mut App) {
         Ok(host) => host,
         Err(problem) => return app.show_action_message(problem),
     };
-    let Some(mounts) = app.launch.driva.as_ref().map(|driva| driva.mounts.clone()) else {
+    let Some(mounts) = app.launch.driva.as_ref().map(DrivaOptions::plain_mounts) else {
         // A replayed journal has no sandbox to describe and none planned, so
         // there is nothing to check the path against and nothing to grant.
         app.insert = None;
@@ -265,7 +265,7 @@ mod tests {
     use super::*;
     use crate::app::Status;
     use crossterm::event::{KeyEvent, KeyModifiers};
-    use styra_server::{DrivaOptions, Mount, MountAccess};
+    use styra_server::{AttributedMount, Mount, MountAccess, MountOrigin};
 
     /// A scratch tree to complete and resolve against, named per test so the
     /// cases stay independent of each other.
@@ -338,10 +338,13 @@ mod tests {
             command: vec!["codex".into()],
             working_directory: PathBuf::from("/workspace"),
             network: false,
-            mounts: vec![Mount::Bind {
-                source: root.to_path_buf(),
-                destination: PathBuf::from("/workspace"),
-                access: MountAccess::ReadWrite,
+            mounts: vec![AttributedMount {
+                origin: MountOrigin::Workspace,
+                mount: Mount::Bind {
+                    source: root.to_path_buf(),
+                    destination: PathBuf::from("/workspace"),
+                    access: MountAccess::ReadWrite,
+                },
             }],
         });
         app.enter_input();
