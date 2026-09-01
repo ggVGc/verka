@@ -1,3 +1,9 @@
+- Enable setting up a job list:
+  - Each job runs in separate branch and worktree, rebases before attempting merge, deletes worktree if merge succeeded
+  - Each job becoms a styra session
+  - This is very similar to linka, and should be built on linka, but can be made part of styra-server as a first step
+  - The job queue is part of a workspace, and persisted
+  - Each job is initially just a prompt. Can later be a collection of "Actions".
 - Sessions can be paused (stopped) for various reasons: Actually done from user perspective, interrupted, machine shutdown:
   - Should be possible to mark a session done, so the conclusion is clear. Done sessions can still be re-opened.
 - Make styra sessions aware of if they are associated with a branch or worktree, so that it can be cleaned up after session is considered done, and we can sort on sessions associated with current branch, or no branch etc.
