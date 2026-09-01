@@ -1,3 +1,8 @@
+- Some kind of snippet mechanism. Global and per workspace:
+  - Quick way of inserting common prompts
+  - Maybe some kind of prompt builder interface in the input window where I can put together blocks and make some of them sticky for next inputs in same interaction.
+- Sticky context per workspace, and maybe per session:
+  - Essentially like claude.md, but more explicit and allows for different content based for multiple workspaces in same project
 - Group driva options based on source
 - Svara: Structured request for files matching some question. Loads into location list (quickfix?)
 - Reviewing code changes is less useful than reviewing architectural changes:
