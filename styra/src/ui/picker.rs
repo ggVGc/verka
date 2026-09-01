@@ -653,7 +653,7 @@ fn interaction_item(
     };
     let color = status_color(&status);
     let state = status.label();
-    ListItem::new(Line::from(vec![
+    let main = Line::from(vec![
         Span::styled(
             if selected { "•" } else { " " },
             Style::default().fg(if selected {
@@ -693,18 +693,17 @@ fn interaction_item(
                 .unwrap_or_default(),
             Style::default().fg(Color::DarkGray),
         ),
-        // What the agent last said, dimmed and last on the row: it is the
-        // reason the operator recognises the interaction, but it must not
-        // crowd out the fixed columns identifying it. The row clips it.
-        Span::styled(
-            interaction
-                .last_message
-                .as_ref()
-                .map(|text| format!("  « {text}"))
-                .unwrap_or_default(),
+    ]);
+    let mut lines = vec![main];
+    if let Some(text) = &interaction.last_message {
+        // Keep the response visually subordinate, but give it the full width
+        // of its own line so it never crowds out the identifying fields.
+        lines.push(Line::from(Span::styled(
+            format!("  « {text}"),
             Style::default().fg(Color::Gray),
-        ),
-    ]))
+        )));
+    }
+    ListItem::new(lines)
 }
 
 fn session_item(session: &SessionSummary, selected: bool) -> ListItem<'static> {
@@ -1126,6 +1125,21 @@ mod tests {
             &[],
         );
         assert!(pending.contains("idle"));
+    }
+
+    #[test]
+    fn interactions_picker_puts_the_latest_response_below_the_main_line() {
+        let mut interaction = interaction_summary("s-1", "codex", true);
+        interaction.last_message = Some("The checks are green.".into());
+
+        let screen = rendered_interactions_picker(&[interaction], &[], 0, &[]);
+        let main_row = screen.find("codex").expect("main interaction line") / 80;
+        let response_row = screen
+            .find("« The checks are green.")
+            .expect("latest response line")
+            / 80;
+
+        assert_eq!(response_row, main_row + 1, "{screen}");
     }
 
     #[test]

@@ -21,6 +21,11 @@ const PREVIEW_SETTLE: Duration = Duration::from_millis(120);
 /// turn ending is visible without the operator moving the cursor.
 const LIVENESS_REFRESH: Duration = Duration::from_secs(2);
 
+/// How often the open interactions picker replaces its summaries. Unlike the
+/// conversation preview, status, selection, name, and last response all come
+/// from `list_interactions`, so they need their own short refresh cadence.
+const INTERACTIONS_REFRESH: Duration = Duration::from_millis(250);
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 // The picker yields at most one of these per run, so the size difference never
 // costs anything worth an extra allocation.
@@ -370,7 +375,21 @@ pub fn run_interactions_picker(
     let mut preview_id = String::new();
     let mut preview_cursor = 0u64;
     let mut preview_updates = Vec::new();
+    let mut refreshed = Instant::now();
     loop {
+        if refreshed.elapsed() >= INTERACTIONS_REFRESH {
+            refreshed = Instant::now();
+            // Refreshing can change the status sort order. Keep the cursor on
+            // the same interaction by identity rather than letting a moving
+            // row silently change the selection.
+            if !preview_id.is_empty() {
+                refocus = Some(preview_id.clone());
+            }
+            if let Ok(mut current) = client.list_interactions() {
+                sort_interactions(&mut current);
+                *interactions = current;
+            }
+        }
         let rows = interaction_rows(interactions, workspaces, current_workspace_id, view);
         let visible: Vec<usize> = rows
             .iter()
