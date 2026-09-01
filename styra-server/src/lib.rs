@@ -116,3 +116,4 @@ pub mod journal;
 pub mod quota;
 pub mod server;
 pub mod workspace;
+pub mod worktree;

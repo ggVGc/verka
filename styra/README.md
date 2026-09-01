@@ -62,11 +62,21 @@ The durable layout is:
 ```text
 workspaces/<WORKSPACE-ID>/
   workspace.json
+  worktrees/                  # linked Git checkouts, when Git-backed
   sessions/<SESSION-ID>/
     session.json
     journal.jsonl
     diagnostics.log
 ```
+
+When a Workspace's host directory is inside a Git working tree, Styra discovers
+that repository on the host and keeps linked checkouts below the Workspace's
+`worktrees/` directory. Driva mounts that directory at
+`/tmp/styra/worktrees`, together with the repository's shared Git metadata, so
+new checkouts become visible without restarting the interaction. Codex sessions
+receive a `create_worktree` tool taking a branch `name`; Styra handles the call
+on the host with `git worktree add -b` and returns the new sandbox path. A
+Workspace outside Git receives neither these mounts nor the tool.
 
 `workspace.json` also holds the Workspace's standing launch policy: the Driva
 templates, extra mounts, and network permission every launch there starts from.

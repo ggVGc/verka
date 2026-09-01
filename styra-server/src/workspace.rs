@@ -42,6 +42,11 @@ pub fn sessions_dir(store_root: &Path, workspace_id: &str) -> PathBuf {
     workspace_dir(store_root, workspace_id).join("sessions")
 }
 
+/// Durable parent for linked Git worktrees created on behalf of this Workspace.
+pub fn worktrees_dir(store_root: &Path, workspace_id: &str) -> PathBuf {
+    workspace_dir(store_root, workspace_id).join("worktrees")
+}
+
 /// Create a durable Workspace for `host_path`.
 ///
 /// Workspace identity is deliberately separate from the host path: two
@@ -69,6 +74,10 @@ pub fn create_with_repository(
     let path = workspace_dir(store_root, &id);
     std::fs::create_dir_all(path.join("sessions"))
         .with_context(|| format!("creating Workspace directory {}", path.display()))?;
+    if crate::git::discover(&host_path)?.is_some() {
+        std::fs::create_dir(path.join("worktrees"))
+            .with_context(|| format!("creating Workspace worktree directory {}", path.display()))?;
+    }
     let meta = WorkspaceMeta {
         id: id.clone(),
         name,

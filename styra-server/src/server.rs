@@ -8,6 +8,7 @@ use crate::protocol::{
     InteractionSnapshotScope, InteractionSummary, InteractionUpdate, LaunchMount, LaunchPolicy,
     QueuedMessage, SendMessage, SessionOrigin, SessionSummary, TemplateSummary,
 };
+use crate::protocol::WorkspaceSummary;
 use crate::protocol::{
     CreateSession, CreateWorkspace, Health, Request, Response, ResumeSession, SequencedUpdate,
     SessionInfo, ShellInfo, StoredSession, Updates, WireResponse, MAX_REQUEST_BYTES,
@@ -25,6 +26,7 @@ use std::time::{Duration, Instant};
 /// Stands in for the session id in a planned launch: the directory it names is
 /// only created once the session exists.
 const PENDING_SESSION_ID: &str = "<pending>";
+const SANDBOX_WORKTREES_DIR: &str = "/tmp/styra/worktrees";
 
 #[derive(Clone)]
 pub struct ServerState {
@@ -258,6 +260,21 @@ impl ManagedInteraction {
 }
 
 impl ServerState {
+    /// Prepare linked worktrees for a Git-backed Workspace.
+    fn workspace_worktrees(
+        &self,
+        workspace: &WorkspaceSummary,
+    ) -> Result<Option<crate::worktree::Worktrees>> {
+        let Some(repository) = crate::git::discover(&workspace.host_path)? else {
+            return Ok(None);
+        };
+        crate::worktree::Worktrees::prepare(
+            repository,
+            crate::workspace::worktrees_dir(&self.inner.store_root, &workspace.id),
+            PathBuf::from(SANDBOX_WORKTREES_DIR),
+        )
+        .map(Some)
+    }
     pub fn new(store_root: PathBuf, socket: PathBuf) -> Self {
         Self {
             inner: Arc::new(ServerInner {
@@ -338,6 +355,15 @@ impl ServerState {
             .map(crate::git::mounts)
             .transpose()?
             .unwrap_or_default();
+        let worktrees = self.workspace_worktrees(&owning_workspace)?;
+        let automatic_mounts = worktrees
+            .as_ref()
+            .map(crate::worktree::Worktrees::mounts)
+            .unwrap_or_default();
+        let dynamic_tools = worktrees
+            .as_ref()
+            .map(|worktrees| vec![worktrees.tool()])
+            .unwrap_or_default();
         let workspace = owning_workspace.host_path;
         let selection = request.selection;
         let name = journal::normalize_session_name(request.name.as_deref())?
@@ -376,8 +402,10 @@ impl ServerState {
                 writable: true,
             },
             repository_mounts,
+            automatic_mounts,
             temporary_mounts: Vec::new(),
             extra_mounts,
+            dynamic_tools,
             template,
             broker: Some(self.prepare_broker(&id, tmux)?),
         };
@@ -597,6 +625,15 @@ impl ServerState {
             .map(crate::git::mounts)
             .transpose()?
             .unwrap_or_default();
+        let worktrees = self.workspace_worktrees(&owning_workspace)?;
+        let automatic_mounts = worktrees
+            .as_ref()
+            .map(crate::worktree::Worktrees::mounts)
+            .unwrap_or_default();
+        let dynamic_tools = worktrees
+            .as_ref()
+            .map(|worktrees| vec![worktrees.tool()])
+            .unwrap_or_default();
         let workspace = owning_workspace.host_path;
         let launch = LaunchPolicy::merge(&owning_workspace.launch, &request.launch);
         let mut profile = crate::agent::resolve_profile(&request.selection, &self.inner.layout)?;
@@ -615,8 +652,10 @@ impl ServerState {
                 writable: true,
             },
             repository_mounts,
+            automatic_mounts,
             temporary_mounts: Vec::new(),
             extra_mounts,
+            dynamic_tools,
             template,
             broker: Some(self.describe_broker(PENDING_SESSION_ID, tmux)),
         };
@@ -670,6 +709,15 @@ impl ServerState {
             .map(crate::git::mounts)
             .transpose()?
             .unwrap_or_default();
+        let worktrees = self.workspace_worktrees(&owning_workspace)?;
+        let automatic_mounts = worktrees
+            .as_ref()
+            .map(crate::worktree::Worktrees::mounts)
+            .unwrap_or_default();
+        let dynamic_tools = worktrees
+            .as_ref()
+            .map(|worktrees| vec![worktrees.tool()])
+            .unwrap_or_default();
         let workspace = owning_workspace.host_path;
         let selection = summary.selection;
         let launch = LaunchPolicy::merge(&owning_workspace.launch, &request.launch);
@@ -701,8 +749,10 @@ impl ServerState {
                 writable: true,
             },
             repository_mounts,
+            automatic_mounts,
             temporary_mounts: Vec::new(),
             extra_mounts,
+            dynamic_tools,
             template,
             broker: Some(self.prepare_broker(&request.id, tmux)?),
         };

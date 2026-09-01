@@ -22,6 +22,7 @@ use crate::protocol::{
 };
 use anyhow::{Context, Result};
 use driva::{ExecutionIo, ExecutionRequest, Isolation, Mount, MountAccess, WritableMountMode};
+use genta::appserver::DynamicTool;
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fs::File;
@@ -44,6 +45,10 @@ pub struct InteractionSpec {
     pub workspace: MountSpec,
     /// Read-only checkout and writable Git metadata belonging to the Workspace.
     pub repository_mounts: Vec<MountSpec>,
+    /// Workspace-managed linked worktrees and their shared Git metadata.
+    pub automatic_mounts: Vec<MountSpec>,
+    /// Host-executed functions exposed by supporting providers.
+    pub dynamic_tools: Vec<DynamicTool>,
     /// Empty writable filesystems discarded after the run (e.g. `/root`).
     pub temporary_mounts: Vec<PathBuf>,
     /// Host directories the operator asked for by hand, already canonicalized
@@ -177,10 +182,12 @@ impl Interaction {
         let appserver = match protocol {
             crate::event::Protocol::CodexAppServer => {
                 let cwd = spec.working_directory.to_string_lossy().into_owned();
-                Some(Arc::new(match &spec.resume_provider_session_id {
+                let client = match &spec.resume_provider_session_id {
                     Some(thread_id) => crate::appserver::AppServer::resume(cwd, thread_id.clone()),
                     None => crate::appserver::AppServer::new(cwd),
-                }))
+                }
+                .with_dynamic_tools(spec.dynamic_tools.clone());
+                Some(Arc::new(client))
             }
             crate::event::Protocol::CodexJsonl | crate::event::Protocol::ClaudeJsonl => None,
         };
@@ -614,6 +621,11 @@ fn attributed_mounts(spec: &InteractionSpec) -> Vec<AttributedMount> {
             .map(|mount| bind(MountOrigin::GitRepository, mount)),
     );
     mounts.extend(
+        spec.automatic_mounts
+            .iter()
+            .map(|mount| bind(MountOrigin::GitRepository, mount)),
+    );
+    mounts.extend(
         spec.profile
             .mounts
             .iter()
@@ -783,6 +795,8 @@ mod tests {
                 writable: true,
             },
             repository_mounts: Vec::new(),
+            automatic_mounts: Vec::new(),
+            dynamic_tools: Vec::new(),
             temporary_mounts: Vec::new(),
             extra_mounts: Vec::new(),
             template: None,

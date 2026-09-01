@@ -332,6 +332,7 @@ The durable layout makes ownership explicit:
 ```text
 workspaces/<workspace-id>/
   workspace.json
+  worktrees/                  # linked Git checkouts, when Git-backed
   sessions/<session-id>/
     session.json
     journal.jsonl
@@ -343,6 +344,23 @@ directory, creation time, and the standing launch policy every Session started
 here begins from (see "The sandbox is chosen where it is shown"). A host
 directory does not determine identity: separate Workspaces may intentionally
 refer to the same checkout.
+
+If the host directory is nested anywhere inside a Git working tree, the server
+discovers the checkout and its common metadata before launch. Each such
+Workspace owns a durable `worktrees/` parent in its state directory. Driva binds
+that parent read-write at `/tmp/styra/worktrees` and binds the common Git
+directory read-write at the absolute path recorded in linked-worktree `.git`
+files. The parent is mounted once, while empty or populated, so a checkout
+created during a turn appears inside the fixed sandbox immediately.
+
+Codex app-server threads advertise one host-executed dynamic function,
+`create_worktree(name)`. An `item/tool/call` is handled synchronously by Styra's
+reader thread: Styra validates the branch name, runs `git worktree add -b` from
+the discovered repository on the host, and replies with the new path below
+`/tmp/styra/worktrees`. Worktree directory components encode branch separators,
+so names such as `feature/ui` remain one safe child of the Workspace-owned
+parent. Non-Git Workspaces advertise no tool and receive no automatic Git
+mounts.
 
 Alongside `journal.jsonl`, one `session.json` is written at session creation:
 the owning Workspace plus genta's `SessionMeta` (the structured selection and
@@ -886,6 +904,8 @@ styra-server/            # the server application + its client interface library
     interaction.rs               # one live agent interaction: Driva launch, pipes, threads
     journal.rs           # raw event/input capture and replay
     workspace.rs         # Workspace metadata and hierarchy
+    git.rs               # host-side enclosing-repository discovery
+    worktree.rs          # Workspace worktree storage, mounts, and agent tool
 
 styra/                   # the terminal client application
   Cargo.toml             # [[bin]] styra; depends on styra-server (path)

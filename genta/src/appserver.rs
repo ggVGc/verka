@@ -43,12 +43,14 @@ pub enum Action {
 /// The callback stays in the embedding application. Genta only translates the
 /// app-server's `dynamicTools` and `item/tool/call` protocol, so a host can add
 /// capabilities without putting application-specific behavior in this crate.
+type DynamicToolHandler = dyn Fn(&Value) -> Result<String, String> + Send + Sync;
+
 #[derive(Clone)]
 pub struct DynamicTool {
     name: String,
     description: String,
     input_schema: Value,
-    handler: Arc<dyn Fn(&Value) -> Result<String, String> + Send + Sync>,
+    handler: Arc<DynamicToolHandler>,
 }
 
 impl DynamicTool {
@@ -592,6 +594,61 @@ mod tests {
         assert_eq!(
             events,
             vec![&AgentEvent::AgentMessage { text: "hi".into() }]
+        );
+    }
+
+    #[test]
+    fn dynamic_tools_are_advertised_and_executed_by_the_host() {
+        let tool = DynamicTool::new(
+            "make_thing",
+            "Make a named thing.",
+            json!({
+                "type": "object",
+                "properties": { "name": { "type": "string" } },
+                "required": ["name"],
+                "additionalProperties": false,
+            }),
+            |arguments| {
+                let name = arguments
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "name is required".to_owned())?;
+                Ok(format!("made {name}"))
+            },
+        );
+        let client = AppServer::new("/tmp/styra/workspace".into()).with_dynamic_tools(vec![tool]);
+        let opened = sent(&client.handle_line(r#"{"id":1,"result":{}}"#));
+        assert_eq!(opened[1]["params"]["dynamicTools"][0]["name"], "make_thing");
+        assert_eq!(
+            opened[1]["params"]["dynamicTools"][0]["inputSchema"]["required"][0],
+            "name"
+        );
+
+        let response = sent(&client.handle_line(
+            r#"{"id":"call-7","method":"item/tool/call","params":{"threadId":"t","turnId":"turn","callId":"call","tool":"make_thing","arguments":{"name":"branch"}}}"#,
+        ));
+        assert_eq!(response[0]["id"], "call-7");
+        assert_eq!(response[0]["result"]["success"], true);
+        assert_eq!(
+            response[0]["result"]["contentItems"][0]["text"],
+            "made branch"
+        );
+    }
+
+    #[test]
+    fn a_dynamic_tool_error_is_returned_to_the_agent() {
+        let tool = DynamicTool::new("fail", "Fail.", json!({ "type": "object" }), |_| {
+            Err("could not do it".into())
+        });
+        let client = AppServer::new("/tmp/styra/workspace".into()).with_dynamic_tools(vec![tool]);
+        let response = sent(&client.handle_line(
+            r#"{"id":9,"method":"item/tool/call","params":{"tool":"fail","arguments":{}}}"#,
+        ));
+
+        assert_eq!(response[0]["result"]["success"], false);
+        assert_eq!(
+            response[0]["result"]["contentItems"][0]["text"],
+            "could not do it"
         );
     }
 }
