@@ -787,34 +787,32 @@ mod tests {
             "{screen}"
         );
         crate::launch::remove_selected_mount(&mut app);
-        assert!(app.launch.workspace.mounts.is_empty());
+        assert_eq!(app.launch.workspace.mounts.len(), 1);
         // This interaction's own mount is untouched by an edit to the other
         // layer.
         assert_eq!(app.launch.interaction.mounts.len(), 1);
     }
 
-    /// A Workspace edit only counts once the server has it, since the launch
-    /// paths merge the stored policy. An unstored one is called out.
+    /// A Workspace edit is only reflected after the server returns its new
+    /// authoritative policy; the UI never displays an optimistic copy.
     #[test]
-    fn an_unstored_workspace_edit_says_so() {
+    fn workspace_edits_are_rendered_from_the_server_snapshot() {
         let mut app = editable_app();
         crate::launch::toggle_scope(&mut app);
         crate::launch::cycle_network(&mut app);
-        assert_eq!(app.launch.workspace.network, Some(true));
-        assert!(app.launch.workspace_unsaved);
+        assert_eq!(app.launch.workspace.network, None);
 
         let screen = tall(&app);
-        assert!(screen.contains("not stored · W retries"), "{screen}");
-        assert!(screen.contains("W store it with the Workspace"), "{screen}");
+        assert!(screen.contains("off — not stated"), "{screen}");
 
-        // The server's acknowledgement clears it, and the pane goes back to
-        // saying the policy is shared.
-        let stored = app.launch.workspace.clone();
-        app.launch.workspace_stored(stored);
+        app.launch.sync_workspace(styra_server::LaunchPolicy {
+            network: Some(true),
+            ..Default::default()
+        });
         let screen = tall(&app);
-        assert!(!screen.contains("not stored"), "{screen}");
+        assert!(screen.contains("network   on"), "{screen}");
         assert!(
-            screen.contains("stored with the Workspace as you edit it"),
+            screen.contains("changes are stored by the server"),
             "{screen}"
         );
     }

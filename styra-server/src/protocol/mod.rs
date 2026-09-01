@@ -569,34 +569,19 @@ mod tests {
             }],
             standalone: false,
         };
-        let request = Request::SetWorkspaceLaunch {
+        let request = Request::ChangeWorkspaceLaunch {
             workspace_id: "w-1".into(),
-            launch: launch.clone(),
+            change: WorkspaceLaunchChange::Replace(launch.clone()),
         };
         let json = serde_json::to_value(&request).unwrap();
-        assert_eq!(json["operation"], "set_workspace_launch");
-        assert_eq!(json["data"]["launch"]["templates"][0], "rust");
+        assert_eq!(json["operation"], "change_workspace_launch");
+        assert_eq!(json["data"]["change"]["change"], "replace");
         assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
 
-        let summary = WorkspaceSummary {
-            id: "w-1".into(),
-            name: None,
-            notes: String::new(),
-            host_path: PathBuf::from("/home/op/project"),
-            path: PathBuf::from("/store/workspaces/w-1"),
-            session_count: 0,
-            age: "just now".into(),
-            created_at_ms: 1,
-            last_accessed_at_ms: 1,
-            launch,
-        };
-        let response = Response::WorkspaceLaunchUpdated(summary);
+        let response = Response::WorkspaceLaunchUpdated(launch);
         let json = serde_json::to_value(&response).unwrap();
         assert_eq!(json["type"], "workspace_launch_updated");
-        assert_eq!(
-            json["data"]["launch"]["mounts"][0]["destination"],
-            "/mnt/corpus"
-        );
+        assert_eq!(json["data"]["mounts"][0]["destination"], "/mnt/corpus");
         assert_eq!(serde_json::from_value::<Response>(json).unwrap(), response);
     }
 

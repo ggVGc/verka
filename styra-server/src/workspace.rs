@@ -221,7 +221,19 @@ pub fn change_launch(
 fn write_meta(directory: &Path, meta: &WorkspaceMeta) -> Result<()> {
     let path = directory.join(WORKSPACE_META_FILE);
     let json = serde_json::to_string_pretty(meta).context("serializing Workspace metadata")?;
-    std::fs::write(&path, json).with_context(|| format!("writing {}", path.display()))
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+    let temporary = directory.join(format!(
+        ".{WORKSPACE_META_FILE}.tmp-{}-{}",
+        std::process::id(),
+        TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::write(&temporary, json).with_context(|| format!("writing {}", temporary.display()))?;
+    if let Err(error) = std::fs::rename(&temporary, &path) {
+        std::fs::remove_file(&temporary).ok();
+        return Err(error).with_context(|| format!("publishing {}", path.display()));
+    }
+    Ok(())
 }
 
 fn read_meta(directory: &Path) -> Result<WorkspaceMeta> {
@@ -310,9 +322,14 @@ mod tests {
             // dropped rather than stored as a contradiction.
             standalone: true,
         };
-        let stored = store_launch(&store, &workspace.id, launch.clone()).unwrap();
-        assert!(!stored.launch.standalone);
-        assert_eq!(stored.launch.templates, launch.templates);
+        let stored = change_launch(
+            &store,
+            &workspace.id,
+            WorkspaceLaunchChange::Replace(launch.clone()),
+        )
+        .unwrap();
+        assert!(!stored.standalone);
+        assert_eq!(stored.templates, launch.templates);
 
         // Notes, and the access bump the picker relies on, both rewrite
         // `workspace.json`; neither is allowed to drop the policy.

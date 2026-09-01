@@ -92,13 +92,13 @@ pub mod spawn;
 
 pub use client::Client;
 pub use daemon::{run, serve_if_requested, ServerConfig};
+pub use protocol::WorkspaceLaunchChange;
 pub use protocol::{
     Answer, AnswerValue, AttributedMount, Contract, Direction, DrivaOptions, FileLocation,
     InteractionActivity, InteractionEnd, InteractionSummary, InteractionUpdate, LaunchMount,
     LaunchPolicy, LogEntry, LogLevel, MountOrigin, QueuedMessage, RawLine, SessionOrigin,
     SessionSummary, TemplateSummary, WorkspaceSummary,
 };
-pub use protocol::WorkspaceLaunchChange;
 pub use spawn::ensure_server;
 
 // --- The session runner ---

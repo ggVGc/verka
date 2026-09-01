@@ -321,20 +321,18 @@ pub fn run(
             Some(Request::ChangeWorkspaceLaunch {
                 change,
                 clear_interaction,
-            }) => {
-                match client.change_workspace_launch(workspace_id, change) {
-                    Ok(policy) if clear_interaction => {
-                        app.launch.adopt_workspace(policy);
-                        app.show_action_message(
-                            "moved into this Workspace's policy — every launch here starts from it",
-                        );
-                    }
-                    Ok(policy) => app.launch.sync_workspace(policy),
-                    Err(error) => app.push_log(LogEntry::error(format!(
-                        "could not change the Workspace launch policy: {error:#}"
-                    ))),
+            }) => match client.change_workspace_launch(workspace_id, change) {
+                Ok(policy) if clear_interaction => {
+                    app.launch.adopt_workspace(policy);
+                    app.show_action_message(
+                        "moved into this Workspace's policy — every launch here starts from it",
+                    );
                 }
-            }
+                Ok(policy) => app.launch.sync_workspace(policy),
+                Err(error) => app.push_log(LogEntry::error(format!(
+                    "could not change the Workspace launch policy: {error:#}"
+                ))),
+            },
             // Parsing is the server's, since it holds the session's recorded
             // contract and the journal the answer is read from; this client
             // only asks and renders.

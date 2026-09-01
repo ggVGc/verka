@@ -813,19 +813,25 @@ mod tests {
         toggle_scope(&mut app);
         assert_eq!(app.launch.scope, LaunchScope::Workspace);
 
-        // A mount added here belongs to the Workspace, not to this interaction.
+        // The UI sends intent and does not optimistically mutate its server
+        // snapshot.
         add_mount(&mut app, "/srv/models:ro");
-        assert_eq!(app.launch.workspace.mounts.len(), 2);
+        assert_eq!(app.launch.workspace.mounts.len(), 1);
         assert!(app.launch.interaction.mounts.is_empty());
-        // It only counts once the server has it, so it is on its way there —
-        // and no plan is asked for meanwhile, since the server would answer for
-        // the policy it still holds.
-        assert!(app.launch.workspace_unsaved);
-        assert_eq!(
-            app.take_request(),
-            Some(Request::StoreWorkspaceLaunch { announce: false })
-        );
+        let request = app.take_request().unwrap();
+        let Request::ChangeWorkspaceLaunch {
+            change: WorkspaceLaunchChange::AddMounts(added),
+            clear_interaction: false,
+        } = request
+        else {
+            panic!("unexpected request: {request:?}");
+        };
         assert!(!wants_plan(&app));
+        let mut stored = app.launch.workspace.clone();
+        stored.mounts.extend(added);
+        app.launch.sync_workspace(stored);
+        assert_eq!(app.launch.workspace.mounts.len(), 2);
+        assert!(wants_plan(&app));
 
         // One the Workspace already grants changes nothing, and says so.
         add_mount(&mut app, "/srv/models:ro");
@@ -834,27 +840,39 @@ mod tests {
         // `x` reaches the Workspace's own mounts here, which is what the
         // interaction layer could never do.
         remove_selected_mount(&mut app);
-        assert_eq!(app.launch.workspace.mounts.len(), 1);
-        assert_eq!(app.launch.effective().mounts.len(), 1);
+        assert_eq!(app.launch.workspace.mounts.len(), 2);
+        assert!(matches!(
+            app.take_request(),
+            Some(Request::ChangeWorkspaceLaunch {
+                change: WorkspaceLaunchChange::RemoveMount(_),
+                clear_interaction: false,
+            })
+        ));
 
         // Templates replace that layer's list rather than being turned into an
         // overlay: there is nothing under it for them to add to.
         set_templates(&mut app, vec!["browser".into()]);
-        assert_eq!(app.launch.workspace.templates, vec!["browser"]);
+        assert_eq!(app.launch.workspace.templates, vec!["rust"]);
+        assert_eq!(
+            app.take_request(),
+            Some(Request::ChangeWorkspaceLaunch {
+                change: WorkspaceLaunchChange::SetTemplates(vec!["browser".into()]),
+                clear_interaction: false,
+            })
+        );
         assert!(app.launch.interaction.templates.is_empty());
 
         // And network is the plain toggle it can be with nothing underneath.
         cycle_network(&mut app);
-        assert_eq!(app.launch.workspace.network, Some(false));
-        cycle_network(&mut app);
         assert_eq!(app.launch.workspace.network, Some(true));
+        assert_eq!(
+            app.take_request(),
+            Some(Request::ChangeWorkspaceLaunch {
+                change: WorkspaceLaunchChange::SetNetwork(Some(false)),
+                clear_interaction: false,
+            })
+        );
         assert_eq!(app.launch.interaction.network, None);
-
-        // Once the server acknowledges, the plan is asked for again.
-        let stored = app.launch.workspace.clone();
-        app.launch.workspace_stored(stored);
-        assert!(!app.launch.workspace_unsaved);
-        assert!(wants_plan(&app));
     }
 
     /// Whether this interaction inherits the Workspace's policy is only ever
@@ -891,7 +909,14 @@ mod tests {
 
         // `x` on the Workspace's pane leaves this interaction's mounts alone.
         remove_selected_mount(&mut app);
-        assert!(app.launch.workspace.mounts.is_empty());
+        assert_eq!(app.launch.workspace.mounts.len(), 1);
+        assert!(matches!(
+            app.take_request(),
+            Some(Request::ChangeWorkspaceLaunch {
+                change: WorkspaceLaunchChange::RemoveMount(_),
+                clear_interaction: false,
+            })
+        ));
         assert_eq!(app.launch.interaction.mounts.len(), 2);
     }
 
@@ -919,7 +944,13 @@ mod tests {
 
         add_mount(&mut app, "/srv/scratch:rw");
         promote_to_workspace(&mut app);
-        assert_eq!(app.take_request(), Some(Request::PromoteLaunchToWorkspace));
+        assert_eq!(
+            app.take_request(),
+            Some(Request::ChangeWorkspaceLaunch {
+                change: WorkspaceLaunchChange::Replace(app.launch.effective()),
+                clear_interaction: true,
+            })
+        );
     }
 
     #[test]

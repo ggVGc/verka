@@ -38,6 +38,10 @@ struct ServerInner {
     socket: PathBuf,
     layout: SandboxLayout,
     interactions: Mutex<HashMap<String, Arc<ManagedInteraction>>>,
+    /// Workspace metadata is one JSON document. Serialize read-modify-write
+    /// launch edits so concurrent clients cannot overwrite each other's
+    /// templates or mounts with stale intermediate documents.
+    workspace_metadata: Mutex<()>,
     /// Set by a [`Request::Shutdown`]; the connection thread checks it after
     /// acknowledging and then exits the process.
     shutdown: AtomicBool,
@@ -251,6 +255,7 @@ impl ServerState {
                 socket,
                 layout: SandboxLayout::default(),
                 interactions: Mutex::new(HashMap::new()),
+                workspace_metadata: Mutex::new(()),
                 shutdown: AtomicBool::new(false),
             }),
         }
@@ -1022,13 +1027,28 @@ impl ServerState {
             Request::ListWorkspaces => Ok(Response::Workspaces(crate::workspace::list(
                 &self.inner.store_root,
             )?)),
-            Request::Workspace { id } => Ok(Response::Workspace(crate::workspace::access(
-                &self.inner.store_root,
-                &id,
-            )?)),
-            Request::WorkspaceLaunch { workspace_id } => Ok(Response::WorkspaceLaunch(
-                crate::workspace::launch(&self.inner.store_root, &workspace_id)?,
-            )),
+            Request::Workspace { id } => {
+                let _metadata = self
+                    .inner
+                    .workspace_metadata
+                    .lock()
+                    .expect("server workspace metadata lock poisoned");
+                Ok(Response::Workspace(crate::workspace::access(
+                    &self.inner.store_root,
+                    &id,
+                )?))
+            }
+            Request::WorkspaceLaunch { workspace_id } => {
+                let _metadata = self
+                    .inner
+                    .workspace_metadata
+                    .lock()
+                    .expect("server workspace metadata lock poisoned");
+                Ok(Response::WorkspaceLaunch(crate::workspace::launch(
+                    &self.inner.store_root,
+                    &workspace_id,
+                )?))
+            }
             Request::CreateSession(request) => {
                 Ok(Response::SessionCreated(self.create_session(request)?))
             }
@@ -1070,15 +1090,33 @@ impl ServerState {
                     self.stored_summary(&request.id)?,
                 ))
             }
-            Request::UpdateWorkspaceNotes(request) => Ok(Response::WorkspaceNotesUpdated(
-                crate::workspace::store_notes(&self.inner.store_root, &request.id, request.notes)?,
-            )),
+            Request::UpdateWorkspaceNotes(request) => {
+                let _metadata = self
+                    .inner
+                    .workspace_metadata
+                    .lock()
+                    .expect("server workspace metadata lock poisoned");
+                Ok(Response::WorkspaceNotesUpdated(
+                    crate::workspace::store_notes(
+                        &self.inner.store_root,
+                        &request.id,
+                        request.notes,
+                    )?,
+                ))
+            }
             Request::ChangeWorkspaceLaunch {
                 workspace_id,
                 change,
-            } => Ok(Response::WorkspaceLaunchUpdated(
-                crate::workspace::change_launch(&self.inner.store_root, &workspace_id, change)?,
-            )),
+            } => {
+                let _metadata = self
+                    .inner
+                    .workspace_metadata
+                    .lock()
+                    .expect("server workspace metadata lock poisoned");
+                Ok(Response::WorkspaceLaunchUpdated(
+                    crate::workspace::change_launch(&self.inner.store_root, &workspace_id, change)?,
+                ))
+            }
             Request::SendMessage { id, message } => {
                 let interaction = self.interaction(&id)?;
                 // A client that names a selection on the turn is switching the
@@ -1965,16 +2003,16 @@ mod tests {
             standalone: false,
         };
         let updated = match state
-            .handle(Request::SetWorkspaceLaunch {
+            .handle(Request::ChangeWorkspaceLaunch {
                 workspace_id: created.id.clone(),
-                launch: launch.clone(),
+                change: crate::protocol::WorkspaceLaunchChange::Replace(launch.clone()),
             })
             .unwrap()
         {
             Response::WorkspaceLaunchUpdated(workspace) => workspace,
             other => panic!("unexpected response: {other:?}"),
         };
-        assert_eq!(updated.launch, launch);
+        assert_eq!(updated, launch);
 
         match state
             .handle(Request::Workspace {
@@ -1988,9 +2026,9 @@ mod tests {
 
         // A policy cannot be stored for a Workspace that is not there.
         assert!(state
-            .handle(Request::SetWorkspaceLaunch {
+            .handle(Request::ChangeWorkspaceLaunch {
                 workspace_id: "no-such-workspace".into(),
-                launch,
+                change: crate::protocol::WorkspaceLaunchChange::Replace(launch),
             })
             .is_err());
 
