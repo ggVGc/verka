@@ -433,9 +433,9 @@ mod tests {
         let (x, y) = find_column(buffer, "payments");
         assert_eq!((x, y), (1, 0));
         // Readable against the border line, unlike the cyan it used to wear.
-        let cell = buffer.cell((x, y)).unwrap();
-        assert_eq!(cell.fg, palette::TEXT);
-        assert!(cell.modifier.contains(Modifier::BOLD));
+        let style = buffer.cell((x, y)).unwrap().style();
+        assert_eq!(style.fg, Some(palette::TEXT));
+        assert!(style.add_modifier.contains(Modifier::BOLD));
     }
 
     #[test]
