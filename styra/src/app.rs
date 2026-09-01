@@ -26,6 +26,7 @@ use styra_server::{InteractionEnd, LogEntry, RawLine};
 
 use crate::composer::Composer;
 use crate::ingest;
+use crate::insert::Insert;
 use crate::launch::{self, Launch};
 use crate::launcher::Launcher;
 use crate::notes::Notes;
@@ -356,6 +357,10 @@ pub struct App {
     /// to parse, which is an `Answer`.
     pub answer_error: Option<String>,
     pub answer_selected: usize,
+    /// The open "insert a path" prompt, while the operator is using it; see
+    /// [`crate::insert`]. Held here rather than in [`Composer`] because its
+    /// second question is about the sandbox, not about the message.
+    pub insert: Option<Insert>,
     /// Set when the operator asks for something only the event loop can do;
     /// it takes the request and acts on it.
     pub request: Option<Request>,
@@ -462,6 +467,7 @@ impl App {
             answer: None,
             answer_error: None,
             answer_selected: 0,
+            insert: None,
             request: None,
             notes: Notes::default(),
         }

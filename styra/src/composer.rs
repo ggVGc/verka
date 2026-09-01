@@ -49,6 +49,17 @@ impl Composer {
         self.text.truncate(word_start);
     }
 
+    /// Append `text` as its own word, adding the separating space the operator
+    /// would otherwise have had to remember to type first. Used by the path
+    /// prompt, which produces one token rather than free text.
+    pub fn insert(&mut self, text: &str) {
+        self.reset_history();
+        if !self.text.is_empty() && !self.text.ends_with(char::is_whitespace) {
+            self.text.push(' ');
+        }
+        self.text.push_str(text);
+    }
+
     pub fn newline(&mut self) {
         self.reset_history();
         self.text.push('\n');
@@ -137,6 +148,21 @@ mod tests {
         // And on an empty buffer it is a no-op rather than an underflow.
         composer.delete_word();
         assert!(composer.text.is_empty());
+    }
+
+    /// An inserted path is a word: it never runs into the word before it, and
+    /// it never doubles a space the operator already typed.
+    #[test]
+    fn inserting_separates_what_it_appends() {
+        let mut composer = Composer::default();
+        composer.insert("/srv/data/notes.txt");
+        assert_eq!(composer.text, "/srv/data/notes.txt");
+        composer.set("summarize".into());
+        composer.insert("/srv/data/notes.txt");
+        assert_eq!(composer.text, "summarize /srv/data/notes.txt");
+        composer.set("summarize ".into());
+        composer.insert("/srv/data/notes.txt");
+        assert_eq!(composer.text, "summarize /srv/data/notes.txt");
     }
 
     /// Walking back through history keeps the half-typed message, so `Down`

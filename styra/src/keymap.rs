@@ -216,6 +216,14 @@ pub(crate) const REFERENCE: &[ReferenceRow] = &[
         keys: "Ctrl+L",
         action: "choose model before first message or idle agent turn",
     },
+    ReferenceRow::Binding {
+        keys: "Ctrl+F",
+        action: "insert a file path (Tab completes, Enter inserts)",
+    },
+    ReferenceRow::Binding {
+        keys: "r / w / n",
+        action: "when that path is unmounted: mount it readable / writable / neither",
+    },
     ReferenceRow::Blank,
     ReferenceRow::Section("Launch and selection screens"),
     ReferenceRow::Binding {

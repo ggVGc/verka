@@ -167,6 +167,23 @@ that report is what is shown. A value that is still only what the selection
 asked for (before the agent's report, or Claude Code's effort, which it never
 reports) is dimmed.
 
+### Naming a file to the agent
+
+`Ctrl+F` in the message box opens a path prompt over it. `Tab` completes against
+the host filesystem and `Enter` inserts. What is inserted is the path the
+*agent* uses, not the one the operator typed: Styra looks the path up in the
+session's Driva policy and rewrites it through the mount that carries it, so a
+file under the Workspace goes in as its sandbox path rather than its host one.
+The path must exist, since a path that is not there cannot be mounted either.
+
+A path no mount carries asks before it is inserted: `r` mounts it readable, `w`
+writable, and `n` inserts it without mounting anything. The grant lands in this
+interaction's own layer of the launch policy (visible in the driva view under
+`d`, and movable up to the Workspace with `U`), so like every mount edit it
+applies when the Session next launches or resumes. A running interaction's
+mounts are fixed for its lifetime, so there the path is inserted with a note
+that the sandbox cannot reach it.
+
 While an idle Codex interaction is live, submit `/cd <directory>` in the
 message box to change its directory for subsequent turns. Relative paths are
 resolved from the Workspace root; absolute paths are accepted only when they

@@ -342,7 +342,23 @@ impl Launch {
     /// mount the Workspace already grants identically is too — an overlay row
     /// that changes nothing about the sandbox is worse than being told so.
     fn add_mount(&mut self, mount: LaunchMount) -> Result<(), &'static str> {
-        match self.scope {
+        self.add_mount_to(self.scope, mount)
+    }
+
+    /// Add `mount` to this interaction's own layer whatever the driva view's
+    /// keys are currently editing.
+    ///
+    /// For the callers that are not the driva view — the message editor's path
+    /// prompt — where a grant lands is not the operator's choice of pane but a
+    /// property of what they are doing: a path that came up in one message is
+    /// this interaction's business, and `U` moves it up a layer if it turns out
+    /// to be the Workspace's.
+    pub fn add_interaction_mount(&mut self, mount: LaunchMount) -> Result<(), &'static str> {
+        self.add_mount_to(LaunchScope::Interaction, mount)
+    }
+
+    fn add_mount_to(&mut self, scope: LaunchScope, mount: LaunchMount) -> Result<(), &'static str> {
+        match scope {
             LaunchScope::Workspace => {
                 if self.workspace.mounts.contains(&mount) {
                     return Err("the Workspace policy already grants that mount");

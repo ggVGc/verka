@@ -498,7 +498,32 @@ current focus is shown in the status line and by which region draws the cursor.
 | `Enter`        | Send the message (configurable: `Enter` sends vs. newline)   |
 | `Alt+Enter`    | Insert a newline (when `Enter` sends)                        |
 | `Ctrl+L`       | Choose launch settings, or the next idle turn's model (and Codex effort) |
+| `Ctrl+F`       | Insert a file path, mounting it first if the sandbox lacks it |
 | `Esc`          | Return to list focus without sending                         |
+
+#### Naming a file to the agent
+
+`Ctrl+F` opens a path prompt over the message box. `Tab` completes against the
+host filesystem, `Enter` accepts, and what is accepted has to exist: a path that
+is not there cannot be mounted either, so it is refused here rather than at the
+launch that would have carried it.
+
+An accepted path is inserted **in the agent's terms**, not the operator's. The
+operator knows host paths; the agent only ever sees the destination its mount
+carries, and the two differ whenever a mount renames what it binds — the
+workspace itself being the usual case. So the path is looked up in the live (or
+planned) Driva policy and rewritten through the innermost mount that carries it,
+which is the one whose destination and access actually apply.
+
+A path no mount carries stops for a second question — `r` readable, `w`
+writable, `n` insert without mounting — because the alternative is a message
+that names something the sandbox has never heard of and a turn spent finding
+that out. A grant lands in *this interaction's* layer, never the Workspace's:
+the path came up in one message, which is the smallest claim available, and `U`
+in the driva view moves it up a layer if it turns out to belong to the work.
+Like every mount edit it takes effect at the next launch or resume, which the
+confirmation says. While an interaction is running its mounts are fixed, so
+there is no question to ask: the path is inserted and the limit is stated.
 
 Expansion is per-entry and inline: an expanded entry grows to show its detail
 body and pushes later entries down, rather than opening a separate pane. This

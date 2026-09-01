@@ -11,6 +11,7 @@ mod files;
 mod footer;
 mod help;
 mod input;
+mod insert;
 mod launcher;
 mod list;
 mod log;
@@ -29,6 +30,7 @@ use footer::render_footer;
 pub(crate) use footer::{message_text_color, tag_color};
 use help::render_keybinds;
 use input::{input_area_height, render_input};
+use insert::render_insert;
 use launcher::render_launcher;
 use list::render_list;
 pub(crate) use list::{summary_line, wrap_line};
@@ -360,6 +362,10 @@ pub fn render(frame: &mut Frame, app: &App) {
     if let Some(editor) = app.notes.editor() {
         render_notes(frame, app, editor);
     }
+
+    // Last, because it is the innermost modal: it is opened from the message
+    // box and floats over it, and it holds the terminal cursor while it does.
+    render_insert(frame, app, frame.area());
 }
 
 #[cfg(test)]

@@ -64,3 +64,6 @@ Workspace
 - [x] **16. Documentation and validation.** Rewrite the architecture, CLI/API
   reference, and tests around Workspace → Session → Interaction, then run all
   Styra and repository-level checks.
+- [x] **18. Path insertion from the message box.** `Ctrl+F` inserts a file
+  path into the message, rewritten through the mount that carries it, and asks
+  whether to grant an unmounted path to this interaction readable or writable.

@@ -2,6 +2,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::path::Path;
 
 use crate::app::{App, Request, Status, View};
+use crate::insert;
 use crate::launch;
 use crate::notes;
 use crate::preferences;
@@ -414,6 +415,10 @@ pub fn handle_input_key(
             app.composer.delete_word()
         }
         KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => app.open_launcher(),
+        // Naming a file is part of writing the message, so it opens from the
+        // box rather than from the driva view that the grant it may ask for
+        // would otherwise have to be made in.
+        KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => insert::open(app),
         KeyCode::Char(ch) => app.composer.char(ch),
         _ => {}
     }

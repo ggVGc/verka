@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use crate::app::{App, Focus, Request, Status};
 use crate::config::Config;
+use crate::insert;
 use crate::keymap::HELP;
 use crate::keys;
 use crate::launch::{self, LaunchScope};
@@ -149,6 +150,12 @@ pub fn run(
         // note text — including `?`, so it is handled ahead of the reference.
         if app.notes.is_open() {
             notes::handle_key(app, client, key);
+            continue;
+        }
+        // So is the message editor's path prompt, whose second question is
+        // answered by a bare letter that means something else everywhere else.
+        if app.insert.is_some() {
+            insert::handle_key(app, key);
             continue;
         }
         // So is the Driva view's mount prompt: what is typed into it is part
