@@ -1,3 +1,4 @@
+- [ ] Styra: driva setting of templates is broken
 - [ ] Investigate this statement: "The existing mutation lock under .git is also questionable and should eventually move behind a proper lock abstraction."
 - [ ] Fix .git isolation in orka project:
   - Agents can currently do whatever to the shared git state since all of project .git is mounted rw.
