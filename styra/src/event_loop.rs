@@ -153,7 +153,9 @@ pub fn run(
             interactions_refreshed = Instant::now();
             if let Ok(interactions) = client.list_interactions() {
                 let current = app.session_id.clone();
-                app.interactions.refresh(interactions, &current);
+                let workspace_id = app.workspace_id.clone();
+                app.interactions
+                    .refresh(interactions, &current, workspace_id.as_deref());
             }
         }
 
@@ -255,17 +257,25 @@ pub fn run(
                     continue;
                 }
                 KeyCode::Char('j') | KeyCode::Down => {
-                    app.interactions.select_next();
+                    app.interactions.select_next(app.workspace_id.as_deref());
                     if let Some(interaction) = app.interactions.selected().cloned() {
                         make_interaction_current(app, live, client, standing_launch, interaction);
                     }
                     continue;
                 }
                 KeyCode::Char('k') | KeyCode::Up => {
-                    app.interactions.select_previous();
+                    app.interactions
+                        .select_previous(app.workspace_id.as_deref());
                     if let Some(interaction) = app.interactions.selected().cloned() {
                         make_interaction_current(app, live, client, standing_launch, interaction);
                     }
+                    continue;
+                }
+                KeyCode::Char('w') => {
+                    let current = app.session_id.clone();
+                    let workspace_id = app.workspace_id.clone();
+                    app.interactions
+                        .toggle_workspace_scope(&current, workspace_id.as_deref());
                     continue;
                 }
                 KeyCode::Char('i') => {}

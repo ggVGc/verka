@@ -57,6 +57,10 @@ pub(crate) const REFERENCE: &[ReferenceRow] = &[
         action: "live interactions/sessions/Workspaces; notes",
     },
     ReferenceRow::Binding {
+        keys: "w (interactions)",
+        action: "current Workspace / all Workspaces",
+    },
+    ReferenceRow::Binding {
         keys: "r / l / t / d",
         action: "raw / log / transcript / driva; press again for events",
     },

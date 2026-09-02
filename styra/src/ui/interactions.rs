@@ -10,26 +10,40 @@ use ratatui::Frame;
 use styra_server::InteractionSummary;
 
 pub(crate) fn height(app: &App, available: u16) -> u16 {
-    (app.interactions.items.len() as u16 + 2)
-        .max(3)
-        .min(available.saturating_div(2).max(3))
-        .min(available)
+    (app.interactions
+        .visible_indices(app.workspace_id.as_deref())
+        .len() as u16
+        + 2)
+    .max(3)
+    .min(available.saturating_div(2).max(3))
+    .min(available)
 }
 
 pub(crate) fn render(frame: &mut Frame, app: &App, area: Rect) {
+    let visible = app
+        .interactions
+        .visible_indices(app.workspace_id.as_deref());
+    let scope = if app.interactions.only_current_workspace {
+        app.workspace_name
+            .as_deref()
+            .or(app.workspace_id.as_deref())
+            .unwrap_or("Current Workspace")
+    } else {
+        "All"
+    };
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(palette::ACCENT))
-        .title(" live interactions · j/k make current · Enter/a close ");
-    let items = app
-        .interactions
-        .items
+        .title(format!(
+            " {scope} · live interactions · j/k make current · w scope · Enter/a close "
+        ));
+    let items = visible
         .iter()
-        .enumerate()
-        .map(|(index, interaction)| {
+        .map(|index| {
+            let interaction = &app.interactions.items[*index];
             item(
                 interaction,
-                index == app.interactions.selected,
+                *index == app.interactions.selected,
                 interaction.id == app.session_id,
             )
         })
@@ -40,7 +54,11 @@ pub(crate) fn render(frame: &mut Frame, app: &App, area: Rect) {
             .add_modifier(Modifier::BOLD),
     );
     let mut state = ListState::default();
-    state.select((!app.interactions.items.is_empty()).then_some(app.interactions.selected));
+    state.select(
+        visible
+            .iter()
+            .position(|index| *index == app.interactions.selected),
+    );
     frame.render_stateful_widget(list, area, &mut state);
 }
 
@@ -140,5 +158,23 @@ mod tests {
             screen.contains("second · payments · codex · current"),
             "{screen}"
         );
+    }
+
+    #[test]
+    fn navigator_names_and_filters_the_current_workspace_scope() {
+        let mut app = testing::app("s-1");
+        app.workspace_id = Some("payments".into());
+        app.workspace_name = Some("Payments".into());
+        let mut other = interaction("s-2", "other");
+        other.workspace_id = "ledger".into();
+        app.interactions
+            .open(vec![interaction("s-1", "current"), other], "s-1");
+        app.interactions
+            .toggle_workspace_scope("s-1", Some("payments"));
+
+        let screen = testing::rendered(&app);
+        assert!(screen.contains("Payments · live interactions"), "{screen}");
+        assert!(screen.contains("current · payments"), "{screen}");
+        assert!(!screen.contains("other · ledger"), "{screen}");
     }
 }
