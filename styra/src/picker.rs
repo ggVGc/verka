@@ -30,7 +30,12 @@ const LIVENESS_REFRESH: Duration = Duration::from_secs(2);
 /// from `list_interactions`, so they need their own short refresh cadence.
 const INTERACTIONS_REFRESH: Duration = Duration::from_millis(250);
 
-type PreviewLoad = (String, Result<styra_server::protocol::Updates, String>);
+struct PreviewBatch {
+    updates: Vec<InteractionUpdate>,
+    next: u64,
+}
+
+type PreviewLoad = (String, Result<PreviewBatch, String>);
 type InteractionsRefresh = Result<Vec<InteractionSummary>, String>;
 
 /// A live-interaction preview retained for the lifetime of its picker. The
@@ -77,7 +82,7 @@ impl InteractionPreviewCache {
         }
     }
 
-    fn finish_load(&mut self, id: &str, result: Result<styra_server::protocol::Updates, String>) {
+    fn finish_load(&mut self, id: &str, result: Result<PreviewBatch, String>) {
         let Some(entry) = self.entries.get_mut(id) else {
             return;
         };
@@ -85,17 +90,11 @@ impl InteractionPreviewCache {
         match result {
             Ok(batch) => {
                 entry.cursor = batch.next;
-                entry
-                    .updates
-                    .extend(batch.updates.into_iter().filter_map(
-                        |sequenced| match sequenced.update {
-                            update @ InteractionUpdate::Event(
-                                styra_server::event::AgentEvent::UserMessage { .. }
-                                | styra_server::event::AgentEvent::AgentMessage { .. },
-                            ) => Some(update),
-                            _ => None,
-                        },
-                    ));
+                if entry.updates.is_empty() {
+                    entry.updates = batch.updates;
+                } else {
+                    entry.updates.extend(batch.updates);
+                }
             }
             Err(message) => {
                 let message = format!("could not load current log: {message}");
@@ -125,9 +124,27 @@ fn load_interaction_preview(client: Client, id: String, after: u64, sender: Send
     thread::spawn(move || {
         let result = client
             .updates_without_raw(&id, after)
+            .map(conversation_preview_batch)
             .map_err(|error| format!("{error:#}"));
         sender.send((id, result)).ok();
     });
+}
+
+fn conversation_preview_batch(batch: styra_server::protocol::Updates) -> PreviewBatch {
+    PreviewBatch {
+        updates: batch
+            .updates
+            .into_iter()
+            .filter_map(|sequenced| match sequenced.update {
+                update @ InteractionUpdate::Event(
+                    styra_server::event::AgentEvent::UserMessage { .. }
+                    | styra_server::event::AgentEvent::AgentMessage { .. },
+                ) => Some(update),
+                _ => None,
+            })
+            .collect(),
+        next: batch.next,
+    }
 }
 
 fn refresh_interactions(client: Client, sender: Sender<InteractionsRefresh>) {
@@ -443,6 +460,7 @@ pub struct InteractionsView {
 pub struct InteractionsList<'a> {
     pub interactions: &'a [InteractionSummary],
     pub workspaces: &'a [WorkspaceSummary],
+    pub current_workspace_id: Option<&'a str>,
     pub rows: &'a [InteractionRow],
     pub selected_row: Option<usize>,
     pub view: InteractionsView,
@@ -456,7 +474,7 @@ pub enum InteractionRow {
     Interaction(usize),
 }
 
-/// The current-interactions picker loop: j/k or arrows to move, Enter to attach
+/// The live-interactions picker loop: j/k or arrows to move, Enter to attach
 /// to a live interaction, `X` to convert the selected active interaction to the
 /// other provider, `S` to stop the selected one, `D` to delete a stopped
 /// one, `w` to restrict the list to the current Workspace, `g` to group it per
@@ -486,6 +504,8 @@ pub fn run_interactions_picker(
     // position, so `w` and `g` do not move the selection off it.
     let mut refocus: Option<String> = None;
     let mut preview_id = String::new();
+    let mut rendered_preview_id = String::new();
+    let mut preview_settle_from: Option<Instant> = None;
     let mut preview_cache = InteractionPreviewCache::default();
     let (preview_sender, preview_receiver): (Sender<PreviewLoad>, Receiver<PreviewLoad>) =
         mpsc::channel();
@@ -496,27 +516,6 @@ pub fn run_interactions_picker(
     let mut refresh_in_flight = false;
     let mut refreshed = Instant::now();
     loop {
-        for (id, result) in preview_receiver.try_iter() {
-            preview_cache.finish_load(&id, result);
-        }
-        if let Ok(result) = refresh_receiver.try_recv() {
-            refresh_in_flight = false;
-            refreshed = Instant::now();
-            if let Ok(mut current) = result {
-                // Refreshing can change the status sort order. Keep the cursor
-                // on the same interaction by identity rather than letting a
-                // moving row silently change the selection.
-                if !preview_id.is_empty() {
-                    refocus = Some(preview_id.clone());
-                }
-                sort_interactions(&mut current);
-                *interactions = current;
-            }
-        }
-        if !refresh_in_flight && refreshed.elapsed() >= INTERACTIONS_REFRESH {
-            refresh_in_flight = true;
-            refresh_interactions(client.clone(), refresh_sender.clone());
-        }
         let rows = interaction_rows(interactions, workspaces, current_workspace_id, view);
         let visible: Vec<usize> = rows
             .iter()
@@ -538,7 +537,10 @@ pub fn run_interactions_picker(
 
         match selected_index {
             Some(index) => {
-                preview_id.clone_from(&interactions[index].id);
+                if preview_id != interactions[index].id {
+                    preview_id.clone_from(&interactions[index].id);
+                    preview_settle_from = Some(Instant::now());
+                }
                 if let Some(after) = preview_cache.start_load(&interactions[index]) {
                     load_interaction_preview(
                         client.clone(),
@@ -550,14 +552,23 @@ pub fn run_interactions_picker(
             }
             None => {
                 preview_id.clear();
+                rendered_preview_id.clear();
+                preview_settle_from = None;
             }
+        }
+
+        if preview_settle_from.is_some_and(|since| since.elapsed() >= PREVIEW_SETTLE) {
+            rendered_preview_id.clone_from(&preview_id);
+            preview_settle_from = None;
         }
 
         let selected_row = selected_row(&rows, selected_index);
         let preview = if preview_id.is_empty() {
             ui::Preview::Ready(&[])
+        } else if preview_settle_from.is_some() {
+            ui::Preview::Loading
         } else {
-            preview_cache.preview(&preview_id)
+            preview_cache.preview(&rendered_preview_id)
         };
         terminal.draw(|frame| {
             ui::render_interactions_picker(
@@ -565,6 +576,7 @@ pub fn run_interactions_picker(
                 &InteractionsList {
                     interactions,
                     workspaces,
+                    current_workspace_id,
                     rows: &rows,
                     selected_row,
                     view,
@@ -574,6 +586,30 @@ pub fn run_interactions_picker(
         })?;
 
         if !event::poll(Duration::from_millis(100))? {
+            // Completed background work is deliberately applied only once
+            // input is idle. A queued movement key always gets a redraw before
+            // any cache or summary maintenance happens on the UI thread.
+            for (id, result) in preview_receiver.try_iter() {
+                preview_cache.finish_load(&id, result);
+            }
+            if let Ok(result) = refresh_receiver.try_recv() {
+                refresh_in_flight = false;
+                refreshed = Instant::now();
+                if let Ok(mut current) = result {
+                    // Refreshing can change the status sort order. Keep the
+                    // cursor on the same interaction by identity rather than
+                    // letting a moving row silently change the selection.
+                    if !preview_id.is_empty() {
+                        refocus = Some(preview_id.clone());
+                    }
+                    sort_interactions(&mut current);
+                    *interactions = current;
+                }
+            }
+            if !refresh_in_flight && refreshed.elapsed() >= INTERACTIONS_REFRESH {
+                refresh_in_flight = true;
+                refresh_interactions(client.clone(), refresh_sender.clone());
+            }
             continue;
         }
         let Event::Key(key) = event::read()? else {
@@ -606,6 +642,7 @@ pub fn run_interactions_picker(
                         &InteractionsList {
                             interactions,
                             workspaces,
+                            current_workspace_id,
                             rows: &rows,
                             selected_row,
                             view,
@@ -623,6 +660,7 @@ pub fn run_interactions_picker(
                             &InteractionsList {
                                 interactions,
                                 workspaces,
+                                current_workspace_id,
                                 rows: &rows,
                                 selected_row,
                                 view,
@@ -642,6 +680,7 @@ pub fn run_interactions_picker(
                         &InteractionsList {
                             interactions,
                             workspaces,
+                            current_workspace_id,
                             rows: &rows,
                             selected_row,
                             view,
@@ -661,6 +700,7 @@ pub fn run_interactions_picker(
                         &InteractionsList {
                             interactions,
                             workspaces,
+                            current_workspace_id,
                             rows: &rows,
                             selected_row,
                             view,
@@ -693,6 +733,7 @@ pub fn run_interactions_picker(
                         &InteractionsList {
                             interactions,
                             workspaces,
+                            current_workspace_id,
                             rows: &rows,
                             selected_row,
                             view,
@@ -727,6 +768,7 @@ pub fn run_interactions_picker(
                         &InteractionsList {
                             interactions,
                             workspaces,
+                            current_workspace_id,
                             rows: &rows,
                             selected_row,
                             view,
@@ -749,6 +791,7 @@ pub fn run_interactions_picker(
                         &InteractionsList {
                             interactions,
                             workspaces,
+                            current_workspace_id,
                             rows: &rows,
                             selected_row,
                             view,
@@ -1006,27 +1049,29 @@ mod tests {
 
         cache.finish_load(
             &interaction.id,
-            Ok(styra_server::protocol::Updates {
-                updates: vec![
-                    styra_server::protocol::SequencedUpdate {
-                        sequence: 1,
-                        update: InteractionUpdate::Event(
-                            styra_server::event::AgentEvent::CommandStarted {
-                                command: "cargo test".into(),
-                            },
-                        ),
-                    },
-                    styra_server::protocol::SequencedUpdate {
-                        sequence: 2,
-                        update: InteractionUpdate::Event(
-                            styra_server::event::AgentEvent::AgentMessage {
-                                text: "ready".into(),
-                            },
-                        ),
-                    },
-                ],
-                next: 2,
-            }),
+            Ok(conversation_preview_batch(
+                styra_server::protocol::Updates {
+                    updates: vec![
+                        styra_server::protocol::SequencedUpdate {
+                            sequence: 1,
+                            update: InteractionUpdate::Event(
+                                styra_server::event::AgentEvent::CommandStarted {
+                                    command: "cargo test".into(),
+                                },
+                            ),
+                        },
+                        styra_server::protocol::SequencedUpdate {
+                            sequence: 2,
+                            update: InteractionUpdate::Event(
+                                styra_server::event::AgentEvent::AgentMessage {
+                                    text: "ready".into(),
+                                },
+                            ),
+                        },
+                    ],
+                    next: 2,
+                },
+            )),
         );
         assert_eq!(cache.start_load(&interaction), None);
         assert!(matches!(
@@ -1042,10 +1087,12 @@ mod tests {
         assert_eq!(cache.start_load(&interaction), Some(0));
         cache.finish_load(
             &interaction.id,
-            Ok(styra_server::protocol::Updates {
-                updates: vec![],
-                next: 7,
-            }),
+            Ok(conversation_preview_batch(
+                styra_server::protocol::Updates {
+                    updates: vec![],
+                    next: 7,
+                },
+            )),
         );
 
         let changed = InteractionSummary {

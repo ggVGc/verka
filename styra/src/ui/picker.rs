@@ -1,4 +1,4 @@
-//! The session, Workspace, and current-interactions picker screens. These
+//! The session, Workspace, and live-interactions picker screens. These
 //! stand apart from [`crate::app::App`] because each overlays before (or
 //! instead of) any loaded session, so they render from their own borrowed
 //! data rather than app state.
@@ -424,7 +424,7 @@ pub fn render_template_picker(
     frame.render_stateful_widget(list, area, &mut state);
 }
 
-/// Render the current-interactions picker: interactions in a band across the
+/// Render the live-interactions picker: interactions in a band across the
 /// top and the selected interaction's conversation preview below.
 ///
 /// Like [`render_picker`], it stands apart from [`crate::app::App`] because it
@@ -438,6 +438,7 @@ pub fn render_interactions_picker(
     let InteractionsList {
         interactions,
         workspaces,
+        current_workspace_id,
         rows,
         selected_row,
         view,
@@ -447,17 +448,18 @@ pub fn render_interactions_picker(
         .direction(Direction::Vertical)
         .constraints([Constraint::Percentage(25), Constraint::Percentage(75)])
         .split(area);
-    let scope = if view.only_current_workspace {
-        " · this workspace"
-    } else {
-        " · all workspaces"
+    // The corner names what is on screen: the attached Workspace when the
+    // list is restricted to it, otherwise every Workspace at once.
+    let scope = match current_workspace_id {
+        Some(id) if view.only_current_workspace => workspace_name(workspaces, id),
+        _ => "All".to_owned(),
     };
     let grouping = if view.grouped { " · grouped" } else { "" };
     let interactions_block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(palette::ACCENT))
         .title(format!(
-            " styra · current interactions{scope}{grouping} · Enter attach · X convert · S stop · D delete · w scope · g group · q cancel "
+            " {scope} · live interactions{grouping} · Enter attach · X convert · S stop · D delete · w scope · g group · q cancel "
         ));
 
     let selected_index = selected_row.and_then(|row| match rows.get(row) {
@@ -567,18 +569,22 @@ fn render_log_preview(
     // The preview follows the tail of the conversation only — the same filter
     // the main list applies in conversation-only mode — so a glance down the
     // picker reads as an exchange rather than as tool traffic.
+    let viewport = area.height.saturating_sub(2) as usize;
+    // Walk backward and stop once the visible tail is full. Long cached
+    // conversations must not be scanned and allocated again on every redraw.
     let entries: Vec<&InteractionUpdate> = updates
         .iter()
+        .rev()
         .filter(|update| is_interaction_entry(update))
+        .take(viewport)
         .collect();
     if entries.is_empty() {
         render_placeholder(frame, block, area, "  no messages yet");
         return;
     }
-    let viewport = area.height.saturating_sub(2) as usize;
-    let start = entries.len().saturating_sub(viewport);
-    let lines: Vec<Line<'static>> = entries[start..]
-        .iter()
+    let lines: Vec<Line<'static>> = entries
+        .into_iter()
+        .rev()
         .map(|update| interaction_preview_line(update, protocol))
         .collect();
     frame.render_widget(Paragraph::new(lines).block(block), area);
@@ -1095,6 +1101,7 @@ mod tests {
         rendered_interactions_rows(
             interactions,
             workspaces,
+            None,
             &rows,
             (!rows.is_empty()).then_some(selected),
             InteractionsView::default(),
@@ -1105,6 +1112,7 @@ mod tests {
     fn rendered_interactions_rows(
         interactions: &[InteractionSummary],
         workspaces: &[WorkspaceSummary],
+        current_workspace_id: Option<&str>,
         rows: &[InteractionRow],
         selected_row: Option<usize>,
         view: InteractionsView,
@@ -1118,6 +1126,7 @@ mod tests {
                     &InteractionsList {
                         interactions,
                         workspaces,
+                        current_workspace_id,
                         rows,
                         selected_row,
                         view,
@@ -1154,7 +1163,7 @@ mod tests {
             launch: Default::default(),
         }];
         let screen = rendered_interactions_picker(&interactions, &workspaces, 0, &[]);
-        assert!(screen.contains("current interactions"));
+        assert!(screen.contains("All · live interactions"));
         assert!(screen.contains("X convert"));
         assert!(screen.contains("conversation"));
         assert!(screen.contains("codex"));
@@ -1237,6 +1246,7 @@ mod tests {
         let screen = rendered_interactions_rows(
             &[],
             &[],
+            None,
             &[],
             None,
             InteractionsView {
@@ -1247,6 +1257,27 @@ mod tests {
         );
         assert!(screen.contains("this Workspace"), "{screen}");
         assert!(screen.contains("w for all"), "{screen}");
+    }
+
+    #[test]
+    fn a_workspace_restricted_view_titles_itself_with_that_workspace() {
+        let interactions = vec![interaction_summary("s-1", "codex", true)];
+        let workspaces = vec![workspace_summary("w-1", "payments", 1)];
+        let rows = vec![InteractionRow::Interaction(0)];
+        let screen = rendered_interactions_rows(
+            &interactions,
+            &workspaces,
+            Some("w-1"),
+            &rows,
+            Some(0),
+            InteractionsView {
+                only_current_workspace: true,
+                grouped: false,
+            },
+            &[],
+        );
+        assert!(screen.contains("payments · live interactions"), "{screen}");
+        assert!(!screen.contains("All ·"), "{screen}");
     }
 
     #[test]
@@ -1267,6 +1298,7 @@ mod tests {
         let screen = rendered_interactions_rows(
             &interactions,
             &workspaces,
+            None,
             &rows,
             Some(1),
             InteractionsView {
@@ -1330,6 +1362,7 @@ mod tests {
                     &InteractionsList {
                         interactions: &interactions,
                         workspaces: &[],
+                        current_workspace_id: None,
                         rows: &rows,
                         selected_row: Some(0),
                         view: InteractionsView::default(),
