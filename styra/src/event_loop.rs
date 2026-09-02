@@ -185,13 +185,12 @@ fn apply_interaction_load(
     };
 
     let (mut next, next_live) = session::app_from_interaction_snapshot(snapshot);
-    next.interactions = std::mem::take(&mut app.interactions);
+    next.adopt(app.take_operator_state());
     next.interactions.select_id(active_id);
+    // Only the newest few updates were asked for, so the list starts out with
+    // holes an unfiltered view would show as gaps; see DESIGN.md. This is the
+    // one display choice a switch overrides.
     next.timeline.conversation_only = true;
-    next.show_preview = app.show_preview;
-    next.preview_mode = app.preview_mode;
-    next.preview_target = app.preview_target;
-    next.recent_models = app.recent_models.clone();
     next.launch.interaction = standing_launch.clone();
     if let Some(workspace) = next
         .interactions
@@ -233,13 +232,10 @@ fn open_raw_history(
     };
     match session::attach_live_interaction(client, interaction) {
         Ok((mut next, next_live)) => {
-            next.interactions = std::mem::take(&mut app.interactions);
-            next.timeline.conversation_only = app.timeline.conversation_only;
-            next.show_preview = app.show_preview;
-            next.preview_mode = app.preview_mode;
-            next.preview_target = app.preview_target;
-            next.recent_models = app.recent_models.clone();
+            next.adopt(app.take_operator_state());
             next.launch.interaction = standing_launch.clone();
+            // The same Interaction in the same Workspace, so its identity is
+            // already known and there is nothing to ask the server for.
             next.workspace_name.clone_from(&app.workspace_name);
             next.launch.workspace = app.launch.workspace.clone();
             next.toggle_raw();

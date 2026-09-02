@@ -618,6 +618,38 @@ pub enum Request {
     },
 }
 
+/// The parts of a screen that belong to the operator rather than to the
+/// Interaction it is showing.
+///
+/// Switching which Interaction is current rebuilds the whole [`App`] from the
+/// server, because the timeline, status and wire history are the Interaction's
+/// and only the server has them. What must not be rebuilt is everything the
+/// operator themselves put on the screen: the navigator they are moving
+/// through, the display choices they made, and the message they have half
+/// written. Those are taken out of the old screen and adopted by the new one.
+///
+/// Deliberately not carried, because they are the Interaction's and rebuilding
+/// them is the point: the timeline, status, usage, answer, wire history — and
+/// the diagnostic log, which is partly fed from the server
+/// ([`styra_server::InteractionUpdate::Log`]), so carrying it across a re-attach
+/// would show the same entries twice.
+#[derive(Default)]
+pub struct OperatorState {
+    interactions: LiveInteractions,
+    /// The event list's own filter, which is a display choice like the rest;
+    /// a caller that wants a different one sets it after adopting.
+    conversation_only: bool,
+    show_preview: bool,
+    preview_mode: PresentationMode,
+    preview_target: PreviewTarget,
+    recent_models: Vec<String>,
+    /// The message being written and the shape its reply was to come back in.
+    /// A draft is the operator's work, so it survives a screen it outlives.
+    composer: Composer,
+    contract: Option<Contract>,
+    file_show_all: bool,
+}
+
 impl App {
     pub fn new(selection: Selection, session_id: impl Into<String>) -> Self {
         Self {
@@ -689,6 +721,41 @@ impl App {
         let mut app = Self::new(selection, String::new());
         app.status = Status::Pending;
         app
+    }
+
+    /// Take the operator-owned state off this screen, leaving the rest of it
+    /// intact; see [`OperatorState`]. The screen is expected to be replaced
+    /// straight afterwards, so what is left behind is the Interaction's own
+    /// state, which the replacement rebuilds from the server.
+    pub fn take_operator_state(&mut self) -> OperatorState {
+        OperatorState {
+            interactions: std::mem::take(&mut self.interactions),
+            conversation_only: self.timeline.conversation_only,
+            show_preview: self.show_preview,
+            preview_mode: self.preview_mode,
+            preview_target: self.preview_target,
+            recent_models: std::mem::take(&mut self.recent_models),
+            composer: std::mem::take(&mut self.composer),
+            contract: self.contract.take(),
+            file_show_all: self.file_show_all,
+        }
+    }
+
+    /// Put operator-owned state onto a screen freshly attached from the server.
+    ///
+    /// The counterpart to [`App::take_operator_state`], and the only place that
+    /// says which fields outlive a screen — so a new field is carried, or
+    /// deliberately not, in one place rather than once per switching path.
+    pub fn adopt(&mut self, state: OperatorState) {
+        self.interactions = state.interactions;
+        self.timeline.conversation_only = state.conversation_only;
+        self.show_preview = state.show_preview;
+        self.preview_mode = state.preview_mode;
+        self.preview_target = state.preview_target;
+        self.recent_models = state.recent_models;
+        self.composer = state.composer;
+        self.contract = state.contract;
+        self.file_show_all = state.file_show_all;
     }
 
     /// Whether the picker is reachable. Before launch all providers are
@@ -1609,6 +1676,49 @@ mod tests {
             activity,
             last_message: None,
         }
+    }
+
+    /// Switching which Interaction is on screen rebuilds the whole screen from
+    /// the server, so anything the operator put there has to be carried over
+    /// deliberately. A half-written message is the case that costs them work.
+    #[test]
+    fn an_unsent_draft_survives_the_screen_it_was_typed_on() {
+        let mut app = app();
+        app.set_input("half a thought".into());
+        app.contract = Some(Contract::Lines);
+        app.show_preview = true;
+        app.file_show_all = true;
+        app.recent_models = vec!["gpt-5.6-sol".into()];
+
+        let mut next = App::new(app.selection.clone(), "session-2");
+        next.adopt(app.take_operator_state());
+
+        assert_eq!(next.composer.text, "half a thought");
+        assert_eq!(next.contract, Some(Contract::Lines));
+        assert!(next.show_preview);
+        assert!(next.file_show_all);
+        assert_eq!(next.recent_models, vec!["gpt-5.6-sol".to_owned()]);
+    }
+
+    /// The log is partly the server's, replayed with the rest of an
+    /// Interaction's history, so a screen that carried it across a re-attach
+    /// would show every entry twice.
+    #[test]
+    fn the_interactions_own_state_is_left_to_be_rebuilt() {
+        let mut app = app();
+        app.push_log(LogEntry::info("something happened"));
+        app.push_raw(RawLine {
+            direction: styra_server::Direction::FromAgent,
+            text: "{}".into(),
+            at_ms: 0,
+        });
+
+        let mut next = App::new(app.selection.clone(), "session-2");
+        next.adopt(app.take_operator_state());
+
+        assert!(next.log.is_empty());
+        assert!(next.raw.is_empty());
+        assert_eq!(next.timeline.entries.len(), 0);
     }
 
     #[test]
