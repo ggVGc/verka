@@ -487,6 +487,9 @@ pub struct App {
     background_count_known: bool,
     /// The verbatim wire interaction, in occurrence order.
     pub raw: Vec<RawLine>,
+    /// Whether `raw` contains this interaction's history from its beginning.
+    /// Browsing live interactions initially omits it and fills it on demand.
+    pub raw_loaded: bool,
     /// Which wire line the raw view has selected.
     pub raw_selected: usize,
     /// When true, `raw_selected` tracks the newest line as it arrives.
@@ -552,6 +555,8 @@ pub enum Request {
     OpenSession(String),
     /// Open the server's live interactions above the main event timeline.
     Interactions,
+    /// Hydrate the current live interaction's raw history, then open it.
+    Raw,
     /// Stop the current interaction and return to the blank start screen.
     Reset,
     /// Return to the blank start screen without stopping the current interaction.
@@ -620,6 +625,7 @@ impl App {
             background_work: false,
             background_count_known: false,
             raw: Vec::new(),
+            raw_loaded: true,
             raw_selected: 0,
             raw_follow: true,
             raw_preview: Scroll::default(),
@@ -2569,6 +2575,7 @@ mod tests {
             Request::Sessions,
             Request::OpenSession("s-1".into()),
             Request::Interactions,
+            Request::Raw,
             Request::Reset,
             Request::NewSession,
             Request::EditFile,

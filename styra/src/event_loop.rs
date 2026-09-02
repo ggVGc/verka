@@ -54,11 +54,11 @@ fn make_interaction_current(
         return;
     }
     let id = interaction.id.clone();
-    match session::attach_live_interaction(client, interaction) {
+    match session::attach_live_interaction_without_raw(client, interaction) {
         Ok((mut next, next_live)) => {
             next.interactions = std::mem::take(&mut app.interactions);
             next.interactions.select_id(&id);
-            next.timeline.conversation_only = app.timeline.conversation_only;
+            next.timeline.conversation_only = true;
             next.show_preview = app.show_preview;
             next.preview_mode = app.preview_mode;
             next.preview_target = app.preview_target;
@@ -83,6 +83,50 @@ fn make_interaction_current(
                 "could not make interaction {id} current: {error:#}"
             )));
         }
+    }
+}
+
+/// Fill the raw history omitted by lightweight list navigation and open the
+/// raw view. Rebuilding once here restores event-to-wire indices as well as
+/// the lines themselves, so branching and raw selection retain their exact
+/// semantics after lazy loading.
+fn open_raw_history(
+    app: &mut App,
+    live: &mut Live,
+    client: &Client,
+    standing_launch: &LaunchPolicy,
+) {
+    let id = app.session_id.clone();
+    let Some(interaction) = app
+        .interactions
+        .items
+        .iter()
+        .find(|interaction| interaction.id == id)
+        .cloned()
+    else {
+        app.push_log(LogEntry::error(
+            "could not find the current live interaction",
+        ));
+        return;
+    };
+    match session::attach_live_interaction(client, interaction) {
+        Ok((mut next, next_live)) => {
+            next.interactions = std::mem::take(&mut app.interactions);
+            next.timeline.conversation_only = app.timeline.conversation_only;
+            next.show_preview = app.show_preview;
+            next.preview_mode = app.preview_mode;
+            next.preview_target = app.preview_target;
+            next.recent_models = app.recent_models.clone();
+            next.launch.interaction = standing_launch.clone();
+            next.workspace_name.clone_from(&app.workspace_name);
+            next.launch.workspace = app.launch.workspace.clone();
+            next.toggle_raw();
+            *app = next;
+            *live = next_live;
+        }
+        Err(error) => app.push_log(LogEntry::error(format!(
+            "could not load raw history for interaction {id}: {error:#}"
+        ))),
     }
 }
 
@@ -364,6 +408,7 @@ pub fn run(
                 app.interactions.open(interactions, workspaces, &current);
                 interactions_refreshed = Instant::now();
             }
+            Some(Request::Raw) => open_raw_history(app, live, client, standing_launch),
             Some(Request::Reset) => return Ok(RunOutcome::Reset),
             Some(Request::NewSession) => return Ok(RunOutcome::NewSession),
             Some(Request::ApplySelection) => {

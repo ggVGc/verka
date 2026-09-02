@@ -234,12 +234,35 @@ pub fn attach_live_interaction(
     client: &Client,
     interaction: InteractionSummary,
 ) -> Result<(App, Live)> {
+    attach_live_interaction_with_raw(client, interaction, true)
+}
+
+/// Attach for interaction-list browsing without transferring the historical
+/// raw wire stream. Decoded events build the ordinary timeline; raw history is
+/// hydrated only if the operator asks for the raw view.
+pub fn attach_live_interaction_without_raw(
+    client: &Client,
+    interaction: InteractionSummary,
+) -> Result<(App, Live)> {
+    attach_live_interaction_with_raw(client, interaction, false)
+}
+
+fn attach_live_interaction_with_raw(
+    client: &Client,
+    interaction: InteractionSummary,
+    raw: bool,
+) -> Result<(App, Live)> {
     let mut app = App::new(interaction.selection.clone(), interaction.id.clone());
+    app.raw_loaded = raw;
     app.session_name = interaction.name.clone();
     app.workspace_id = Some(interaction.workspace_id.clone());
     app.set_workspace_root(interaction.workspace.clone());
     app.launch.record(interaction.driva.clone());
-    let batch = client.updates(&interaction.id, 0)?;
+    let batch = if raw {
+        client.updates(&interaction.id, 0)?
+    } else {
+        client.updates_without_raw(&interaction.id, 0)?
+    };
     let cursor = batch.next;
     for sequenced in batch.updates {
         apply_update(&mut app, sequenced.update);
