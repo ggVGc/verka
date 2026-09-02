@@ -65,9 +65,7 @@ pub fn create_with_repository(
     let host_path = host_path
         .canonicalize()
         .with_context(|| format!("workspace directory {} must exist", host_path.display()))?;
-    let git_repository = git_repository
-        .map(crate::git::repository_root)
-        .transpose()?;
+    let git_repository = git_repository.map(validate_git_repository).transpose()?;
     let created_at_ms = now_ms();
     let id = new_id(created_at_ms);
     let path = workspace_dir(store_root, &id);
@@ -199,11 +197,18 @@ pub fn set_git_repository(
         anyhow::bail!("Workspace {id:?} was not found");
     }
     let mut meta = read_meta(&path)?;
-    meta.git_repository = git_repository
-        .map(crate::git::repository_root)
-        .transpose()?;
+    meta.git_repository = git_repository.map(validate_git_repository).transpose()?;
     write_meta(&path, &meta)?;
     summary_from_meta(&path, meta, now_ms())
+}
+
+/// Resolve every path needed at launch before making the association durable.
+/// This prevents malformed linked-worktree metadata from poisoning all future
+/// launches in the Workspace.
+fn validate_git_repository(path: &Path) -> Result<PathBuf> {
+    let root = crate::git::repository_root(path)?;
+    crate::git::mounts(&root)?;
+    Ok(root)
 }
 
 /// Read a Workspace's standing sandbox policy without marking it accessed.
@@ -424,6 +429,23 @@ mod tests {
         assert_eq!(cleared.git_repository, None);
         let restored = set_git_repository(&store, &workspace.id, Some(&repository)).unwrap();
         assert_eq!(restored.git_repository.as_deref(), Some(expected.as_path()));
+
+        std::fs::remove_dir_all(store).ok();
+        std::fs::remove_dir_all(host).ok();
+        std::fs::remove_dir_all(repository).ok();
+    }
+
+    #[test]
+    fn malformed_git_metadata_is_rejected_before_it_is_stored() {
+        let store = temp_dir("invalid-git-store");
+        let host = temp_dir("invalid-git-host");
+        let repository = temp_dir("invalid-git-repository");
+        std::fs::write(repository.join(".git"), "not a gitdir pointer\n").unwrap();
+        let workspace = create(&store, &host, None).unwrap();
+
+        let error = set_git_repository(&store, &workspace.id, Some(&repository)).unwrap_err();
+        assert!(error.to_string().contains("invalid Git pointer"));
+        assert_eq!(get(&store, &workspace.id).unwrap().git_repository, None);
 
         std::fs::remove_dir_all(store).ok();
         std::fs::remove_dir_all(host).ok();
