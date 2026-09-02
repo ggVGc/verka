@@ -657,10 +657,12 @@ immediately makes the highlighted Interaction current and fills the ordinary
 event list below with its complete timeline. The Interaction previously shown
 keeps running on the server; only this client's current view changes.
 
-Moving initially asks for decoded updates without the raw wire stream, and a
-newly selected Interaction returns to conversation-only mode. The first `r`
-hydrates its complete raw history and rebuilds the event-to-wire indices before
-opening the raw view; subsequent raw-view toggles use that local history.
+Moving initially asks for only the five newest non-raw updates, and a newly
+selected Interaction returns to conversation-only mode focused on its newest
+visible entry. The returned cursor is still the true stream tail, so live
+polling continues from there rather than filling in the omitted prefix. The
+first `r` hydrates complete history and rebuilds the event-to-wire indices
+before opening the raw view; subsequent raw-view toggles use that local history.
 
 The navigator refreshes its summaries while open. Pending work is listed
 first, running work next, and stopped Interactions last, with server order

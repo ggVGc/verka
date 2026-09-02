@@ -31,6 +31,7 @@ pub enum RunOutcome {
 }
 
 const INTERACTIONS_REFRESH: Duration = Duration::from_millis(250);
+const INTERACTION_RECENT_UPDATES: usize = 5;
 
 pub struct RunContext<'a> {
     pub workspace_id: &'a str,
@@ -54,7 +55,7 @@ fn make_interaction_current(
         return;
     }
     let id = interaction.id.clone();
-    match session::attach_live_interaction_without_raw(client, interaction) {
+    match session::attach_live_interaction_recent(client, interaction, INTERACTION_RECENT_UPDATES) {
         Ok((mut next, next_live)) => {
             next.interactions = std::mem::take(&mut app.interactions);
             next.interactions.select_id(&id);

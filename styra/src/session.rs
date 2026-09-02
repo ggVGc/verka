@@ -234,23 +234,24 @@ pub fn attach_live_interaction(
     client: &Client,
     interaction: InteractionSummary,
 ) -> Result<(App, Live)> {
-    attach_live_interaction_with_raw(client, interaction, true)
+    attach_live_interaction_with_raw(client, interaction, true, None)
 }
 
-/// Attach for interaction-list browsing without transferring the historical
-/// raw wire stream. Decoded events build the ordinary timeline; raw history is
-/// hydrated only if the operator asks for the raw view.
-pub fn attach_live_interaction_without_raw(
+/// Attach for interaction-list browsing with only the newest non-raw updates.
+/// Full raw history is hydrated only if the operator asks for the raw view.
+pub fn attach_live_interaction_recent(
     client: &Client,
     interaction: InteractionSummary,
+    limit: usize,
 ) -> Result<(App, Live)> {
-    attach_live_interaction_with_raw(client, interaction, false)
+    attach_live_interaction_with_raw(client, interaction, false, Some(limit))
 }
 
 fn attach_live_interaction_with_raw(
     client: &Client,
     interaction: InteractionSummary,
     raw: bool,
+    recent: Option<usize>,
 ) -> Result<(App, Live)> {
     let mut app = App::new(interaction.selection.clone(), interaction.id.clone());
     app.raw_loaded = raw;
@@ -258,15 +259,16 @@ fn attach_live_interaction_with_raw(
     app.workspace_id = Some(interaction.workspace_id.clone());
     app.set_workspace_root(interaction.workspace.clone());
     app.launch.record(interaction.driva.clone());
-    let batch = if raw {
-        client.updates(&interaction.id, 0)?
-    } else {
-        client.updates_without_raw(&interaction.id, 0)?
+    let batch = match (raw, recent) {
+        (true, _) => client.updates(&interaction.id, 0)?,
+        (false, Some(limit)) => client.recent_updates_without_raw(&interaction.id, limit)?,
+        (false, None) => client.updates_without_raw(&interaction.id, 0)?,
     };
     let cursor = batch.next;
     for sequenced in batch.updates {
         apply_update(&mut app, sequenced.update);
     }
+    app.select_last();
     for message in client.queued_messages(&interaction.id)? {
         app.queue_message(message);
     }
