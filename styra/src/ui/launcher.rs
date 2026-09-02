@@ -176,6 +176,9 @@ mod tests {
     #[test]
     fn the_launcher_offers_only_concrete_catalog_rows() {
         let body = testing::screen(&launching()).body();
+        // Anchor first: a negative assertion alone is satisfied by a blank
+        // render, so it would keep passing if the launcher stopped drawing.
+        assert!(body.contains("gpt-5.6-sol"), "{body}");
         assert!(!body.contains("custom"), "{body}");
         assert!(!body.contains("│ default"), "{body}");
     }
@@ -207,6 +210,10 @@ mod tests {
     #[test]
     fn the_launcher_is_modal_and_hides_the_session_view() {
         let body = testing::screen(&launching()).body();
+        assert!(
+            body.contains("effort"),
+            "the launcher should be drawn: {body}"
+        );
         assert!(!body.contains("message"), "{body}");
     }
 
