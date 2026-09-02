@@ -171,10 +171,9 @@ pub fn render_notes_prompt(frame: &mut Frame, scope: Scope, value: &str) {
 
 #[cfg(test)]
 mod tests {
+    use super::super::testing::rendered;
     use crate::app::App;
     use crate::notes;
-    use ratatui::backend::TestBackend;
-    use ratatui::Terminal;
 
     fn app() -> App {
         let mut app = App::new(
@@ -184,21 +183,6 @@ mod tests {
         app.session_name = Some("Fix retries".into());
         app.workspace_name = Some("payments".into());
         app
-    }
-
-    fn rendered(app: &App) -> String {
-        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
-        terminal
-            .draw(|frame| super::super::render(frame, app))
-            .unwrap();
-        terminal
-            .backend()
-            .buffer()
-            .clone()
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>()
     }
 
     #[test]

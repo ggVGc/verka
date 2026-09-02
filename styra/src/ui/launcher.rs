@@ -138,25 +138,10 @@ fn render_launcher_column(
 
 #[cfg(test)]
 mod tests {
+    use super::super::testing::rendered;
     use crate::app::App;
-    use ratatui::backend::TestBackend;
-    use ratatui::Terminal;
-    use styra_server::agent::Provider;
 
-    fn rendered(app: &App) -> String {
-        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
-        terminal
-            .draw(|frame| super::super::render(frame, app))
-            .unwrap();
-        terminal
-            .backend()
-            .buffer()
-            .clone()
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>()
-    }
+    use styra_server::agent::Provider;
 
     /// The picker is modal: it replaces the session view entirely, and spells
     /// out the profile its current rows add up to.

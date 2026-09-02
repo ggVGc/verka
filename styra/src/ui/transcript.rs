@@ -53,26 +53,11 @@ pub(crate) fn render_transcript_view(frame: &mut Frame, app: &App, area: Rect) {
 
 #[cfg(test)]
 mod tests {
+    use super::super::testing::rendered;
     use super::*;
     use crate::app::View;
-    use ratatui::backend::TestBackend;
-    use ratatui::Terminal;
-    use styra_server::event::AgentEvent;
 
-    fn rendered(app: &App) -> String {
-        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
-        terminal
-            .draw(|frame| super::super::render(frame, app))
-            .unwrap();
-        terminal
-            .backend()
-            .buffer()
-            .clone()
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>()
-    }
+    use styra_server::event::AgentEvent;
 
     #[test]
     fn transcript_view_renders_the_current_session() {

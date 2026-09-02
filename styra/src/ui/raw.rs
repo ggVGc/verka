@@ -219,24 +219,8 @@ impl JsonWriter {
 
 #[cfg(test)]
 mod tests {
+    use super::super::testing::rendered;
     use super::*;
-    use ratatui::backend::TestBackend;
-    use ratatui::Terminal;
-
-    fn rendered(app: &App) -> String {
-        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
-        terminal
-            .draw(|frame| super::super::render(frame, app))
-            .unwrap();
-        terminal
-            .backend()
-            .buffer()
-            .clone()
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>()
-    }
 
     #[test]
     fn raw_view_shows_wire_lines_with_direction_markers() {

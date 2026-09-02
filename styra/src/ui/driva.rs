@@ -552,26 +552,12 @@ fn mount_line(mount: &Mount) -> Line<'static> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::testing::rendered;
     use super::*;
     use crate::app::View;
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
     use std::path::PathBuf;
-
-    fn rendered(app: &App) -> String {
-        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
-        terminal
-            .draw(|frame| super::super::render(frame, app))
-            .unwrap();
-        terminal
-            .backend()
-            .buffer()
-            .clone()
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>()
-    }
 
     #[test]
     fn driva_view_shows_the_launch_policy_or_a_placeholder_before_launch() {

@@ -250,27 +250,13 @@ fn bash_spans(line: &str) -> Vec<Span<'static>> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::testing::rendered;
     use super::*;
     use crate::app::View;
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
     use ratatui::Terminal;
     use styra_server::event::AgentEvent;
-
-    fn rendered(app: &App) -> String {
-        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
-        terminal
-            .draw(|frame| super::super::render(frame, app))
-            .unwrap();
-        terminal
-            .backend()
-            .buffer()
-            .clone()
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>()
-    }
 
     fn find_column(buffer: &Buffer, needle: &str) -> (u16, u16) {
         let needle_chars: Vec<char> = needle.chars().collect();

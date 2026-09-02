@@ -42,25 +42,9 @@ pub(crate) fn log_line(entry: &styra_server::LogEntry) -> Line<'static> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::testing::rendered;
     use super::*;
     use crate::app::View;
-    use ratatui::backend::TestBackend;
-    use ratatui::Terminal;
-
-    fn rendered(app: &App) -> String {
-        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
-        terminal
-            .draw(|frame| super::super::render(frame, app))
-            .unwrap();
-        terminal
-            .backend()
-            .buffer()
-            .clone()
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>()
-    }
 
     #[test]
     fn log_view_shows_entries_with_levels() {

@@ -24,6 +24,8 @@ mod picker;
 mod preview;
 pub(crate) mod quota;
 mod raw;
+#[cfg(test)]
+mod testing;
 mod transcript;
 
 use answer::render_answer;
