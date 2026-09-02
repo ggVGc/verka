@@ -425,15 +425,15 @@ pub fn render_template_picker(
 }
 
 /// Render the current-interactions picker: interactions in a band across the
-/// top and the selected interaction's live diagnostic/stderr log below.
+/// top and the selected interaction's conversation preview below.
 ///
 /// Like [`render_picker`], it stands apart from [`crate::app::App`] because it
 /// overlays whichever session is currently loaded. The picker loop owns and
-/// refreshes `updates`, while this function remains a pure renderer.
+/// refreshes the preview, while this function remains a pure renderer.
 pub fn render_interactions_picker(
     frame: &mut Frame,
     list: &InteractionsList<'_>,
-    updates: &[InteractionUpdate],
+    preview: Preview<'_>,
 ) {
     let InteractionsList {
         interactions,
@@ -475,7 +475,7 @@ pub fn render_interactions_picker(
                 "  no live interactions on the server"
             },
         );
-        render_log_preview(frame, None, None, None, Preview::Ready(updates), panes[1]);
+        render_log_preview(frame, None, None, None, preview, panes[1]);
         return;
     }
 
@@ -511,7 +511,7 @@ pub fn render_interactions_picker(
         selected_index.map(|item| item.id.as_str()),
         selected_index.map(|item| item.selection.provider.protocol()),
         selected_index.map(interaction_status),
-        Preview::Ready(updates),
+        preview,
         panes[1],
     );
 }
@@ -1122,7 +1122,7 @@ mod tests {
                         selected_row,
                         view,
                     },
-                    updates,
+                    Preview::Ready(updates),
                 )
             })
             .unwrap();
@@ -1315,6 +1315,32 @@ mod tests {
         let loaded = screen_text(terminal.backend().buffer());
         assert!(loaded.contains("no messages yet"), "{loaded}");
         assert!(!loaded.contains("loading"), "{loaded}");
+    }
+
+    #[test]
+    fn interactions_picker_marks_an_in_flight_preview_as_loading() {
+        let interactions = vec![interaction_summary("s-1", "codex", true)];
+        let rows = vec![InteractionRow::Interaction(0)];
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+
+        terminal
+            .draw(|frame| {
+                render_interactions_picker(
+                    frame,
+                    &InteractionsList {
+                        interactions: &interactions,
+                        workspaces: &[],
+                        rows: &rows,
+                        selected_row: Some(0),
+                        view: InteractionsView::default(),
+                    },
+                    Preview::Loading,
+                )
+            })
+            .unwrap();
+        let screen = screen_text(terminal.backend().buffer());
+        assert!(screen.contains("loading"), "{screen}");
+        assert!(!screen.contains("no messages yet"), "{screen}");
     }
 
     #[test]

@@ -2,7 +2,10 @@ use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
+use std::collections::HashMap;
 use std::io::Stdout;
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use styra_server::protocol::ResumeSession;
@@ -11,7 +14,8 @@ use styra_server::{Client, InteractionSummary, InteractionUpdate, LogEntry, Work
 use crate::notes;
 use crate::ui;
 
-/// How long the cursor must rest on a Session before its preview is loaded.
+/// How long the cursor must rest on a Session or Workspace before its preview
+/// is loaded.
 /// Short enough to feel immediate when the cursor stops, long enough that
 /// scrolling through the list costs no loads at all.
 const PREVIEW_SETTLE: Duration = Duration::from_millis(120);
@@ -25,6 +29,115 @@ const LIVENESS_REFRESH: Duration = Duration::from_secs(2);
 /// conversation preview, status, selection, name, and last response all come
 /// from `list_interactions`, so they need their own short refresh cadence.
 const INTERACTIONS_REFRESH: Duration = Duration::from_millis(250);
+
+type PreviewLoad = (String, Result<styra_server::protocol::Updates, String>);
+type InteractionsRefresh = Result<Vec<InteractionSummary>, String>;
+
+/// A live-interaction preview retained for the lifetime of its picker. The
+/// summary records which server state the cursor covers; when that changes, a
+/// new incremental request starts without throwing the cached conversation
+/// away.
+struct CachedInteractionPreview {
+    summary: InteractionSummary,
+    cursor: u64,
+    updates: Vec<InteractionUpdate>,
+    loading: bool,
+}
+
+#[derive(Default)]
+struct InteractionPreviewCache {
+    entries: HashMap<String, CachedInteractionPreview>,
+}
+
+impl InteractionPreviewCache {
+    /// Mark a missing or stale preview as loading and return the cursor its
+    /// background request should start from. One request per interaction may
+    /// be in flight; a summary that changes during it remains stale and causes
+    /// another incremental request as soon as this one completes.
+    fn start_load(&mut self, interaction: &InteractionSummary) -> Option<u64> {
+        match self.entries.get_mut(&interaction.id) {
+            Some(entry) if entry.loading || entry.summary == *interaction => None,
+            Some(entry) => {
+                entry.summary = interaction.clone();
+                entry.loading = true;
+                Some(entry.cursor)
+            }
+            None => {
+                self.entries.insert(
+                    interaction.id.clone(),
+                    CachedInteractionPreview {
+                        summary: interaction.clone(),
+                        cursor: 0,
+                        updates: Vec::new(),
+                        loading: true,
+                    },
+                );
+                Some(0)
+            }
+        }
+    }
+
+    fn finish_load(&mut self, id: &str, result: Result<styra_server::protocol::Updates, String>) {
+        let Some(entry) = self.entries.get_mut(id) else {
+            return;
+        };
+        entry.loading = false;
+        match result {
+            Ok(batch) => {
+                entry.cursor = batch.next;
+                entry
+                    .updates
+                    .extend(batch.updates.into_iter().filter_map(
+                        |sequenced| match sequenced.update {
+                            update @ InteractionUpdate::Event(
+                                styra_server::event::AgentEvent::UserMessage { .. }
+                                | styra_server::event::AgentEvent::AgentMessage { .. },
+                            ) => Some(update),
+                            _ => None,
+                        },
+                    ));
+            }
+            Err(message) => {
+                let message = format!("could not load current log: {message}");
+                let already_reported = entry.updates.last().is_some_and(
+                    |update| matches!(update, InteractionUpdate::Log(log) if log.message == message),
+                );
+                if !already_reported {
+                    entry
+                        .updates
+                        .push(InteractionUpdate::Log(LogEntry::error(message)));
+                }
+            }
+        }
+    }
+
+    fn preview(&self, id: &str) -> ui::Preview<'_> {
+        match self.entries.get(id) {
+            Some(entry) if !entry.updates.is_empty() || !entry.loading => {
+                ui::Preview::Ready(&entry.updates)
+            }
+            _ => ui::Preview::Loading,
+        }
+    }
+}
+
+fn load_interaction_preview(client: Client, id: String, after: u64, sender: Sender<PreviewLoad>) {
+    thread::spawn(move || {
+        let result = client
+            .updates_without_raw(&id, after)
+            .map_err(|error| format!("{error:#}"));
+        sender.send((id, result)).ok();
+    });
+}
+
+fn refresh_interactions(client: Client, sender: Sender<InteractionsRefresh>) {
+    thread::spawn(move || {
+        let result = client
+            .list_interactions()
+            .map_err(|error| format!("{error:#}"));
+        sender.send(result).ok();
+    });
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 // The picker yields at most one of these per run, so the size difference never
@@ -373,22 +486,36 @@ pub fn run_interactions_picker(
     // position, so `w` and `g` do not move the selection off it.
     let mut refocus: Option<String> = None;
     let mut preview_id = String::new();
-    let mut preview_cursor = 0u64;
-    let mut preview_updates = Vec::new();
+    let mut preview_cache = InteractionPreviewCache::default();
+    let (preview_sender, preview_receiver): (Sender<PreviewLoad>, Receiver<PreviewLoad>) =
+        mpsc::channel();
+    let (refresh_sender, refresh_receiver): (
+        Sender<InteractionsRefresh>,
+        Receiver<InteractionsRefresh>,
+    ) = mpsc::channel();
+    let mut refresh_in_flight = false;
     let mut refreshed = Instant::now();
     loop {
-        if refreshed.elapsed() >= INTERACTIONS_REFRESH {
+        for (id, result) in preview_receiver.try_iter() {
+            preview_cache.finish_load(&id, result);
+        }
+        if let Ok(result) = refresh_receiver.try_recv() {
+            refresh_in_flight = false;
             refreshed = Instant::now();
-            // Refreshing can change the status sort order. Keep the cursor on
-            // the same interaction by identity rather than letting a moving
-            // row silently change the selection.
-            if !preview_id.is_empty() {
-                refocus = Some(preview_id.clone());
-            }
-            if let Ok(mut current) = client.list_interactions() {
+            if let Ok(mut current) = result {
+                // Refreshing can change the status sort order. Keep the cursor
+                // on the same interaction by identity rather than letting a
+                // moving row silently change the selection.
+                if !preview_id.is_empty() {
+                    refocus = Some(preview_id.clone());
+                }
                 sort_interactions(&mut current);
                 *interactions = current;
             }
+        }
+        if !refresh_in_flight && refreshed.elapsed() >= INTERACTIONS_REFRESH {
+            refresh_in_flight = true;
+            refresh_interactions(client.clone(), refresh_sender.clone());
         }
         let rows = interaction_rows(interactions, workspaces, current_workspace_id, view);
         let visible: Vec<usize> = rows
@@ -411,42 +538,27 @@ pub fn run_interactions_picker(
 
         match selected_index {
             Some(index) => {
-                if preview_id != interactions[index].id {
-                    preview_id.clone_from(&interactions[index].id);
-                    preview_cursor = 0;
-                    preview_updates.clear();
-                }
-                match client.updates(&preview_id, preview_cursor) {
-                    Ok(batch) => {
-                        preview_cursor = batch.next;
-                        preview_updates.extend(batch.updates.into_iter().filter_map(|sequenced| {
-                            match sequenced.update {
-                                InteractionUpdate::Raw(_) => None,
-                                update => Some(update),
-                            }
-                        }));
-                    }
-                    Err(error) => {
-                        let message = format!("could not load current log: {error:#}");
-                        if !preview_updates
-                            .last()
-                            .is_some_and(
-                                |update| matches!(update, InteractionUpdate::Log(entry) if entry.message == message),
-                            )
-                        {
-                            preview_updates.push(InteractionUpdate::Log(LogEntry::error(message)));
-                        }
-                    }
+                preview_id.clone_from(&interactions[index].id);
+                if let Some(after) = preview_cache.start_load(&interactions[index]) {
+                    load_interaction_preview(
+                        client.clone(),
+                        preview_id.clone(),
+                        after,
+                        preview_sender.clone(),
+                    );
                 }
             }
             None => {
                 preview_id.clear();
-                preview_cursor = 0;
-                preview_updates.clear();
             }
         }
 
         let selected_row = selected_row(&rows, selected_index);
+        let preview = if preview_id.is_empty() {
+            ui::Preview::Ready(&[])
+        } else {
+            preview_cache.preview(&preview_id)
+        };
         terminal.draw(|frame| {
             ui::render_interactions_picker(
                 frame,
@@ -457,7 +569,7 @@ pub fn run_interactions_picker(
                     selected_row,
                     view,
                 },
-                &preview_updates,
+                preview,
             )
         })?;
 
@@ -739,7 +851,7 @@ fn show_interactions_message(
 ) -> Result<()> {
     loop {
         terminal.draw(|frame| {
-            ui::render_interactions_picker(frame, list, &[]);
+            ui::render_interactions_picker(frame, list, ui::Preview::Ready(&[]));
             ui::render_message_popup(frame, title, message);
         })?;
         if let Event::Key(key) = event::read()? {
@@ -878,6 +990,70 @@ mod tests {
             workspace_id: workspace_id.into(),
             ..interaction(id, accepting, activity)
         }
+    }
+
+    #[test]
+    fn interaction_previews_load_immediately_then_stay_cached() {
+        let interaction = interaction("one", true, InteractionActivity::Pending);
+        let mut cache = InteractionPreviewCache::default();
+
+        assert_eq!(cache.start_load(&interaction), Some(0));
+        assert_eq!(cache.start_load(&interaction), None);
+        assert!(matches!(
+            cache.preview(&interaction.id),
+            ui::Preview::Loading
+        ));
+
+        cache.finish_load(
+            &interaction.id,
+            Ok(styra_server::protocol::Updates {
+                updates: vec![
+                    styra_server::protocol::SequencedUpdate {
+                        sequence: 1,
+                        update: InteractionUpdate::Event(
+                            styra_server::event::AgentEvent::CommandStarted {
+                                command: "cargo test".into(),
+                            },
+                        ),
+                    },
+                    styra_server::protocol::SequencedUpdate {
+                        sequence: 2,
+                        update: InteractionUpdate::Event(
+                            styra_server::event::AgentEvent::AgentMessage {
+                                text: "ready".into(),
+                            },
+                        ),
+                    },
+                ],
+                next: 2,
+            }),
+        );
+        assert_eq!(cache.start_load(&interaction), None);
+        assert!(matches!(
+            cache.preview(&interaction.id),
+            ui::Preview::Ready(updates) if updates.len() == 1
+        ));
+    }
+
+    #[test]
+    fn new_interaction_information_refreshes_a_cached_preview_incrementally() {
+        let interaction = interaction("one", true, InteractionActivity::Running);
+        let mut cache = InteractionPreviewCache::default();
+        assert_eq!(cache.start_load(&interaction), Some(0));
+        cache.finish_load(
+            &interaction.id,
+            Ok(styra_server::protocol::Updates {
+                updates: vec![],
+                next: 7,
+            }),
+        );
+
+        let changed = InteractionSummary {
+            last_message: Some("new response".into()),
+            ..interaction
+        };
+        assert_eq!(cache.start_load(&changed), Some(7));
+        assert_eq!(cache.start_load(&changed), None);
     }
 
     fn workspace(id: &str, last_accessed_at_ms: u64) -> WorkspaceSummary {

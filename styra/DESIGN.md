@@ -620,13 +620,18 @@ Two client-facing shortcuts:
 
 `A` opens the server's current-Interactions picker. Each entry names its
 Workspace and Session. The list stays on the left, while the right pane follows
-the selected Interaction's live log: decoded agent
-activity, Styra diagnostics and stderr, and the final process outcome. Moving
-the selection with `j`/`k` immediately loads its history and continues
-polling for new entries. `Enter` attaches to the selected Interaction; `Esc`/`q`
-returns without affecting any running process. Entries are grouped with pending
-work first, idle Interactions next, and stopped Interactions last; server order
-is retained within each group.
+the selected Interaction's live conversation, omitting tool traffic, raw wire
+lines, and Styra diagnostics. Moving
+the selection with `j`/`k` immediately starts loading its history on a
+background thread, so the list remains responsive while the pane says
+`loading…`. Loaded previews are cached for the lifetime of the picker; a
+changed Interaction summary starts an incremental background refresh without
+discarding the cached conversation. The periodic summary-list refresh also
+runs in the background, leaving cursor input and drawing free of server
+round-trips. `Enter` attaches to the selected
+Interaction; `Esc`/`q` returns without affecting any running process. Entries
+are grouped with pending work first, idle Interactions next, and stopped
+Interactions last; server order is retained within each group.
 
 ### Starting sends nothing on its own
 
