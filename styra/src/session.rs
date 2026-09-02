@@ -41,13 +41,7 @@ pub fn resolve_workspace(workspace: Option<&Path>) -> Result<PathBuf> {
 pub fn workspace_for_host(client: &Client, host_path: &Path) -> Result<WorkspaceSummary> {
     let canonical = host_path.canonicalize()?;
     if let Some(workspace) = find_workspace_for_host(&client.list_workspaces()?, &canonical) {
-        let workspace = client.workspace(&workspace.id)?;
-        if workspace.git_repository.is_none() {
-            if let Some(repository) = enclosing_git_repository(&canonical) {
-                return client.set_workspace_git_repository(&workspace.id, Some(&repository));
-            }
-        }
-        return Ok(workspace);
+        return client.workspace(&workspace.id);
     }
     create_workspace(client, canonical, None)
 }
