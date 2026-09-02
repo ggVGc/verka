@@ -1,3 +1,7 @@
+- [ ] Big styra refactor:
+  - Separate the rendering so that the application renders into a target interface describing the UI
+  - That interface is implemented using ratatui
+  - This should allow tests to supply the interface and test for rendered data, without involving ratatui at all and checking buffer contents
 - [ ] Styra: driva setting of templates is broken
 - [ ] Investigate this statement: "The existing mutation lock under .git is also questionable and should eventually move behind a proper lock abstraction."
 - [ ] Fix .git isolation in orka project:
