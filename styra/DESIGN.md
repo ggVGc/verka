@@ -522,6 +522,7 @@ current focus is shown in the status line and by which region draws the cursor.
 | `s`             | Stop the Interaction (keeps the Session and journal)        |
 | `F`             | Seed an explicit new Session from this Session's transcript |
 | `a`             | Open live Interactions above the event list                  |
+| `D`             | In the Interaction navigator, delete the selected stopped Interaction |
 | `A`             | Browse Sessions in the current Workspace with a preview     |
 | `S`             | Stop the Interaction and return to a blank Session screen   |
 | `V`             | Choose a Workspace, then browse its Sessions                |
@@ -669,7 +670,10 @@ first, running work next, and stopped Interactions last, with server order
 retained within each group. All-Workspaces mode always groups the rows beneath
 Workspace headings; current-Workspace mode omits the one redundant heading.
 `w` switches between those scopes. `Enter`, `a`, or `Esc` closes the navigator
-and leaves the highlighted Interaction current.
+and leaves the highlighted Interaction current. `D` removes a highlighted
+stopped Interaction from the server. The next available Interaction becomes
+current without closing the navigator; deleting the last one closes it and
+returns Styra to its blank default state.
 
 ### Starting sends nothing on its own
 

@@ -323,6 +323,32 @@ pub fn run(
                         .toggle_workspace_scope(&current, workspace_id.as_deref());
                     continue;
                 }
+                KeyCode::Char('D') => {
+                    let Some(interaction) = app.interactions.selected().cloned() else {
+                        continue;
+                    };
+                    if interaction.accepting {
+                        app.show_action_message("only stopped interactions can be deleted");
+                        continue;
+                    }
+                    if let Err(error) = client.close_interaction(&interaction.id) {
+                        app.push_log(LogEntry::error(format!(
+                            "could not delete interaction {}: {error:#}",
+                            interaction.id
+                        )));
+                        continue;
+                    }
+                    let workspace_id = app.workspace_id.clone();
+                    let Some(next) = app
+                        .interactions
+                        .remove_and_select_next(&interaction.id, workspace_id.as_deref())
+                    else {
+                        app.interactions.open = false;
+                        return Ok(RunOutcome::Reset);
+                    };
+                    make_interaction_current(app, live, client, standing_launch, next);
+                    continue;
+                }
                 KeyCode::Char('i') => {}
                 _ => app.interactions.open = false,
             }
