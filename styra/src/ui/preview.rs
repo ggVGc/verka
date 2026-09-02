@@ -140,12 +140,23 @@ pub(crate) fn preview_lines(app: &App) -> Vec<Line<'static>> {
         false,
         protocol,
     )];
-    for block in protocol.presented_detail(&entry.event, app.preview_mode) {
+    let mut blocks = protocol
+        .presented_detail(&entry.event, app.preview_mode)
+        .into_iter();
+    if let Some(first) = blocks.next() {
         lines.extend(presented_block_lines(
-            block,
+            first,
             message_text_color(entry.event.tag()),
             app.preview_mode,
         ));
+        for block in blocks {
+            lines.push(Line::from(""));
+            lines.extend(presented_block_lines(
+                block,
+                message_text_color(entry.event.tag()),
+                app.preview_mode,
+            ));
+        }
     }
     lines
 }
@@ -382,6 +393,36 @@ mod tests {
         assert!(shown.contains("24 passed"));
         // Still selecting the message; only the preview's target changed.
         assert_eq!(app.timeline.selected, app.timeline.entries.len() - 1);
+    }
+
+    #[test]
+    fn command_preview_separates_the_command_from_its_output_with_a_blank_line() {
+        let mut app = testing::app("s1");
+        app.push_event(AgentEvent::CommandCompleted {
+            command: "cargo test".into(),
+            status: "completed".into(),
+            exit_code: Some(0),
+            output: "24 passed".into(),
+        });
+        app.toggle_preview();
+
+        let lines = preview_lines(&app);
+        let output_row = lines
+            .iter()
+            .position(|line| {
+                line.spans
+                    .iter()
+                    .any(|span| span.content.contains("24 passed"))
+            })
+            .expect("output line");
+        let separator = &lines[output_row - 1];
+        assert!(
+            separator
+                .spans
+                .iter()
+                .all(|span| span.content.trim().is_empty()),
+            "expected a blank line directly above the output, found {separator:?}"
+        );
     }
 
     #[test]
