@@ -448,10 +448,30 @@ pub fn run_workspace_picker(
 /// every Workspace or only the one this client is attached to, in one flat list
 /// or split under a heading per Workspace. Both are toggled from inside the
 /// picker, so this is only where it starts.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InteractionsView {
     pub only_current_workspace: bool,
     pub grouped: bool,
+}
+
+impl Default for InteractionsView {
+    /// Grouping is on by default: over every Workspace the headings are what
+    /// keep a long list readable.
+    fn default() -> Self {
+        Self {
+            only_current_workspace: false,
+            grouped: true,
+        }
+    }
+}
+
+impl InteractionsView {
+    /// Whether the list is actually laid out under Workspace headings. A view
+    /// restricted to one Workspace has a single group, so a heading over it
+    /// would only repeat what the corner already says.
+    pub fn groups_by_workspace(self) -> bool {
+        self.grouped && !self.only_current_workspace
+    }
 }
 
 /// Everything the interactions picker draws besides the conversation preview:
@@ -853,7 +873,7 @@ fn interaction_rows(
         })
         .map(|(index, _)| index)
         .collect();
-    if !view.grouped {
+    if !view.groups_by_workspace() {
         return included
             .into_iter()
             .map(InteractionRow::Interaction)

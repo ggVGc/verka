@@ -454,13 +454,27 @@ pub fn render_interactions_picker(
         Some(id) if view.only_current_workspace => workspace_name(workspaces, id),
         _ => "All".to_owned(),
     };
-    let grouping = if view.grouped { " · grouped" } else { "" };
+    let grouping = if view.groups_by_workspace() {
+        " · grouped"
+    } else {
+        ""
+    };
     let interactions_block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(palette::ACCENT))
-        .title(format!(
-            " {scope} · live interactions{grouping} · Enter attach · i insert · X convert · S stop · D delete · w scope · g group · q cancel "
-        ));
+        .title(Line::from(vec![
+            // The scope wears the same yellow the Workspace headings and the
+            // per-row Workspace names do, so it reads as one of them.
+            Span::styled(
+                format!(" {scope}"),
+                Style::default()
+                    .fg(palette::WARNING)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(format!(
+                " · live interactions{grouping} · Enter attach · i insert · X convert · S stop · D delete · w scope · g group · q cancel "
+            )),
+        ]));
 
     let selected_index = selected_row.and_then(|row| match rows.get(row) {
         Some(InteractionRow::Interaction(index)) => interactions.get(*index),
@@ -490,10 +504,11 @@ pub fn render_interactions_picker(
         .map(|(row, entry)| match entry {
             InteractionRow::Workspace(name) => workspace_heading_item(name),
             // In grouped mode the heading already says which Workspace the row
-            // belongs to, so the row itself does not repeat it.
+            // belongs to, and a Workspace-restricted view says it in the
+            // corner, so the row itself does not repeat it.
             InteractionRow::Interaction(index) => interaction_item(
                 &interactions[*index],
-                (!view.grouped)
+                (!view.groups_by_workspace() && !view.only_current_workspace)
                     .then(|| workspace_name(workspaces, &interactions[*index].workspace_id)),
                 Some(row) == selected_row,
                 row_width,
@@ -1104,7 +1119,11 @@ mod tests {
             None,
             &rows,
             (!rows.is_empty()).then_some(selected),
-            InteractionsView::default(),
+            // The rows here are flat, so the view has to be as well.
+            InteractionsView {
+                only_current_workspace: false,
+                grouped: false,
+            },
             updates,
         )
     }
@@ -1278,6 +1297,8 @@ mod tests {
         );
         assert!(screen.contains("payments · live interactions"), "{screen}");
         assert!(!screen.contains("All ·"), "{screen}");
+        // The corner already names the Workspace, so the row does not.
+        assert_eq!(screen.matches("payments").count(), 1, "{screen}");
     }
 
     #[test]

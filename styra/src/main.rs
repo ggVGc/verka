@@ -171,7 +171,7 @@ fn open_start_screen(
         Some(&active_workspace.id),
         picker::InteractionsView {
             only_current_workspace: true,
-            grouped: false,
+            ..Default::default()
         },
     );
     let outcome = match choice {
