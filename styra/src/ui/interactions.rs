@@ -38,11 +38,7 @@ pub(crate) fn render(frame: &mut Frame, app: &App, area: Rect) {
             Row::Workspace(name) => workspace_heading(name),
             Row::Interaction(index) => {
                 let interaction = &app.interactions.items[*index];
-                item(
-                    interaction,
-                    *index == app.interactions.selected,
-                    interaction.id == app.session_id,
-                )
+                item(interaction, *index == app.interactions.selected)
             }
         })
         .collect::<Vec<_>>();
@@ -107,7 +103,7 @@ fn workspace_heading(name: &str) -> ListItem<'static> {
     )))
 }
 
-fn item(interaction: &InteractionSummary, selected: bool, current: bool) -> ListItem<'static> {
+fn item(interaction: &InteractionSummary, selected: bool) -> ListItem<'static> {
     let status = status(interaction);
     let color = status_color(&status);
     let name = interaction
@@ -131,12 +127,6 @@ fn item(interaction: &InteractionSummary, selected: bool, current: bool) -> List
         Span::styled(
             format!(" · {}", interaction.selection.provider.as_str()),
             Style::default().fg(palette::ACCENT),
-        ),
-        Span::styled(
-            if current { " · current" } else { "" },
-            Style::default()
-                .fg(palette::SUCCESS)
-                .add_modifier(Modifier::BOLD),
         ),
     ]))
 }
@@ -197,7 +187,8 @@ mod tests {
         let timeline = screen.find("current timeline").unwrap();
         assert!(navigator < timeline, "{screen}");
         assert!(screen.contains(" payments"), "{screen}");
-        assert!(screen.contains("second · codex · current"), "{screen}");
+        assert!(screen.contains("second · codex"), "{screen}");
+        assert!(!screen.contains("· current"), "{screen}");
     }
 
     #[test]
