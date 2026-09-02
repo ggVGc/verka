@@ -45,6 +45,10 @@ struct ServerInner {
     /// Set by a [`Request::Shutdown`]; the connection thread checks it after
     /// acknowledging and then exits the process.
     shutdown: AtomicBool,
+    /// Plan-quota readings seen on any interaction's wire. Server-wide rather
+    /// than per-interaction because the quota is the account's, so a reading
+    /// taken on one session is what every other session is also spending.
+    quota: Arc<crate::quota::QuotaLog>,
 }
 
 struct ManagedInteraction {
@@ -257,6 +261,7 @@ impl ServerState {
                 interactions: Mutex::new(HashMap::new()),
                 workspace_metadata: Mutex::new(()),
                 shutdown: AtomicBool::new(false),
+                quota: Arc::new(crate::quota::QuotaLog::new()),
             }),
         }
     }
@@ -376,6 +381,8 @@ impl ServerState {
                 .unwrap_or(&self.inner.store_root)
                 .to_path_buf(),
         });
+        let quota = Arc::clone(&self.inner.quota);
+        let quota_session = id.clone();
         std::thread::Builder::new()
             .name(format!("styra-updates-{id}"))
             .spawn(move || {
@@ -447,12 +454,34 @@ impl ServerState {
                         }
                         _ => {}
                     }
+                    // Quota figures live only on the verbatim line: the
+                    // decoder keeps a token-count event's counts and drops the
+                    // limits beside them, and Claude's rate-limit event decodes
+                    // to its wire type alone.
+                    let announcements = match &update {
+                        InteractionUpdate::Raw(line)
+                            if line.direction == crate::protocol::Direction::FromAgent =>
+                        {
+                            quota.observe(&quota_session, line.at_ms, &line.text)
+                        }
+                        _ => Vec::new(),
+                    };
                     if matches!(update, InteractionUpdate::Ended(_)) {
                         accepting_messages.store(false, Ordering::Release);
                     }
                     let mut history = updates.lock().expect("interaction update lock poisoned");
                     let sequence = history.len() as u64 + 1;
                     history.push(SequencedUpdate { sequence, update });
+                    // A window filling up has to reach the operator rather than
+                    // wait to be looked up, so it joins the update stream they
+                    // are already reading.
+                    for reading in announcements {
+                        let sequence = history.len() as u64 + 1;
+                        history.push(SequencedUpdate {
+                            sequence,
+                            update: InteractionUpdate::Quota(reading),
+                        });
+                    }
                 }
             })
             .context("starting the interaction update collector")?;
@@ -667,6 +696,8 @@ impl ServerState {
             session_path: summary.path.clone(),
         });
         let id = request.id.clone();
+        let quota = Arc::clone(&self.inner.quota);
+        let quota_session = id.clone();
         std::thread::Builder::new()
             .name(format!("styra-updates-{id}"))
             .spawn(move || {
@@ -738,12 +769,34 @@ impl ServerState {
                         }
                         _ => {}
                     }
+                    // Quota figures live only on the verbatim line: the
+                    // decoder keeps a token-count event's counts and drops the
+                    // limits beside them, and Claude's rate-limit event decodes
+                    // to its wire type alone.
+                    let announcements = match &update {
+                        InteractionUpdate::Raw(line)
+                            if line.direction == crate::protocol::Direction::FromAgent =>
+                        {
+                            quota.observe(&quota_session, line.at_ms, &line.text)
+                        }
+                        _ => Vec::new(),
+                    };
                     if matches!(update, InteractionUpdate::Ended(_)) {
                         accepting_messages.store(false, Ordering::Release);
                     }
                     let mut history = updates.lock().expect("interaction update lock poisoned");
                     let sequence = history.len() as u64 + 1;
                     history.push(SequencedUpdate { sequence, update });
+                    // A window filling up has to reach the operator rather than
+                    // wait to be looked up, so it joins the update stream they
+                    // are already reading.
+                    for reading in announcements {
+                        let sequence = history.len() as u64 + 1;
+                        history.push(SequencedUpdate {
+                            sequence,
+                            update: InteractionUpdate::Quota(reading),
+                        });
+                    }
                 }
             })
             .context("starting the resumed interaction update collector")?;
@@ -1286,6 +1339,7 @@ impl ServerState {
             }
             // Flag the shutdown; the connection thread acts on it once this
             // acknowledgement has gone back over the wire.
+            Request::QuotaLog => Ok(Response::QuotaLog(self.inner.quota.entries())),
             Request::Shutdown => {
                 self.inner.shutdown.store(true, Ordering::Release);
                 Ok(Response::Accepted)

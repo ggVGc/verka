@@ -22,7 +22,7 @@ use styra_server::agent::{Provider, Selection};
 use styra_server::event::PresentationMode;
 use styra_server::event::{AgentEvent, DetailBlock, TokenUsage};
 use styra_server::{Answer, AnswerValue, Contract, FileLocation, QueuedMessage};
-use styra_server::{InteractionEnd, LogEntry, RawLine};
+use styra_server::{InteractionEnd, LogEntry, QuotaEvent, QuotaStatus, RawLine};
 
 use crate::composer::Composer;
 use crate::ingest;
@@ -49,6 +49,8 @@ pub enum View {
     Events,
     Raw,
     Log,
+    /// The plan-quota readings the server has seen, newest last.
+    Quota,
     Transcript,
     Driva,
     Files,
@@ -354,6 +356,12 @@ pub struct App {
     pub log: Vec<LogEntry>,
     /// Lines scrolled back from the bottom of the log view; 0 tracks the tail.
     pub log_scroll_back: u16,
+    /// Plan-quota readings, oldest first. Filled by asking the server, which
+    /// holds the log — quota belongs to the account, so this is every
+    /// interaction's readings, not just this session's.
+    pub quota: Vec<QuotaEvent>,
+    /// Lines scrolled back from the bottom of the quota view; 0 tracks the tail.
+    pub quota_scroll_back: u16,
     /// Lines scrolled down from the top of the rendered transcript view; 0
     /// shows its start. Unlike the raw/log views, the transcript reads as a
     /// document from the beginning rather than anchoring to the tail.
@@ -425,6 +433,9 @@ pub enum Request {
     /// Tell the server the live interaction has been switched onto
     /// [`App::selection`], so the change lands now and outlives this client.
     ApplySelection,
+    /// Fetch the server's plan-quota log, which is server-wide and lives only
+    /// in the daemon's memory, so there is nothing to read locally.
+    Quota,
     /// Fetch the last turn's typed answer from the server, which parses it.
     /// `contract` names a shape to read the reply under instead of the one the
     /// turn was sent with, which is how a mis-shaped answer is recovered
@@ -474,6 +485,8 @@ impl App {
             raw_preview: Scroll::default(),
             log: Vec::new(),
             log_scroll_back: 0,
+            quota: Vec::new(),
+            quota_scroll_back: 0,
             transcript_scroll: 0,
             file_selected: 0,
             file_show_all: false,
@@ -653,6 +666,41 @@ impl App {
         if self.log_scroll_back > 0 {
             self.log_scroll_back = self.log_scroll_back.saturating_add(1);
         }
+    }
+
+    /// Take a quota reading the server judged worth announcing.
+    ///
+    /// It lands in three places on purpose: the quota view, so the reading is
+    /// there to look up; the log, so it stays on the record for the rest of the
+    /// session; and a notice, so an operator watching the event list learns
+    /// their window is filling without having gone looking for it.
+    pub fn note_quota(&mut self, reading: QuotaEvent) {
+        self.push_log(match reading.status {
+            QuotaStatus::Exhausted => LogEntry::error(reading.describe()),
+            _ => LogEntry::warn(reading.describe()),
+        });
+        self.show_action_message(reading.describe());
+        // The view is otherwise filled wholesale by asking the server; an
+        // announced reading is appended so it shows without a round trip.
+        self.quota.push(reading);
+        if self.quota_scroll_back > 0 {
+            self.quota_scroll_back = self.quota_scroll_back.saturating_add(1);
+        }
+    }
+
+    /// Replace the quota view's contents with what the server holds.
+    pub fn set_quota(&mut self, readings: Vec<QuotaEvent>) {
+        self.quota = readings;
+        self.quota_scroll_back = 0;
+    }
+
+    pub fn quota_scroll_up(&mut self) {
+        let max = self.quota.len().saturating_sub(1) as u16;
+        self.quota_scroll_back = self.quota_scroll_back.saturating_add(1).min(max);
+    }
+
+    pub fn quota_scroll_down(&mut self) {
+        self.quota_scroll_back = self.quota_scroll_back.saturating_sub(1);
     }
 
     pub fn log_scroll_up(&mut self) {
@@ -1281,7 +1329,7 @@ impl App {
                 // is to copy — and the thing worth looking at.
                 None => Some(self.answer.as_ref()?.source.clone()),
             },
-            View::Log | View::Transcript | View::Driva => None,
+            View::Log | View::Quota | View::Transcript | View::Driva => None,
         }
     }
 

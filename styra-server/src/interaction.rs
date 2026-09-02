@@ -948,6 +948,10 @@ mod tests {
                 Ok(InteractionUpdate::Raw(line)) => raw_directions.push(line.direction),
                 Ok(InteractionUpdate::Log(entry)) => logs.push(entry.message),
                 Ok(InteractionUpdate::WorkingDirectoryChanged(_)) => {}
+                // Never sent on this channel: quota readings are derived from
+                // the raw lines by the server's update collector, not by the
+                // interaction's own threads.
+                Ok(InteractionUpdate::Quota(_)) => {}
                 Ok(InteractionUpdate::Ended(_)) => ended = true,
                 Err(_) => {}
             }

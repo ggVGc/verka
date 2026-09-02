@@ -59,6 +59,11 @@ pub enum InteractionUpdate {
     Raw(RawLine),
     /// A diagnostic message for the log view.
     Log(LogEntry),
+    /// A plan-quota window worth the operator's attention — nearly full, or
+    /// full. Only readings that say something new are sent; every reading,
+    /// notable or not, is kept in the server's quota log for
+    /// [`crate::protocol::Request::QuotaLog`] to return.
+    Quota(QuotaEvent),
     /// The host directory used for subsequent agent turns.
     WorkingDirectoryChanged(PathBuf),
     /// The agent process ended; no further events will arrive.
@@ -98,6 +103,89 @@ impl LogEntry {
         Self {
             level: LogLevel::Error,
             message: message.into(),
+        }
+    }
+}
+
+/// How much of a quota window is left, as the provider judges it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuotaStatus {
+    /// Room remains, and the provider is not warning about the window.
+    Allowed,
+    /// The window is close enough to full that the provider says so, or its
+    /// usage has passed [`crate::quota::WARN_THRESHOLD`].
+    Warning,
+    /// The window is full: turns are being refused until it resets.
+    Exhausted,
+}
+
+/// One reading of a plan quota window, as a provider reported it mid-session.
+///
+/// Both interactive providers volunteer these unprompted, in different shapes
+/// and with different amounts of detail — see [`crate::quota`], which reads
+/// them off the wire and keeps them.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct QuotaEvent {
+    /// When the reading was seen, in milliseconds since the epoch.
+    pub at_ms: u64,
+    /// The interaction whose wire carried it. Quota is account-wide, so this
+    /// says where the reading came from, not what it applies to.
+    pub session_id: String,
+    /// The window the reading is about, as the provider names it
+    /// (`five_hour`) or as its length (`1h`, `7d`).
+    pub window: String,
+    pub status: QuotaStatus,
+    /// How full the window is, as a fraction. `None` when the provider
+    /// withholds it — Claude sends a figure only once it has something to warn
+    /// about, so a permitted reading genuinely does not say how full it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub utilization: Option<f64>,
+    /// When the window resets, in milliseconds since the epoch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resets_at_ms: Option<u64>,
+    /// Whatever else the provider said about the limit, e.g.
+    /// `out_of_credits` for a rejected overage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+impl QuotaEvent {
+    /// Whether this reading is worth telling the operator about unprompted,
+    /// rather than only recording for them to look up.
+    pub fn is_notable(&self) -> bool {
+        match self.status {
+            QuotaStatus::Allowed => false,
+            QuotaStatus::Warning | QuotaStatus::Exhausted => true,
+        }
+    }
+
+    /// The reading as one line of prose. Carries no timestamp: the reset is a
+    /// moment, and only the caller knows what "now" is to measure it against.
+    pub fn describe(&self) -> String {
+        let mut line = match (self.status, self.utilization) {
+            (QuotaStatus::Exhausted, _) => {
+                format!("plan quota exhausted: the {} window is full", self.window)
+            }
+            (_, Some(utilization)) => format!(
+                "plan quota: the {} window is {:.0}% used",
+                self.window,
+                utilization * 100.0
+            ),
+            (_, None) => format!("plan quota: the {} window is nearly full", self.window),
+        };
+        if let Some(detail) = &self.detail {
+            line.push_str(&format!(" ({detail})"));
+        }
+        line
+    }
+
+    /// The percentage as the views show it, or `?` where the provider gave no
+    /// figure.
+    pub fn utilization_label(&self) -> String {
+        match self.utilization {
+            Some(utilization) => format!("{:.0}%", utilization * 100.0),
+            None => "?".into(),
         }
     }
 }

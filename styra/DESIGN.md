@@ -433,6 +433,41 @@ it here (rather than only persisting it to `diagnostics.log`) is what makes a
 session that produces no events diagnosable from inside the interface. The log
 view shares the raw view's bottom-anchored scrolling.
 
+### The quota view
+
+`Q` toggles a **quota view**: what the providers have said about how much of
+the plan subscription is left. Both interactive agents volunteer these figures
+unprompted and in different shapes — Claude sends a `rate_limit_event` naming
+one window (`five_hour`) and its reset, adding a `utilization` figure only once
+it has something to warn about; Codex reports a percentage for a short and a
+long window inside its token-count notification, and says nothing about
+severity. Genta's decoder keeps neither, so the server reads them off the
+verbatim line before anything discards them (`styra_server::quota`).
+
+The log is **server-wide and in-memory**, which is the whole design in one
+sentence: quota belongs to the account rather than to a session, so a reading
+taken on one Interaction is what every other Interaction is also spending, and
+it is a live reading rather than a record worth keeping, so it dies with the
+daemon instead of accumulating in the store beside the journals. `Q` therefore
+also refreshes the view — there is nothing local to show without asking.
+
+A reading is *announced* rather than merely recorded when a window is nearly
+full (the provider's own warning, or past 90% for Codex, which states no
+threshold of its own) or has been refused outright. An announcement crosses the
+wire as its own `InteractionUpdate::Quota`, so the client decides how to show
+it rather than parsing prose out of a log line: Styra puts it in this view, on
+the log at `warn` (or `error`, when the window is full), and in a transient
+notice, so an operator reading the event list learns their window is filling
+without having gone looking. A given window is announced only when its reading
+actually changes — status moving, or usage climbing another ten percent — so a
+provider that repeats the same warning every turn costs one message, not one
+per turn. Every reading is logged either way.
+
+Note that what the providers volunteer is thinner than a quota display would
+want: Claude reports no figure at all below 90%, so a permitted window shows
+`?` rather than a misleading `0%`, and neither provider names the plan or its
+credit balance on the wire.
+
 ### The transcript view
 
 `t` toggles a **transcript view**: the current session's decoded events laid
@@ -481,6 +516,7 @@ current focus is shown in the status line and by which region draws the cursor.
 | `r`             | Toggle the raw wire view, focused on the selected entry's wire line (in the raw view, `j`/`k`/`g`/`G` select, `PgUp`/`PgDn` scroll the entry panel) |
 | `l`             | Toggle the diagnostic log view (same scrolling as the raw view) |
 | `t`             | Toggle the rendered transcript view (`j`/`k`/`g`/`G` scroll from the start) |
+| `Q`             | Toggle the plan-quota view, refreshing it from the server (`j`/`k` scroll) |
 | `i`             | Enter input focus                                           |
 | `L`             | Choose launch settings, or the model for the next idle agent turn (and Codex effort) |
 | `s`             | Stop the Interaction (keeps the Session and journal)        |

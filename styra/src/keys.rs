@@ -110,6 +110,12 @@ pub fn handle_list_key(
         KeyCode::Char('i') if app.view != View::Preview => return app.enter_input(),
         KeyCode::Char('r') => return app.toggle_raw(),
         KeyCode::Char('l') => return app.toggle_view(View::Log),
+        // Opening the view also refreshes it: the log lives in the daemon's
+        // memory, so there is nothing local to show without asking.
+        KeyCode::Char('Q') => {
+            app.toggle_view(View::Quota);
+            return app.ask(Request::Quota);
+        }
         KeyCode::Char('t') => return app.toggle_view(View::Transcript),
         KeyCode::Char('d') => return app.toggle_view(View::Driva),
         KeyCode::Char('f') => return app.toggle_files(),
@@ -161,6 +167,11 @@ pub fn handle_list_key(
             KeyCode::Char('k') | KeyCode::Up => app.log_scroll_up(),
             KeyCode::Char('g') => app.log_to_top(),
             KeyCode::Char('G') => app.log_to_bottom(),
+            _ => {}
+        },
+        View::Quota => match key.code {
+            KeyCode::Char('j') | KeyCode::Down => app.quota_scroll_down(),
+            KeyCode::Char('k') | KeyCode::Up => app.quota_scroll_up(),
             _ => {}
         },
         View::Transcript => match key.code {

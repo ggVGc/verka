@@ -57,6 +57,9 @@ fn main() -> anyhow::Result<()> {
                 InteractionUpdate::Log(entry) => {
                     println!("LOG    {:?}: {}", entry.level, entry.message)
                 }
+                InteractionUpdate::Quota(reading) => {
+                    println!("QUOTA  {}", reading.describe())
+                }
                 InteractionUpdate::WorkingDirectoryChanged(directory) => {
                     println!("CWD    {}", directory.display())
                 }

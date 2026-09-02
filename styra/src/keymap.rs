@@ -61,6 +61,10 @@ pub(crate) const REFERENCE: &[ReferenceRow] = &[
         action: "raw / log / transcript / driva; press again for events",
     },
     ReferenceRow::Binding {
+        keys: "Q",
+        action: "plan quota readings, refreshed from the server",
+    },
+    ReferenceRow::Binding {
         keys: "f",
         action: "files mentioned by the focused entry",
     },
@@ -119,7 +123,7 @@ pub(crate) const REFERENCE: &[ReferenceRow] = &[
         action: "copy selected entry to clipboard",
     },
     ReferenceRow::Blank,
-    ReferenceRow::Section("Raw, log, and transcript"),
+    ReferenceRow::Section("Raw, log, quota, and transcript"),
     ReferenceRow::Binding {
         keys: "j/k or ↓/↑",
         action: "move or scroll",

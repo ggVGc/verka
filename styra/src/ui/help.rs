@@ -111,7 +111,7 @@ mod tests {
         for expected in [
             "Global",
             "Events and previews",
-            "Raw, log, and transcript",
+            "Raw, log, quota, and transcript",
             "Driva (launch policy",
             "choose Driva templates",
             "Message editor",

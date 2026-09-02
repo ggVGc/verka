@@ -660,6 +660,10 @@ fn interaction_preview_line(
             ])
         }
         InteractionUpdate::Log(entry) => log_line(entry),
+        InteractionUpdate::Quota(reading) => Line::from(Span::styled(
+            reading.describe(),
+            Style::default().fg(super::quota::status_color(reading.status)),
+        )),
         InteractionUpdate::WorkingDirectoryChanged(directory) => Line::from(Span::styled(
             format!("working directory: {}", directory.display()),
             Style::default().fg(palette::ACCENT),

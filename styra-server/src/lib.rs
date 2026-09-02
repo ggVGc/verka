@@ -96,8 +96,8 @@ pub use protocol::WorkspaceLaunchChange;
 pub use protocol::{
     Answer, AnswerValue, AttributedMount, Contract, Direction, DrivaOptions, FileLocation,
     InteractionActivity, InteractionEnd, InteractionSummary, InteractionUpdate, LaunchMount,
-    LaunchPolicy, LogEntry, LogLevel, MountOrigin, QueuedMessage, RawLine, SessionOrigin,
-    SessionSummary, TemplateSummary, WorkspaceSummary,
+    LaunchPolicy, LogEntry, LogLevel, MountOrigin, QueuedMessage, QuotaEvent, QuotaStatus, RawLine,
+    SessionOrigin, SessionSummary, TemplateSummary, WorkspaceSummary,
 };
 pub use spawn::ensure_server;
 
@@ -109,5 +109,6 @@ pub mod broker;
 mod git;
 pub mod interaction;
 pub mod journal;
+pub mod quota;
 pub mod server;
 pub mod workspace;

@@ -344,6 +344,15 @@ pub fn run(
                 };
                 app.set_answer(answer.map_err(|error| format!("{error:#}")));
             }
+            // The quota log is the server's: it reads the figures off every
+            // interaction's wire, so one client asking gets every session's
+            // readings rather than only this one's.
+            Some(Request::Quota) => match client.quota_log() {
+                Ok(readings) => app.set_quota(readings),
+                Err(error) => app.push_log(LogEntry::error(format!(
+                    "could not read the quota log: {error:#}"
+                ))),
+            },
             Some(Request::EditFile) => {
                 let Some(path) = app.selected_file_path() else {
                     continue;

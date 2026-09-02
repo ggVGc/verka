@@ -16,8 +16,8 @@ pub use transport::{read_message, read_message_limited, write_message, MAX_REQUE
 pub use types::{
     Answer, AnswerValue, AttributedMount, Contract, Direction, DrivaOptions, FileLocation,
     InteractionActivity, InteractionEnd, InteractionSummary, InteractionUpdate, LaunchMount,
-    LaunchPolicy, LogEntry, LogLevel, MountOrigin, QueuedMessage, RawLine, SessionOrigin,
-    SessionSummary, TemplateSummary, WorkspaceSummary,
+    LaunchPolicy, LogEntry, LogLevel, MountOrigin, QueuedMessage, QuotaEvent, QuotaStatus, RawLine,
+    SessionOrigin, SessionSummary, TemplateSummary, WorkspaceSummary,
 };
 
 // These external vocabularies are serialized inside protocol payloads. Re-export
@@ -373,6 +373,11 @@ pub enum Request {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         contract: Option<Contract>,
     },
+    /// Read the server's in-memory log of plan-quota readings seen on any
+    /// interaction's wire, oldest first. Server-wide because quota belongs to
+    /// the account rather than to one session, and in-memory because it is a
+    /// live reading rather than a record: it starts empty with the daemon.
+    QuotaLog,
     /// Ask the server to remove its socket and exit. Any live interactions it owns die
     /// with it, so this is the deliberate counterpart to the daemon outliving
     /// its clients.
@@ -410,6 +415,7 @@ pub enum Response {
     StoredSession(StoredSession),
     Shell(ShellInfo),
     Answer(Answer),
+    QuotaLog(Vec<QuotaEvent>),
 }
 
 /// Response envelope returned for every syntactically valid connection.

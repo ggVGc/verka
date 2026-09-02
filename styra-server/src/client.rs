@@ -380,6 +380,16 @@ impl Client {
         }
     }
 
+    /// Read the server's plan-quota readings, oldest first. Empty until a
+    /// provider has volunteered one — it is a live in-memory log, so it starts
+    /// empty with the daemon rather than being loaded from the store.
+    pub fn quota_log(&self) -> Result<Vec<crate::protocol::QuotaEvent>> {
+        match self.request(Request::QuotaLog)? {
+            Response::QuotaLog(value) => Ok(value),
+            other => unexpected("quota_log", other),
+        }
+    }
+
     pub fn list_sessions(&self, workspace_id: &str) -> Result<Vec<SessionSummary>> {
         match self.request(Request::ListSessions {
             workspace_id: workspace_id.to_owned(),

@@ -22,6 +22,7 @@ mod notes;
 mod palette;
 mod picker;
 mod preview;
+pub(crate) mod quota;
 mod raw;
 mod transcript;
 
@@ -48,6 +49,7 @@ pub use picker::{
 };
 pub(crate) use preview::preview_scroll_limit;
 use preview::{render_fullscreen_preview, render_preview};
+use quota::render_quota;
 use raw::render_raw;
 use transcript::render_transcript_view;
 
@@ -360,6 +362,7 @@ pub fn render(frame: &mut Frame, app: &App) {
         View::Events => render_list(frame, app, chunks[0]),
         View::Raw => render_raw(frame, app, chunks[0]),
         View::Log => render_log(frame, app, chunks[0]),
+        View::Quota => render_quota(frame, app, chunks[0]),
         View::Transcript => render_transcript_view(frame, app, chunks[0]),
         View::Driva => render_driva(frame, app, chunks[0]),
         View::Files => render_files(frame, app, chunks[0]),
