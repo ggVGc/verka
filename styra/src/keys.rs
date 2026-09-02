@@ -108,7 +108,9 @@ pub fn handle_list_key(
             return;
         }
         KeyCode::Char('i') if app.view != View::Preview => return app.enter_input(),
-        KeyCode::Char('r') if app.view == View::Raw || app.raw_loaded => return app.toggle_raw(),
+        KeyCode::Char('r') if app.view == View::Raw || !app.raw.needs_hydration() => {
+            return app.toggle_raw()
+        }
         KeyCode::Char('r') => return app.ask(Request::Raw),
         KeyCode::Char('l') => return app.toggle_view(View::Log),
         // Opening the view also refreshes it: the log lives in the daemon's
@@ -154,12 +156,12 @@ pub fn handle_list_key(
             _ => {}
         },
         View::Raw => match key.code {
-            KeyCode::PageDown => app.raw_preview.page_down(),
-            KeyCode::PageUp => app.raw_preview.page_up(),
-            KeyCode::Char('j') | KeyCode::Down => app.raw_select_next(),
-            KeyCode::Char('k') | KeyCode::Up => app.raw_select_prev(),
-            KeyCode::Char('g') => app.raw_select_first(),
-            KeyCode::Char('G') => app.raw_select_last(),
+            KeyCode::PageDown => app.raw.preview.page_down(),
+            KeyCode::PageUp => app.raw.preview.page_up(),
+            KeyCode::Char('j') | KeyCode::Down => app.raw.select_next(),
+            KeyCode::Char('k') | KeyCode::Up => app.raw.select_prev(),
+            KeyCode::Char('g') => app.raw.select_first(),
+            KeyCode::Char('G') => app.raw.select_last(),
             KeyCode::Char('y') => copy_selection(app),
             _ => {}
         },
@@ -527,7 +529,7 @@ mod tests {
         let root = tree("lazy-raw");
         let mut app = app(&root);
         app.enter_list();
-        app.raw_loaded = false;
+        app.raw.set_loaded(false);
         let client = Client::new(root.join("missing.sock"));
         let mut live = Live::Pending;
         let mut pending_fold = false;

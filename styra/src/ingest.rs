@@ -175,7 +175,7 @@ pub fn push_event(app: &mut App, event: AgentEvent) {
     if transfer_expansion {
         app.timeline.entries[app.timeline.selected].expanded = false;
     }
-    let raw_index = app.raw.len().checked_sub(1);
+    let raw_index = app.raw.last_index();
     app.timeline.entries.push(Entry {
         event,
         expanded: transfer_expansion,
@@ -209,7 +209,7 @@ fn unframed(event: AgentEvent) -> (AgentEvent, Option<Contract>) {
 /// Whether there was is what comes back: a task the list has not seen yet is an
 /// ordinary appended row.
 fn refresh_task(app: &mut App, event: &AgentEvent) -> bool {
-    let raw_index = app.raw.len().checked_sub(1);
+    let raw_index = app.raw.last_index();
     let id = event.task_id();
     let Some(entry) = app
         .timeline
@@ -264,7 +264,7 @@ fn refresh_task(app: &mut App, event: &AgentEvent) -> bool {
 /// running total for the whole run of thinking. Whether it was is what comes back: if not, the event is an
 /// ordinary appended row.
 fn refresh_thinking(app: &mut App, event: &AgentEvent) -> bool {
-    let raw_index = app.raw.len().checked_sub(1);
+    let raw_index = app.raw.last_index();
     let Some(entry) = app.timeline.entries.last_mut() else {
         return false;
     };

@@ -40,13 +40,13 @@ pub(crate) fn render_raw(frame: &mut Frame, app: &App, area: Rect) {
         .raw
         .iter()
         .enumerate()
-        .map(|(idx, line)| ListItem::new(raw_line(line, idx == app.raw_selected)))
+        .map(|(idx, line)| ListItem::new(raw_line(line, idx == app.raw.selected_index())))
         .collect();
     let list = List::new(items)
         .block(block)
         .highlight_style(Style::default().bg(palette::SELECTION_BACKGROUND));
     let mut state = ListState::default();
-    state.select(Some(app.raw_selected));
+    state.select(Some(app.raw.selected_index()));
     frame.render_stateful_widget(list, area, &mut state);
 }
 
@@ -67,8 +67,8 @@ fn render_raw_preview(frame: &mut Frame, app: &App, area: Rect) {
         area.width.saturating_sub(2),
         area.height.saturating_sub(2),
     );
-    app.raw_preview.note_limit(scroll_limit);
-    let scroll = app.raw_preview.clamped();
+    app.raw.preview.note_limit(scroll_limit);
+    let scroll = app.raw.preview.clamped();
     let paragraph = Paragraph::new(lines)
         .block(block)
         .wrap(Wrap { trim: false })
@@ -77,7 +77,7 @@ fn render_raw_preview(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn raw_preview_lines(app: &App) -> Vec<Line<'static>> {
-    let Some(line) = app.raw.get(app.raw_selected) else {
+    let Some(line) = app.raw.selected() else {
         return vec![Line::from(Span::styled(
             "  no wire traffic yet",
             Style::default().fg(palette::MUTED_TEXT),
@@ -227,12 +227,12 @@ mod tests {
     fn raw_view_shows_wire_lines_with_direction_markers() {
         use styra_server::{Direction, RawLine};
         let mut app = testing::app("s1");
-        app.push_raw(RawLine {
+        app.raw.push(RawLine {
             at_ms: 0,
             direction: Direction::ToAgent,
             text: r#"{"op":"user_input"}"#.into(),
         });
-        app.push_raw(RawLine {
+        app.raw.push(RawLine {
             at_ms: 0,
             direction: Direction::FromAgent,
             text: r#"{"type":"turn.started"}"#.into(),
@@ -255,7 +255,7 @@ mod tests {
     fn long_raw_lines_are_truncated_in_the_list_but_shown_in_full_in_the_preview() {
         use styra_server::{Direction, RawLine};
         let mut app = testing::app("s1");
-        app.push_raw(RawLine {
+        app.raw.push(RawLine {
             at_ms: 0,
             direction: Direction::FromAgent,
             text: format!(
@@ -279,7 +279,7 @@ mod tests {
     fn raw_preview_pretty_prints_and_highlights_the_selected_line() {
         use styra_server::{Direction, RawLine};
         let mut app = testing::app("s1");
-        app.push_raw(RawLine {
+        app.raw.push(RawLine {
             at_ms: 0,
             direction: Direction::FromAgent,
             text: r#"{"type":"turn.started","ok":true,"count":3}"#.into(),
@@ -296,22 +296,22 @@ mod tests {
     fn raw_view_navigates_and_previews_the_selected_line() {
         use styra_server::{Direction, RawLine};
         let mut app = testing::app("s1");
-        app.push_raw(RawLine {
+        app.raw.push(RawLine {
             at_ms: 0,
             direction: Direction::FromAgent,
             text: r#"{"marker":"first"}"#.into(),
         });
-        app.push_raw(RawLine {
+        app.raw.push(RawLine {
             at_ms: 0,
             direction: Direction::FromAgent,
             text: r#"{"marker":"second"}"#.into(),
         });
         app.toggle_raw();
-        assert_eq!(app.raw_selected, 1, "starts on the tail");
+        assert_eq!(app.raw.selected_index(), 1, "starts on the tail");
         assert!(rendered(&app).contains("second"));
 
-        app.raw_select_prev();
-        assert_eq!(app.raw_selected, 0);
+        app.raw.select_prev();
+        assert_eq!(app.raw.selected_index(), 0);
         assert!(rendered(&app).contains("first"));
     }
 

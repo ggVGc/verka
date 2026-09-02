@@ -26,6 +26,7 @@ mod mount;
 mod notes;
 mod picker;
 mod preferences;
+mod raw;
 mod session;
 mod terminal;
 mod timeline;

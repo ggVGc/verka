@@ -818,7 +818,7 @@ mod tests {
 
         assert_eq!(app.session_id, "target");
         assert_eq!(app.timeline.entries.len(), 1);
-        assert!(!app.raw_loaded);
+        assert!(app.raw.needs_hydration());
         assert_eq!(
             live,
             Live::Running {

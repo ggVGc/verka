@@ -251,7 +251,8 @@ pub fn app_from_interaction_snapshot(snapshot: InteractionSnapshot) -> (App, Liv
         scope,
     } = snapshot;
     let mut app = App::new(interaction.selection.clone(), interaction.id.clone());
-    app.raw_loaded = matches!(scope, InteractionSnapshotScope::Full);
+    app.raw
+        .set_loaded(matches!(scope, InteractionSnapshotScope::Full));
     app.session_name = interaction.name.clone();
     app.workspace_id = Some(interaction.workspace_id.clone());
     app.set_workspace_root(interaction.workspace.clone());
@@ -297,7 +298,7 @@ pub fn open_stored(client: &Client, session_id: &str) -> Result<(App, Live)> {
     // a `raw_index` that actually points at its own wire line instead of
     // leaving it unset.
     for (event, line) in stored.events.into_iter().zip(stored.raw) {
-        app.push_raw(line);
+        app.raw.push(line);
         // Skip carried-but-viewless traffic (e.g. app-server control lines),
         // matching what a live session shows; it stays available in the raw
         // view above.
@@ -449,7 +450,7 @@ pub fn interrupt_interaction(app: &mut App, client: &Client, live: &Live) {
 pub fn apply_update(app: &mut App, update: InteractionUpdate) {
     match update {
         InteractionUpdate::Event(event) => app.push_event(event),
-        InteractionUpdate::Raw(line) => app.push_raw(line),
+        InteractionUpdate::Raw(line) => app.raw.push(line),
         InteractionUpdate::Log(entry) => app.push_log(entry),
         InteractionUpdate::Quota(reading) => app.note_quota(reading),
         InteractionUpdate::WorkingDirectoryChanged(directory) => {

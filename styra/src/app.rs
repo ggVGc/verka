@@ -22,15 +22,16 @@ use styra_server::agent::{Provider, Selection};
 use styra_server::event::PresentationMode;
 use styra_server::event::{AgentEvent, DetailBlock, TokenUsage};
 use styra_server::{Answer, AnswerValue, Contract, FileLocation, QueuedMessage};
-use styra_server::{InteractionEnd, LogEntry, QuotaEvent, QuotaStatus, RawLine};
+use styra_server::{InteractionEnd, LogEntry, QuotaEvent, QuotaStatus};
 
 use crate::composer::Composer;
 use crate::ingest;
-use crate::interactions::LiveInteractions;
 use crate::insert::Prompt;
+use crate::interactions::LiveInteractions;
 use crate::launch::{self, Launch};
 use crate::launcher::Launcher;
 use crate::notes::Notes;
+use crate::raw::RawView;
 use crate::timeline::{Entry, Step, Timeline};
 
 /// Which region receives keys, like vim's normal/insert split.
@@ -347,17 +348,8 @@ pub struct App {
     /// on that count is the only thing that moves `background_work`; the
     /// tool-call heuristics are a fallback for providers that stay silent.
     background_count_known: bool,
-    /// The verbatim wire interaction, in occurrence order.
-    pub raw: Vec<RawLine>,
-    /// Whether `raw` contains this interaction's history from its beginning.
-    /// Browsing live interactions initially omits it and fills it on demand.
-    pub raw_loaded: bool,
-    /// Which wire line the raw view has selected.
-    pub raw_selected: usize,
-    /// When true, `raw_selected` tracks the newest line as it arrives.
-    pub raw_follow: bool,
-    /// How far the selected wire line's pretty-printed preview is scrolled.
-    pub raw_preview: Scroll,
+    /// The verbatim wire interaction and the place in it; see [`RawView`].
+    pub raw: RawView,
     /// Diagnostic log entries, in occurrence order.
     pub log: Vec<LogEntry>,
     /// Lines scrolled back from the bottom of the log view; 0 tracks the tail.
@@ -518,11 +510,7 @@ impl App {
             events_received: 0,
             background_work: false,
             background_count_known: false,
-            raw: Vec::new(),
-            raw_loaded: true,
-            raw_selected: 0,
-            raw_follow: true,
-            raw_preview: Scroll::default(),
+            raw: RawView::default(),
             log: Vec::new(),
             log_scroll_back: 0,
             quota: Vec::new(),
@@ -735,7 +723,7 @@ impl App {
     }
 
     /// Append a diagnostic log entry, keeping the tail in view unless the
-    /// operator has scrolled up (mirrors [`push_raw`](Self::push_raw)).
+    /// operator has scrolled up (mirrors [`RawView::push`]).
     pub fn push_log(&mut self, entry: LogEntry) {
         self.log.push(entry);
         if self.log_scroll_back > 0 {
@@ -795,42 +783,29 @@ impl App {
         self.log_scroll_back = 0;
     }
 
-    /// Append a verbatim wire line. When the operator has selected a line
-    /// explicitly, the view stays pinned to it; otherwise the selection
-    /// tracks the new tail.
-    pub fn push_raw(&mut self, line: RawLine) {
-        self.raw.push(line);
-        if self.raw_follow {
-            self.raw_selected = self.raw.len() - 1;
-            self.raw_preview.reset();
-        }
-    }
-
     /// Toggle the raw wire view on, or back to the event list. Entering it
     /// focuses the wire line behind the currently selected entry (or the
     /// tail, while the list is following it, or if no line is known for the
     /// selection), so switching views keeps the same point in the session
     /// in view rather than resetting to wherever the raw view was last left.
+    ///
+    /// The join between the two lists is why this stays here: which line to
+    /// enter on is the timeline's to say, and what to do with it is
+    /// [`RawView::enter`]'s.
     pub fn toggle_raw(&mut self) {
         if self.view == View::Raw {
             self.view = View::Events;
             return;
         }
         self.view = View::Raw;
-        self.raw_preview.reset();
-        if !self.timeline.follow {
-            if let Some(idx) = self
-                .timeline
-                .selected_entry()
-                .and_then(|entry| entry.raw_index)
-            {
-                self.raw_selected = idx.min(self.raw.len().saturating_sub(1));
-                self.raw_follow = false;
-                return;
-            }
-        }
-        self.raw_selected = self.raw.len().saturating_sub(1);
-        self.raw_follow = true;
+        let line = (!self.timeline.follow)
+            .then(|| {
+                self.timeline
+                    .selected_entry()
+                    .and_then(|entry| entry.raw_index)
+            })
+            .flatten();
+        self.raw.enter(line);
     }
 
     /// Show `view`, or return to the event list if it is already showing, so
@@ -843,44 +818,6 @@ impl App {
         } else {
             view
         };
-    }
-
-    /// Move the raw view's selection to the next wire line.
-    pub fn raw_select_next(&mut self) {
-        if self.raw_selected + 1 < self.raw.len() {
-            self.raw_selected += 1;
-            self.raw_preview.reset();
-        }
-        // Re-enable follow only when the selection reaches the tail.
-        self.raw_follow = !self.raw.is_empty() && self.raw_selected + 1 >= self.raw.len();
-    }
-
-    /// Move the raw view's selection to the previous wire line.
-    pub fn raw_select_prev(&mut self) {
-        if self.raw_selected > 0 {
-            self.raw_selected -= 1;
-            self.raw_preview.reset();
-        }
-        // Moving off the tail pins the view.
-        self.raw_follow = false;
-    }
-
-    pub fn raw_select_first(&mut self) {
-        if self.raw.is_empty() {
-            return;
-        }
-        self.raw_selected = 0;
-        self.raw_preview.reset();
-        self.raw_follow = false;
-    }
-
-    pub fn raw_select_last(&mut self) {
-        if self.raw.is_empty() {
-            return;
-        }
-        self.raw_selected = self.raw.len() - 1;
-        self.raw_preview.reset();
-        self.raw_follow = true;
     }
 
     /// Scroll the transcript view forward (towards its end).
@@ -1409,10 +1346,7 @@ impl App {
                 }
                 Some(text)
             }
-            View::Raw => self
-                .raw
-                .get(self.raw_selected)
-                .map(|line| line.text.clone()),
+            View::Raw => self.raw.selected().map(|line| line.text.clone()),
             View::Files => self
                 .selected_file_path()
                 .map(|path| path.display().to_string()),
@@ -1473,6 +1407,7 @@ mod tests {
     use super::*;
     use crate::launcher::LaunchColumn;
     use styra_server::agent::Effort;
+    use styra_server::RawLine;
 
     /// A session app with every default these tests would otherwise inherit
     /// pinned explicitly: the profile names its model and effort instead of
@@ -1519,7 +1454,7 @@ mod tests {
     fn the_interactions_own_state_is_left_to_be_rebuilt() {
         let mut app = app();
         app.push_log(LogEntry::info("something happened"));
-        app.push_raw(RawLine {
+        app.raw.push(RawLine {
             direction: styra_server::Direction::FromAgent,
             text: "{}".into(),
             at_ms: 0,
@@ -2495,49 +2430,11 @@ mod tests {
     }
 
     #[test]
-    fn raw_view_toggles_and_selects_from_the_tail() {
-        use styra_server::{Direction, RawLine};
-        let mut app = app();
-        assert_eq!(app.view, View::Events);
-        app.toggle_raw();
-        assert_eq!(app.view, View::Raw);
-
-        for i in 0..5 {
-            app.push_raw(RawLine {
-                at_ms: 0,
-                direction: Direction::FromAgent,
-                text: format!("line {i}"),
-            });
-        }
-        assert_eq!(app.raw_selected, 4, "starts pinned to the tail");
-        assert!(app.raw_follow);
-
-        app.raw_select_prev();
-        assert_eq!(app.raw_selected, 3);
-        assert!(!app.raw_follow);
-        // A new line while a specific line is selected keeps that same line
-        // in view rather than yanking to the new tail.
-        app.push_raw(RawLine {
-            at_ms: 0,
-            direction: Direction::ToAgent,
-            text: "new".into(),
-        });
-        assert_eq!(app.raw_selected, 3);
-
-        app.raw_select_last();
-        assert_eq!(app.raw_selected, 5);
-        assert!(app.raw_follow);
-        app.raw_select_first();
-        assert_eq!(app.raw_selected, 0);
-        assert!(!app.raw_follow);
-    }
-
-    #[test]
     fn entering_raw_view_focuses_the_selected_entrys_wire_line() {
-        use styra_server::{Direction, RawLine};
+        use styra_server::Direction;
         let mut app = app();
         for i in 0..3 {
-            app.push_raw(RawLine {
+            app.raw.push(RawLine {
                 at_ms: 0,
                 direction: Direction::FromAgent,
                 text: format!("{{\"n\":{i}}}"),
@@ -2554,10 +2451,10 @@ mod tests {
 
         app.toggle_raw();
         assert_eq!(
-            app.raw_selected, 1,
+            app.raw.selected_index(), 1,
             "focuses the wire line behind the selected entry"
         );
-        assert!(!app.raw_follow);
+        assert!(!app.raw.is_following());
     }
 
     #[test]
@@ -3103,9 +3000,9 @@ mod tests {
 
     #[test]
     fn copy_text_in_the_raw_view_is_the_selected_wire_line() {
-        use styra_server::{Direction, RawLine};
+        use styra_server::Direction;
         let mut app = app();
-        app.push_raw(RawLine {
+        app.raw.push(RawLine {
             at_ms: 0,
             direction: Direction::FromAgent,
             text: r#"{"type":"turn.started"}"#.into(),
