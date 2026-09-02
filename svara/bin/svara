@@ -1,4 +1,5 @@
 #!/usr/bin/env -S nvim --headless -l
+-- vim:ft=lua
 
 local script = arg[0]
 local bin = script:match("^(.*)/[^/]+$") or "."
