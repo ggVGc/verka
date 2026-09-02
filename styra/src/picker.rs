@@ -475,8 +475,9 @@ pub enum InteractionRow {
 }
 
 /// The live-interactions picker loop: j/k or arrows to move, Enter to attach
-/// to a live interaction, `X` to convert the selected active interaction to the
-/// other provider, `S` to stop the selected one, `D` to delete a stopped
+/// to a live interaction, `i` to attach and enter input mode, `X` to convert
+/// the selected active interaction to the other provider, `S` to stop the
+/// selected one, `D` to delete a stopped
 /// one, `w` to restrict the list to the current Workspace, `g` to group it per
 /// Workspace, Esc or q to back out. Mirrors [`run_session_picker`] but over the
 /// server's live interactions rather than the stored-session store.
@@ -490,7 +491,7 @@ pub fn run_interactions_picker(
     workspaces: &[WorkspaceSummary],
     current_workspace_id: Option<&str>,
     view: InteractionsView,
-) -> Result<Option<(InteractionSummary, Option<String>)>> {
+) -> Result<Option<(InteractionSummary, Option<String>, bool)>> {
     sort_interactions(interactions);
     // Without a Workspace to compare against, the restricted view has nothing
     // to restrict to, so the picker stays on the whole list.
@@ -626,7 +627,12 @@ pub fn run_interactions_picker(
             KeyCode::Char('k') | KeyCode::Up => selected = selected.saturating_sub(1),
             KeyCode::Enter => {
                 if let Some(index) = selected_index {
-                    return Ok(Some((interactions[index].clone(), None)));
+                    return Ok(Some((interactions[index].clone(), None, false)));
+                }
+            }
+            KeyCode::Char('i') => {
+                if let Some(index) = selected_index {
+                    return Ok(Some((interactions[index].clone(), None, true)));
                 }
             }
             // Resume the converted sibling before stopping the source, so a
@@ -726,6 +732,7 @@ pub fn run_interactions_picker(
                                 source.selection.provider.as_str(),
                                 converted.selection.provider.as_str(),
                             )),
+                            false,
                         )));
                     }
                     Err(error) => show_interactions_message(

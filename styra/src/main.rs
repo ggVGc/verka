@@ -178,14 +178,18 @@ fn open_start_screen(
         // Attaching adopts the standing launch inputs too: they describe what
         // *this client* would start next (and what a resume sends), not
         // anything about the interaction being attached to.
-        Ok(Some((interaction, notice))) => session::attach_live_interaction(client, interaction)
-            .map(|(mut app, live)| {
+        Ok(Some((interaction, notice, enter_input))) => {
+            session::attach_live_interaction(client, interaction).map(|(mut app, live)| {
                 app.launch.interaction = launch.clone();
+                if enter_input {
+                    app.enter_input();
+                }
                 if let Some(notice) = notice {
                     app.show_action_message(notice);
                 }
                 (app, live)
-            }),
+            })
+        }
         Ok(None) => Ok((
             pending_app(selection, launch, active_workspace),
             Live::Pending,
@@ -458,12 +462,16 @@ fn main() -> Result<()> {
             RunOutcome::Attach {
                 interaction,
                 notice,
+                enter_input,
             } => {
                 let id = interaction.id.clone();
                 match session::attach_live_interaction(&client, interaction) {
                     Ok((mut new_app, new_live)) => {
                         new_app.launch.interaction = launch.clone();
                         carry_active_session_view(&app, &mut new_app);
+                        if enter_input {
+                            new_app.enter_input();
+                        }
                         if let Some(notice) = notice {
                             new_app.show_action_message(notice);
                         }

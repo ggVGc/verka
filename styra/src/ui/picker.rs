@@ -459,7 +459,7 @@ pub fn render_interactions_picker(
         .borders(Borders::ALL)
         .border_style(Style::default().fg(palette::ACCENT))
         .title(format!(
-            " {scope} · live interactions{grouping} · Enter attach · X convert · S stop · D delete · w scope · g group · q cancel "
+            " {scope} · live interactions{grouping} · Enter attach · i insert · X convert · S stop · D delete · w scope · g group · q cancel "
         ));
 
     let selected_index = selected_row.and_then(|row| match rows.get(row) {
