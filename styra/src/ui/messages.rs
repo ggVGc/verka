@@ -34,16 +34,14 @@ pub(crate) fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
 
 #[cfg(test)]
 mod tests {
+    use super::super::testing;
     use super::*;
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
 
     #[test]
     fn panel_grows_by_one_row_for_each_message() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         assert_eq!(message_area_height(&app), 0);
 
         app.show_action_message("first");

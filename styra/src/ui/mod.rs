@@ -393,83 +393,48 @@ pub fn render(frame: &mut Frame, app: &App) {
 
 #[cfg(test)]
 mod tests {
+    use super::testing::{self, rendered};
     use super::*;
-    use ratatui::backend::TestBackend;
-    use ratatui::buffer::Buffer;
-    use ratatui::Terminal;
     use styra_server::event::{AgentEvent, TokenUsage};
-
-    fn rendered(app: &App) -> String {
-        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
-        terminal.draw(|frame| render(frame, app)).unwrap();
-        let buffer = terminal.backend().buffer().clone();
-        buffer
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>()
-    }
-
-    /// The (x, y) of `needle`'s first character in the buffer. Column-based
-    /// rather than a byte offset into a joined `String`: title rows carry
-    /// multi-byte box-drawing and separator glyphs (`┌`, `·`, `●`) ahead of
-    /// plain-ASCII text, so a byte offset from `str::find` would overshoot the
-    /// actual column whenever the needle sits after one of those.
-    fn find_column(buffer: &Buffer, needle: &str) -> (u16, u16) {
-        let needle_chars: Vec<char> = needle.chars().collect();
-        for y in 0..buffer.area.height {
-            let symbols: Vec<&str> = (0..buffer.area.width)
-                .map(|x| buffer.cell((x, y)).unwrap().symbol())
-                .collect();
-            let found = (0..symbols.len()).find(|&start| {
-                needle_chars.iter().enumerate().all(|(i, &ch)| {
-                    symbols.get(start + i).and_then(|s| s.chars().next()) == Some(ch)
-                })
-            });
-            if let Some(x) = found {
-                return (x as u16, y);
-            }
-        }
-        panic!("no cell contains {needle:?}");
-    }
 
     #[test]
     fn header_shows_selection_and_status() {
-        let app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
-        let screen = rendered(&app);
-        assert!(!screen.contains("styra"), "{screen}");
-        assert!(screen.contains("codex"));
-        assert!(screen.contains("running"));
+        let title = testing::screen(&testing::app("s1")).title();
+        // Scoped to the title row, and stated positively. The old form was
+        // `!rendered(..).contains("styra")` over the flattened buffer, meant
+        // to say the title no longer opens with the program's name — but the
+        // footer renders the host's working directory, so it also failed in
+        // any checkout whose path happened to contain the word.
+        assert!(title.starts_with("┌ codex · "), "{title}");
+        assert!(title.contains("running"), "{title}");
     }
 
     #[test]
     fn header_opens_with_the_workspace_name_at_the_top_left() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.workspace_name = Some("payments".into());
-        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
-        terminal.draw(|frame| render(frame, &app)).unwrap();
-        let buffer = terminal.backend().buffer();
+        let screen = testing::screen(&app);
 
-        let (x, y) = find_column(buffer, "payments");
-        assert_eq!((x, y), (1, 0));
+        // Spelled as the row it produces rather than as a column number: what
+        // the test means is that the workspace name comes first, ahead of the
+        // agent, and a bare `(x, y)` says that only by arithmetic over the
+        // border and the title's leading pad.
+        assert!(
+            screen.title().starts_with("┌ payments · codex · "),
+            "{}",
+            screen.title()
+        );
+
+        let (x, y) = screen.find("payments");
         // Readable against the border line, unlike the cyan it used to wear.
-        let style = buffer.cell((x, y)).unwrap().style();
+        let style = screen.buffer().cell((x, y)).unwrap().style();
         assert_eq!(style.fg, Some(palette::TEXT));
         assert!(style.add_modifier.contains(Modifier::BOLD));
     }
 
     #[test]
     fn header_shows_the_workspace_name_alongside_the_session_name() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.workspace_name = Some("payments".into());
         app.session_name = Some("Fix retries".into());
         let screen = rendered(&app);
@@ -479,19 +444,14 @@ mod tests {
 
     #[test]
     fn event_list_header_indicates_conversation_only_filter() {
-        let app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
+        app.timeline.conversation_only = true;
         assert!(rendered(&app).contains("conversation only"));
     }
 
     #[test]
     fn header_shows_a_dot_indicating_running_vs_idle() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         assert!(rendered(&app).contains('●'));
         assert_eq!(status_color(&app.status), palette::WARNING);
 
@@ -507,10 +467,7 @@ mod tests {
         // Explicit span styles keep the title independent of the block border.
         // The rendered view is intentionally dimmed later when the modal input
         // box opens, so inspect the title before that overlay is applied.
-        let app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let app = testing::app("s1");
         let title = title_line(
             &app.launch_label(),
             Some("payments"),
@@ -524,18 +481,12 @@ mod tests {
 
     #[test]
     fn message_box_floats_in_the_center_of_the_primary_view() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.enter_input();
 
-        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
-        terminal.draw(|frame| render(frame, &app)).unwrap();
-        let buffer = terminal.backend().buffer();
-
-        let (_, input_y) = find_column(buffer, "type a message, Enter to send");
-        let (_, view_y) = find_column(buffer, "codex");
+        let screen = testing::screen(&app);
+        let (_, input_y) = screen.find("type a message, Enter to send");
+        let (_, view_y) = screen.find("codex");
         assert_eq!(input_y, 9);
         assert!(
             input_y > view_y,
@@ -545,23 +496,17 @@ mod tests {
 
     #[test]
     fn message_box_dims_the_view_behind_it_but_stays_bright() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.enter_input();
 
-        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
-        terminal.draw(|frame| render(frame, &app)).unwrap();
-        let buffer = terminal.backend().buffer();
-
-        let (view_x, view_y) = find_column(buffer, "codex");
-        let view_style = buffer.cell((view_x, view_y)).unwrap().style();
+        let screen = testing::screen(&app);
+        let (view_x, view_y) = screen.find("codex");
+        let view_style = screen.buffer().cell((view_x, view_y)).unwrap().style();
         assert_eq!(view_style.fg, Some(palette::MODAL_BACKDROP));
         assert!(view_style.add_modifier.contains(Modifier::DIM));
 
-        let (input_x, input_y) = find_column(buffer, "type a message, Enter to send");
-        let input_style = buffer.cell((input_x, input_y)).unwrap().style();
+        let (input_x, input_y) = screen.find("type a message, Enter to send");
+        let input_style = screen.buffer().cell((input_x, input_y)).unwrap().style();
         assert_eq!(input_style.fg, Some(palette::MUTED_TEXT));
         assert!(!input_style.add_modifier.contains(Modifier::DIM));
     }
@@ -571,20 +516,18 @@ mod tests {
     /// model nobody typed.
     #[test]
     fn the_status_line_names_the_model_and_effort_in_use() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s-1",
-        );
-        assert!(rendered(&app).contains(" codex · gpt-5.6-sol · high"));
+        let mut app = testing::app("s-1");
+        let expected = format!(" codex · {} · {}", testing::MODEL, testing::EFFORT);
+        assert!(rendered(&app).contains(&expected), "{}", rendered(&app));
 
         app.push_event(AgentEvent::ThreadStarted {
             thread_id: "t-9".into(),
-            model: Some("gpt-5.6-sol".into()),
-            effort: Some("high".into()),
+            model: Some(testing::MODEL.into()),
+            effort: Some(testing::EFFORT.into()),
         });
         let screen = rendered(&app);
         assert!(
-            screen.contains(" codex · gpt-5.6-sol · high · ● running"),
+            screen.contains(&format!("{expected} · ● running")),
             "{screen}"
         );
 
@@ -598,11 +541,8 @@ mod tests {
         ];
         for toggle in toggles {
             toggle(&mut app);
-            assert!(
-                rendered(&app).contains("gpt-5.6-sol · high"),
-                "{}",
-                rendered(&app)
-            );
+            let named = format!("{} · {}", testing::MODEL, testing::EFFORT);
+            assert!(rendered(&app).contains(&named), "{}", rendered(&app));
             toggle(&mut app);
         }
     }
@@ -611,30 +551,29 @@ mod tests {
     /// but dimmed: it is what was asked for, not yet what is known to run.
     #[test]
     fn a_requested_model_is_shown_dimmed_until_the_agent_reports_one() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("claude:opus/max").unwrap(),
-            "s-1",
+        let mut app = testing::app_with("claude:opus/max", "s-1");
+        let screen = testing::screen(&app);
+        let (x, y) = screen.find("opus");
+        assert_eq!(
+            screen.buffer().cell((x, y)).unwrap().fg,
+            palette::ADDITIONAL_INFO
         );
-        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
-        terminal.draw(|frame| render(frame, &app)).unwrap();
-        let buffer = terminal.backend().buffer().clone();
-        let (x, y) = find_column(&buffer, "opus");
-        assert_eq!(buffer.cell((x, y)).unwrap().fg, palette::ADDITIONAL_INFO);
 
         app.push_event(AgentEvent::ThreadStarted {
             thread_id: "s-1".into(),
             model: Some("claude-opus-4-8".into()),
             effort: None,
         });
-        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
-        terminal.draw(|frame| render(frame, &app)).unwrap();
-        let buffer = terminal.backend().buffer().clone();
-        let (x, y) = find_column(&buffer, "claude-opus-4-8");
-        assert_eq!(buffer.cell((x, y)).unwrap().fg, palette::TEXT);
+        let screen = testing::screen(&app);
+        let (x, y) = screen.find("claude-opus-4-8");
+        assert_eq!(screen.buffer().cell((x, y)).unwrap().fg, palette::TEXT);
         // The launch's own effort stays alongside the reported model, still
         // dimmed: Claude Code never reports one, so it remains only what was
         // asked for.
-        let (x, y) = find_column(&buffer, "max");
-        assert_eq!(buffer.cell((x, y)).unwrap().fg, palette::ADDITIONAL_INFO);
+        let (x, y) = screen.find("max");
+        assert_eq!(
+            screen.buffer().cell((x, y)).unwrap().fg,
+            palette::ADDITIONAL_INFO
+        );
     }
 }

@@ -138,44 +138,76 @@ fn render_launcher_column(
 
 #[cfg(test)]
 mod tests {
+    use super::super::testing;
     use super::super::testing::rendered;
     use crate::app::App;
 
     use styra_server::agent::Provider;
 
-    /// The picker is modal: it replaces the session view entirely, and spells
-    /// out the profile its current rows add up to.
-    #[test]
-    fn the_launcher_shows_three_columns_and_the_resulting_selection() {
-        let mut app = App::pending(styra_server::agent::Selection::parse("codex").unwrap());
+    /// An open launcher over a pending session. The log entry is here because
+    /// the launcher draws over a session view that has one.
+    fn launching() -> App {
+        let mut app = testing::pending_app();
         app.push_log(styra_server::LogEntry::info("journal: /tmp/styra/s-1"));
         app.open_launcher();
-        let launcher = app.launcher.as_mut().unwrap();
-        launcher.next_column();
-        launcher.next();
-        launcher.next_column();
-        launcher.prev();
+        app
+    }
 
+    #[test]
+    fn the_launcher_shows_a_column_per_axis_of_the_profile() {
+        let app = launching();
         let screen = rendered(&app);
         assert!(screen.contains("styra · launch"), "{screen}");
-        for column in ["model", "effort"] {
+        for column in ["agent", "model", "effort"] {
             assert!(
                 screen.contains(column),
                 "missing the {column} column: {screen}"
             );
         }
-        // Every row is a concrete choice out of the agent's own catalogs: no
-        // free-text row to type an id into, and no row standing for "whatever the
-        // agent is configured for".
         assert!(screen.contains("gpt-5.6-sol"), "{screen}");
         assert!(screen.contains("minimal"), "{screen}");
-        assert!(!screen.contains("custom"), "{screen}");
-        assert!(!screen.contains("│ default"), "{screen}");
-        assert!(screen.contains("codex:gpt-5.6-terra/medium"), "{screen}");
         assert!(screen.contains("Enter select"), "{screen}");
         assert!(screen.contains("D save default"), "{screen}");
-        // Nothing of the session view shows through a modal picker.
-        assert!(!screen.contains("message"), "{screen}");
+    }
+
+    /// Every row is a concrete choice out of the agent's own catalogs: no
+    /// free-text row to type an id into, and no row standing for "whatever the
+    /// agent is configured for".
+    #[test]
+    fn the_launcher_offers_only_concrete_catalog_rows() {
+        let body = testing::screen(&launching()).body();
+        assert!(!body.contains("custom"), "{body}");
+        assert!(!body.contains("│ default"), "{body}");
+    }
+
+    /// The picker spells out the profile its current rows add up to. Both the
+    /// starting profile and the expected one are named, so the arithmetic is
+    /// between two fixed points rather than "one row along from the default".
+    #[test]
+    fn the_launcher_title_states_the_profile_the_rows_add_up_to() {
+        let mut app = launching();
+        assert!(
+            rendered(&app).contains(testing::PROFILE),
+            "the launcher should open on the profile the session carries"
+        );
+
+        let launcher = app.launcher.as_mut().unwrap();
+        launcher.next_column();
+        launcher.next(); // gpt-5.6-sol -> gpt-5.6-terra
+        launcher.next_column();
+        launcher.prev(); // high -> medium
+
+        let screen = rendered(&app);
+        assert!(screen.contains("codex:gpt-5.6-terra/medium"), "{screen}");
+    }
+
+    /// Nothing of the session view shows through a modal picker. Asserted over
+    /// the body rather than the whole screen: the footer renders the host's
+    /// working directory, and a needle this short can match a path component.
+    #[test]
+    fn the_launcher_is_modal_and_hides_the_session_view() {
+        let body = testing::screen(&launching()).body();
+        assert!(!body.contains("message"), "{body}");
     }
 
     /// A model the catalog does not list — one the operator named with

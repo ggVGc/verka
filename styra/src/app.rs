@@ -1373,11 +1373,20 @@ mod tests {
     use crate::launcher::LaunchColumn;
     use styra_server::agent::Effort;
 
+    /// A session app with every default these tests would otherwise inherit
+    /// pinned explicitly: the profile names its model and effort instead of
+    /// letting the provider resolve them, and both timeline filters are set
+    /// rather than left to `Timeline::default`. A test that inherits a default
+    /// is really asserting it, and breaks when the product changes its mind
+    /// about something the test had no opinion on.
     fn app() -> App {
-        App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("codex:gpt-5.6-sol/high").unwrap(),
             "session-1",
-        )
+        );
+        app.timeline.conversation_only = false;
+        app.timeline.show_minor = false;
+        app
     }
 
     #[test]
@@ -2469,10 +2478,12 @@ mod tests {
             command: "cargo test".into(),
         });
 
-        assert_eq!(app.view, View::Events);
-        assert!(app.timeline.conversation_only);
+        // What the filter does, at each of its two states named outright. The
+        // toggle's job is to move between them; which one a fresh session
+        // starts in is a product decision, not this test's business.
+        app.timeline.conversation_only = true;
         assert!(app.timeline.is_visible(0));
-        assert!(!app.timeline.is_visible(1));
+        assert!(!app.timeline.is_visible(1), "the command should be hidden");
 
         app.toggle_conversation_only();
         assert!(!app.timeline.conversation_only);
@@ -2481,11 +2492,15 @@ mod tests {
         app.toggle_conversation_only();
         assert!(app.timeline.conversation_only);
         assert!(!app.timeline.is_visible(1));
+
+        // Filtering the list is not a view change.
+        assert_eq!(app.view, View::Events);
     }
 
     #[test]
     fn conversation_only_still_shows_errors_and_model_changes() {
         let mut app = app();
+        app.timeline.conversation_only = true;
         app.push_event(AgentEvent::Error {
             message: "workspace is out of credits".into(),
         });
@@ -2494,7 +2509,6 @@ mod tests {
             effort: None,
         });
 
-        assert!(app.timeline.conversation_only);
         assert!(app.timeline.is_visible(0));
         assert!(app.timeline.is_visible(1));
         assert_eq!(

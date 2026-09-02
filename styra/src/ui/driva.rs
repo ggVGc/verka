@@ -552,6 +552,7 @@ fn mount_line(mount: &Mount) -> Line<'static> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::testing;
     use super::super::testing::rendered;
     use super::*;
     use crate::app::View;
@@ -564,10 +565,7 @@ mod tests {
         use styra_server::DrivaOptions;
         use styra_server::{Mount, MountAccess};
 
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.toggle_view(View::Driva);
         let placeholder = rendered(&app);
         assert!(placeholder.contains("no launch policy"));
@@ -908,10 +906,7 @@ mod tests {
     fn a_live_launch_policy_offers_no_editing() {
         use styra_server::DrivaOptions;
 
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.toggle_view(View::Driva);
         app.launch.record(DrivaOptions {
             isolation_backend: "bwrap".into(),
@@ -932,10 +927,7 @@ mod tests {
         use crate::app::Status;
         use styra_server::DrivaOptions;
 
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.toggle_view(View::Driva);
         app.launch.record(DrivaOptions {
             isolation_backend: "bwrap".into(),

@@ -935,6 +935,7 @@ pub(crate) fn detail_lines(
 
 #[cfg(test)]
 mod tests {
+    use super::super::testing;
     use super::super::testing::rendered;
     use super::*;
     use ratatui::backend::TestBackend;
@@ -1033,10 +1034,7 @@ mod tests {
     /// list — it is ten lines of boilerplate that say the same thing.
     #[test]
     fn a_typed_turn_shows_its_shape_rather_than_its_framing() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.push_event(AgentEvent::UserMessage {
             text: styra_server::contract::frame(
                 "which files handle auth?",
@@ -1052,10 +1050,7 @@ mod tests {
 
     #[test]
     fn a_running_session_shows_a_progress_tail_and_an_elapsed_title() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.push_event(AgentEvent::UserMessage {
             text: "do the thing".into(),
         });
@@ -1067,10 +1062,7 @@ mod tests {
 
     #[test]
     fn an_idle_session_says_it_waits_without_counting_the_wait() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.push_event(AgentEvent::AgentMessage {
             text: "done".into(),
         });
@@ -1089,10 +1081,7 @@ mod tests {
 
     #[test]
     fn expanded_and_selected_content_uses_the_selection_backdrop_not_white() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.push_event(AgentEvent::AgentMessage {
             text: "hello\nworld".into(),
         });
@@ -1118,10 +1107,7 @@ mod tests {
 
     #[test]
     fn an_expanded_selected_entrys_detail_body_is_never_bold() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.push_event(AgentEvent::AgentMessage {
             text: "hello\nworld".into(),
         });
@@ -1157,10 +1143,7 @@ mod tests {
 
     #[test]
     fn only_the_selected_entrys_first_row_gets_the_selection_backdrop() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.push_event(AgentEvent::AgentMessage {
             text: "one\ntwo".into(),
         });
@@ -1202,10 +1185,7 @@ mod tests {
 
     #[test]
     fn a_collapsed_entry_with_more_to_show_has_a_fold_marker() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.push_event(AgentEvent::AgentMessage {
             text: "hello world\nmore detail".into(),
         });
@@ -1217,10 +1197,7 @@ mod tests {
 
     #[test]
     fn an_entry_with_nothing_beyond_its_summary_has_no_fold_marker() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         // A single-line agent message: its detail body is identical to the
         // summary already shown, so there is nothing left to expand into.
         app.push_event(AgentEvent::AgentMessage {
@@ -1267,10 +1244,7 @@ mod tests {
 
     #[test]
     fn a_truncated_single_line_summary_has_a_fold_marker_and_expands_to_the_full_text() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.push_event(AgentEvent::AgentMessage {
             text: "z".repeat(500),
         });
@@ -1293,36 +1267,32 @@ mod tests {
 
     #[test]
     fn conversation_only_mode_renders_every_entry_expanded() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.push_event(AgentEvent::AgentMessage {
             text: "z".repeat(500),
         });
 
-        // Start from the filter off, so the entry's own collapsed state shows.
-        app.toggle_conversation_only();
+        // Each step names the filter state it is about rather than toggling
+        // from whatever the previous one left, so the sequence does not depend
+        // on which way the filter starts out.
+        app.timeline.conversation_only = false;
         let collapsed = rendered(&app);
         assert!(collapsed.contains('▸'));
         assert!(collapsed.chars().filter(|&c| c == 'z').count() < 500);
 
-        app.toggle_conversation_only();
+        app.timeline.conversation_only = true;
         let expanded = rendered(&app);
         assert!(!expanded.contains('▸'));
         assert_eq!(expanded.chars().filter(|&c| c == 'z').count(), 500);
 
         // The filter did not consume the entry's own folding state.
-        app.toggle_conversation_only();
+        app.timeline.conversation_only = false;
         assert!(rendered(&app).contains('▸'));
     }
 
     #[test]
     fn a_shell_tool_gets_a_checkmark_only_when_it_completes() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.push_event(AgentEvent::ToolStarted {
             id: "toolu_1".into(),
             name: "Bash".into(),
@@ -1370,10 +1340,7 @@ mod tests {
 
     #[test]
     fn a_failed_shell_tool_gets_a_cross() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.push_event(AgentEvent::ToolStarted {
             id: "toolu_1".into(),
             name: "Bash".into(),
@@ -1393,10 +1360,7 @@ mod tests {
 
     #[test]
     fn a_successful_shell_tool_with_an_error_diagnostic_gets_an_amber_warning() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("claude").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app_with(testing::CLAUDE_PROFILE, "s1");
         app.push_event(AgentEvent::ToolStarted {
             id: "toolu_1".into(),
             name: "Bash".into(),
@@ -1477,10 +1441,7 @@ mod tests {
 
     #[test]
     fn an_expanded_command_shows_detail_lines() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.push_event(AgentEvent::CommandCompleted {
             command: "cargo test".into(),
             status: "completed".into(),
@@ -1495,10 +1456,7 @@ mod tests {
 
     #[test]
     fn an_expanded_entry_uses_the_pretty_provider_presentation() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("claude").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app_with(testing::CLAUDE_PROFILE, "s1");
         app.push_event(AgentEvent::ToolStarted {
             id: "toolu_1".into(),
             name: "Bash".into(),
@@ -1513,10 +1471,7 @@ mod tests {
 
     #[test]
     fn expanding_keeps_the_summary_on_the_first_row_without_repeating_it() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.push_event(AgentEvent::CommandCompleted {
             command: "cargo test".into(),
             status: "completed".into(),
@@ -1541,10 +1496,7 @@ mod tests {
     /// message used to blank the entire log. It must stay clipped instead.
     #[test]
     fn an_expanded_entry_taller_than_the_viewport_is_clipped_not_dropped() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.push_event(AgentEvent::AgentMessage {
             text: "an earlier message".into(),
         });
@@ -1574,10 +1526,7 @@ mod tests {
 
     #[test]
     fn selecting_after_a_long_message_keeps_the_message_visible() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.push_event(AgentEvent::AgentMessage {
             text: "an earlier message".into(),
         });
@@ -1596,10 +1545,7 @@ mod tests {
 
     #[test]
     fn a_long_expanded_entry_after_the_selection_still_shows_its_summary() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.push_event(AgentEvent::AgentMessage {
             text: "the selected message".into(),
         });
@@ -1650,10 +1596,7 @@ mod tests {
 
     #[test]
     fn usage_is_shown_once_recorded() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.push_event(AgentEvent::TurnCompleted {
             usage: TokenUsage {
                 input_tokens: 12,
@@ -1667,10 +1610,7 @@ mod tests {
 
     #[test]
     fn minor_events_are_omitted_from_the_list_when_hidden() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.push_event(AgentEvent::ThreadStarted {
             thread_id: "t-1".into(),
             model: None,
@@ -1688,10 +1628,7 @@ mod tests {
 
     #[test]
     fn long_summary_lines_are_clipped_while_collapsed_and_wrap_once_expanded() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.push_event(AgentEvent::AgentMessage {
             text: "word ".repeat(40),
         });
@@ -1723,10 +1660,7 @@ mod tests {
 
     #[test]
     fn wrapped_agent_messages_keep_a_hanging_indent() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.push_event(AgentEvent::AgentMessage {
             text: "one two three four five six seven eight nine ten eleven twelve".into(),
         });
@@ -1756,10 +1690,7 @@ mod tests {
 
     #[test]
     fn conversation_messages_are_capped_at_120_columns() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         let long_word = "x".repeat(MAX_CONVERSATION_WIDTH + 10);
         app.push_event(AgentEvent::UserMessage {
             text: long_word.clone(),

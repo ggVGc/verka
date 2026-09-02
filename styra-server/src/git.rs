@@ -18,8 +18,8 @@ pub fn repository_root(path: &Path) -> Result<PathBuf> {
 /// Mandatory mounts for a Workspace's associated repository.
 pub fn mounts(root: &Path) -> Result<Vec<MountSpec>> {
     let root = repository_root(root)?;
-    let git_dir = git_path(&root, &["rev-parse", "--absolute-git-dir"])
-        .context("resolving Git directory")?;
+    let git_dir =
+        git_path(&root, &["rev-parse", "--absolute-git-dir"]).context("resolving Git directory")?;
     let common_dir = git_path(
         &root,
         &["rev-parse", "--path-format=absolute", "--git-common-dir"],
@@ -98,7 +98,10 @@ mod tests {
     fn init(repository: &Path) {
         git(repository, &["init", "--quiet"]);
         git(repository, &["config", "user.name", "Styra Test"]);
-        git(repository, &["config", "user.email", "styra@example.invalid"]);
+        git(
+            repository,
+            &["config", "user.email", "styra@example.invalid"],
+        );
         std::fs::write(repository.join("tracked"), "initial\n").unwrap();
         git(repository, &["add", "tracked"]);
         git(repository, &["commit", "--quiet", "-m", "initial"]);
@@ -130,7 +133,14 @@ mod tests {
         init(&main);
         git(
             &main,
-            &["worktree", "add", "--quiet", "-b", "feature", worktree.to_str().unwrap()],
+            &[
+                "worktree",
+                "add",
+                "--quiet",
+                "-b",
+                "feature",
+                worktree.to_str().unwrap(),
+            ],
         );
 
         let resolved = mounts(&worktree).unwrap();

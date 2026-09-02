@@ -219,16 +219,14 @@ impl JsonWriter {
 
 #[cfg(test)]
 mod tests {
+    use super::super::testing;
     use super::super::testing::rendered;
     use super::*;
 
     #[test]
     fn raw_view_shows_wire_lines_with_direction_markers() {
         use styra_server::{Direction, RawLine};
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.push_raw(RawLine {
             at_ms: 0,
             direction: Direction::ToAgent,
@@ -256,10 +254,7 @@ mod tests {
     #[test]
     fn long_raw_lines_are_truncated_in_the_list_but_shown_in_full_in_the_preview() {
         use styra_server::{Direction, RawLine};
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.push_raw(RawLine {
             at_ms: 0,
             direction: Direction::FromAgent,
@@ -283,10 +278,7 @@ mod tests {
     #[test]
     fn raw_preview_pretty_prints_and_highlights_the_selected_line() {
         use styra_server::{Direction, RawLine};
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.push_raw(RawLine {
             at_ms: 0,
             direction: Direction::FromAgent,
@@ -303,10 +295,7 @@ mod tests {
     #[test]
     fn raw_view_navigates_and_previews_the_selected_line() {
         use styra_server::{Direction, RawLine};
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.push_raw(RawLine {
             at_ms: 0,
             direction: Direction::FromAgent,

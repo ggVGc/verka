@@ -98,6 +98,7 @@ fn clock(at_ms: u64) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::super::testing;
     use super::*;
     use crate::app::View;
     use ratatui::backend::TestBackend;
@@ -119,10 +120,7 @@ mod tests {
     }
 
     fn app() -> App {
-        App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        )
+        testing::app("s1")
     }
 
     fn reading(window: &str, status: QuotaStatus, utilization: Option<f64>) -> QuotaEvent {

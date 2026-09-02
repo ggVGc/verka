@@ -243,6 +243,7 @@ fn render_empty_content(frame: &mut Frame, area: Rect) {
 
 #[cfg(test)]
 mod tests {
+    use super::super::testing;
     use super::*;
     use styra_server::event::AgentEvent;
 
@@ -251,10 +252,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("styra-files-ui-{}", std::process::id()));
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.set_workspace_root(root.clone());
         app.push_event(AgentEvent::FileChanged {
             id: "1".into(),

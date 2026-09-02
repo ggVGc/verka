@@ -30,12 +30,21 @@ use styra_server::agent::Selection;
 pub(crate) const MODEL: &str = "gpt-5.6-sol";
 pub(crate) const EFFORT: &str = "high";
 pub(crate) const PROFILE: &str = "codex:gpt-5.6-sol/high";
+/// The equivalent for tests that need the other provider's presentation.
+pub(crate) const CLAUDE_PROFILE: &str = "claude:claude-opus-5/high";
 
 /// A session app with a pinned profile and both timeline filters off, so tool,
 /// thinking, and lifecycle entries render. Tests that care about a filter set
 /// it themselves; see the module note on why none of this is left to default.
 pub(crate) fn app(session: &str) -> App {
-    configure(App::new(Selection::parse(PROFILE).unwrap(), session))
+    app_with(PROFILE, session)
+}
+
+/// [`app`] on an explicitly named profile, for tests about a provider's own
+/// rendering. Still a full `provider:model/effort` triple: a bare provider
+/// name would put the test back at the mercy of the provider's defaults.
+pub(crate) fn app_with(profile: &str, session: &str) -> App {
+    configure(App::new(Selection::parse(profile).unwrap(), session))
 }
 
 /// [`app`] for a session that has not launched yet.

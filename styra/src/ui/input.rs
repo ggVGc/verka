@@ -82,6 +82,7 @@ pub(super) fn wrapped_input_lines(text: &str, width: usize, style: Style) -> Vec
 
 #[cfg(test)]
 mod tests {
+    use super::super::testing;
     use super::super::testing::rendered;
     use super::super::{modal_input, palette};
     use super::*;
@@ -90,10 +91,7 @@ mod tests {
 
     #[test]
     fn message_box_is_only_shown_while_input_is_active() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         assert_eq!(app.focus, Focus::List);
         assert!(!rendered(&app).contains("type a message, Enter to send"));
 
@@ -103,10 +101,7 @@ mod tests {
 
     #[test]
     fn input_wraps_at_the_panel_width_and_keeps_the_cursor_on_screen() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.enter_input();
         app.set_input("abcdefghijk".into());
 
@@ -124,10 +119,7 @@ mod tests {
 
     #[test]
     fn queued_messages_use_the_additional_information_color() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.queue_message(styra_server::QueuedMessage::new("send this later"));
 
         let display = modal_input::display(&modal(&app), 40);
@@ -141,10 +133,7 @@ mod tests {
 
     #[test]
     fn long_input_scrolls_to_keep_the_newest_text_visible() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.enter_input();
         app.set_input(format!("{}TAIL", "x".repeat(200)));
 

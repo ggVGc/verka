@@ -654,14 +654,21 @@ mod cli_tests {
 
     #[test]
     fn active_session_selection_keeps_the_conversation_only_filter() {
-        let selection = Selection::parse("codex").unwrap();
-        let mut previous = App::new(selection.clone(), "previous");
-        previous.toggle_conversation_only();
-        let mut next = App::new(selection, "next");
+        // Both states, named outright and carried in both directions. The old
+        // form toggled the previous session's filter from whatever a fresh
+        // `Timeline` starts with and asserted the result, so it was really
+        // asserting that default and broke when the default changed.
+        for carried in [true, false] {
+            let selection = Selection::parse("codex:gpt-5.6-sol/high").unwrap();
+            let mut previous = App::new(selection.clone(), "previous");
+            previous.timeline.conversation_only = carried;
+            let mut next = App::new(selection, "next");
+            next.timeline.conversation_only = !carried;
 
-        carry_active_session_view(&previous, &mut next);
+            carry_active_session_view(&previous, &mut next);
 
-        assert!(!next.timeline.conversation_only);
+            assert_eq!(next.timeline.conversation_only, carried);
+        }
     }
 
     #[test]

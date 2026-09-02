@@ -61,17 +61,15 @@ pub(crate) fn message_text_color(tag: &str) -> Color {
 
 #[cfg(test)]
 mod tests {
+    use super::super::testing;
     use super::super::testing::rendered;
-    use super::*;
+
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
 
     #[test]
     fn footer_shows_keybinds_and_working_directory() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.set_workspace_root("/tmp/styra/workspace".into());
         let screen = rendered(&app);
         assert!(screen.contains("? keybinds"));
@@ -81,10 +79,7 @@ mod tests {
 
     #[test]
     fn working_directory_is_aligned_to_the_bottom_right() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.set_workspace_root("/workspace".into());
         let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
         terminal

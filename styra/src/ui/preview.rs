@@ -250,6 +250,7 @@ fn bash_spans(line: &str) -> Vec<Span<'static>> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::testing;
     use super::super::testing::rendered;
     use super::*;
     use crate::app::View;
@@ -281,10 +282,7 @@ mod tests {
         // The list pane keeps showing its own truncated summary line
         // regardless of the preview panel, so this checks the preview's own
         // content directly rather than the whole screen.
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.push_event(AgentEvent::AgentMessage {
             text: "z".repeat(500),
         });
@@ -298,10 +296,7 @@ mod tests {
 
     #[test]
     fn pretty_preview_styles_message_markdown_and_raw_preview_keeps_it_literal() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.push_event(AgentEvent::AgentMessage {
             text: "# Title\n- use `cargo test` for **all**".into(),
         });
@@ -343,10 +338,7 @@ mod tests {
 
     #[test]
     fn preview_panel_shows_full_content_of_the_selected_entry_when_toggled() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.push_event(AgentEvent::CommandCompleted {
             command: "cargo test".into(),
             status: "completed".into(),
@@ -365,10 +357,7 @@ mod tests {
 
     #[test]
     fn command_mode_previews_the_newest_command_and_result_whatever_is_focused() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.push_event(AgentEvent::CommandCompleted {
             command: "cargo test".into(),
             status: "completed".into(),
@@ -397,10 +386,7 @@ mod tests {
 
     #[test]
     fn command_mode_falls_back_to_the_selection_before_any_command_runs() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.push_event(AgentEvent::AgentMessage {
             text: "all green".into(),
         });
@@ -411,10 +397,7 @@ mod tests {
 
     #[test]
     fn file_diff_preview_toggles_between_minimal_and_raw_output() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.push_event(AgentEvent::FileChanged {
             id: "f1".into(),
             paths: vec!["src/lib.rs".into()],
@@ -447,10 +430,7 @@ mod tests {
 
     #[test]
     fn compact_provider_diff_still_changes_visibly_between_modes() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.push_event(AgentEvent::FileChanged {
             id: "f1".into(),
             paths: vec!["src/lib.rs".into()],
@@ -517,10 +497,7 @@ mod tests {
 
     #[test]
     fn codex_bash_toggles_between_highlighted_command_and_wrapper() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.push_event(AgentEvent::CommandStarted {
             command: "/usr/bin/bash -lc 'cargo test --all'".into(),
         });
@@ -549,10 +526,7 @@ mod tests {
 
     #[test]
     fn diff_preview_never_emits_literal_terminal_tabs() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.push_event(AgentEvent::DiffUpdated {
             diff: "@@\n-\told\n+\tnew".into(),
         });
@@ -566,10 +540,7 @@ mod tests {
 
     #[test]
     fn fullscreen_preview_replaces_the_whole_main_region() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.push_event(AgentEvent::CommandCompleted {
             command: "cargo test".into(),
             status: "completed".into(),
@@ -595,10 +566,7 @@ mod tests {
 
     #[test]
     fn fullscreen_preview_has_no_border_or_title() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.push_event(AgentEvent::AgentMessage {
             text: "hello".into(),
         });
@@ -626,10 +594,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("notes.txt"), "line one\nline two").unwrap();
 
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.set_workspace_root(dir.clone());
         app.push_event(AgentEvent::FileChanged {
             id: "f1".into(),
@@ -657,10 +622,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("notes.txt"), "line one\nline two").unwrap();
 
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.set_workspace_root(dir.clone());
         // A FileChanged entry exercises the ordinary preview detail body.
         app.push_event(AgentEvent::FileChanged {
@@ -701,10 +663,7 @@ mod tests {
         // The preview panel's border is unconditionally `DarkGray` (it has no
         // separate focus state), so its unstyled title used to inherit that
         // same dim color from the border paint underneath it.
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.push_event(AgentEvent::AgentMessage {
             text: "hello".into(),
         });
@@ -727,10 +686,7 @@ mod tests {
         // `«`/`»` marker instead of jumping to the left edge; the preview
         // panel must wrap the same way rather than leaning on the widget's
         // own left-flush word wrap.
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.push_event(AgentEvent::AgentMessage {
             text: "one two three four five six seven eight nine ten eleven twelve".into(),
         });

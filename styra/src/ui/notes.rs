@@ -171,15 +171,13 @@ pub fn render_notes_prompt(frame: &mut Frame, scope: Scope, value: &str) {
 
 #[cfg(test)]
 mod tests {
+    use super::super::testing;
     use super::super::testing::rendered;
     use crate::app::App;
     use crate::notes;
 
     fn app() -> App {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.session_name = Some("Fix retries".into());
         app.workspace_name = Some("payments".into());
         app
@@ -232,7 +230,7 @@ mod tests {
     /// to, so the editor opens on the Workspace instead.
     #[test]
     fn a_pending_session_edits_workspace_notes_only() {
-        let mut app = App::pending(styra_server::agent::Selection::parse("codex").unwrap());
+        let mut app = testing::pending_app();
         app.workspace_name = Some("payments".into());
         notes::open(&mut app);
         assert!(rendered(&app).contains("Workspace notes"));

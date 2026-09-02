@@ -53,18 +53,16 @@ pub(crate) fn render_transcript_view(frame: &mut Frame, app: &App, area: Rect) {
 
 #[cfg(test)]
 mod tests {
+    use super::super::testing;
     use super::super::testing::rendered;
-    use super::*;
+
     use crate::app::View;
 
     use styra_server::event::AgentEvent;
 
     #[test]
     fn transcript_view_renders_the_current_session() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.push_event(AgentEvent::UserMessage {
             text: "implement retry backoff".into(),
         });
@@ -80,10 +78,7 @@ mod tests {
 
     #[test]
     fn transcript_view_follows_the_minor_toggle_and_rerenders_when_flipped() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.push_event(AgentEvent::ThreadStarted {
             thread_id: "t-1".into(),
             model: None,
@@ -94,21 +89,20 @@ mod tests {
         });
         app.toggle_view(View::Transcript);
 
-        assert!(!app.timeline.show_minor);
+        app.timeline.show_minor = false;
         assert!(!rendered(&app).contains("t-1"));
 
         // Toggling minor visibility while the transcript is already open must
         // re-render it on the very next frame, not require reopening the view.
         app.toggle_minor();
+        assert!(app.timeline.show_minor);
         assert!(rendered(&app).contains("t-1"));
     }
 
     #[test]
     fn transcript_view_follows_conversation_only_filter_and_shows_indicator() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
+        app.timeline.conversation_only = true;
         app.push_event(AgentEvent::UserMessage {
             text: "keep this prompt".into(),
         });
@@ -130,10 +124,7 @@ mod tests {
 
     #[test]
     fn transcript_view_shows_a_placeholder_before_anything_happens() {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.toggle_view(View::Transcript);
         assert!(rendered(&app).contains("nothing to render yet"));
     }

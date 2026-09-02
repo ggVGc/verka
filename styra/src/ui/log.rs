@@ -42,17 +42,15 @@ pub(crate) fn log_line(entry: &styra_server::LogEntry) -> Line<'static> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::testing;
     use super::super::testing::rendered;
-    use super::*;
+
     use crate::app::View;
 
     #[test]
     fn log_view_shows_entries_with_levels() {
         use styra_server::LogEntry;
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
+        let mut app = testing::app("s1");
         app.push_log(LogEntry::info("launching codex"));
         app.push_log(LogEntry::error("could not run the agent: bwrap missing"));
         app.toggle_view(View::Log);
