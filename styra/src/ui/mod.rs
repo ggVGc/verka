@@ -66,12 +66,12 @@ const DETAIL_INDENT: &str = "    ";
 /// Draw the shared message box over whatever a picker has already rendered.
 /// The main interaction view opens the same box from [`render`]; only the title
 /// and where a sent message goes differ.
-pub fn render_message_input(frame: &mut Frame, title: String, text: &str) {
+pub fn render_message_input(frame: &mut Frame, title: String, note: Option<String>, text: &str) {
     modal_input::render(
         frame,
         &modal_input::ModalInput {
             title,
-            note: None,
+            note,
             preceding: Vec::new(),
             text,
             placeholder: "type a message, Enter to send",

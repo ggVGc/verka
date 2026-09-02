@@ -9,9 +9,12 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use styra_server::protocol::ResumeSession;
-use styra_server::{Client, InteractionSummary, InteractionUpdate, LogEntry, WorkspaceSummary};
+use styra_server::{
+    Client, Contract, InteractionSummary, InteractionUpdate, LogEntry, WorkspaceSummary,
+};
 
 use crate::composer::Composer;
+
 use crate::notes;
 use crate::ui;
 
@@ -674,7 +677,7 @@ pub fn run_interactions_picker(
                     .name
                     .clone()
                     .unwrap_or_else(|| ui::short_id(&target.id).to_owned());
-                let Some(message) =
+                let Some((message, contract)) =
                     read_interaction_message(terminal, &list, preview, &mut composer, &name)?
                 else {
                     continue;
@@ -688,7 +691,8 @@ pub fn run_interactions_picker(
                     )?;
                     continue;
                 }
-                if let Err(error) = client.send_message(&target.id, &message) {
+                let turn = crate::session::turn(&message, &target.selection, contract);
+                if let Err(error) = client.send_turn(&target.id, turn) {
                     show_interactions_message(
                         terminal,
                         &list,
@@ -964,12 +968,16 @@ fn read_interaction_message(
     preview: ui::Preview<'_>,
     composer: &mut Composer,
     name: &str,
-) -> Result<Option<String>> {
+) -> Result<Option<(String, Option<Contract>)>> {
     let title = format!(" message · {name} · Enter send · Esc cancel ");
+    // Chosen for this message and sent with it, the way the session view's box
+    // does it — a shape is part of writing the question.
+    let mut contract: Option<Contract> = None;
     loop {
+        let note = contract.map(|contract| format!(" asking for {} ", contract.as_str()));
         terminal.draw(|frame| {
             ui::render_interactions_picker(frame, list, preview);
-            ui::render_message_input(frame, title.clone(), &composer.text);
+            ui::render_message_input(frame, title.clone(), note.clone(), &composer.text);
         })?;
         let Event::Key(key) = event::read()? else {
             continue;
@@ -979,8 +987,13 @@ fn read_interaction_message(
         }
         match key.code {
             KeyCode::Esc => return Ok(None),
+            KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                contract = crate::session::next_contract(contract)
+            }
             KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => composer.newline(),
-            KeyCode::Enter => return Ok(composer.take()),
+            KeyCode::Enter => {
+                return Ok(composer.take().map(|message| (message, contract)));
+            }
             KeyCode::Backspace => composer.backspace(),
             KeyCode::Up => composer.history_previous(),
             KeyCode::Down => composer.history_next(),

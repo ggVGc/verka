@@ -959,24 +959,9 @@ impl App {
 
     // --- Typed turn answers ---------------------------------------------------
 
-    /// Contracts in the order `Ctrl-T` walks them, taken from the server's own
-    /// list so a contract added there is offered here without a second edit.
-    /// The cycle ends back at an untyped turn, so the operator can always get
-    /// out of one without leaving the message box.
-    pub const CONTRACTS: [Contract; 4] = styra_server::contract::CONTRACTS;
-
     /// Step to the next return contract for the message being typed.
     pub fn cycle_contract(&mut self) {
-        let next = match self.contract {
-            None => Some(Self::CONTRACTS[0]),
-            Some(current) => {
-                let index = Self::CONTRACTS.iter().position(|c| *c == current);
-                index
-                    .and_then(|index| Self::CONTRACTS.get(index + 1))
-                    .copied()
-            }
-        };
-        self.contract = next;
+        self.contract = crate::session::next_contract(self.contract);
     }
 
     /// Take the contract the message about to be sent asks for, clearing it.
@@ -2696,7 +2681,7 @@ mod tests {
     fn cycling_contracts_returns_to_an_untyped_turn() {
         let mut app = app();
         assert_eq!(app.contract, None);
-        for expected in App::CONTRACTS {
+        for expected in crate::session::CONTRACTS {
             app.cycle_contract();
             assert_eq!(app.contract, Some(expected));
         }

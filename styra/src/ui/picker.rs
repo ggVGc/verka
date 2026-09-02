@@ -1446,12 +1446,19 @@ mod tests {
                     },
                     Preview::Ready(&updates),
                 );
-                super::super::render_message_input(frame, " message · s-1 ".into(), "ship it");
+                super::super::render_message_input(
+                    frame,
+                    " message · s-1 ".into(),
+                    Some(" asking for text ".into()),
+                    "ship it",
+                );
             })
             .unwrap();
         let screen = screen_text(terminal.backend().buffer());
         assert!(screen.contains("ship it"), "{screen}");
         assert!(screen.contains("Tests pass."), "{screen}");
+        // A contract chosen for the message is named on the box that sends it.
+        assert!(screen.contains("asking for text"), "{screen}");
     }
 
     #[test]

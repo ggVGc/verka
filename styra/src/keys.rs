@@ -338,7 +338,7 @@ pub fn handle_input_key(
                         // Queued as composed, contract included: the shape was
                         // chosen for this question and is asked for whenever
                         // the agent gets to it.
-                        let turn = session::turn(&message, app, contract);
+                        let turn = session::turn(&message, &app.selection, contract);
                         if let Err(error) = client.queue_turn(session_id, turn) {
                             app.push_log(LogEntry::error(format!(
                                 "could not persist queued message: {error:#}"
@@ -353,7 +353,7 @@ pub fn handle_input_key(
                     Live::Running { session_id, .. }
                         if matches!(app.status, Status::Idle | Status::Background) =>
                     {
-                        let turn = session::turn(&message, app, contract);
+                        let turn = session::turn(&message, &app.selection, contract);
                         match client.send_turn(session_id, turn) {
                             Ok(()) => app.status = Status::Running,
                             Err(error) => {

@@ -98,7 +98,7 @@ pub fn run(
                 if let Some(message) = app.take_queued_message() {
                     // Sent as it was composed: a message queued asking for a
                     // shape still asks for it when the agent frees up.
-                    let turn = session::turn(&message.text, app, message.contract);
+                    let turn = session::turn(&message.text, &app.selection, message.contract);
                     match client.send_turn(session_id, turn) {
                         Ok(()) => {
                             app.status = Status::Running;

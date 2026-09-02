@@ -85,10 +85,33 @@ pub fn all_sessions(client: &Client) -> Result<Vec<SessionSummary>> {
 /// Ask the server for a session. `launch` is this launch's own policy only:
 /// the Workspace's standing one is added on the server, so the client cannot
 /// launch under a policy it never showed.
+/// Contracts in the order `Ctrl-T` walks them, taken from the server's own
+/// list so a contract added there is offered here without a second edit. The
+/// cycle ends back at an untyped turn, so the operator can always get out of
+/// one without leaving the message box.
+pub const CONTRACTS: [Contract; 4] = styra_server::contract::CONTRACTS;
+
+/// The next return contract after `current`, wrapping back to an untyped turn.
+/// Shared by both message boxes, so `Ctrl-T` walks the same cycle in each.
+pub fn next_contract(current: Option<Contract>) -> Option<Contract> {
+    match current {
+        None => Some(CONTRACTS[0]),
+        Some(current) => CONTRACTS
+            .iter()
+            .position(|contract| *contract == current)
+            .and_then(|index| CONTRACTS.get(index + 1))
+            .copied(),
+    }
+}
+
 /// One turn as this client describes it: the operator's text, the selection it
 /// should run under, and the shape it asks its reply to take.
-pub fn turn(message: &str, app: &App, contract: Option<Contract>) -> SendMessage {
-    let turn = SendMessage::new(message).under(app.selection.clone());
+///
+/// Takes the selection rather than the whole [`App`] because a turn is also
+/// composed where there is no loaded session — the live-interactions picker
+/// sends to an interaction it only has a summary of.
+pub fn turn(message: &str, selection: &Selection, contract: Option<Contract>) -> SendMessage {
+    let turn = SendMessage::new(message).under(selection.clone());
     match contract {
         Some(contract) => turn.asking_for(contract),
         None => turn,
@@ -302,7 +325,9 @@ pub fn resume_and_send(
                 session_id: session_id.clone(),
                 cursor: info.updates_after,
             };
-            if let Err(error) = client.send_turn(&session_id, turn(&message, app, contract)) {
+            if let Err(error) =
+                client.send_turn(&session_id, turn(&message, &app.selection, contract))
+            {
                 app.push_log(LogEntry::error(format!("send failed: {error:#}")));
             }
         }
