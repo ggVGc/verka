@@ -22,7 +22,6 @@
 
 use crate::app::{App, Request, Status};
 use crate::mount;
-use std::path::PathBuf;
 use styra_server::agent::Selection;
 use styra_server::{DrivaOptions, LaunchMount, LaunchPolicy, WorkspaceLaunchChange};
 
@@ -465,71 +464,6 @@ pub fn set_templates(app: &mut App, chosen: Vec<String>) {
     }
 }
 
-/// Add the history of the git checkout the client was started in as a writable
-/// mount — the one mount an operator almost always wants and the most tedious to
-/// type, since it means knowing where the repository root actually is.
-///
-/// The checkout's `.git` and not the checkout itself: the workspace the agent
-/// already has is where the files live, so mounting the whole root would hand it
-/// a second copy of the tree. What it is missing is the history — an agent that
-/// cannot see `.git` fails every command that reads it in a way that reads as a
-/// broken agent rather than a mount that was cut too narrowly.
-///
-/// Inside a linked worktree that `.git` is a file pointing at a directory that
-/// lives under the main checkout, so the history is outside the mount and every
-/// command that reads it still fails. The directories that file leads to are
-/// added alongside it.
-pub fn add_git_history(app: &mut App) {
-    if !app.allow_launch_edit() {
-        return;
-    }
-    let start = app.workspace_root.clone().or_else(default_root);
-    let Some(root) = start.as_deref().and_then(mount::git_root) else {
-        return app.show_action_message("no .git found at or above the working directory");
-    };
-    let mut sources = vec![root.join(".git")];
-    for directory in mount::history_directories(&root) {
-        if !sources.iter().any(|source| directory.starts_with(source)) {
-            sources.push(directory);
-        }
-    }
-
-    let mut added = Vec::new();
-    let mut workspace_mounts = Vec::new();
-    let mut skipped = Vec::new();
-    for source in sources {
-        let request = LaunchMount {
-            source,
-            destination: None,
-            writable: true,
-        };
-        let label = mount::label(&request);
-        let result = if app.launch.scope == LaunchScope::Workspace {
-            if app.launch.workspace.mounts.contains(&request) {
-                Err("the Workspace policy already grants that mount")
-            } else {
-                workspace_mounts.push(request);
-                Ok(())
-            }
-        } else {
-            app.launch.add_mount(request)
-        };
-        match result {
-            Ok(()) => added.push(label),
-            Err(reason) => skipped.push(reason),
-        }
-    }
-    if !workspace_mounts.is_empty() {
-        workspace_change(app, WorkspaceLaunchChange::AddMounts(workspace_mounts));
-    }
-
-    match (added.is_empty(), skipped.first()) {
-        (true, Some(reason)) => app.show_action_message(*reason),
-        (true, None) => {}
-        (false, _) => app.show_action_message(format!("added {}", added.join(", "))),
-    }
-}
-
 /// Open the prompt that adds an extra mount.
 pub fn open_prompt(app: &mut App) {
     if !app.allow_launch_edit() {
@@ -675,15 +609,10 @@ pub fn editable(status: &Status) -> bool {
     )
 }
 
-/// Where to look for a checkout when there is no Workspace to look in: the
-/// process's own working directory, which is where the client was started.
-fn default_root() -> Option<PathBuf> {
-    std::env::current_dir().ok()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     fn workspace_policy() -> LaunchPolicy {
         LaunchPolicy {
@@ -1149,34 +1078,5 @@ mod tests {
         assert!(pending.can_edit_launch());
         cycle_network(&mut pending);
         assert_eq!(pending.launch.interaction.network, Some(true));
-    }
-
-    /// The shortcut for the mount almost every launch wants: the history of the
-    /// checkout the client was started in, writable, without typing the path.
-    #[test]
-    fn g_adds_the_working_directorys_git_directory_as_a_writable_mount() {
-        let Some(root) = default_root().as_deref().and_then(mount::git_root) else {
-            return;
-        };
-        let mut app = pending();
-        add_git_history(&mut app);
-        assert!(app
-            .launch
-            .interaction
-            .mounts
-            .iter()
-            .any(|added| added.source == root.join(".git") && added.writable));
-        // The `.git` alone — the workspace already carries the tree.
-        assert!(!app
-            .launch
-            .interaction
-            .mounts
-            .iter()
-            .any(|added| added.source == root));
-
-        // And it is this interaction's own mount, so asking twice adds nothing.
-        let before = app.launch.interaction.mounts.len();
-        add_git_history(&mut app);
-        assert_eq!(app.launch.interaction.mounts.len(), before);
     }
 }

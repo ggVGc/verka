@@ -425,7 +425,7 @@ fn hint_lines(app: &App) -> Vec<Line<'static>> {
     let muted = Style::default().fg(palette::ADDITIONAL_INFO);
     let mut lines = vec![Line::from(Span::styled(
         format!(
-            "  Tab {} · m mount · g .git · x remove · T templates · w network",
+            "  Tab {} · m mount · x remove · T templates · w network",
             app.launch.scope.other().phrase()
         ),
         muted,
@@ -732,7 +732,7 @@ mod tests {
         assert!(screen.contains("▸ this interaction"), "{screen}");
         assert!(screen.contains("none — m adds one"), "{screen}");
         assert!(
-            screen.contains("Tab the Workspace · m mount · g .git"),
+            screen.contains("Tab the Workspace · m mount · x remove"),
             "{screen}"
         );
 
@@ -962,34 +962,6 @@ mod tests {
         assert!(app.can_edit_launch());
         let screen = tall(&app);
         assert!(screen.contains("m mount"), "{screen}");
-    }
-
-    /// The shortcut for the mount almost every launch wants: the history of the
-    /// checkout the client was started in, writable, without typing the path.
-    /// The `.git` alone — the workspace already carries the tree.
-    #[test]
-    fn g_adds_the_working_directorys_git_directory_as_a_writable_mount() {
-        let mut app = editable_app();
-        let root = std::env::current_dir()
-            .unwrap()
-            .ancestors()
-            .find(|directory| directory.join(".git").exists())
-            .unwrap()
-            .to_path_buf();
-        crate::launch::add_git_history(&mut app);
-        let screen = tall(&app);
-        assert!(
-            screen.contains(&format!("{} (rw)", root.join(".git").display())),
-            "{screen}"
-        );
-        assert!(
-            !screen.contains(&format!("{} (rw)", root.display())),
-            "{screen}"
-        );
-
-        // And it is the operator's own mount, so asking twice adds nothing.
-        crate::launch::add_git_history(&mut app);
-        assert_eq!(app.launch.interaction.mounts.len(), 1);
     }
 
     #[test]

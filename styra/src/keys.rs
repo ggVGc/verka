@@ -191,9 +191,6 @@ pub fn handle_list_key(
                 }
             }
             KeyCode::Char('m') => launch::open_prompt(app),
-            // The mount nobody should have to type out: the checkout this
-            // client was started in, writable.
-            KeyCode::Char('g') => launch::add_git_history(app),
             KeyCode::Char('x') => launch::remove_selected_mount(app),
             // Mirrors `D` in the launch picker: keep this policy as the one a
             // brand-new client starts from, rather than only this session's.

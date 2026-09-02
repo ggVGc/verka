@@ -157,66 +157,6 @@ pub fn visibility(mounts: &[Mount], host: &Path) -> Option<Visible> {
         .map(|(_, visible)| visible)
 }
 
-/// The nearest enclosing directory of `start` that holds a `.git`. Inside a
-/// worktree `.git` is a file rather than a directory, so the test is existence
-/// and not kind.
-pub fn git_root(start: &Path) -> Option<PathBuf> {
-    start
-        .ancestors()
-        .find(|directory| directory.join(".git").exists())
-        .map(Path::to_path_buf)
-}
-
-/// The directories holding the git history of a checkout whose root is
-/// `root`, for the case where the root alone does not hold it.
-///
-/// In an ordinary checkout `.git` is a directory inside the root and this is
-/// empty. In a linked worktree `.git` is instead a file naming a directory
-/// under the main checkout, which in turn names the common directory that
-/// carries the objects and refs — both live outside the worktree, so both have
-/// to be mounted for history to be readable at all.
-pub fn history_directories(root: &Path) -> Vec<PathBuf> {
-    let pointer = root.join(".git");
-    if pointer.is_dir() {
-        return Vec::new();
-    }
-    let Some(git_directory) = std::fs::read_to_string(&pointer)
-        .ok()
-        .and_then(|contents| {
-            contents.lines().find_map(|line| {
-                line.trim()
-                    .strip_prefix("gitdir:")
-                    .map(|target| target.trim().to_owned())
-            })
-        })
-        .map(|target| resolve_against(root, Path::new(&target)))
-    else {
-        return Vec::new();
-    };
-    let common = std::fs::read_to_string(git_directory.join("commondir"))
-        .ok()
-        .map(|contents| resolve_against(&git_directory, Path::new(contents.trim())));
-    let mut directories = vec![git_directory];
-    if let Some(common) = common {
-        if !directories.contains(&common) {
-            directories.push(common);
-        }
-    }
-    directories
-}
-
-/// Interpret a path a git pointer file gave us, which may be relative to the
-/// file that named it. Canonicalized when the target exists so that the `..`
-/// segments git writes do not reach the launch policy as-is.
-fn resolve_against(base: &Path, target: &Path) -> PathBuf {
-    let joined = if target.is_absolute() {
-        target.to_path_buf()
-    } else {
-        base.join(target)
-    };
-    std::fs::canonicalize(&joined).unwrap_or(joined)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -332,35 +272,6 @@ mod tests {
         // A prefix that is not a path prefix does not count: `/srv-old` merely
         // starts with the same characters as `/srv`.
         assert_eq!(visibility(&mounts, Path::new("/srv-old/data")), None);
-    }
-
-    #[test]
-    fn a_worktree_contributes_the_directories_holding_its_history() {
-        let base = std::env::temp_dir().join("styra-git-history-directories");
-        let _ = std::fs::remove_dir_all(&base);
-        let main = base.join("main");
-        let worktree_git = main.join(".git/worktrees/feature");
-        let worktree = base.join("feature");
-        std::fs::create_dir_all(&worktree_git).unwrap();
-        std::fs::create_dir_all(&worktree).unwrap();
-        std::fs::write(
-            worktree.join(".git"),
-            "gitdir: ../main/.git/worktrees/feature\n",
-        )
-        .unwrap();
-        std::fs::write(worktree_git.join("commondir"), "../..\n").unwrap();
-
-        let directories = history_directories(&worktree);
-
-        assert_eq!(
-            directories,
-            vec![
-                std::fs::canonicalize(&worktree_git).unwrap(),
-                std::fs::canonicalize(main.join(".git")).unwrap(),
-            ]
-        );
-        assert!(history_directories(&main).is_empty());
-        let _ = std::fs::remove_dir_all(&base);
     }
 
     /// The client resolves `~` itself: a path left for the server to expand
