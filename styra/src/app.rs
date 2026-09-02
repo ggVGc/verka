@@ -22,7 +22,9 @@ use styra_server::agent::{Provider, Selection};
 use styra_server::event::PresentationMode;
 use styra_server::event::{AgentEvent, DetailBlock, TokenUsage};
 use styra_server::{Answer, AnswerValue, Contract, FileLocation, QueuedMessage};
-use styra_server::{InteractionEnd, LogEntry, QuotaEvent, QuotaStatus, RawLine};
+use styra_server::{
+    InteractionEnd, InteractionSummary, LogEntry, QuotaEvent, QuotaStatus, RawLine,
+};
 
 use crate::composer::Composer;
 use crate::ingest;
@@ -69,6 +71,85 @@ pub enum PreviewTarget {
     /// selection currently is — so the preview keeps showing what the agent
     /// is running while the operator reads elsewhere in the list.
     Command,
+}
+
+/// The live interactions navigator embedded above the main event list.
+///
+/// It is deliberately only navigation state: the selected interaction's full
+/// history lives in the ordinary [`App`] fields below, so there is no second
+/// preview cache or interaction screen to keep in sync.
+#[derive(Clone, Debug, Default)]
+pub struct LiveInteractions {
+    pub open: bool,
+    pub items: Vec<InteractionSummary>,
+    pub selected: usize,
+}
+
+impl LiveInteractions {
+    pub fn open(&mut self, mut items: Vec<InteractionSummary>, current: &str) {
+        sort_interactions(&mut items);
+        self.selected = items
+            .iter()
+            .position(|interaction| interaction.id == current)
+            .unwrap_or(0);
+        self.items = items;
+        self.open = true;
+    }
+
+    pub fn refresh(&mut self, mut items: Vec<InteractionSummary>, current: &str) {
+        let selected = self
+            .items
+            .get(self.selected)
+            .map(|interaction| interaction.id.as_str())
+            .unwrap_or(current);
+        sort_interactions(&mut items);
+        self.selected = items
+            .iter()
+            .position(|interaction| interaction.id == selected)
+            .or_else(|| {
+                items
+                    .iter()
+                    .position(|interaction| interaction.id == current)
+            })
+            .unwrap_or(0);
+        self.items = items;
+    }
+
+    pub fn selected(&self) -> Option<&InteractionSummary> {
+        self.items.get(self.selected)
+    }
+
+    pub fn select_next(&mut self) {
+        self.selected = (self.selected + 1).min(self.items.len().saturating_sub(1));
+    }
+
+    pub fn select_previous(&mut self) {
+        self.selected = self.selected.saturating_sub(1);
+    }
+
+    pub fn select_id(&mut self, id: &str) {
+        if let Some(selected) = self
+            .items
+            .iter()
+            .position(|interaction| interaction.id == id)
+        {
+            self.selected = selected;
+        }
+    }
+}
+
+fn sort_interactions(interactions: &mut [InteractionSummary]) {
+    interactions.sort_by_key(|interaction| {
+        if !interaction.accepting {
+            2
+        } else {
+            match interaction.activity {
+                styra_server::InteractionActivity::Pending => 0,
+                styra_server::InteractionActivity::Running
+                | styra_server::InteractionActivity::Background => 1,
+            }
+        }
+    });
 }
 
 /// The session's lifecycle as the operator sees it.
@@ -278,6 +359,8 @@ pub struct App {
     pub keybinds_scroll: u16,
     /// The message being typed and the ones already sent; see [`Composer`].
     pub composer: Composer,
+    /// Server-wide interaction navigation shown above the event timeline.
+    pub interactions: LiveInteractions,
     /// Messages submitted while the current turn is running. They remain
     /// visible until sent or the interaction is stopped.
     queued_messages: VecDeque<QueuedMessage>,
@@ -409,9 +492,7 @@ pub enum Request {
     /// skipping the picker — e.g. right after branching one, to look at the
     /// result rather than having to find it again in the list.
     OpenSession(String),
-    /// List the server's live interactions and, if the operator picks one,
-    /// attach to it. The current interaction is left running, not stopped:
-    /// attaching only changes what this client views.
+    /// Open the server's live interactions above the main event timeline.
     Interactions,
     /// Stop the current interaction and return to the blank start screen.
     Reset,
@@ -454,6 +535,7 @@ impl App {
             show_keybinds: false,
             keybinds_scroll: 0,
             composer: Composer::default(),
+            interactions: LiveInteractions::default(),
             queued_messages: VecDeque::new(),
             status: Status::Running,
             action_messages: VecDeque::new(),
@@ -1372,6 +1454,7 @@ mod tests {
     use super::*;
     use crate::launcher::LaunchColumn;
     use styra_server::agent::Effort;
+    use styra_server::{DrivaOptions, InteractionActivity};
 
     /// A session app with every default these tests would otherwise inherit
     /// pinned explicitly: the profile names its model and effort instead of
@@ -1387,6 +1470,71 @@ mod tests {
         app.timeline.conversation_only = false;
         app.timeline.show_minor = false;
         app
+    }
+
+    fn interaction(id: &str, accepting: bool, activity: InteractionActivity) -> InteractionSummary {
+        InteractionSummary {
+            id: id.into(),
+            name: None,
+            workspace_id: "workspace".into(),
+            selection: styra_server::agent::Selection::parse("codex").unwrap(),
+            workspace: PathBuf::from("/workspace"),
+            driva: DrivaOptions {
+                isolation_backend: "none".into(),
+                command: vec![],
+                working_directory: PathBuf::from("/workspace"),
+                network: false,
+                mounts: vec![],
+            },
+            accepting,
+            activity,
+            last_message: None,
+        }
+    }
+
+    #[test]
+    fn live_interactions_open_on_the_current_session_in_status_order() {
+        let mut live = LiveInteractions::default();
+        live.open(
+            vec![
+                interaction("stopped", false, InteractionActivity::Running),
+                interaction("running", true, InteractionActivity::Running),
+                interaction("idle", true, InteractionActivity::Pending),
+            ],
+            "running",
+        );
+
+        assert!(live.open);
+        assert_eq!(
+            live.items
+                .iter()
+                .map(|interaction| interaction.id.as_str())
+                .collect::<Vec<_>>(),
+            ["idle", "running", "stopped"]
+        );
+        assert_eq!(live.selected().unwrap().id, "running");
+    }
+
+    #[test]
+    fn refreshing_live_interactions_keeps_the_highlight_by_identity() {
+        let mut live = LiveInteractions::default();
+        live.open(
+            vec![
+                interaction("one", true, InteractionActivity::Pending),
+                interaction("two", true, InteractionActivity::Running),
+            ],
+            "one",
+        );
+        live.select_next();
+        live.refresh(
+            vec![
+                interaction("two", true, InteractionActivity::Pending),
+                interaction("one", true, InteractionActivity::Running),
+            ],
+            "one",
+        );
+
+        assert_eq!(live.selected().unwrap().id, "two");
     }
 
     #[test]

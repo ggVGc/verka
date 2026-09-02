@@ -116,7 +116,7 @@ mod tests {
             "choose Driva templates",
             "Message editor",
             "Launch and selection screens",
-            "current sessions",
+            "live interactions",
             "Ctrl+L",
             "z R / z M",
         ] {

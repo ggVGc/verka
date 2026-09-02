@@ -4,9 +4,9 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use std::io::Stdout;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use crate::app::{App, Focus, Request, Status};
+use crate::app::{App, Focus, LaunchPolicy, Request, Status};
 use crate::config::Config;
 use crate::keymap::HELP;
 use crate::keys;
@@ -22,16 +22,68 @@ use styra_server::{Client, InteractionSummary, LogEntry, WorkspaceSummary};
 pub enum RunOutcome {
     Quit,
     OpenWorkspace {
-        workspace: WorkspaceSummary,
+        workspace: Box<WorkspaceSummary>,
         session_id: Option<String>,
     },
     OpenSession(String),
-    Attach {
-        interaction: InteractionSummary,
-        notice: Option<String>,
-    },
     Reset,
     NewSession,
+}
+
+const INTERACTIONS_REFRESH: Duration = Duration::from_millis(250);
+
+pub struct RunContext<'a> {
+    pub workspace_id: &'a str,
+    pub standing_launch: &'a LaunchPolicy,
+    pub preferences_path: &'a Path,
+    pub config: &'a Config,
+}
+
+/// Make `interaction` the screen's current session without leaving the main
+/// event loop. The navigator and operator-owned display choices survive; the
+/// interaction timeline itself is rebuilt from the server exactly as it was
+/// when the old standalone picker returned a selection.
+fn make_interaction_current(
+    app: &mut App,
+    live: &mut Live,
+    client: &Client,
+    standing_launch: &LaunchPolicy,
+    interaction: InteractionSummary,
+) {
+    if interaction.id == app.session_id {
+        return;
+    }
+    let id = interaction.id.clone();
+    match session::attach_live_interaction(client, interaction) {
+        Ok((mut next, next_live)) => {
+            next.interactions = std::mem::take(&mut app.interactions);
+            next.interactions.select_id(&id);
+            next.timeline.conversation_only = app.timeline.conversation_only;
+            next.show_preview = app.show_preview;
+            next.preview_mode = app.preview_mode;
+            next.preview_target = app.preview_target;
+            next.recent_models = app.recent_models.clone();
+            next.launch.interaction = standing_launch.clone();
+            if let Some(workspace) = client.list_workspaces().ok().and_then(|workspaces| {
+                workspaces
+                    .into_iter()
+                    .find(|workspace| Some(workspace.id.as_str()) == next.workspace_id.as_deref())
+            }) {
+                next.workspace_name = Some(session::workspace_display_name(&workspace));
+                next.launch.set_workspace(workspace.launch);
+            }
+            next.view = crate::app::View::Events;
+            next.focus = Focus::List;
+            *app = next;
+            *live = next_live;
+        }
+        Err(error) => {
+            app.interactions.select_id(&app.session_id);
+            app.push_log(LogEntry::error(format!(
+                "could not make interaction {id} current: {error:#}"
+            )));
+        }
+    }
 }
 
 /// Return the running interaction an in-client transition explicitly stops.
@@ -48,15 +100,20 @@ pub fn run(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     app: &mut App,
     client: &Client,
-    workspace_id: &str,
     live: &mut Live,
-    preferences_path: &Path,
-    config: &Config,
+    context: RunContext<'_>,
 ) -> Result<RunOutcome> {
+    let RunContext {
+        workspace_id,
+        standing_launch,
+        preferences_path,
+        config,
+    } = context;
     // The model column's ordering is remembered across runs, so pick it up
     // before the picker can be opened.
     app.recent_models = preferences::load_recent_models(preferences_path);
     let mut pending_fold = false;
+    let mut interactions_refreshed = Instant::now();
     loop {
         app.expire_action_messages();
         notes::ensure_loaded(app, client, workspace_id);
@@ -90,6 +147,14 @@ pub fn run(
         }
         if disconnected {
             *live = Live::Viewing;
+        }
+
+        if app.interactions.open && interactions_refreshed.elapsed() >= INTERACTIONS_REFRESH {
+            interactions_refreshed = Instant::now();
+            if let Ok(interactions) = client.list_interactions() {
+                let current = app.session_id.clone();
+                app.interactions.refresh(interactions, &current);
+            }
         }
 
         if let Live::Running { session_id, .. } = live {
@@ -180,6 +245,34 @@ pub fn run(
             continue;
         }
 
+        // The embedded interaction list owns navigation while it is open.
+        // Moving its cursor changes the current timeline immediately; Enter
+        // merely closes it because there is no separate attach confirmation.
+        if app.interactions.open && app.focus == Focus::List {
+            match key.code {
+                KeyCode::Char('a') | KeyCode::Esc | KeyCode::Enter => {
+                    app.interactions.open = false;
+                    continue;
+                }
+                KeyCode::Char('j') | KeyCode::Down => {
+                    app.interactions.select_next();
+                    if let Some(interaction) = app.interactions.selected().cloned() {
+                        make_interaction_current(app, live, client, standing_launch, interaction);
+                    }
+                    continue;
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    app.interactions.select_previous();
+                    if let Some(interaction) = app.interactions.selected().cloned() {
+                        make_interaction_current(app, live, client, standing_launch, interaction);
+                    }
+                    continue;
+                }
+                KeyCode::Char('i') => {}
+                _ => app.interactions.open = false,
+            }
+        }
+
         // The picker raises requests of its own (applying a model change to the
         // live session), so it falls through to the request match below rather
         // than skipping straight to the next frame.
@@ -226,13 +319,13 @@ pub fn run(
                 let mut sessions = client.list_sessions(&workspace.id)?;
                 if sessions.is_empty() {
                     return Ok(RunOutcome::OpenWorkspace {
-                        workspace,
+                        workspace: Box::new(workspace),
                         session_id: None,
                     });
                 }
                 if let Some(id) = picker::run_session_picker(terminal, client, &mut sessions)? {
                     return Ok(RunOutcome::OpenWorkspace {
-                        workspace,
+                        workspace: Box::new(workspace),
                         session_id: Some(id),
                     });
                 }
@@ -249,25 +342,16 @@ pub fn run(
                 }
             }
             Some(Request::Interactions) => {
-                let mut interactions = client.list_interactions()?;
+                let interactions = client.list_interactions()?;
                 if interactions.is_empty() {
                     app.push_log(LogEntry::warn("no live interactions on the server"));
                     continue;
                 }
-                let workspaces = client.list_workspaces()?;
-                if let Some((interaction, notice)) = picker::run_interactions_picker(
-                    terminal,
-                    client,
-                    &mut interactions,
-                    &workspaces,
-                    Some(workspace_id),
-                    picker::InteractionsView::default(),
-                )? {
-                    return Ok(RunOutcome::Attach {
-                        interaction,
-                        notice,
-                    });
-                }
+                let current = app.session_id.clone();
+                app.view = crate::app::View::Events;
+                app.focus = Focus::List;
+                app.interactions.open(interactions, &current);
+                interactions_refreshed = Instant::now();
             }
             Some(Request::Reset) => return Ok(RunOutcome::Reset),
             Some(Request::NewSession) => return Ok(RunOutcome::NewSession),

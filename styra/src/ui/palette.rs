@@ -28,12 +28,6 @@ pub(crate) const INACTIVE: Color = Color::DarkGray;
 pub(crate) const MODAL_BACKDROP: Color = Color::DarkGray;
 
 pub(crate) const SELECTION_BACKGROUND: Color = Color::Rgb(44, 42, 30);
-/// A slightly darker tint than the surrounding rows, for a continuation line
-/// that belongs to the row above it rather than standing on its own.
-pub(crate) const SUBORDINATE_BACKGROUND: Color = Color::Rgb(24, 24, 24);
-/// Text on such a line: a step darker than the row it hangs under, so it reads
-/// as subordinate without dropping to the near-invisible [`INACTIVE`].
-pub(crate) const SUBORDINATE_TEXT: Color = Color::Rgb(190, 190, 150);
 pub(crate) const SELECTION_MARKER: Color = Color::Yellow;
 pub(crate) const LIVE_MARKER: Color = Color::Green;
 

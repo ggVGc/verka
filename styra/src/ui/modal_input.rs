@@ -1,10 +1,8 @@
 //! The message box itself: one centered, modal input box over whatever is
 //! already on screen.
 //!
-//! Both places that compose a message use this — the main interaction view and
-//! the live-interactions picker — so a message is typed into the same box, at
-//! the same size, with the same wrapping and cursor, wherever it was opened
-//! from. Only what is behind it, and what a sent message goes to, differ.
+//! Kept separate from the surrounding screen renderer so input wrapping,
+//! backdrop styling, and cursor placement remain one focused component.
 
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Modifier, Style};

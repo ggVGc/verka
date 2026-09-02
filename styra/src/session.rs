@@ -126,9 +126,8 @@ pub fn next_contract(current: Option<Contract>) -> Option<Contract> {
 /// One turn as this client describes it: the operator's text, the selection it
 /// should run under, and the shape it asks its reply to take.
 ///
-/// Takes the selection rather than the whole [`App`] because a turn is also
-/// composed where there is no loaded session — the live-interactions picker
-/// sends to an interaction it only has a summary of.
+/// Takes the selection rather than the whole [`App`] so launch and resume paths
+/// can build the same wire request without borrowing unrelated display state.
 pub fn turn(message: &str, selection: &Selection, contract: Option<Contract>) -> SendMessage {
     let turn = SendMessage::new(message).under(selection.clone());
     match contract {
