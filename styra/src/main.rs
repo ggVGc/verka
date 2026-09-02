@@ -17,6 +17,7 @@ mod config;
 mod event_loop;
 mod ingest;
 mod insert;
+mod interactions;
 mod keymap;
 mod keys;
 mod launch;
