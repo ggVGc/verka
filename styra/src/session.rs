@@ -1,7 +1,8 @@
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
-use crate::app::{App, LaunchPolicy, Status};
+use crate::activity::Status;
+use crate::app::{App, LaunchPolicy};
 use crate::launch;
 use styra_server::agent::Selection;
 use styra_server::protocol::{
@@ -273,13 +274,13 @@ pub fn app_from_interaction_snapshot(snapshot: InteractionSnapshot) -> (App, Liv
         // TurnCompleted/background lifecycle events needed to reconstruct the
         // status. The summary was captured by the server with the snapshot and
         // is authoritative for both preview and full-load races.
-        app.sync_interaction_activity(activity, background_work);
-    } else if app.status.is_active() {
+        app.activity.sync_to_interaction(activity, background_work);
+    } else if app.activity.status.is_active() {
         // Stopped interactions remain in the server's interaction list until
         // another interaction replaces them. Treat that stale record like a
         // stored journal, otherwise input can be queued against a process that
         // cannot receive it instead of taking the native-resume path.
-        app.status = Status::Stopped;
+        app.activity.status = Status::Stopped;
     }
     (app, live)
 }
@@ -361,7 +362,7 @@ pub fn resume_and_send(
             }
             let session_id = info.id;
             app.session_id = session_id.clone();
-            app.status = Status::Running;
+            app.activity.status = Status::Running;
             *live = Live::Running {
                 session_id: session_id.clone(),
                 cursor: info.updates_after,
@@ -461,7 +462,7 @@ pub fn apply_update(app: &mut App, update: InteractionUpdate) {
 }
 
 fn mark_stopped(app: &mut App, live: &mut Live) {
-    app.status = Status::Stopped;
+    app.activity.status = Status::Stopped;
     // This App still represents the same durable Session. `Pending` is
     // reserved for a blank screen with no Session id; marking a stopped
     // Session pending makes the next message create an unrelated session and
@@ -568,7 +569,7 @@ mod tests {
             trailing_agent_message(),
         ));
 
-        assert_eq!(app.status, Status::Idle);
+        assert_eq!(app.activity.status, Status::Idle);
         assert_eq!(
             live,
             Live::Running {
@@ -586,13 +587,13 @@ mod tests {
             trailing_agent_message(),
         ));
 
-        assert_eq!(app.status, Status::Background);
+        assert_eq!(app.activity.status, Status::Background);
         // The synchronized backing flag must also keep a later completion in
         // Background rather than incorrectly changing it to Idle.
         app.push_event(AgentEvent::TurnCompleted {
             usage: Default::default(),
         });
-        assert_eq!(app.status, Status::Background);
+        assert_eq!(app.activity.status, Status::Background);
     }
 
     #[test]
@@ -602,11 +603,11 @@ mod tests {
         snapshot.background_work = true;
         let (mut app, _) = app_from_interaction_snapshot(snapshot);
 
-        assert_eq!(app.status, Status::Running);
+        assert_eq!(app.activity.status, Status::Running);
         app.push_event(AgentEvent::TurnCompleted {
             usage: Default::default(),
         });
-        assert_eq!(app.status, Status::Background);
+        assert_eq!(app.activity.status, Status::Background);
     }
 
     #[test]
@@ -623,7 +624,7 @@ mod tests {
             updates,
         ));
 
-        assert_eq!(app.status, Status::Stopped);
+        assert_eq!(app.activity.status, Status::Stopped);
         assert_eq!(live, Live::Viewing);
     }
 
@@ -638,7 +639,7 @@ mod tests {
         mark_stopped(&mut app, &mut live);
 
         assert_eq!(app.session_id, "session-1");
-        assert_eq!(app.status, Status::Stopped);
+        assert_eq!(app.activity.status, Status::Stopped);
         assert_eq!(live, Live::Viewing);
     }
 

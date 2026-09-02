@@ -924,7 +924,7 @@ mod tests {
     /// reopens exactly as if the interaction had never started.
     #[test]
     fn a_stopped_interactions_launch_policy_can_be_edited_again() {
-        use crate::app::Status;
+        use crate::activity::Status;
         use styra_server::DrivaOptions;
 
         let mut app = testing::app("s1");
@@ -936,7 +936,7 @@ mod tests {
             network: false,
             mounts: Vec::new(),
         });
-        app.status = Status::Stopped;
+        app.activity.status = Status::Stopped;
         assert!(app.can_edit_launch());
         let screen = tall(&app);
         assert!(screen.contains("m mount"), "{screen}");

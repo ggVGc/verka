@@ -1,7 +1,8 @@
 //! The live-interaction navigator embedded above the main event timeline.
 
 use super::{palette, short_id, status_color};
-use crate::app::{App, Status};
+use crate::activity::Status;
+use crate::app::App;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -50,7 +51,7 @@ pub(crate) fn render(frame: &mut Frame, app: &App, area: Rect) {
                     interaction,
                     *index == app.interactions.selected,
                     item_width,
-                    app.progress().events,
+                    app.activity.progress().events,
                 )
             }
         })

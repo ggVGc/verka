@@ -6,7 +6,8 @@ use super::{
     conversation_only_title, format_duration, message_text_color, palette, render_placeholder,
     render_preview, tag_color, view_block, DETAIL_INDENT, MAX_DETAIL_LINES,
 };
-use crate::app::{App, Progress, Status, View};
+use crate::activity::{Progress, Status};
+use crate::app::{App, View};
 use crate::timeline::Entry;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -34,6 +35,7 @@ pub(crate) fn render_list(frame: &mut Frame, app: &App, area: Rect) {
     };
 
     let usage = app
+        .activity
         .latest_usage
         .as_ref()
         .map(|u| {
@@ -299,9 +301,9 @@ fn rows_after_selection(
 const QUIET_THRESHOLD: Duration = Duration::from_secs(3);
 
 fn status_tail(app: &App) -> Line<'static> {
-    let progress = app.progress();
+    let progress = app.activity.progress();
     let elapsed = format_duration(progress.in_status);
-    let (text, color) = match app.status {
+    let (text, color) = match app.activity.status {
         Status::Pending => (
             "  … waiting for your first message".to_string(),
             palette::INACTIVE,
@@ -1064,7 +1066,7 @@ mod tests {
         app.push_event(AgentEvent::TurnCompleted {
             usage: TokenUsage::default(),
         });
-        app.note_progress();
+        app.activity.note_progress();
 
         let screen = rendered(&app);
         assert!(

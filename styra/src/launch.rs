@@ -20,7 +20,8 @@
 //! wider client — refusing an edit while an interaction is running, reporting
 //! what happened, and asking the event loop to reach the server.
 
-use crate::app::{App, Request, Status};
+use crate::activity::Status;
+use crate::app::{App, Request};
 use crate::mount;
 use styra_server::agent::Selection;
 use styra_server::{DrivaOptions, LaunchMount, LaunchPolicy, WorkspaceLaunchChange};
@@ -998,7 +999,7 @@ mod tests {
 
         // Once something is running, what it runs under replaces the plan and
         // no further planning happens.
-        app.status = Status::Running;
+        app.activity.status = Status::Running;
         app.launch.record(options("live"));
         assert!(!app.launch.planned);
         assert!(!wants_plan(&app));
@@ -1026,7 +1027,7 @@ mod tests {
             assert!(!app.can_edit_launch());
             assert!(!wants_plan(&app));
 
-            app.status = status;
+            app.activity.status = status;
             assert!(app.can_edit_launch());
             // Nothing has changed yet, but the record is the previous
             // interaction's, so the sandbox a resume would use is asked for.

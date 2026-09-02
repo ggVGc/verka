@@ -6,7 +6,8 @@
 //! about whether the session is still working. [`App`] carries the state; this
 //! module is the only place that decides how an [`AgentEvent`] changes it.
 
-use crate::app::{App, Status};
+use crate::activity::Status;
+use crate::app::App;
 use crate::timeline::{Entry, Step};
 use styra_server::contract;
 use styra_server::event::{AgentEvent, TokenUsage};
@@ -23,7 +24,7 @@ pub fn push_event(app: &mut App, event: AgentEvent) {
     let (event, contract) = unframed(event);
     // Set before the replacement paths below, all of which return early:
     // a command or tool finishing is activity like any other.
-    app.note_event_received();
+    app.activity.note_event_received();
     // A command completion is the final state of the command-start row.
     // Replace the most recent matching start instead of adding a second
     // line, so the list shows one command whose indication changes from
@@ -67,7 +68,7 @@ pub fn push_event(app: &mut App, event: AgentEvent) {
                 };
             }
             if finishes_background {
-                app.note_background_finished();
+                app.activity.note_background_finished();
             }
             follow_tail(app);
             return;
@@ -117,14 +118,14 @@ pub fn push_event(app: &mut App, event: AgentEvent) {
             // figures of its own (a default, empty one); keep whatever the
             // last `UsageUpdated` reported rather than blanking the display.
             if *usage != TokenUsage::default() {
-                app.latest_usage = Some(usage.clone());
+                app.activity.latest_usage = Some(usage.clone());
             }
-            if app.status.is_active() {
-                app.status = app.idle_or_background();
+            if app.activity.status.is_active() {
+                app.activity.status = app.activity.idle_or_background();
             }
         }
         AgentEvent::UsageUpdated { usage } => {
-            app.latest_usage = Some(usage.clone());
+            app.activity.latest_usage = Some(usage.clone());
         }
         // The agent naming its own model settles what is running, so it
         // replaces the launch request in the status line. An effort the
@@ -151,16 +152,16 @@ pub fn push_event(app: &mut App, event: AgentEvent) {
         | AgentEvent::AgentMessage { .. }
         | AgentEvent::Thinking { .. }
         | AgentEvent::PlanUpdated { .. } => {
-            if app.status.is_active() {
-                app.status = Status::Running;
+            if app.activity.status.is_active() {
+                app.activity.status = Status::Running;
             }
         }
         _ => {}
     }
     if let Some(running) = event.background_tasks_running() {
-        app.note_background_count(running);
+        app.activity.note_background_count(running);
     } else if event.starts_background_task() {
-        app.note_background_started();
+        app.activity.note_background_started();
     }
     let transfer_expansion = app.timeline.follow
         && app.timeline.event_is_visible(&event)
@@ -252,8 +253,8 @@ fn refresh_task(app: &mut App, event: &AgentEvent) -> bool {
         _ => entry.event = event.clone(),
     }
     entry.raw_index = raw_index;
-    if app.status.is_active() {
-        app.status = Status::Running;
+    if app.activity.status.is_active() {
+        app.activity.status = Status::Running;
     }
     follow_visible_tail(app);
     true
@@ -291,8 +292,8 @@ fn refresh_thinking(app: &mut App, event: &AgentEvent) -> bool {
     }
     // The refreshed line stands for the newest wire message.
     entry.raw_index = raw_index;
-    if app.status.is_active() {
-        app.status = Status::Running;
+    if app.activity.status.is_active() {
+        app.activity.status = Status::Running;
     }
     follow_visible_tail(app);
     true
@@ -319,7 +320,7 @@ fn follow_visible_tail(app: &mut App) {
 
 /// Record that the session ended. This is terminal regardless of `Stopped`.
 pub fn on_ended(app: &mut App, end: InteractionEnd) {
-    app.status = Status::Ended {
+    app.activity.status = Status::Ended {
         exit_code: end.exit_code,
         error: end.error,
     };

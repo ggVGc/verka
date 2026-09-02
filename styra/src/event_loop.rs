@@ -7,7 +7,8 @@ use std::path::Path;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
-use crate::app::{App, Focus, LaunchPolicy, Request, Status};
+use crate::activity::Status;
+use crate::app::{App, Focus, LaunchPolicy, Request};
 use crate::config::Config;
 use crate::keymap::HELP;
 use crate::keys;
@@ -342,14 +343,14 @@ pub fn run(
         }
 
         if let Live::Running { session_id, .. } = live {
-            if session_id == &active_interaction_id && app.status == Status::Idle {
+            if session_id == &active_interaction_id && app.activity.status == Status::Idle {
                 if let Some(message) = app.take_queued_message() {
                     // Sent as it was composed: a message queued asking for a
                     // shape still asks for it when the agent frees up.
                     let turn = session::turn(&message.text, &app.selection, message.contract);
                     match client.send_turn(session_id, turn) {
                         Ok(()) => {
-                            app.status = Status::Running;
+                            app.activity.status = Status::Running;
                             let waiting = app.queued_message_count();
                             app.show_action_message(if waiting == 0 {
                                 "sent queued message automatically".into()
@@ -373,7 +374,7 @@ pub fn run(
             }
         }
 
-        app.note_progress();
+        app.activity.note_progress();
         terminal.draw(|frame| ui::render(frame, app))?;
 
         if !event::poll(Duration::from_millis(100))? {

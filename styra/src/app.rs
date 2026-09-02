@@ -20,10 +20,11 @@ use std::time::{Duration, Instant};
 use styra_server::agent::SandboxLayout;
 use styra_server::agent::{Provider, Selection};
 use styra_server::event::PresentationMode;
-use styra_server::event::{AgentEvent, DetailBlock, TokenUsage};
+use styra_server::event::{AgentEvent, DetailBlock};
 use styra_server::{Answer, AnswerValue, Contract, FileLocation, QueuedMessage};
 use styra_server::{InteractionEnd, LogEntry, QuotaEvent, QuotaStatus};
 
+use crate::activity::{Activity, Status};
 use crate::composer::Composer;
 use crate::ingest;
 use crate::insert::Prompt;
@@ -73,81 +74,6 @@ pub enum PreviewTarget {
     Command,
 }
 
-/// The session's lifecycle as the operator sees it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Status {
-    /// No agent process has been launched yet; it starts on the operator's
-    /// first submitted message (see `App::pending`).
-    Pending,
-    /// The agent is working.
-    Running,
-    /// A turn completed; the agent is idle, awaiting input.
-    Idle,
-    /// The agent is idle, but a Claude background task is still running.
-    Background,
-    /// The operator stopped the session; the process may still be winding down.
-    Stopped,
-    /// The agent process ended.
-    Ended {
-        exit_code: Option<i32>,
-        error: Option<String>,
-    },
-}
-
-impl Status {
-    pub fn label(&self) -> String {
-        match self {
-            Status::Pending => "not started".into(),
-            Status::Running => "running".into(),
-            Status::Idle => "idle".into(),
-            Status::Background => "idle · background work running".into(),
-            Status::Stopped => "stopped".into(),
-            Status::Ended { error: Some(_), .. } => "failed".into(),
-            Status::Ended {
-                exit_code: Some(code),
-                ..
-            } => format!("ended ({code})"),
-            Status::Ended { .. } => "ended".into(),
-        }
-    }
-
-    /// A single character standing in for the state, for lists that mark every
-    /// row with it in a one-column gutter. It carries the same color the label
-    /// does, so the glyph and the word never disagree.
-    ///
-    /// Deliberately ASCII: these are exactly one cell wide in every terminal
-    /// and font, so nothing to the right of the gutter can drift out of
-    /// alignment the way it can behind a double-width or missing glyph.
-    pub fn glyph(&self) -> char {
-        match self {
-            Status::Pending => '.',
-            Status::Running => '>',
-            Status::Idle => 'o',
-            Status::Background => '*',
-            Status::Stopped => '#',
-            Status::Ended { error: Some(_), .. } => '!',
-            Status::Ended { .. } => 'x',
-        }
-    }
-
-    pub fn is_active(&self) -> bool {
-        matches!(
-            self,
-            Status::Pending | Status::Running | Status::Idle | Status::Background | Status::Stopped
-        )
-    }
-}
-
-impl From<styra_server::InteractionActivity> for Status {
-    fn from(activity: styra_server::InteractionActivity) -> Self {
-        match activity {
-            styra_server::InteractionActivity::Pending => Self::Idle,
-            styra_server::InteractionActivity::Running => Self::Running,
-            styra_server::InteractionActivity::Background => Self::Background,
-        }
-    }
-}
-
 /// What a launch is asked for beyond the agent selection: the sandbox policy
 /// inputs the server resolves into a concrete Driva request.
 ///
@@ -161,25 +87,6 @@ impl From<styra_server::InteractionActivity> for Status {
 /// ([`crate::preferences`], [`crate::session`]) want the type without wanting
 /// the state machine around it.
 pub use styra_server::LaunchPolicy;
-
-/// How long the session has been in its current state, and how long since
-/// anything last arrived from the agent.
-///
-/// A turn can spend minutes inside one tool call, during which nothing on the
-/// screen changes; without these two numbers a working session and a hung one
-/// look identical.
-#[derive(Clone, Copy, Debug)]
-pub struct Progress {
-    /// Time since the status last changed — for a running turn, how long it
-    /// has been running; for an idle one, how long it has been waiting.
-    pub in_status: Duration,
-    /// Time since the last event was received, or `None` if none has been.
-    pub since_event: Option<Duration>,
-    /// How many events have arrived from the agent. The spinner steps with
-    /// this rather than with the clock, so its motion means "something came
-    /// back" instead of "the frame was redrawn".
-    pub events: usize,
-}
 
 /// A short-lived notice about something Styra did on the operator's behalf.
 pub struct ActionMessage {
@@ -285,7 +192,9 @@ pub struct App {
     /// Messages submitted while the current turn is running. They remain
     /// visible until sent or the interaction is stopped.
     queued_messages: VecDeque<QueuedMessage>,
-    pub status: Status,
+    /// The Interaction's status and the bookkeeping around it; see
+    /// [`Activity`].
+    pub activity: Activity,
     /// Recent actions Styra performed without a direct operator command.
     /// Each is displayed for five seconds in the message panel.
     pub action_messages: VecDeque<ActionMessage>,
@@ -332,22 +241,6 @@ pub struct App {
     /// The sandbox policy: both of its layers, the sandbox they resolve to, and
     /// which layer the driva view's keys are editing. See [`Launch`].
     pub launch: Launch,
-    pub latest_usage: Option<TokenUsage>,
-    /// When the status last changed, and the status that was current then.
-    /// Status is written from several places (an applied update, a queued send,
-    /// a key handler), so the moment it changed is noticed in one place —
-    /// [`App::note_progress`] — rather than at each assignment.
-    status_since: Instant,
-    noted_status: Status,
-    /// When the last event arrived from the agent. `None` until one has.
-    last_event_at: Option<Instant>,
-    /// How many events have arrived from the agent, for the spinner's phase.
-    events_received: usize,
-    background_work: bool,
-    /// Set once the provider has reported its background-task set. From then
-    /// on that count is the only thing that moves `background_work`; the
-    /// tool-call heuristics are a fallback for providers that stay silent.
-    background_count_known: bool,
     /// The verbatim wire interaction and the place in it; see [`RawView`].
     pub raw: RawView,
     /// Diagnostic log entries, in occurrence order.
@@ -486,7 +379,7 @@ impl App {
             composer: Composer::default(),
             interactions: LiveInteractions::default(),
             queued_messages: VecDeque::new(),
-            status: Status::Running,
+            activity: Activity::default(),
             action_messages: VecDeque::new(),
             show_preview: false,
             preview: Scroll::default(),
@@ -503,13 +396,6 @@ impl App {
             workspace_root: None,
             working_directory: None,
             launch: Launch::default(),
-            latest_usage: None,
-            status_since: Instant::now(),
-            noted_status: Status::Running,
-            last_event_at: None,
-            events_received: 0,
-            background_work: false,
-            background_count_known: false,
             raw: RawView::default(),
             log: Vec::new(),
             log_scroll_back: 0,
@@ -540,7 +426,7 @@ impl App {
     /// with yet.
     pub fn pending(selection: Selection) -> Self {
         let mut app = Self::new(selection, String::new());
-        app.status = Status::Pending;
+        app.activity.status = Status::Pending;
         app
     }
 
@@ -583,8 +469,8 @@ impl App {
     /// configurable; idle Codex and Claude threads also accept a model change
     /// before their next turn (Codex additionally accepts an effort change).
     pub fn can_configure_launch(&self) -> bool {
-        self.status == Status::Pending
-            || (self.status == Status::Idle
+        self.activity.status == Status::Pending
+            || (self.activity.status == Status::Idle
                 && matches!(self.selection.provider, Provider::Codex | Provider::Claude))
     }
 
@@ -608,11 +494,11 @@ impl App {
     pub fn confirm_launcher(&mut self) {
         if let Some(launcher) = self.launcher.take() {
             let selection = launcher.selection();
-            if self.status != Status::Pending && selection.provider != self.selection.provider {
+            if self.activity.status != Status::Pending && selection.provider != self.selection.provider {
                 self.show_action_message("changing agent requires a new session");
             } else {
                 let mut selection = selection;
-                if self.status != Status::Pending
+                if self.activity.status != Status::Pending
                     && selection.provider == Provider::Claude
                     && selection.effort != self.selection.effort
                 {
@@ -621,7 +507,7 @@ impl App {
                         "Claude Code can change model between turns; effort remains session-wide",
                     );
                 }
-                let live = self.status != Status::Pending && selection != self.selection;
+                let live = self.activity.status != Status::Pending && selection != self.selection;
                 self.note_recent_model(&selection.model);
                 self.set_selection(selection);
                 self.reported_model = None;
@@ -687,24 +573,6 @@ impl App {
     }
 
     /// Remove notices whose independent five-second display window has elapsed.
-    /// Notice a status change made since the last frame, so [`Self::progress`]
-    /// can report how long the session has been in its current state. Called
-    /// once per event-loop iteration, just before rendering.
-    pub fn note_progress(&mut self) {
-        if self.noted_status != self.status {
-            self.noted_status = self.status.clone();
-            self.status_since = Instant::now();
-        }
-    }
-
-    pub fn progress(&self) -> Progress {
-        Progress {
-            in_status: self.status_since.elapsed(),
-            since_event: self.last_event_at.map(|at| at.elapsed()),
-            events: self.events_received,
-        }
-    }
-
     pub fn expire_action_messages(&mut self) {
         let now = Instant::now();
         while self
@@ -842,7 +710,7 @@ impl App {
 
     /// True when the operator can still send messages.
     pub fn can_send(&self) -> bool {
-        self.status.is_active()
+        self.activity.status.is_active()
     }
 
     pub fn queued_messages(&self) -> impl Iterator<Item = &QueuedMessage> {
@@ -881,74 +749,6 @@ impl App {
     /// Record that the session ended; see [`ingest::on_ended`].
     pub fn on_ended(&mut self, end: InteractionEnd) {
         ingest::on_ended(self, end);
-    }
-
-    /// Note that something arrived from the agent, whatever it was: the spinner
-    /// steps with the count and the "nothing for a while" figure with the time.
-    pub(crate) fn note_event_received(&mut self) {
-        self.last_event_at = Some(Instant::now());
-        self.events_received += 1;
-    }
-
-    /// Where a completed turn leaves the session: still working on something in
-    /// the background, or genuinely waiting for the operator.
-    pub(crate) fn idle_or_background(&self) -> Status {
-        if self.background_work {
-            Status::Background
-        } else {
-            Status::Idle
-        }
-    }
-
-    /// Reconcile a reconstructed interaction view with the server's current
-    /// activity summary. A bounded preview deliberately omits lifecycle
-    /// events, so replaying its conversation tail alone cannot distinguish an
-    /// idle interaction from one that is still working.
-    ///
-    /// Background state is supplied independently because foreground and
-    /// background work can coexist while the activity is `Running`.
-    pub(crate) fn sync_interaction_activity(
-        &mut self,
-        activity: styra_server::InteractionActivity,
-        background_work: bool,
-    ) {
-        self.background_work = background_work;
-        match activity {
-            styra_server::InteractionActivity::Pending => {
-                self.status = Status::Idle;
-            }
-            styra_server::InteractionActivity::Running => {
-                self.status = Status::Running;
-            }
-            styra_server::InteractionActivity::Background => {
-                self.status = Status::Background;
-            }
-        }
-    }
-
-    /// The provider's own count of what it is running in the background. Once
-    /// it has reported one, that count is the only thing that moves the flag.
-    pub(crate) fn note_background_count(&mut self, running: usize) {
-        self.background_count_known = true;
-        self.background_work = running > 0;
-        if !self.background_work && self.status == Status::Background {
-            self.status = Status::Idle;
-        }
-    }
-
-    /// A tool call that looks like it started background work, for providers
-    /// that never report a count.
-    pub(crate) fn note_background_started(&mut self) {
-        self.background_work = true;
-    }
-
-    /// The same heuristic in reverse, and ignored once the provider has spoken
-    /// for itself.
-    pub(crate) fn note_background_finished(&mut self) {
-        if !self.background_count_known {
-            self.background_work = false;
-            self.status = Status::Idle;
-        }
     }
 
     /// Put the selection on the last entry, where following leaves it, and
@@ -1300,7 +1100,7 @@ impl App {
 
     /// Whether the launch policy can still be edited; see [`launch::editable`].
     pub fn can_edit_launch(&self) -> bool {
-        launch::editable(&self.status)
+        launch::editable(&self.activity.status)
     }
 
     /// Refuse an edit to the launch policy when there is nothing to edit,
@@ -1407,6 +1207,7 @@ mod tests {
     use super::*;
     use crate::launcher::LaunchColumn;
     use styra_server::agent::Effort;
+    use styra_server::event::TokenUsage;
     use styra_server::RawLine;
 
     /// A session app with every default these tests would otherwise inherit
@@ -1718,20 +1519,20 @@ mod tests {
     #[test]
     fn status_follows_turn_lifecycle_and_captures_usage() {
         let mut app = app();
-        assert_eq!(app.status, Status::Running);
+        assert_eq!(app.activity.status, Status::Running);
         app.push_event(AgentEvent::TurnCompleted {
             usage: TokenUsage {
                 input_tokens: 7,
                 ..Default::default()
             },
         });
-        assert_eq!(app.status, Status::Idle);
-        assert_eq!(app.latest_usage.as_ref().unwrap().input_tokens, 7);
+        assert_eq!(app.activity.status, Status::Idle);
+        assert_eq!(app.activity.latest_usage.as_ref().unwrap().input_tokens, 7);
 
         app.push_event(AgentEvent::UserMessage {
             text: "more".into(),
         });
-        assert_eq!(app.status, Status::Running);
+        assert_eq!(app.activity.status, Status::Running);
     }
 
     /// A typed turn arrives framed, since the server appends the contract's
@@ -1776,8 +1577,8 @@ mod tests {
         app.push_event(AgentEvent::TurnCompleted {
             usage: TokenUsage::default(),
         });
-        assert_eq!(app.status, Status::Background);
-        assert_eq!(app.status.label(), "idle · background work running");
+        assert_eq!(app.activity.status, Status::Background);
+        assert_eq!(app.activity.status.label(), "idle · background work running");
 
         app.push_event(AgentEvent::ToolStarted {
             id: "poll-1".into(),
@@ -1791,7 +1592,7 @@ mod tests {
             status: "completed".into(),
             output: "Task completed successfully".into(),
         });
-        assert_eq!(app.status, Status::Idle);
+        assert_eq!(app.activity.status, Status::Idle);
     }
 
     #[test]
@@ -1806,16 +1607,16 @@ mod tests {
         app.push_event(AgentEvent::TurnCompleted {
             usage: TokenUsage::default(),
         });
-        assert_eq!(app.status, Status::Background);
+        assert_eq!(app.activity.status, Status::Background);
 
         // The agent never polls the task; it reads the output file directly
         // and the provider reports the set is empty. That must clear.
         app.push_event(AgentEvent::BackgroundTasks { running: 0 });
-        assert_eq!(app.status, Status::Idle);
+        assert_eq!(app.activity.status, Status::Idle);
         app.push_event(AgentEvent::TurnCompleted {
             usage: TokenUsage::default(),
         });
-        assert_eq!(app.status, Status::Idle);
+        assert_eq!(app.activity.status, Status::Idle);
     }
 
     #[test]
@@ -1837,7 +1638,7 @@ mod tests {
         app.push_event(AgentEvent::TurnCompleted {
             usage: TokenUsage::default(),
         });
-        assert_eq!(app.status, Status::Background);
+        assert_eq!(app.activity.status, Status::Background);
     }
 
     #[test]
@@ -1904,7 +1705,7 @@ mod tests {
         app.push_event(AgentEvent::CommandStarted {
             command: "cargo test".into(),
         });
-        assert_eq!(app.status, Status::Running);
+        assert_eq!(app.activity.status, Status::Running);
 
         app.push_event(AgentEvent::UsageUpdated {
             usage: TokenUsage {
@@ -1913,11 +1714,11 @@ mod tests {
             },
         });
         assert_eq!(
-            app.status,
+            app.activity.status,
             Status::Running,
             "a usage ping mid-turn must not end it"
         );
-        assert_eq!(app.latest_usage.as_ref().unwrap().input_tokens, 10);
+        assert_eq!(app.activity.latest_usage.as_ref().unwrap().input_tokens, 10);
 
         app.push_event(AgentEvent::CommandStarted {
             command: "cargo build".into(),
@@ -1928,16 +1729,16 @@ mod tests {
                 ..Default::default()
             },
         });
-        assert_eq!(app.status, Status::Running);
-        assert_eq!(app.latest_usage.as_ref().unwrap().input_tokens, 20);
+        assert_eq!(app.activity.status, Status::Running);
+        assert_eq!(app.activity.latest_usage.as_ref().unwrap().input_tokens, 20);
 
         // The app-server's real end-of-turn signal carries no usage of its
         // own; the last reported usage must survive it, not reset to zero.
         app.push_event(AgentEvent::TurnCompleted {
             usage: TokenUsage::default(),
         });
-        assert_eq!(app.status, Status::Idle);
-        assert_eq!(app.latest_usage.as_ref().unwrap().input_tokens, 20);
+        assert_eq!(app.activity.status, Status::Idle);
+        assert_eq!(app.activity.latest_usage.as_ref().unwrap().input_tokens, 20);
     }
 
     #[test]
@@ -2037,7 +1838,7 @@ mod tests {
             error: None,
         });
         assert_eq!(
-            app.status,
+            app.activity.status,
             Status::Ended {
                 exit_code: Some(0),
                 error: None
@@ -2050,13 +1851,13 @@ mod tests {
         app.push_event(AgentEvent::AgentMessage {
             text: "late".into(),
         });
-        assert!(matches!(app.status, Status::Ended { .. }));
+        assert!(matches!(app.activity.status, Status::Ended { .. }));
     }
 
     #[test]
     fn pending_opens_in_list_focus_with_no_session_yet_and_allows_sending() {
         let app = App::pending(Selection::new(Provider::Codex));
-        assert_eq!(app.status, Status::Pending);
+        assert_eq!(app.activity.status, Status::Pending);
         assert_eq!(app.focus, Focus::List);
         assert!(app.session_id.is_empty());
         assert!(app.composer.text.is_empty());
@@ -2119,7 +1920,7 @@ mod tests {
         assert_eq!(app.selection.model, model);
         assert_eq!(app.selection.effort, effort);
         // Nothing was launched or sent by the picking itself.
-        assert_eq!(app.status, Status::Pending);
+        assert_eq!(app.activity.status, Status::Pending);
         assert!(app.session_id.is_empty());
         assert!(app.timeline.entries.is_empty());
     }
@@ -2205,7 +2006,7 @@ mod tests {
     #[test]
     fn the_launcher_is_unreachable_once_something_has_been_launched() {
         let mut app = app();
-        assert_eq!(app.status, Status::Running);
+        assert_eq!(app.activity.status, Status::Running);
         assert!(!app.can_configure_launch());
         app.open_launcher();
         assert!(app.launcher.is_none());
@@ -2214,7 +2015,7 @@ mod tests {
     #[test]
     fn an_idle_codex_thread_can_change_its_next_turn_model() {
         let mut app = App::new(Selection::new(Provider::Codex), "session-1");
-        app.status = Status::Idle;
+        app.activity.status = Status::Idle;
         assert!(app.can_configure_launch());
         app.open_launcher();
         assert!(app.launcher.is_some());
@@ -2224,7 +2025,7 @@ mod tests {
     fn an_idle_claude_thread_can_change_model_but_not_effort() {
         let original = Selection::parse("claude:claude-sonnet-5/high").unwrap();
         let mut app = App::new(original.clone(), "session-1");
-        app.status = Status::Idle;
+        app.activity.status = Status::Idle;
         app.open_launcher();
         let launcher = app.launcher.as_mut().unwrap();
         while launcher.selection().model == original.model {
@@ -2244,7 +2045,7 @@ mod tests {
     #[test]
     fn switching_a_live_sessions_model_asks_the_server_to_apply_it_now() {
         let mut app = App::new(Selection::new(Provider::Codex), "session-1");
-        app.status = Status::Idle;
+        app.activity.status = Status::Idle;
         app.open_launcher();
         let launcher = app.launcher.as_mut().unwrap();
         launcher.next_column();
@@ -2257,7 +2058,7 @@ mod tests {
     #[test]
     fn confirming_the_same_selection_asks_the_server_for_nothing() {
         let mut app = App::new(Selection::new(Provider::Codex), "session-1");
-        app.status = Status::Idle;
+        app.activity.status = Status::Idle;
         app.open_launcher();
         app.confirm_launcher();
 
@@ -2281,7 +2082,7 @@ mod tests {
     #[test]
     fn a_running_turn_cannot_change_model() {
         let mut app = App::new(Selection::new(Provider::Codex), "session-1");
-        app.status = Status::Running;
+        app.activity.status = Status::Running;
         assert!(!app.can_configure_launch());
         app.open_launcher();
         assert!(app.launcher.is_none());

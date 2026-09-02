@@ -55,7 +55,8 @@ use quota::render_quota;
 use raw::render_raw;
 use transcript::render_transcript_view;
 
-use crate::app::{App, Focus, LaunchLabel, Status, View};
+use crate::activity::Status;
+use crate::app::{App, Focus, LaunchLabel, View};
 use crate::insert::Prompt;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -197,9 +198,9 @@ fn title_line(
 /// process has ended, and while idle — none of those is a state the operator
 /// is waiting out, so how long it has held is not worth counting.
 fn status_elapsed(app: &App) -> Option<String> {
-    match app.status {
+    match app.activity.status {
         Status::Running | Status::Background | Status::Stopped => {
-            Some(format_duration(app.progress().in_status))
+            Some(format_duration(app.activity.progress().in_status))
         }
         Status::Pending | Status::Idle | Status::Ended { .. } => None,
     }
@@ -222,7 +223,7 @@ fn view_block(app: &App, suffix: Option<&str>) -> Block<'static> {
         .title(title_line(
             &app.launch_label(),
             app.workspace_name.as_deref(),
-            &app.status,
+            &app.activity.status,
             status_elapsed(app),
             suffix,
         ));
@@ -437,13 +438,13 @@ mod tests {
     fn header_shows_a_dot_indicating_running_vs_idle() {
         let mut app = testing::app("s1");
         assert!(rendered(&app).contains('●'));
-        assert_eq!(status_color(&app.status), palette::WARNING);
+        assert_eq!(status_color(&app.activity.status), palette::WARNING);
 
         app.push_event(AgentEvent::TurnCompleted {
             usage: TokenUsage::default(),
         });
         assert!(rendered(&app).contains("idle"));
-        assert_eq!(status_color(&app.status), palette::SUCCESS);
+        assert_eq!(status_color(&app.activity.status), palette::SUCCESS);
     }
 
     #[test]
@@ -455,7 +456,7 @@ mod tests {
         let title = title_line(
             &app.launch_label(),
             Some("payments"),
-            &app.status,
+            &app.activity.status,
             None,
             None,
         );

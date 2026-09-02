@@ -1,7 +1,8 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::path::Path;
 
-use crate::app::{App, Request, Status, View};
+use crate::activity::Status;
+use crate::app::{App, Request, View};
 use crate::insert;
 use crate::launch;
 use crate::notes;
@@ -390,7 +391,7 @@ pub fn handle_input_key(
                 // and travels with it down whichever send path applies.
                 let contract = app.take_contract();
                 match live {
-                    Live::Running { session_id, .. } if app.status == Status::Running => {
+                    Live::Running { session_id, .. } if app.activity.status == Status::Running => {
                         // Queued as composed, contract included: the shape was
                         // chosen for this question and is asked for whenever
                         // the agent gets to it.
@@ -407,11 +408,11 @@ pub fn handle_input_key(
                         )));
                     }
                     Live::Running { session_id, .. }
-                        if matches!(app.status, Status::Idle | Status::Background) =>
+                        if matches!(app.activity.status, Status::Idle | Status::Background) =>
                     {
                         let turn = session::turn(&message, &app.selection, contract);
                         match client.send_turn(session_id, turn) {
-                            Ok(()) => app.status = Status::Running,
+                            Ok(()) => app.activity.status = Status::Running,
                             Err(error) => {
                                 app.push_log(LogEntry::error(format!("send failed: {error:#}")))
                             }
@@ -442,7 +443,7 @@ pub fn handle_input_key(
                                     "journal: {}",
                                     info.journal_path.display()
                                 )));
-                                app.status = Status::Running;
+                                app.activity.status = Status::Running;
                                 *live = Live::Running {
                                     session_id: info.id,
                                     cursor: info.updates_after,
