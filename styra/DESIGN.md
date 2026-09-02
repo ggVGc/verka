@@ -628,9 +628,11 @@ background thread, so the list remains responsive while the pane says
 changed Interaction summary starts an incremental background refresh without
 discarding the cached conversation. The periodic summary-list refresh also
 runs in the background, leaving cursor input and drawing free of server
-round-trips. `Enter` attaches to the selected
-Interaction; `Esc`/`q` returns without affecting any running process. Entries
-are grouped with pending work first, idle Interactions next, and stopped
+round-trips. Preview rendering waits for the cursor to settle, but fetching
+does not; completed jobs and summary updates are applied only on input-idle
+ticks so they cannot get ahead of a queued movement key. `Enter` attaches to
+the selected Interaction; `Esc`/`q` returns without affecting any running
+process. Entries are grouped with pending work first, idle Interactions next, and stopped
 Interactions last; server order is retained within each group.
 
 ### Starting sends nothing on its own
