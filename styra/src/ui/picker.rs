@@ -1450,7 +1450,9 @@ mod tests {
                     frame,
                     " message · s-1 ".into(),
                     Some(" asking for text ".into()),
+                    None,
                     "ship it",
+                    true,
                 );
             })
             .unwrap();

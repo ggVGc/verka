@@ -14,6 +14,7 @@ use styra_server::{
 };
 
 use crate::composer::Composer;
+use crate::insert;
 
 use crate::notes;
 use crate::ui;
@@ -677,8 +678,14 @@ pub fn run_interactions_picker(
                     .name
                     .clone()
                     .unwrap_or_else(|| ui::short_id(&target.id).to_owned());
-                let Some((message, contract)) =
-                    read_interaction_message(terminal, &list, preview, &mut composer, &name)?
+                let Some((message, contract)) = read_interaction_message(
+                    terminal,
+                    &list,
+                    preview,
+                    &mut composer,
+                    &target,
+                    &name,
+                )?
                 else {
                     continue;
                 };
@@ -967,22 +974,64 @@ fn read_interaction_message(
     list: &InteractionsList<'_>,
     preview: ui::Preview<'_>,
     composer: &mut Composer,
+    target: &InteractionSummary,
     name: &str,
 ) -> Result<Option<(String, Option<Contract>)>> {
+    // Paths are resolved against the interaction's own Workspace and checked
+    // against its own sandbox — not this client's.
+    let base = Some(&target.workspace);
+    let driva = &target.driva;
     let title = format!(" message · {name} · Enter send · Esc cancel ");
     // Chosen for this message and sent with it, the way the session view's box
     // does it — a shape is part of writing the question.
     let mut contract: Option<Contract> = None;
+    // The path prompt, while it is open over the box; see [`crate::insert`].
+    // A live interaction's sandbox is fixed for its lifetime and this client
+    // holds no policy for it, so nothing here can grant a path — an unmounted
+    // one is inserted with that said out loud instead.
+    let mut prompt: Option<insert::Prompt> = None;
+    let mut notice: Option<String> = None;
     loop {
         let note = contract.map(|contract| format!(" asking for {} ", contract.as_str()));
         terminal.draw(|frame| {
             ui::render_interactions_picker(frame, list, preview);
-            ui::render_message_input(frame, title.clone(), note.clone(), &composer.text);
+            ui::render_message_input(
+                frame,
+                title.clone(),
+                note.clone(),
+                notice.clone(),
+                &composer.text,
+                prompt.is_none(),
+            );
+            if let Some(prompt) = &prompt {
+                ui::render_path_prompt(frame, prompt.state());
+            }
         })?;
         let Event::Key(key) = event::read()? else {
             continue;
         };
         if key.kind != KeyEventKind::Press {
+            continue;
+        }
+        // The path prompt is modal over the box: while it is open, every
+        // printable key is part of a path rather than of the message.
+        if let Some(open) = prompt.as_mut() {
+            match open.key(key) {
+                insert::Outcome::Open => {}
+                insert::Outcome::Closed => prompt = None,
+                insert::Outcome::Notice(said) => notice = Some(said),
+                insert::Outcome::Insert { path, notice: said } => {
+                    prompt = None;
+                    composer.insert(&path.display().to_string());
+                    notice = said;
+                }
+                // Nothing to grant against, so the prompt never asks; insert
+                // what it decided on anyway rather than dropping it.
+                insert::Outcome::Grant { path, .. } => {
+                    prompt = None;
+                    composer.insert(&path.display().to_string());
+                }
+            }
             continue;
         }
         match key.code {
@@ -999,6 +1048,10 @@ fn read_interaction_message(
             KeyCode::Down => composer.history_next(),
             KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 composer.delete_word()
+            }
+            // Naming a file is part of writing the message here too.
+            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                prompt = Some(insert::Prompt::new(base.cloned(), Some(driva), false));
             }
             KeyCode::Char(ch) if !ch.is_control() => composer.char(ch),
             _ => {}

@@ -13,16 +13,22 @@
 //! The state machine is the two questions in that order — which path, then on
 //! what terms — and nothing else; the pure parts of it (resolving a path,
 //! deciding whether a mount carries it) live in [`crate::mount`].
+//!
+//! [`Prompt`] holds what it needs to answer both questions — where relative
+//! paths start, the sandbox it is checking against, and whether that sandbox
+//! can still be changed — and reports what it decided as an [`Outcome`] rather
+//! than reaching into a session. Both message boxes open it: the session view
+//! from its own launch policy, and the live-interactions picker from the
+//! summary of the interaction it is sending to.
 
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use std::path::{Path, PathBuf};
 
-use crate::app::App;
 use crate::mount;
-use styra_server::{DrivaOptions, LaunchMount};
+use styra_server::{DrivaOptions, LaunchMount, Mount};
 
-/// The open path prompt, and which of its two questions is being answered.
+/// Which of the prompt's two questions is being answered.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Insert {
     /// Typing a path, with `Tab` completing it against the filesystem.
@@ -32,72 +38,177 @@ pub enum Insert {
     Grant(PathBuf),
 }
 
-/// Open the prompt. Bound in the message editor, since what it produces is
-/// message text: an operator who wanted to change the policy for its own sake
-/// would be in the driva view instead.
-pub fn open(app: &mut App) {
-    app.insert = Some(Insert::Typing(String::new()));
+/// The open path prompt: its question, and what it is answering against.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Prompt {
+    state: Insert,
+    /// Where a relative path is relative to; see [`Prompt::new`].
+    base: Option<PathBuf>,
+    /// The sandbox to check a path against, or `None` when there is no policy
+    /// to check it against at all — a replayed journal has neither a sandbox
+    /// nor one planned.
+    mounts: Option<Vec<Mount>>,
+    /// Whether a path outside the sandbox can still be granted. False once the
+    /// sandbox is running, whose mounts are fixed for its lifetime.
+    can_grant: bool,
 }
 
-pub fn cancel(app: &mut App) {
-    app.insert = None;
+/// What answering the prompt decided, for the message box that opened it to
+/// carry out. Every variant that names a path also closes the prompt: the
+/// path was decided, and what is left is putting it in the message.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Outcome {
+    /// Still open, with nothing yet to do.
+    Open,
+    /// Closed with nothing to insert.
+    Closed,
+    /// Put `path` in the message. `notice` says how it was arrived at, when
+    /// that is worth saying — the mount it came through, or the limit that
+    /// stopped it from being granted.
+    Insert {
+        path: PathBuf,
+        notice: Option<String>,
+    },
+    /// Add `mount` to this interaction's launch policy, then insert `path`.
+    /// Bound at its own name, so the path the agent will use is the host path
+    /// unchanged — which is what gets inserted.
+    Grant { mount: LaunchMount, path: PathBuf },
+    /// Something to tell the operator, with the prompt still open on it.
+    Notice(String),
 }
 
-/// The prompt is modal in both of its states — while typing, every printable
-/// key is part of a path, and while granting, the single letter *is* the
-/// answer — so the event loop routes keys here ahead of everything else.
-pub fn handle_key(app: &mut App, key: KeyEvent) {
-    match &app.insert {
-        None => {}
-        Some(Insert::Typing(_)) => match key.code {
-            KeyCode::Esc => cancel(app),
-            KeyCode::Enter => confirm(app),
-            KeyCode::Tab => complete_typed(app),
-            KeyCode::Backspace => {
-                if let Some(Insert::Typing(text)) = app.insert.as_mut() {
+impl Prompt {
+    /// Open the prompt. Bound in the message editor, since what it produces is
+    /// message text: an operator who wanted to change the policy for its own
+    /// sake would be in the driva view instead.
+    ///
+    /// `base` is where a relative path is relative to: the host directory
+    /// backing the agent's workspace, and failing that the directory this
+    /// client was started in. Deliberately not the interaction's working
+    /// directory, which for a live Codex session is a path *inside* the
+    /// sandbox and would resolve against the wrong filesystem.
+    pub fn new(base: Option<PathBuf>, driva: Option<&DrivaOptions>, can_grant: bool) -> Self {
+        Self {
+            state: Insert::Typing(String::new()),
+            base: base.or_else(|| std::env::current_dir().ok()),
+            mounts: driva.map(DrivaOptions::plain_mounts),
+            can_grant,
+        }
+    }
+
+    /// Which question is open, for the renderer.
+    pub fn state(&self) -> &Insert {
+        &self.state
+    }
+
+    /// The prompt is modal in both of its states — while typing, every
+    /// printable key is part of a path, and while granting, the single letter
+    /// *is* the answer — so both message boxes route keys here ahead of
+    /// everything else.
+    pub fn key(&mut self, key: KeyEvent) -> Outcome {
+        match &mut self.state {
+            Insert::Typing(text) => match key.code {
+                KeyCode::Esc => Outcome::Closed,
+                KeyCode::Enter => self.confirm(),
+                KeyCode::Tab => {
+                    if let Some(completed) = complete(self.base.as_deref(), text) {
+                        *text = completed;
+                    }
+                    Outcome::Open
+                }
+                KeyCode::Backspace => {
                     text.pop();
+                    Outcome::Open
                 }
-            }
-            KeyCode::Char(ch) if !ch.is_control() => {
-                if let Some(Insert::Typing(text)) = app.insert.as_mut() {
+                KeyCode::Char(ch) if !ch.is_control() => {
                     text.push(ch);
+                    Outcome::Open
                 }
-            }
-            _ => {}
-        },
-        Some(Insert::Grant(host)) => {
-            let host = host.clone();
-            match key.code {
-                KeyCode::Char('r') => grant(app, host, false),
-                KeyCode::Char('w') => grant(app, host, true),
-                // Naming a path the sandbox cannot reach is a legitimate thing
-                // to do — describing where a file *should* end up, or asking
-                // about one the agent is expected to fail on — so the question
-                // has an answer that grants nothing and still inserts.
-                KeyCode::Char('n') => {
-                    app.insert = None;
-                    insert_path(app, &host);
-                    app.show_action_message(format!(
-                        "inserted {} — the sandbox cannot reach it",
-                        host.display()
-                    ));
+                _ => Outcome::Open,
+            },
+            Insert::Grant(host) => {
+                let host = host.clone();
+                match key.code {
+                    KeyCode::Char('r') => self.grant(host, false),
+                    KeyCode::Char('w') => self.grant(host, true),
+                    // Naming a path the sandbox cannot reach is a legitimate
+                    // thing to do — describing where a file *should* end up, or
+                    // asking about one the agent is expected to fail on — so
+                    // the question has an answer that grants nothing and still
+                    // inserts.
+                    KeyCode::Char('n') => Outcome::Insert {
+                        notice: Some(format!(
+                            "inserted {} — the sandbox cannot reach it",
+                            host.display()
+                        )),
+                        path: host,
+                    },
+                    KeyCode::Esc => Outcome::Closed,
+                    _ => Outcome::Open,
                 }
-                KeyCode::Esc => cancel(app),
-                _ => {}
             }
         }
     }
-}
 
-/// Where a relative path is relative to: the host directory backing the
-/// agent's workspace, and failing that the directory this client was started
-/// in. Deliberately not the interaction's working directory, which for a live
-/// Codex session is a path *inside* the sandbox and would resolve against the
-/// wrong filesystem.
-fn base(app: &App) -> Option<PathBuf> {
-    app.workspace_root
-        .clone()
-        .or_else(|| std::env::current_dir().ok())
+    /// Accept the typed path: rewrite it into the agent's terms if a mount
+    /// carries it, and otherwise move on to the second question.
+    fn confirm(&mut self) -> Outcome {
+        let Insert::Typing(text) = &self.state else {
+            return Outcome::Open;
+        };
+        // A path that does not resolve leaves the prompt open with the text
+        // still in it, the way the mount prompt does: it is nearly always a
+        // typo one keystroke from being right.
+        let host = match resolve(self.base.as_deref(), text) {
+            Ok(host) => host,
+            Err(problem) => return Outcome::Notice(problem),
+        };
+        let Some(mounts) = &self.mounts else {
+            return Outcome::Insert {
+                path: host,
+                notice: Some("no sandbox policy known — inserted the path as it is".into()),
+            };
+        };
+        match mount::visibility(mounts, &host) {
+            Some(visible) => Outcome::Insert {
+                notice: Some(format!("{} ({})", visible.path.display(), visible.access)),
+                path: visible.path,
+            },
+            // Nothing carries it, and the policy is open to being changed, so
+            // ask.
+            None if self.can_grant => {
+                self.state = Insert::Grant(host);
+                Outcome::Open
+            }
+            // Nothing carries it and nothing can, because a running sandbox's
+            // mounts are fixed for its lifetime. Say so instead of offering a
+            // grant that would be refused, and insert the path anyway — the
+            // operator asked for it and may well mean it.
+            None => Outcome::Insert {
+                path: host,
+                notice: Some(
+                    "outside the sandbox — stop the interaction to mount it (S, then d)".into(),
+                ),
+            },
+        }
+    }
+
+    /// Grant `host` to the interaction and insert it.
+    ///
+    /// Always the interaction's own layer, never the Workspace's: the path came
+    /// up in one message, which is the smallest and shortest-lived claim
+    /// available. `U` in the driva view moves it up a layer once it turns out
+    /// to be a property of the work rather than of this conversation.
+    fn grant(&mut self, host: PathBuf, writable: bool) -> Outcome {
+        Outcome::Grant {
+            mount: LaunchMount {
+                source: host.clone(),
+                destination: None,
+                writable,
+            },
+            path: host,
+        }
+    }
 }
 
 /// Turn what was typed into a canonical host path.
@@ -118,92 +229,6 @@ pub fn resolve(base: Option<&Path>, text: &str) -> Result<PathBuf, String> {
         (false, None) => return Err(format!("{} must be an absolute path", path.display())),
     };
     std::fs::canonicalize(&path).map_err(|error| format!("{}: {error}", path.display()))
-}
-
-/// Accept the typed path: rewrite it into the agent's terms if a mount carries
-/// it, and otherwise move on to the second question.
-fn confirm(app: &mut App) {
-    let Some(Insert::Typing(text)) = app.insert.clone() else {
-        return;
-    };
-    // A path that does not resolve leaves the prompt open with the text still
-    // in it, the way the mount prompt does: it is nearly always a typo one
-    // keystroke from being right.
-    let host = match resolve(base(app).as_deref(), &text) {
-        Ok(host) => host,
-        Err(problem) => return app.show_action_message(problem),
-    };
-    let Some(mounts) = app.launch.driva.as_ref().map(DrivaOptions::plain_mounts) else {
-        // A replayed journal has no sandbox to describe and none planned, so
-        // there is nothing to check the path against and nothing to grant.
-        app.insert = None;
-        insert_path(app, &host);
-        return app.show_action_message("no sandbox policy known — inserted the path as it is");
-    };
-    match mount::visibility(&mounts, &host) {
-        Some(visible) => {
-            app.insert = None;
-            let message = format!("{} ({})", visible.path.display(), visible.access);
-            insert_path(app, &visible.path);
-            app.show_action_message(message);
-        }
-        // Nothing carries it, and the policy is open to being changed, so ask.
-        None if app.can_edit_launch() => app.insert = Some(Insert::Grant(host)),
-        // Nothing carries it and nothing can, because a running sandbox's
-        // mounts are fixed for its lifetime. Say so instead of offering a
-        // grant that would be refused, and insert the path anyway — the
-        // operator asked for it and may well mean it.
-        None => {
-            app.insert = None;
-            insert_path(app, &host);
-            app.show_action_message(
-                "outside the sandbox — stop the interaction to mount it (S, then d)",
-            );
-        }
-    }
-}
-
-/// Grant `host` to this interaction and insert it.
-///
-/// Always this interaction's own layer, never the Workspace's: the path came up
-/// in one message, which is the smallest and shortest-lived claim available. `U`
-/// in the driva view moves it up a layer once it turns out to be a property of
-/// the work rather than of this conversation.
-///
-/// With no destination, Driva binds a source at its own name, so the path the
-/// agent will use is the host path unchanged — which is what gets inserted.
-fn grant(app: &mut App, host: PathBuf, writable: bool) {
-    app.insert = None;
-    let request = LaunchMount {
-        source: host.clone(),
-        destination: None,
-        writable,
-    };
-    let label = mount::label(&request);
-    let message = match app.launch.add_interaction_mount(request) {
-        // The mount is a request, not a live change: nothing rebinds the
-        // sandbox of an interaction that has already started, so the message
-        // says when it will actually apply rather than only that it was added.
-        Ok(()) => format!("added {label} — applies when this Session next launches"),
-        Err(reason) => reason.to_owned(),
-    };
-    insert_path(app, &host);
-    app.show_action_message(message);
-}
-
-/// Put `path` into the message, separated from whatever is already there.
-fn insert_path(app: &mut App, path: &Path) {
-    app.composer.insert(&path.display().to_string());
-}
-
-/// Extend the typed path as far as the filesystem leaves no choice.
-fn complete_typed(app: &mut App) {
-    let Some(Insert::Typing(text)) = app.insert.clone() else {
-        return;
-    };
-    if let Some(completed) = complete(base(app).as_deref(), &text) {
-        app.insert = Some(Insert::Typing(completed));
-    }
 }
 
 /// The typed text extended by the longest prefix every candidate shares, or
@@ -263,9 +288,8 @@ pub fn complete(base: Option<&Path>, text: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::Status;
     use crossterm::event::{KeyEvent, KeyModifiers};
-    use styra_server::{AttributedMount, Mount, MountAccess, MountOrigin};
+    use styra_server::{AttributedMount, MountAccess, MountOrigin};
 
     /// A scratch tree to complete and resolve against, named per test so the
     /// cases stay independent of each other.
@@ -328,12 +352,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
-    /// An app whose sandbox binds `root` at `/workspace` and nothing else, with
-    /// nothing launched — so the launch policy is still open to being edited.
-    fn app(root: &Path) -> App {
-        let mut app = App::pending(styra_server::agent::Selection::parse("codex").unwrap());
-        app.set_workspace_root(root.to_path_buf());
-        app.launch.record(DrivaOptions {
+    /// A sandbox that binds `root` at `/workspace` and nothing else.
+    fn driva(root: &Path) -> DrivaOptions {
+        DrivaOptions {
             isolation_backend: "bwrap".into(),
             command: vec!["codex".into()],
             working_directory: PathBuf::from("/workspace"),
@@ -346,96 +367,96 @@ mod tests {
                     access: MountAccess::ReadWrite,
                 },
             }],
-        });
-        app.enter_input();
-        app
-    }
-
-    fn press(app: &mut App, code: KeyCode) {
-        handle_key(app, KeyEvent::new(code, KeyModifiers::NONE));
-    }
-
-    fn typed(app: &mut App, text: &str) {
-        open(app);
-        for ch in text.chars() {
-            press(app, KeyCode::Char(ch));
         }
-        press(app, KeyCode::Enter);
     }
 
-    /// A path the sandbox already carries goes straight into the message — and
-    /// goes in as the agent's path, not the operator's, since those are the same
-    /// file under two names and only one of them means anything to the agent.
+    /// A prompt over that sandbox, with the policy still open to being edited.
+    fn prompt(root: &Path) -> Prompt {
+        Prompt::new(Some(root.to_path_buf()), Some(&driva(root)), true)
+    }
+
+    fn press(prompt: &mut Prompt, code: KeyCode) -> Outcome {
+        prompt.key(KeyEvent::new(code, KeyModifiers::NONE))
+    }
+
+    /// Type `text` and accept it, returning what the prompt decided.
+    fn typed(prompt: &mut Prompt, text: &str) -> Outcome {
+        for ch in text.chars() {
+            press(prompt, KeyCode::Char(ch));
+        }
+        press(prompt, KeyCode::Enter)
+    }
+
+    /// A path the sandbox already carries is decided straight away — and in the
+    /// agent's terms, not the operator's, since those are the same file under
+    /// two names and only one of them means anything to the agent.
     #[test]
     fn a_mounted_path_is_inserted_in_the_agents_terms() {
         let root = std::fs::canonicalize(tree("mounted")).unwrap();
-        let mut app = app(&root);
+        let mut prompt = prompt(&root);
 
-        typed(&mut app, "reports/summary.md");
+        let outcome = typed(&mut prompt, "reports/summary.md");
 
-        assert_eq!(app.insert, None);
-        assert_eq!(app.composer.text, "/workspace/reports/summary.md");
-        assert!(app.launch.interaction.mounts.is_empty());
+        let Outcome::Insert { path, .. } = outcome else {
+            panic!("expected an insert, got {outcome:?}");
+        };
+        assert_eq!(path, PathBuf::from("/workspace/reports/summary.md"));
 
         let _ = std::fs::remove_dir_all(&root);
     }
 
     /// A path outside every mount stops for the second question, and answering
-    /// it grants the path to this interaction and inserts it.
+    /// it grants the path and inserts it.
     #[test]
     fn an_unmounted_path_asks_before_it_is_inserted() {
         let root = std::fs::canonicalize(tree("unmounted")).unwrap();
         let outside = std::fs::canonicalize(tree("unmounted-elsewhere")).unwrap();
-        let mut app = app(&root);
+        let mut prompt = prompt(&root);
+        let host = outside.join("notes.txt");
 
-        typed(&mut app, &outside.join("notes.txt").display().to_string());
+        let outcome = typed(&mut prompt, &host.display().to_string());
 
         assert_eq!(
-            app.insert,
-            Some(Insert::Grant(outside.join("notes.txt"))),
+            (outcome, prompt.state()),
+            (Outcome::Open, &Insert::Grant(host.clone())),
             "an unmounted path is not inserted until the question is answered"
         );
-        assert!(app.composer.text.is_empty());
 
-        press(&mut app, KeyCode::Char('w'));
-        assert_eq!(app.insert, None);
         assert_eq!(
-            app.launch.interaction.mounts,
-            vec![LaunchMount {
-                source: outside.join("notes.txt"),
-                destination: None,
-                writable: true,
-            }]
-        );
-        // Bound at its own name, so what the agent will call it is what the
-        // operator typed.
-        assert_eq!(
-            app.composer.text,
-            outside.join("notes.txt").display().to_string()
+            press(&mut prompt, KeyCode::Char('w')),
+            Outcome::Grant {
+                mount: LaunchMount {
+                    source: host.clone(),
+                    destination: None,
+                    writable: true,
+                },
+                // Bound at its own name, so what the agent will call it is what
+                // the operator typed.
+                path: host,
+            }
         );
 
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&outside);
     }
 
-    /// `n` is the answer that grants nothing: the path still goes into the
-    /// message, because naming a file the agent cannot open is a legitimate
-    /// thing to do.
+    /// `n` is the answer that grants nothing: the path is still inserted,
+    /// because naming a file the agent cannot open is a legitimate thing to do.
     #[test]
     fn declining_the_grant_still_inserts_the_path() {
         let root = std::fs::canonicalize(tree("declined")).unwrap();
         let outside = std::fs::canonicalize(tree("declined-elsewhere")).unwrap();
-        let mut app = app(&root);
+        let mut prompt = prompt(&root);
+        let host = outside.join("notes.txt");
 
-        typed(&mut app, &outside.join("notes.txt").display().to_string());
-        press(&mut app, KeyCode::Char('n'));
+        typed(&mut prompt, &host.display().to_string());
+        let outcome = press(&mut prompt, KeyCode::Char('n'));
 
-        assert_eq!(app.insert, None);
-        assert!(app.launch.interaction.mounts.is_empty());
-        assert_eq!(
-            app.composer.text,
-            outside.join("notes.txt").display().to_string()
-        );
+        let Outcome::Insert { path, notice } = outcome else {
+            panic!("expected an insert, got {outcome:?}");
+        };
+        assert_eq!(path, host);
+        assert!(notice.unwrap().contains("cannot reach it"));
 
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&outside);
@@ -445,27 +466,40 @@ mod tests {
     /// grant to offer. The path is inserted and the limit is said out loud,
     /// rather than a question being asked whose answers would all fail.
     #[test]
-    fn a_running_interaction_is_told_rather_than_asked() {
+    fn a_fixed_sandbox_is_told_rather_than_asked() {
         let root = std::fs::canonicalize(tree("running")).unwrap();
         let outside = std::fs::canonicalize(tree("running-elsewhere")).unwrap();
-        let mut app = app(&root);
-        app.status = Status::Running;
+        let mut prompt = Prompt::new(Some(root.clone()), Some(&driva(&root)), false);
+        let host = outside.join("notes.txt");
 
-        typed(&mut app, &outside.join("notes.txt").display().to_string());
+        let outcome = typed(&mut prompt, &host.display().to_string());
 
-        assert_eq!(app.insert, None);
-        assert!(app.launch.interaction.mounts.is_empty());
-        assert_eq!(
-            app.composer.text,
-            outside.join("notes.txt").display().to_string()
-        );
-        assert!(app
-            .action_messages
-            .iter()
-            .any(|message| message.text.contains("outside the sandbox")));
+        let Outcome::Insert { path, notice } = outcome else {
+            panic!("expected an insert, got {outcome:?}");
+        };
+        assert_eq!(path, host);
+        assert!(notice.unwrap().contains("outside the sandbox"));
 
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    /// With no policy to check against there is nothing to rewrite and nothing
+    /// to grant, so the path goes in as it is and the box says why.
+    #[test]
+    fn without_a_sandbox_the_path_goes_in_unchanged() {
+        let root = std::fs::canonicalize(tree("nosandbox")).unwrap();
+        let mut prompt = Prompt::new(Some(root.clone()), None, true);
+
+        let outcome = typed(&mut prompt, "notes.txt");
+
+        let Outcome::Insert { path, notice } = outcome else {
+            panic!("expected an insert, got {outcome:?}");
+        };
+        assert_eq!(path, root.join("notes.txt"));
+        assert!(notice.unwrap().contains("no sandbox policy known"));
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// A path that is not there cannot be mounted, so the prompt says so and
@@ -473,19 +507,15 @@ mod tests {
     #[test]
     fn a_path_that_does_not_exist_leaves_the_prompt_open() {
         let root = std::fs::canonicalize(tree("absent")).unwrap();
-        let mut app = app(&root);
+        let mut prompt = prompt(&root);
 
-        typed(&mut app, "reprots/summary.md");
+        let outcome = typed(&mut prompt, "reprots/summary.md");
 
-        assert_eq!(
-            app.insert,
-            Some(Insert::Typing("reprots/summary.md".into()))
-        );
-        assert!(app.composer.text.is_empty());
+        assert!(matches!(outcome, Outcome::Notice(_)), "{outcome:?}");
+        assert_eq!(prompt.state(), &Insert::Typing("reprots/summary.md".into()));
 
         // Tab completion is what fixes it, and Esc abandons it either way.
-        press(&mut app, KeyCode::Esc);
-        assert_eq!(app.insert, None);
+        assert_eq!(press(&mut prompt, KeyCode::Esc), Outcome::Closed);
 
         let _ = std::fs::remove_dir_all(&root);
     }

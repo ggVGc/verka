@@ -29,6 +29,9 @@ pub(crate) fn modal(app: &App) -> ModalInput<'_> {
             .contract
             .map(|contract| format!(" asking for {} ", contract.as_str())),
         preceding: queued_lines(app),
+        // The session view says this in an action message instead, under the
+        // view rather than under the box.
+        notice: None,
         text: &app.composer.text,
         placeholder: "type a message, Enter to send",
         cursor: app.focus == Focus::Input,

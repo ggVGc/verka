@@ -27,6 +27,10 @@ pub(crate) struct ModalInput<'a> {
     /// Text above the buffer: already-composed messages still waiting. Wrapped
     /// with the buffer, and dimmed to set it apart from what is being typed.
     pub preceding: Vec<String>,
+    /// A transient line under the box: how the last path was resolved, or why
+    /// it could not be. The session view has action messages for this; a box
+    /// opened over a picker has nowhere else to put it.
+    pub notice: Option<String>,
     /// The buffer being typed.
     pub text: &'a str,
     /// What an empty buffer says instead, so the box explains itself.
@@ -81,6 +85,12 @@ pub(crate) fn render(frame: &mut Frame, input: &ModalInput<'_>) {
         block = block.title(Span::styled(
             note.clone(),
             Style::default().fg(palette::ACCENT),
+        ));
+    }
+    if let Some(notice) = &input.notice {
+        block = block.title_bottom(Span::styled(
+            format!(" {notice} "),
+            Style::default().fg(palette::MUTED_WARNING),
         ));
     }
     let inner = block.inner(area);

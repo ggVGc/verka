@@ -5,7 +5,6 @@
 //! list of single-key answers about a path that is already decided.
 
 use super::palette;
-use crate::app::App;
 use crate::insert::Insert;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Modifier, Style};
@@ -13,8 +12,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
-pub(crate) fn render_insert(frame: &mut Frame, app: &App, area: Rect) {
-    match &app.insert {
+/// Draw whichever question the path prompt has open, if any. Takes the question
+/// rather than a session, so both message boxes can float it over themselves.
+pub(crate) fn render_insert(frame: &mut Frame, insert: Option<&Insert>, area: Rect) {
+    match insert {
         None => {}
         Some(Insert::Typing(text)) => render_typing(frame, text, area),
         Some(Insert::Grant(host)) => render_grant(frame, &host.display().to_string(), area),
@@ -113,10 +114,10 @@ mod tests {
     use ratatui::Terminal;
     use std::path::PathBuf;
 
-    fn rendered(app: &App) -> String {
+    fn rendered(insert: &Insert) -> String {
         let mut terminal = Terminal::new(TestBackend::new(90, 24)).unwrap();
         terminal
-            .draw(|frame| super::super::render(frame, app))
+            .draw(|frame| render_insert(frame, Some(insert), frame.area()))
             .unwrap();
         terminal
             .backend()
@@ -128,20 +129,9 @@ mod tests {
             .collect::<String>()
     }
 
-    fn app() -> App {
-        let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
-            "s1",
-        );
-        app.enter_input();
-        app
-    }
-
     #[test]
     fn the_path_prompt_floats_over_the_message_it_writes_into() {
-        let mut app = app();
-        app.insert = Some(Insert::Typing("/srv/data/not".into()));
-        let screen = rendered(&app);
+        let screen = rendered(&Insert::Typing("/srv/data/not".into()));
         assert!(screen.contains("/srv/data/not"), "{screen}");
         assert!(screen.contains("Tab complete"), "{screen}");
     }
@@ -150,9 +140,7 @@ mod tests {
     /// handed to the agent is the whole of what is being asked.
     #[test]
     fn the_grant_question_names_the_path_and_its_answers() {
-        let mut app = app();
-        app.insert = Some(Insert::Grant(PathBuf::from("/srv/data")));
-        let screen = rendered(&app);
+        let screen = rendered(&Insert::Grant(PathBuf::from("/srv/data")));
         assert!(screen.contains("outside the sandbox"), "{screen}");
         assert!(screen.contains("/srv/data"), "{screen}");
         assert!(screen.contains("readable"), "{screen}");

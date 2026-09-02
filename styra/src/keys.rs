@@ -293,6 +293,51 @@ fn copy_selection(app: &mut App) {
     }
 }
 
+/// Open the path prompt over the message box, against what this session's
+/// sandbox carries and whether that sandbox can still be changed.
+fn open_insert(app: &mut App) {
+    app.insert = Some(insert::Prompt::new(
+        app.workspace_root.clone(),
+        app.launch.driva.as_ref(),
+        app.can_edit_launch(),
+    ));
+}
+
+/// Route a key to the open path prompt and apply what it decided to the
+/// message being composed. The prompt itself knows nothing about [`App`]; this
+/// is where its outcome becomes message text, a mount request, and a notice.
+pub fn handle_insert_key(app: &mut App, key: KeyEvent) {
+    let Some(prompt) = app.insert.as_mut() else {
+        return;
+    };
+    match prompt.key(key) {
+        insert::Outcome::Open => {}
+        insert::Outcome::Closed => app.insert = None,
+        insert::Outcome::Notice(notice) => app.show_action_message(notice),
+        insert::Outcome::Insert { path, notice } => {
+            app.insert = None;
+            app.composer.insert(&path.display().to_string());
+            if let Some(notice) = notice {
+                app.show_action_message(notice);
+            }
+        }
+        insert::Outcome::Grant { mount, path } => {
+            app.insert = None;
+            let label = crate::mount::label(&mount);
+            let message = match app.launch.add_interaction_mount(mount) {
+                // The mount is a request, not a live change: nothing rebinds
+                // the sandbox of an interaction that has already started, so
+                // the message says when it will actually apply rather than
+                // only that it was added.
+                Ok(()) => format!("added {label} — applies when this Session next launches"),
+                Err(reason) => reason.to_owned(),
+            };
+            app.composer.insert(&path.display().to_string());
+            app.show_action_message(message);
+        }
+    }
+}
+
 pub fn handle_input_key(
     app: &mut App,
     client: &Client,
@@ -414,8 +459,106 @@ pub fn handle_input_key(
         // Naming a file is part of writing the message, so it opens from the
         // box rather than from the driva view that the grant it may ask for
         // would otherwise have to be made in.
-        KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => insert::open(app),
+        KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => open_insert(app),
         KeyCode::Char(ch) => app.composer.char(ch),
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use styra_server::{
+        AttributedMount, DrivaOptions, LaunchMount, Mount, MountAccess, MountOrigin,
+    };
+
+    /// A session whose sandbox binds `root` at `/workspace` and nothing else,
+    /// with nothing launched — so the launch policy is still open to editing.
+    fn app(root: &Path) -> App {
+        let mut app = App::pending(styra_server::agent::Selection::parse("codex").unwrap());
+        app.set_workspace_root(root.to_path_buf());
+        app.launch.record(DrivaOptions {
+            isolation_backend: "bwrap".into(),
+            command: vec!["codex".into()],
+            working_directory: PathBuf::from("/workspace"),
+            network: false,
+            mounts: vec![AttributedMount {
+                origin: MountOrigin::Workspace,
+                mount: Mount::Bind {
+                    source: root.to_path_buf(),
+                    destination: PathBuf::from("/workspace"),
+                    access: MountAccess::ReadWrite,
+                },
+            }],
+        });
+        app.enter_input();
+        app
+    }
+
+    fn tree(name: &str) -> PathBuf {
+        let base = std::env::temp_dir().join(format!("styra-keys-{name}"));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("reports")).unwrap();
+        std::fs::write(base.join("reports/summary.md"), "x").unwrap();
+        std::fs::write(base.join("notes.txt"), "x").unwrap();
+        std::fs::canonicalize(base).unwrap()
+    }
+
+    fn typed(app: &mut App, text: &str) {
+        open_insert(app);
+        for ch in text.chars() {
+            handle_insert_key(app, KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+        handle_insert_key(app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    }
+
+    /// What the prompt decides reaches the message: a path the sandbox already
+    /// carries goes in under the name the agent knows it by.
+    #[test]
+    fn a_decided_path_goes_into_the_message_being_composed() {
+        let root = tree("mounted");
+        let mut app = app(&root);
+
+        typed(&mut app, "reports/summary.md");
+
+        assert!(app.insert.is_none());
+        assert_eq!(app.composer.text, "/workspace/reports/summary.md");
+        assert!(app.launch.interaction.mounts.is_empty());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// And a granted one also reaches the launch policy, as this
+    /// interaction's own mount.
+    #[test]
+    fn a_granted_path_is_added_to_this_interactions_mounts() {
+        let root = tree("granted");
+        let outside = tree("granted-elsewhere");
+        let mut app = app(&root);
+        let host = outside.join("notes.txt");
+
+        typed(&mut app, &host.display().to_string());
+        handle_insert_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE),
+        );
+
+        assert!(app.insert.is_none());
+        assert_eq!(
+            app.launch.interaction.mounts,
+            vec![LaunchMount {
+                source: host.clone(),
+                destination: None,
+                writable: true,
+            }]
+        );
+        assert_eq!(app.composer.text, host.display().to_string());
+        assert!(app.action_messages.iter().any(|message| message
+            .text
+            .contains("applies when this Session next launches")));
+
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
     }
 }

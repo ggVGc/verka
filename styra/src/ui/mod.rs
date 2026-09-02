@@ -52,6 +52,7 @@ use raw::render_raw;
 use transcript::render_transcript_view;
 
 use crate::app::{App, Focus, LaunchLabel, Status, View};
+use crate::insert::Prompt;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -66,18 +67,36 @@ const DETAIL_INDENT: &str = "    ";
 /// Draw the shared message box over whatever a picker has already rendered.
 /// The main interaction view opens the same box from [`render`]; only the title
 /// and where a sent message goes differ.
-pub fn render_message_input(frame: &mut Frame, title: String, note: Option<String>, text: &str) {
+/// `note` names a standing qualifier on the message (the chosen contract) and
+/// `notice` a transient line about the last thing that happened in the box.
+/// `cursor` is false while an inner prompt has the keyboard.
+pub fn render_message_input(
+    frame: &mut Frame,
+    title: String,
+    note: Option<String>,
+    notice: Option<String>,
+    text: &str,
+    cursor: bool,
+) {
     modal_input::render(
         frame,
         &modal_input::ModalInput {
             title,
             note,
+            notice,
             preceding: Vec::new(),
             text,
             placeholder: "type a message, Enter to send",
-            cursor: true,
+            cursor,
         },
     );
+}
+
+/// Draw the path prompt over a message box a picker has already drawn; the
+/// session view draws it from [`render`] instead. Innermost of the modals, so
+/// it is drawn last and holds the cursor while it is open.
+pub fn render_path_prompt(frame: &mut Frame, insert: &crate::insert::Insert) {
+    render_insert(frame, Some(insert), frame.area());
 }
 
 /// A duration in the compact form the status line and tail use: `12s`,
@@ -364,7 +383,7 @@ pub fn render(frame: &mut Frame, app: &App) {
 
     // Last, because it is the innermost modal: it is opened from the message
     // box and floats over it, and it holds the terminal cursor while it does.
-    render_insert(frame, app, frame.area());
+    render_insert(frame, app.insert.as_ref().map(Prompt::state), frame.area());
 }
 
 #[cfg(test)]
