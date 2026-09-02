@@ -42,6 +42,10 @@ pub struct CreateWorkspace {
     pub host_path: PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// A path at or inside the Git repository this Workspace should carry.
+    /// The server resolves and stores the checkout root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_repository: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -223,6 +227,12 @@ pub enum Request {
     Workspace {
         id: String,
     },
+    /// Associate (or disassociate) a Workspace with a Git checkout. The path
+    /// may be anywhere inside the checkout; the server stores its root.
+    SetWorkspaceGitRepository {
+        workspace_id: String,
+        git_repository: Option<PathBuf>,
+    },
     /// Read the server-owned Workspace launch policy without touching the
     /// Workspace's last-accessed timestamp. Used as a lightweight change feed
     /// by clients displaying the Driva options view.
@@ -378,6 +388,7 @@ pub enum Response {
     WorkspaceCreated(WorkspaceSummary),
     Workspaces(Vec<WorkspaceSummary>),
     Workspace(WorkspaceSummary),
+    WorkspaceGitRepositoryUpdated(WorkspaceSummary),
     WorkspaceLaunch(LaunchPolicy),
     SessionCreated(SessionInfo),
     SessionPlan(DrivaOptions),
@@ -583,6 +594,31 @@ mod tests {
         assert_eq!(json["type"], "workspace_launch_updated");
         assert_eq!(json["data"]["mounts"][0]["destination"], "/mnt/corpus");
         assert_eq!(serde_json::from_value::<Response>(json).unwrap(), response);
+    }
+
+    #[test]
+    fn a_workspace_git_repository_can_be_associated_or_cleared() {
+        let request = Request::SetWorkspaceGitRepository {
+            workspace_id: "w-1".into(),
+            git_repository: Some(PathBuf::from("/srv/project/subdir")),
+        };
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["operation"], "set_workspace_git_repository");
+        assert_eq!(json["data"]["workspace_id"], "w-1");
+        assert_eq!(json["data"]["git_repository"], "/srv/project/subdir");
+        assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
+
+        let cleared: Request = serde_json::from_str(
+            r#"{"operation":"set_workspace_git_repository","data":{"workspace_id":"w-1","git_repository":null}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            cleared,
+            Request::SetWorkspaceGitRepository {
+                git_repository: None,
+                ..
+            }
+        ));
     }
 
     #[test]

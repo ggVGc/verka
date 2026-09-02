@@ -106,6 +106,7 @@ pub use spawn::ensure_server;
 // the `styra-server` binary can drive these; not part of the interface a
 // client depends on.
 pub mod broker;
+mod git;
 pub mod interaction;
 pub mod journal;
 pub mod server;

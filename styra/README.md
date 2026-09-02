@@ -70,9 +70,14 @@ workspaces/<WORKSPACE-ID>/
 
 `workspace.json` also holds the Workspace's standing launch policy: the Driva
 templates, extra mounts, and network permission every launch there starts from.
+When a client associates a Git checkout, its canonical root is stored in the
+same metadata. Every launch then mounts the checkout at its host path read-only
+and mounts its `.git` metadata writable. Linked worktrees additionally expose
+the main checkout and common Git directory at the absolute paths recorded in
+their `.git` pointer.
 An individual interaction adds its own on top. The driva view (`d`) shows the two
 as two panes and edits either one: `Tab` moves the keys between them, and the
-focused pane is the one `w`, `T`, `m`, `g` and `x` change. Edits to the Workspace
+focused pane is the one `w`, `T`, `m` and `x` change. Edits to the Workspace
 pane are stored with the Workspace as they are made, so every client launching
 there picks them up; `D` keeps this interaction's own settings as this client's
 starting point instead, and `U` moves them up into the Workspace's policy. An
@@ -92,9 +97,10 @@ Operations:
 | Operation | Data | Result type |
 | --- | --- | --- |
 | `health` | none | `health` |
-| `create_workspace` | host path and optional name | `workspace_created` |
+| `create_workspace` | host path, optional name, and optional Git repository path | `workspace_created` |
 | `list_workspaces` | none | `workspaces` |
 | `workspace` | Workspace id | `workspace` |
+| `set_workspace_git_repository` | Workspace id and optional Git repository path | `workspace_git_repository_updated` |
 | `create_session` | Workspace id, provider/model/effort selection, this launch's own policy, optional message | `session_created` |
 | `plan_session` | Workspace id and the same launch inputs, creating nothing | `session_plan` |
 | `list_templates` | Workspace id | `templates` |
@@ -104,7 +110,7 @@ Operations:
 | `rename_session` | Session id and optional name | `session_renamed` |
 | `update_session_notes` | Session id and plain-text notes | `session_notes_updated` |
 | `update_workspace_notes` | Workspace id and plain-text notes | `workspace_notes_updated` |
-| `set_workspace_launch` | Workspace id and the standing launch policy every launch there starts from | `workspace_launch_updated` |
+| `change_workspace_launch` | Workspace id and one standing launch-policy edit | `workspace_launch_updated` |
 | `list_sessions` | Workspace id | `stored_sessions` |
 | `send_message` | session id and message | `accepted` |
 | `updates` | session id and `after` cursor | `updates` |

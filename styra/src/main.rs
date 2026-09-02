@@ -312,10 +312,7 @@ fn main() -> Result<()> {
                     Ok(client.workspace(&workspace.id).unwrap_or(workspace))
                 }
                 picker::WorkspaceChoice::CreateCurrentDirectory => {
-                    client.create_workspace(&styra_server::protocol::CreateWorkspace {
-                        host_path: current_directory,
-                        name: None,
-                    })
+                    session::create_workspace(&client, current_directory, None)
                 }
             };
             let workspace = match workspace {
@@ -587,6 +584,7 @@ mod cli_tests {
             name: None,
             notes: String::new(),
             host_path: host_path.into(),
+            git_repository: None,
             path: format!("/store/{id}").into(),
             session_count: 0,
             age: "now".into(),

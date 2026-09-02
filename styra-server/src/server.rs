@@ -278,6 +278,12 @@ impl ServerState {
     fn create_session(&self, request: CreateSession) -> Result<SessionInfo> {
         let owning_workspace =
             crate::workspace::get(&self.inner.store_root, &request.workspace_id)?;
+        let repository_mounts = owning_workspace
+            .git_repository
+            .as_deref()
+            .map(crate::git::mounts)
+            .transpose()?
+            .unwrap_or_default();
         let workspace = owning_workspace.host_path;
         let selection = request.selection;
         let name = journal::normalize_session_name(request.name.as_deref())?
@@ -315,6 +321,7 @@ impl ServerState {
                 destination: self.inner.layout.workspace.clone(),
                 writable: true,
             },
+            repository_mounts,
             temporary_mounts: Vec::new(),
             extra_mounts,
             template,
@@ -505,6 +512,12 @@ impl ServerState {
     fn plan_session(&self, request: crate::protocol::PlanSession) -> Result<DrivaOptions> {
         let owning_workspace =
             crate::workspace::get(&self.inner.store_root, &request.workspace_id)?;
+        let repository_mounts = owning_workspace
+            .git_repository
+            .as_deref()
+            .map(crate::git::mounts)
+            .transpose()?
+            .unwrap_or_default();
         let workspace = owning_workspace.host_path;
         let launch = LaunchPolicy::merge(&owning_workspace.launch, &request.launch);
         let mut profile = crate::agent::resolve_profile(&request.selection, &self.inner.layout)?;
@@ -522,6 +535,7 @@ impl ServerState {
                 destination: self.inner.layout.workspace.clone(),
                 writable: true,
             },
+            repository_mounts,
             temporary_mounts: Vec::new(),
             extra_mounts,
             template,
@@ -571,6 +585,12 @@ impl ServerState {
         ensure_native_session_exists(summary.selection.provider, &provider_session_id)?;
         let owning_workspace =
             crate::workspace::get(&self.inner.store_root, &summary.workspace_id)?;
+        let repository_mounts = owning_workspace
+            .git_repository
+            .as_deref()
+            .map(crate::git::mounts)
+            .transpose()?
+            .unwrap_or_default();
         let workspace = owning_workspace.host_path;
         let selection = summary.selection;
         let launch = LaunchPolicy::merge(&owning_workspace.launch, &request.launch);
@@ -601,6 +621,7 @@ impl ServerState {
                 destination: self.inner.layout.workspace.clone(),
                 writable: true,
             },
+            repository_mounts,
             temporary_mounts: Vec::new(),
             extra_mounts,
             template,
@@ -1017,13 +1038,18 @@ impl ServerState {
             Request::Health => Ok(Response::Health(Health {
                 service: "styra".into(),
             })),
-            Request::CreateWorkspace(CreateWorkspace { host_path, name }) => {
-                Ok(Response::WorkspaceCreated(crate::workspace::create(
+            Request::CreateWorkspace(CreateWorkspace {
+                host_path,
+                name,
+                git_repository,
+            }) => Ok(Response::WorkspaceCreated(
+                crate::workspace::create_with_repository(
                     &self.inner.store_root,
                     &host_path,
                     name,
-                )?))
-            }
+                    git_repository.as_deref(),
+                )?,
+            )),
             Request::ListWorkspaces => Ok(Response::Workspaces(crate::workspace::list(
                 &self.inner.store_root,
             )?)),
@@ -1037,6 +1063,23 @@ impl ServerState {
                     &self.inner.store_root,
                     &id,
                 )?))
+            }
+            Request::SetWorkspaceGitRepository {
+                workspace_id,
+                git_repository,
+            } => {
+                let _metadata = self
+                    .inner
+                    .workspace_metadata
+                    .lock()
+                    .expect("server workspace metadata lock poisoned");
+                Ok(Response::WorkspaceGitRepositoryUpdated(
+                    crate::workspace::set_git_repository(
+                        &self.inner.store_root,
+                        &workspace_id,
+                        git_repository.as_deref(),
+                    )?,
+                ))
             }
             Request::WorkspaceLaunch { workspace_id } => {
                 let _metadata = self
@@ -1984,6 +2027,7 @@ mod tests {
             .handle(Request::CreateWorkspace(CreateWorkspace {
                 host_path: host.clone(),
                 name: None,
+                git_repository: None,
             }))
             .unwrap()
         {
@@ -2051,6 +2095,7 @@ mod tests {
             .handle(Request::CreateWorkspace(CreateWorkspace {
                 host_path: host.clone(),
                 name: Some("api test".into()),
+                git_repository: None,
             }))
             .unwrap()
         {

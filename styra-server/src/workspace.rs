@@ -20,6 +20,8 @@ struct WorkspaceMeta {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     notes: String,
     host_path: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    git_repository: Option<PathBuf>,
     created_at_ms: u64,
     #[serde(default)]
     last_accessed_at_ms: Option<u64>,
@@ -51,9 +53,21 @@ pub fn create(
     host_path: &Path,
     name: Option<String>,
 ) -> Result<WorkspaceSummary> {
+    create_with_repository(store_root, host_path, name, None)
+}
+
+pub fn create_with_repository(
+    store_root: &Path,
+    host_path: &Path,
+    name: Option<String>,
+    git_repository: Option<&Path>,
+) -> Result<WorkspaceSummary> {
     let host_path = host_path
         .canonicalize()
         .with_context(|| format!("workspace directory {} must exist", host_path.display()))?;
+    let git_repository = git_repository
+        .map(crate::git::repository_root)
+        .transpose()?;
     let created_at_ms = now_ms();
     let id = new_id(created_at_ms);
     let path = workspace_dir(store_root, &id);
@@ -64,6 +78,7 @@ pub fn create(
         name,
         notes: String::new(),
         host_path: host_path.clone(),
+        git_repository: git_repository.clone(),
         created_at_ms,
         last_accessed_at_ms: Some(created_at_ms),
         launch: LaunchPolicy::default(),
@@ -74,6 +89,7 @@ pub fn create(
         name: meta.name,
         notes: meta.notes,
         host_path,
+        git_repository,
         path,
         session_count: 0,
         age: "just now".into(),
@@ -150,6 +166,7 @@ fn summary_from_meta(path: &Path, meta: WorkspaceMeta, now: u64) -> Result<Works
         name: meta.name,
         notes: meta.notes,
         host_path: meta.host_path,
+        git_repository: meta.git_repository,
         path: path.to_path_buf(),
         session_count,
         age: humanize_age(now, meta.created_at_ms),
@@ -167,6 +184,24 @@ pub fn store_notes(store_root: &Path, id: &str, notes: String) -> Result<Workspa
     }
     let mut meta = read_meta(&path)?;
     meta.notes = notes;
+    write_meta(&path, &meta)?;
+    summary_from_meta(&path, meta, now_ms())
+}
+
+/// Replace a Workspace's durable Git checkout association.
+pub fn set_git_repository(
+    store_root: &Path,
+    id: &str,
+    git_repository: Option<&Path>,
+) -> Result<WorkspaceSummary> {
+    let path = workspace_dir(store_root, id);
+    if !path.is_dir() {
+        anyhow::bail!("Workspace {id:?} was not found");
+    }
+    let mut meta = read_meta(&path)?;
+    meta.git_repository = git_repository
+        .map(crate::git::repository_root)
+        .transpose()?;
     write_meta(&path, &meta)?;
     summary_from_meta(&path, meta, now_ms())
 }
@@ -361,6 +396,38 @@ mod tests {
 
         std::fs::remove_dir_all(store).ok();
         std::fs::remove_dir_all(host).ok();
+    }
+
+    #[test]
+    fn a_git_repository_association_is_canonical_and_durable() {
+        let store = temp_dir("git-store");
+        let host = temp_dir("git-host");
+        let repository = temp_dir("git-repository");
+        std::fs::create_dir(repository.join(".git")).unwrap();
+        std::fs::create_dir(repository.join("subdir")).unwrap();
+
+        let workspace =
+            create_with_repository(&store, &host, None, Some(&repository.join("subdir"))).unwrap();
+        let expected = repository.canonicalize().unwrap();
+        assert_eq!(
+            workspace.git_repository.as_deref(),
+            Some(expected.as_path())
+        );
+        assert_eq!(
+            get(&store, &workspace.id).unwrap().git_repository,
+            Some(expected.clone())
+        );
+        let metadata = std::fs::read_to_string(workspace.path.join(WORKSPACE_META_FILE)).unwrap();
+        assert!(metadata.contains("git_repository"));
+
+        let cleared = set_git_repository(&store, &workspace.id, None).unwrap();
+        assert_eq!(cleared.git_repository, None);
+        let restored = set_git_repository(&store, &workspace.id, Some(&repository)).unwrap();
+        assert_eq!(restored.git_repository.as_deref(), Some(expected.as_path()));
+
+        std::fs::remove_dir_all(store).ok();
+        std::fs::remove_dir_all(host).ok();
+        std::fs::remove_dir_all(repository).ok();
     }
 
     #[test]

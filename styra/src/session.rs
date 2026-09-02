@@ -41,12 +41,37 @@ pub fn resolve_workspace(workspace: Option<&Path>) -> Result<PathBuf> {
 pub fn workspace_for_host(client: &Client, host_path: &Path) -> Result<WorkspaceSummary> {
     let canonical = host_path.canonicalize()?;
     if let Some(workspace) = find_workspace_for_host(&client.list_workspaces()?, &canonical) {
-        return client.workspace(&workspace.id);
+        let workspace = client.workspace(&workspace.id)?;
+        if workspace.git_repository.is_none() {
+            if let Some(repository) = enclosing_git_repository(&canonical) {
+                return client.set_workspace_git_repository(&workspace.id, Some(&repository));
+            }
+        }
+        return Ok(workspace);
     }
+    create_workspace(client, canonical, None)
+}
+
+/// Create a Workspace and associate the nearest enclosing Git checkout when
+/// there is one. Repository discovery belongs to the creating client because
+/// an omitted repository in the wire request deliberately means "none".
+pub fn create_workspace(
+    client: &Client,
+    host_path: PathBuf,
+    name: Option<String>,
+) -> Result<WorkspaceSummary> {
+    let git_repository = enclosing_git_repository(&host_path);
     client.create_workspace(&CreateWorkspace {
-        host_path: canonical,
-        name: None,
+        host_path,
+        name,
+        git_repository,
     })
+}
+
+fn enclosing_git_repository(path: &Path) -> Option<PathBuf> {
+    path.ancestors()
+        .find(|directory| directory.join(".git").exists())
+        .map(Path::to_path_buf)
 }
 
 /// What to call a Workspace on screen: its given name, or the last component
@@ -446,6 +471,7 @@ mod tests {
             name: None,
             notes: String::new(),
             host_path: host_path.into(),
+            git_repository: None,
             path: format!("/state/workspaces/{id}").into(),
             session_count: 0,
             age: "now".into(),

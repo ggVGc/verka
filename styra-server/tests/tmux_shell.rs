@@ -176,6 +176,7 @@ done
         .create_workspace(&CreateWorkspace {
             host_path: workspace.clone(),
             name: Some("tmux test".into()),
+            git_repository: None,
         })
         .unwrap();
     let session = client

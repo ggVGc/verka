@@ -28,6 +28,9 @@ pub struct WorkspaceSummary {
     pub notes: String,
     /// Canonical host directory mounted into Sessions in this Workspace.
     pub host_path: PathBuf,
+    /// Canonical root of the Git checkout associated with this Workspace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_repository: Option<PathBuf>,
     /// Directory holding `workspace.json` and this Workspace's Sessions.
     pub path: PathBuf,
     /// Number of durable Sessions currently stored in the Workspace.
@@ -170,6 +173,8 @@ impl DrivaOptions {
 pub enum MountOrigin {
     /// The operator's project, bound writable as the agent's workspace.
     Workspace,
+    /// The Git checkout durably associated with the Workspace.
+    GitRepository,
     /// An empty writable filesystem discarded when the run ends.
     Scratch,
     /// Granted by the agent profile — its credentials, tools, and caches.
@@ -187,6 +192,7 @@ impl MountOrigin {
     pub fn label(self) -> &'static str {
         match self {
             Self::Workspace => "workspace",
+            Self::GitRepository => "git repository",
             Self::Scratch => "scratch",
             Self::Profile => "agent profile",
             Self::Template => "templates",

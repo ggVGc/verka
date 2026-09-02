@@ -167,6 +167,20 @@ impl Client {
         }
     }
 
+    pub fn set_workspace_git_repository(
+        &self,
+        workspace_id: &str,
+        git_repository: Option<&Path>,
+    ) -> Result<WorkspaceSummary> {
+        match self.request(Request::SetWorkspaceGitRepository {
+            workspace_id: workspace_id.to_owned(),
+            git_repository: git_repository.map(Path::to_path_buf),
+        })? {
+            Response::WorkspaceGitRepositoryUpdated(value) => Ok(value),
+            other => unexpected("workspace_git_repository_updated", other),
+        }
+    }
+
     /// Fetch the server-owned launch policy without recording a Workspace
     /// access. The UI uses this to observe edits made by other clients.
     pub fn workspace_launch(&self, workspace_id: &str) -> Result<LaunchPolicy> {

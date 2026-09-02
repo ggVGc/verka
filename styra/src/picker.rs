@@ -1284,6 +1284,7 @@ mod tests {
             name: None,
             notes: String::new(),
             host_path: format!("/home/op/{id}").into(),
+            git_repository: None,
             path: format!("/state/workspaces/{id}").into(),
             session_count: 0,
             age: "now".into(),

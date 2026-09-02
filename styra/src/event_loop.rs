@@ -220,10 +220,7 @@ pub fn run(
                     }
                     picker::WorkspaceChoice::CreateCurrentDirectory => {
                         let host_path = session::resolve_workspace(None)?;
-                        client.create_workspace(&styra_server::protocol::CreateWorkspace {
-                            host_path,
-                            name: None,
-                        })?
+                        session::create_workspace(client, host_path, None)?
                     }
                 };
                 let mut sessions = client.list_sessions(&workspace.id)?;

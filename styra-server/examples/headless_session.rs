@@ -27,6 +27,7 @@ fn main() -> anyhow::Result<()> {
     let workspace = client.create_workspace(&CreateWorkspace {
         host_path: std::env::current_dir()?.canonicalize()?,
         name: Some("headless".into()),
+        git_repository: None,
     })?;
     let session = client.create_session(&CreateSession {
         workspace_id: workspace.id,

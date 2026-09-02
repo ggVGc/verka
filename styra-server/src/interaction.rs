@@ -42,6 +42,8 @@ pub struct InteractionSpec {
     pub working_directory: PathBuf,
     /// The operator's project, mounted writable as the agent workspace.
     pub workspace: MountSpec,
+    /// Read-only checkout and writable Git metadata belonging to the Workspace.
+    pub repository_mounts: Vec<MountSpec>,
     /// Empty writable filesystems discarded after the run (e.g. `/root`).
     pub temporary_mounts: Vec<PathBuf>,
     /// Host directories the operator asked for by hand, already canonicalized
@@ -607,6 +609,11 @@ fn attributed_mounts(spec: &InteractionSpec) -> Vec<AttributedMount> {
         .collect();
     mounts.push(bind(MountOrigin::Workspace, &spec.workspace));
     mounts.extend(
+        spec.repository_mounts
+            .iter()
+            .map(|mount| bind(MountOrigin::GitRepository, mount)),
+    );
+    mounts.extend(
         spec.profile
             .mounts
             .iter()
@@ -775,6 +782,7 @@ mod tests {
                 destination: dir.to_path_buf(),
                 writable: true,
             },
+            repository_mounts: Vec::new(),
             temporary_mounts: Vec::new(),
             extra_mounts: Vec::new(),
             template: None,
@@ -1029,6 +1037,40 @@ mod tests {
             Mount::Bind { source, destination, access: MountAccess::ReadWrite }
                 if source == std::path::Path::new("/srv/out")
                     && destination == std::path::Path::new("/mnt/out")
+        )));
+    }
+
+    #[test]
+    fn repository_mounts_are_enforced_and_attributed_separately() {
+        let dir = PathBuf::from("/tmp/styra/workspace");
+        let mut spec = workspace_spec(&dir);
+        spec.repository_mounts = vec![
+            MountSpec {
+                source: PathBuf::from("/host/repository"),
+                destination: PathBuf::from("/host/repository"),
+                writable: false,
+            },
+            MountSpec {
+                source: PathBuf::from("/host/repository/.git"),
+                destination: PathBuf::from("/host/repository/.git"),
+                writable: true,
+            },
+        ];
+
+        let options = DrivaOptions::capture(&spec, "bwrap");
+        assert!(options.mounts.iter().any(|mount| matches!(
+            mount,
+            AttributedMount {
+                origin: MountOrigin::GitRepository,
+                mount: Mount::Bind { destination, access: MountAccess::ReadOnly, .. },
+            } if destination == std::path::Path::new("/host/repository")
+        )));
+        assert!(options.mounts.iter().any(|mount| matches!(
+            mount,
+            AttributedMount {
+                origin: MountOrigin::GitRepository,
+                mount: Mount::Bind { destination, access: MountAccess::ReadWrite, .. },
+            } if destination == std::path::Path::new("/host/repository/.git")
         )));
     }
 
