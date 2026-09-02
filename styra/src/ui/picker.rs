@@ -472,7 +472,7 @@ pub fn render_interactions_picker(
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(format!(
-                " · live interactions{grouping} · Enter attach · i insert · X convert · S stop · D delete · w scope · g group · q cancel "
+                " · live interactions{grouping} · Enter attach · i message · X convert · S stop · D delete · w scope · g group · q cancel "
             )),
         ]));
 
@@ -825,7 +825,7 @@ fn session_item(session: &SessionSummary, selected: bool) -> ListItem<'static> {
     ListItem::new(lines)
 }
 
-fn short_id(id: &str) -> &str {
+pub(crate) fn short_id(id: &str) -> &str {
     id.get(id.len().saturating_sub(12)..).unwrap_or(id)
 }
 
@@ -1419,6 +1419,39 @@ mod tests {
         // Tool activity and Styra's own log entries are not conversation.
         assert!(!screen.contains("cargo test"));
         assert!(!screen.contains("waiting for response"));
+    }
+
+    /// The message box floats over the list rather than replacing it, so the
+    /// conversation being replied to has to survive behind it.
+    #[test]
+    fn the_message_box_over_the_interactions_picker_keeps_the_preview() {
+        let interactions = vec![interaction_summary("s-1", "codex", true)];
+        let updates = vec![InteractionUpdate::Event(AgentEvent::AgentMessage {
+            text: "Tests pass.".into(),
+        })];
+        let rows = vec![InteractionRow::Interaction(0)];
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+
+        terminal
+            .draw(|frame| {
+                render_interactions_picker(
+                    frame,
+                    &InteractionsList {
+                        interactions: &interactions,
+                        workspaces: &[],
+                        current_workspace_id: None,
+                        rows: &rows,
+                        selected_row: Some(0),
+                        view: InteractionsView::default(),
+                    },
+                    Preview::Ready(&updates),
+                );
+                super::super::render_message_input(frame, " message · s-1 ".into(), "ship it");
+            })
+            .unwrap();
+        let screen = screen_text(terminal.backend().buffer());
+        assert!(screen.contains("ship it"), "{screen}");
+        assert!(screen.contains("Tests pass."), "{screen}");
     }
 
     #[test]

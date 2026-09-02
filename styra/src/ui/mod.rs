@@ -17,6 +17,7 @@ mod list;
 mod log;
 mod markdown;
 mod messages;
+mod modal_input;
 mod notes;
 mod palette;
 mod picker;
@@ -30,7 +31,7 @@ use files::render_files;
 use footer::render_footer;
 pub(crate) use footer::{message_text_color, tag_color};
 use help::render_keybinds;
-use input::{input_area_height, render_input};
+use input::render_input;
 use insert::render_insert;
 use launcher::render_launcher;
 use list::render_list;
@@ -40,6 +41,7 @@ use log::render_log;
 use messages::{message_area_height, render_messages};
 use notes::render_notes;
 pub use notes::render_notes_prompt;
+pub(crate) use picker::short_id;
 pub use picker::{
     render_interactions_picker, render_message_popup, render_name_prompt, render_picker,
     render_template_picker, render_workspace_picker, Preview, SessionsPreview,
@@ -53,7 +55,7 @@ use crate::app::{App, Focus, LaunchLabel, Status, View};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 use std::time::Duration;
 
@@ -61,6 +63,23 @@ use std::time::Duration;
 /// cannot bury the rest of the session.
 const MAX_DETAIL_LINES: usize = 40;
 const DETAIL_INDENT: &str = "    ";
+/// Draw the shared message box over whatever a picker has already rendered.
+/// The main interaction view opens the same box from [`render`]; only the title
+/// and where a sent message goes differ.
+pub fn render_message_input(frame: &mut Frame, title: String, text: &str) {
+    modal_input::render(
+        frame,
+        &modal_input::ModalInput {
+            title,
+            note: None,
+            preceding: Vec::new(),
+            text,
+            placeholder: "type a message, Enter to send",
+            cursor: true,
+        },
+    );
+}
+
 /// A duration in the compact form the status line and tail use: `12s`,
 /// `2m14s`, `1h04m`. Seconds are dropped past an hour, where they no longer
 /// tell the operator anything they are waiting on.
@@ -333,29 +352,10 @@ pub fn render(frame: &mut Frame, app: &App) {
     }
     render_footer(frame, app, chunks[2]);
 
+    // The message box is modal while input has focus: it dims the finished
+    // screen and floats over the middle of it.
     if input_active {
-        // The message box is modal while input has focus. Wash the completed
-        // screen beneath it down to dark gray (and request terminal dimming)
-        // so all text, borders, and status colors visibly recede. Then clear
-        // and redraw the box itself at normal brightness.
-        frame.render_widget(
-            Block::default().style(
-                Style::default()
-                    .fg(palette::MODAL_BACKDROP)
-                    .add_modifier(Modifier::DIM),
-            ),
-            frame.area(),
-        );
-        let width = frame.area().width.saturating_sub(4).min(80);
-        let height = input_area_height(app, width.saturating_sub(2));
-        let area = Rect {
-            x: frame.area().x + frame.area().width.saturating_sub(width) / 2,
-            y: frame.area().y + frame.area().height.saturating_sub(height) / 2,
-            width,
-            height: height.min(frame.area().height),
-        };
-        frame.render_widget(Clear, area);
-        render_input(frame, app, area);
+        render_input(frame, app);
     }
 
     if let Some(editor) = app.notes.editor() {

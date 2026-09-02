@@ -1,22 +1,16 @@
-//! The message input box: wraps typed text and queued messages to the panel
-//! width and keeps the terminal cursor positioned within them.
+//! The main interaction view's message box: what goes in the shared modal
+//! input box when it is opened over a session — its titles, and the messages
+//! already queued behind the one being typed.
 
-use super::palette;
+use super::modal_input::{self, ModalInput};
 use crate::app::{App, Focus};
-use ratatui::layout::{Position, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 use unicode_width::UnicodeWidthChar;
 
-pub(crate) fn render_input(frame: &mut Frame, app: &App, area: Rect) {
-    let focused = app.focus == Focus::Input;
-    let border_style = if focused {
-        Style::default().fg(palette::ACCENT)
-    } else {
-        Style::default().fg(palette::INACTIVE)
-    };
+/// What the session's message box holds, for [`modal_input`] to draw.
+pub(crate) fn modal(app: &App) -> ModalInput<'_> {
     let title = if app.can_send() {
         if app.queued_message_count() == 0 {
             " message ".to_owned()
@@ -26,98 +20,38 @@ pub(crate) fn render_input(frame: &mut Frame, app: &App, area: Rect) {
     } else {
         " message (resumes on send) ".to_owned()
     };
-    let mut block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(border_style)
-        .title(Span::styled(
-            title,
-            Style::default().fg(palette::MUTED_TEXT),
-        ));
-    // A contract changes what the agent is asked for, so it is shown on the
-    // box the whole time it applies rather than only in the sent message.
-    if let Some(contract) = app.contract {
-        block = block.title(Span::styled(
-            format!(" asking for {} ", contract.as_str()),
-            Style::default().fg(palette::ACCENT),
-        ));
-    }
-    let inner = block.inner(area);
-    let display = input_display(app, inner.width);
-    let visible_rows = inner.height;
-    let scroll = (display.lines.len() as u16).saturating_sub(visible_rows);
-    let paragraph = Paragraph::new(display.lines)
-        .block(block)
-        .scroll((scroll, 0));
-    frame.render_widget(paragraph, area);
-
-    if focused {
-        frame.set_cursor_position(Position {
-            x: inner.x + display.cursor_col,
-            y: inner.y + display.cursor_row.saturating_sub(scroll),
-        });
+    ModalInput {
+        title,
+        // A contract changes what the agent is asked for, so it is shown on
+        // the box the whole time it applies rather than only in the sent
+        // message.
+        note: app
+            .contract
+            .map(|contract| format!(" asking for {} ", contract.as_str())),
+        preceding: queued_lines(app),
+        text: &app.composer.text,
+        placeholder: "type a message, Enter to send",
+        cursor: app.focus == Focus::Input,
     }
 }
 
-struct InputDisplay {
-    lines: Vec<Line<'static>>,
-    cursor_col: u16,
-    cursor_row: u16,
+pub(crate) fn render_input(frame: &mut Frame, app: &App) {
+    modal_input::render(frame, &modal(app));
 }
 
-fn input_display(app: &App, width: u16) -> InputDisplay {
-    let width = usize::from(width.max(1));
-    let mut lines = Vec::new();
-    for message in app.queued_messages() {
-        // A queued message keeps the shape it was composed with, so the line
-        // says so — otherwise the operator has no way to tell which of several
-        // waiting messages asked for what.
-        let prefix = match message.contract {
-            Some(contract) => format!("queued ({}): ", contract.as_str()),
-            None => "queued: ".to_owned(),
-        };
-        lines.extend(wrapped_input_lines(
-            &format!("{prefix}{}", message.text),
-            width,
-            Style::default().fg(palette::ADDITIONAL_INFO),
-        ));
-    }
-    let preceding_rows = lines.len();
-
-    if app.composer.text.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "type a message, Enter to send",
-            Style::default().fg(palette::MUTED_TEXT),
-        )));
-        return InputDisplay {
-            lines,
-            cursor_col: 0,
-            cursor_row: preceding_rows as u16,
-        };
-    }
-
-    let mut input_lines = wrapped_input_lines(
-        &app.composer.text,
-        width,
-        Style::default().fg(palette::TEXT),
-    );
-    let mut cursor_col = input_lines
-        .last()
-        .map(|line| line.width())
-        .unwrap_or_default();
-    // At the right edge, a terminal cursor advances to the next visual row.
-    // Represent that row explicitly so the cursor never lands on the border.
-    if cursor_col == width {
-        input_lines.push(Line::default());
-        cursor_col = 0;
-    }
-    let cursor_row = preceding_rows + input_lines.len().saturating_sub(1);
-    lines.extend(input_lines);
-
-    InputDisplay {
-        lines,
-        cursor_col: cursor_col as u16,
-        cursor_row: cursor_row as u16,
-    }
+/// The messages already waiting, above the one being typed. Each keeps the
+/// shape it was composed with, so the line says so — otherwise the operator
+/// has no way to tell which of several waiting messages asked for what.
+fn queued_lines(app: &App) -> Vec<String> {
+    app.queued_messages()
+        .map(|message: &styra_server::QueuedMessage| {
+            let prefix = match message.contract {
+                Some(contract) => format!("queued ({}): ", contract.as_str()),
+                None => "queued: ".to_owned(),
+            };
+            format!("{prefix}{}", message.text)
+        })
+        .collect()
 }
 
 /// Wrap `text` to `width` columns, breaking on explicit newlines and then on
@@ -143,15 +77,9 @@ pub(super) fn wrapped_input_lines(text: &str, width: usize, style: Style) -> Vec
     lines
 }
 
-/// Input box height grows with wrapped content to a useful maximum; beyond
-/// that, rendering scrolls to keep the cursor and newest text visible.
-pub(crate) fn input_area_height(app: &App, width: u16) -> u16 {
-    let lines = input_display(app, width).lines.len().max(1);
-    (lines as u16 + 2).clamp(3, 8)
-}
-
 #[cfg(test)]
 mod tests {
+    use super::super::{modal_input, palette};
     use super::*;
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
@@ -193,13 +121,13 @@ mod tests {
         app.enter_input();
         app.set_input("abcdefghijk".into());
 
-        let display = input_display(&app, 5);
+        let display = modal_input::display(&modal(&app), 5);
         assert_eq!(display.lines.len(), 3);
         assert_eq!(display.cursor_col, 1);
         assert_eq!(display.cursor_row, 2);
 
         app.set_input("abcde".into());
-        let display = input_display(&app, 5);
+        let display = modal_input::display(&modal(&app), 5);
         assert_eq!(display.lines.len(), 2);
         assert_eq!(display.cursor_col, 0);
         assert_eq!(display.cursor_row, 1);
@@ -213,7 +141,7 @@ mod tests {
         );
         app.queue_message(styra_server::QueuedMessage::new("send this later"));
 
-        let display = input_display(&app, 40);
+        let display = modal_input::display(&modal(&app), 40);
         let queued = display.lines[0]
             .spans
             .iter()

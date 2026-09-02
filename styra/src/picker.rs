@@ -1,5 +1,5 @@
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use std::collections::HashMap;
@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use styra_server::protocol::ResumeSession;
 use styra_server::{Client, InteractionSummary, InteractionUpdate, LogEntry, WorkspaceSummary};
 
+use crate::composer::Composer;
 use crate::notes;
 use crate::ui;
 
@@ -495,9 +496,9 @@ pub enum InteractionRow {
 }
 
 /// The live-interactions picker loop: j/k or arrows to move, Enter to attach
-/// to a live interaction, `i` to attach and enter input mode, `X` to convert
-/// the selected active interaction to the other provider, `S` to stop the
-/// selected one, `D` to delete a stopped
+/// to a live interaction, `i` to send it a message without leaving the list,
+/// `X` to convert the selected active interaction to the other provider,
+/// `S` to stop the selected one, `D` to delete a stopped
 /// one, `w` to restrict the list to the current Workspace, `g` to group it per
 /// Workspace, Esc or q to back out. Mirrors [`run_session_picker`] but over the
 /// server's live interactions rather than the stored-session store.
@@ -511,7 +512,7 @@ pub fn run_interactions_picker(
     workspaces: &[WorkspaceSummary],
     current_workspace_id: Option<&str>,
     view: InteractionsView,
-) -> Result<Option<(InteractionSummary, Option<String>, bool)>> {
+) -> Result<Option<(InteractionSummary, Option<String>)>> {
     sort_interactions(interactions);
     // Without a Workspace to compare against, the restricted view has nothing
     // to restrict to, so the picker stays on the whole list.
@@ -524,6 +525,10 @@ pub fn run_interactions_picker(
     // row the operator was looking at is found again by id rather than by
     // position, so `w` and `g` do not move the selection off it.
     let mut refocus: Option<String> = None;
+    // One buffer for the whole picker session, so `Up`/`Down` walk back
+    // through the messages already sent from here, as they do in the session
+    // view's box.
+    let mut composer = Composer::default();
     let mut preview_id = String::new();
     let mut rendered_preview_id = String::new();
     let mut preview_settle_from: Option<Instant> = None;
@@ -647,12 +652,49 @@ pub fn run_interactions_picker(
             KeyCode::Char('k') | KeyCode::Up => selected = selected.saturating_sub(1),
             KeyCode::Enter => {
                 if let Some(index) = selected_index {
-                    return Ok(Some((interactions[index].clone(), None, false)));
+                    return Ok(Some((interactions[index].clone(), None)));
                 }
             }
+            // Sending stays in the picker: the composer opens over the list,
+            // so a message goes out without leaving the view being scanned.
             KeyCode::Char('i') => {
-                if let Some(index) = selected_index {
-                    return Ok(Some((interactions[index].clone(), None, true)));
+                let Some(index) = selected_index else {
+                    continue;
+                };
+                let target = interactions[index].clone();
+                let list = InteractionsList {
+                    interactions,
+                    workspaces,
+                    current_workspace_id,
+                    rows: &rows,
+                    selected_row,
+                    view,
+                };
+                let name = target
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| ui::short_id(&target.id).to_owned());
+                let Some(message) =
+                    read_interaction_message(terminal, &list, preview, &mut composer, &name)?
+                else {
+                    continue;
+                };
+                if !target.accepting {
+                    show_interactions_message(
+                        terminal,
+                        &list,
+                        "interaction is not active",
+                        "Only an active interaction can be sent to.",
+                    )?;
+                    continue;
+                }
+                if let Err(error) = client.send_message(&target.id, &message) {
+                    show_interactions_message(
+                        terminal,
+                        &list,
+                        "could not send message",
+                        &format!("{error:#}"),
+                    )?;
                 }
             }
             // Resume the converted sibling before stopping the source, so a
@@ -752,7 +794,6 @@ pub fn run_interactions_picker(
                                 source.selection.provider.as_str(),
                                 converted.selection.provider.as_str(),
                             )),
-                            false,
                         )));
                     }
                     Err(error) => show_interactions_message(
@@ -909,6 +950,47 @@ pub fn workspace_name(workspaces: &[WorkspaceSummary], workspace_id: &str) -> St
         .find(|workspace| workspace.id == workspace_id)
         .map(crate::session::workspace_display_name)
         .unwrap_or_else(|| workspace_id.to_owned())
+}
+
+/// Read one message for the selected interaction in the shared message box
+/// over the interactions list. `composer` outlives the box so its history
+/// does, and the readline-style edits (`Ctrl-W`, `Alt-Enter`) are the session
+/// view's. The list keeps its preview behind the box, so
+/// what is being replied to stays readable while the reply is typed. `None`
+/// when the operator backs out with Esc.
+fn read_interaction_message(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    list: &InteractionsList<'_>,
+    preview: ui::Preview<'_>,
+    composer: &mut Composer,
+    name: &str,
+) -> Result<Option<String>> {
+    let title = format!(" message · {name} · Enter send · Esc cancel ");
+    loop {
+        terminal.draw(|frame| {
+            ui::render_interactions_picker(frame, list, preview);
+            ui::render_message_input(frame, title.clone(), &composer.text);
+        })?;
+        let Event::Key(key) = event::read()? else {
+            continue;
+        };
+        if key.kind != KeyEventKind::Press {
+            continue;
+        }
+        match key.code {
+            KeyCode::Esc => return Ok(None),
+            KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => composer.newline(),
+            KeyCode::Enter => return Ok(composer.take()),
+            KeyCode::Backspace => composer.backspace(),
+            KeyCode::Up => composer.history_previous(),
+            KeyCode::Down => composer.history_next(),
+            KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                composer.delete_word()
+            }
+            KeyCode::Char(ch) if !ch.is_control() => composer.char(ch),
+            _ => {}
+        }
+    }
 }
 
 /// Show a dismissable notice over the interactions picker, so an error or a

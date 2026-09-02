@@ -30,7 +30,6 @@ pub enum RunOutcome {
     Attach {
         interaction: InteractionSummary,
         notice: Option<String>,
-        enter_input: bool,
     },
     Reset,
     NewSession,
@@ -260,8 +259,7 @@ pub fn run(
                     continue;
                 }
                 let workspaces = client.list_workspaces()?;
-                if let Some((interaction, notice, enter_input)) =
-                    picker::run_interactions_picker(
+                if let Some((interaction, notice)) = picker::run_interactions_picker(
                     terminal,
                     client,
                     &mut interactions,
@@ -272,7 +270,6 @@ pub fn run(
                     return Ok(RunOutcome::Attach {
                         interaction,
                         notice,
-                        enter_input,
                     });
                 }
             }
