@@ -24,6 +24,7 @@ use styra_server::event::{AgentEvent, DetailBlock, TokenUsage};
 use styra_server::{Answer, AnswerValue, Contract, FileLocation, QueuedMessage};
 use styra_server::{
     InteractionEnd, InteractionSummary, LogEntry, QuotaEvent, QuotaStatus, RawLine,
+    WorkspaceSummary,
 };
 
 use crate::composer::Composer;
@@ -83,17 +84,24 @@ pub struct LiveInteractions {
     pub open: bool,
     pub only_current_workspace: bool,
     pub items: Vec<InteractionSummary>,
+    pub workspaces: Vec<WorkspaceSummary>,
     pub selected: usize,
 }
 
 impl LiveInteractions {
-    pub fn open(&mut self, mut items: Vec<InteractionSummary>, current: &str) {
+    pub fn open(
+        &mut self,
+        mut items: Vec<InteractionSummary>,
+        workspaces: Vec<WorkspaceSummary>,
+        current: &str,
+    ) {
         sort_interactions(&mut items);
         self.selected = items
             .iter()
             .position(|interaction| interaction.id == current)
             .unwrap_or(0);
         self.items = items;
+        self.workspaces = workspaces;
         self.open = true;
     }
 
@@ -1551,6 +1559,7 @@ mod tests {
                 interaction("running", true, InteractionActivity::Running),
                 interaction("idle", true, InteractionActivity::Pending),
             ],
+            vec![],
             "running",
         );
 
@@ -1573,6 +1582,7 @@ mod tests {
                 interaction("one", true, InteractionActivity::Pending),
                 interaction("two", true, InteractionActivity::Running),
             ],
+            vec![],
             "one",
         );
         live.select_next(Some("workspace"));
@@ -1599,6 +1609,7 @@ mod tests {
                 other,
                 interaction("next", true, InteractionActivity::Running),
             ],
+            vec![],
             "current",
         );
 

@@ -358,9 +358,10 @@ pub fn run(
                     continue;
                 }
                 let current = app.session_id.clone();
+                let workspaces = client.list_workspaces()?;
                 app.view = crate::app::View::Events;
                 app.focus = Focus::List;
-                app.interactions.open(interactions, &current);
+                app.interactions.open(interactions, workspaces, &current);
                 interactions_refreshed = Instant::now();
             }
             Some(Request::Reset) => return Ok(RunOutcome::Reset),

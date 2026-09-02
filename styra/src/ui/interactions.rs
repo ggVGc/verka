@@ -10,19 +10,14 @@ use ratatui::Frame;
 use styra_server::InteractionSummary;
 
 pub(crate) fn height(app: &App, available: u16) -> u16 {
-    (app.interactions
-        .visible_indices(app.workspace_id.as_deref())
-        .len() as u16
-        + 2)
-    .max(3)
-    .min(available.saturating_div(2).max(3))
-    .min(available)
+    (rows(app).len() as u16 + 2)
+        .max(3)
+        .min(available.saturating_div(2).max(3))
+        .min(available)
 }
 
 pub(crate) fn render(frame: &mut Frame, app: &App, area: Rect) {
-    let visible = app
-        .interactions
-        .visible_indices(app.workspace_id.as_deref());
+    let rows = rows(app);
     let scope = if app.interactions.only_current_workspace {
         app.workspace_name
             .as_deref()
@@ -37,15 +32,18 @@ pub(crate) fn render(frame: &mut Frame, app: &App, area: Rect) {
         .title(format!(
             " {scope} · live interactions · j/k make current · w scope · Enter/a close "
         ));
-    let items = visible
+    let items = rows
         .iter()
-        .map(|index| {
-            let interaction = &app.interactions.items[*index];
-            item(
-                interaction,
-                *index == app.interactions.selected,
-                interaction.id == app.session_id,
-            )
+        .map(|row| match row {
+            Row::Workspace(name) => workspace_heading(name),
+            Row::Interaction(index) => {
+                let interaction = &app.interactions.items[*index];
+                item(
+                    interaction,
+                    *index == app.interactions.selected,
+                    interaction.id == app.session_id,
+                )
+            }
         })
         .collect::<Vec<_>>();
     let list = List::new(items).block(block).highlight_style(
@@ -54,12 +52,59 @@ pub(crate) fn render(frame: &mut Frame, app: &App, area: Rect) {
             .add_modifier(Modifier::BOLD),
     );
     let mut state = ListState::default();
-    state.select(
-        visible
-            .iter()
-            .position(|index| *index == app.interactions.selected),
-    );
+    state.select(rows.iter().position(
+        |row| matches!(row, Row::Interaction(index) if *index == app.interactions.selected),
+    ));
     frame.render_stateful_widget(list, area, &mut state);
+}
+
+enum Row {
+    Workspace(String),
+    Interaction(usize),
+}
+
+fn rows(app: &App) -> Vec<Row> {
+    let visible = app
+        .interactions
+        .visible_indices(app.workspace_id.as_deref());
+    if app.interactions.only_current_workspace {
+        return visible.into_iter().map(Row::Interaction).collect();
+    }
+
+    let mut rows = Vec::new();
+    let mut placed = vec![false; app.interactions.items.len()];
+    for leader in &visible {
+        if placed[*leader] {
+            continue;
+        }
+        let workspace_id = &app.interactions.items[*leader].workspace_id;
+        rows.push(Row::Workspace(workspace_name(app, workspace_id)));
+        for index in &visible {
+            if !placed[*index] && app.interactions.items[*index].workspace_id == *workspace_id {
+                placed[*index] = true;
+                rows.push(Row::Interaction(*index));
+            }
+        }
+    }
+    rows
+}
+
+fn workspace_name(app: &App, workspace_id: &str) -> String {
+    app.interactions
+        .workspaces
+        .iter()
+        .find(|workspace| workspace.id == workspace_id)
+        .map(crate::session::workspace_display_name)
+        .unwrap_or_else(|| workspace_id.to_owned())
+}
+
+fn workspace_heading(name: &str) -> ListItem<'static> {
+    ListItem::new(Line::from(Span::styled(
+        format!(" {name}"),
+        Style::default()
+            .fg(palette::WARNING)
+            .add_modifier(Modifier::BOLD),
+    )))
 }
 
 fn item(interaction: &InteractionSummary, selected: bool, current: bool) -> ListItem<'static> {
@@ -83,10 +128,6 @@ fn item(interaction: &InteractionSummary, selected: bool, current: bool) -> List
             Style::default().fg(color).add_modifier(Modifier::BOLD),
         ),
         Span::styled(name, Style::default().fg(palette::TEXT)),
-        Span::styled(
-            format!(" · {}", interaction.workspace_id),
-            Style::default().fg(palette::WARNING),
-        ),
         Span::styled(
             format!(" · {}", interaction.selection.provider.as_str()),
             Style::default().fg(palette::ACCENT),
@@ -144,6 +185,7 @@ mod tests {
         let mut app = testing::app("s-2");
         app.interactions.open(
             vec![interaction("s-1", "first"), interaction("s-2", "second")],
+            vec![],
             "s-2",
         );
         app.push_event(AgentEvent::AgentMessage {
@@ -154,10 +196,8 @@ mod tests {
         let navigator = screen.find("live interactions").unwrap();
         let timeline = screen.find("current timeline").unwrap();
         assert!(navigator < timeline, "{screen}");
-        assert!(
-            screen.contains("second · payments · codex · current"),
-            "{screen}"
-        );
+        assert!(screen.contains(" payments"), "{screen}");
+        assert!(screen.contains("second · codex · current"), "{screen}");
     }
 
     #[test]
@@ -168,13 +208,34 @@ mod tests {
         let mut other = interaction("s-2", "other");
         other.workspace_id = "ledger".into();
         app.interactions
-            .open(vec![interaction("s-1", "current"), other], "s-1");
+            .open(vec![interaction("s-1", "current"), other], vec![], "s-1");
         app.interactions
             .toggle_workspace_scope("s-1", Some("payments"));
 
         let screen = testing::rendered(&app);
         assert!(screen.contains("Payments · live interactions"), "{screen}");
-        assert!(screen.contains("current · payments"), "{screen}");
-        assert!(!screen.contains("other · ledger"), "{screen}");
+        assert!(screen.contains("current · codex"), "{screen}");
+        assert!(!screen.contains("other"), "{screen}");
+        assert!(!screen.contains("ledger"), "{screen}");
+    }
+
+    #[test]
+    fn all_scope_groups_interactions_under_workspace_headings() {
+        let mut app = testing::app("s-1");
+        let mut ledger = interaction("s-2", "ledger session");
+        ledger.workspace_id = "ledger".into();
+        app.interactions.open(
+            vec![interaction("s-1", "payments session"), ledger],
+            vec![],
+            "s-1",
+        );
+
+        let screen = testing::rendered(&app);
+        let payments_heading = screen.find(" payments").unwrap();
+        let payments_session = screen.find("payments session").unwrap();
+        let ledger_heading = screen.find(" ledger").unwrap();
+        let ledger_session = screen.find("ledger session").unwrap();
+        assert!(payments_heading < payments_session, "{screen}");
+        assert!(ledger_heading < ledger_session, "{screen}");
     }
 }

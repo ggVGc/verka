@@ -659,9 +659,10 @@ keeps running on the server; only this client's current view changes.
 
 The navigator refreshes its summaries while open. Pending work is listed
 first, running work next, and stopped Interactions last, with server order
-retained within each group. `w` switches between every Workspace and only the
-Workspace of the Interaction currently shown. `Enter`, `a`, or `Esc` closes
-the navigator and leaves the highlighted Interaction current.
+retained within each group. All-Workspaces mode always groups the rows beneath
+Workspace headings; current-Workspace mode omits the one redundant heading.
+`w` switches between those scopes. `Enter`, `a`, or `Esc` closes the navigator
+and leaves the highlighted Interaction current.
 
 ### Starting sends nothing on its own
 
