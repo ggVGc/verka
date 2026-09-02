@@ -1,3 +1,6 @@
+- Since stopping and resuming works now, allow provider changing and other similar actions if a session is Idle, since it can just be stopped and restarted. Instruct the user if that happened (or that it will happen?).
+- Live interaction running state should show the same animated box
+- Toggle driva mounts to writable or readonly, for workspace or interaction. Also possible as ovveride in a specific interaction.
 - Enable setting up a job list:
   - Each job runs in separate branch and worktree, rebases before attempting merge, deletes worktree if merge succeeded
   - Each job becoms a styra session

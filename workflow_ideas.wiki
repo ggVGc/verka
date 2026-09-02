@@ -1,0 +1,10 @@
+= Spec tests =
+- Requires that the application is in good unit-testable state, including user interactions, and preferably even UI layout/interaction.
+- Be in read-only "spec session"
+- I describe the intended behaviour
+- LLM generates a test file
+- I review and comment on test file until I accept it fulfills my request
+- The file is committed (probably on feature branch)
+- New session is started with the same feature request and discussion context, but the test file is read-only
+- Implement until feature is implemented and test (or tests) pass
+  - or LLM says there is some major blocker
