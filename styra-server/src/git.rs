@@ -4,43 +4,27 @@
 use crate::agent::MountSpec;
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 /// Resolve `path` to the root of its nearest enclosing Git checkout.
 pub fn repository_root(path: &Path) -> Result<PathBuf> {
     let path = path
         .canonicalize()
         .with_context(|| format!("Git repository path {} must exist", path.display()))?;
-    path.ancestors()
-        .find(|directory| directory.join(".git").exists())
-        .map(Path::to_path_buf)
+    git_path(&path, &["rev-parse", "--show-toplevel"])
         .with_context(|| format!("{} is not inside a Git repository", path.display()))
 }
 
 /// Mandatory mounts for a Workspace's associated repository.
 pub fn mounts(root: &Path) -> Result<Vec<MountSpec>> {
     let root = repository_root(root)?;
-    let git_file = root.join(".git");
-    let git_dir = if git_file.is_dir() {
-        git_file.canonicalize()?
-    } else {
-        let pointer = std::fs::read_to_string(&git_file)
-            .with_context(|| format!("reading Git pointer {}", git_file.display()))?;
-        let target = pointer
-            .lines()
-            .find_map(|line| line.trim().strip_prefix("gitdir:"))
-            .map(str::trim)
-            .filter(|target| !target.is_empty())
-            .with_context(|| format!("invalid Git pointer {}", git_file.display()))?;
-        resolve(&root, Path::new(target))
-            .canonicalize()
-            .with_context(|| format!("resolving Git directory from {}", git_file.display()))?
-    };
-    let common_dir = std::fs::read_to_string(git_dir.join("commondir"))
-        .ok()
-        .map(|target| resolve(&git_dir, Path::new(target.trim())))
-        .unwrap_or_else(|| git_dir.clone())
-        .canonicalize()
-        .context("resolving Git common directory")?;
+    let git_dir = git_path(&root, &["rev-parse", "--absolute-git-dir"])
+        .context("resolving Git directory")?;
+    let common_dir = git_path(
+        &root,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )
+    .context("resolving Git common directory")?;
 
     let mut mounts = Vec::new();
     push(&mut mounts, root, false);
@@ -69,12 +53,25 @@ fn push(mounts: &mut Vec<MountSpec>, path: PathBuf, writable: bool) {
     });
 }
 
-fn resolve(base: &Path, target: &Path) -> PathBuf {
-    if target.is_absolute() {
-        target.to_path_buf()
-    } else {
-        base.join(target)
+fn git_path(directory: &Path, arguments: &[&str]) -> Result<PathBuf> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(directory)
+        .args(arguments)
+        .output()
+        .context("running git")?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("git failed: {}", stderr.trim());
     }
+    let value = String::from_utf8(output.stdout).context("Git returned a non-UTF-8 path")?;
+    let value = value.trim();
+    if value.is_empty() {
+        anyhow::bail!("git returned an empty path");
+    }
+    Path::new(value)
+        .canonicalize()
+        .with_context(|| format!("resolving Git path {value}"))
 }
 
 #[cfg(test)]
@@ -88,10 +85,29 @@ mod tests {
         path
     }
 
+    fn git(directory: &Path, arguments: &[&str]) {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(directory)
+            .args(arguments)
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {arguments:?} failed");
+    }
+
+    fn init(repository: &Path) {
+        git(repository, &["init", "--quiet"]);
+        git(repository, &["config", "user.name", "Styra Test"]);
+        git(repository, &["config", "user.email", "styra@example.invalid"]);
+        std::fs::write(repository.join("tracked"), "initial\n").unwrap();
+        git(repository, &["add", "tracked"]);
+        git(repository, &["commit", "--quiet", "-m", "initial"]);
+    }
+
     #[test]
     fn a_regular_checkout_mounts_the_tree_read_only_and_git_writable() {
         let root = temp("regular");
-        std::fs::create_dir(root.join(".git")).unwrap();
+        init(&root);
 
         let resolved = mounts(&root).unwrap();
         assert_eq!(resolved.len(), 2);
@@ -110,15 +126,12 @@ mod tests {
         let base = temp("worktree");
         let main = base.join("main");
         let worktree = base.join("feature");
-        let worktree_git = main.join(".git/worktrees/feature");
-        std::fs::create_dir_all(&worktree_git).unwrap();
-        std::fs::create_dir_all(&worktree).unwrap();
-        std::fs::write(
-            worktree.join(".git"),
-            format!("gitdir: {}\n", worktree_git.display()),
-        )
-        .unwrap();
-        std::fs::write(worktree_git.join("commondir"), "../..\n").unwrap();
+        std::fs::create_dir(&main).unwrap();
+        init(&main);
+        git(
+            &main,
+            &["worktree", "add", "--quiet", "-b", "feature", worktree.to_str().unwrap()],
+        );
 
         let resolved = mounts(&worktree).unwrap();
         let common = main.join(".git").canonicalize().unwrap();

@@ -320,6 +320,16 @@ mod tests {
         root
     }
 
+    fn git_init(directory: &Path) {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(directory)
+            .args(["init", "--quiet"])
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
+
     #[test]
     fn creates_and_lists_distinct_workspaces_for_the_same_host_path() {
         let store = temp_dir("store");
@@ -408,7 +418,7 @@ mod tests {
         let store = temp_dir("git-store");
         let host = temp_dir("git-host");
         let repository = temp_dir("git-repository");
-        std::fs::create_dir(repository.join(".git")).unwrap();
+        git_init(&repository);
         std::fs::create_dir(repository.join("subdir")).unwrap();
 
         let workspace =
@@ -444,7 +454,7 @@ mod tests {
         let workspace = create(&store, &host, None).unwrap();
 
         let error = set_git_repository(&store, &workspace.id, Some(&repository)).unwrap_err();
-        assert!(error.to_string().contains("invalid Git pointer"));
+        assert!(error.to_string().contains("not inside a Git repository"));
         assert_eq!(get(&store, &workspace.id).unwrap().git_repository, None);
 
         std::fs::remove_dir_all(store).ok();
