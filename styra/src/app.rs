@@ -16,7 +16,6 @@
 use std::cell::Cell;
 use std::path::PathBuf;
 use styra_server::agent::{Provider, Selection};
-use styra_server::event::PresentationMode;
 use styra_server::event::{AgentEvent, DetailBlock};
 use styra_server::Contract;
 use styra_server::{InteractionEnd, LogEntry, QuotaEvent, QuotaStatus};
@@ -34,7 +33,7 @@ use crate::launcher::Launcher;
 use crate::notes::Notes;
 use crate::notices::Notices;
 use crate::outbox::Outbox;
-use crate::preview::{Preview, PreviewTarget};
+use crate::preview::{self, Preview};
 use crate::raw::RawView;
 use crate::tail::Tail;
 use crate::timeline::{Entry, Step, Timeline};
@@ -313,9 +312,9 @@ pub struct OperatorState {
     /// The event list's own filter, which is a display choice like the rest;
     /// a caller that wants a different one sets it after adopting.
     conversation_only: bool,
-    show_preview: bool,
-    preview_mode: PresentationMode,
-    preview_target: PreviewTarget,
+    /// The preview panel's own display choices; see
+    /// [`Preview::choices`](crate::preview::Preview::choices).
+    preview: preview::Choices,
     recent_models: Vec<String>,
     /// The message being written and the shape its reply was to come back in.
     /// A draft is the operator's work, so it survives a screen it outlives.
@@ -381,9 +380,7 @@ impl App {
         OperatorState {
             interactions: std::mem::take(&mut self.interactions),
             conversation_only: self.timeline.conversation_only,
-            show_preview: self.preview.open,
-            preview_mode: self.preview.mode(),
-            preview_target: self.preview.target(),
+            preview: self.preview.choices(),
             recent_models: std::mem::take(&mut self.recent_models),
             composer: std::mem::take(&mut self.composer),
             contract: self.outbox.take_contract(),
@@ -399,8 +396,7 @@ impl App {
     pub fn adopt(&mut self, state: OperatorState) {
         self.interactions = state.interactions;
         self.timeline.conversation_only = state.conversation_only;
-        self.preview
-            .adopt(state.show_preview, state.preview_mode, state.preview_target);
+        self.preview.adopt(state.preview);
         self.recent_models = state.recent_models;
         self.composer = state.composer;
         self.outbox.set_contract(state.contract);

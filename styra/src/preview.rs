@@ -28,6 +28,19 @@ pub enum PreviewTarget {
     Command,
 }
 
+/// The panel's display choices, which belong to the operator rather than to
+/// the Interaction on screen and so outlive it; see
+/// [`OperatorState`](crate::app::OperatorState).
+///
+/// The scroll offset is deliberately not among them: it was taken against
+/// another screen's content.
+#[derive(Clone, Copy, Default)]
+pub struct Choices {
+    open: bool,
+    mode: PresentationMode,
+    target: PreviewTarget,
+}
+
 /// Whether the panel is open, what it is pointed at, and how far into it the
 /// operator has read.
 #[derive(Default)]
@@ -86,13 +99,22 @@ impl Preview {
         self.scroll.reset();
     }
 
+    /// The choices that outlive this screen.
+    pub fn choices(&self) -> Choices {
+        Choices {
+            open: self.open,
+            mode: self.mode,
+            target: self.target,
+        }
+    }
+
     /// Adopt the presentation choices made on a previous screen. The offset is
     /// not adopted with them: it was taken against that screen's content. See
     /// [`crate::app::OperatorState`].
-    pub fn adopt(&mut self, open: bool, mode: PresentationMode, target: PreviewTarget) {
-        self.open = open;
-        self.mode = mode;
-        self.target = target;
+    pub fn adopt(&mut self, choices: Choices) {
+        self.open = choices.open;
+        self.mode = choices.mode;
+        self.target = choices.target;
         self.scroll.reset();
     }
 }
@@ -165,7 +187,11 @@ mod tests {
         preview.scroll.note_limit(100);
         preview.scroll.page_down();
 
-        preview.adopt(true, PresentationMode::Raw, PreviewTarget::Command);
+        let mut chosen = Preview::default();
+        chosen.show();
+        chosen.toggle_mode();
+        chosen.toggle_target();
+        preview.adopt(chosen.choices());
 
         assert!(preview.open);
         assert_eq!(preview.mode(), PresentationMode::Raw);
