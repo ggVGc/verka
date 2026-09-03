@@ -69,19 +69,6 @@ fn enclosing_git_repository(path: &Path) -> Option<PathBuf> {
         .map(Path::to_path_buf)
 }
 
-/// What to call a Workspace on screen: its given name, or the last component
-/// of the host directory it stands for when it has none.
-pub fn workspace_display_name(workspace: &WorkspaceSummary) -> String {
-    workspace.name.clone().unwrap_or_else(|| {
-        workspace
-            .host_path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("workspace")
-            .to_owned()
-    })
-}
-
 /// Find the durable Workspace associated with an already-canonical host path.
 pub fn find_workspace_for_host(
     workspaces: &[WorkspaceSummary],

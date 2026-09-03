@@ -407,6 +407,19 @@ impl App {
         self.files.set_scope(state.file_show_all);
     }
 
+    /// Point this screen at `workspace`: which one it is, what to call it,
+    /// and the standing policy every launch in it is layered onto.
+    ///
+    /// The three moved together at three call sites that each carried a
+    /// different subset of them, so they are stated here once. Where the
+    /// agent is *working* is deliberately not included: a live interaction may
+    /// have been told to work somewhere other than the Workspace root, and
+    /// this is also called to refresh a screen already showing it.
+    pub fn show_workspace(&mut self, workspace: &styra_server::WorkspaceSummary) {
+        self.workspace.show(workspace);
+        self.launch.set_workspace(workspace.launch.clone());
+    }
+
     /// Whether the picker is reachable. Before launch all providers are
     /// configurable; idle Codex and Claude threads also accept a model change
     /// before their next turn (Codex additionally accepts an effort change).

@@ -14,6 +14,8 @@
 
 use std::path::{Path, PathBuf};
 
+use styra_server::WorkspaceSummary;
+
 /// The Workspace the screen is showing: how it is identified, and where it is.
 #[derive(Default)]
 pub struct Location {
@@ -32,6 +34,17 @@ pub struct Location {
 }
 
 impl Location {
+    /// Point this at `workspace`: which one it is and what to call it.
+    ///
+    /// Deliberately not where the agent is working. This is also called to
+    /// refresh a screen that is already showing the Workspace, and a live
+    /// interaction may have been told to work somewhere other than its root
+    /// since it started.
+    pub fn show(&mut self, workspace: &WorkspaceSummary) {
+        self.id = Some(workspace.id.clone());
+        self.name = Some(display_name(workspace));
+    }
+
     /// The host directory backing the agent's workspace, if there is a live
     /// one. `None` for a replayed journal.
     pub fn root(&self) -> Option<&Path> {
@@ -68,9 +81,72 @@ impl Location {
     }
 }
 
+/// What to call a Workspace on screen: its given name, or the last component
+/// of the host directory it stands for when it has none.
+pub fn display_name(workspace: &WorkspaceSummary) -> String {
+    workspace.name.clone().unwrap_or_else(|| {
+        workspace
+            .host_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("workspace")
+            .to_owned()
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn workspace(id: &str, name: Option<&str>, host_path: &str) -> WorkspaceSummary {
+        WorkspaceSummary {
+            id: id.into(),
+            name: name.map(str::to_owned),
+            notes: String::new(),
+            host_path: host_path.into(),
+            git_repository: None,
+            path: format!("/state/workspaces/{id}").into(),
+            session_count: 0,
+            age: "now".into(),
+            created_at_ms: 1,
+            last_accessed_at_ms: 1,
+            launch: Default::default(),
+        }
+    }
+
+    #[test]
+    fn a_named_workspace_is_shown_under_its_name() {
+        assert_eq!(
+            display_name(&workspace("w-1", Some("payments"), "/home/op/svc")),
+            "payments"
+        );
+    }
+
+    /// Most Workspaces are never named, so the directory they stand for is
+    /// what the operator recognises them by.
+    #[test]
+    fn an_unnamed_workspace_is_shown_under_its_directory() {
+        assert_eq!(display_name(&workspace("w-1", None, "/home/op/svc")), "svc");
+    }
+
+    /// Showing a Workspace says which one and what to call it, and leaves
+    /// where the agent is working alone — a live interaction may have been
+    /// told to work somewhere other than the root since it started.
+    #[test]
+    fn showing_a_workspace_does_not_move_the_agent() {
+        let mut location = Location::default();
+        location.enter(PathBuf::from("/home/op/svc"));
+        location.change_directory(PathBuf::from("/home/op/svc/crates/inner"));
+
+        location.show(&workspace("w-1", Some("payments"), "/home/op/svc"));
+
+        assert_eq!(location.id.as_deref(), Some("w-1"));
+        assert_eq!(location.name.as_deref(), Some("payments"));
+        assert_eq!(
+            location.working_directory_or_current(),
+            Some(PathBuf::from("/home/op/svc/crates/inner"))
+        );
+    }
 
     #[test]
     fn there_is_no_root_until_a_live_workspace_records_one() {

@@ -105,7 +105,7 @@ fn workspace_name(app: &App, workspace_id: &str) -> String {
         .workspaces
         .iter()
         .find(|workspace| workspace.id == workspace_id)
-        .map(crate::session::workspace_display_name)
+        .map(crate::workspace::display_name)
         .unwrap_or_else(|| workspace_id.to_owned())
 }
 

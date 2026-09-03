@@ -72,9 +72,11 @@ fn refresh_workspace_context(app: &mut App, client: &Client, active: &WorkspaceS
                 .into_iter()
                 .find(|workspace| workspace.id == id)
         });
-    app.workspace.name = workspace.as_ref().map(session::workspace_display_name);
-    if let Some(workspace) = workspace {
-        app.launch.set_workspace(workspace.launch);
+    match workspace {
+        Some(workspace) => app.show_workspace(&workspace),
+        // Nothing to name it with: the Workspace it belongs to is not one this
+        // server still lists.
+        None => app.workspace.name = None,
     }
 }
 
@@ -103,8 +105,9 @@ fn pending_app(
 ) -> App {
     let mut app = App::pending(selection);
     app.launch.interaction = launch;
-    app.launch.set_workspace(workspace.launch.clone());
-    app.workspace.id = Some(workspace.id.clone());
+    app.show_workspace(workspace);
+    // A blank screen starts at the Workspace root, having no interaction that
+    // could have moved somewhere else.
     app.workspace.enter(workspace.host_path.clone());
     app
 }

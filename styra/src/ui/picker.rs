@@ -285,7 +285,7 @@ fn workspace_item(
     selected: bool,
     interactions: &[InteractionSummary],
 ) -> ListItem<'static> {
-    let name = crate::session::workspace_display_name(workspace);
+    let name = crate::workspace::display_name(workspace);
     let live = live_interactions(&workspace.id, interactions);
     ListItem::new(Line::from(vec![
         Span::styled(
@@ -354,7 +354,7 @@ fn render_sessions_preview(
     let title = match workspace {
         Some(workspace) => format!(
             " sessions \u{b7} {} ",
-            crate::session::workspace_display_name(workspace)
+            crate::workspace::display_name(workspace)
         ),
         None => " sessions ".to_owned(),
     };

@@ -90,9 +90,9 @@ fn apply_interaction_load(
         .workspaces
         .iter()
         .find(|workspace| Some(workspace.id.as_str()) == next.workspace.id.as_deref())
+        .cloned()
     {
-        next.workspace.name = Some(session::workspace_display_name(workspace));
-        next.launch.set_workspace(workspace.launch.clone());
+        next.show_workspace(&workspace);
     }
     next.view = crate::app::View::Events;
     next.focus = Focus::List;
