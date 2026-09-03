@@ -3,12 +3,12 @@
 use crate::agent::{MountSpec, SandboxLayout, Selection};
 use crate::interaction::{Interaction, InteractionSpec, ResolvedTemplate, SandboxBroker};
 use crate::journal::{self, Journal};
+use crate::protocol::WorkspaceSummary;
 use crate::protocol::{
     Answer, Contract, DrivaOptions, InteractionActivity, InteractionSnapshot,
     InteractionSnapshotScope, InteractionSummary, InteractionUpdate, LaunchMount, LaunchPolicy,
     QueuedMessage, SendMessage, SessionOrigin, SessionSummary, TemplateSummary,
 };
-use crate::protocol::WorkspaceSummary;
 use crate::protocol::{
     CreateSession, CreateWorkspace, Health, Request, Response, ResumeSession, SequencedUpdate,
     SessionInfo, ShellInfo, StoredSession, Updates, WireResponse, MAX_REQUEST_BYTES,
