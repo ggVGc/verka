@@ -144,8 +144,8 @@ fn item(interaction: &InteractionSummary, selected: bool, width: u16) -> ListIte
         lines.push(Line::from(Span::styled(
             format!("{body}{}", " ".repeat(padding)),
             Style::default()
-                .fg(palette::MUTED_TEXT)
-                .bg(palette::CODE_BACKGROUND),
+                .fg(palette::SUBORDINATE_TEXT)
+                .bg(palette::SUBORDINATE_BACKGROUND),
         )));
     }
     ListItem::new(lines)
