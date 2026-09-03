@@ -138,6 +138,12 @@ impl Scroll {
         self.offset = 0;
     }
 
+    /// Jump past the true end; [`Self::clamped`] brings it back to the last
+    /// page, so the exact rendered line count need not be known here.
+    pub fn scroll_to_end(&mut self) {
+        self.offset = u16::MAX;
+    }
+
     pub fn page_down(&mut self) {
         self.offset = self
             .clamped()
@@ -215,10 +221,10 @@ pub struct App {
     /// holds the log — quota belongs to the account, so this is every
     /// interaction's readings, not just this session's.
     pub quota: Tail<QuotaEvent>,
-    /// Lines scrolled down from the top of the rendered transcript view; 0
-    /// shows its start. Unlike the raw/log views, the transcript reads as a
-    /// document from the beginning rather than anchoring to the tail.
-    pub transcript_scroll: u16,
+    /// How far down the rendered transcript is scrolled; 0 shows its start.
+    /// Unlike the raw/log views, the transcript reads as a document from the
+    /// beginning rather than anchoring to the tail.
+    pub transcript: Scroll,
     /// Selected file in the Files view and whether it aggregates the session;
     /// see [`FilesView`].
     pub files: FilesView,
@@ -342,7 +348,7 @@ impl App {
             raw: RawView::default(),
             log: Tail::default(),
             quota: Tail::default(),
-            transcript_scroll: 0,
+            transcript: Scroll::default(),
             files: FilesView::default(),
             answer: AnswerView::default(),
             insert: None,
@@ -571,26 +577,6 @@ impl App {
         } else {
             view
         };
-    }
-
-    /// Scroll the transcript view forward (towards its end).
-    pub fn transcript_scroll_down(&mut self) {
-        self.transcript_scroll = self.transcript_scroll.saturating_add(1);
-    }
-
-    /// Scroll the transcript view backward (towards its start).
-    pub fn transcript_scroll_up(&mut self) {
-        self.transcript_scroll = self.transcript_scroll.saturating_sub(1);
-    }
-
-    pub fn transcript_to_top(&mut self) {
-        self.transcript_scroll = 0;
-    }
-
-    /// Jump past the transcript's true end; rendering clamps this back to
-    /// the last page, so the exact rendered line count need not be known here.
-    pub fn transcript_to_bottom(&mut self) {
-        self.transcript_scroll = u16::MAX;
     }
 
     /// True when the operator can still send messages.
@@ -1912,20 +1898,24 @@ mod tests {
 
         app.toggle_view(View::Transcript);
         assert_eq!(
-            app.transcript_scroll, 0,
+            app.transcript.clamped(),
+            0,
             "starts at the beginning, not the tail"
         );
 
-        app.transcript_scroll_down();
-        app.transcript_scroll_down();
-        assert_eq!(app.transcript_scroll, 2);
-        app.transcript_scroll_up();
-        assert_eq!(app.transcript_scroll, 1);
+        // The transcript scrolls against what was rendered, so stand in for a
+        // render that found ten lines below the fold.
+        app.transcript.note_limit(10);
+        app.transcript.line_down();
+        app.transcript.line_down();
+        assert_eq!(app.transcript.clamped(), 2);
+        app.transcript.line_up();
+        assert_eq!(app.transcript.clamped(), 1);
 
-        app.transcript_to_bottom();
-        assert_eq!(app.transcript_scroll, u16::MAX);
-        app.transcript_to_top();
-        assert_eq!(app.transcript_scroll, 0);
+        app.transcript.scroll_to_end();
+        assert_eq!(app.transcript.clamped(), 10, "the last page, not past it");
+        app.transcript.reset();
+        assert_eq!(app.transcript.clamped(), 0);
     }
 
     #[test]

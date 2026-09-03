@@ -44,9 +44,12 @@ pub(crate) fn render_transcript_view(frame: &mut Frame, app: &App, area: Rect) {
         })
         .collect();
 
+    // Only the renderer knows the height the document has to fit, so it is
+    // the one that can say how far it actually scrolls.
     let viewport = area.height.saturating_sub(2) as usize;
-    let max_start = lines.len().saturating_sub(viewport) as u16;
-    let start = app.transcript_scroll.min(max_start);
+    app.transcript
+        .note_limit(lines.len().saturating_sub(viewport) as u16);
+    let start = app.transcript.clamped();
     let paragraph = Paragraph::new(lines).block(block).scroll((start, 0));
     frame.render_widget(paragraph, area);
 }

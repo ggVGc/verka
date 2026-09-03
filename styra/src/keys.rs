@@ -180,10 +180,10 @@ pub fn handle_list_key(
         },
         View::Transcript => match key.code {
             KeyCode::Char('c') => app.toggle_conversation_only(),
-            KeyCode::Char('j') | KeyCode::Down => app.transcript_scroll_down(),
-            KeyCode::Char('k') | KeyCode::Up => app.transcript_scroll_up(),
-            KeyCode::Char('g') => app.transcript_to_top(),
-            KeyCode::Char('G') => app.transcript_to_bottom(),
+            KeyCode::Char('j') | KeyCode::Down => app.transcript.line_down(),
+            KeyCode::Char('k') | KeyCode::Up => app.transcript.line_up(),
+            KeyCode::Char('g') => app.transcript.reset(),
+            KeyCode::Char('G') => app.transcript.scroll_to_end(),
             _ => {}
         },
         // Editing the launch policy. These keys deliberately avoid the letters
