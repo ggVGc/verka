@@ -26,6 +26,7 @@ use styra_server::{InteractionEnd, LogEntry, QuotaEvent, QuotaStatus};
 use crate::activity::{Activity, Status};
 use crate::answer::AnswerView;
 use crate::composer::Composer;
+use crate::preview::{Preview, PreviewTarget};
 use crate::files::{self, FilesView};
 use crate::ingest;
 use crate::insert::Prompt;
@@ -62,18 +63,6 @@ pub enum View {
     /// The last turn's typed answer, rendered as the shape it was asked for.
     Answer,
     Preview,
-}
-
-/// Which entry the preview panel shows.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum PreviewTarget {
-    /// The entry the list selection is on.
-    #[default]
-    Selection,
-    /// The newest shell command and its result, regardless of where the
-    /// selection currently is — so the preview keeps showing what the agent
-    /// is running while the operator reads elsewhere in the list.
-    Command,
 }
 
 /// What a launch is asked for beyond the agent selection: the sandbox policy
@@ -200,14 +189,8 @@ pub struct App {
     /// Recent actions Styra performed without a direct operator command.
     /// Each is displayed for five seconds in the message panel.
     pub action_messages: VecDeque<ActionMessage>,
-    /// When true, a side panel shows the full expanded content of the
-    /// selected entry, independent of whether it is folded in the list.
-    pub show_preview: bool,
-    /// How far the selected entry's preview is scrolled.
-    pub preview: Scroll,
-    pub preview_mode: PresentationMode,
-    /// Whether the preview follows the selection or the newest command.
-    pub preview_target: PreviewTarget,
+    /// The panel showing one entry in full, and how; see [`Preview`].
+    pub preview: Preview,
     /// What the next session launches with: agent, model, reasoning effort.
     /// This is the choice for the current workspace, edited through [`Launcher`]
     /// while nothing is running. The terminal client only persists it as the
@@ -372,10 +355,7 @@ impl App {
             queued_messages: VecDeque::new(),
             activity: Activity::default(),
             action_messages: VecDeque::new(),
-            show_preview: false,
-            preview: Scroll::default(),
-            preview_mode: PresentationMode::Pretty,
-            preview_target: PreviewTarget::Selection,
+            preview: Preview::default(),
             selection,
             launcher: None,
             recent_models: Vec::new(),
@@ -424,9 +404,9 @@ impl App {
         OperatorState {
             interactions: std::mem::take(&mut self.interactions),
             conversation_only: self.timeline.conversation_only,
-            show_preview: self.show_preview,
-            preview_mode: self.preview_mode,
-            preview_target: self.preview_target,
+            show_preview: self.preview.open,
+            preview_mode: self.preview.mode(),
+            preview_target: self.preview.target(),
             recent_models: std::mem::take(&mut self.recent_models),
             composer: std::mem::take(&mut self.composer),
             contract: self.contract.take(),
@@ -442,9 +422,8 @@ impl App {
     pub fn adopt(&mut self, state: OperatorState) {
         self.interactions = state.interactions;
         self.timeline.conversation_only = state.conversation_only;
-        self.show_preview = state.show_preview;
-        self.preview_mode = state.preview_mode;
-        self.preview_target = state.preview_target;
+        self.preview
+            .adopt(state.show_preview, state.preview_mode, state.preview_target);
         self.recent_models = state.recent_models;
         self.composer = state.composer;
         self.contract = state.contract;
@@ -703,7 +682,7 @@ impl App {
     /// start its preview from the top.
     pub(crate) fn select_tail(&mut self) {
         self.timeline.select_tail();
-        self.preview.reset();
+        self.preview.scroll.reset();
     }
 
     // --- List navigation ----------------------------------------------------
@@ -714,7 +693,7 @@ impl App {
 
     fn moved(&mut self, moved: bool) {
         if moved {
-            self.preview.reset();
+            self.preview.scroll.reset();
         }
     }
 
@@ -768,10 +747,6 @@ impl App {
         self.moved(moved);
     }
 
-    /// Toggle the side panel that previews the selected entry's full content.
-    pub fn toggle_preview(&mut self) {
-        self.show_preview = !self.show_preview;
-    }
 
     /// Open the combined interaction/files layout with its entry preview
     /// visible, or return to the ordinary event list when already open.
@@ -780,7 +755,7 @@ impl App {
             self.view = View::Events;
         } else {
             self.view = View::Files;
-            self.show_preview = true;
+            self.preview.show();
         }
     }
 
@@ -877,22 +852,6 @@ impl App {
             .map(|item| item.resolved.clone())
     }
 
-    pub fn toggle_preview_mode(&mut self) {
-        self.preview_mode = match self.preview_mode {
-            PresentationMode::Pretty => PresentationMode::Raw,
-            PresentationMode::Raw => PresentationMode::Pretty,
-        };
-        self.preview.reset();
-    }
-
-    pub fn toggle_preview_target(&mut self) {
-        self.preview_target = match self.preview_target {
-            PreviewTarget::Selection => PreviewTarget::Command,
-            PreviewTarget::Command => PreviewTarget::Selection,
-        };
-        self.preview.reset();
-    }
-
     /// The entry the preview panel and the `y` shortcut act on: the selected
     /// one, or — in [`PreviewTarget::Command`] — the newest shell entry. That
     /// entry holds both the command and its result, since a completion
@@ -900,7 +859,7 @@ impl App {
     /// to the selection while no command has run yet, so the panel is never
     /// blank just because the mode is on.
     pub fn preview_entry(&self) -> Option<&Entry> {
-        if self.preview_target == PreviewTarget::Command {
+        if self.preview.follows_command() {
             if let Some(entry) = self.timeline.newest_command() {
                 return Some(entry);
             }
@@ -953,7 +912,7 @@ impl App {
                 let entry = self.preview_entry()?;
                 let protocol = self.selection.provider.protocol();
                 let mut text = String::new();
-                for block in protocol.presented_detail(&entry.event, self.preview_mode) {
+                for block in protocol.presented_detail(&entry.event, self.preview.mode()) {
                     if !text.is_empty() {
                         text.push('\n');
                     }
@@ -964,7 +923,7 @@ impl App {
                     }
                 }
                 if text.is_empty() {
-                    text = protocol.presented_summary(&entry.event, self.preview_mode);
+                    text = protocol.presented_summary(&entry.event, self.preview.mode());
                 }
                 Some(text)
             }
@@ -1047,7 +1006,7 @@ mod tests {
         let mut app = app();
         app.set_input("half a thought".into());
         app.contract = Some(Contract::Lines);
-        app.show_preview = true;
+        app.preview.show();
         app.files.set_scope(true);
         app.recent_models = vec!["gpt-5.6-sol".into()];
 
@@ -1056,7 +1015,7 @@ mod tests {
 
         assert_eq!(next.composer.text, "half a thought");
         assert_eq!(next.contract, Some(Contract::Lines));
-        assert!(next.show_preview);
+        assert!(next.preview.open);
         assert!(next.files.shows_all());
         assert_eq!(next.recent_models, vec!["gpt-5.6-sol".to_owned()]);
     }
@@ -1097,13 +1056,13 @@ mod tests {
         let mut app = app();
         app.push_event(AgentEvent::AgentMessage { text: "hi".into() });
         app.timeline.entries[0].expanded = true;
-        app.preview.offset = 3;
+        app.preview.scroll.offset = 3;
 
         app.push_event(AgentEvent::TurnStarted);
 
         assert!(app.timeline.follow);
         assert_eq!(app.timeline.selected, 0);
-        assert_eq!(app.preview.offset, 3);
+        assert_eq!(app.preview.scroll.offset, 3);
         assert!(app.timeline.is_visible(app.timeline.selected));
         assert!(app.timeline.entries[0].expanded);
         assert!(!app.timeline.entries[1].expanded);
@@ -2317,27 +2276,27 @@ mod tests {
             text: "second\nbody".into(),
         });
         app.select_first();
-        app.preview.note_limit(100);
-        app.preview.page_down();
-        assert_eq!(app.preview.offset, 10);
+        app.preview.scroll.note_limit(100);
+        app.preview.scroll.page_down();
+        assert_eq!(app.preview.scroll.offset, 10);
 
         app.select_next();
         assert_eq!(app.timeline.selected, 1);
-        assert_eq!(app.preview.offset, 0);
+        assert_eq!(app.preview.scroll.offset, 0);
     }
 
     #[test]
     fn preview_page_down_does_not_accumulate_past_the_rendered_end() {
         let mut app = app();
-        app.preview.note_limit(23);
+        app.preview.scroll.note_limit(23);
 
         for _ in 0..100 {
-            app.preview.page_down();
+            app.preview.scroll.page_down();
         }
-        assert_eq!(app.preview.offset, 23);
+        assert_eq!(app.preview.scroll.offset, 23);
 
-        app.preview.page_up();
-        assert_eq!(app.preview.offset, 13);
+        app.preview.scroll.page_up();
+        assert_eq!(app.preview.scroll.offset, 13);
     }
 
     #[test]
@@ -2487,16 +2446,6 @@ mod tests {
     }
 
     #[test]
-    fn preview_toggles_independently_of_other_view_state() {
-        let mut app = app();
-        assert!(!app.show_preview);
-        app.toggle_preview();
-        assert!(app.show_preview);
-        app.toggle_preview();
-        assert!(!app.show_preview);
-    }
-
-    #[test]
     fn fullscreen_preview_toggles_the_view_and_is_independent_of_the_side_panel() {
         let mut app = app();
         assert_eq!(app.view, View::Events);
@@ -2504,7 +2453,7 @@ mod tests {
         assert_eq!(app.view, View::Preview);
         // The side-panel flag (bound to lowercase `p`) is a separate toggle;
         // the full-screen shortcut (`P`) does not touch it.
-        assert!(!app.show_preview);
+        assert!(!app.preview.open);
         app.toggle_view(View::Preview);
         assert_eq!(app.view, View::Events);
     }
@@ -2512,14 +2461,14 @@ mod tests {
     #[test]
     fn files_view_opens_with_a_togglable_entry_preview() {
         let mut app = app();
-        assert!(!app.show_preview);
+        assert!(!app.preview.open);
 
         app.toggle_files();
         assert_eq!(app.view, View::Files);
-        assert!(app.show_preview);
+        assert!(app.preview.open);
 
-        app.toggle_preview();
-        assert!(!app.show_preview);
+        app.preview.toggle();
+        assert!(!app.preview.open);
         app.toggle_files();
         assert_eq!(app.view, View::Events);
     }

@@ -3,7 +3,8 @@
 //! is folded in the list.
 
 use super::{message_text_color, palette, summary_line, wrap_line, DETAIL_INDENT};
-use crate::app::{App, PreviewTarget};
+use crate::app::App;
+use crate::preview::PreviewTarget;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
@@ -12,7 +13,7 @@ use ratatui::Frame;
 use styra_server::event::{AgentEvent, DetailBlock, PresentationMode};
 
 pub(crate) fn render_preview(frame: &mut Frame, app: &App, area: Rect) {
-    let title = match (app.preview_mode, app.preview_target) {
+    let title = match (app.preview.mode(), app.preview.target()) {
         (PresentationMode::Pretty, PreviewTarget::Selection) => {
             " preview · pretty · v: raw · C: command "
         }
@@ -43,8 +44,8 @@ pub(crate) fn render_preview(frame: &mut Frame, app: &App, area: Rect) {
         area.width.saturating_sub(2),
         area.height.saturating_sub(2),
     );
-    app.preview.note_limit(scroll_limit);
-    let scroll = app.preview.clamped();
+    app.preview.scroll.note_limit(scroll_limit);
+    let scroll = app.preview.scroll.clamped();
     let paragraph = Paragraph::new(lines)
         .block(block)
         .wrap(Wrap { trim: false })
@@ -63,8 +64,8 @@ pub(crate) fn render_fullscreen_preview(frame: &mut Frame, app: &App, area: Rect
         preview_summary_indent(app),
     );
     let scroll_limit = preview_scroll_limit(&lines, area.width, area.height);
-    app.preview.note_limit(scroll_limit);
-    let scroll = app.preview.clamped();
+    app.preview.scroll.note_limit(scroll_limit);
+    let scroll = app.preview.scroll.clamped();
     let paragraph = Paragraph::new(lines)
         .wrap(Wrap { trim: false })
         .scroll((scroll, 0));
@@ -141,20 +142,20 @@ pub(crate) fn preview_lines(app: &App) -> Vec<Line<'static>> {
         protocol,
     )];
     let mut blocks = protocol
-        .presented_detail(&entry.event, app.preview_mode)
+        .presented_detail(&entry.event, app.preview.mode())
         .into_iter();
     if let Some(first) = blocks.next() {
         lines.extend(presented_block_lines(
             first,
             message_text_color(entry.event.tag()),
-            app.preview_mode,
+            app.preview.mode(),
         ));
         for block in blocks {
             lines.push(Line::from(""));
             lines.extend(presented_block_lines(
                 block,
                 message_text_color(entry.event.tag()),
-                app.preview_mode,
+                app.preview.mode(),
             ));
         }
     }
@@ -328,7 +329,7 @@ mod tests {
             .flat_map(|line| &line.spans)
             .any(|span| span.style.fg == Some(palette::WARNING)));
 
-        app.toggle_preview_mode();
+        app.preview.toggle_mode();
         let raw: String = preview_lines(&app)
             .iter()
             .flat_map(|line| &line.spans)
@@ -360,7 +361,7 @@ mod tests {
         assert!(!app.timeline.entries[0].expanded);
         assert!(!rendered(&app).contains("24 passed"));
 
-        app.toggle_preview();
+        app.preview.toggle();
         let shown = rendered(&app);
         assert!(shown.contains("preview"));
         assert!(shown.contains("24 passed"));
@@ -379,14 +380,14 @@ mod tests {
             text: "all green".into(),
         });
         app.select_last();
-        app.toggle_preview();
+        app.preview.toggle();
 
         // Focus is on the message, so that is what the preview shows.
         let shown = rendered(&app);
         assert!(shown.contains("all green"));
         assert!(!shown.contains("24 passed"));
 
-        app.toggle_preview_target();
+        app.preview.toggle_target();
         let shown = rendered(&app);
         assert!(shown.contains("command"));
         assert!(shown.contains("cargo test"));
@@ -404,7 +405,7 @@ mod tests {
             exit_code: Some(0),
             output: "24 passed".into(),
         });
-        app.toggle_preview();
+        app.preview.toggle();
 
         let lines = preview_lines(&app);
         let output_row = lines
@@ -431,8 +432,8 @@ mod tests {
         app.push_event(AgentEvent::AgentMessage {
             text: "all green".into(),
         });
-        app.toggle_preview();
-        app.toggle_preview_target();
+        app.preview.toggle();
+        app.preview.toggle_target();
         assert!(rendered(&app).contains("all green"));
     }
 
@@ -449,7 +450,7 @@ mod tests {
             checkpoint: None,
             checkpoint_error: None,
         });
-        app.toggle_preview();
+        app.preview.toggle();
 
         let minimal = rendered(&app);
         assert!(minimal.contains("pretty"));
@@ -460,7 +461,7 @@ mod tests {
         assert!(!minimal.contains("index 123"));
         assert!(!minimal.contains(" context"));
 
-        app.toggle_preview_mode();
+        app.preview.toggle_mode();
         let raw = rendered(&app);
         assert!(raw.contains("raw"));
         assert!(raw.contains("diff --git"));
@@ -490,7 +491,7 @@ mod tests {
         assert!(minimal.contains("-old"));
         assert!(minimal.contains("+new"));
 
-        app.toggle_preview_mode();
+        app.preview.toggle_mode();
         let raw = preview_lines(&app);
         let raw = raw
             .iter()
@@ -527,7 +528,7 @@ mod tests {
             .flat_map(|line| &line.spans)
             .any(|span| span.style.fg == Some(palette::ACCENT)));
 
-        app.toggle_preview_mode();
+        app.preview.toggle_mode();
         let raw = preview_lines(&app)
             .iter()
             .flat_map(|line| &line.spans)
@@ -556,7 +557,7 @@ mod tests {
             .flat_map(|line| &line.spans)
             .any(|span| span.style.fg == Some(palette::ACCENT)));
 
-        app.toggle_preview_mode();
+        app.preview.toggle_mode();
         let raw = preview_lines(&app)
             .iter()
             .flat_map(|line| &line.spans)
@@ -644,7 +645,7 @@ mod tests {
             checkpoint: None,
             checkpoint_error: None,
         });
-        app.toggle_preview();
+        app.preview.toggle();
 
         let screen = rendered(&app);
         assert!(screen.contains("notes.txt"));
@@ -673,7 +674,7 @@ mod tests {
             checkpoint: None,
             checkpoint_error: None,
         });
-        app.toggle_preview();
+        app.preview.toggle();
 
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
         terminal
@@ -708,7 +709,7 @@ mod tests {
         app.push_event(AgentEvent::AgentMessage {
             text: "hello".into(),
         });
-        app.toggle_preview();
+        app.preview.toggle();
 
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
         terminal
@@ -731,7 +732,7 @@ mod tests {
         app.push_event(AgentEvent::AgentMessage {
             text: "one two three four five six seven eight nine ten eleven twelve".into(),
         });
-        app.toggle_preview();
+        app.preview.toggle();
 
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
         terminal

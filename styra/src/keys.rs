@@ -137,10 +137,10 @@ pub fn handle_list_key(
     match app.view {
         View::Events => match key.code {
             KeyCode::Char('c') => app.toggle_conversation_only(),
-            KeyCode::Char('v') if app.show_preview => app.toggle_preview_mode(),
-            KeyCode::Char('C') if app.show_preview => app.toggle_preview_target(),
-            KeyCode::PageDown if app.show_preview => app.preview.page_down(),
-            KeyCode::PageUp if app.show_preview => app.preview.page_up(),
+            KeyCode::Char('v') if app.preview.open => app.preview.toggle_mode(),
+            KeyCode::Char('C') if app.preview.open => app.preview.toggle_target(),
+            KeyCode::PageDown if app.preview.open => app.preview.scroll.page_down(),
+            KeyCode::PageUp if app.preview.open => app.preview.scroll.page_up(),
             KeyCode::Char('J') | KeyCode::Down => app.select_next(),
             KeyCode::Char('K') | KeyCode::Up => app.select_prev(),
             KeyCode::Char('j') => app.select_next_line(),
@@ -152,7 +152,7 @@ pub fn handle_list_key(
             KeyCode::Char('G') => app.select_last(),
             KeyCode::Char('z') => *pending_fold = true,
             KeyCode::Char('m') => app.toggle_minor(),
-            KeyCode::Char('p') => app.toggle_preview(),
+            KeyCode::Char('p') => app.preview.toggle(),
             KeyCode::Char('y') => copy_selection(app),
             _ => {}
         },
@@ -269,7 +269,7 @@ pub fn handle_list_key(
                 app.files.select_last(last);
             }
             KeyCode::Char('a') => app.toggle_file_scope(),
-            KeyCode::Char('p') => app.toggle_preview(),
+            KeyCode::Char('p') => app.preview.toggle(),
             KeyCode::Char('y') => copy_selection(app),
             _ => {}
         },
@@ -277,12 +277,12 @@ pub fn handle_list_key(
         // list, is what the reader is moving through: `j`/`k` scroll it a line
         // at a time and the shifted pair changes entry.
         View::Preview => match key.code {
-            KeyCode::Char('v') => app.toggle_preview_mode(),
-            KeyCode::Char('C') => app.toggle_preview_target(),
-            KeyCode::PageDown => app.preview.page_down(),
-            KeyCode::PageUp => app.preview.page_up(),
-            KeyCode::Char('j') => app.preview.line_down(),
-            KeyCode::Char('k') => app.preview.line_up(),
+            KeyCode::Char('v') => app.preview.toggle_mode(),
+            KeyCode::Char('C') => app.preview.toggle_target(),
+            KeyCode::PageDown => app.preview.scroll.page_down(),
+            KeyCode::PageUp => app.preview.scroll.page_up(),
+            KeyCode::Char('j') => app.preview.scroll.line_down(),
+            KeyCode::Char('k') => app.preview.scroll.line_up(),
             KeyCode::Char('J') | KeyCode::Down => app.select_next_line(),
             KeyCode::Char('K') | KeyCode::Up => app.select_prev_line(),
             KeyCode::Char('g') => app.select_first(),

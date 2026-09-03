@@ -37,7 +37,7 @@ pub(crate) fn render_files(frame: &mut Frame, app: &App, area: Rect) {
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(columns[0]);
     render_list(frame, app, left[0]);
-    let (preview_area, content_area) = if app.show_preview {
+    let (preview_area, content_area) = if app.preview.open {
         let right = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
@@ -218,7 +218,7 @@ mod tests {
             checkpoint_error: None,
         });
         app.view = crate::app::View::Files;
-        app.show_preview = true;
+        app.preview.show();
         let mut terminal =
             ratatui::Terminal::new(ratatui::backend::TestBackend::new(90, 20)).unwrap();
         terminal

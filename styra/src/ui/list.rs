@@ -23,7 +23,7 @@ use styra_server::event::{AgentEvent, DetailBlock, PresentationMode, Protocol};
 const MAX_CONVERSATION_WIDTH: usize = 120;
 
 pub(crate) fn render_list(frame: &mut Frame, app: &App, area: Rect) {
-    let area = if app.show_preview && app.view == View::Events {
+    let area = if app.preview.open && app.view == View::Events {
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])

@@ -29,6 +29,7 @@ mod mount;
 mod notes;
 mod picker;
 mod preferences;
+mod preview;
 mod raw;
 mod session;
 mod tail;
