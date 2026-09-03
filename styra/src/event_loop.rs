@@ -4,7 +4,6 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use std::io::Stdout;
 use std::path::Path;
-use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
 use crate::activity::Status;
@@ -13,14 +12,13 @@ use crate::config::Config;
 use crate::keymap::HELP;
 use crate::keys;
 use crate::launch::{self, LaunchScope};
+use crate::loader::{LoadEvent, Loads};
 use crate::notes;
 use crate::picker;
 use crate::preferences;
 use crate::session::{self, Live};
 use crate::ui;
-use styra_server::{
-    Client, InteractionSnapshot, InteractionSnapshotScope, LogEntry, WorkspaceSummary,
-};
+use styra_server::{Client, InteractionSnapshotScope, LogEntry, WorkspaceSummary};
 
 /// What the interactive loop returned control to `main` for.
 pub enum RunOutcome {
@@ -44,104 +42,6 @@ pub struct RunContext<'a> {
     pub config: &'a Config,
 }
 
-/// Request/response messages used only between this Styra instance's event
-/// loop and its background interaction loader.
-#[derive(Clone, Debug)]
-struct InteractionLoadRequest {
-    request_id: String,
-    generation: u64,
-    id: String,
-    scope: InteractionSnapshotScope,
-}
-
-struct InteractionLoadEvent {
-    request_id: String,
-    generation: u64,
-    id: String,
-    result: anyhow::Result<InteractionSnapshot>,
-}
-
-#[derive(Clone, Debug)]
-enum InteractionLoaderCommand {
-    Load(InteractionLoadRequest),
-    Cancel(String),
-}
-
-/// A coordinator keeps interaction-list movement non-blocking. Fetches use
-/// their own threads so the coordinator remains able to tell the server to
-/// cancel an outstanding request as soon as selection moves elsewhere.
-fn interaction_loader(
-    client: Client,
-) -> (
-    Sender<InteractionLoaderCommand>,
-    Receiver<InteractionLoadEvent>,
-) {
-    let (requests_tx, requests_rx) = mpsc::channel::<InteractionLoaderCommand>();
-    let (events_tx, events_rx) = mpsc::channel();
-    std::thread::Builder::new()
-        .name("styra-interaction-preview".into())
-        .spawn(move || {
-            while let Ok(command) = requests_rx.recv() {
-                match command {
-                    InteractionLoaderCommand::Cancel(request_id) => {
-                        let _ = client.cancel_interaction_snapshot(&request_id);
-                    }
-                    InteractionLoaderCommand::Load(request) => {
-                        let fetch_client = client.clone();
-                        let fetch_events = events_tx.clone();
-                        let _ = std::thread::Builder::new()
-                            .name("styra-interaction-fetch".into())
-                            .spawn(move || {
-                                let result = fetch_client.interaction_snapshot_requested(
-                                    &request.request_id,
-                                    &request.id,
-                                    request.scope,
-                                );
-                                let _ = fetch_events.send(InteractionLoadEvent {
-                                    request_id: request.request_id,
-                                    generation: request.generation,
-                                    id: request.id,
-                                    result,
-                                });
-                            });
-                    }
-                }
-            }
-        })
-        .expect("starting interaction preview worker");
-    (requests_tx, events_rx)
-}
-
-fn request_interaction_load(
-    requests: &Sender<InteractionLoaderCommand>,
-    pending_request: &mut Option<String>,
-    generation: &mut u64,
-    active_id: &mut String,
-    id: String,
-    scope: InteractionSnapshotScope,
-) {
-    cancel_pending_interaction_load(requests, pending_request);
-    *generation = generation.wrapping_add(1);
-    active_id.clone_from(&id);
-    let request_id = Client::interaction_snapshot_request_id();
-    pending_request.clone_from(&Some(request_id.clone()));
-    let _ = requests.send(InteractionLoaderCommand::Load(InteractionLoadRequest {
-        request_id,
-        generation: *generation,
-        id,
-        scope,
-    }));
-}
-
-fn cancel_pending_interaction_load(
-    requests: &Sender<InteractionLoaderCommand>,
-    pending_request: &mut Option<String>,
-) {
-    if let Some(request_id) = pending_request.take() {
-        let _ = requests.send(InteractionLoaderCommand::Cancel(request_id));
-    }
-}
-
 /// Global actions which operate on the current interaction without dismissing
 /// its navigator. They fall through to the ordinary list-key handler below.
 fn interaction_navigator_passthrough(code: &KeyCode) -> bool {
@@ -155,27 +55,19 @@ fn apply_interaction_load(
     app: &mut App,
     live: &mut Live,
     standing_launch: &LaunchPolicy,
-    active_id: &mut String,
-    pending_request: &mut Option<String>,
-    generation: u64,
-    event: InteractionLoadEvent,
+    loads: &mut Loads,
+    event: LoadEvent,
 ) {
-    if event.generation != generation
-        || event.id != *active_id
-        || pending_request.as_deref() != Some(event.request_id.as_str())
-    {
+    if !loads.accepts(&event) {
         return;
     }
-    *pending_request = None;
+    let request_id = Loads::request_id_of(&event).to_owned();
+    loads.answered();
     let snapshot = match event.result {
-        Ok(snapshot)
-            if snapshot.request_id == event.request_id && snapshot.interaction.id == *active_id =>
-        {
-            snapshot
-        }
+        Ok(snapshot) if loads.matches(&snapshot, &request_id) => snapshot,
         Ok(_) => return,
         Err(error) => {
-            active_id.clone_from(&app.session_id);
+            loads.settle_on(app.session_id.clone());
             app.interactions.select_id(&app.session_id);
             app.push_log(LogEntry::error(format!(
                 "could not load interaction {}: {error:#}",
@@ -187,7 +79,7 @@ fn apply_interaction_load(
 
     let (mut next, next_live) = session::app_from_interaction_snapshot(snapshot);
     next.adopt(app.take_operator_state());
-    next.interactions.select_id(active_id);
+    next.interactions.select_id(loads.active_id());
     // Only the newest few updates were asked for, so the list starts out with
     // holes an unfiltered view would show as gaps; see DESIGN.md. This is the
     // one display choice a switch overrides.
@@ -275,26 +167,15 @@ pub fn run(
     // The model column's ordering is remembered across runs, so pick it up
     // before the picker can be opened.
     app.recent_models = preferences::load_recent_models(preferences_path);
-    let (interaction_requests, interaction_events) = interaction_loader(client.clone());
     // This belongs to the client process, not the server: two Styra instances
     // may browse different interactions and independently reject payloads that
     // are late for their own current selection.
-    let mut active_interaction_id = app.session_id.clone();
-    let mut interaction_generation = 0_u64;
-    let mut pending_interaction_request = None;
+    let (mut loads, interaction_events) = Loads::start(client.clone(), app.session_id.clone());
     let mut pending_fold = false;
     let mut interactions_refreshed = Instant::now();
     loop {
         while let Ok(event) = interaction_events.try_recv() {
-            apply_interaction_load(
-                app,
-                live,
-                standing_launch,
-                &mut active_interaction_id,
-                &mut pending_interaction_request,
-                interaction_generation,
-                event,
-            );
+            apply_interaction_load(app, live, standing_launch, &mut loads, event);
         }
         app.notices.expire();
         notes::ensure_loaded(app, client, workspace_id);
@@ -309,7 +190,7 @@ pub fn run(
         session::ensure_driva_plan(app, client, workspace_id);
         let mut disconnected = false;
         if let Live::Running { session_id, cursor } = live {
-            if session_id == &active_interaction_id {
+            if loads.is_on(session_id) {
                 match client.updates(session_id, *cursor) {
                     Ok(batch) => {
                         *cursor = batch.next;
@@ -343,7 +224,7 @@ pub fn run(
         }
 
         if let Live::Running { session_id, .. } = live {
-            if session_id == &active_interaction_id && app.activity.status == Status::Idle {
+            if loads.is_on(session_id) && app.activity.status == Status::Idle {
                 if let Some(message) = app.outbox.take_queued() {
                     // Sent as it was composed: a message queued asking for a
                     // shape still asks for it when the agent frees up.
@@ -443,25 +324,14 @@ pub fn run(
                 KeyCode::Enter => {
                     if let Some(interaction) = app.interactions.selected().cloned() {
                         app.interactions.open = false;
-                        request_interaction_load(
-                            &interaction_requests,
-                            &mut pending_interaction_request,
-                            &mut interaction_generation,
-                            &mut active_interaction_id,
-                            interaction.id,
-                            InteractionSnapshotScope::Full,
-                        );
+                        loads.request(interaction.id, InteractionSnapshotScope::Full);
                     }
                     continue;
                 }
                 KeyCode::Char('j') | KeyCode::Down => {
                     app.interactions.select_next(app.workspace.id.as_deref());
                     if let Some(interaction) = app.interactions.selected().cloned() {
-                        request_interaction_load(
-                            &interaction_requests,
-                            &mut pending_interaction_request,
-                            &mut interaction_generation,
-                            &mut active_interaction_id,
+                        loads.request(
                             interaction.id,
                             InteractionSnapshotScope::Preview {
                                 limit: INTERACTION_RECENT_UPDATES,
@@ -474,11 +344,7 @@ pub fn run(
                     app.interactions
                         .select_previous(app.workspace.id.as_deref());
                     if let Some(interaction) = app.interactions.selected().cloned() {
-                        request_interaction_load(
-                            &interaction_requests,
-                            &mut pending_interaction_request,
-                            &mut interaction_generation,
-                            &mut active_interaction_id,
+                        loads.request(
                             interaction.id,
                             InteractionSnapshotScope::Preview {
                                 limit: INTERACTION_RECENT_UPDATES,
@@ -517,11 +383,7 @@ pub fn run(
                         app.interactions.open = false;
                         return Ok(RunOutcome::Reset);
                     };
-                    request_interaction_load(
-                        &interaction_requests,
-                        &mut pending_interaction_request,
-                        &mut interaction_generation,
-                        &mut active_interaction_id,
+                    loads.request(
                         next.id,
                         InteractionSnapshotScope::Preview {
                             limit: INTERACTION_RECENT_UPDATES,
@@ -537,7 +399,7 @@ pub fn run(
         // Selection changes the local active id immediately, before its
         // asynchronous payload has rebuilt `app`. Do not let a fast follow-up
         // key act on the interaction that this instance has just left.
-        if active_interaction_id != app.session_id {
+        if !loads.is_on(&app.session_id) {
             continue;
         }
 
@@ -620,21 +482,11 @@ pub fn run(
                 app.view = crate::app::View::Events;
                 app.focus = Focus::List;
                 app.interactions.open(interactions, workspaces, &current);
-                cancel_pending_interaction_load(
-                    &interaction_requests,
-                    &mut pending_interaction_request,
-                );
-                active_interaction_id = current;
-                interaction_generation = interaction_generation.wrapping_add(1);
+                loads.settle_on(current);
                 interactions_refreshed = Instant::now();
             }
             Some(Request::Raw) => {
-                cancel_pending_interaction_load(
-                    &interaction_requests,
-                    &mut pending_interaction_request,
-                );
-                interaction_generation = interaction_generation.wrapping_add(1);
-                active_interaction_id.clone_from(&app.session_id);
+                loads.settle_on(app.session_id.clone());
                 open_raw_history(app, live, client, standing_launch);
             }
             Some(Request::Reset) => return Ok(RunOutcome::Reset),
@@ -747,8 +599,10 @@ pub fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::loader;
     use std::path::PathBuf;
     use styra_server::protocol::{SequencedUpdate, Updates};
+    use styra_server::InteractionSnapshot;
     use styra_server::{DrivaOptions, InteractionActivity, InteractionSummary, InteractionUpdate};
 
     fn app(id: &str) -> App {
@@ -796,25 +650,22 @@ mod tests {
     fn matching_payload_populates_the_main_view_without_a_navigator() {
         let mut app = app("before");
         let mut live = Live::Viewing;
-        let mut active = "target".to_owned();
-        let mut pending = Some("request-3".to_owned());
+        let mut loads = loader::waiting_for("target", "request-3", 3);
 
         apply_interaction_load(
             &mut app,
             &mut live,
             &LaunchPolicy::default(),
-            &mut active,
-            &mut pending,
-            3,
-            InteractionLoadEvent {
-                request_id: "request-3".into(),
-                generation: 3,
-                id: "target".into(),
-                result: Ok(snapshot(
+            &mut loads,
+            loader::load_event(
+                "request-3",
+                3,
+                "target",
+                Ok(snapshot(
                     "target",
                     InteractionSnapshotScope::Preview { limit: 5 },
                 )),
-            },
+            ),
         );
 
         assert_eq!(app.session_id, "target");
@@ -828,61 +679,55 @@ mod tests {
             }
         );
         assert!(!app.interactions.open);
-        assert!(pending.is_none());
+        assert!(!loads.is_waiting());
     }
 
     #[test]
     fn incoming_interaction_payloads_are_scoped_to_this_clients_active_view() {
         let mut app = app("current");
         let mut live = Live::Viewing;
-        let mut active = "current".to_owned();
-        let mut pending = Some("request-4".to_owned());
+        let mut loads = loader::waiting_for("current", "request-4", 4);
 
         apply_interaction_load(
             &mut app,
             &mut live,
             &LaunchPolicy::default(),
-            &mut active,
-            &mut pending,
-            4,
-            InteractionLoadEvent {
-                request_id: "request-4".into(),
-                generation: 4,
-                id: "another-clients-view".into(),
-                result: Err(anyhow::anyhow!("must never reach the current log")),
-            },
+            &mut loads,
+            loader::load_event(
+                "request-4",
+                4,
+                "another-clients-view",
+                Err(anyhow::anyhow!("must never reach the current log")),
+            ),
         );
 
         assert_eq!(app.session_id, "current");
         assert!(app.log.is_empty());
-        assert_eq!(active, "current");
+        assert_eq!(loads.active_id(), "current");
     }
 
     #[test]
     fn an_older_preview_cannot_replace_a_newer_load_of_the_same_interaction() {
         let mut app = app("before");
         let mut live = Live::Viewing;
-        let mut active = "target".to_owned();
-        let mut pending = Some("request-8".to_owned());
+        let mut loads = loader::waiting_for("target", "request-8", 8);
 
         apply_interaction_load(
             &mut app,
             &mut live,
             &LaunchPolicy::default(),
-            &mut active,
-            &mut pending,
-            8,
-            InteractionLoadEvent {
-                request_id: "request-7".into(),
-                generation: 7,
-                id: "target".into(),
-                result: Err(anyhow::anyhow!("obsolete preview")),
-            },
+            &mut loads,
+            loader::load_event(
+                "request-7",
+                7,
+                "target",
+                Err(anyhow::anyhow!("obsolete preview")),
+            ),
         );
 
         assert_eq!(app.session_id, "before");
         assert!(app.log.is_empty());
-        assert_eq!(active, "target");
+        assert_eq!(loads.active_id(), "target");
     }
 
     #[test]
@@ -890,34 +735,5 @@ mod tests {
         assert!(interaction_navigator_passthrough(&KeyCode::Char('S')));
         assert!(interaction_navigator_passthrough(&KeyCode::Char('i')));
         assert!(!interaction_navigator_passthrough(&KeyCode::Char('l')));
-    }
-
-    #[test]
-    fn moving_to_another_entry_cancels_the_outstanding_fetch_first() {
-        let (commands, received) = mpsc::channel();
-        let mut pending = Some("old-request".to_owned());
-        let mut generation = 4;
-        let mut active = "old".to_owned();
-
-        request_interaction_load(
-            &commands,
-            &mut pending,
-            &mut generation,
-            &mut active,
-            "new".into(),
-            InteractionSnapshotScope::Preview { limit: 5 },
-        );
-
-        assert!(matches!(
-            received.recv().unwrap(),
-            InteractionLoaderCommand::Cancel(request_id) if request_id == "old-request"
-        ));
-        let InteractionLoaderCommand::Load(request) = received.recv().unwrap() else {
-            panic!("the replacement fetch must follow cancellation");
-        };
-        assert_eq!(request.id, "new");
-        assert_eq!(pending.as_deref(), Some(request.request_id.as_str()));
-        assert_eq!(active, "new");
-        assert_eq!(generation, 5);
     }
 }
