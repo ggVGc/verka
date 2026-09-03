@@ -223,7 +223,7 @@ pub fn launch_live_session(
         info.journal_path.display()
     )));
     for message in &info.queued {
-        app.queue_message(message.clone());
+        app.outbox.queue(message.clone());
     }
     Ok((app, info))
 }
@@ -264,7 +264,7 @@ pub fn app_from_interaction_snapshot(snapshot: InteractionSnapshot) -> (App, Liv
     }
     app.select_last();
     for message in queued {
-        app.queue_message(message);
+        app.outbox.queue(message);
     }
     let accepting = interaction.accepting;
     let activity = interaction.activity;
@@ -358,7 +358,7 @@ pub fn resume_and_send(
             app.launch.record(info.driva);
             app.push_log(LogEntry::info("resumed with provider-native context"));
             for message in &info.queued {
-                app.queue_message(message.clone());
+                app.outbox.queue(message.clone());
             }
             let session_id = info.id;
             app.session_id = session_id.clone();
@@ -393,7 +393,7 @@ pub fn pause_interaction(app: &mut App, client: &Client, live: &mut Live) {
                     "could not clear the durable message queue: {error:#}"
                 )));
             }
-            let cleared = app.clear_queued_messages();
+            let cleared = app.outbox.clear_queued();
             app.push_log(LogEntry::info(if cleared == 0 {
                 "interaction paused; send a new message to start again".into()
             } else {

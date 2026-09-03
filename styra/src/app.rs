@@ -20,12 +20,13 @@ use std::time::{Duration, Instant};
 use styra_server::agent::{Provider, Selection};
 use styra_server::event::PresentationMode;
 use styra_server::event::{AgentEvent, DetailBlock};
-use styra_server::{Contract, QueuedMessage};
+use styra_server::Contract;
 use styra_server::{InteractionEnd, LogEntry, QuotaEvent, QuotaStatus};
 
 use crate::activity::{Activity, Status};
 use crate::answer::AnswerView;
 use crate::composer::Composer;
+use crate::outbox::Outbox;
 use crate::preview::{Preview, PreviewTarget};
 use crate::files::{self, FilesView};
 use crate::ingest;
@@ -180,9 +181,9 @@ pub struct App {
     pub composer: Composer,
     /// Server-wide interaction navigation shown above the event timeline.
     pub interactions: LiveInteractions,
-    /// Messages submitted while the current turn is running. They remain
-    /// visible until sent or the interaction is stopped.
-    queued_messages: VecDeque<QueuedMessage>,
+    /// Messages on their way out and the shape the next one asks for; see
+    /// [`Outbox`].
+    pub outbox: Outbox,
     /// The Interaction's status and the bookkeeping around it; see
     /// [`Activity`].
     pub activity: Activity,
@@ -241,11 +242,6 @@ pub struct App {
     /// Selected file in the Files view and whether it aggregates the session;
     /// see [`FilesView`].
     pub files: FilesView,
-    /// The shape the next message asks its reply to come back in, or `None` for
-    /// an ordinary turn. Set by the operator before sending and cleared once
-    /// the message it applies to has gone, so a contract never silently
-    /// outlives the question it was chosen for.
-    pub contract: Option<Contract>,
     /// The typed answer last fetched for this session, and the selection
     /// within it; see [`AnswerView`].
     pub answer: AnswerView,
@@ -352,7 +348,7 @@ impl App {
             keybinds_scroll: 0,
             composer: Composer::default(),
             interactions: LiveInteractions::default(),
-            queued_messages: VecDeque::new(),
+            outbox: Outbox::default(),
             activity: Activity::default(),
             action_messages: VecDeque::new(),
             preview: Preview::default(),
@@ -372,7 +368,6 @@ impl App {
             quota: Tail::default(),
             transcript_scroll: 0,
             files: FilesView::default(),
-            contract: None,
             answer: AnswerView::default(),
             insert: None,
             request: None,
@@ -409,7 +404,7 @@ impl App {
             preview_target: self.preview.target(),
             recent_models: std::mem::take(&mut self.recent_models),
             composer: std::mem::take(&mut self.composer),
-            contract: self.contract.take(),
+            contract: self.outbox.take_contract(),
             file_show_all: self.files.shows_all(),
         }
     }
@@ -426,7 +421,7 @@ impl App {
             .adopt(state.show_preview, state.preview_mode, state.preview_target);
         self.recent_models = state.recent_models;
         self.composer = state.composer;
-        self.contract = state.contract;
+        self.outbox.set_contract(state.contract);
         self.files.set_scope(state.file_show_all);
     }
 
@@ -640,28 +635,6 @@ impl App {
         self.activity.status.is_active()
     }
 
-    pub fn queued_messages(&self) -> impl Iterator<Item = &QueuedMessage> {
-        self.queued_messages.iter()
-    }
-
-    pub fn queued_message_count(&self) -> usize {
-        self.queued_messages.len()
-    }
-
-    pub fn queue_message(&mut self, message: QueuedMessage) {
-        self.queued_messages.push_back(message);
-    }
-
-    pub fn take_queued_message(&mut self) -> Option<QueuedMessage> {
-        self.queued_messages.pop_front()
-    }
-
-    pub fn clear_queued_messages(&mut self) -> usize {
-        let count = self.queued_messages.len();
-        self.queued_messages.clear();
-        count
-    }
-
     // --- Ingesting session updates -----------------------------------------
     //
     // How an event changes the list is [`crate::ingest`]'s; these are the parts
@@ -767,19 +740,6 @@ impl App {
     }
 
     // --- Typed turn answers ---------------------------------------------------
-
-    /// Step to the next return contract for the message being typed.
-    pub fn cycle_contract(&mut self) {
-        self.contract = crate::session::next_contract(self.contract);
-    }
-
-    /// Take the contract the message about to be sent asks for, clearing it.
-    ///
-    /// Taken rather than read: a contract belongs to the question it was chosen
-    /// for, and leaving it set would silently type the next message too.
-    pub fn take_contract(&mut self) -> Option<Contract> {
-        self.contract.take()
-    }
 
     /// Show the answer view, asking the event loop to fetch under the
     /// session's recorded contract; or leave it when already there.
@@ -1005,7 +965,7 @@ mod tests {
     fn an_unsent_draft_survives_the_screen_it_was_typed_on() {
         let mut app = app();
         app.set_input("half a thought".into());
-        app.contract = Some(Contract::Lines);
+        app.outbox.set_contract(Some(Contract::Lines));
         app.preview.show();
         app.files.set_scope(true);
         app.recent_models = vec!["gpt-5.6-sol".into()];
@@ -1014,7 +974,7 @@ mod tests {
         next.adopt(app.take_operator_state());
 
         assert_eq!(next.composer.text, "half a thought");
-        assert_eq!(next.contract, Some(Contract::Lines));
+        assert_eq!(next.outbox.contract(), Some(Contract::Lines));
         assert!(next.preview.open);
         assert!(next.files.shows_all());
         assert_eq!(next.recent_models, vec!["gpt-5.6-sol".to_owned()]);
@@ -1411,36 +1371,6 @@ mod tests {
             usage: TokenUsage::default(),
         });
         assert_eq!(app.activity.status, Status::Background);
-    }
-
-    #[test]
-    fn queued_messages_are_fifo_and_can_be_cleared() {
-        let mut app = app();
-        app.queue_message(QueuedMessage::new("first"));
-        app.queue_message(QueuedMessage::new("second"));
-
-        assert_eq!(app.queued_message_count(), 2);
-        assert_eq!(app.take_queued_message(), Some(QueuedMessage::new("first")));
-        assert_eq!(
-            app.take_queued_message(),
-            Some(QueuedMessage::new("second"))
-        );
-        assert_eq!(app.take_queued_message(), None);
-
-        app.queue_message(QueuedMessage::new("keep until Esc"));
-        assert_eq!(app.clear_queued_messages(), 1);
-        assert_eq!(app.queued_message_count(), 0);
-    }
-
-    /// A message queued while the agent was busy keeps the shape it was
-    /// composed with, so it still asks for one when the queue drains.
-    #[test]
-    fn a_queued_message_keeps_its_contract() {
-        let mut app = app();
-        app.queue_message(QueuedMessage::new("which files?").asking_for(Some(Contract::Files)));
-        let queued = app.take_queued_message().expect("the message was queued");
-        assert_eq!(queued.text, "which files?");
-        assert_eq!(queued.contract, Some(Contract::Files));
     }
 
     #[test]
@@ -2351,31 +2281,6 @@ mod tests {
         app.toggle_file_scope();
         assert_eq!(app.file_paths(), vec!["README.md", "src/lib.rs"]);
         let _ = std::fs::remove_dir_all(root);
-    }
-
-    /// The cycle ends at "no contract" so an operator who opened one can get
-    /// back out of it without leaving the message box.
-    #[test]
-    fn cycling_contracts_returns_to_an_untyped_turn() {
-        let mut app = app();
-        assert_eq!(app.contract, None);
-        for expected in crate::session::CONTRACTS {
-            app.cycle_contract();
-            assert_eq!(app.contract, Some(expected));
-        }
-        app.cycle_contract();
-        assert_eq!(app.contract, None);
-    }
-
-    /// A contract belongs to the message it was chosen for. Taking it is what
-    /// stops the next, unrelated message from being typed too.
-    #[test]
-    fn taking_a_contract_clears_it_for_the_following_message() {
-        let mut app = app();
-        app.cycle_contract();
-        assert_eq!(app.take_contract(), Some(Contract::Text));
-        assert_eq!(app.contract, None);
-        assert_eq!(app.take_contract(), None);
     }
 
     /// Opening the view asks for the answer; it cannot render one it never

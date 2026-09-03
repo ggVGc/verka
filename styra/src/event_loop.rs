@@ -344,14 +344,14 @@ pub fn run(
 
         if let Live::Running { session_id, .. } = live {
             if session_id == &active_interaction_id && app.activity.status == Status::Idle {
-                if let Some(message) = app.take_queued_message() {
+                if let Some(message) = app.outbox.take_queued() {
                     // Sent as it was composed: a message queued asking for a
                     // shape still asks for it when the agent frees up.
                     let turn = session::turn(&message.text, &app.selection, message.contract);
                     match client.send_turn(session_id, turn) {
                         Ok(()) => {
                             app.activity.status = Status::Running;
-                            let waiting = app.queued_message_count();
+                            let waiting = app.outbox.queued_count();
                             app.show_action_message(if waiting == 0 {
                                 "sent queued message automatically".into()
                             } else {
@@ -366,7 +366,7 @@ pub fn run(
                             }
                         }
                         Err(error) => {
-                            app.queue_message(message);
+                            app.outbox.queue(message);
                             app.push_log(LogEntry::error(format!("queued send failed: {error:#}")));
                         }
                     }

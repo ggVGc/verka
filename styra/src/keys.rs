@@ -364,7 +364,7 @@ pub fn handle_input_key(
         KeyCode::Esc => app.enter_list(),
         // Choosing a shape is part of writing the message, so it lives in the
         // box rather than being a mode entered from outside it.
-        KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::CONTROL) => app.cycle_contract(),
+        KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::CONTROL) => app.outbox.cycle_contract(),
         KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => app.composer.newline(),
         KeyCode::Enter => {
             if let Some(message) = app.take_message() {
@@ -392,7 +392,7 @@ pub fn handle_input_key(
                 }
                 // The contract belongs to this message, so it is taken here
                 // and travels with it down whichever send path applies.
-                let contract = app.take_contract();
+                let contract = app.outbox.take_contract();
                 match live {
                     Live::Running { session_id, .. } if app.activity.status == Status::Running => {
                         // Queued as composed, contract included: the shape was
@@ -404,10 +404,10 @@ pub fn handle_input_key(
                                 "could not persist queued message: {error:#}"
                             )));
                         }
-                        app.queue_message(QueuedMessage::new(message).asking_for(contract));
+                        app.outbox.queue(QueuedMessage::new(message).asking_for(contract));
                         app.push_log(LogEntry::info(format!(
                             "message queued ({} waiting)",
-                            app.queued_message_count()
+                            app.outbox.queued_count()
                         )));
                     }
                     Live::Running { session_id, .. }

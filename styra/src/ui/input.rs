@@ -12,10 +12,10 @@ use unicode_width::UnicodeWidthChar;
 /// What the session's message box holds, for [`modal_input`] to draw.
 pub(crate) fn modal(app: &App) -> ModalInput<'_> {
     let title = if app.can_send() {
-        if app.queued_message_count() == 0 {
+        if app.outbox.queued_count() == 0 {
             " message ".to_owned()
         } else {
-            format!(" message · {} queued ", app.queued_message_count())
+            format!(" message · {} queued ", app.outbox.queued_count())
         }
     } else {
         " message (resumes on send) ".to_owned()
@@ -26,7 +26,8 @@ pub(crate) fn modal(app: &App) -> ModalInput<'_> {
         // the box the whole time it applies rather than only in the sent
         // message.
         note: app
-            .contract
+            .outbox
+            .contract()
             .map(|contract| format!(" asking for {} ", contract.as_str())),
         preceding: queued_lines(app),
         // The session view says this in an action message instead, under the
@@ -46,7 +47,7 @@ pub(crate) fn render_input(frame: &mut Frame, app: &App) {
 /// shape it was composed with, so the line says so — otherwise the operator
 /// has no way to tell which of several waiting messages asked for what.
 fn queued_lines(app: &App) -> Vec<String> {
-    app.queued_messages()
+    app.outbox.queued()
         .map(|message: &styra_server::QueuedMessage| {
             let prefix = match message.contract {
                 Some(contract) => format!("queued ({}): ", contract.as_str()),
@@ -120,7 +121,7 @@ mod tests {
     #[test]
     fn queued_messages_use_the_additional_information_color() {
         let mut app = testing::app("s1");
-        app.queue_message(styra_server::QueuedMessage::new("send this later"));
+        app.outbox.queue(styra_server::QueuedMessage::new("send this later"));
 
         let display = modal_input::display(&modal(&app), 40);
         let queued = display.lines[0]
