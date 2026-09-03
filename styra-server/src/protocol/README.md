@@ -45,6 +45,20 @@ lifecycle, diagnostic, and raw-wire updates do not consume the limit. Its
 show a short tail and continue with ordinary incremental `updates` polling
 without later receiving the omitted prefix.
 
+`interaction_snapshot` is the self-contained view-loading operation. Its
+`preview` scope returns that bounded conversation tail together with the
+interaction's current summary, background-work state, and durable input queue;
+its `full` scope returns the complete update stream. This lets a UI send one
+request while navigating and turn the eventual response into a locally tagged
+event without performing more round trips for small lifecycle state.
+
+Every snapshot request carries a client-generated `request_id`. A client which
+moves to another interaction sends `cancel_interaction_snapshot` with that id
+before starting the replacement fetch. Cancellation is independent of the
+interaction id: multiple Styra processes may fetch the same interaction while
+retaining separate control over their outstanding work. The server also honors
+a cancellation that arrives just before its corresponding fetch connection.
+
 A resumed interaction seeds its update stream from stored history. The resume
 response's `updates_after` cursor lets the resuming client skip history it has
 already rendered; a newly attaching client starts from zero.

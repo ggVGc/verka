@@ -1,16 +1,19 @@
 //! Blocking client for Styra's JSON protocol over a Unix domain socket.
 
 use crate::protocol::{
-    Answer, Contract, CreateSession, CreateWorkspace, DrivaOptions, Health, LaunchPolicy,
-    PlanSession, QueuedMessage, RenameSession, Request, Response, ResumeSession, SendMessage,
-    SessionInfo, ShellInfo, StoredSession, TemplateSummary, UpdateNotes, Updates, WireResponse,
-    WorkspaceLaunchChange,
+    Answer, Contract, CreateSession, CreateWorkspace, DrivaOptions, Health, InteractionSnapshot,
+    InteractionSnapshotScope, LaunchPolicy, PlanSession, QueuedMessage, RenameSession, Request,
+    Response, ResumeSession, SendMessage, SessionInfo, ShellInfo, StoredSession, TemplateSummary,
+    UpdateNotes, Updates, WireResponse, WorkspaceLaunchChange,
 };
 use crate::protocol::{InteractionSummary, SessionSummary, WorkspaceSummary};
 use anyhow::{bail, Context, Result};
 use std::io::BufReader;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static NEXT_SNAPSHOT_REQUEST: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone)]
 pub struct Client {
@@ -371,6 +374,52 @@ impl Client {
         })? {
             Response::Updates(value) => Ok(value),
             other => unexpected("updates", other),
+        }
+    }
+
+    /// Fetch one self-contained payload for populating an interaction view.
+    pub fn interaction_snapshot(
+        &self,
+        id: &str,
+        scope: InteractionSnapshotScope,
+    ) -> Result<InteractionSnapshot> {
+        let request_id = Self::interaction_snapshot_request_id();
+        self.interaction_snapshot_requested(&request_id, id, scope)
+    }
+
+    /// A process-unique identity suitable for a cancellable snapshot request.
+    pub fn interaction_snapshot_request_id() -> String {
+        format!(
+            "{}-{}",
+            std::process::id(),
+            NEXT_SNAPSHOT_REQUEST.fetch_add(1, Ordering::Relaxed)
+        )
+    }
+
+    /// Fetch a snapshot under a caller-owned identity which can be cancelled
+    /// from another connection while this blocking call is outstanding.
+    pub fn interaction_snapshot_requested(
+        &self,
+        request_id: &str,
+        id: &str,
+        scope: InteractionSnapshotScope,
+    ) -> Result<InteractionSnapshot> {
+        match self.request(Request::InteractionSnapshot {
+            request_id: request_id.to_owned(),
+            id: id.to_owned(),
+            scope,
+        })? {
+            Response::InteractionSnapshot(value) => Ok(value),
+            other => unexpected("interaction_snapshot", other),
+        }
+    }
+
+    pub fn cancel_interaction_snapshot(&self, request_id: &str) -> Result<()> {
+        match self.request(Request::CancelInteractionSnapshot {
+            request_id: request_id.to_owned(),
+        })? {
+            Response::Accepted => Ok(()),
+            other => unexpected("accepted", other),
         }
     }
 

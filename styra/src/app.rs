@@ -1063,6 +1063,32 @@ impl App {
         }
     }
 
+    /// Reconcile a reconstructed interaction view with the server's current
+    /// activity summary. A bounded preview deliberately omits lifecycle
+    /// events, so replaying its conversation tail alone cannot distinguish an
+    /// idle interaction from one that is still working.
+    ///
+    /// Background state is supplied independently because foreground and
+    /// background work can coexist while the activity is `Running`.
+    pub(crate) fn sync_interaction_activity(
+        &mut self,
+        activity: styra_server::InteractionActivity,
+        background_work: bool,
+    ) {
+        self.background_work = background_work;
+        match activity {
+            styra_server::InteractionActivity::Pending => {
+                self.status = Status::Idle;
+            }
+            styra_server::InteractionActivity::Running => {
+                self.status = Status::Running;
+            }
+            styra_server::InteractionActivity::Background => {
+                self.status = Status::Background;
+            }
+        }
+    }
+
     /// The provider's own count of what it is running in the background. Once
     /// it has reported one, that count is the only thing that moves the flag.
     pub(crate) fn note_background_count(&mut self, running: usize) {

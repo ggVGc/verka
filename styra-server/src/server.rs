@@ -4,9 +4,9 @@ use crate::agent::{MountSpec, SandboxLayout, Selection};
 use crate::interaction::{Interaction, InteractionSpec, ResolvedTemplate, SandboxBroker};
 use crate::journal::{self, Journal};
 use crate::protocol::{
-    Answer, Contract, DrivaOptions, InteractionActivity, InteractionSummary, InteractionUpdate,
-    LaunchMount, LaunchPolicy, QueuedMessage, SendMessage, SessionOrigin, SessionSummary,
-    TemplateSummary,
+    Answer, Contract, DrivaOptions, InteractionActivity, InteractionSnapshot,
+    InteractionSnapshotScope, InteractionSummary, InteractionUpdate, LaunchMount, LaunchPolicy,
+    QueuedMessage, SendMessage, SessionOrigin, SessionSummary, TemplateSummary,
 };
 use crate::protocol::{
     CreateSession, CreateWorkspace, Health, Request, Response, ResumeSession, SequencedUpdate,
@@ -49,6 +49,9 @@ struct ServerInner {
     /// than per-interaction because the quota is the account's, so a reading
     /// taken on one session is what every other session is also spending.
     quota: Arc<crate::quota::QuotaLog>,
+    /// Client-generated snapshot request ids mapped to cancellation flags.
+    /// Request ids keep different Styra instances from cancelling each other.
+    snapshot_cancellations: Mutex<HashMap<String, Arc<AtomicBool>>>,
 }
 
 struct ManagedInteraction {
@@ -56,6 +59,9 @@ struct ManagedInteraction {
     updates: Arc<Mutex<Vec<SequencedUpdate>>>,
     accepting_messages: Arc<AtomicBool>,
     activity: Arc<Mutex<InteractionActivity>>,
+    /// Kept separately because `Running` says only that foreground work is in
+    /// progress; background work may exist at the same time.
+    background_work: Arc<AtomicBool>,
     /// Captured at spawn so the interaction can be listed and reattached to without
     /// re-deriving them: the agent selection, host workspace, and launch policy.
     workspace_id: String,
@@ -262,12 +268,55 @@ impl ServerState {
                 workspace_metadata: Mutex::new(()),
                 shutdown: AtomicBool::new(false),
                 quota: Arc::new(crate::quota::QuotaLog::new()),
+                snapshot_cancellations: Mutex::new(HashMap::new()),
             }),
         }
     }
 
     pub fn store_root(&self) -> &Path {
         &self.inner.store_root
+    }
+
+    fn snapshot_cancellation(&self, request_id: &str) -> Arc<AtomicBool> {
+        self.inner
+            .snapshot_cancellations
+            .lock()
+            .expect("snapshot cancellation lock poisoned")
+            .entry(request_id.to_owned())
+            .or_insert_with(|| Arc::new(AtomicBool::new(false)))
+            .clone()
+    }
+
+    fn cancel_snapshot(&self, request_id: &str) {
+        let mut cancellations = self
+            .inner
+            .snapshot_cancellations
+            .lock()
+            .expect("snapshot cancellation lock poisoned");
+        // Cancellation may beat the fetch connection to the server, so retain
+        // a tombstone. Bound abandoned/late tombstones while preserving active
+        // (false) tokens; request ids are unique per client process.
+        if cancellations.len() >= 1024 {
+            cancellations.retain(|_, token| !token.load(Ordering::Acquire));
+        }
+        cancellations
+            .entry(request_id.to_owned())
+            .or_insert_with(|| Arc::new(AtomicBool::new(false)))
+            .store(true, Ordering::Release);
+    }
+
+    fn finish_snapshot(&self, request_id: &str, token: &Arc<AtomicBool>) {
+        let mut cancellations = self
+            .inner
+            .snapshot_cancellations
+            .lock()
+            .expect("snapshot cancellation lock poisoned");
+        if cancellations
+            .get(request_id)
+            .is_some_and(|registered| Arc::ptr_eq(registered, token))
+        {
+            cancellations.remove(request_id);
+        }
     }
 
     /// If a client asked the server to shut down, remove the socket and exit.
@@ -364,11 +413,13 @@ impl ServerState {
         let updates = Arc::new(Mutex::new(Vec::new()));
         let accepting_messages = Arc::new(AtomicBool::new(true));
         let activity = Arc::new(Mutex::new(InteractionActivity::Pending));
+        let background_work = Arc::new(AtomicBool::new(false));
         let managed = Arc::new(ManagedInteraction {
             interaction,
             updates: Arc::clone(&updates),
             accepting_messages: Arc::clone(&accepting_messages),
             activity: Arc::clone(&activity),
+            background_work: Arc::clone(&background_work),
             workspace_id: request.workspace_id.clone(),
             name: Mutex::new(name.clone()),
             selection: Mutex::new(selection.clone()),
@@ -386,7 +437,6 @@ impl ServerState {
         std::thread::Builder::new()
             .name(format!("styra-updates-{id}"))
             .spawn(move || {
-                let mut background_work = false;
                 // Once the provider reports its background-task set, that
                 // count alone drives `background_work`; the tool-call
                 // heuristics below are a fallback for quieter providers.
@@ -401,8 +451,8 @@ impl ServerState {
                                 .background_tasks_running()
                                 .expect("guard checked the running count is present");
                             background_count_known = true;
-                            background_work = running > 0;
-                            if !background_work {
+                            background_work.store(running > 0, Ordering::Release);
+                            if running == 0 {
                                 let mut activity =
                                     activity.lock().expect("interaction activity lock poisoned");
                                 if *activity == InteractionActivity::Background {
@@ -411,7 +461,7 @@ impl ServerState {
                             }
                         }
                         InteractionUpdate::Event(event) if event.starts_background_task() => {
-                            background_work = true;
+                            background_work.store(true, Ordering::Release);
                             *activity.lock().expect("interaction activity lock poisoned") =
                                 InteractionActivity::Running;
                         }
@@ -436,7 +486,7 @@ impl ServerState {
                             ..
                         }) => {
                             *activity.lock().expect("interaction activity lock poisoned") =
-                                if background_work {
+                                if background_work.load(Ordering::Acquire) {
                                     InteractionActivity::Background
                                 } else {
                                     InteractionActivity::Pending
@@ -447,7 +497,7 @@ impl ServerState {
                             ..
                         }) if background_polls.remove(id) => {
                             if !background_count_known && update_finishes_background(&update) {
-                                background_work = false;
+                                background_work.store(false, Ordering::Release);
                                 *activity.lock().expect("interaction activity lock poisoned") =
                                     InteractionActivity::Pending;
                             }
@@ -677,6 +727,7 @@ impl ServerState {
         let updates = Arc::new(Mutex::new(seeded_updates));
         let accepting_messages = Arc::new(AtomicBool::new(true));
         let activity = Arc::new(Mutex::new(InteractionActivity::Pending));
+        let background_work = Arc::new(AtomicBool::new(false));
         // A resumed Session may carry over messages that were durably queued
         // on a previous attachment (one stopped before the interaction went
         // idle enough to send them), so reload them rather than starting empty.
@@ -686,6 +737,7 @@ impl ServerState {
             updates: Arc::clone(&updates),
             accepting_messages: Arc::clone(&accepting_messages),
             activity: Arc::clone(&activity),
+            background_work: Arc::clone(&background_work),
             workspace_id: summary.workspace_id.clone(),
             name: Mutex::new(summary.name.clone()),
             selection: Mutex::new(selection.clone()),
@@ -701,7 +753,6 @@ impl ServerState {
         std::thread::Builder::new()
             .name(format!("styra-updates-{id}"))
             .spawn(move || {
-                let mut background_work = false;
                 // Once the provider reports its background-task set, that
                 // count alone drives `background_work`; the tool-call
                 // heuristics below are a fallback for quieter providers.
@@ -716,8 +767,8 @@ impl ServerState {
                                 .background_tasks_running()
                                 .expect("guard checked the running count is present");
                             background_count_known = true;
-                            background_work = running > 0;
-                            if !background_work {
+                            background_work.store(running > 0, Ordering::Release);
+                            if running == 0 {
                                 let mut activity =
                                     activity.lock().expect("interaction activity lock poisoned");
                                 if *activity == InteractionActivity::Background {
@@ -726,7 +777,7 @@ impl ServerState {
                             }
                         }
                         InteractionUpdate::Event(event) if event.starts_background_task() => {
-                            background_work = true;
+                            background_work.store(true, Ordering::Release);
                             *activity.lock().expect("interaction activity lock poisoned") =
                                 InteractionActivity::Running;
                         }
@@ -751,7 +802,7 @@ impl ServerState {
                             ..
                         }) => {
                             *activity.lock().expect("interaction activity lock poisoned") =
-                                if background_work {
+                                if background_work.load(Ordering::Acquire) {
                                     InteractionActivity::Background
                                 } else {
                                     InteractionActivity::Pending
@@ -762,7 +813,7 @@ impl ServerState {
                             ..
                         }) if background_polls.remove(id) => {
                             if !background_count_known && update_finishes_background(&update) {
-                                background_work = false;
+                                background_work.store(false, Ordering::Release);
                                 *activity.lock().expect("interaction activity lock poisoned") =
                                     InteractionActivity::Pending;
                             }
@@ -1306,6 +1357,39 @@ impl ServerState {
                     .expect("interaction update lock poisoned");
                 Ok(Response::Updates(recent_conversation_updates(&all, limit)))
             }
+            Request::InteractionSnapshot {
+                request_id,
+                id,
+                scope,
+            } => {
+                let cancelled = self.snapshot_cancellation(&request_id);
+                let result = (|| {
+                    ensure_snapshot_not_cancelled(&cancelled)?;
+                    let interaction = self.interaction(&id)?;
+                    let updates = {
+                        let all = interaction
+                            .updates
+                            .lock()
+                            .expect("interaction update lock poisoned");
+                        snapshot_updates(&all, scope, &cancelled)?
+                    };
+                    ensure_snapshot_not_cancelled(&cancelled)?;
+                    Ok(Response::InteractionSnapshot(InteractionSnapshot {
+                        request_id: request_id.clone(),
+                        interaction: interaction.summary(),
+                        background_work: interaction.background_work.load(Ordering::Acquire),
+                        updates,
+                        queued: interaction.queued_messages(),
+                        scope,
+                    }))
+                })();
+                self.finish_snapshot(&request_id, &cancelled);
+                result
+            }
+            Request::CancelInteractionSnapshot { request_id } => {
+                self.cancel_snapshot(&request_id);
+                Ok(Response::Accepted)
+            }
             Request::ListInteractions => {
                 let interactions = self
                     .inner
@@ -1372,6 +1456,36 @@ fn recent_conversation_updates(all: &[SequencedUpdate], limit: usize) -> Updates
         .collect::<Vec<_>>();
     updates.reverse();
     Updates { updates, next }
+}
+
+fn snapshot_updates(
+    all: &[SequencedUpdate],
+    scope: InteractionSnapshotScope,
+    cancelled: &AtomicBool,
+) -> Result<Updates> {
+    ensure_snapshot_not_cancelled(cancelled)?;
+    let updates = match scope {
+        InteractionSnapshotScope::Preview { limit } => recent_conversation_updates(all, limit),
+        InteractionSnapshotScope::Full => Updates {
+            updates: all
+                .iter()
+                .map(|update| {
+                    ensure_snapshot_not_cancelled(cancelled)?;
+                    Ok(update.clone())
+                })
+                .collect::<Result<Vec<_>>>()?,
+            next: all.last().map(|update| update.sequence).unwrap_or(0),
+        },
+    };
+    ensure_snapshot_not_cancelled(cancelled)?;
+    Ok(updates)
+}
+
+fn ensure_snapshot_not_cancelled(cancelled: &AtomicBool) -> Result<()> {
+    if cancelled.load(Ordering::Acquire) {
+        anyhow::bail!("interaction snapshot request was cancelled");
+    }
+    Ok(())
 }
 
 fn replayed_session_updates(
@@ -1757,6 +1871,30 @@ mod tests {
             [4, 7]
         );
         assert!(recent_conversation_updates(&all, 0).updates.is_empty());
+        let cancelled = AtomicBool::new(false);
+        let full = snapshot_updates(&all, InteractionSnapshotScope::Full, &cancelled).unwrap();
+        assert_eq!(full.next, 7);
+        assert_eq!(full.updates, all);
+    }
+
+    #[test]
+    fn snapshot_building_observes_cancellation() {
+        let cancelled = AtomicBool::new(true);
+        let error = snapshot_updates(&[], InteractionSnapshotScope::Full, &cancelled).unwrap_err();
+        assert!(error.to_string().contains("cancelled"));
+    }
+
+    #[test]
+    fn cancellation_can_arrive_before_the_snapshot_fetch() {
+        let socket = temp_path("snapshot-cancel");
+        let state = ServerState::new(socket.with_extension("store"), socket);
+
+        state.cancel_snapshot("client-fetch-1");
+        let token = state.snapshot_cancellation("client-fetch-1");
+
+        assert!(token.load(Ordering::Acquire));
+        assert!(ensure_snapshot_not_cancelled(&token).is_err());
+        state.finish_snapshot("client-fetch-1", &token);
     }
 
     #[test]
