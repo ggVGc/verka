@@ -17,8 +17,6 @@ struct WorkspaceMeta {
     id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     name: Option<String>,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    notes: String,
     host_path: PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     git_repository: Option<PathBuf>,
@@ -74,7 +72,6 @@ pub fn create_with_repository(
     let meta = WorkspaceMeta {
         id: id.clone(),
         name,
-        notes: String::new(),
         host_path: host_path.clone(),
         git_repository: git_repository.clone(),
         created_at_ms,
@@ -85,7 +82,6 @@ pub fn create_with_repository(
     Ok(WorkspaceSummary {
         id,
         name: meta.name,
-        notes: meta.notes,
         host_path,
         git_repository,
         path,
@@ -162,7 +158,6 @@ fn summary_from_meta(path: &Path, meta: WorkspaceMeta, now: u64) -> Result<Works
     Ok(WorkspaceSummary {
         id: meta.id,
         name: meta.name,
-        notes: meta.notes,
         host_path: meta.host_path,
         git_repository: meta.git_repository,
         path: path.to_path_buf(),
@@ -172,18 +167,6 @@ fn summary_from_meta(path: &Path, meta: WorkspaceMeta, now: u64) -> Result<Works
         last_accessed_at_ms,
         launch: meta.launch,
     })
-}
-
-/// Replace a Workspace's notes. Notes are plain UTF-8 text and may be empty.
-pub fn store_notes(store_root: &Path, id: &str, notes: String) -> Result<WorkspaceSummary> {
-    let path = workspace_dir(store_root, id);
-    if !path.is_dir() {
-        anyhow::bail!("Workspace {id:?} was not found");
-    }
-    let mut meta = read_meta(&path)?;
-    meta.notes = notes;
-    write_meta(&path, &meta)?;
-    summary_from_meta(&path, meta, now_ms())
 }
 
 /// Replace a Workspace's durable Git checkout association.
@@ -381,12 +364,10 @@ mod tests {
         assert!(!stored.standalone);
         assert_eq!(stored.templates, launch.templates);
 
-        // Notes, and the access bump the picker relies on, both rewrite
-        // `workspace.json`; neither is allowed to drop the policy.
-        store_notes(&store, &workspace.id, "shared notes".into()).unwrap();
+        // The access bump the picker relies on rewrites `workspace.json`;
+        // it is not allowed to drop the policy.
         access(&store, &workspace.id).unwrap();
         let reread = get(&store, &workspace.id).unwrap();
-        assert_eq!(reread.notes, "shared notes");
         assert_eq!(reread.launch.mounts, launch.mounts);
         assert_eq!(reread.launch.network, Some(true));
 

@@ -13,7 +13,6 @@ use crate::keymap::HELP;
 use crate::keys;
 use crate::launch::{self, LaunchScope};
 use crate::loader::{LoadEvent, Loads};
-use crate::notes;
 use crate::picker;
 use crate::preferences;
 use crate::session::{self, Live};
@@ -178,7 +177,6 @@ pub fn run(
             apply_interaction_load(app, live, standing_launch, &mut loads, event);
         }
         app.notices.expire();
-        notes::ensure_loaded(app, client, workspace_id);
         // Workspace launch policy is a server-owned read model. Refresh it
         // independently of input so edits from another Styra client flow into
         // this Driva view and invalidate its planned options.
@@ -284,14 +282,9 @@ pub fn run(
             }
             continue;
         }
-        // The notes editor is modal, and everything printable typed into it is
-        // note text — including `?`, so it is handled ahead of the reference.
-        if app.notes.is_open() {
-            notes::handle_key(app, client, key);
-            continue;
-        }
-        // So is the message editor's path prompt, whose second question is
-        // answered by a bare letter that means something else everywhere else.
+        // The message editor's path prompt is modal, and its second question is
+        // answered by a bare letter that means something else everywhere else,
+        // so it is handled ahead of the reference.
         if app.insert.is_some() {
             keys::handle_insert_key(app, key);
             continue;

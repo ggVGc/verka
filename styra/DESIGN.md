@@ -584,7 +584,7 @@ implied by the ordering. The marker refreshes while the picker sits open; the
 ordering does not, so a row does not move under the cursor looking at it.
 
 The right-hand pane previews the screen `Enter` leads to: the selected
-Workspace's notes above its Sessions, listed one line each — provider, name,
+Workspace's Sessions, listed one line each — provider, name,
 age — with live ones carrying the same green dot. Loading a Session list is a
 round-trip to the server, so it waits for the cursor to settle (as the Session
 picker's conversation preview does) and the pane says `loading…` until it
@@ -637,7 +637,7 @@ Two client-facing shortcuts:
 
 - `x` in the Session picker converts the selected Session's native transcript
   to Styra's other interactive provider, keeping the whole history. Carries
-  over the source's name and notes. The picker opens the new Session
+  over the source's name. The picker opens the new Session
   immediately on success, or shows the failure (most commonly a stored
   Session with no provider id, so nothing native exists to convert) without
   leaving the list.
@@ -776,8 +776,8 @@ Most of what a
 given body of work needs from its sandbox is a property of the work, not of one
 interaction with an agent about it: the corpus that has to be readable, the
 toolchain template, whether anything here may reach the network. That belongs to
-the Workspace, so a Workspace stores one — in `workspace.json`, beside its notes
-— and every launch there starts from it, from any client. What is particular to
+the Workspace, so a Workspace stores one — in `workspace.json` — and every
+launch there starts from it, from any client. What is particular to
 one interaction is the other: `App::launch`, seeded from the saved defaults with
 this invocation's flags over it.
 
@@ -910,7 +910,6 @@ styra/                   # the terminal client application
     mount.rs             # writing, reading and locating host mounts (pure)
     launcher.rs          # the agent/model/effort picker's state
     composer.rs          # the message buffer and prompt history
-    notes.rs             # Session and Workspace notes: state, keys, persistence
     ui/                  # widget layout, one module per view
 ```
 

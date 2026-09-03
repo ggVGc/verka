@@ -60,8 +60,7 @@ fn queued_lines(app: &App) -> Vec<String> {
 }
 
 /// Wrap `text` to `width` columns, breaking on explicit newlines and then on
-/// the last column that fits. Shared with the notes editor, which wraps and
-/// trails a cursor the same way.
+/// the last column that fits.
 pub(super) fn wrapped_input_lines(text: &str, width: usize, style: Style) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     for logical_line in text.split('\n') {

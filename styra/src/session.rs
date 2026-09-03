@@ -478,7 +478,6 @@ mod tests {
         WorkspaceSummary {
             id: id.into(),
             name: None,
-            notes: String::new(),
             host_path: host_path.into(),
             git_repository: None,
             path: format!("/state/workspaces/{id}").into(),

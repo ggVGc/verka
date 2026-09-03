@@ -4,7 +4,7 @@
 //! Anything with enough state of its own to be worth a module has one, and is
 //! carried here as a field rather than spread across this struct: the event
 //! list is a [`Timeline`], the sandbox policy a [`Launch`], and likewise
-//! [`Launcher`], [`Composer`] and [`Notes`]. What stays here is what belongs to
+//! [`Launcher`] and [`Composer`]. What stays here is what belongs to
 //! no single one of them, and the few methods that have to join two — a
 //! selection move also resets the preview scroll, an edit to the launch policy
 //! is refused while an interaction is running.
@@ -30,7 +30,6 @@ use crate::insert::Prompt;
 use crate::interactions::LiveInteractions;
 use crate::launch::{self, Launch};
 use crate::launcher::Launcher;
-use crate::notes::Notes;
 use crate::notices::Notices;
 use crate::outbox::Outbox;
 use crate::preview::{self, Preview};
@@ -237,8 +236,6 @@ pub struct App {
     /// Set when the operator asks for something only the event loop can do;
     /// it takes the request and acts on it.
     pub request: Option<Request>,
-    /// This Session's and Workspace's notes; see [`crate::notes`].
-    pub notes: Notes,
 }
 
 /// Something the operator asked for that [`App`] cannot carry out itself,
@@ -352,7 +349,6 @@ impl App {
             answer: AnswerView::default(),
             insert: None,
             request: None,
-            notes: Notes::default(),
         }
     }
 

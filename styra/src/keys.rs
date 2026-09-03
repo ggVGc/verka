@@ -5,7 +5,6 @@ use crate::activity::Status;
 use crate::app::{App, Request, View};
 use crate::insert;
 use crate::launch;
-use crate::notes;
 use crate::preferences;
 use crate::session::{self, Live};
 use crate::terminal;
@@ -56,7 +55,7 @@ fn confirm(app: &mut App, preferences_path: &Path) {
 /// Keys for the driva view's "add a mount" prompt. It is modal — every
 /// printable key is part of the path being typed, `?` included — so the event
 /// loop routes keys here ahead of the keybind reference and every view and
-/// global binding, exactly as it does for the notes editor.
+/// global binding.
 pub fn handle_mount_prompt_key(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Esc => launch::cancel_prompt(app),
@@ -126,7 +125,6 @@ pub fn handle_list_key(
         KeyCode::Char('X') => return app.toggle_answer(),
         KeyCode::Char('P') => return app.toggle_view(View::Preview),
         KeyCode::Char('L') => return app.open_launcher(),
-        KeyCode::Char('E') => return notes::open(app),
         KeyCode::Char('a') if app.view != View::Files => return app.ask(Request::Interactions),
         KeyCode::Char('V') => return app.ask(Request::Workspace),
         KeyCode::Char('A') => return app.ask(Request::Sessions),

@@ -4,7 +4,7 @@ use crate::protocol::{
     Answer, Contract, CreateSession, CreateWorkspace, DrivaOptions, Health, InteractionSnapshot,
     InteractionSnapshotScope, LaunchPolicy, PlanSession, QueuedMessage, RenameSession, Request,
     Response, ResumeSession, SendMessage, SessionInfo, ShellInfo, StoredSession, TemplateSummary,
-    UpdateNotes, Updates, WireResponse, WorkspaceLaunchChange,
+    Updates, WireResponse, WorkspaceLaunchChange,
 };
 use crate::protocol::{InteractionSummary, SessionSummary, WorkspaceSummary};
 use anyhow::{bail, Context, Result};
@@ -110,26 +110,6 @@ impl Client {
         }))? {
             Response::SessionRenamed(value) => Ok(value),
             other => unexpected("session_renamed", other),
-        }
-    }
-
-    pub fn update_session_notes(&self, id: &str, notes: &str) -> Result<SessionSummary> {
-        match self.request(Request::UpdateSessionNotes(UpdateNotes {
-            id: id.to_owned(),
-            notes: notes.to_owned(),
-        }))? {
-            Response::SessionNotesUpdated(value) => Ok(value),
-            other => unexpected("session_notes_updated", other),
-        }
-    }
-
-    pub fn update_workspace_notes(&self, id: &str, notes: &str) -> Result<WorkspaceSummary> {
-        match self.request(Request::UpdateWorkspaceNotes(UpdateNotes {
-            id: id.to_owned(),
-            notes: notes.to_owned(),
-        }))? {
-            Response::WorkspaceNotesUpdated(value) => Ok(value),
-            other => unexpected("workspace_notes_updated", other),
         }
     }
 

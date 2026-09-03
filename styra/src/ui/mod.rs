@@ -19,7 +19,6 @@ mod log;
 mod markdown;
 mod messages;
 mod modal_input;
-mod notes;
 mod palette;
 mod picker;
 mod preview;
@@ -42,8 +41,6 @@ use list::render_list;
 pub(crate) use list::{summary_line, wrap_line};
 use log::render_log;
 use messages::{message_area_height, render_messages};
-use notes::render_notes;
-pub use notes::render_notes_prompt;
 pub(crate) use picker::short_id;
 pub use picker::{
     render_message_popup, render_name_prompt, render_picker, render_template_picker,
@@ -230,23 +227,7 @@ fn view_block(app: &App, suffix: Option<&str>) -> Block<'static> {
     if let Some(title) = session_title(app) {
         block = block.title(title);
     }
-    if let Some(title) = notes_title(app) {
-        block = block.title_bottom(title);
-    }
     block
-}
-
-/// Marker shown while this Session or its Workspace has notes. Without it the
-/// notes would be invisible until someone thought to press `E`, which is no
-/// use for a note written to be found again later.
-fn notes_title(app: &App) -> Option<Line<'static>> {
-    app.notes.any().then(|| {
-        Line::from(Span::styled(
-            " ✎ notes · E ",
-            Style::default().fg(palette::WARNING),
-        ))
-        .right_aligned()
-    })
 }
 
 /// A view's empty state: one muted line saying why there is nothing to show,
@@ -312,18 +293,10 @@ pub fn render(frame: &mut Frame, app: &App) {
     // text, cleanly selectable and copyable.
     if app.view == View::Preview {
         render_fullscreen_preview(frame, app, frame.area());
-        // Notes are reachable from every view, this one included, so the editor
-        // still has to be drawn over it.
-        if let Some(editor) = app.notes.editor() {
-            render_notes(frame, app, editor);
-        }
         return;
     }
 
-    // The notes editor is modal too, but it floats over the view it was opened
-    // from rather than replacing it, so the view is drawn first and the editor
-    // over it at the end of this function.
-    let input_active = app.focus == Focus::Input && !app.notes.is_open();
+    let input_active = app.focus == Focus::Input;
     let message_height = message_area_height(app).min(frame.area().height.saturating_sub(2));
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -365,10 +338,6 @@ pub fn render(frame: &mut Frame, app: &App) {
     // screen and floats over the middle of it.
     if input_active {
         render_input(frame, app);
-    }
-
-    if let Some(editor) = app.notes.editor() {
-        render_notes(frame, app, editor);
     }
 
     // Last, because it is the innermost modal: it is opened from the message

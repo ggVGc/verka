@@ -7,7 +7,6 @@ use std::time::{Duration, Instant};
 
 use styra_server::{Client, InteractionSummary, InteractionUpdate, LogEntry, WorkspaceSummary};
 
-use crate::notes;
 use crate::ui;
 
 /// How long the cursor must rest on a Session or Workspace before its preview
@@ -31,7 +30,7 @@ pub enum WorkspaceChoice {
 }
 
 /// The session picker loop: j/k or arrows to move, Enter to choose a
-/// session, `e` to edit its Session notes, Esc or q to back out.
+/// session, Esc or q to back out.
 pub fn run_session_picker(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     client: &Client,
@@ -146,9 +145,6 @@ pub fn run_session_picker(
                     )?;
                 }
             }
-            KeyCode::Char('e') if !sessions.is_empty() => {
-                notes::edit_session_notes(terminal, client, sessions, selected, &preview_updates)?;
-            }
             KeyCode::Char('x') if !sessions.is_empty() => {
                 match client.convert_session_provider(&sessions[selected].id) {
                     Ok(converted) => return Ok(Some(converted.id)),
@@ -220,8 +216,8 @@ fn read_session_name(
 }
 
 /// The Workspace picker loop: j/k or arrows to move, Enter to open a
-/// Workspace, `e` to edit its Workspace notes, `c` to create one for the
-/// current directory, Esc or q to back out.
+/// Workspace, `c` to create one for the current directory, Esc or q to back
+/// out.
 ///
 /// The list is ordered once on entry, by [`sort_workspaces`]. A Workspace the
 /// operator opens is not reordered under them while they look at it — but its
@@ -294,16 +290,6 @@ pub fn run_workspace_picker(
                 )));
             }
             KeyCode::Char('c') => return Ok(Some(WorkspaceChoice::CreateCurrentDirectory)),
-            KeyCode::Char('e') if !workspaces.is_empty() => {
-                notes::edit_workspace_notes(
-                    terminal,
-                    client,
-                    workspaces,
-                    selected,
-                    &interactions,
-                    &preview_sessions,
-                )?;
-            }
             _ => {}
         }
     }
@@ -425,7 +411,6 @@ mod tests {
         WorkspaceSummary {
             id: id.into(),
             name: None,
-            notes: String::new(),
             host_path: format!("/home/op/{id}").into(),
             git_repository: None,
             path: format!("/state/workspaces/{id}").into(),

@@ -92,13 +92,6 @@ pub struct RenameSession {
     pub name: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct UpdateNotes {
-    pub id: String,
-    pub notes: String,
-}
-
 /// One server-owned edit to a Workspace's standing launch policy.
 ///
 /// Clients send intent instead of replacing a locally cached copy. This lets
@@ -304,8 +297,6 @@ pub enum Request {
         provider: Option<Provider>,
     },
     RenameSession(RenameSession),
-    UpdateSessionNotes(UpdateNotes),
-    UpdateWorkspaceNotes(UpdateNotes),
     /// Apply one edit to the latest stored Workspace sandbox policy. Applies to
     /// launches made after it, not to interactions already running under the
     /// old one.
@@ -450,8 +441,6 @@ pub enum Response {
     SessionConverted(SessionSummary),
     SessionBranched(SessionSummary),
     SessionRenamed(SessionSummary),
-    SessionNotesUpdated(SessionSummary),
-    WorkspaceNotesUpdated(WorkspaceSummary),
     WorkspaceLaunchUpdated(LaunchPolicy),
     Accepted,
     Queued(usize),

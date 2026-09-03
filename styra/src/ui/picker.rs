@@ -2,7 +2,6 @@
 //! [`crate::app::App`] because each overlays before (or instead of) any loaded
 //! session, so they render from their own borrowed data rather than app state.
 
-use super::notes::render_notes_pane;
 use super::{message_text_color, palette, render_placeholder, tag_color};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -10,7 +9,6 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
-use crate::notes;
 use styra_server::{InteractionSummary, InteractionUpdate, SessionSummary, WorkspaceSummary};
 
 /// Whether the picker has the selected session's conversation yet. Loading is
@@ -40,7 +38,7 @@ pub fn render_picker(
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(palette::ACCENT))
-        .title(" styra · choose a session · Enter open · r rename · e Session notes · x convert provider · q cancel ");
+        .title(" styra · choose a session · Enter open · r rename · x convert provider · q cancel ");
 
     if sessions.is_empty() {
         render_placeholder(frame, block, panes[0], "  no sessions found");
@@ -72,22 +70,12 @@ fn render_session_preview(
     preview: Preview<'_>,
     area: Rect,
 ) {
-    let panes = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(32), Constraint::Percentage(68)])
-        .split(area);
-    render_notes_pane(
-        frame,
-        notes::Scope::Session,
-        session.map(|item| item.notes.as_str()),
-        panes[0],
-    );
     render_session_log_preview(
         frame,
         session.map(|item| item.id.as_str()),
         session.map(|item| item.selection.provider.protocol()),
         preview,
-        panes[1],
+        area,
     );
 }
 
@@ -219,7 +207,7 @@ pub enum SessionsPreview<'a> {
 
 /// Render the top-level Workspace picker. Entering a Workspace leads to its
 /// separate Session picker, so the right-hand pane previews that next screen
-/// for the row under the cursor: the Workspace's notes above its Sessions.
+/// for the row under the cursor: the Workspace's Sessions.
 pub fn render_workspace_picker(
     frame: &mut Frame,
     workspaces: &[WorkspaceSummary],
@@ -232,16 +220,10 @@ pub fn render_workspace_picker(
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(58), Constraint::Percentage(42)])
         .split(area);
-    let side = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
-        .split(panes[1]);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(palette::ACCENT))
-        .title(
-            " styra \u{b7} choose a Workspace \u{b7} Enter open \u{b7} e Workspace notes \u{b7} c create \u{b7} q cancel ",
-        );
+        .title(" styra \u{b7} choose a Workspace \u{b7} Enter open \u{b7} c create \u{b7} q cancel ");
     if workspaces.is_empty() {
         render_placeholder(
             frame,
@@ -249,8 +231,7 @@ pub fn render_workspace_picker(
             panes[0],
             "  no Workspaces found \u{b7} press c to create one in the current directory",
         );
-        render_notes_pane(frame, notes::Scope::Workspace, None, side[0]);
-        render_sessions_preview(frame, None, preview, interactions, side[1]);
+        render_sessions_preview(frame, None, preview, interactions, panes[1]);
         return;
     }
     let selected = selected.min(workspaces.len() - 1);
@@ -268,13 +249,7 @@ pub fn render_workspace_picker(
     state.select(Some(selected));
     frame.render_stateful_widget(list, panes[0], &mut state);
     let workspace = workspaces.get(selected);
-    render_notes_pane(
-        frame,
-        notes::Scope::Workspace,
-        workspace.map(|item| item.notes.as_str()),
-        side[0],
-    );
-    render_sessions_preview(frame, workspace, preview, interactions, side[1]);
+    render_sessions_preview(frame, workspace, preview, interactions, panes[1]);
 }
 
 /// One Workspace row. A Workspace holding an Interaction the server still
@@ -567,7 +542,6 @@ mod tests {
         SessionSummary {
             id: id.into(),
             name: None,
-            notes: String::new(),
             workspace_id: "w-1".into(),
             path: std::path::PathBuf::from(id),
             selection: styra_server::agent::Selection::parse(selection).unwrap(),
@@ -692,7 +666,6 @@ mod tests {
         WorkspaceSummary {
             id: id.into(),
             name: Some(name.into()),
-            notes: String::new(),
             host_path: PathBuf::from(format!("/home/op/{id}")),
             git_repository: None,
             path: PathBuf::from(format!("/state/workspaces/{id}")),
@@ -708,6 +681,17 @@ mod tests {
     /// liveness, age, host path — so an assertion about the row is not really
     /// an assertion about where it was truncated.
     const WORKSPACE_PICKER_WIDTH: usize = 130;
+
+    /// The Workspace list occupies the left 58% of the picker. The preview on
+    /// the right carries the selected Workspace's name in its own border title,
+    /// so a row has to be matched against this pane alone to be the list's.
+    fn workspace_rows(screen: &str) -> Vec<String> {
+        let width = WORKSPACE_PICKER_WIDTH * 58 / 100;
+        screen_lines(screen, WORKSPACE_PICKER_WIDTH)
+            .into_iter()
+            .map(|line| line.chars().take(width).collect())
+            .collect()
+    }
 
     fn rendered_workspace_picker(
         workspaces: &[WorkspaceSummary],
@@ -756,11 +740,11 @@ mod tests {
         let screen =
             rendered_workspace_picker(&workspaces, 0, &interactions, SessionsPreview::Ready(&[]));
 
-        let payments = screen_lines(&screen, WORKSPACE_PICKER_WIDTH)
+        let payments = workspace_rows(&screen)
             .into_iter()
             .find(|line| line.contains("payments"))
             .unwrap();
-        let quiet = screen_lines(&screen, WORKSPACE_PICKER_WIDTH)
+        let quiet = workspace_rows(&screen)
             .into_iter()
             .find(|line| line.contains("quiet"))
             .unwrap();

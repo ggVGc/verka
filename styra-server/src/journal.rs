@@ -29,8 +29,6 @@ struct StoredSessionMeta {
     workspace_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     name: Option<String>,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    notes: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     provider_session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -261,7 +259,6 @@ fn write_session_meta(
     let stored = StoredSessionMeta {
         workspace_id: workspace_id.to_owned(),
         name,
-        notes: String::new(),
         provider_session_id: None,
         origin: None,
         contract: None,
@@ -296,7 +293,6 @@ pub fn session_summary_at(path: &Path, workspace_id: &str) -> Result<SessionSumm
     Ok(SessionSummary {
         id,
         name: meta.name,
-        notes: meta.notes,
         workspace_id: workspace_id.to_owned(),
         path: path.to_path_buf(),
         selection: meta.agent.selection,
@@ -466,18 +462,6 @@ pub fn store_session_name(path: &Path, name: Option<&str>) -> Result<Option<Stri
     stored.name.clone_from(&name);
     write_stored_session_meta(&directory, &stored)?;
     Ok(name)
-}
-
-/// Replace a Session's operator-authored notes.
-pub fn store_session_notes(path: &Path, notes: String) -> Result<()> {
-    let directory = if path.is_dir() {
-        path.to_path_buf()
-    } else {
-        path.parent().map(Path::to_path_buf).unwrap_or_default()
-    };
-    let mut stored = read_stored_session_meta(&directory)?;
-    stored.notes = notes;
-    write_stored_session_meta(&directory, &stored)
 }
 
 pub fn normalize_session_name(name: Option<&str>) -> Result<Option<String>> {
@@ -946,7 +930,6 @@ mod tests {
         let summary = |created_at_ms: Option<u64>| SessionSummary {
             id: format!("{created_at_ms:?}"),
             name: None,
-            notes: String::new(),
             workspace_id: "w-1".into(),
             path: PathBuf::new(),
             selection: crate::agent::Selection::new(crate::agent::Provider::Codex),

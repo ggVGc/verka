@@ -23,9 +23,6 @@ pub struct WorkspaceSummary {
     /// Optional operator-facing name. The host directory name is the display
     /// fallback when this is absent.
     pub name: Option<String>,
-    /// Operator-authored notes shared by every Session in the Workspace.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub notes: String,
     /// Canonical host directory mounted into Sessions in this Workspace.
     pub host_path: PathBuf,
     /// Canonical root of the Git checkout associated with this Workspace.
@@ -518,9 +515,6 @@ pub struct SessionSummary {
     /// Optional operator-facing name; the stable id remains the identity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// Operator-authored notes specific to this Session.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub notes: String,
     /// The owning Workspace.
     pub workspace_id: String,
     /// Its directory, ready to pass straight to `--view`.

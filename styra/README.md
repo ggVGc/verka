@@ -108,8 +108,6 @@ Operations:
 | `convert_session_provider` | Session id | `session_converted` (a new sibling Session, resumable under Styra's other interactive provider; sugar over `branch_session` with no cutoff and the other provider) |
 | `branch_session` | Session id, optional history cutoff (`at_ms`), optional destination provider | `session_branched` (a new sibling Session seeded with the history up to the cutoff, or all of it) |
 | `rename_session` | Session id and optional name | `session_renamed` |
-| `update_session_notes` | Session id and plain-text notes | `session_notes_updated` |
-| `update_workspace_notes` | Workspace id and plain-text notes | `workspace_notes_updated` |
 | `change_workspace_launch` | Workspace id and one standing launch-policy edit | `workspace_launch_updated` |
 | `list_sessions` | Workspace id | `stored_sessions` |
 | `send_message` | session id and message | `accepted` |
@@ -229,17 +227,3 @@ Sessions receive a display name from their first prompt (normalized and
 truncated locally; no extra model call is made). In a Session picker, press
 `r` to edit that name; saving an empty value clears it. Names need not be
 unique and never replace the immutable Session id used by the API and store.
-
-Workspaces and Sessions can each carry durable, multiline notes. Press `E` in
-the main view to read and write them without leaving the session: the editor
-floats over the current view on this Session's notes, `Tab` moves between
-Session and Workspace notes, `Ctrl+S` saves both, and `Esc` closes without
-saving. While either set of notes is non-empty the view's bottom border carries
-a `✎ notes` marker, so notes written to be found later are visible without
-opening anything. Before the first message there is no Session yet, so the
-editor opens on the Workspace notes alone.
-
-The Workspace and Session pickers show the same notes in a yellow pane labelled
-with its scope, where `e` edits the notes of the highlighted row on the same
-`Ctrl+S`/`Esc` terms. Empty text clears the notes. Workspace notes live in
-`workspace.json`, while Session notes live in that Session's `session.json`.

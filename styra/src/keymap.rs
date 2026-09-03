@@ -53,8 +53,8 @@ pub(crate) const REFERENCE: &[ReferenceRow] = &[
         action: "open session shell in a new terminal",
     },
     ReferenceRow::Binding {
-        keys: "a / A / V; E",
-        action: "live interactions/sessions/Workspaces; notes",
+        keys: "a / A / V",
+        action: "live interactions/sessions/Workspaces",
     },
     ReferenceRow::Binding {
         keys: "w (interactions)",

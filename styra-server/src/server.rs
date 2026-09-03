@@ -975,9 +975,6 @@ impl ServerState {
             .parent()
             .context("a freshly created session journal has a parent directory")?;
         journal::store_provider_session_id(directory, &new_native_id)?;
-        if !summary.notes.is_empty() {
-            journal::store_session_notes(directory, summary.notes.clone())?;
-        }
         journal::store_session_origin(
             directory,
             SessionOrigin {
@@ -1229,27 +1226,6 @@ impl ServerState {
                     *interaction.name.lock().expect("session name lock poisoned") = name;
                 }
                 Ok(Response::SessionRenamed(self.stored_summary(&request.id)?))
-            }
-            Request::UpdateSessionNotes(request) => {
-                let summary = self.stored_summary(&request.id)?;
-                journal::store_session_notes(&summary.path, request.notes)?;
-                Ok(Response::SessionNotesUpdated(
-                    self.stored_summary(&request.id)?,
-                ))
-            }
-            Request::UpdateWorkspaceNotes(request) => {
-                let _metadata = self
-                    .inner
-                    .workspace_metadata
-                    .lock()
-                    .expect("server workspace metadata lock poisoned");
-                Ok(Response::WorkspaceNotesUpdated(
-                    crate::workspace::store_notes(
-                        &self.inner.store_root,
-                        &request.id,
-                        request.notes,
-                    )?,
-                ))
             }
             Request::ChangeWorkspaceLaunch {
                 workspace_id,

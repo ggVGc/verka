@@ -28,7 +28,6 @@ mod launch;
 mod launcher;
 mod loader;
 mod mount;
-mod notes;
 mod notices;
 mod outbox;
 mod picker;
@@ -491,7 +490,6 @@ mod cli_tests {
         WorkspaceSummary {
             id: id.into(),
             name: None,
-            notes: String::new(),
             host_path: host_path.into(),
             git_repository: None,
             path: format!("/store/{id}").into(),

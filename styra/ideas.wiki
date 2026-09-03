@@ -65,7 +65,7 @@
 - Concept of a Styra session is not the same as an agent session:
   - Maybe it's a "project", or workspace?
   - It can have many associated agent sessions
-  - And other things, like notes, todo list etc.
+  - And other things, like a todo list etc.
 - When resuming sessions with the same model provider, use the actual raw session logged from the agent.
   - Otherwise do a translation between the JSON formats
   - Or, if we can't, a text transcript
