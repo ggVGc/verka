@@ -10,7 +10,14 @@ use ratatui::Frame;
 use styra_server::InteractionSummary;
 
 pub(crate) fn height(app: &App, available: u16) -> u16 {
-    (rows(app).len() as u16 + 2)
+    let rows = rows(app);
+    let message_rows = rows
+        .iter()
+        .filter(|row| {
+            matches!(row, Row::Interaction(index) if app.interactions.items[*index].last_message.is_some())
+        })
+        .count() as u16;
+    (rows.len() as u16 + message_rows + 2)
         .max(3)
         .min(available.saturating_div(2).max(3))
         .min(available)
@@ -18,6 +25,7 @@ pub(crate) fn height(app: &App, available: u16) -> u16 {
 
 pub(crate) fn render(frame: &mut Frame, app: &App, area: Rect) {
     let rows = rows(app);
+    let item_width = area.width.saturating_sub(2);
     let scope = if app.interactions.only_current_workspace {
         app.workspace_name
             .as_deref()
@@ -38,7 +46,7 @@ pub(crate) fn render(frame: &mut Frame, app: &App, area: Rect) {
             Row::Workspace(name) => workspace_heading(name),
             Row::Interaction(index) => {
                 let interaction = &app.interactions.items[*index];
-                item(interaction, *index == app.interactions.selected)
+                item(interaction, *index == app.interactions.selected, item_width)
             }
         })
         .collect::<Vec<_>>();
@@ -103,14 +111,14 @@ fn workspace_heading(name: &str) -> ListItem<'static> {
     )))
 }
 
-fn item(interaction: &InteractionSummary, selected: bool) -> ListItem<'static> {
+fn item(interaction: &InteractionSummary, selected: bool, width: u16) -> ListItem<'static> {
     let status = status(interaction);
     let color = status_color(&status);
     let name = interaction
         .name
         .clone()
         .unwrap_or_else(|| short_id(&interaction.id).to_owned());
-    ListItem::new(Line::from(vec![
+    let main = Line::from(vec![
         Span::styled(
             if selected { "• " } else { "  " },
             Style::default().fg(if selected {
@@ -128,7 +136,19 @@ fn item(interaction: &InteractionSummary, selected: bool) -> ListItem<'static> {
             format!(" · {}", interaction.selection.provider.as_str()),
             Style::default().fg(palette::ACCENT),
         ),
-    ]))
+    ]);
+    let mut lines = vec![main];
+    if let Some(text) = &interaction.last_message {
+        let body = format!("    « {text}");
+        let padding = (width as usize).saturating_sub(body.chars().count());
+        lines.push(Line::from(Span::styled(
+            format!("{body}{}", " ".repeat(padding)),
+            Style::default()
+                .fg(palette::MUTED_TEXT)
+                .bg(palette::CODE_BACKGROUND),
+        )));
+    }
+    ListItem::new(lines)
 }
 
 fn status(interaction: &InteractionSummary) -> Status {
@@ -189,6 +209,20 @@ mod tests {
         assert!(screen.contains(" payments"), "{screen}");
         assert!(screen.contains("second · codex"), "{screen}");
         assert!(!screen.contains("· current"), "{screen}");
+    }
+
+    #[test]
+    fn navigator_puts_the_latest_response_below_the_interaction() {
+        let mut app = testing::app("s-1");
+        let mut interaction = interaction("s-1", "first");
+        interaction.last_message = Some("The checks are green.".into());
+        app.interactions.open(vec![interaction], vec![], "s-1");
+
+        let screen = testing::rendered(&app);
+        let interaction_row = screen.find("first · codex").unwrap() / 80;
+        let response_row = screen.find("« The checks are green.").unwrap() / 80;
+
+        assert_eq!(response_row, interaction_row + 1, "{screen}");
     }
 
     #[test]

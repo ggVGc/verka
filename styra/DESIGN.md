@@ -667,7 +667,9 @@ before opening the raw view; subsequent raw-view toggles use that local history.
 
 The navigator refreshes its summaries while open. Pending work is listed
 first, running work next, and stopped Interactions last, with server order
-retained within each group. All-Workspaces mode always groups the rows beneath
+retained within each group. Each row shows the latest received agent message
+on a subordinate line, updated along with those live summaries. All-Workspaces
+mode always groups the rows beneath
 Workspace headings; current-Workspace mode omits the one redundant heading.
 `w` switches between those scopes. `Enter`, `a`, or `Esc` closes the navigator
 and leaves the highlighted Interaction current. `D` removes a highlighted

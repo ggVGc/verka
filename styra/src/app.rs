@@ -1621,9 +1621,11 @@ mod tests {
             "one",
         );
         live.select_next(Some("workspace"));
+        let mut refreshed_two = interaction("two", true, InteractionActivity::Pending);
+        refreshed_two.last_message = Some("new response".into());
         live.refresh(
             vec![
-                interaction("two", true, InteractionActivity::Pending),
+                refreshed_two,
                 interaction("one", true, InteractionActivity::Running),
             ],
             "one",
@@ -1631,6 +1633,10 @@ mod tests {
         );
 
         assert_eq!(live.selected().unwrap().id, "two");
+        assert_eq!(
+            live.selected().unwrap().last_message.as_deref(),
+            Some("new response")
+        );
     }
 
     #[test]
