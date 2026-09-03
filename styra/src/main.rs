@@ -300,7 +300,6 @@ fn main() -> Result<()> {
                 )?;
                 app = new_app;
                 live = Live::Running {
-                    session_id: info.id,
                     cursor: info.updates_after,
                 };
             }
@@ -338,8 +337,8 @@ fn main() -> Result<()> {
             Ok(outcome) => outcome,
             Err(error) => break Err(error),
         };
-        if let Some(session_id) = event_loop::interaction_stopped_by(&outcome, &live) {
-            client.stop_interaction(session_id).ok();
+        if event_loop::stops_current_interaction(&outcome, &live) {
+            client.stop_interaction(&app.session_id).ok();
         }
         match outcome {
             RunOutcome::Quit => break Ok(()),
@@ -533,29 +532,26 @@ mod cli_tests {
 
     #[test]
     fn quitting_and_switching_detach_but_reset_stops_the_running_interaction() {
-        let live = Live::Running {
-            session_id: "styra-live".into(),
-            cursor: 7,
-        };
+        let live = Live::Running { cursor: 7 };
 
         assert_eq!(
-            event_loop::interaction_stopped_by(&RunOutcome::Quit, &live),
-            None
+            event_loop::stops_current_interaction(&RunOutcome::Quit, &live),
+            false
         );
         assert_eq!(
-            event_loop::interaction_stopped_by(
+            event_loop::stops_current_interaction(
                 &RunOutcome::OpenSession("styra-other".into()),
                 &live,
             ),
-            None
+            false
         );
         assert_eq!(
-            event_loop::interaction_stopped_by(&RunOutcome::Reset, &live),
-            Some("styra-live")
+            event_loop::stops_current_interaction(&RunOutcome::Reset, &live),
+            true
         );
         assert_eq!(
-            event_loop::interaction_stopped_by(&RunOutcome::NewSession, &live),
-            None
+            event_loop::stops_current_interaction(&RunOutcome::NewSession, &live),
+            false
         );
     }
 

@@ -21,9 +21,9 @@ pub enum Live {
     /// Nothing has been launched; the event loop spawns the session itself
     /// the moment the operator submits a message from `Focus::Input`.
     Pending,
-    /// A server-owned agent process, addressed by id. `cursor` makes polling
-    /// incremental and preserves the server's update order.
-    Running { session_id: String, cursor: u64 },
+    /// A server-owned agent process. Its identity is `App::session_id`; the
+    /// cursor makes polling incremental and preserves the server's update order.
+    Running { cursor: u64 },
     /// A replayed journal (`--view`, a reopened Session, or one this client
     /// lost its connection to); no live agent is attached. Sending a message
     /// resumes it through the provider's native mechanism.
@@ -237,7 +237,7 @@ pub fn attach_live_interaction(
         app.outbox.queue(message);
     }
     let accepting = interaction.accepting;
-    let live = attached_live(interaction.id, cursor, accepting);
+    let live = attached_live(cursor, accepting);
     if !accepting && app.activity.status.is_active() {
         // Stopped interactions remain in the server's interaction list until
         // another interaction replaces them. Treat that stale record like a
@@ -327,7 +327,6 @@ pub fn resume_and_send(
             app.session_id = session_id.clone();
             app.activity.status = Status::Running;
             *live = Live::Running {
-                session_id: session_id.clone(),
                 cursor: info.updates_after,
             };
             if let Err(error) =
@@ -347,11 +346,11 @@ pub fn resume_and_send(
 }
 
 pub fn pause_interaction(app: &mut App, client: &Client, live: &mut Live) {
-    if let Live::Running { session_id, .. } = live {
-        if let Err(error) = client.stop_interaction(session_id) {
+    if let Live::Running { .. } = live {
+        if let Err(error) = client.stop_interaction(&app.session_id) {
             app.push_log(LogEntry::error(format!("pause failed: {error:#}")));
         } else {
-            if let Err(error) = client.clear_queued_messages(session_id) {
+            if let Err(error) = client.clear_queued_messages(&app.session_id) {
                 app.push_log(LogEntry::error(format!(
                     "could not clear the durable message queue: {error:#}"
                 )));
@@ -400,10 +399,10 @@ pub fn branch_session(app: &mut App, client: &Client) {
 }
 
 pub fn interrupt_interaction(app: &mut App, client: &Client, live: &Live) {
-    let Live::Running { session_id, .. } = live else {
+    let Live::Running { .. } = live else {
         return app.push_log(LogEntry::warn("no live interaction to interrupt"));
     };
-    match client.interrupt_interaction(session_id) {
+    match client.interrupt_interaction(&app.session_id) {
         Ok(()) => app.push_log(LogEntry::info("interrupt requested")),
         Err(error) => app.push_log(LogEntry::error(format!("interrupt failed: {error:#}"))),
     }
@@ -433,9 +432,9 @@ fn mark_stopped(app: &mut App, live: &mut Live) {
     *live = Live::Viewing;
 }
 
-fn attached_live(session_id: String, cursor: u64, accepting: bool) -> Live {
+fn attached_live(cursor: u64, accepting: bool) -> Live {
     if accepting {
-        Live::Running { session_id, cursor }
+        Live::Running { cursor }
     } else {
         Live::Viewing
     }
@@ -476,10 +475,7 @@ mod tests {
     #[test]
     fn stopped_session_is_viewed_until_its_next_message_resumes_it() {
         let mut app = app();
-        let mut live = Live::Running {
-            session_id: "session-1".into(),
-            cursor: 7,
-        };
+        let mut live = Live::Running { cursor: 7 };
 
         mark_stopped(&mut app, &mut live);
 
@@ -490,14 +486,8 @@ mod tests {
 
     #[test]
     fn stopped_server_interaction_is_opened_as_resumable_history() {
-        assert_eq!(attached_live("session-1".into(), 7, false), Live::Viewing);
-        assert_eq!(
-            attached_live("session-1".into(), 7, true),
-            Live::Running {
-                session_id: "session-1".into(),
-                cursor: 7,
-            }
-        );
+        assert_eq!(attached_live(7, false), Live::Viewing);
+        assert_eq!(attached_live(7, true), Live::Running { cursor: 7 });
     }
 
     #[test]

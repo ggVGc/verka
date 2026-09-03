@@ -88,10 +88,10 @@ fn make_interaction_current(
 }
 
 /// Return the running interaction an in-client transition explicitly stops.
-pub fn interaction_stopped_by<'a>(outcome: &RunOutcome, live: &'a Live) -> Option<&'a str> {
+pub fn stops_current_interaction(outcome: &RunOutcome, live: &Live) -> bool {
     match (outcome, live) {
-        (RunOutcome::Reset, Live::Running { session_id, .. }) => Some(session_id),
-        _ => None,
+        (RunOutcome::Reset, Live::Running { .. }) => true,
+        _ => false,
     }
 }
 
@@ -127,8 +127,8 @@ pub fn run(
         }
         session::ensure_driva_plan(app, client, workspace_id);
         let mut disconnected = false;
-        if let Live::Running { session_id, cursor } = live {
-            match client.updates(session_id, *cursor) {
+        if let Live::Running { cursor } = live {
+            match client.updates(&app.session_id, *cursor) {
                 Ok(batch) => {
                     *cursor = batch.next;
                     for sequenced in batch.updates {
@@ -159,13 +159,13 @@ pub fn run(
             }
         }
 
-        if let Live::Running { session_id, .. } = live {
+        if let Live::Running { .. } = live {
             if app.activity.status == Status::Idle {
                 if let Some(message) = app.outbox.take_queued() {
                     // Sent as it was composed: a message queued asking for a
                     // shape still asks for it when the agent frees up.
                     let turn = session::turn(&message.text, &app.selection, message.contract);
-                    match client.send_turn(session_id, turn) {
+                    match client.send_turn(&app.session_id, turn) {
                         Ok(()) => {
                             app.activity.status = Status::Running;
                             let waiting = app.outbox.queued_count();
@@ -176,7 +176,7 @@ pub fn run(
                                     "sent queued message automatically ({waiting} still waiting)"
                                 )
                             });
-                            if let Err(error) = client.take_queued_message(session_id) {
+                            if let Err(error) = client.take_queued_message(&app.session_id) {
                                 app.push_log(LogEntry::error(format!(
                                     "could not clear sent message from the durable queue: {error:#}"
                                 )));
@@ -399,11 +399,11 @@ pub fn run(
             Some(Request::Reset) => return Ok(RunOutcome::Reset),
             Some(Request::NewSession) => return Ok(RunOutcome::NewSession),
             Some(Request::ApplySelection) => {
-                let Live::Running { session_id, .. } = live else {
+                let Live::Running { .. } = live else {
                     continue;
                 };
                 let selection = app.selection.clone();
-                match client.set_session_selection(session_id, &selection) {
+                match client.set_session_selection(&app.session_id, &selection) {
                     Ok(()) => app.show_action_message(format!("model set to {}", selection.model)),
                     Err(error) => app.push_log(LogEntry::error(format!(
                         "could not switch to {}: {error:#}",

@@ -96,10 +96,10 @@ pub fn handle_list_key(
         KeyCode::Char('S') => return session::pause_interaction(app, client, live),
         KeyCode::Char('b') => return session::branch_session(app, client),
         KeyCode::Char('!') => {
-            let Live::Running { session_id, .. } = live else {
+            let Live::Running { .. } = live else {
                 return app.show_action_message("no live interaction to open a shell for");
             };
-            match terminal::open_shell(client, session_id) {
+            match terminal::open_shell(client, &app.session_id) {
                 Ok(program) => app.show_action_message(format!("opened shell in {program}")),
                 Err(error) => app.push_log(LogEntry::error(format!(
                     "could not open session shell: {error:#}"
@@ -372,7 +372,7 @@ pub fn handle_input_key(
             if let Some(message) = app.take_message() {
                 app.enter_list();
                 if let Some(directory) = message.strip_prefix("/cd ") {
-                    let Live::Running { session_id, .. } = live else {
+                    let Live::Running { .. } = live else {
                         return app
                             .push_log(LogEntry::warn("/cd requires a live Codex interaction"));
                     };
@@ -380,7 +380,7 @@ pub fn handle_input_key(
                         return app.push_log(LogEntry::warn("usage: /cd <directory>"));
                     }
                     match client
-                        .set_interaction_working_directory(session_id, directory.trim().into())
+                        .set_interaction_working_directory(&app.session_id, directory.trim().into())
                     {
                         Ok(()) => app.show_action_message(format!(
                             "working directory: {}",
@@ -396,12 +396,12 @@ pub fn handle_input_key(
                 // and travels with it down whichever send path applies.
                 let contract = app.outbox.take_contract();
                 match live {
-                    Live::Running { session_id, .. } if app.activity.status == Status::Running => {
+                    Live::Running { .. } if app.activity.status == Status::Running => {
                         // Queued as composed, contract included: the shape was
                         // chosen for this question and is asked for whenever
                         // the agent gets to it.
                         let turn = session::turn(&message, &app.selection, contract);
-                        if let Err(error) = client.queue_turn(session_id, turn) {
+                        if let Err(error) = client.queue_turn(&app.session_id, turn) {
                             app.push_log(LogEntry::error(format!(
                                 "could not persist queued message: {error:#}"
                             )));
@@ -413,11 +413,11 @@ pub fn handle_input_key(
                             app.outbox.queued_count()
                         )));
                     }
-                    Live::Running { session_id, .. }
+                    Live::Running { .. }
                         if matches!(app.activity.status, Status::Idle | Status::Background) =>
                     {
                         let turn = session::turn(&message, &app.selection, contract);
-                        match client.send_turn(session_id, turn) {
+                        match client.send_turn(&app.session_id, turn) {
                             Ok(()) => app.activity.status = Status::Running,
                             Err(error) => {
                                 app.push_log(LogEntry::error(format!("send failed: {error:#}")))
@@ -451,7 +451,6 @@ pub fn handle_input_key(
                                 )));
                                 app.activity.status = Status::Running;
                                 *live = Live::Running {
-                                    session_id: info.id,
                                     cursor: info.updates_after,
                                 };
                             }
