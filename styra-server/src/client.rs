@@ -362,9 +362,9 @@ impl Client {
         self.updates_filtered(id, after, false)
     }
 
-    /// Read at most the newest `limit` non-raw updates. `next` is the cursor
-    /// at the end of the complete stream, ready for ordinary polling.
-    pub fn recent_updates_without_raw(&self, id: &str, limit: usize) -> Result<Updates> {
+    /// Read at most the newest `limit` conversation events. `next` is the
+    /// cursor at the end of the complete stream, ready for ordinary polling.
+    pub fn recent_conversation_updates(&self, id: &str, limit: usize) -> Result<Updates> {
         match self.request(Request::RecentUpdates {
             id: id.to_owned(),
             limit,

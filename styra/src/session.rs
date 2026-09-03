@@ -237,7 +237,7 @@ pub fn attach_live_interaction(
     attach_live_interaction_with_raw(client, interaction, true, None)
 }
 
-/// Attach for interaction-list browsing with only the newest non-raw updates.
+/// Attach for interaction-list browsing with only the newest conversation events.
 /// Full raw history is hydrated only if the operator asks for the raw view.
 pub fn attach_live_interaction_recent(
     client: &Client,
@@ -261,7 +261,7 @@ fn attach_live_interaction_with_raw(
     app.launch.record(interaction.driva.clone());
     let batch = match (raw, recent) {
         (true, _) => client.updates(&interaction.id, 0)?,
-        (false, Some(limit)) => client.recent_updates_without_raw(&interaction.id, limit)?,
+        (false, Some(limit)) => client.recent_conversation_updates(&interaction.id, limit)?,
         (false, None) => client.updates_without_raw(&interaction.id, 0)?,
     };
     let cursor = batch.next;

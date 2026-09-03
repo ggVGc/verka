@@ -341,8 +341,8 @@ pub enum Request {
         #[serde(default = "yes")]
         raw: bool,
     },
-    /// Return at most the newest `limit` non-raw updates. The response cursor
-    /// still points to the true end of the complete stream.
+    /// Return at most the newest `limit` conversation events. The response
+    /// cursor still points to the true end of the complete stream.
     RecentUpdates {
         id: String,
         limit: usize,

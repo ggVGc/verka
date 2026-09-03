@@ -38,10 +38,12 @@ Setting it to `false` omits the verbatim agent wire lines: `updates` filters out
 re-reading the journal to rebuild it. A client that renders only decoded events
 should pass `false` — the wire lines dominate the size of a long interaction.
 
-`recent_updates` returns at most the newest requested number of non-raw
-updates. Its `next` cursor points to the true end of the complete stream, so a
-client can show a short tail and continue with ordinary incremental `updates`
-polling without later receiving the omitted prefix.
+`recent_updates` returns at most the newest requested number of conversation
+events: operator messages, agent messages, errors, and model changes. Tool,
+lifecycle, diagnostic, and raw-wire updates do not consume the limit. Its
+`next` cursor points to the true end of the complete stream, so a client can
+show a short tail and continue with ordinary incremental `updates` polling
+without later receiving the omitted prefix.
 
 A resumed interaction seeds its update stream from stored history. The resume
 response's `updates_after` cursor lets the resuming client skip history it has

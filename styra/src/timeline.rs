@@ -111,20 +111,7 @@ impl Timeline {
 
     pub(crate) fn event_is_visible(&self, event: &AgentEvent) -> bool {
         (self.show_minor || !event.is_minor())
-            && (!self.conversation_only
-                || matches!(
-                    event,
-                    AgentEvent::UserMessage { .. }
-                        | AgentEvent::AgentMessage { .. }
-                        // A failure ends the exchange the operator is reading;
-                        // hiding it behind a filter leaves the conversation
-                        // looking as if the agent simply stopped replying.
-                        | AgentEvent::Error { .. }
-                        // Which model answered is part of reading a
-                        // conversation back, and the change is an operator
-                        // action like a message.
-                        | AgentEvent::ModelChanged { .. }
-                ))
+            && (!self.conversation_only || event.is_conversation())
     }
 
     /// Whether an entry is shown in the list under the current filters.

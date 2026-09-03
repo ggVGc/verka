@@ -655,15 +655,16 @@ Two client-facing shortcuts:
 `a` opens the server's live Interactions as a navigator above the main event
 list. There is no separate picker or conversation preview: moving with `j`/`k`
 immediately makes the highlighted Interaction current and fills the ordinary
-event list below with its complete timeline. The Interaction previously shown
-keeps running on the server; only this client's current view changes.
+event list below with its recent conversation tail. The Interaction previously
+shown keeps running on the server; only this client's current view changes.
 
-Moving initially asks for only the five newest non-raw updates, and a newly
+Moving initially asks for only the five newest conversation events, and a newly
 selected Interaction returns to conversation-only mode focused on its newest
 visible entry. The returned cursor is still the true stream tail, so live
-polling continues from there rather than filling in the omitted prefix. The
-first `r` hydrates complete history and rebuilds the event-to-wire indices
-before opening the raw view; subsequent raw-view toggles use that local history.
+polling continues from there rather than filling in the omitted prefix. `Enter`
+confirms the highlighted Interaction, loads its complete history including raw
+wire data, and closes the navigator. The first `r` can also hydrate that complete
+history on demand; subsequent raw-view toggles use the local history.
 
 The navigator refreshes its summaries while open. Pending work is listed
 first, running work next, and stopped Interactions last, with server order
@@ -671,8 +672,8 @@ retained within each group. Each row shows the latest received agent message
 on a subordinate line, updated along with those live summaries. All-Workspaces
 mode always groups the rows beneath
 Workspace headings; current-Workspace mode omits the one redundant heading.
-`w` switches between those scopes. `Enter`, `a`, or `Esc` closes the navigator
-and leaves the highlighted Interaction current. `D` removes a highlighted
+`w` switches between those scopes. `a` or `Esc` closes the navigator while
+leaving its lightweight tail current. `D` removes a highlighted
 stopped Interaction from the server. The next available Interaction becomes
 current without closing the navigator; deleting the last one closes it and
 returns Styra to its blank default state.

@@ -114,7 +114,7 @@ Operations:
 | `list_sessions` | Workspace id | `stored_sessions` |
 | `send_message` | session id and message | `accepted` |
 | `updates` | session id and `after` cursor | `updates` |
-| `recent_updates` | session id and maximum non-raw entries | `updates` |
+| `recent_updates` | session id and maximum conversation entries | `updates` |
 | `interrupt_interaction` | session id | `accepted` |
 | `stop_interaction` | session id | `accepted` |
 | `close_interaction` | session id | `accepted` |

@@ -1304,7 +1304,7 @@ impl ServerState {
                     .updates
                     .lock()
                     .expect("interaction update lock poisoned");
-                Ok(Response::Updates(recent_updates_without_raw(&all, limit)))
+                Ok(Response::Updates(recent_conversation_updates(&all, limit)))
             }
             Request::ListInteractions => {
                 let interactions = self
@@ -1356,12 +1356,17 @@ impl ServerState {
     }
 }
 
-fn recent_updates_without_raw(all: &[SequencedUpdate], limit: usize) -> Updates {
+fn recent_conversation_updates(all: &[SequencedUpdate], limit: usize) -> Updates {
     let next = all.last().map(|update| update.sequence).unwrap_or(0);
     let mut updates = all
         .iter()
         .rev()
-        .filter(|update| !matches!(update.update, InteractionUpdate::Raw(_)))
+        .filter(|update| {
+            matches!(
+                &update.update,
+                InteractionUpdate::Event(event) if event.is_conversation()
+            )
+        })
         .take(limit)
         .cloned()
         .collect::<Vec<_>>();
@@ -1695,10 +1700,15 @@ mod tests {
     }
 
     #[test]
-    fn recent_updates_take_the_non_raw_tail_and_keep_the_true_cursor() {
+    fn recent_updates_take_the_conversation_tail_and_keep_the_true_cursor() {
         let update = |sequence, update| SequencedUpdate { sequence, update };
         let all = vec![
-            update(1, InteractionUpdate::Log(LogEntry::info("one"))),
+            update(
+                1,
+                InteractionUpdate::Event(crate::event::AgentEvent::UserMessage {
+                    text: "one".into(),
+                }),
+            ),
             update(
                 2,
                 InteractionUpdate::Raw(RawLine {
@@ -1707,8 +1717,18 @@ mod tests {
                     text: "wire".into(),
                 }),
             ),
-            update(3, InteractionUpdate::Log(LogEntry::info("three"))),
-            update(4, InteractionUpdate::Log(LogEntry::info("four"))),
+            update(
+                3,
+                InteractionUpdate::Event(crate::event::AgentEvent::CommandStarted {
+                    command: "cargo test".into(),
+                }),
+            ),
+            update(
+                4,
+                InteractionUpdate::Event(crate::event::AgentEvent::AgentMessage {
+                    text: "four".into(),
+                }),
+            ),
             update(
                 5,
                 InteractionUpdate::Raw(RawLine {
@@ -1718,19 +1738,25 @@ mod tests {
                 }),
             ),
             update(6, InteractionUpdate::Log(LogEntry::info("six"))),
+            update(
+                7,
+                InteractionUpdate::Event(crate::event::AgentEvent::AgentMessage {
+                    text: "seven".into(),
+                }),
+            ),
         ];
 
-        let recent = recent_updates_without_raw(&all, 2);
-        assert_eq!(recent.next, 6);
+        let recent = recent_conversation_updates(&all, 2);
+        assert_eq!(recent.next, 7);
         assert_eq!(
             recent
                 .updates
                 .iter()
                 .map(|update| update.sequence)
                 .collect::<Vec<_>>(),
-            [4, 6]
+            [4, 7]
         );
-        assert!(recent_updates_without_raw(&all, 0).updates.is_empty());
+        assert!(recent_conversation_updates(&all, 0).updates.is_empty());
     }
 
     #[test]

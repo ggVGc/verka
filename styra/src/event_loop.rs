@@ -50,12 +50,18 @@ fn make_interaction_current(
     client: &Client,
     standing_launch: &LaunchPolicy,
     interaction: InteractionSummary,
-) {
-    if interaction.id == app.session_id {
-        return;
+    full: bool,
+) -> bool {
+    if !full && interaction.id == app.session_id {
+        return true;
     }
     let id = interaction.id.clone();
-    match session::attach_live_interaction_recent(client, interaction, INTERACTION_RECENT_UPDATES) {
+    let attached = if full {
+        session::attach_live_interaction(client, interaction)
+    } else {
+        session::attach_live_interaction_recent(client, interaction, INTERACTION_RECENT_UPDATES)
+    };
+    match attached {
         Ok((mut next, next_live)) => {
             next.interactions = std::mem::take(&mut app.interactions);
             next.interactions.select_id(&id);
@@ -77,12 +83,14 @@ fn make_interaction_current(
             next.focus = Focus::List;
             *app = next;
             *live = next_live;
+            true
         }
         Err(error) => {
             app.interactions.select_id(&app.session_id);
             app.push_log(LogEntry::error(format!(
                 "could not make interaction {id} current: {error:#}"
             )));
+            false
         }
     }
 }
@@ -293,18 +301,41 @@ pub fn run(
         }
 
         // The embedded interaction list owns navigation while it is open.
-        // Moving its cursor changes the current timeline immediately; Enter
-        // merely closes it because there is no separate attach confirmation.
+        // Moving its cursor changes the current timeline immediately with a
+        // short conversation tail. Enter confirms it by loading the complete
+        // interaction before closing the navigator.
         if app.interactions.open && app.focus == Focus::List {
             match key.code {
-                KeyCode::Char('a') | KeyCode::Esc | KeyCode::Enter => {
+                KeyCode::Char('a') | KeyCode::Esc => {
                     app.interactions.open = false;
+                    continue;
+                }
+                KeyCode::Enter => {
+                    if let Some(interaction) = app.interactions.selected().cloned() {
+                        if make_interaction_current(
+                            app,
+                            live,
+                            client,
+                            standing_launch,
+                            interaction,
+                            true,
+                        ) {
+                            app.interactions.open = false;
+                        }
+                    }
                     continue;
                 }
                 KeyCode::Char('j') | KeyCode::Down => {
                     app.interactions.select_next(app.workspace_id.as_deref());
                     if let Some(interaction) = app.interactions.selected().cloned() {
-                        make_interaction_current(app, live, client, standing_launch, interaction);
+                        make_interaction_current(
+                            app,
+                            live,
+                            client,
+                            standing_launch,
+                            interaction,
+                            false,
+                        );
                     }
                     continue;
                 }
@@ -312,7 +343,14 @@ pub fn run(
                     app.interactions
                         .select_previous(app.workspace_id.as_deref());
                     if let Some(interaction) = app.interactions.selected().cloned() {
-                        make_interaction_current(app, live, client, standing_launch, interaction);
+                        make_interaction_current(
+                            app,
+                            live,
+                            client,
+                            standing_launch,
+                            interaction,
+                            false,
+                        );
                     }
                     continue;
                 }
@@ -346,7 +384,7 @@ pub fn run(
                         app.interactions.open = false;
                         return Ok(RunOutcome::Reset);
                     };
-                    make_interaction_current(app, live, client, standing_launch, next);
+                    make_interaction_current(app, live, client, standing_launch, next, false);
                     continue;
                 }
                 KeyCode::Char('i') => {}
