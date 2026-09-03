@@ -593,7 +593,7 @@ mod tests {
             }]
         );
         assert_eq!(app.composer.text, host.display().to_string());
-        assert!(app.action_messages.iter().any(|message| message
+        assert!(app.notices.iter().any(|message| message
             .text
             .contains("applies when this Session next launches")));
 

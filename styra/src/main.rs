@@ -27,6 +27,7 @@ mod launch;
 mod launcher;
 mod mount;
 mod notes;
+mod notices;
 mod outbox;
 mod picker;
 mod preferences;

@@ -9,15 +9,15 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
 pub(crate) fn message_area_height(app: &App) -> u16 {
-    if app.action_messages.is_empty() {
+    if app.notices.is_empty() {
         0
     } else {
-        (app.action_messages.len() as u16).saturating_add(2)
+        (app.notices.len() as u16).saturating_add(2)
     }
 }
 
 pub(crate) fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
-    let lines = app.action_messages.iter().map(|message| {
+    let lines = app.notices.iter().map(|message| {
         Line::from(vec![
             Span::styled("● ", Style::default().fg(palette::ACCENT)),
             Span::styled(message.text.clone(), Style::default().fg(palette::TEXT)),

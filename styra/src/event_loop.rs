@@ -296,7 +296,7 @@ pub fn run(
                 event,
             );
         }
-        app.expire_action_messages();
+        app.notices.expire();
         notes::ensure_loaded(app, client, workspace_id);
         // Workspace launch policy is a server-owned read model. Refresh it
         // independently of input so edits from another Styra client flow into

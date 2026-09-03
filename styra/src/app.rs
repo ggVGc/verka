@@ -14,9 +14,7 @@
 //! `main` feeds it input and session updates.
 
 use std::cell::Cell;
-use std::collections::VecDeque;
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
 use styra_server::agent::{Provider, Selection};
 use styra_server::event::PresentationMode;
 use styra_server::event::{AgentEvent, DetailBlock};
@@ -35,6 +33,7 @@ use crate::interactions::LiveInteractions;
 use crate::launch::{self, Launch};
 use crate::launcher::Launcher;
 use crate::notes::Notes;
+use crate::notices::Notices;
 use crate::raw::RawView;
 use crate::tail::Tail;
 use crate::timeline::{Entry, Step, Timeline};
@@ -80,14 +79,6 @@ pub enum View {
 /// ([`crate::preferences`], [`crate::session`]) want the type without wanting
 /// the state machine around it.
 pub use styra_server::LaunchPolicy;
-
-/// A short-lived notice about something Styra did on the operator's behalf.
-pub struct ActionMessage {
-    pub text: String,
-    shown_at: Instant,
-}
-
-const ACTION_MESSAGE_LIFETIME: Duration = Duration::from_secs(5);
 
 /// How many recently selected models the picker remembers to order its model
 /// column by.
@@ -188,9 +179,9 @@ pub struct App {
     /// The Interaction's status and the bookkeeping around it; see
     /// [`Activity`].
     pub activity: Activity,
-    /// Recent actions Styra performed without a direct operator command.
-    /// Each is displayed for five seconds in the message panel.
-    pub action_messages: VecDeque<ActionMessage>,
+    /// Recent actions Styra performed without a direct operator command; see
+    /// [`Notices`].
+    pub notices: Notices,
     /// The panel showing one entry in full, and how; see [`Preview`].
     pub preview: Preview,
     /// What the next session launches with: agent, model, reasoning effort.
@@ -342,7 +333,7 @@ impl App {
             interactions: LiveInteractions::default(),
             outbox: Outbox::default(),
             activity: Activity::default(),
-            action_messages: VecDeque::new(),
+            notices: Notices::default(),
             preview: Preview::default(),
             selection,
             launcher: None,
@@ -515,22 +506,7 @@ impl App {
 
     /// Tell the operator about an action Styra took on their behalf.
     pub fn show_action_message(&mut self, message: impl Into<String>) {
-        self.action_messages.push_back(ActionMessage {
-            text: message.into(),
-            shown_at: Instant::now(),
-        });
-    }
-
-    /// Remove notices whose independent five-second display window has elapsed.
-    pub fn expire_action_messages(&mut self) {
-        let now = Instant::now();
-        while self
-            .action_messages
-            .front()
-            .is_some_and(|message| now.duration_since(message.shown_at) >= ACTION_MESSAGE_LIFETIME)
-        {
-            self.action_messages.pop_front();
-        }
+        self.notices.show(message);
     }
 
     /// Replace the message box's contents outright, used to restore a message
@@ -1340,29 +1316,6 @@ mod tests {
             usage: TokenUsage::default(),
         });
         assert_eq!(app.activity.status, Status::Background);
-    }
-
-    #[test]
-    fn automatic_action_messages_accumulate() {
-        let mut app = app();
-        assert!(app.action_messages.is_empty());
-
-        app.show_action_message("first action");
-        app.show_action_message("second action");
-        assert_eq!(app.action_messages.len(), 2);
-        assert_eq!(app.action_messages[0].text, "first action");
-        assert_eq!(app.action_messages[1].text, "second action");
-    }
-
-    #[test]
-    fn automatic_action_messages_expire_after_five_seconds() {
-        let mut app = app();
-        app.show_action_message("old action");
-        app.action_messages[0].shown_at = Instant::now() - Duration::from_secs(5);
-
-        app.expire_action_messages();
-
-        assert!(app.action_messages.is_empty());
     }
 
     #[test]

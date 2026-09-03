@@ -178,8 +178,8 @@ mod tests {
         let mut app = app();
         app.note_quota(reading("five_hour", QuotaStatus::Warning, Some(0.91)));
         assert_eq!(app.quota.iter().count(), 1);
-        assert_eq!(app.action_messages.len(), 1);
-        assert!(app.action_messages[0].text.contains("91% used"));
+        assert_eq!(app.notices.len(), 1);
+        assert!(app.notices.iter().any(|notice| notice.text.contains("91% used")));
         assert_eq!(app.log.iter().count(), 1);
         assert_eq!(app.log.newest().unwrap().level, styra_server::LogLevel::Warn);
     }
