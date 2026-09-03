@@ -270,19 +270,16 @@ pub fn run(
 
         // While the reference is open it is modal, so none of the commands
         // described by it can accidentally act on the session underneath.
-        if app.show_keybinds {
+        if app.help.is_open() {
             match key.code {
-                KeyCode::Char('?') | KeyCode::Esc | KeyCode::Char('q') => {
-                    app.show_keybinds = false;
-                    app.keybinds_scroll = 0;
-                }
+                KeyCode::Char('?') | KeyCode::Esc | KeyCode::Char('q') => app.help.close(),
                 // The reference is taller than a short terminal, so the
                 // sections at the end have to be reachable.
-                KeyCode::Char('j') | KeyCode::Down => app.scroll_keybinds(1),
-                KeyCode::Char('k') | KeyCode::Up => app.scroll_keybinds(-1),
-                KeyCode::PageDown => app.scroll_keybinds(10),
-                KeyCode::PageUp => app.scroll_keybinds(-10),
-                KeyCode::Char('g') => app.keybinds_scroll = 0,
+                KeyCode::Char('j') | KeyCode::Down => app.help.line_down(),
+                KeyCode::Char('k') | KeyCode::Up => app.help.line_up(),
+                KeyCode::PageDown => app.help.page_down(),
+                KeyCode::PageUp => app.help.page_up(),
+                KeyCode::Char('g') => app.help.scroll_to_top(),
                 _ => {}
             }
             continue;
@@ -307,7 +304,7 @@ pub fn run(
         }
         // In input focus, `?` is message text rather than a shortcut.
         if app.focus == Focus::List && key.code == KeyCode::Char(HELP.chars().next().unwrap()) {
-            app.show_keybinds = true;
+            app.help.open();
             continue;
         }
 

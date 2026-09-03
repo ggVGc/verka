@@ -18,6 +18,7 @@ mod composer;
 mod config;
 mod event_loop;
 mod files;
+mod help;
 mod ingest;
 mod insert;
 mod interactions;

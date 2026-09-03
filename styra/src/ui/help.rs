@@ -1,6 +1,7 @@
 //! Full-screen keyboard shortcut reference.
 
 use super::palette;
+use crate::help::Help;
 use crate::keymap::{ReferenceRow, CLOSE_REFERENCE, REFERENCE};
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -8,9 +9,9 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Frame;
 
-/// The reference is longer than a short terminal, so `scroll` says how far
+/// The reference is longer than a short terminal, so [`Help`] says how far
 /// down it the operator has moved. [`reference_height`] is what bounds that.
-pub(crate) fn render_keybinds(frame: &mut Frame, area: Rect, scroll: u16) {
+pub(crate) fn render_keybinds(frame: &mut Frame, area: Rect, help: &Help) {
     let heading = Style::default()
         .fg(palette::ACCENT)
         .add_modifier(Modifier::BOLD);
@@ -41,8 +42,11 @@ pub(crate) fn render_keybinds(frame: &mut Frame, area: Rect, scroll: u16) {
         muted,
     )));
 
+    // Only the renderer knows the height, so it is the one that can say how
+    // far the reference actually scrolls; see [`Help::note_limit`].
     let visible = area.height.saturating_sub(2);
-    let scroll = scroll.min(reference_height().saturating_sub(visible));
+    help.note_limit(reference_height().saturating_sub(visible));
+    let scroll = help.offset();
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(palette::ACCENT))
@@ -69,9 +73,17 @@ mod tests {
     use ratatui::Terminal;
 
     fn screen_at(scroll: u16) -> String {
+        let mut help = Help::default();
+        help.open();
+        // The limit the renderer will report is not known before it draws, so
+        // set one that cannot clamp the offset this test asked for.
+        help.note_limit(u16::MAX);
+        for _ in 0..scroll {
+            help.line_down();
+        }
         let mut terminal = Terminal::new(TestBackend::new(100, 60)).unwrap();
         terminal
-            .draw(|frame| render_keybinds(frame, frame.area(), scroll))
+            .draw(|frame| render_keybinds(frame, frame.area(), &help))
             .unwrap();
         let buffer = terminal.backend().buffer().clone();
         buffer

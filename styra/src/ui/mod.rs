@@ -294,8 +294,8 @@ fn session_title(app: &App) -> Option<Line<'static>> {
 }
 
 pub fn render(frame: &mut Frame, app: &App) {
-    if app.show_keybinds {
-        render_keybinds(frame, frame.area(), app.keybinds_scroll);
+    if app.help.is_open() {
+        render_keybinds(frame, frame.area(), &app.help);
         return;
     }
 

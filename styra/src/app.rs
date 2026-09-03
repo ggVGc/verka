@@ -25,6 +25,7 @@ use crate::activity::{Activity, Status};
 use crate::answer::AnswerView;
 use crate::composer::Composer;
 use crate::files::{self, FilesView};
+use crate::help::Help;
 use crate::ingest;
 use crate::insert::Prompt;
 use crate::interactions::LiveInteractions;
@@ -163,12 +164,8 @@ pub struct App {
     pub timeline: Timeline,
     pub focus: Focus,
     pub view: View,
-    /// Whether the full-screen keyboard shortcut reference is open.
-    pub show_keybinds: bool,
-    /// Lines the keybind reference is scrolled down by. It is longer than a
-    /// short terminal, so without this the sections at the end are simply
-    /// unreachable rather than merely below the fold.
-    pub keybinds_scroll: u16,
+    /// The full-screen keyboard reference; see [`Help`].
+    pub help: Help,
     /// The message being typed and the ones already sent; see [`Composer`].
     pub composer: Composer,
     /// Server-wide interaction navigation shown above the event timeline.
@@ -327,8 +324,7 @@ impl App {
             timeline: Timeline::default(),
             focus: Focus::List,
             view: View::Events,
-            show_keybinds: false,
-            keybinds_scroll: 0,
+            help: Help::default(),
             composer: Composer::default(),
             interactions: LiveInteractions::default(),
             outbox: Outbox::default(),
@@ -696,13 +692,6 @@ impl App {
             self.view = View::Files;
             self.preview.show();
         }
-    }
-
-    /// Move the keybind reference by `delta` lines, never above its start.
-    /// The lower bound is the renderer's, since only it knows the height it
-    /// has to fill.
-    pub fn scroll_keybinds(&mut self, delta: i16) {
-        self.keybinds_scroll = self.keybinds_scroll.saturating_add_signed(delta);
     }
 
     // --- Typed turn answers ---------------------------------------------------
