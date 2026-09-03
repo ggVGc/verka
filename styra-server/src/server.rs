@@ -59,6 +59,9 @@ struct ManagedInteraction {
     updates: Arc<Mutex<Vec<SequencedUpdate>>>,
     accepting_messages: Arc<AtomicBool>,
     activity: Arc<Mutex<InteractionActivity>>,
+    /// Kept separately because `Running` says only that foreground work is in
+    /// progress; background work may exist at the same time.
+    background_work: Arc<AtomicBool>,
     /// Captured at spawn so the interaction can be listed and reattached to without
     /// re-deriving them: the agent selection, host workspace, and launch policy.
     workspace_id: String,
@@ -410,11 +413,13 @@ impl ServerState {
         let updates = Arc::new(Mutex::new(Vec::new()));
         let accepting_messages = Arc::new(AtomicBool::new(true));
         let activity = Arc::new(Mutex::new(InteractionActivity::Pending));
+        let background_work = Arc::new(AtomicBool::new(false));
         let managed = Arc::new(ManagedInteraction {
             interaction,
             updates: Arc::clone(&updates),
             accepting_messages: Arc::clone(&accepting_messages),
             activity: Arc::clone(&activity),
+            background_work: Arc::clone(&background_work),
             workspace_id: request.workspace_id.clone(),
             name: Mutex::new(name.clone()),
             selection: Mutex::new(selection.clone()),
@@ -432,7 +437,6 @@ impl ServerState {
         std::thread::Builder::new()
             .name(format!("styra-updates-{id}"))
             .spawn(move || {
-                let mut background_work = false;
                 // Once the provider reports its background-task set, that
                 // count alone drives `background_work`; the tool-call
                 // heuristics below are a fallback for quieter providers.
@@ -447,8 +451,8 @@ impl ServerState {
                                 .background_tasks_running()
                                 .expect("guard checked the running count is present");
                             background_count_known = true;
-                            background_work = running > 0;
-                            if !background_work {
+                            background_work.store(running > 0, Ordering::Release);
+                            if running == 0 {
                                 let mut activity =
                                     activity.lock().expect("interaction activity lock poisoned");
                                 if *activity == InteractionActivity::Background {
@@ -457,7 +461,7 @@ impl ServerState {
                             }
                         }
                         InteractionUpdate::Event(event) if event.starts_background_task() => {
-                            background_work = true;
+                            background_work.store(true, Ordering::Release);
                             *activity.lock().expect("interaction activity lock poisoned") =
                                 InteractionActivity::Running;
                         }
@@ -482,7 +486,7 @@ impl ServerState {
                             ..
                         }) => {
                             *activity.lock().expect("interaction activity lock poisoned") =
-                                if background_work {
+                                if background_work.load(Ordering::Acquire) {
                                     InteractionActivity::Background
                                 } else {
                                     InteractionActivity::Pending
@@ -493,7 +497,7 @@ impl ServerState {
                             ..
                         }) if background_polls.remove(id) => {
                             if !background_count_known && update_finishes_background(&update) {
-                                background_work = false;
+                                background_work.store(false, Ordering::Release);
                                 *activity.lock().expect("interaction activity lock poisoned") =
                                     InteractionActivity::Pending;
                             }
@@ -723,6 +727,7 @@ impl ServerState {
         let updates = Arc::new(Mutex::new(seeded_updates));
         let accepting_messages = Arc::new(AtomicBool::new(true));
         let activity = Arc::new(Mutex::new(InteractionActivity::Pending));
+        let background_work = Arc::new(AtomicBool::new(false));
         // A resumed Session may carry over messages that were durably queued
         // on a previous attachment (one stopped before the interaction went
         // idle enough to send them), so reload them rather than starting empty.
@@ -732,6 +737,7 @@ impl ServerState {
             updates: Arc::clone(&updates),
             accepting_messages: Arc::clone(&accepting_messages),
             activity: Arc::clone(&activity),
+            background_work: Arc::clone(&background_work),
             workspace_id: summary.workspace_id.clone(),
             name: Mutex::new(summary.name.clone()),
             selection: Mutex::new(selection.clone()),
@@ -747,7 +753,6 @@ impl ServerState {
         std::thread::Builder::new()
             .name(format!("styra-updates-{id}"))
             .spawn(move || {
-                let mut background_work = false;
                 // Once the provider reports its background-task set, that
                 // count alone drives `background_work`; the tool-call
                 // heuristics below are a fallback for quieter providers.
@@ -762,8 +767,8 @@ impl ServerState {
                                 .background_tasks_running()
                                 .expect("guard checked the running count is present");
                             background_count_known = true;
-                            background_work = running > 0;
-                            if !background_work {
+                            background_work.store(running > 0, Ordering::Release);
+                            if running == 0 {
                                 let mut activity =
                                     activity.lock().expect("interaction activity lock poisoned");
                                 if *activity == InteractionActivity::Background {
@@ -772,7 +777,7 @@ impl ServerState {
                             }
                         }
                         InteractionUpdate::Event(event) if event.starts_background_task() => {
-                            background_work = true;
+                            background_work.store(true, Ordering::Release);
                             *activity.lock().expect("interaction activity lock poisoned") =
                                 InteractionActivity::Running;
                         }
@@ -797,7 +802,7 @@ impl ServerState {
                             ..
                         }) => {
                             *activity.lock().expect("interaction activity lock poisoned") =
-                                if background_work {
+                                if background_work.load(Ordering::Acquire) {
                                     InteractionActivity::Background
                                 } else {
                                     InteractionActivity::Pending
@@ -808,7 +813,7 @@ impl ServerState {
                             ..
                         }) if background_polls.remove(id) => {
                             if !background_count_known && update_finishes_background(&update) {
-                                background_work = false;
+                                background_work.store(false, Ordering::Release);
                                 *activity.lock().expect("interaction activity lock poisoned") =
                                     InteractionActivity::Pending;
                             }
@@ -1372,6 +1377,7 @@ impl ServerState {
                     Ok(Response::InteractionSnapshot(InteractionSnapshot {
                         request_id: request_id.clone(),
                         interaction: interaction.summary(),
+                        background_work: interaction.background_work.load(Ordering::Acquire),
                         updates,
                         queued: interaction.queued_messages(),
                         scope,

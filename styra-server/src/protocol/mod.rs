@@ -224,6 +224,11 @@ pub struct InteractionSnapshot {
     /// Client-generated identity used to correlate and cancel this fetch.
     pub request_id: String,
     pub interaction: InteractionSummary,
+    /// Whether work survives outside the foreground turn. This is separate
+    /// from `interaction.activity`: `Running` can coexist with background
+    /// work, and a bounded preview may have omitted the event that started it.
+    #[serde(default)]
+    pub background_work: bool,
     pub updates: Updates,
     pub queued: Vec<QueuedMessage>,
     pub scope: InteractionSnapshotScope,

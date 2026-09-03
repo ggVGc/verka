@@ -47,10 +47,10 @@ without later receiving the omitted prefix.
 
 `interaction_snapshot` is the self-contained view-loading operation. Its
 `preview` scope returns that bounded conversation tail together with the
-interaction's current summary and durable input queue; its `full` scope returns
-the complete update stream. This lets a UI send one request while navigating
-and turn the eventual response into a locally tagged event without performing
-more round trips for small lifecycle state.
+interaction's current summary, background-work state, and durable input queue;
+its `full` scope returns the complete update stream. This lets a UI send one
+request while navigating and turn the eventual response into a locally tagged
+event without performing more round trips for small lifecycle state.
 
 Every snapshot request carries a client-generated `request_id`. A client which
 moves to another interaction sends `cancel_interaction_snapshot` with that id

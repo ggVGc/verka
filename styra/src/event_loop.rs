@@ -778,6 +778,7 @@ mod tests {
                 activity: InteractionActivity::Running,
                 last_message: Some("payload body".into()),
             },
+            background_work: false,
             updates: Updates {
                 updates: vec![SequencedUpdate {
                     sequence: 12,
