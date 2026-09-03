@@ -902,7 +902,9 @@ styra/                   # the terminal client application
     preview.rs           # the panel showing one entry in full, and how
     outbox.rs            # the pending contract and the queue of messages to send
     notices.rs           # short-lived notices, each on its own five-second clock
+    help.rs              # the keyboard reference: whether it is open, and where in it
     interactions.rs      # the live Interactions navigator
+    loader.rs            # fetching Interaction snapshots, and which answers still matter
     workspace.rs         # which Workspace is on screen and where it is on this host
     launch.rs            # the sandbox policy's two layers, and the keys that edit them
     mount.rs             # writing, reading and locating host mounts (pure)
@@ -921,7 +923,8 @@ event loop) does the part that is not its business to know about.
 
 What earns a module is a rule, not a field count: the wire view's selection
 tracking its tail, a preview offset that stops meaning anything when the
-content changes, a contract belonging to the one question it was chosen for.
+content changes, a contract belonging to the one question it was chosen for,
+an answer from the snapshot loader that a later one has already superseded.
 Those rules were each re-established at several call sites over public fields
 before they had a type to live in. What is left on `App` is the state that
 belongs to no single module and the few methods that join two of them —
