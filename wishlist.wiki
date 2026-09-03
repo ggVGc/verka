@@ -1,3 +1,6 @@
+- styra: quota tracking:
+  - Doesn't say which provider
+  - Should show local time rather than UTC
 - Styra: renaming of interactions
 - Stopping with an error should become a different state than just Idle, and should show differently in the live interactions list
 - If an interaction has stopped because of rate limit. Automatically try to continue it when rate new window opens, unless interaction explicitly stopped.
