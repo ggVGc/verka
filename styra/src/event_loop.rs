@@ -450,6 +450,20 @@ pub fn run(
                     });
                 }
             }
+            Some(Request::SetWorktreesEnabled(enabled)) => {
+                match client.set_workspace_worktrees_enabled(workspace_id, enabled) {
+                    Ok(workspace) => {
+                        app.show_workspace(&workspace);
+                        app.show_action_message(format!(
+                            "worktree creation {} for future launches",
+                            if enabled { "enabled" } else { "disabled" }
+                        ));
+                    }
+                    Err(error) => app.push_log(LogEntry::error(format!(
+                        "could not change worktree creation: {error:#}"
+                    ))),
+                }
+            }
             Some(Request::OpenSession(id)) => return Ok(RunOutcome::OpenSession(id)),
             Some(Request::Sessions) => {
                 let mut sessions = client.list_sessions(workspace_id)?;

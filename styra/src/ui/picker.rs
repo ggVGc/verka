@@ -38,7 +38,9 @@ pub fn render_picker(
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(palette::ACCENT))
-        .title(" styra · choose a session · Enter open · r rename · x convert provider · q cancel ");
+        .title(
+            " styra · choose a session · Enter open · r rename · x convert provider · q cancel ",
+        );
 
     if sessions.is_empty() {
         render_placeholder(frame, block, panes[0], "  no sessions found");
@@ -223,7 +225,9 @@ pub fn render_workspace_picker(
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(palette::ACCENT))
-        .title(" styra \u{b7} choose a Workspace \u{b7} Enter open \u{b7} c create \u{b7} q cancel ");
+        .title(
+            " styra \u{b7} choose a Workspace \u{b7} Enter open \u{b7} c create \u{b7} q cancel ",
+        );
     if workspaces.is_empty() {
         render_placeholder(
             frame,
@@ -668,6 +672,7 @@ mod tests {
             name: Some(name.into()),
             host_path: PathBuf::from(format!("/home/op/{id}")),
             git_repository: None,
+            worktrees_enabled: false,
             path: PathBuf::from(format!("/state/workspaces/{id}")),
             session_count,
             age: "2h ago".into(),

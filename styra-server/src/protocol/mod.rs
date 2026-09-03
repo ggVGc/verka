@@ -256,6 +256,12 @@ pub enum Request {
         workspace_id: String,
         git_repository: Option<PathBuf>,
     },
+    /// Opt in or out of exposing linked-worktree creation to launches in this
+    /// Workspace.
+    SetWorkspaceWorktreesEnabled {
+        workspace_id: String,
+        enabled: bool,
+    },
     /// Read the server-owned Workspace launch policy without touching the
     /// Workspace's last-accessed timestamp. Used as a lightweight change feed
     /// by clients displaying the Driva options view.
@@ -433,6 +439,7 @@ pub enum Response {
     Workspaces(Vec<WorkspaceSummary>),
     Workspace(WorkspaceSummary),
     WorkspaceGitRepositoryUpdated(WorkspaceSummary),
+    WorkspaceWorktreesUpdated(WorkspaceSummary),
     WorkspaceLaunch(LaunchPolicy),
     SessionCreated(SessionInfo),
     SessionPlan(DrivaOptions),
@@ -692,6 +699,19 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn workspace_worktree_creation_can_be_enabled_explicitly() {
+        let request = Request::SetWorkspaceWorktreesEnabled {
+            workspace_id: "w-1".into(),
+            enabled: true,
+        };
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["operation"], "set_workspace_worktrees_enabled");
+        assert_eq!(json["data"]["workspace_id"], "w-1");
+        assert_eq!(json["data"]["enabled"], true);
+        assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
     }
 
     #[test]

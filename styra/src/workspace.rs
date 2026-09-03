@@ -25,6 +25,8 @@ pub struct Location {
     /// metadata (with the host directory name as its fallback) by the client,
     /// since Sessions only carry the durable Workspace id.
     pub name: Option<String>,
+    /// Whether future launches expose linked-worktree creation.
+    pub worktrees_enabled: bool,
     /// The host directory backing the agent's sandboxed workspace, when known.
     /// A replayed journal has no live workspace.
     root: Option<PathBuf>,
@@ -43,6 +45,7 @@ impl Location {
     pub fn show(&mut self, workspace: &WorkspaceSummary) {
         self.id = Some(workspace.id.clone());
         self.name = Some(display_name(workspace));
+        self.worktrees_enabled = workspace.worktrees_enabled;
     }
 
     /// The host directory backing the agent's workspace, if there is a live
@@ -104,6 +107,7 @@ mod tests {
             name: name.map(str::to_owned),
             host_path: host_path.into(),
             git_repository: None,
+            worktrees_enabled: false,
             path: format!("/state/workspaces/{id}").into(),
             session_count: 0,
             age: "now".into(),

@@ -164,6 +164,20 @@ impl Client {
         }
     }
 
+    pub fn set_workspace_worktrees_enabled(
+        &self,
+        workspace_id: &str,
+        enabled: bool,
+    ) -> Result<WorkspaceSummary> {
+        match self.request(Request::SetWorkspaceWorktreesEnabled {
+            workspace_id: workspace_id.to_owned(),
+            enabled,
+        })? {
+            Response::WorkspaceWorktreesUpdated(value) => Ok(value),
+            other => unexpected("workspace_worktrees_updated", other),
+        }
+    }
+
     /// Fetch the server-owned launch policy without recording a Workspace
     /// access. The UI uses this to observe edits made by other clients.
     pub fn workspace_launch(&self, workspace_id: &str) -> Result<LaunchPolicy> {

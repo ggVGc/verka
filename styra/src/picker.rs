@@ -413,6 +413,7 @@ mod tests {
             name: None,
             host_path: format!("/home/op/{id}").into(),
             git_repository: None,
+            worktrees_enabled: false,
             path: format!("/state/workspaces/{id}").into(),
             session_count: 0,
             age: "now".into(),

@@ -273,6 +273,8 @@ pub enum Request {
         change: styra_server::WorkspaceLaunchChange,
         clear_interaction: bool,
     },
+    /// Persist the linked-worktree preference for this Workspace.
+    SetWorktreesEnabled(bool),
     /// Tell the server the live interaction has been switched onto
     /// [`App::selection`], so the change lands now and outlives this client.
     ApplySelection,

@@ -264,6 +264,9 @@ impl ServerState {
         &self,
         workspace: &WorkspaceSummary,
     ) -> Result<Option<crate::worktree::Worktrees>> {
+        if !workspace.worktrees_enabled {
+            return Ok(None);
+        }
         let Some(repository) = crate::git::discover(&workspace.host_path)? else {
             return Ok(None);
         };
@@ -1233,6 +1236,23 @@ impl ServerState {
                     )?,
                 ))
             }
+            Request::SetWorkspaceWorktreesEnabled {
+                workspace_id,
+                enabled,
+            } => {
+                let _metadata = self
+                    .inner
+                    .workspace_metadata
+                    .lock()
+                    .expect("server workspace metadata lock poisoned");
+                Ok(Response::WorkspaceWorktreesUpdated(
+                    crate::workspace::set_worktrees_enabled(
+                        &self.inner.store_root,
+                        &workspace_id,
+                        enabled,
+                    )?,
+                ))
+            }
             Request::WorkspaceLaunch { workspace_id } => {
                 let _metadata = self
                     .inner
@@ -1844,6 +1864,36 @@ mod tests {
 
     fn temp_path(tag: &str) -> PathBuf {
         std::env::temp_dir().join(format!("styra-server-{tag}-{}.sock", std::process::id(),))
+    }
+
+    #[test]
+    fn workspace_worktrees_are_not_prepared_until_enabled() {
+        let store = temp_path("optional-worktrees-store");
+        let host = temp_path("optional-worktrees-host");
+        std::fs::remove_dir_all(&store).ok();
+        std::fs::remove_dir_all(&host).ok();
+        std::fs::create_dir_all(&host).unwrap();
+        assert!(std::process::Command::new("git")
+            .arg("-C")
+            .arg(&host)
+            .args(["init", "--quiet"])
+            .status()
+            .unwrap()
+            .success());
+        let state = ServerState::new(store.clone(), store.with_extension("sock"));
+        let workspace = crate::workspace::create(&store, &host, None).unwrap();
+        let worktrees_path = crate::workspace::worktrees_dir(&store, &workspace.id);
+
+        assert!(state.workspace_worktrees(&workspace).unwrap().is_none());
+        assert!(!worktrees_path.exists());
+
+        let workspace =
+            crate::workspace::set_worktrees_enabled(&store, &workspace.id, true).unwrap();
+        assert!(state.workspace_worktrees(&workspace).unwrap().is_some());
+        assert!(worktrees_path.is_dir());
+
+        std::fs::remove_dir_all(store).ok();
+        std::fs::remove_dir_all(host).ok();
     }
 
     #[test]

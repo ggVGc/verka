@@ -62,21 +62,24 @@ The durable layout is:
 ```text
 workspaces/<WORKSPACE-ID>/
   workspace.json
-  worktrees/                  # linked Git checkouts, when Git-backed
+  worktrees/                  # linked Git checkouts, when explicitly enabled
   sessions/<SESSION-ID>/
     session.json
     journal.jsonl
     diagnostics.log
 ```
 
-When a Workspace's host directory is inside a Git working tree, Styra discovers
-that repository on the host and keeps linked checkouts below the Workspace's
-`worktrees/` directory. Driva mounts that directory at
+Linked-worktree creation is off by default. Press `W` in the interface to opt a
+Workspace in; the footer always shows `worktrees: ON` or `worktrees: OFF`. When
+enabled and the Workspace's host directory is inside a Git working tree, Styra
+discovers that repository on the host and keeps linked checkouts below the
+Workspace's `worktrees/` directory. Driva mounts that directory at
 `/tmp/styra/worktrees`, together with the repository's shared Git metadata, so
 new checkouts become visible without restarting the interaction. Codex sessions
 receive a `create_worktree` tool taking a branch `name`; Styra handles the call
 on the host with `git worktree add -b` and returns the new sandbox path. A
-Workspace outside Git receives neither these mounts nor the tool.
+Workspace outside Git receives neither these mounts nor the tool. Turning the
+setting off affects future launches and does not delete existing worktrees.
 
 `workspace.json` also holds the Workspace's standing launch policy: the Driva
 templates, extra mounts, and network permission every launch there starts from.
@@ -111,6 +114,7 @@ Operations:
 | `list_workspaces` | none | `workspaces` |
 | `workspace` | Workspace id | `workspace` |
 | `set_workspace_git_repository` | Workspace id and optional Git repository path | `workspace_git_repository_updated` |
+| `set_workspace_worktrees_enabled` | Workspace id and enabled state | `workspace_worktrees_updated` |
 | `create_session` | Workspace id, provider/model/effort selection, this launch's own policy, optional message | `session_created` |
 | `plan_session` | Workspace id and the same launch inputs, creating nothing | `session_plan` |
 | `list_templates` | Workspace id | `templates` |

@@ -148,6 +148,12 @@ absolute-path tooling and makes provider session state stable for that project.
 Hosts that mount ephemeral worktrees instead select an explicit fixed sandbox
 layout, such as Orka's `/tmp/orka/workspace`.
 
+Linked-worktree creation is a separate, durable Workspace capability and is
+off by default. The client exposes an always-visible `worktrees: ON/OFF` state
+and an explicit `W` toggle. Only enabled Workspaces prepare the host-side
+worktree directory, mounts, and `create_worktree` tool for future launches;
+disabling it leaves any worktrees already created untouched.
+
 ## The agent profile
 
 A profile is the only agent-specific knowledge in Styra. It defines:

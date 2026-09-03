@@ -16,10 +16,25 @@ pub(crate) fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
         .working_directory_or_current()
         .map(|path| path.display().to_string())
         .unwrap_or_default();
-    let directory_width = working_directory.width().min(area.width as usize) as u16;
+    let worktrees = format!(
+        " W worktrees: {} ",
+        if app.workspace.worktrees_enabled {
+            "ON"
+        } else {
+            "OFF"
+        }
+    );
+    let worktrees_width = worktrees.width().min(area.width as usize) as u16;
+    let directory_width = working_directory
+        .width()
+        .min(area.width.saturating_sub(worktrees_width) as usize) as u16;
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Min(0), Constraint::Length(directory_width)])
+        .constraints([
+            Constraint::Min(0),
+            Constraint::Length(worktrees_width),
+            Constraint::Length(directory_width),
+        ])
         .split(area);
 
     let keybinds = Paragraph::new(Line::from(Span::styled(
@@ -31,8 +46,18 @@ pub(crate) fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
         Style::default().fg(palette::ADDITIONAL_INFO),
     )))
     .right_aligned();
+    let worktrees = Paragraph::new(Line::from(Span::styled(
+        worktrees,
+        Style::default().fg(if app.workspace.worktrees_enabled {
+            palette::SUCCESS
+        } else {
+            palette::INACTIVE
+        }),
+    )))
+    .right_aligned();
     frame.render_widget(keybinds, chunks[0]);
-    frame.render_widget(directory, chunks[1]);
+    frame.render_widget(worktrees, chunks[1]);
+    frame.render_widget(directory, chunks[2]);
 }
 
 pub(crate) fn tag_color(tag: &str) -> Color {
@@ -73,7 +98,16 @@ mod tests {
         let screen = rendered(&app);
         assert!(screen.contains("? keybinds"));
         assert!(screen.contains("/tmp/styra/workspace"));
+        assert!(screen.contains("W worktrees: OFF"));
         assert!(!screen.contains("j/k next/prev"));
+    }
+
+    #[test]
+    fn footer_makes_enabled_worktree_creation_visible() {
+        let mut app = testing::app("s1");
+        app.workspace.worktrees_enabled = true;
+
+        assert!(rendered(&app).contains("W worktrees: ON"));
     }
 
     #[test]
