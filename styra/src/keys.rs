@@ -169,8 +169,8 @@ pub fn handle_list_key(
         View::Log => match key.code {
             KeyCode::Char('j') | KeyCode::Down => app.log.scroll_down(),
             KeyCode::Char('k') | KeyCode::Up => app.log.scroll_up(),
-            KeyCode::Char('g') => app.log.to_top(),
-            KeyCode::Char('G') => app.log.to_bottom(),
+            KeyCode::Char('g') => app.log.scroll_to_top(),
+            KeyCode::Char('G') => app.log.scroll_to_bottom(),
             _ => {}
         },
         View::Quota => match key.code {

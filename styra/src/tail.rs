@@ -75,11 +75,13 @@ impl<T> Tail<T> {
         self.scroll_back = self.scroll_back.saturating_sub(1);
     }
 
-    pub fn to_top(&mut self) {
+    /// Jump to the oldest entry.
+    pub fn scroll_to_top(&mut self) {
         self.scroll_back = self.items.len().saturating_sub(1) as u16;
     }
 
-    pub fn to_bottom(&mut self) {
+    /// Jump back to the newest, resuming the tail.
+    pub fn scroll_to_bottom(&mut self) {
         self.scroll_back = 0;
     }
 }
@@ -141,7 +143,7 @@ mod tests {
         let mut tail: Tail<usize> = Tail::default();
 
         tail.scroll_up();
-        tail.to_top();
+        tail.scroll_to_top();
 
         assert_eq!(tail.scroll_back(), 0);
         assert!(tail.is_empty());
@@ -150,7 +152,7 @@ mod tests {
     #[test]
     fn replacing_the_contents_returns_to_the_tail() {
         let mut tail = tail(5);
-        tail.to_top();
+        tail.scroll_to_top();
         assert_eq!(tail.scroll_back(), 4);
 
         tail.replace(vec![10, 11]);

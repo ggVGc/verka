@@ -1905,7 +1905,7 @@ mod tests {
         assert_eq!(app.log.scroll_back(), 1);
         app.push_log(LogEntry::warn("more"));
         assert_eq!(app.log.scroll_back(), 2, "scrolled-up view stays put");
-        app.log.to_bottom();
+        app.log.scroll_to_bottom();
         assert_eq!(app.log.scroll_back(), 0);
     }
 

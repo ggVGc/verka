@@ -232,6 +232,13 @@ impl Activity {
 mod tests {
     use super::*;
 
+    fn in_status(status: Status) -> Activity {
+        Activity {
+            status,
+            ..Default::default()
+        }
+    }
+
     /// A provider that reports its background set owns the answer from then
     /// on, so a heuristic guess afterwards must not contradict it.
     #[test]
@@ -266,8 +273,7 @@ mod tests {
     /// Interaction that is mid-turn stays running.
     #[test]
     fn a_cleared_count_leaves_a_running_turn_alone() {
-        let mut activity = Activity::default();
-        activity.status = Status::Running;
+        let mut activity = in_status(Status::Running);
 
         activity.note_background_count(0);
 
@@ -324,8 +330,7 @@ mod tests {
     /// that changed nothing does not read as a fresh transition.
     #[test]
     fn the_status_clock_restarts_only_on_a_real_change() {
-        let mut activity = Activity::default();
-        activity.status = Status::Idle;
+        let mut activity = in_status(Status::Idle);
         activity.note_progress();
         let first = activity.progress().in_status;
 

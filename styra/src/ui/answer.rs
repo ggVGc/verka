@@ -22,7 +22,7 @@ pub(crate) fn render_answer(frame: &mut Frame, app: &App, area: Rect) {
     let block = view_block(app, Some(&title(app)));
 
     let Some(answer) = app.answer.answer() else {
-        let text = match app.answer.error().as_deref() {
+        let text = match app.answer.error() {
             Some(error) => format!("  {error}"),
             None => "  no answer yet".to_owned(),
         };
