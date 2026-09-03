@@ -17,6 +17,7 @@ mod clipboard;
 mod composer;
 mod config;
 mod event_loop;
+mod files;
 mod ingest;
 mod insert;
 mod interactions;

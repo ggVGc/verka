@@ -1,6 +1,7 @@
 //! Files mentioned by the focused event (or by the session), arranged by root.
 
 use crate::app::App;
+use crate::files::{self, FileItem};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
@@ -8,65 +9,20 @@ use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Frame;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use styra_server::agent::SandboxLayout;
 
 use super::{palette, render_list, render_placeholder, render_preview};
 
-struct FileItem {
-    reported: String,
-    resolved: PathBuf,
-    root: PathBuf,
-    relative: PathBuf,
-}
-
-fn resolve(root: &Path, reported: &str) -> PathBuf {
-    let path = Path::new(reported);
-    if path.is_absolute() {
-        if let Ok(relative) = path.strip_prefix(&SandboxLayout::default().workspace) {
-            return root.join(relative);
-        }
-        path.to_path_buf()
-    } else {
-        root.join(path)
-    }
-}
-
 fn items(app: &App) -> Vec<FileItem> {
-    let cwd = app
+    let root = app
         .workspace_root
         .clone()
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| PathBuf::from("."));
-    let mut items: Vec<_> = app
-        .file_paths()
-        .into_iter()
-        .map(|reported| {
-            let resolved = resolve(&cwd, &reported);
-            let (root, relative) = match resolved.strip_prefix(&cwd) {
-                Ok(relative) => (cwd.clone(), relative.to_path_buf()),
-                Err(_) => {
-                    let external_root = resolved.parent().unwrap_or(Path::new("/")).to_path_buf();
-                    let relative = resolved
-                        .strip_prefix(&external_root)
-                        .unwrap_or(&resolved)
-                        .to_path_buf();
-                    (external_root, relative)
-                }
-            };
-            FileItem {
-                reported,
-                resolved,
-                root,
-                relative,
-            }
-        })
-        .collect();
-    items.sort_by(|a, b| (&a.root, &a.relative).cmp(&(&b.root, &b.relative)));
-    items
+    files::items(&root, app.file_paths())
 }
 
 pub(crate) fn render_files(frame: &mut Frame, app: &App, area: Rect) {
-    let scope = if app.file_show_all {
+    let scope = if app.files.shows_all() {
         "files · all session · a: focused"
     } else {
         "files · focused entry · a: all"
@@ -112,13 +68,13 @@ pub(crate) fn render_files(frame: &mut Frame, app: &App, area: Rect) {
         render_tree(
             frame,
             &files,
-            app.file_selected.min(files.len() - 1),
+            app.files.selected_index().min(files.len() - 1),
             tree_block,
             left[1],
         );
         render_content(
             frame,
-            &files[app.file_selected.min(files.len() - 1)],
+            &files[app.files.selected_index().min(files.len() - 1)],
             content_area,
         );
     }

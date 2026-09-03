@@ -15,9 +15,8 @@
 
 use std::cell::Cell;
 use std::collections::VecDeque;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
-use styra_server::agent::SandboxLayout;
 use styra_server::agent::{Provider, Selection};
 use styra_server::event::PresentationMode;
 use styra_server::event::{AgentEvent, DetailBlock};
@@ -27,6 +26,7 @@ use styra_server::{InteractionEnd, LogEntry, QuotaEvent, QuotaStatus};
 use crate::activity::{Activity, Status};
 use crate::answer::AnswerView;
 use crate::composer::Composer;
+use crate::files::{self, FilesView};
 use crate::ingest;
 use crate::insert::Prompt;
 use crate::interactions::LiveInteractions;
@@ -255,9 +255,9 @@ pub struct App {
     /// shows its start. Unlike the raw/log views, the transcript reads as a
     /// document from the beginning rather than anchoring to the tail.
     pub transcript_scroll: u16,
-    /// Selected file in the Files view and whether it aggregates the session.
-    pub file_selected: usize,
-    pub file_show_all: bool,
+    /// Selected file in the Files view and whether it aggregates the session;
+    /// see [`FilesView`].
+    pub files: FilesView,
     /// The shape the next message asks its reply to come back in, or `None` for
     /// an ordinary turn. Set by the operator before sending and cleared once
     /// the message it applies to has gone, so a contract never silently
@@ -391,8 +391,7 @@ impl App {
             log: Tail::default(),
             quota: Tail::default(),
             transcript_scroll: 0,
-            file_selected: 0,
-            file_show_all: false,
+            files: FilesView::default(),
             contract: None,
             answer: AnswerView::default(),
             insert: None,
@@ -431,7 +430,7 @@ impl App {
             recent_models: std::mem::take(&mut self.recent_models),
             composer: std::mem::take(&mut self.composer),
             contract: self.contract.take(),
-            file_show_all: self.file_show_all,
+            file_show_all: self.files.shows_all(),
         }
     }
 
@@ -449,7 +448,7 @@ impl App {
         self.recent_models = state.recent_models;
         self.composer = state.composer;
         self.contract = state.contract;
-        self.file_show_all = state.file_show_all;
+        self.files.set_scope(state.file_show_all);
     }
 
     /// Whether the picker is reachable. Before launch all providers are
@@ -827,74 +826,35 @@ impl App {
 
     pub fn file_select_next(&mut self) {
         let last = self.file_paths().len().saturating_sub(1);
-        self.file_selected = self.file_selected.saturating_add(1).min(last);
+        self.files.select_next(last);
     }
 
     pub fn file_select_prev(&mut self) {
-        self.file_selected = self.file_selected.saturating_sub(1);
+        self.files.select_prev();
     }
 
     pub fn toggle_file_scope(&mut self) {
-        self.file_show_all = !self.file_show_all;
-        self.file_selected = 0;
+        self.files.toggle_scope();
     }
 
-    /// Files explicitly touched by an event, plus path-like text mentions that
-    /// currently resolve to files. Paths retain their reported spelling so the
-    /// Files renderer can distinguish workspace-relative and external roots.
+    /// Files touched or named by the focused entry, or by the whole session;
+    /// see [`files::mentioned`].
     pub fn file_paths(&self) -> Vec<String> {
-        let entries: Box<dyn Iterator<Item = &Entry> + '_> = if self.file_show_all {
+        let entries: Box<dyn Iterator<Item = &Entry> + '_> = if self.files.shows_all() {
             Box::new(self.timeline.entries.iter())
         } else {
             Box::new(self.timeline.selected_entry().into_iter())
         };
-        let mut paths = Vec::new();
-        for entry in entries {
-            if let AgentEvent::FileChanged { paths: changed, .. } = &entry.event {
-                paths.extend(changed.iter().cloned());
-            }
-            let mut text = entry.event.summary();
-            for block in entry.event.detail() {
-                text.push('\n');
-                match block {
-                    DetailBlock::Text(part) | DetailBlock::Code { text: part, .. } => {
-                        text.push_str(&part)
-                    }
-                }
-            }
-            for token in text.split_whitespace() {
-                let candidate = token.trim_matches(|ch: char| {
-                    matches!(
-                        ch,
-                        '`' | '\'' | '"' | '(' | ')' | '[' | ']' | '{' | '}' | ',' | ':' | ';'
-                    )
-                });
-                if candidate.is_empty() || (!candidate.contains('/') && !candidate.contains('.')) {
-                    continue;
-                }
-                let path = PathBuf::from(candidate);
-                let resolved = if path.is_absolute() {
-                    match path.strip_prefix(&SandboxLayout::default().workspace) {
-                        Ok(relative) => self
-                            .workspace_root
-                            .as_ref()
-                            .map(|root| root.join(relative))
-                            .unwrap_or(path),
-                        Err(_) => path,
-                    }
-                } else if let Some(root) = &self.workspace_root {
-                    root.join(path)
-                } else {
-                    continue;
-                };
-                if resolved.is_file() {
-                    paths.push(candidate.to_owned());
-                }
-            }
-        }
-        paths.sort();
-        paths.dedup();
-        paths
+        files::mentioned(entries, self.workspace_root.as_deref())
+    }
+
+    /// The root the Files view displays paths beneath: the Workspace when
+    /// there is one, and otherwise wherever this client was started, so a
+    /// replayed journal still resolves the paths it mentions.
+    fn display_root(&self) -> Option<PathBuf> {
+        self.workspace_root
+            .clone()
+            .or_else(|| std::env::current_dir().ok())
     }
 
     /// Resolve the selected Files-view entry to the corresponding host path.
@@ -903,54 +863,18 @@ impl App {
     /// instead, so `e` opens what the agent named without a second mechanism
     /// for doing the same thing.
     pub fn selected_file_path(&self) -> Option<PathBuf> {
+        let root = self.display_root()?;
         if self.view == View::Answer {
             let file = self.answer.selected_file()?;
-            let root = self
-                .workspace_root
-                .clone()
-                .or_else(|| std::env::current_dir().ok())?;
             return Some(if file.path.is_absolute() {
                 file.path.clone()
             } else {
                 root.join(&file.path)
             });
         }
-        let root = self
-            .workspace_root
-            .clone()
-            .or_else(|| std::env::current_dir().ok())?;
-        let sandbox_workspace = SandboxLayout::default().workspace;
-        let mut paths = self
-            .file_paths()
-            .into_iter()
-            .map(|reported| {
-                let path = PathBuf::from(reported);
-                let resolved = if path.is_absolute() {
-                    path.strip_prefix(&sandbox_workspace)
-                        .map(|relative| root.join(relative))
-                        .unwrap_or(path)
-                } else {
-                    root.join(path)
-                };
-                let (display_root, relative) = match resolved.strip_prefix(&root) {
-                    Ok(relative) => (root.clone(), relative.to_path_buf()),
-                    Err(_) => {
-                        let display_root =
-                            resolved.parent().unwrap_or(Path::new("/")).to_path_buf();
-                        let relative = resolved
-                            .strip_prefix(&display_root)
-                            .unwrap_or(&resolved)
-                            .to_path_buf();
-                        (display_root, relative)
-                    }
-                };
-                ((display_root, relative), resolved)
-            })
-            .collect::<Vec<_>>();
-        paths.sort_by(|a, b| a.0.cmp(&b.0));
-        paths
-            .get(self.file_selected)
-            .map(|(_, resolved)| resolved.clone())
+        files::items(&root, self.file_paths())
+            .get(self.files.selected_index())
+            .map(|item| item.resolved.clone())
     }
 
     pub fn toggle_preview_mode(&mut self) {
@@ -1124,7 +1048,7 @@ mod tests {
         app.set_input("half a thought".into());
         app.contract = Some(Contract::Lines);
         app.show_preview = true;
-        app.file_show_all = true;
+        app.files.set_scope(true);
         app.recent_models = vec!["gpt-5.6-sol".into()];
 
         let mut next = App::new(app.selection.clone(), "session-2");
@@ -1133,7 +1057,7 @@ mod tests {
         assert_eq!(next.composer.text, "half a thought");
         assert_eq!(next.contract, Some(Contract::Lines));
         assert!(next.show_preview);
-        assert!(next.file_show_all);
+        assert!(next.files.shows_all());
         assert_eq!(next.recent_models, vec!["gpt-5.6-sol".to_owned()]);
     }
 

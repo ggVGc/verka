@@ -257,14 +257,17 @@ pub fn handle_list_key(
             KeyCode::Char('k') | KeyCode::Up => app.file_select_prev(),
             KeyCode::Char('J') => {
                 app.select_next_line();
-                app.file_selected = 0;
+                app.files.select_first();
             }
             KeyCode::Char('K') => {
                 app.select_prev_line();
-                app.file_selected = 0;
+                app.files.select_first();
             }
-            KeyCode::Char('g') => app.file_selected = 0,
-            KeyCode::Char('G') => app.file_selected = app.file_paths().len().saturating_sub(1),
+            KeyCode::Char('g') => app.files.select_first(),
+            KeyCode::Char('G') => {
+                let last = app.file_paths().len().saturating_sub(1);
+                app.files.select_last(last);
+            }
             KeyCode::Char('a') => app.toggle_file_scope(),
             KeyCode::Char('p') => app.toggle_preview(),
             KeyCode::Char('y') => copy_selection(app),
