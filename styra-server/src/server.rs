@@ -1298,6 +1298,14 @@ impl ServerState {
                 let next = all.last().map(|update| update.sequence).unwrap_or(after);
                 Ok(Response::Updates(Updates { updates, next }))
             }
+            Request::RecentUpdates { id, limit } => {
+                let interaction = self.interaction(&id)?;
+                let all = interaction
+                    .updates
+                    .lock()
+                    .expect("interaction update lock poisoned");
+                Ok(Response::Updates(recent_conversation_updates(&all, limit)))
+            }
             Request::ListInteractions => {
                 let interactions = self
                     .inner
@@ -1346,6 +1354,24 @@ impl ServerState {
             }
         }
     }
+}
+
+fn recent_conversation_updates(all: &[SequencedUpdate], limit: usize) -> Updates {
+    let next = all.last().map(|update| update.sequence).unwrap_or(0);
+    let mut updates = all
+        .iter()
+        .rev()
+        .filter(|update| {
+            matches!(
+                &update.update,
+                InteractionUpdate::Event(event) if event.is_conversation()
+            )
+        })
+        .take(limit)
+        .cloned()
+        .collect::<Vec<_>>();
+    updates.reverse();
+    Updates { updates, next }
 }
 
 fn replayed_session_updates(
@@ -1667,10 +1693,70 @@ fn serve_connection(mut stream: UnixStream, state: &ServerState) -> Result<()> {
 mod tests {
     use super::*;
     use crate::client::Client;
-    use crate::protocol::{AttributedMount, MountOrigin};
+    use crate::protocol::{AttributedMount, Direction, LogEntry, MountOrigin, RawLine};
 
     fn temp_path(tag: &str) -> PathBuf {
         std::env::temp_dir().join(format!("styra-server-{tag}-{}.sock", std::process::id(),))
+    }
+
+    #[test]
+    fn recent_updates_take_the_conversation_tail_and_keep_the_true_cursor() {
+        let update = |sequence, update| SequencedUpdate { sequence, update };
+        let all = vec![
+            update(
+                1,
+                InteractionUpdate::Event(crate::event::AgentEvent::UserMessage {
+                    text: "one".into(),
+                }),
+            ),
+            update(
+                2,
+                InteractionUpdate::Raw(RawLine {
+                    at_ms: 0,
+                    direction: Direction::FromAgent,
+                    text: "wire".into(),
+                }),
+            ),
+            update(
+                3,
+                InteractionUpdate::Event(crate::event::AgentEvent::CommandStarted {
+                    command: "cargo test".into(),
+                }),
+            ),
+            update(
+                4,
+                InteractionUpdate::Event(crate::event::AgentEvent::AgentMessage {
+                    text: "four".into(),
+                }),
+            ),
+            update(
+                5,
+                InteractionUpdate::Raw(RawLine {
+                    at_ms: 0,
+                    direction: Direction::FromAgent,
+                    text: "more wire".into(),
+                }),
+            ),
+            update(6, InteractionUpdate::Log(LogEntry::info("six"))),
+            update(
+                7,
+                InteractionUpdate::Event(crate::event::AgentEvent::AgentMessage {
+                    text: "seven".into(),
+                }),
+            ),
+        ];
+
+        let recent = recent_conversation_updates(&all, 2);
+        assert_eq!(recent.next, 7);
+        assert_eq!(
+            recent
+                .updates
+                .iter()
+                .map(|update| update.sequence)
+                .collect::<Vec<_>>(),
+            [4, 7]
+        );
+        assert!(recent_conversation_updates(&all, 0).updates.is_empty());
     }
 
     #[test]

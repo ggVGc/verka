@@ -521,8 +521,9 @@ current focus is shown in the status line and by which region draws the cursor.
 | `L`             | Choose launch settings, or the model for the next idle agent turn (and Codex effort) |
 | `s`             | Stop the Interaction (keeps the Session and journal)        |
 | `F`             | Seed an explicit new Session from this Session's transcript |
-| `a`             | Browse Sessions in the current Workspace with a preview     |
-| `A`             | Show live Interactions with a preview                       |
+| `a`             | Open live Interactions above the event list                  |
+| `D`             | In the Interaction navigator, delete the selected stopped Interaction |
+| `A`             | Browse Sessions in the current Workspace with a preview     |
 | `S`             | Stop the Interaction and return to a blank Session screen   |
 | `V`             | Choose a Workspace, then browse its Sessions                |
 | `q`             | Quit (prompts if the session is still running)              |
@@ -640,9 +641,6 @@ Two client-facing shortcuts:
   immediately on success, or shows the failure (most commonly a stored
   Session with no provider id, so nothing native exists to convert) without
   leaving the list.
-- `X` in the current-Interactions picker converts the selected active
-  Interaction, starts its converted sibling idle, stops the original, and
-  attaches to the new Interaction.
 - `b` in the event list branches the current Session under the *same*
   provider, seeded with history up to the selected entry (a checkpoint), or
   the whole history when the list is following the newest entry or the
@@ -654,22 +652,31 @@ Two client-facing shortcuts:
 
 ### Current Interactions
 
-`A` opens the server's current-Interactions picker. Each entry names its
-Workspace and Session. The list stays on the left, while the right pane follows
-the selected Interaction's live conversation, omitting tool traffic, raw wire
-lines, and Styra diagnostics. Moving
-the selection with `j`/`k` immediately starts loading its history on a
-background thread, so the list remains responsive while the pane says
-`loading…`. Loaded previews are cached for the lifetime of the picker; a
-changed Interaction summary starts an incremental background refresh without
-discarding the cached conversation. The periodic summary-list refresh also
-runs in the background, leaving cursor input and drawing free of server
-round-trips. Preview rendering waits for the cursor to settle, but fetching
-does not; completed jobs and summary updates are applied only on input-idle
-ticks so they cannot get ahead of a queued movement key. `Enter` attaches to
-the selected Interaction; `Esc`/`q` returns without affecting any running
-process. Entries are grouped with pending work first, idle Interactions next, and stopped
-Interactions last; server order is retained within each group.
+`a` opens the server's live Interactions as a navigator above the main event
+list. There is no separate picker or conversation preview: moving with `j`/`k`
+immediately makes the highlighted Interaction current and fills the ordinary
+event list below with its recent conversation tail. The Interaction previously
+shown keeps running on the server; only this client's current view changes.
+
+Moving initially asks for only the five newest conversation events, and a newly
+selected Interaction returns to conversation-only mode focused on its newest
+visible entry. The returned cursor is still the true stream tail, so live
+polling continues from there rather than filling in the omitted prefix. `Enter`
+confirms the highlighted Interaction, loads its complete history including raw
+wire data, and closes the navigator. The first `r` can also hydrate that complete
+history on demand; subsequent raw-view toggles use the local history.
+
+The navigator refreshes its summaries while open. Pending work is listed
+first, running work next, and stopped Interactions last, with server order
+retained within each group. Each row shows the latest received agent message
+on a subordinate line, updated along with those live summaries. All-Workspaces
+mode always groups the rows beneath
+Workspace headings; current-Workspace mode omits the one redundant heading.
+`w` switches between those scopes. `a` or `Esc` closes the navigator while
+leaving its lightweight tail current. `D` removes a highlighted
+stopped Interaction from the server. The next available Interaction becomes
+current without closing the navigator; deleting the last one closes it and
+returns Styra to its blank default state.
 
 ### Starting sends nothing on its own
 

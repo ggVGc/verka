@@ -126,9 +126,8 @@ pub fn next_contract(current: Option<Contract>) -> Option<Contract> {
 /// One turn as this client describes it: the operator's text, the selection it
 /// should run under, and the shape it asks its reply to take.
 ///
-/// Takes the selection rather than the whole [`App`] because a turn is also
-/// composed where there is no loaded session — the live-interactions picker
-/// sends to an interaction it only has a summary of.
+/// Takes the selection rather than the whole [`App`] so launch and resume paths
+/// can build the same wire request without borrowing unrelated display state.
 pub fn turn(message: &str, selection: &Selection, contract: Option<Contract>) -> SendMessage {
     let turn = SendMessage::new(message).under(selection.clone());
     match contract {
@@ -235,16 +234,41 @@ pub fn attach_live_interaction(
     client: &Client,
     interaction: InteractionSummary,
 ) -> Result<(App, Live)> {
+    attach_live_interaction_with_raw(client, interaction, true, None)
+}
+
+/// Attach for interaction-list browsing with only the newest conversation events.
+/// Full raw history is hydrated only if the operator asks for the raw view.
+pub fn attach_live_interaction_recent(
+    client: &Client,
+    interaction: InteractionSummary,
+    limit: usize,
+) -> Result<(App, Live)> {
+    attach_live_interaction_with_raw(client, interaction, false, Some(limit))
+}
+
+fn attach_live_interaction_with_raw(
+    client: &Client,
+    interaction: InteractionSummary,
+    raw: bool,
+    recent: Option<usize>,
+) -> Result<(App, Live)> {
     let mut app = App::new(interaction.selection.clone(), interaction.id.clone());
+    app.raw_loaded = raw;
     app.session_name = interaction.name.clone();
     app.workspace_id = Some(interaction.workspace_id.clone());
     app.set_workspace_root(interaction.workspace.clone());
     app.launch.record(interaction.driva.clone());
-    let batch = client.updates(&interaction.id, 0)?;
+    let batch = match (raw, recent) {
+        (true, _) => client.updates(&interaction.id, 0)?,
+        (false, Some(limit)) => client.recent_conversation_updates(&interaction.id, limit)?,
+        (false, None) => client.updates_without_raw(&interaction.id, 0)?,
+    };
     let cursor = batch.next;
     for sequenced in batch.updates {
         apply_update(&mut app, sequenced.update);
     }
+    app.select_last();
     for message in client.queued_messages(&interaction.id)? {
         app.queue_message(message);
     }

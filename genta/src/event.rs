@@ -255,6 +255,19 @@ pub enum PresentationMode {
 }
 
 impl AgentEvent {
+    /// Whether this event belongs in the human-readable conversation. Errors
+    /// complete the exchange being read, and model changes explain which
+    /// model produced the replies around them.
+    pub fn is_conversation(&self) -> bool {
+        matches!(
+            self,
+            AgentEvent::UserMessage { .. }
+                | AgentEvent::AgentMessage { .. }
+                | AgentEvent::Error { .. }
+                | AgentEvent::ModelChanged { .. }
+        )
+    }
+
     /// Whether this event starts or finishes a Claude Code background shell
     /// task. Claude reports `run_in_background` in the Bash tool input, while
     /// the later TaskOutput/TaskGet result reports whether that task is done.

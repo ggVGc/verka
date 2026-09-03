@@ -1,4 +1,5 @@
 - Stopping with an error should become a different state than just Idle, and should show differently in the live interactions list
+- If an interaction has stopped because of rate limit. Automatically try to continue it when rate new window opens, unless interaction explicitly stopped.
 - Start new session from single entry (or selection of multiple entries) in an interaction log. Should carry a link to where it originated from.
 - Since stopping and resuming works now, allow provider changing and other similar actions if a session is Idle, since it can just be stopped and restarted. Instruct the user if that happened (or that it will happen?).
 - Live interaction running state should show the same animated box

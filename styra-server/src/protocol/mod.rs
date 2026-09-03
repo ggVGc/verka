@@ -341,6 +341,12 @@ pub enum Request {
         #[serde(default = "yes")]
         raw: bool,
     },
+    /// Return at most the newest `limit` conversation events. The response
+    /// cursor still points to the true end of the complete stream.
+    RecentUpdates {
+        id: String,
+        limit: usize,
+    },
     ListInteractions,
     ListSessions {
         workspace_id: String,
@@ -474,6 +480,15 @@ mod tests {
             serde_json::from_str::<Request>(r#"{"api_version":"v3","operation":"health"}"#)
                 .is_err()
         );
+
+        let recent = Request::RecentUpdates {
+            id: "s-1".into(),
+            limit: 5,
+        };
+        let json = serde_json::to_value(&recent).unwrap();
+        assert_eq!(json["operation"], "recent_updates");
+        assert_eq!(json["data"]["limit"], 5);
+        assert_eq!(serde_json::from_value::<Request>(json).unwrap(), recent);
     }
 
     #[test]

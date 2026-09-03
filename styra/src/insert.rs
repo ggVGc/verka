@@ -17,9 +17,7 @@
 //! [`Prompt`] holds what it needs to answer both questions — where relative
 //! paths start, the sandbox it is checking against, and whether that sandbox
 //! can still be changed — and reports what it decided as an [`Outcome`] rather
-//! than reaching into a session. Both message boxes open it: the session view
-//! from its own launch policy, and the live-interactions picker from the
-//! summary of the interaction it is sending to.
+//! than reaching into a session.
 
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;

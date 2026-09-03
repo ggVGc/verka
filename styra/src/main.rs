@@ -96,13 +96,6 @@ fn pending_app(
     app
 }
 
-/// Carry client-side display state across the active-interactions picker.
-/// Attaching rebuilds the [`App`] from the selected interaction, but this
-/// filter belongs to the operator's view rather than to either Session.
-fn carry_active_session_view(previous: &App, next: &mut App) {
-    next.timeline.conversation_only = previous.timeline.conversation_only;
-}
-
 /// What a new interaction starts from: the operator's saved defaults with this
 /// invocation's flags over them.
 ///
@@ -131,77 +124,6 @@ fn standing_launch(
         launch.templates = cli.template.clone();
     }
     Ok((defaults.selection, launch))
-}
-
-/// What an ordinary interactive launch (no CLI prompt, no `--view`) opens
-/// into: if the active Workspace already has live interactions, let the
-/// operator pick one to attach to rather than burying it behind a blank
-/// screen; otherwise fall back to the blank pending screen, without forcing
-/// input focus (see `App::pending`).
-fn open_start_screen(
-    client: &Client,
-    terminal: &mut Option<Terminal<CrosstermBackend<Stdout>>>,
-    selection: styra_server::agent::Selection,
-    launch: LaunchPolicy,
-    active_workspace: &WorkspaceSummary,
-) -> Result<(App, Live)> {
-    let mut interactions = client.list_interactions()?;
-    if !interactions
-        .iter()
-        .any(|interaction| interaction.workspace_id == active_workspace.id)
-    {
-        return Ok((
-            pending_app(selection, launch, active_workspace),
-            Live::Pending,
-        ));
-    }
-
-    let mut term = match terminal.take() {
-        Some(term) => term,
-        None => terminal::setup()?,
-    };
-    let workspaces = client.list_workspaces()?;
-    // The start screen is about the Workspace being opened, so the picker
-    // starts restricted to it — `w` widens it to the whole server.
-    let choice = picker::run_interactions_picker(
-        &mut term,
-        client,
-        &mut interactions,
-        &workspaces,
-        Some(&active_workspace.id),
-        picker::InteractionsView {
-            only_current_workspace: true,
-            ..Default::default()
-        },
-    );
-    let outcome = match choice {
-        // Attaching adopts the standing launch inputs too: they describe what
-        // *this client* would start next (and what a resume sends), not
-        // anything about the interaction being attached to.
-        Ok(Some((interaction, notice))) => session::attach_live_interaction(client, interaction)
-            .map(|(mut app, live)| {
-                app.launch.interaction = launch.clone();
-                if let Some(notice) = notice {
-                    app.show_action_message(notice);
-                }
-                (app, live)
-            }),
-        Ok(None) => Ok((
-            pending_app(selection, launch, active_workspace),
-            Live::Pending,
-        )),
-        Err(error) => Err(error),
-    };
-    match outcome {
-        Ok(pair) => {
-            *terminal = Some(term);
-            Ok(pair)
-        }
-        Err(error) => {
-            terminal::restore(&mut term)?;
-            Err(error)
-        }
-    }
 }
 
 fn main() -> Result<()> {
@@ -369,19 +291,11 @@ fn main() -> Result<()> {
                 };
             }
             // No seed: nothing has been said to an agent yet, so nothing is
-            // launched yet either. The event loop spawns the session the
-            // moment the operator submits their first message — on whatever
-            // the launch picker holds by then. If the Workspace already has
-            // live interactions, offer to attach to one instead of opening
-            // straight onto the blank screen.
+            // launched yet either. Existing interactions are reached from the
+            // main screen with `a`; there is no separate startup picker.
             None => {
-                (app, live) = open_start_screen(
-                    &client,
-                    &mut terminal,
-                    selection,
-                    launch.clone(),
-                    &active_workspace,
-                )?;
+                app = pending_app(selection, launch.clone(), &active_workspace);
+                live = Live::Pending;
             }
         }
     }
@@ -399,10 +313,13 @@ fn main() -> Result<()> {
             &mut terminal,
             &mut app,
             &client,
-            &active_workspace.id,
             &mut live,
-            &preferences_path,
-            &config,
+            event_loop::RunContext {
+                workspace_id: &active_workspace.id,
+                standing_launch: &launch,
+                preferences_path: &preferences_path,
+                config: &config,
+            },
         ) {
             Ok(outcome) => outcome,
             Err(error) => break Err(error),
@@ -416,7 +333,7 @@ fn main() -> Result<()> {
                 workspace,
                 session_id,
             } => {
-                active_workspace = workspace;
+                active_workspace = *workspace;
                 match session_id {
                     Some(session_id) => match session::open_session(&client, &session_id) {
                         Ok((mut new_app, new_live)) => {
@@ -448,30 +365,6 @@ fn main() -> Result<()> {
                     Err(error) => app.push_log(LogEntry::error(format!(
                         "could not open Session {session_id}: {error:#}"
                     ))),
-                }
-            }
-            // Attach to another live interaction. The outgoing one is left running on
-            // the server (interactions outlive a client); we just stop viewing it.
-            RunOutcome::Attach {
-                interaction,
-                notice,
-            } => {
-                let id = interaction.id.clone();
-                match session::attach_live_interaction(&client, interaction) {
-                    Ok((mut new_app, new_live)) => {
-                        new_app.launch.interaction = launch.clone();
-                        carry_active_session_view(&app, &mut new_app);
-                        if let Some(notice) = notice {
-                            new_app.show_action_message(notice);
-                        }
-                        app = new_app;
-                        live = new_live;
-                    }
-                    Err(error) => {
-                        app.push_log(LogEntry::error(format!(
-                            "could not attach to interaction {id}: {error:#}"
-                        )));
-                    }
                 }
             }
             // Return to the blank start screen. Reset has already stopped the
@@ -650,25 +543,6 @@ mod cli_tests {
             event_loop::interaction_stopped_by(&RunOutcome::NewSession, &live),
             None
         );
-    }
-
-    #[test]
-    fn active_session_selection_keeps_the_conversation_only_filter() {
-        // Both states, named outright and carried in both directions. The old
-        // form toggled the previous session's filter from whatever a fresh
-        // `Timeline` starts with and asserted the result, so it was really
-        // asserting that default and broke when the default changed.
-        for carried in [true, false] {
-            let selection = Selection::parse("codex:gpt-5.6-sol/high").unwrap();
-            let mut previous = App::new(selection.clone(), "previous");
-            previous.timeline.conversation_only = carried;
-            let mut next = App::new(selection, "next");
-            next.timeline.conversation_only = !carried;
-
-            carry_active_session_view(&previous, &mut next);
-
-            assert_eq!(next.timeline.conversation_only, carried);
-        }
     }
 
     #[test]

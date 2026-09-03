@@ -12,6 +12,7 @@ mod footer;
 mod help;
 mod input;
 mod insert;
+mod interactions;
 mod launcher;
 mod list;
 mod log;
@@ -39,15 +40,14 @@ use insert::render_insert;
 use launcher::render_launcher;
 use list::render_list;
 pub(crate) use list::{summary_line, wrap_line};
-pub(crate) use log::log_line;
 use log::render_log;
 use messages::{message_area_height, render_messages};
 use notes::render_notes;
 pub use notes::render_notes_prompt;
 pub(crate) use picker::short_id;
 pub use picker::{
-    render_interactions_picker, render_message_popup, render_name_prompt, render_picker,
-    render_template_picker, render_workspace_picker, Preview, SessionsPreview,
+    render_message_popup, render_name_prompt, render_picker, render_template_picker,
+    render_workspace_picker, Preview, SessionsPreview,
 };
 pub(crate) use preview::preview_scroll_limit;
 use preview::{render_fullscreen_preview, render_preview};
@@ -64,45 +64,18 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 use std::time::Duration;
 
+/// Braille spinner frames shared by every view that represents active agent
+/// work. The phase advances only when an agent event arrives.
+const RUNNING_INDICATOR: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+pub(crate) fn running_indicator(events: usize) -> &'static str {
+    RUNNING_INDICATOR[events % RUNNING_INDICATOR.len()]
+}
+
 /// Cap on detail lines shown for one expanded entry, so a single noisy command
 /// cannot bury the rest of the session.
 const MAX_DETAIL_LINES: usize = 40;
 const DETAIL_INDENT: &str = "    ";
-/// Draw the shared message box over whatever a picker has already rendered.
-/// The main interaction view opens the same box from [`render`]; only the title
-/// and where a sent message goes differ.
-/// `note` names a standing qualifier on the message (the chosen contract) and
-/// `notice` a transient line about the last thing that happened in the box.
-/// `cursor` is false while an inner prompt has the keyboard.
-pub fn render_message_input(
-    frame: &mut Frame,
-    title: String,
-    note: Option<String>,
-    notice: Option<String>,
-    text: &str,
-    cursor: bool,
-) {
-    modal_input::render(
-        frame,
-        &modal_input::ModalInput {
-            title,
-            note,
-            notice,
-            preceding: Vec::new(),
-            text,
-            placeholder: "type a message, Enter to send",
-            cursor,
-        },
-    );
-}
-
-/// Draw the path prompt over a message box a picker has already drawn; the
-/// session view draws it from [`render`] instead. Innermost of the modals, so
-/// it is drawn last and holds the cursor while it is open.
-pub fn render_path_prompt(frame: &mut Frame, insert: &crate::insert::Insert) {
-    render_insert(frame, Some(insert), frame.area());
-}
-
 /// A duration in the compact form the status line and tail use: `12s`,
 /// `2m14s`, `1h04m`. Seconds are dropped past an hour, where they no longer
 /// tell the operator anything they are waiting on.
@@ -361,6 +334,17 @@ pub fn render(frame: &mut Frame, app: &App) {
         .split(frame.area());
 
     match app.view {
+        View::Events if app.interactions.open => {
+            let panes = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(interactions::height(app, chunks[0].height)),
+                    Constraint::Min(1),
+                ])
+                .split(chunks[0]);
+            interactions::render(frame, app, panes[0]);
+            render_list(frame, app, panes[1]);
+        }
         View::Events => render_list(frame, app, chunks[0]),
         View::Raw => render_raw(frame, app, chunks[0]),
         View::Log => render_log(frame, app, chunks[0]),
