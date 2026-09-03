@@ -1,10 +1,10 @@
 //! Blocking client for Styra's JSON protocol over a Unix domain socket.
 
 use crate::protocol::{
-    Answer, Contract, CreateSession, CreateWorkspace, DrivaOptions, Health, LaunchPolicy,
-    PlanSession, QueuedMessage, RenameSession, Request, Response, ResumeSession, SendMessage,
-    SessionInfo, ShellInfo, StoredSession, TemplateSummary, UpdateNotes, Updates, WireResponse,
-    WorkspaceLaunchChange,
+    Answer, Contract, CreateSession, CreateWorkspace, DrivaOptions, Health, InteractionSnapshot,
+    InteractionSnapshotScope, LaunchPolicy, PlanSession, QueuedMessage, RenameSession, Request,
+    Response, ResumeSession, SendMessage, SessionInfo, ShellInfo, StoredSession, TemplateSummary,
+    UpdateNotes, Updates, WireResponse, WorkspaceLaunchChange,
 };
 use crate::protocol::{InteractionSummary, SessionSummary, WorkspaceSummary};
 use anyhow::{bail, Context, Result};
@@ -371,6 +371,21 @@ impl Client {
         })? {
             Response::Updates(value) => Ok(value),
             other => unexpected("updates", other),
+        }
+    }
+
+    /// Fetch one self-contained payload for populating an interaction view.
+    pub fn interaction_snapshot(
+        &self,
+        id: &str,
+        scope: InteractionSnapshotScope,
+    ) -> Result<InteractionSnapshot> {
+        match self.request(Request::InteractionSnapshot {
+            id: id.to_owned(),
+            scope,
+        })? {
+            Response::InteractionSnapshot(value) => Ok(value),
+            other => unexpected("interaction_snapshot", other),
         }
     }
 

@@ -45,6 +45,13 @@ lifecycle, diagnostic, and raw-wire updates do not consume the limit. Its
 show a short tail and continue with ordinary incremental `updates` polling
 without later receiving the omitted prefix.
 
+`interaction_snapshot` is the self-contained view-loading operation. Its
+`preview` scope returns that bounded conversation tail together with the
+interaction's current summary and durable input queue; its `full` scope returns
+the complete update stream. This lets a UI send one request while navigating
+and turn the eventual response into a locally tagged event without performing
+more round trips for small lifecycle state.
+
 A resumed interaction seeds its update stream from stored history. The resume
 response's `updates_after` cursor lets the resuming client skip history it has
 already rendered; a newly attaching client starts from zero.

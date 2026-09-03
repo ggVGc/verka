@@ -8,8 +8,8 @@ use styra_server::protocol::{
     CreateSession, CreateWorkspace, PlanSession, ResumeSession, SendMessage, SessionInfo,
 };
 use styra_server::{
-    Client, Contract, InteractionSummary, InteractionUpdate, LogEntry, SessionSummary,
-    WorkspaceSummary,
+    Client, Contract, InteractionSnapshot, InteractionSnapshotScope, InteractionSummary,
+    InteractionUpdate, LogEntry, SessionSummary, WorkspaceSummary,
 };
 
 /// The live-agent side of the interactive loop: no process yet (awaiting the
@@ -234,42 +234,32 @@ pub fn attach_live_interaction(
     client: &Client,
     interaction: InteractionSummary,
 ) -> Result<(App, Live)> {
-    attach_live_interaction_with_raw(client, interaction, true, None)
+    let snapshot = client.interaction_snapshot(&interaction.id, InteractionSnapshotScope::Full)?;
+    Ok(app_from_interaction_snapshot(snapshot))
 }
 
-/// Attach for interaction-list browsing with only the newest conversation events.
-/// Full raw history is hydrated only if the operator asks for the raw view.
-pub fn attach_live_interaction_recent(
-    client: &Client,
-    interaction: InteractionSummary,
-    limit: usize,
-) -> Result<(App, Live)> {
-    attach_live_interaction_with_raw(client, interaction, false, Some(limit))
-}
-
-fn attach_live_interaction_with_raw(
-    client: &Client,
-    interaction: InteractionSummary,
-    raw: bool,
-    recent: Option<usize>,
-) -> Result<(App, Live)> {
+/// Turn a server event into the ordinary main interaction model. Keeping this
+/// independent of the navigator lets preview and full payloads populate the
+/// same view through the event loop's single incoming-event path.
+pub fn app_from_interaction_snapshot(snapshot: InteractionSnapshot) -> (App, Live) {
+    let InteractionSnapshot {
+        interaction,
+        updates,
+        queued,
+        scope,
+    } = snapshot;
     let mut app = App::new(interaction.selection.clone(), interaction.id.clone());
-    app.raw_loaded = raw;
+    app.raw_loaded = matches!(scope, InteractionSnapshotScope::Full);
     app.session_name = interaction.name.clone();
     app.workspace_id = Some(interaction.workspace_id.clone());
     app.set_workspace_root(interaction.workspace.clone());
     app.launch.record(interaction.driva.clone());
-    let batch = match (raw, recent) {
-        (true, _) => client.updates(&interaction.id, 0)?,
-        (false, Some(limit)) => client.recent_conversation_updates(&interaction.id, limit)?,
-        (false, None) => client.updates_without_raw(&interaction.id, 0)?,
-    };
-    let cursor = batch.next;
-    for sequenced in batch.updates {
+    let cursor = updates.next;
+    for sequenced in updates.updates {
         apply_update(&mut app, sequenced.update);
     }
     app.select_last();
-    for message in client.queued_messages(&interaction.id)? {
+    for message in queued {
         app.queue_message(message);
     }
     let accepting = interaction.accepting;
@@ -283,7 +273,7 @@ fn attach_live_interaction_with_raw(
             app.status = Status::Stopped;
         }
     }
-    Ok((app, live))
+    (app, live)
 }
 
 /// Replay a stored journal into a fresh `App`, with no live agent attached.

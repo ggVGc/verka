@@ -4,9 +4,9 @@ use crate::agent::{MountSpec, SandboxLayout, Selection};
 use crate::interaction::{Interaction, InteractionSpec, ResolvedTemplate, SandboxBroker};
 use crate::journal::{self, Journal};
 use crate::protocol::{
-    Answer, Contract, DrivaOptions, InteractionActivity, InteractionSummary, InteractionUpdate,
-    LaunchMount, LaunchPolicy, QueuedMessage, SendMessage, SessionOrigin, SessionSummary,
-    TemplateSummary,
+    Answer, Contract, DrivaOptions, InteractionActivity, InteractionSnapshot,
+    InteractionSnapshotScope, InteractionSummary, InteractionUpdate, LaunchMount, LaunchPolicy,
+    QueuedMessage, SendMessage, SessionOrigin, SessionSummary, TemplateSummary,
 };
 use crate::protocol::{
     CreateSession, CreateWorkspace, Health, Request, Response, ResumeSession, SequencedUpdate,
@@ -1306,6 +1306,22 @@ impl ServerState {
                     .expect("interaction update lock poisoned");
                 Ok(Response::Updates(recent_conversation_updates(&all, limit)))
             }
+            Request::InteractionSnapshot { id, scope } => {
+                let interaction = self.interaction(&id)?;
+                let updates = {
+                    let all = interaction
+                        .updates
+                        .lock()
+                        .expect("interaction update lock poisoned");
+                    snapshot_updates(&all, scope)
+                };
+                Ok(Response::InteractionSnapshot(InteractionSnapshot {
+                    interaction: interaction.summary(),
+                    updates,
+                    queued: interaction.queued_messages(),
+                    scope,
+                }))
+            }
             Request::ListInteractions => {
                 let interactions = self
                     .inner
@@ -1372,6 +1388,16 @@ fn recent_conversation_updates(all: &[SequencedUpdate], limit: usize) -> Updates
         .collect::<Vec<_>>();
     updates.reverse();
     Updates { updates, next }
+}
+
+fn snapshot_updates(all: &[SequencedUpdate], scope: InteractionSnapshotScope) -> Updates {
+    match scope {
+        InteractionSnapshotScope::Preview { limit } => recent_conversation_updates(all, limit),
+        InteractionSnapshotScope::Full => Updates {
+            updates: all.to_vec(),
+            next: all.last().map(|update| update.sequence).unwrap_or(0),
+        },
+    }
 }
 
 fn replayed_session_updates(
@@ -1757,6 +1783,9 @@ mod tests {
             [4, 7]
         );
         assert!(recent_conversation_updates(&all, 0).updates.is_empty());
+        let full = snapshot_updates(&all, InteractionSnapshotScope::Full);
+        assert_eq!(full.next, 7);
+        assert_eq!(full.updates, all);
     }
 
     #[test]

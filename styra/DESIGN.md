@@ -654,17 +654,27 @@ Two client-facing shortcuts:
 
 `a` opens the server's live Interactions as a navigator above the main event
 list. There is no separate picker or conversation preview: moving with `j`/`k`
-immediately makes the highlighted Interaction current and fills the ordinary
-event list below with its recent conversation tail. The Interaction previously
-shown keeps running on the server; only this client's current view changes.
+marks the highlighted Interaction as this client's current target and sends a
+preview request without waiting in the key handler. Its eventual payload fills
+the ordinary event list below. The Interaction previously shown keeps running
+on the server; only this client's current view changes.
 
 Moving initially asks for only the five newest conversation events, and a newly
 selected Interaction returns to conversation-only mode focused on its newest
 visible entry. The returned cursor is still the true stream tail, so live
-polling continues from there rather than filling in the omitted prefix. `Enter`
-confirms the highlighted Interaction, loads its complete history including raw
-wire data, and closes the navigator. The first `r` can also hydrate that complete
-history on demand; subsequent raw-view toggles use the local history.
+polling continues from there rather than filling in the omitted prefix. The
+payload also carries the current lifecycle summary and durable input queue, so
+populating the view needs no follow-up round trips. `Enter` confirms the
+highlighted Interaction, requests its complete history including raw wire data,
+and closes the navigator immediately. The same incoming-event handler applies
+preview and full payloads whether or not the navigator remains open.
+
+Every payload is tagged with its Interaction id and the local request
+generation. Each Styra instance keeps its own active id and applies only a
+matching latest payload. A late response for a row that instance has already
+moved past—and an old preview arriving after a full request—is ignored. The
+first `r` can also hydrate complete history on demand; subsequent raw-view
+toggles use the local history.
 
 The navigator refreshes its summaries while open. Pending work is listed
 first, running work next, and stopped Interactions last, with server order

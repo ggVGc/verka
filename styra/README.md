@@ -115,6 +115,7 @@ Operations:
 | `send_message` | session id and message | `accepted` |
 | `updates` | session id and `after` cursor | `updates` |
 | `recent_updates` | session id and maximum conversation entries | `updates` |
+| `interaction_snapshot` | session id and preview limit or full scope | `interaction_snapshot` (summary, updates, queue, and scope) |
 | `interrupt_interaction` | session id | `accepted` |
 | `stop_interaction` | session id | `accepted` |
 | `close_interaction` | session id | `accepted` |
