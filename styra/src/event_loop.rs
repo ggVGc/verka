@@ -109,6 +109,12 @@ fn request_interaction_load(
     });
 }
 
+/// Global actions which operate on the current interaction without dismissing
+/// its navigator. They fall through to the ordinary list-key handler below.
+fn interaction_navigator_passthrough(code: &KeyCode) -> bool {
+    matches!(code, KeyCode::Char('i') | KeyCode::Char('S'))
+}
+
 /// Apply an incoming interaction payload only when it still belongs to this
 /// Styra instance's active view. The generation also rejects an older preview
 /// of the same interaction after a full load has been requested.
@@ -479,7 +485,7 @@ pub fn run(
                     );
                     continue;
                 }
-                KeyCode::Char('i') => {}
+                code if interaction_navigator_passthrough(&code) => {}
                 _ => app.interactions.open = false,
             }
         }
@@ -813,5 +819,12 @@ mod tests {
         assert_eq!(app.session_id, "before");
         assert!(app.log.is_empty());
         assert_eq!(active, "target");
+    }
+
+    #[test]
+    fn stopping_is_a_navigator_passthrough_action() {
+        assert!(interaction_navigator_passthrough(&KeyCode::Char('S')));
+        assert!(interaction_navigator_passthrough(&KeyCode::Char('i')));
+        assert!(!interaction_navigator_passthrough(&KeyCode::Char('l')));
     }
 }
