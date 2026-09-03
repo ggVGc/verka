@@ -17,53 +17,25 @@ pub struct LiveInteractions {
     pub only_current_workspace: bool,
     pub items: Vec<InteractionSummary>,
     pub workspaces: Vec<WorkspaceSummary>,
-    pub selected: usize,
 }
 
 impl LiveInteractions {
-    pub fn open(
-        &mut self,
-        mut items: Vec<InteractionSummary>,
-        workspaces: Vec<WorkspaceSummary>,
-        current: &str,
-    ) {
+    pub fn open(&mut self, mut items: Vec<InteractionSummary>, workspaces: Vec<WorkspaceSummary>) {
         sort_interactions(&mut items);
-        self.selected = items
-            .iter()
-            .position(|interaction| interaction.id == current)
-            .unwrap_or(0);
         self.items = items;
         self.workspaces = workspaces;
         self.open = true;
     }
 
-    pub fn refresh(
-        &mut self,
-        mut items: Vec<InteractionSummary>,
-        current: &str,
-        workspace_id: Option<&str>,
-    ) {
-        let selected = self
-            .items
-            .get(self.selected)
-            .map(|interaction| interaction.id.as_str())
-            .unwrap_or(current);
+    pub fn refresh(&mut self, mut items: Vec<InteractionSummary>) {
         sort_interactions(&mut items);
-        self.selected = items
-            .iter()
-            .position(|interaction| interaction.id == selected)
-            .or_else(|| {
-                items
-                    .iter()
-                    .position(|interaction| interaction.id == current)
-            })
-            .unwrap_or(0);
         self.items = items;
-        self.ensure_visible(current, workspace_id);
     }
 
-    pub fn selected(&self) -> Option<&InteractionSummary> {
-        self.items.get(self.selected)
+    pub fn current(&self, current: &str) -> Option<&InteractionSummary> {
+        self.items
+            .iter()
+            .find(|interaction| interaction.id == current)
     }
 
     pub fn visible_indices(&self, workspace_id: Option<&str>) -> Vec<usize> {
@@ -78,43 +50,37 @@ impl LiveInteractions {
             .collect()
     }
 
-    pub fn select_next(&mut self, workspace_id: Option<&str>) {
+    pub fn next(&self, current: &str, workspace_id: Option<&str>) -> Option<InteractionSummary> {
         let visible = self.visible_indices(workspace_id);
-        let position = visible
+        let index = visible
             .iter()
-            .position(|index| *index == self.selected)
+            .position(|index| self.items[*index].id == current)
+            .map(|position| (position + 1).min(visible.len().saturating_sub(1)))
             .unwrap_or(0);
-        self.selected = visible
-            .get((position + 1).min(visible.len().saturating_sub(1)))
-            .copied()
-            .unwrap_or(0);
+        visible
+            .get(index)
+            .and_then(|index| self.items.get(*index))
+            .cloned()
     }
 
-    pub fn select_previous(&mut self, workspace_id: Option<&str>) {
+    pub fn previous(
+        &self,
+        current: &str,
+        workspace_id: Option<&str>,
+    ) -> Option<InteractionSummary> {
         let visible = self.visible_indices(workspace_id);
         let position = visible
             .iter()
-            .position(|index| *index == self.selected)
+            .position(|index| self.items[*index].id == current)
             .unwrap_or(0);
-        self.selected = visible
+        visible
             .get(position.saturating_sub(1))
-            .copied()
-            .unwrap_or(0);
+            .and_then(|index| self.items.get(*index))
+            .cloned()
     }
 
-    pub fn toggle_workspace_scope(&mut self, current: &str, workspace_id: Option<&str>) {
+    pub fn toggle_workspace_scope(&mut self) {
         self.only_current_workspace = !self.only_current_workspace;
-        self.ensure_visible(current, workspace_id);
-    }
-
-    pub fn select_id(&mut self, id: &str) {
-        if let Some(selected) = self
-            .items
-            .iter()
-            .position(|interaction| interaction.id == id)
-        {
-            self.selected = selected;
-        }
     }
 
     /// Remove an interaction and select the entry now occupying its place.
@@ -131,29 +97,20 @@ impl LiveInteractions {
             .position(|interaction| interaction.id == id)?;
         self.items.remove(removed);
         if self.items.is_empty() {
-            self.selected = 0;
             return None;
         }
 
-        self.selected = removed.min(self.items.len() - 1);
         if self.visible_indices(workspace_id).is_empty() {
             self.only_current_workspace = false;
         }
         let visible = self.visible_indices(workspace_id);
-        if !visible.contains(&self.selected) {
-            self.selected = visible.first().copied().unwrap_or(0);
-        }
-        self.selected().cloned()
-    }
-
-    fn ensure_visible(&mut self, current: &str, workspace_id: Option<&str>) {
-        let visible = self.visible_indices(workspace_id);
-        if !visible.contains(&self.selected) {
-            self.select_id(current);
-        }
-        if !visible.contains(&self.selected) {
-            self.selected = visible.first().copied().unwrap_or(0);
-        }
+        visible
+            .iter()
+            .copied()
+            .find(|index| *index >= removed)
+            .or_else(|| visible.last().copied())
+            .and_then(|index| self.items.get(index))
+            .cloned()
     }
 }
 
@@ -207,7 +164,6 @@ mod tests {
                 interaction("idle", true, InteractionActivity::Pending),
             ],
             vec![],
-            "running",
         );
 
         assert!(live.open);
@@ -218,11 +174,11 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["idle", "running", "stopped"]
         );
-        assert_eq!(live.selected().unwrap().id, "running");
+        assert_eq!(live.current("running").unwrap().id, "running");
     }
 
     #[test]
-    fn refreshing_live_interactions_keeps_the_highlight_by_identity() {
+    fn refreshing_live_interactions_keeps_current_lookup_by_identity() {
         let mut live = LiveInteractions::default();
         live.open(
             vec![
@@ -230,23 +186,19 @@ mod tests {
                 interaction("two", true, InteractionActivity::Running),
             ],
             vec![],
-            "one",
         );
-        live.select_next(Some("workspace"));
+        let next = live.next("one", Some("workspace")).unwrap();
+        assert_eq!(next.id, "two");
         let mut refreshed_two = interaction("two", true, InteractionActivity::Pending);
         refreshed_two.last_message = Some("new response".into());
-        live.refresh(
-            vec![
-                refreshed_two,
-                interaction("one", true, InteractionActivity::Running),
-            ],
-            "one",
-            Some("workspace"),
-        );
+        live.refresh(vec![
+            refreshed_two,
+            interaction("one", true, InteractionActivity::Running),
+        ]);
 
-        assert_eq!(live.selected().unwrap().id, "two");
+        assert_eq!(live.current("two").unwrap().id, "two");
         assert_eq!(
-            live.selected().unwrap().last_message.as_deref(),
+            live.current("two").unwrap().last_message.as_deref(),
             Some("new response")
         );
     }
@@ -263,16 +215,14 @@ mod tests {
                 interaction("next", true, InteractionActivity::Running),
             ],
             vec![],
-            "current",
         );
 
-        live.toggle_workspace_scope("current", Some("workspace"));
+        live.toggle_workspace_scope();
         assert!(live.only_current_workspace);
         assert_eq!(live.visible_indices(Some("workspace")), vec![0, 2]);
-        live.select_next(Some("workspace"));
-        assert_eq!(live.selected().unwrap().id, "next");
+        assert_eq!(live.next("current", Some("workspace")).unwrap().id, "next");
 
-        live.toggle_workspace_scope("next", Some("workspace"));
+        live.toggle_workspace_scope();
         assert!(!live.only_current_workspace);
         assert_eq!(live.visible_indices(Some("workspace")), vec![0, 1, 2]);
     }
@@ -287,7 +237,6 @@ mod tests {
                 interaction("stopped", false, InteractionActivity::Running),
             ],
             vec![],
-            "stopped",
         );
 
         let next = live
@@ -295,7 +244,6 @@ mod tests {
             .unwrap();
 
         assert_eq!(next.id, "two");
-        assert_eq!(live.selected().unwrap().id, "two");
         assert!(live.open);
     }
 
@@ -310,9 +258,8 @@ mod tests {
                 other,
             ],
             vec![],
-            "current",
         );
-        live.toggle_workspace_scope("current", Some("workspace"));
+        live.toggle_workspace_scope();
 
         let next = live
             .remove_and_select_next("current", Some("workspace"))

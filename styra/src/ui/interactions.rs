@@ -50,7 +50,7 @@ pub(crate) fn render(frame: &mut Frame, app: &App, area: Rect) {
                 let interaction = &app.interactions.items[*index];
                 item(
                     interaction,
-                    *index == app.interactions.selected,
+                    interaction.id == app.session_id,
                     item_width,
                     app.activity.progress().events,
                 )
@@ -64,7 +64,7 @@ pub(crate) fn render(frame: &mut Frame, app: &App, area: Rect) {
     );
     let mut state = ListState::default();
     state.select(rows.iter().position(
-        |row| matches!(row, Row::Interaction(index) if *index == app.interactions.selected),
+        |row| matches!(row, Row::Interaction(index) if app.interactions.items[*index].id == app.session_id),
     ));
     frame.render_stateful_widget(list, area, &mut state);
 }
@@ -213,7 +213,6 @@ mod tests {
         app.interactions.open(
             vec![interaction("s-1", "first"), interaction("s-2", "second")],
             vec![],
-            "s-2",
         );
         app.push_event(AgentEvent::AgentMessage {
             text: "current timeline".into(),
@@ -233,7 +232,7 @@ mod tests {
         let mut app = testing::app("s-1");
         let mut interaction = interaction("s-1", "first");
         interaction.last_message = Some("The checks are green.".into());
-        app.interactions.open(vec![interaction], vec![], "s-1");
+        app.interactions.open(vec![interaction], vec![]);
 
         let screen = testing::rendered(&app);
         let interaction_row = screen.find("first · codex").unwrap() / 80;
@@ -247,7 +246,7 @@ mod tests {
         let mut app = testing::app("s-1");
         let mut interaction = interaction("s-1", "working");
         interaction.activity = InteractionActivity::Running;
-        app.interactions.open(vec![interaction], vec![], "s-1");
+        app.interactions.open(vec![interaction], vec![]);
 
         let screen = testing::rendered(&app);
 
@@ -266,9 +265,8 @@ mod tests {
         let mut other = interaction("s-2", "other");
         other.workspace_id = "ledger".into();
         app.interactions
-            .open(vec![interaction("s-1", "current"), other], vec![], "s-1");
-        app.interactions
-            .toggle_workspace_scope("s-1", Some("payments"));
+            .open(vec![interaction("s-1", "current"), other], vec![]);
+        app.interactions.toggle_workspace_scope();
 
         let screen = testing::rendered(&app);
         assert!(screen.contains("Payments · live interactions"), "{screen}");
@@ -282,11 +280,8 @@ mod tests {
         let mut app = testing::app("s-1");
         let mut ledger = interaction("s-2", "ledger session");
         ledger.workspace_id = "ledger".into();
-        app.interactions.open(
-            vec![interaction("s-1", "payments session"), ledger],
-            vec![],
-            "s-1",
-        );
+        app.interactions
+            .open(vec![interaction("s-1", "payments session"), ledger], vec![]);
 
         let screen = testing::rendered(&app);
         let payments_heading = screen.find(" payments").unwrap();

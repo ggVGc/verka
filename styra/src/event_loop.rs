@@ -61,7 +61,6 @@ fn make_interaction_current(
     match session::attach_live_interaction(client, interaction) {
         Ok((mut next, next_live)) => {
             next.adopt(app.take_operator_state());
-            next.interactions.select_id(&id);
             next.launch.interaction = standing_launch.clone();
             if let Some(workspace) = next
                 .interactions
@@ -78,7 +77,6 @@ fn make_interaction_current(
             *live = next_live;
         }
         Err(error) => {
-            app.interactions.select_id(&app.session_id);
             app.push_log(LogEntry::error(format!(
                 "could not make interaction {id} current: {error:#}"
             )));
@@ -151,10 +149,7 @@ pub fn run(
         if app.interactions.open && interactions_refreshed.elapsed() >= INTERACTIONS_REFRESH {
             interactions_refreshed = Instant::now();
             if let Ok(interactions) = client.list_interactions() {
-                let current = app.session_id.clone();
-                let workspace_id = app.workspace.id.clone();
-                app.interactions
-                    .refresh(interactions, &current, workspace_id.as_deref());
+                app.interactions.refresh(interactions);
             }
         }
 
@@ -248,29 +243,30 @@ pub fn run(
                     continue;
                 }
                 KeyCode::Char('j') | KeyCode::Down => {
-                    app.interactions.select_next(app.workspace.id.as_deref());
-                    if let Some(interaction) = app.interactions.selected().cloned() {
+                    if let Some(interaction) = app
+                        .interactions
+                        .next(&app.session_id, app.workspace.id.as_deref())
+                    {
                         make_interaction_current(app, live, client, standing_launch, interaction);
                     }
                     continue;
                 }
                 KeyCode::Char('k') | KeyCode::Up => {
-                    app.interactions
-                        .select_previous(app.workspace.id.as_deref());
-                    if let Some(interaction) = app.interactions.selected().cloned() {
+                    if let Some(interaction) = app
+                        .interactions
+                        .previous(&app.session_id, app.workspace.id.as_deref())
+                    {
                         make_interaction_current(app, live, client, standing_launch, interaction);
                     }
                     continue;
                 }
                 KeyCode::Char('w') => {
-                    let current = app.session_id.clone();
-                    let workspace_id = app.workspace.id.clone();
-                    app.interactions
-                        .toggle_workspace_scope(&current, workspace_id.as_deref());
+                    app.interactions.toggle_workspace_scope();
                     continue;
                 }
                 KeyCode::Char('D') => {
-                    let Some(interaction) = app.interactions.selected().cloned() else {
+                    let Some(interaction) = app.interactions.current(&app.session_id).cloned()
+                    else {
                         continue;
                     };
                     if interaction.accepting {
@@ -388,11 +384,10 @@ pub fn run(
                     app.push_log(LogEntry::warn("no live interactions on the server"));
                     continue;
                 }
-                let current = app.session_id.clone();
                 let workspaces = client.list_workspaces()?;
                 app.view = crate::app::View::Events;
                 app.focus = Focus::List;
-                app.interactions.open(interactions, workspaces, &current);
+                app.interactions.open(interactions, workspaces);
                 interactions_refreshed = Instant::now();
             }
             Some(Request::Reset) => return Ok(RunOutcome::Reset),
