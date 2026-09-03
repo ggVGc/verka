@@ -679,6 +679,40 @@ mod tests {
         assert!(!loads.is_waiting());
     }
 
+    /// Switching Interactions rebuilds the whole screen from the server, so
+    /// anything the operator put on it themselves has to be carried across
+    /// deliberately. A half-written message is the one that costs them work.
+    #[test]
+    fn switching_interactions_keeps_what_the_operator_put_on_the_screen() {
+        let mut app = app("before");
+        app.set_input("half a thought".into());
+        app.preview.show();
+        app.recent_models = vec!["gpt-5.6-sol".into()];
+        let mut live = Live::Viewing;
+        let mut loads = loader::waiting_for("target", "request-3", 3);
+
+        apply_interaction_load(
+            &mut app,
+            &mut live,
+            &LaunchPolicy::default(),
+            &mut loads,
+            loader::load_event(
+                "request-3",
+                3,
+                "target",
+                Ok(snapshot(
+                    "target",
+                    InteractionSnapshotScope::Preview { limit: 5 },
+                )),
+            ),
+        );
+
+        assert_eq!(app.session_id, "target", "a different Interaction");
+        assert_eq!(app.composer.text, "half a thought");
+        assert!(app.preview.open);
+        assert_eq!(app.recent_models, vec!["gpt-5.6-sol".to_owned()]);
+    }
+
     #[test]
     fn incoming_interaction_payloads_are_scoped_to_this_clients_active_view() {
         let mut app = app("current");
