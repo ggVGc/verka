@@ -29,6 +29,7 @@ mod picker;
 mod preferences;
 mod raw;
 mod session;
+mod tail;
 mod terminal;
 mod timeline;
 mod ui;

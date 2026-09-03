@@ -20,7 +20,7 @@ pub(crate) fn render_log(frame: &mut Frame, app: &App, area: Rect) {
     let lines: Vec<Line<'static>> = app.log.iter().map(log_line).collect();
     let viewport = area.height.saturating_sub(2) as usize;
     let max_start = lines.len().saturating_sub(viewport);
-    let start = max_start.saturating_sub(app.log_scroll_back as usize) as u16;
+    let start = max_start.saturating_sub(app.log.scroll_back() as usize) as u16;
     let paragraph = Paragraph::new(lines).block(block).scroll((start, 0));
     frame.render_widget(paragraph, area);
 }

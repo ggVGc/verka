@@ -716,7 +716,7 @@ pub fn run(
             // interaction's wire, so one client asking gets every session's
             // readings rather than only this one's.
             Some(Request::Quota) => match client.quota_log() {
-                Ok(readings) => app.set_quota(readings),
+                Ok(readings) => app.quota.replace(readings),
                 Err(error) => app.push_log(LogEntry::error(format!(
                     "could not read the quota log: {error:#}"
                 ))),

@@ -33,6 +33,7 @@ use crate::launch::{self, Launch};
 use crate::launcher::Launcher;
 use crate::notes::Notes;
 use crate::raw::RawView;
+use crate::tail::Tail;
 use crate::timeline::{Entry, Step, Timeline};
 
 /// Which region receives keys, like vim's normal/insert split.
@@ -243,16 +244,12 @@ pub struct App {
     pub launch: Launch,
     /// The verbatim wire interaction and the place in it; see [`RawView`].
     pub raw: RawView,
-    /// Diagnostic log entries, in occurrence order.
-    pub log: Vec<LogEntry>,
-    /// Lines scrolled back from the bottom of the log view; 0 tracks the tail.
-    pub log_scroll_back: u16,
+    /// Diagnostic log entries, in occurrence order; see [`Tail`].
+    pub log: Tail<LogEntry>,
     /// Plan-quota readings, oldest first. Filled by asking the server, which
     /// holds the log — quota belongs to the account, so this is every
     /// interaction's readings, not just this session's.
-    pub quota: Vec<QuotaEvent>,
-    /// Lines scrolled back from the bottom of the quota view; 0 tracks the tail.
-    pub quota_scroll_back: u16,
+    pub quota: Tail<QuotaEvent>,
     /// Lines scrolled down from the top of the rendered transcript view; 0
     /// shows its start. Unlike the raw/log views, the transcript reads as a
     /// document from the beginning rather than anchoring to the tail.
@@ -397,10 +394,8 @@ impl App {
             working_directory: None,
             launch: Launch::default(),
             raw: RawView::default(),
-            log: Vec::new(),
-            log_scroll_back: 0,
-            quota: Vec::new(),
-            quota_scroll_back: 0,
+            log: Tail::default(),
+            quota: Tail::default(),
             transcript_scroll: 0,
             file_selected: 0,
             file_show_all: false,
@@ -590,13 +585,10 @@ impl App {
         self.composer.set(text);
     }
 
-    /// Append a diagnostic log entry, keeping the tail in view unless the
-    /// operator has scrolled up (mirrors [`RawView::push`]).
+    /// Append a diagnostic log entry; see [`Tail::push`] for what it does to
+    /// a view the operator has scrolled back through.
     pub fn push_log(&mut self, entry: LogEntry) {
         self.log.push(entry);
-        if self.log_scroll_back > 0 {
-            self.log_scroll_back = self.log_scroll_back.saturating_add(1);
-        }
     }
 
     /// Take a quota reading the server judged worth announcing.
@@ -614,41 +606,6 @@ impl App {
         // The view is otherwise filled wholesale by asking the server; an
         // announced reading is appended so it shows without a round trip.
         self.quota.push(reading);
-        if self.quota_scroll_back > 0 {
-            self.quota_scroll_back = self.quota_scroll_back.saturating_add(1);
-        }
-    }
-
-    /// Replace the quota view's contents with what the server holds.
-    pub fn set_quota(&mut self, readings: Vec<QuotaEvent>) {
-        self.quota = readings;
-        self.quota_scroll_back = 0;
-    }
-
-    pub fn quota_scroll_up(&mut self) {
-        let max = self.quota.len().saturating_sub(1) as u16;
-        self.quota_scroll_back = self.quota_scroll_back.saturating_add(1).min(max);
-    }
-
-    pub fn quota_scroll_down(&mut self) {
-        self.quota_scroll_back = self.quota_scroll_back.saturating_sub(1);
-    }
-
-    pub fn log_scroll_up(&mut self) {
-        let max = self.log.len().saturating_sub(1) as u16;
-        self.log_scroll_back = self.log_scroll_back.saturating_add(1).min(max);
-    }
-
-    pub fn log_scroll_down(&mut self) {
-        self.log_scroll_back = self.log_scroll_back.saturating_sub(1);
-    }
-
-    pub fn log_to_top(&mut self) {
-        self.log_scroll_back = self.log.len().saturating_sub(1) as u16;
-    }
-
-    pub fn log_to_bottom(&mut self) {
-        self.log_scroll_back = 0;
     }
 
     /// Toggle the raw wire view on, or back to the event list. Entering it
@@ -2273,13 +2230,13 @@ mod tests {
         for i in 0..4 {
             app.push_log(LogEntry::info(format!("entry {i}")));
         }
-        assert_eq!(app.log_scroll_back, 0);
-        app.log_scroll_up();
-        assert_eq!(app.log_scroll_back, 1);
+        assert_eq!(app.log.scroll_back(), 0);
+        app.log.scroll_up();
+        assert_eq!(app.log.scroll_back(), 1);
         app.push_log(LogEntry::warn("more"));
-        assert_eq!(app.log_scroll_back, 2, "scrolled-up view stays put");
-        app.log_to_bottom();
-        assert_eq!(app.log_scroll_back, 0);
+        assert_eq!(app.log.scroll_back(), 2, "scrolled-up view stays put");
+        app.log.to_bottom();
+        assert_eq!(app.log.scroll_back(), 0);
     }
 
     #[test]

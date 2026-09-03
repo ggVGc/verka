@@ -31,7 +31,7 @@ pub(crate) fn render_quota(frame: &mut Frame, app: &App, area: Rect) {
     let lines: Vec<Line<'static>> = app.quota.iter().map(quota_line).collect();
     let viewport = area.height.saturating_sub(2) as usize;
     let max_start = lines.len().saturating_sub(viewport);
-    let start = max_start.saturating_sub(app.quota_scroll_back as usize) as u16;
+    let start = max_start.saturating_sub(app.quota.scroll_back() as usize) as u16;
     let paragraph = Paragraph::new(lines).block(block).scroll((start, 0));
     frame.render_widget(paragraph, area);
 }
@@ -138,7 +138,7 @@ mod tests {
     #[test]
     fn the_quota_view_lists_each_window_with_its_usage() {
         let mut app = app();
-        app.set_quota(vec![
+        app.quota.replace(vec![
             reading("five_hour", QuotaStatus::Warning, Some(0.91)),
             reading("7d", QuotaStatus::Allowed, Some(0.125)),
         ]);
@@ -157,7 +157,7 @@ mod tests {
     #[test]
     fn a_reading_without_a_usage_figure_shows_no_percentage() {
         let mut app = app();
-        app.set_quota(vec![reading("five_hour", QuotaStatus::Allowed, None)]);
+        app.quota.replace(vec![reading("five_hour", QuotaStatus::Allowed, None)]);
         app.toggle_view(View::Quota);
         let screen = rendered(&app);
         assert!(screen.contains("?"));
@@ -177,19 +177,19 @@ mod tests {
     fn an_announced_reading_shows_in_the_view_the_log_and_a_notice() {
         let mut app = app();
         app.note_quota(reading("five_hour", QuotaStatus::Warning, Some(0.91)));
-        assert_eq!(app.quota.len(), 1);
+        assert_eq!(app.quota.iter().count(), 1);
         assert_eq!(app.action_messages.len(), 1);
         assert!(app.action_messages[0].text.contains("91% used"));
-        assert_eq!(app.log.len(), 1);
-        assert_eq!(app.log[0].level, styra_server::LogLevel::Warn);
+        assert_eq!(app.log.iter().count(), 1);
+        assert_eq!(app.log.newest().unwrap().level, styra_server::LogLevel::Warn);
     }
 
     #[test]
     fn an_exhausted_window_is_logged_as_an_error() {
         let mut app = app();
         app.note_quota(reading("five_hour", QuotaStatus::Exhausted, None));
-        assert_eq!(app.log[0].level, styra_server::LogLevel::Error);
-        assert!(app.log[0].message.contains("exhausted"));
+        assert_eq!(app.log.newest().unwrap().level, styra_server::LogLevel::Error);
+        assert!(app.log.newest().unwrap().message.contains("exhausted"));
     }
 
     #[test]

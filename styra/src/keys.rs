@@ -167,15 +167,15 @@ pub fn handle_list_key(
             _ => {}
         },
         View::Log => match key.code {
-            KeyCode::Char('j') | KeyCode::Down => app.log_scroll_down(),
-            KeyCode::Char('k') | KeyCode::Up => app.log_scroll_up(),
-            KeyCode::Char('g') => app.log_to_top(),
-            KeyCode::Char('G') => app.log_to_bottom(),
+            KeyCode::Char('j') | KeyCode::Down => app.log.scroll_down(),
+            KeyCode::Char('k') | KeyCode::Up => app.log.scroll_up(),
+            KeyCode::Char('g') => app.log.to_top(),
+            KeyCode::Char('G') => app.log.to_bottom(),
             _ => {}
         },
         View::Quota => match key.code {
-            KeyCode::Char('j') | KeyCode::Down => app.quota_scroll_down(),
-            KeyCode::Char('k') | KeyCode::Up => app.quota_scroll_up(),
+            KeyCode::Char('j') | KeyCode::Down => app.quota.scroll_down(),
+            KeyCode::Char('k') | KeyCode::Up => app.quota.scroll_up(),
             _ => {}
         },
         View::Transcript => match key.code {
