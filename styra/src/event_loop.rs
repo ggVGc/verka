@@ -197,9 +197,9 @@ fn apply_interaction_load(
         .interactions
         .workspaces
         .iter()
-        .find(|workspace| Some(workspace.id.as_str()) == next.workspace_id.as_deref())
+        .find(|workspace| Some(workspace.id.as_str()) == next.workspace.id.as_deref())
     {
-        next.workspace_name = Some(session::workspace_display_name(workspace));
+        next.workspace.name = Some(session::workspace_display_name(workspace));
         next.launch.set_workspace(workspace.launch.clone());
     }
     next.view = crate::app::View::Events;
@@ -237,7 +237,7 @@ fn open_raw_history(
             next.launch.interaction = standing_launch.clone();
             // The same Interaction in the same Workspace, so its identity is
             // already known and there is nothing to ask the server for.
-            next.workspace_name.clone_from(&app.workspace_name);
+            next.workspace.name.clone_from(&app.workspace.name);
             next.launch.workspace = app.launch.workspace.clone();
             next.toggle_raw();
             *app = next;
@@ -336,7 +336,7 @@ pub fn run(
             interactions_refreshed = Instant::now();
             if let Ok(interactions) = client.list_interactions() {
                 let current = app.session_id.clone();
-                let workspace_id = app.workspace_id.clone();
+                let workspace_id = app.workspace.id.clone();
                 app.interactions
                     .refresh(interactions, &current, workspace_id.as_deref());
             }
@@ -455,7 +455,7 @@ pub fn run(
                     continue;
                 }
                 KeyCode::Char('j') | KeyCode::Down => {
-                    app.interactions.select_next(app.workspace_id.as_deref());
+                    app.interactions.select_next(app.workspace.id.as_deref());
                     if let Some(interaction) = app.interactions.selected().cloned() {
                         request_interaction_load(
                             &interaction_requests,
@@ -472,7 +472,7 @@ pub fn run(
                 }
                 KeyCode::Char('k') | KeyCode::Up => {
                     app.interactions
-                        .select_previous(app.workspace_id.as_deref());
+                        .select_previous(app.workspace.id.as_deref());
                     if let Some(interaction) = app.interactions.selected().cloned() {
                         request_interaction_load(
                             &interaction_requests,
@@ -489,7 +489,7 @@ pub fn run(
                 }
                 KeyCode::Char('w') => {
                     let current = app.session_id.clone();
-                    let workspace_id = app.workspace_id.clone();
+                    let workspace_id = app.workspace.id.clone();
                     app.interactions
                         .toggle_workspace_scope(&current, workspace_id.as_deref());
                     continue;
@@ -509,7 +509,7 @@ pub fn run(
                         )));
                         continue;
                     }
-                    let workspace_id = app.workspace_id.clone();
+                    let workspace_id = app.workspace.id.clone();
                     let Some(next) = app
                         .interactions
                         .remove_and_select_next(&interaction.id, workspace_id.as_deref())

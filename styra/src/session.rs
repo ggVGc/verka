@@ -215,8 +215,8 @@ pub fn launch_live_session(
     let mut app = App::new(info.selection.clone(), info.id.clone());
     app.launch.interaction = launch.clone();
     app.session_name = info.name.clone();
-    app.workspace_id = Some(info.workspace_id.clone());
-    app.set_workspace_root(info.workspace.clone());
+    app.workspace.id = Some(info.workspace_id.clone());
+    app.workspace.enter(info.workspace.clone());
     app.launch.record(info.driva.clone());
     app.push_log(LogEntry::info(format!(
         "journal: {}",
@@ -255,8 +255,8 @@ pub fn app_from_interaction_snapshot(snapshot: InteractionSnapshot) -> (App, Liv
     app.raw
         .set_loaded(matches!(scope, InteractionSnapshotScope::Full));
     app.session_name = interaction.name.clone();
-    app.workspace_id = Some(interaction.workspace_id.clone());
-    app.set_workspace_root(interaction.workspace.clone());
+    app.workspace.id = Some(interaction.workspace_id.clone());
+    app.workspace.enter(interaction.workspace.clone());
     app.launch.record(interaction.driva.clone());
     let cursor = updates.next;
     for sequenced in updates.updates {
@@ -292,7 +292,7 @@ pub fn open_stored(client: &Client, session_id: &str) -> Result<(App, Live)> {
     let stored = client.stored_session(session_id)?;
     let mut app = App::new(stored.summary.selection, stored.summary.id);
     app.session_name = stored.summary.name;
-    app.workspace_id = Some(stored.summary.workspace_id);
+    app.workspace.id = Some(stored.summary.workspace_id);
     // `stored.events[i]` and `stored.raw[i]` are decoded from the same journal
     // record (see `journal::replay`/`replay_raw`), so pushing them in lockstep
     // — raw line first, as a live session receives it — gives each kept entry
@@ -354,7 +354,7 @@ pub fn resume_and_send(
     }) {
         Ok(info) => {
             app.session_name = info.name.clone();
-            app.set_workspace_root(info.workspace);
+            app.workspace.enter(info.workspace);
             app.launch.record(info.driva);
             app.push_log(LogEntry::info("resumed with provider-native context"));
             for message in &info.queued {
@@ -455,7 +455,7 @@ pub fn apply_update(app: &mut App, update: InteractionUpdate) {
         InteractionUpdate::Log(entry) => app.push_log(entry),
         InteractionUpdate::Quota(reading) => app.note_quota(reading),
         InteractionUpdate::WorkingDirectoryChanged(directory) => {
-            app.set_working_directory(directory);
+            app.workspace.change_directory(directory);
         }
         InteractionUpdate::Ended(end) => app.on_ended(end),
     }

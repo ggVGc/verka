@@ -28,9 +28,9 @@ pub(crate) fn render(frame: &mut Frame, app: &App, area: Rect) {
     let rows = rows(app);
     let item_width = area.width.saturating_sub(2);
     let scope = if app.interactions.only_current_workspace {
-        app.workspace_name
+        app.workspace.name
             .as_deref()
-            .or(app.workspace_id.as_deref())
+            .or(app.workspace.id.as_deref())
             .unwrap_or("Current Workspace")
     } else {
         "All"
@@ -76,7 +76,7 @@ enum Row {
 fn rows(app: &App) -> Vec<Row> {
     let visible = app
         .interactions
-        .visible_indices(app.workspace_id.as_deref());
+        .visible_indices(app.workspace.id.as_deref());
     if app.interactions.only_current_workspace {
         return visible.into_iter().map(Row::Interaction).collect();
     }
@@ -260,8 +260,8 @@ mod tests {
     #[test]
     fn navigator_names_and_filters_the_current_workspace_scope() {
         let mut app = testing::app("s-1");
-        app.workspace_id = Some("payments".into());
-        app.workspace_name = Some("Payments".into());
+        app.workspace.id = Some("payments".into());
+        app.workspace.name = Some("Payments".into());
         let mut other = interaction("s-2", "other");
         other.workspace_id = "ledger".into();
         app.interactions

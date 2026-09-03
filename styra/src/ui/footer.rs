@@ -12,9 +12,8 @@ use unicode_width::UnicodeWidthStr;
 
 pub(crate) fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     let working_directory = app
-        .working_directory
-        .clone()
-        .or_else(|| std::env::current_dir().ok())
+        .workspace
+        .working_directory_or_current()
         .map(|path| path.display().to_string())
         .unwrap_or_default();
     let directory_width = working_directory.width().min(area.width as usize) as u16;
@@ -70,7 +69,7 @@ mod tests {
     #[test]
     fn footer_shows_keybinds_and_working_directory() {
         let mut app = testing::app("s1");
-        app.set_workspace_root("/tmp/styra/workspace".into());
+        app.workspace.enter("/tmp/styra/workspace".into());
         let screen = rendered(&app);
         assert!(screen.contains("? keybinds"));
         assert!(screen.contains("/tmp/styra/workspace"));
@@ -80,7 +79,7 @@ mod tests {
     #[test]
     fn working_directory_is_aligned_to_the_bottom_right() {
         let mut app = testing::app("s1");
-        app.set_workspace_root("/workspace".into());
+        app.workspace.enter("/workspace".into());
         let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
         terminal
             .draw(|frame| super::super::render(frame, &app))

@@ -14,9 +14,8 @@ use super::{palette, render_list, render_placeholder, render_preview};
 
 fn items(app: &App) -> Vec<FileItem> {
     let root = app
-        .workspace_root
-        .clone()
-        .or_else(|| std::env::current_dir().ok())
+        .workspace
+        .root_or_current_directory()
         .unwrap_or_else(|| PathBuf::from("."));
     files::items(&root, app.file_paths())
 }
@@ -209,7 +208,7 @@ mod tests {
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
         let mut app = testing::app("s1");
-        app.set_workspace_root(root.clone());
+        app.workspace.enter(root.clone());
         app.push_event(AgentEvent::FileChanged {
             id: "1".into(),
             paths: vec!["src/main.rs".into()],

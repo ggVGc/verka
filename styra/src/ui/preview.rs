@@ -637,7 +637,7 @@ mod tests {
         std::fs::write(dir.join("notes.txt"), "line one\nline two").unwrap();
 
         let mut app = testing::app("s1");
-        app.set_workspace_root(dir.clone());
+        app.workspace.enter(dir.clone());
         app.push_event(AgentEvent::FileChanged {
             id: "f1".into(),
             paths: vec!["notes.txt".into()],
@@ -665,7 +665,7 @@ mod tests {
         std::fs::write(dir.join("notes.txt"), "line one\nline two").unwrap();
 
         let mut app = testing::app("s1");
-        app.set_workspace_root(dir.clone());
+        app.workspace.enter(dir.clone());
         // A FileChanged entry exercises the ordinary preview detail body.
         app.push_event(AgentEvent::FileChanged {
             id: "f1".into(),

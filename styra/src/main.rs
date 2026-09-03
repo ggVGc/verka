@@ -37,6 +37,7 @@ mod tail;
 mod terminal;
 mod timeline;
 mod ui;
+mod workspace;
 
 use app::{App, LaunchPolicy};
 use cli::{Cli, CliCommand};
@@ -55,19 +56,20 @@ use styra_server::{Client, LogEntry, WorkspaceSummary};
 /// Workspace's launches to the policy of the one just left.
 fn refresh_workspace_context(app: &mut App, client: &Client, active: &WorkspaceSummary) {
     let workspace = app
-        .workspace_id
+        .workspace
+        .id
         .as_deref()
         .filter(|id| *id == active.id)
         .map(|_| active.clone())
         .or_else(|| {
-            let id = app.workspace_id.as_deref()?;
+            let id = app.workspace.id.as_deref()?;
             client
                 .list_workspaces()
                 .ok()?
                 .into_iter()
                 .find(|workspace| workspace.id == id)
         });
-    app.workspace_name = workspace.as_ref().map(session::workspace_display_name);
+    app.workspace.name = workspace.as_ref().map(session::workspace_display_name);
     if let Some(workspace) = workspace {
         app.launch.set_workspace(workspace.launch);
     }
@@ -78,7 +80,7 @@ fn workspace_for_new_session(
     active: &WorkspaceSummary,
     workspaces: &[WorkspaceSummary],
 ) -> WorkspaceSummary {
-    let Some(workspace_id) = app.workspace_id.as_deref() else {
+    let Some(workspace_id) = app.workspace.id.as_deref() else {
         return active.clone();
     };
     if workspace_id == active.id {
@@ -99,8 +101,8 @@ fn pending_app(
     let mut app = App::pending(selection);
     app.launch.interaction = launch;
     app.launch.set_workspace(workspace.launch.clone());
-    app.workspace_id = Some(workspace.id.clone());
-    app.set_workspace_root(workspace.host_path.clone());
+    app.workspace.id = Some(workspace.id.clone());
+    app.workspace.enter(workspace.host_path.clone());
     app
 }
 
@@ -559,7 +561,7 @@ mod cli_tests {
         let viewed = workspace("viewed", "/work/viewed");
         let selection = Selection::parse("codex:gpt-5.6-sol/high").unwrap();
         let mut app = App::pending(selection.clone());
-        app.workspace_id = Some(viewed.id.clone());
+        app.workspace.id = Some(viewed.id.clone());
 
         let inherited = workspace_for_new_session(&app, &active, &[active.clone(), viewed.clone()]);
         let pending = pending_app(
@@ -569,8 +571,8 @@ mod cli_tests {
         );
 
         assert_eq!(inherited, viewed);
-        assert_eq!(pending.workspace_id.as_deref(), Some("viewed"));
-        assert_eq!(pending.workspace_root, Some(PathBuf::from("/work/viewed")));
+        assert_eq!(pending.workspace.id.as_deref(), Some("viewed"));
+        assert_eq!(pending.workspace.root(), Some(Path::new("/work/viewed")));
         assert_eq!(pending.selection, selection);
     }
 

@@ -38,6 +38,7 @@ use crate::notes::Notes;
 use crate::raw::RawView;
 use crate::tail::Tail;
 use crate::timeline::{Entry, Step, Timeline};
+use crate::workspace::Location;
 
 /// Which region receives keys, like vim's normal/insert split.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -209,21 +210,12 @@ pub struct App {
     /// but only the agent can confirm what it resolved to. `None` until the
     /// agent's session-start line arrives (and for agents that report neither).
     pub reported_model: Option<(String, Option<String>)>,
-    /// Durable Workspace containing the current Session, when known.
-    pub workspace_id: Option<String>,
-    /// Operator-facing name of the active Workspace. This is resolved from
-    /// Workspace metadata (with the host directory name as its fallback) by
-    /// the client, since Sessions only carry the durable Workspace id.
-    pub workspace_name: Option<String>,
+    /// Which Workspace this screen is showing and where it is; see
+    /// [`Location`].
+    pub workspace: Location,
     pub session_id: String,
     /// Optional operator-facing name of the current durable Session.
     pub session_name: Option<String>,
-    /// The host directory backing the agent's sandboxed workspace, when
-    /// known (a live session; a replayed journal has no live workspace).
-    /// Lets the preview panel read a changed file's current content.
-    pub workspace_root: Option<PathBuf>,
-    /// The current directory within `workspace_root` used by a live interaction.
-    pub working_directory: Option<PathBuf>,
     /// The sandbox policy: both of its layers, the sandbox they resolve to, and
     /// which layer the driva view's keys are editing. See [`Launch`].
     pub launch: Launch,
@@ -356,12 +348,9 @@ impl App {
             launcher: None,
             recent_models: Vec::new(),
             reported_model: None,
-            workspace_id: None,
-            workspace_name: None,
+            workspace: Location::default(),
             session_id: session_id.into(),
             session_name: None,
-            workspace_root: None,
-            working_directory: None,
             launch: Launch::default(),
             raw: RawView::default(),
             log: Tail::default(),
@@ -780,16 +769,7 @@ impl App {
         } else {
             Box::new(self.timeline.selected_entry().into_iter())
         };
-        files::mentioned(entries, self.workspace_root.as_deref())
-    }
-
-    /// The root the Files view displays paths beneath: the Workspace when
-    /// there is one, and otherwise wherever this client was started, so a
-    /// replayed journal still resolves the paths it mentions.
-    fn display_root(&self) -> Option<PathBuf> {
-        self.workspace_root
-            .clone()
-            .or_else(|| std::env::current_dir().ok())
+        files::mentioned(entries, self.workspace.root())
     }
 
     /// Resolve the selected Files-view entry to the corresponding host path.
@@ -798,7 +778,7 @@ impl App {
     /// instead, so `e` opens what the agent named without a second mechanism
     /// for doing the same thing.
     pub fn selected_file_path(&self) -> Option<PathBuf> {
-        let root = self.display_root()?;
+        let root = self.workspace.root_or_current_directory()?;
         if self.view == View::Answer {
             let file = self.answer.selected_file()?;
             return Some(if file.path.is_absolute() {
@@ -827,17 +807,6 @@ impl App {
         self.timeline.selected_entry()
     }
 
-    /// Record the host directory backing the agent's workspace, so the
-    /// preview panel can resolve a changed file's path to its current
-    /// content on disk.
-    pub fn set_workspace_root(&mut self, path: PathBuf) {
-        self.working_directory = Some(path.clone());
-        self.workspace_root = Some(path);
-    }
-
-    pub fn set_working_directory(&mut self, path: PathBuf) {
-        self.working_directory = Some(path);
-    }
 
     /// Whether the launch policy can still be edited; see [`launch::editable`].
     pub fn can_edit_launch(&self) -> bool {
@@ -2250,21 +2219,13 @@ mod tests {
     }
 
     #[test]
-    fn workspace_root_is_unset_until_the_host_records_it() {
-        let mut app = app();
-        assert_eq!(app.workspace_root, None);
-        app.set_workspace_root(PathBuf::from("/home/op/project"));
-        assert_eq!(app.workspace_root, Some(PathBuf::from("/home/op/project")));
-    }
-
-    #[test]
     fn file_view_collects_focused_and_session_paths() {
         let root = std::env::temp_dir().join(format!("styra-file-view-{}", std::process::id()));
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::write(root.join("src/lib.rs"), "pub fn lib() {}\n").unwrap();
         std::fs::write(root.join("README.md"), "read me\n").unwrap();
         let mut app = app();
-        app.set_workspace_root(root.clone());
+        app.workspace.enter(root.clone());
         app.push_event(AgentEvent::AgentMessage {
             text: "see README.md".into(),
         });
@@ -2316,7 +2277,7 @@ mod tests {
     #[test]
     fn a_files_answer_resolves_its_selection_against_the_workspace() {
         let mut app = app();
-        app.set_workspace_root(PathBuf::from("/work"));
+        app.workspace.enter(PathBuf::from("/work"));
         app.view = View::Answer;
         app.answer.set(Ok(Answer {
             contract: Contract::Files,

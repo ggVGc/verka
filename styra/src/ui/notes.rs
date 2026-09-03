@@ -121,7 +121,7 @@ fn scope_subject(app: &App, editor: &Editor) -> Option<String> {
             .session_name
             .clone()
             .or_else(|| (!app.session_id.is_empty()).then(|| app.session_id.clone())),
-        Scope::Workspace => app.workspace_name.clone(),
+        Scope::Workspace => app.workspace.name.clone(),
     }
 }
 
@@ -179,7 +179,7 @@ mod tests {
     fn app() -> App {
         let mut app = testing::app("s1");
         app.session_name = Some("Fix retries".into());
-        app.workspace_name = Some("payments".into());
+        app.workspace.name = Some("payments".into());
         app
     }
 
@@ -231,7 +231,7 @@ mod tests {
     #[test]
     fn a_pending_session_edits_workspace_notes_only() {
         let mut app = testing::pending_app();
-        app.workspace_name = Some("payments".into());
+        app.workspace.name = Some("payments".into());
         notes::open(&mut app);
         assert!(rendered(&app).contains("Workspace notes"));
     }

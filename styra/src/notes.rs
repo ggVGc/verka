@@ -194,7 +194,8 @@ pub fn ensure_loaded(app: &mut App, client: &Client, workspace_id: &str) {
     }
     app.notes.loaded = true;
     let workspace = app
-        .workspace_id
+        .workspace
+        .id
         .clone()
         .unwrap_or_else(|| workspace_id.to_owned());
     let mut session_notes = String::new();
@@ -247,7 +248,7 @@ fn save(app: &mut App, client: &Client) {
         }
     }
     if editor.workspace != app.notes.workspace {
-        match app.workspace_id.clone() {
+        match app.workspace.id.clone() {
             Some(workspace_id) => {
                 match client.update_workspace_notes(&workspace_id, &editor.workspace) {
                     Ok(summary) => app.notes.workspace = summary.notes,

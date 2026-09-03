@@ -312,7 +312,7 @@ fn copy_selection(app: &mut App) {
 /// sandbox carries and whether that sandbox can still be changed.
 fn open_insert(app: &mut App) {
     app.insert = Some(insert::Prompt::new(
-        app.workspace_root.clone(),
+        app.workspace.root().map(std::path::Path::to_path_buf),
         app.launch.driva.as_ref(),
         app.can_edit_launch(),
     ));
@@ -437,10 +437,10 @@ pub fn handle_input_key(
                         ) {
                             Ok(info) => {
                                 app.selection = info.selection;
-                                app.workspace_id = Some(info.workspace_id);
+                                app.workspace.id = Some(info.workspace_id);
                                 app.session_id = info.id.clone();
                                 app.session_name = info.name;
-                                app.set_workspace_root(info.workspace);
+                                app.workspace.enter(info.workspace);
                                 app.launch.record(info.driva);
                                 app.push_log(LogEntry::info(format!(
                                     "journal: {}",
@@ -492,7 +492,7 @@ mod tests {
     /// with nothing launched — so the launch policy is still open to editing.
     fn app(root: &Path) -> App {
         let mut app = App::pending(styra_server::agent::Selection::parse("codex").unwrap());
-        app.set_workspace_root(root.to_path_buf());
+        app.workspace.enter(root.to_path_buf());
         app.launch.record(DrivaOptions {
             isolation_backend: "bwrap".into(),
             command: vec!["codex".into()],

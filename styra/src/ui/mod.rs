@@ -222,7 +222,7 @@ fn view_block(app: &App, suffix: Option<&str>) -> Block<'static> {
         .border_style(border_style)
         .title(title_line(
             &app.launch_label(),
-            app.workspace_name.as_deref(),
+            app.workspace.name.as_deref(),
             &app.activity.status,
             status_elapsed(app),
             suffix,
@@ -397,7 +397,7 @@ mod tests {
     #[test]
     fn header_opens_with_the_workspace_name_at_the_top_left() {
         let mut app = testing::app("s1");
-        app.workspace_name = Some("payments".into());
+        app.workspace.name = Some("payments".into());
         let screen = testing::screen(&app);
 
         // Spelled as the row it produces rather than as a column number: what
@@ -420,7 +420,7 @@ mod tests {
     #[test]
     fn header_shows_the_workspace_name_alongside_the_session_name() {
         let mut app = testing::app("s1");
-        app.workspace_name = Some("payments".into());
+        app.workspace.name = Some("payments".into());
         app.session_name = Some("Fix retries".into());
         let screen = rendered(&app);
         assert!(screen.contains("Fix retries"));
