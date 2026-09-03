@@ -304,7 +304,8 @@ mod tests {
     fn a_fetch_failure_is_reported_in_place_of_the_answer() {
         let mut app = App::new(Selection::new(Provider::Codex), "s-1");
         app.view = View::Answer;
-        app.answer.set(Err("session has no typed turn to answer".into()));
+        app.answer
+            .set(Err("session has no typed turn to answer".into()));
         assert!(rendered(&app).contains("no typed turn"));
     }
 }

@@ -56,9 +56,7 @@ impl Location {
     /// Falls back to wherever this client was started, so a replayed journal
     /// still resolves the paths it mentions rather than showing none.
     pub fn root_or_current_directory(&self) -> Option<PathBuf> {
-        self.root
-            .clone()
-            .or_else(|| std::env::current_dir().ok())
+        self.root.clone().or_else(|| std::env::current_dir().ok())
     }
 
     /// Where the agent is working, for the footer to name. Same fallback, and

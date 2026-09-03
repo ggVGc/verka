@@ -59,7 +59,9 @@ impl AnswerView {
     }
 
     fn value(&self) -> Option<&AnswerValue> {
-        self.answer.as_ref().and_then(|answer| answer.value.as_ref())
+        self.answer
+            .as_ref()
+            .and_then(|answer| answer.value.as_ref())
     }
 
     /// How many selectable rows the current answer has; 0 for shapes that are

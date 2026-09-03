@@ -193,8 +193,7 @@ fn path_like(token: &str) -> Option<&str> {
             '`' | '\'' | '"' | '(' | ')' | '[' | ']' | '{' | '}' | ',' | ':' | ';'
         )
     });
-    let path_like = !candidate.is_empty()
-        && (candidate.contains('/') || candidate.contains('.'));
+    let path_like = !candidate.is_empty() && (candidate.contains('/') || candidate.contains('.'));
     path_like.then_some(candidate)
 }
 
@@ -240,7 +239,11 @@ mod tests {
         let root = Path::new("/home/me/project");
         let items = items(
             root,
-            vec!["src/main.rs".into(), "/etc/hosts".into(), "README.md".into()],
+            vec![
+                "src/main.rs".into(),
+                "/etc/hosts".into(),
+                "README.md".into(),
+            ],
         );
 
         let grouped: Vec<_> = items

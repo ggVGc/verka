@@ -267,7 +267,10 @@ mod tests {
     #[test]
     fn a_view_attached_without_history_asks_for_it_once() {
         let mut raw = RawView::default();
-        assert!(!raw.needs_hydration(), "a fresh screen has nothing to fetch");
+        assert!(
+            !raw.needs_hydration(),
+            "a fresh screen has nothing to fetch"
+        );
 
         raw.set_loaded(false);
         assert!(raw.needs_hydration());

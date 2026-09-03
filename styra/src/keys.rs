@@ -364,7 +364,9 @@ pub fn handle_input_key(
         KeyCode::Esc => app.enter_list(),
         // Choosing a shape is part of writing the message, so it lives in the
         // box rather than being a mode entered from outside it.
-        KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::CONTROL) => app.outbox.cycle_contract(),
+        KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.outbox.cycle_contract()
+        }
         KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => app.composer.newline(),
         KeyCode::Enter => {
             if let Some(message) = app.take_message() {
@@ -404,7 +406,8 @@ pub fn handle_input_key(
                                 "could not persist queued message: {error:#}"
                             )));
                         }
-                        app.outbox.queue(QueuedMessage::new(message).asking_for(contract));
+                        app.outbox
+                            .queue(QueuedMessage::new(message).asking_for(contract));
                         app.push_log(LogEntry::info(format!(
                             "message queued ({} waiting)",
                             app.outbox.queued_count()

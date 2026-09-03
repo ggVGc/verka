@@ -24,8 +24,6 @@ use styra_server::{InteractionEnd, LogEntry, QuotaEvent, QuotaStatus};
 use crate::activity::{Activity, Status};
 use crate::answer::AnswerView;
 use crate::composer::Composer;
-use crate::outbox::Outbox;
-use crate::preview::{Preview, PreviewTarget};
 use crate::files::{self, FilesView};
 use crate::ingest;
 use crate::insert::Prompt;
@@ -34,6 +32,8 @@ use crate::launch::{self, Launch};
 use crate::launcher::Launcher;
 use crate::notes::Notes;
 use crate::notices::Notices;
+use crate::outbox::Outbox;
+use crate::preview::{Preview, PreviewTarget};
 use crate::raw::RawView;
 use crate::tail::Tail;
 use crate::timeline::{Entry, Step, Timeline};
@@ -434,7 +434,9 @@ impl App {
     pub fn confirm_launcher(&mut self) {
         if let Some(launcher) = self.launcher.take() {
             let selection = launcher.selection();
-            if self.activity.status != Status::Pending && selection.provider != self.selection.provider {
+            if self.activity.status != Status::Pending
+                && selection.provider != self.selection.provider
+            {
                 self.show_action_message("changing agent requires a new session");
             } else {
                 let mut selection = selection;
@@ -685,7 +687,6 @@ impl App {
         self.moved(moved);
     }
 
-
     /// Open the combined interaction/files layout with its entry preview
     /// visible, or return to the ordinary event list when already open.
     pub fn toggle_files(&mut self) {
@@ -782,7 +783,6 @@ impl App {
         }
         self.timeline.selected_entry()
     }
-
 
     /// Whether the launch policy can still be edited; see [`launch::editable`].
     pub fn can_edit_launch(&self) -> bool {
@@ -884,8 +884,8 @@ mod tests {
     use crate::launcher::LaunchColumn;
     use styra_server::agent::Effort;
     use styra_server::event::TokenUsage;
-    use styra_server::{Answer, AnswerValue, FileLocation};
     use styra_server::RawLine;
+    use styra_server::{Answer, AnswerValue, FileLocation};
 
     /// A session app with every default these tests would otherwise inherit
     /// pinned explicitly: the profile names its model and effort instead of
@@ -945,7 +945,6 @@ mod tests {
         assert!(next.raw.is_empty());
         assert_eq!(next.timeline.entries.len(), 0);
     }
-
 
     #[test]
     fn following_tracks_the_newest_entry() {
@@ -1255,7 +1254,10 @@ mod tests {
             usage: TokenUsage::default(),
         });
         assert_eq!(app.activity.status, Status::Background);
-        assert_eq!(app.activity.status.label(), "idle · background work running");
+        assert_eq!(
+            app.activity.status.label(),
+            "idle · background work running"
+        );
 
         app.push_event(AgentEvent::ToolStarted {
             id: "poll-1".into(),
@@ -1876,7 +1878,8 @@ mod tests {
 
         app.toggle_raw();
         assert_eq!(
-            app.raw.selected_index(), 1,
+            app.raw.selected_index(),
+            1,
             "focuses the wire line behind the selected entry"
         );
         assert!(!app.raw.is_following());

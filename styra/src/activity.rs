@@ -331,6 +331,9 @@ mod tests {
 
         activity.note_progress();
 
-        assert!(activity.progress().in_status >= first, "same status, same clock");
+        assert!(
+            activity.progress().in_status >= first,
+            "same status, same clock"
+        );
     }
 }

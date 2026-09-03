@@ -28,7 +28,8 @@ pub(crate) fn render(frame: &mut Frame, app: &App, area: Rect) {
     let rows = rows(app);
     let item_width = area.width.saturating_sub(2);
     let scope = if app.interactions.only_current_workspace {
-        app.workspace.name
+        app.workspace
+            .name
             .as_deref()
             .or(app.workspace.id.as_deref())
             .unwrap_or("Current Workspace")

@@ -47,7 +47,8 @@ pub(crate) fn render_input(frame: &mut Frame, app: &App) {
 /// shape it was composed with, so the line says so — otherwise the operator
 /// has no way to tell which of several waiting messages asked for what.
 fn queued_lines(app: &App) -> Vec<String> {
-    app.outbox.queued()
+    app.outbox
+        .queued()
         .map(|message: &styra_server::QueuedMessage| {
             let prefix = match message.contract {
                 Some(contract) => format!("queued ({}): ", contract.as_str()),
@@ -121,7 +122,8 @@ mod tests {
     #[test]
     fn queued_messages_use_the_additional_information_color() {
         let mut app = testing::app("s1");
-        app.outbox.queue(styra_server::QueuedMessage::new("send this later"));
+        app.outbox
+            .queue(styra_server::QueuedMessage::new("send this later"));
 
         let display = modal_input::display(&modal(&app), 40);
         let queued = display.lines[0]

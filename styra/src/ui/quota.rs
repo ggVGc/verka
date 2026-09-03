@@ -157,7 +157,8 @@ mod tests {
     #[test]
     fn a_reading_without_a_usage_figure_shows_no_percentage() {
         let mut app = app();
-        app.quota.replace(vec![reading("five_hour", QuotaStatus::Allowed, None)]);
+        app.quota
+            .replace(vec![reading("five_hour", QuotaStatus::Allowed, None)]);
         app.toggle_view(View::Quota);
         let screen = rendered(&app);
         assert!(screen.contains("?"));
@@ -179,16 +180,25 @@ mod tests {
         app.note_quota(reading("five_hour", QuotaStatus::Warning, Some(0.91)));
         assert_eq!(app.quota.iter().count(), 1);
         assert_eq!(app.notices.len(), 1);
-        assert!(app.notices.iter().any(|notice| notice.text.contains("91% used")));
+        assert!(app
+            .notices
+            .iter()
+            .any(|notice| notice.text.contains("91% used")));
         assert_eq!(app.log.iter().count(), 1);
-        assert_eq!(app.log.newest().unwrap().level, styra_server::LogLevel::Warn);
+        assert_eq!(
+            app.log.newest().unwrap().level,
+            styra_server::LogLevel::Warn
+        );
     }
 
     #[test]
     fn an_exhausted_window_is_logged_as_an_error() {
         let mut app = app();
         app.note_quota(reading("five_hour", QuotaStatus::Exhausted, None));
-        assert_eq!(app.log.newest().unwrap().level, styra_server::LogLevel::Error);
+        assert_eq!(
+            app.log.newest().unwrap().level,
+            styra_server::LogLevel::Error
+        );
         assert!(app.log.newest().unwrap().message.contains("exhausted"));
     }
 
