@@ -891,9 +891,19 @@ styra/                   # the terminal client application
   Cargo.toml             # [[bin]] styra; depends on styra-server (path)
   src/
     main.rs              # CLI entry, terminal setup/teardown, event loop wiring
-    app.rs               # the App struct: session status, views, and the state below
+    app.rs               # the App struct: what is left when each field below has a module
     timeline.rs          # the event list: rows, selection, filters, expansion
     ingest.rs            # how one AgentEvent changes that list and the status
+    activity.rs          # the Interaction's status, background work, and progress
+    raw.rs               # the wire lines, the place in them, and whether they are loaded
+    tail.rs              # a list read from its end: the log and the quota readings
+    answer.rs            # the last turn's typed answer and the selection within it
+    files.rs             # files the agent named, and where they are on this host
+    preview.rs           # the panel showing one entry in full, and how
+    outbox.rs            # the pending contract and the queue of messages to send
+    notices.rs           # short-lived notices, each on its own five-second clock
+    interactions.rs      # the live Interactions navigator
+    workspace.rs         # which Workspace is on screen and where it is on this host
     launch.rs            # the sandbox policy's two layers, and the keys that edit them
     mount.rs             # writing, reading and locating host mounts (pure)
     launcher.rs          # the agent/model/effort picker's state
@@ -908,6 +918,15 @@ the state struct. Where a decision needs both — a mount added to the Workspace
 layer has to reach the server, a selection move has to reset the preview scroll
 — the module makes the decision and hands back what happened, and `App` (or the
 event loop) does the part that is not its business to know about.
+
+What earns a module is a rule, not a field count: the wire view's selection
+tracking its tail, a preview offset that stops meaning anything when the
+content changes, a contract belonging to the one question it was chosen for.
+Those rules were each re-established at several call sites over public fields
+before they had a type to live in. What is left on `App` is the state that
+belongs to no single module and the few methods that join two of them —
+`toggle_raw` asks the timeline which wire line to enter on, `preview_entry`
+asks it which entry the panel is pointed at.
 
 The agent knowledge (`agent`), event decoding (`event`), app-server handshake
 (`appserver`), and rendering (`render`) live in the `genta` library; the server
