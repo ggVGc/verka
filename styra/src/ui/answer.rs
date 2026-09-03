@@ -21,8 +21,8 @@ use styra_server::{Answer, AnswerValue, FileLocation};
 pub(crate) fn render_answer(frame: &mut Frame, app: &App, area: Rect) {
     let block = view_block(app, Some(&title(app)));
 
-    let Some(answer) = app.answer.as_ref() else {
-        let text = match app.answer_error.as_deref() {
+    let Some(answer) = app.answer.answer() else {
+        let text = match app.answer.error().as_deref() {
             Some(error) => format!("  {error}"),
             None => "  no answer yet".to_owned(),
         };
@@ -31,14 +31,15 @@ pub(crate) fn render_answer(frame: &mut Frame, app: &App, area: Rect) {
     };
 
     let lines = match answer.value.as_ref() {
-        Some(value) => value_lines(value, app.answer_selected),
+        Some(value) => value_lines(value, app.answer.selected_index()),
         None => unsatisfied_lines(answer),
     };
     // A navigable answer scrolls to keep the selection in view; a document one
     // is read from the top, and its own keys are not bound to move a selection.
     let viewport = usize::from(area.height.saturating_sub(2));
     let scroll = app
-        .answer_selected
+        .answer
+        .selected_index()
         .saturating_add(1)
         .saturating_sub(viewport) as u16;
     frame.render_widget(Paragraph::new(lines).block(block).scroll((scroll, 0)), area);
@@ -47,7 +48,7 @@ pub(crate) fn render_answer(frame: &mut Frame, app: &App, area: Rect) {
 /// What the view is showing, in the block's title: the contract read under,
 /// and how many items came back.
 fn title(app: &App) -> String {
-    let Some(answer) = app.answer.as_ref() else {
+    let Some(answer) = app.answer.answer() else {
         return "answer".to_owned();
     };
     let contract = answer.contract.as_str();
@@ -169,7 +170,7 @@ mod tests {
     fn app_showing(answer: Answer) -> App {
         let mut app = App::new(Selection::new(Provider::Codex), "s-1");
         app.view = View::Answer;
-        app.set_answer(Ok(answer));
+        app.answer.set(Ok(answer));
         app
     }
 
@@ -228,17 +229,17 @@ mod tests {
     #[test]
     fn the_selection_moves_through_a_files_answer() {
         let mut app = app_showing(files_answer());
-        assert_eq!(app.answer_rows(), 2);
-        app.answer_select_next();
+        assert_eq!(app.answer.rows(), 2);
+        app.answer.select_next();
         assert_eq!(
-            app.selected_answer_file().map(|file| file.path.clone()),
+            app.answer.selected_file().map(|file| file.path.clone()),
             Some(PathBuf::from("src/session.rs"))
         );
         // And stops at the end rather than running off it.
-        app.answer_select_next();
-        assert_eq!(app.answer_selected, 1);
-        app.answer_select_prev();
-        assert_eq!(app.answer_selected, 0);
+        app.answer.select_next();
+        assert_eq!(app.answer.selected_index(), 1);
+        app.answer.select_prev();
+        assert_eq!(app.answer.selected_index(), 0);
     }
 
     /// The point of keeping `source` on an unsatisfied answer: the operator
@@ -277,9 +278,9 @@ mod tests {
             error: None,
             source: "…".into(),
         });
-        assert_eq!(app.answer_rows(), 0);
-        app.answer_select_next();
-        assert_eq!(app.answer_selected, 0);
+        assert_eq!(app.answer.rows(), 0);
+        app.answer.select_next();
+        assert_eq!(app.answer.selected_index(), 0);
         assert!(rendered(&app).contains("it caches nothing."));
     }
 
@@ -303,7 +304,7 @@ mod tests {
     fn a_fetch_failure_is_reported_in_place_of_the_answer() {
         let mut app = App::new(Selection::new(Provider::Codex), "s-1");
         app.view = View::Answer;
-        app.set_answer(Err("session has no typed turn to answer".into()));
+        app.answer.set(Err("session has no typed turn to answer".into()));
         assert!(rendered(&app).contains("no typed turn"));
     }
 }

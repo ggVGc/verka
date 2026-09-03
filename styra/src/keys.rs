@@ -241,13 +241,13 @@ pub fn handle_list_key(
             KeyCode::Char('F') => app.reread_answer(Contract::Files),
             KeyCode::Char('J') => app.reread_answer(Contract::Json),
             KeyCode::Char('R') => app.ask(Request::Answer { contract: None }),
-            KeyCode::Char('e') if app.selected_answer_file().is_some() => {
+            KeyCode::Char('e') if app.answer.selected_file().is_some() => {
                 app.ask(Request::EditFile)
             }
-            KeyCode::Char('j') | KeyCode::Down => app.answer_select_next(),
-            KeyCode::Char('k') | KeyCode::Up => app.answer_select_prev(),
-            KeyCode::Char('g') => app.answer_selected = 0,
-            KeyCode::Char('G') => app.answer_selected = app.answer_rows().saturating_sub(1),
+            KeyCode::Char('j') | KeyCode::Down => app.answer.select_next(),
+            KeyCode::Char('k') | KeyCode::Up => app.answer.select_prev(),
+            KeyCode::Char('g') => app.answer.select_first(),
+            KeyCode::Char('G') => app.answer.select_last(),
             KeyCode::Char('y') => copy_selection(app),
             _ => {}
         },

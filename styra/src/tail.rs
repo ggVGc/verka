@@ -54,6 +54,7 @@ impl<T> Tail<T> {
 
     /// The newest entry, which is the one a view anchored to the tail shows
     /// last.
+    #[cfg(test)]
     pub fn newest(&self) -> Option<&T> {
         self.items.last()
     }

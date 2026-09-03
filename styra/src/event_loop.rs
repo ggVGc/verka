@@ -703,14 +703,14 @@ pub fn run(
             Some(Request::Answer { contract }) => {
                 let id = app.session_id.clone();
                 if id.is_empty() {
-                    app.set_answer(Err("no session to answer from yet".into()));
+                    app.answer.set(Err("no session to answer from yet".into()));
                     continue;
                 }
                 let answer = match contract {
                     Some(contract) => client.turn_answer_as(&id, contract),
                     None => client.turn_answer(&id),
                 };
-                app.set_answer(answer.map_err(|error| format!("{error:#}")));
+                app.answer.set(answer.map_err(|error| format!("{error:#}")));
             }
             // The quota log is the server's: it reads the figures off every
             // interaction's wire, so one client asking gets every session's

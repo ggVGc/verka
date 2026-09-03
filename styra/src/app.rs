@@ -21,10 +21,11 @@ use styra_server::agent::SandboxLayout;
 use styra_server::agent::{Provider, Selection};
 use styra_server::event::PresentationMode;
 use styra_server::event::{AgentEvent, DetailBlock};
-use styra_server::{Answer, AnswerValue, Contract, FileLocation, QueuedMessage};
+use styra_server::{Contract, QueuedMessage};
 use styra_server::{InteractionEnd, LogEntry, QuotaEvent, QuotaStatus};
 
 use crate::activity::{Activity, Status};
+use crate::answer::AnswerView;
 use crate::composer::Composer;
 use crate::ingest;
 use crate::insert::Prompt;
@@ -263,15 +264,8 @@ pub struct App {
     /// outlives the question it was chosen for.
     pub contract: Option<Contract>,
     /// The typed answer last fetched for this session, and the selection
-    /// within it. `None` before anything has been asked for; an `Answer` whose
-    /// value is absent is a reply that missed its contract, which is shown
-    /// rather than discarded.
-    pub answer: Option<Answer>,
-    /// Why the last answer could not be fetched at all — no typed turn, no
-    /// reply yet, no session. Distinct from an answer that arrived and failed
-    /// to parse, which is an `Answer`.
-    pub answer_error: Option<String>,
-    pub answer_selected: usize,
+    /// within it; see [`AnswerView`].
+    pub answer: AnswerView,
     /// The open "insert a path" prompt, while the operator is using it; see
     /// [`crate::insert`]. Held here rather than in [`Composer`] because its
     /// second question is about the sandbox, not about the message.
@@ -400,9 +394,7 @@ impl App {
             file_selected: 0,
             file_show_all: false,
             contract: None,
-            answer: None,
-            answer_error: None,
-            answer_selected: 0,
+            answer: AnswerView::default(),
             insert: None,
             request: None,
             notes: Notes::default(),
@@ -833,57 +825,6 @@ impl App {
         });
     }
 
-    /// Record a fetched answer, or why there was none to fetch.
-    pub fn set_answer(&mut self, answer: Result<Answer, String>) {
-        self.answer_selected = 0;
-        match answer {
-            Ok(answer) => {
-                self.answer = Some(answer);
-                self.answer_error = None;
-            }
-            Err(error) => {
-                self.answer = None;
-                self.answer_error = Some(error);
-            }
-        }
-    }
-
-    /// How many selectable rows the current answer has; 0 for shapes that are
-    /// read rather than navigated.
-    pub fn answer_rows(&self) -> usize {
-        match self
-            .answer
-            .as_ref()
-            .and_then(|answer| answer.value.as_ref())
-        {
-            Some(AnswerValue::Lines(lines)) => lines.len(),
-            Some(AnswerValue::Files(files)) => files.len(),
-            _ => 0,
-        }
-    }
-
-    pub fn answer_select_next(&mut self) {
-        let last = self.answer_rows().saturating_sub(1);
-        self.answer_selected = self.answer_selected.saturating_add(1).min(last);
-    }
-
-    pub fn answer_select_prev(&mut self) {
-        self.answer_selected = self.answer_selected.saturating_sub(1);
-    }
-
-    /// The file location the answer view's selection is on, if it is showing
-    /// files at all. What `e` opens, and what the footer names.
-    pub fn selected_answer_file(&self) -> Option<&FileLocation> {
-        match self
-            .answer
-            .as_ref()
-            .and_then(|answer| answer.value.as_ref())
-        {
-            Some(AnswerValue::Files(files)) => files.get(self.answer_selected),
-            _ => None,
-        }
-    }
-
     pub fn file_select_next(&mut self) {
         let last = self.file_paths().len().saturating_sub(1);
         self.file_selected = self.file_selected.saturating_add(1).min(last);
@@ -963,7 +904,7 @@ impl App {
     /// for doing the same thing.
     pub fn selected_file_path(&self) -> Option<PathBuf> {
         if self.view == View::Answer {
-            let file = self.selected_answer_file()?;
+            let file = self.answer.selected_file()?;
             let root = self
                 .workspace_root
                 .clone()
@@ -1110,17 +1051,7 @@ impl App {
             // A navigable answer copies the selected row; one that is read
             // rather than navigated copies the whole value, which is what an
             // operator reaching for `y` on a JSON or prose answer wants.
-            View::Answer => match self.answer.as_ref()?.value.as_ref() {
-                Some(AnswerValue::Lines(lines)) => lines.get(self.answer_selected).cloned(),
-                Some(AnswerValue::Files(_)) => {
-                    self.selected_answer_file().map(FileLocation::located)
-                }
-                Some(AnswerValue::Text(text)) => Some(text.clone()),
-                Some(AnswerValue::Json(json)) => serde_json::to_string_pretty(json).ok(),
-                // Nothing parsed, so the reply itself is the only thing there
-                // is to copy — and the thing worth looking at.
-                None => Some(self.answer.as_ref()?.source.clone()),
-            },
+            View::Answer => self.answer.copy_text(),
             View::Log | View::Quota | View::Transcript | View::Driva => None,
         }
     }
@@ -1165,6 +1096,7 @@ mod tests {
     use crate::launcher::LaunchColumn;
     use styra_server::agent::Effort;
     use styra_server::event::TokenUsage;
+    use styra_server::{Answer, AnswerValue, FileLocation};
     use styra_server::RawLine;
 
     /// A session app with every default these tests would otherwise inherit
@@ -2591,45 +2523,6 @@ mod tests {
         );
     }
 
-    /// A fresh answer is read from its start, not from wherever the previous
-    /// one happened to be scrolled to.
-    #[test]
-    fn a_new_answer_resets_the_selection() {
-        let mut app = app();
-        app.set_answer(Ok(Answer {
-            contract: Contract::Lines,
-            value: Some(AnswerValue::Lines(vec!["a".into(), "b".into()])),
-            error: None,
-            source: "…".into(),
-        }));
-        app.answer_select_next();
-        assert_eq!(app.answer_selected, 1);
-
-        app.set_answer(Ok(Answer {
-            contract: Contract::Lines,
-            value: Some(AnswerValue::Lines(vec!["c".into()])),
-            error: None,
-            source: "…".into(),
-        }));
-        assert_eq!(app.answer_selected, 0);
-    }
-
-    /// A failed fetch replaces the previous answer rather than leaving a stale
-    /// one on screen under an error that contradicts it.
-    #[test]
-    fn a_failed_fetch_clears_the_previous_answer() {
-        let mut app = app();
-        app.set_answer(Ok(Answer {
-            contract: Contract::Text,
-            value: Some(AnswerValue::Text("hello".into())),
-            error: None,
-            source: "…".into(),
-        }));
-        app.set_answer(Err("no typed turn to answer".into()));
-        assert!(app.answer.is_none());
-        assert_eq!(app.answer_error.as_deref(), Some("no typed turn to answer"));
-    }
-
     /// `e` in the answer view opens what the agent named, so the location has
     /// to resolve against the Workspace exactly as the Files view's does.
     #[test]
@@ -2637,7 +2530,7 @@ mod tests {
         let mut app = app();
         app.set_workspace_root(PathBuf::from("/work"));
         app.view = View::Answer;
-        app.set_answer(Ok(Answer {
+        app.answer.set(Ok(Answer {
             contract: Contract::Files,
             value: Some(AnswerValue::Files(vec![FileLocation {
                 path: PathBuf::from("src/auth.rs"),

@@ -10,6 +10,7 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 mod activity;
+mod answer;
 mod app;
 mod cli;
 mod clipboard;
