@@ -328,7 +328,6 @@ fn main() -> Result<()> {
             &client,
             &mut live,
             event_loop::RunContext {
-                workspace_id: &active_workspace.id,
                 standing_launch: &launch,
                 preferences_path: &preferences_path,
                 config: &config,

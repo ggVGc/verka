@@ -33,7 +33,6 @@ pub enum RunOutcome {
 const INTERACTIONS_REFRESH: Duration = Duration::from_millis(250);
 
 pub struct RunContext<'a> {
-    pub workspace_id: &'a str,
     pub standing_launch: &'a LaunchPolicy,
     pub preferences_path: &'a Path,
     pub config: &'a Config,
@@ -105,7 +104,6 @@ pub fn run(
     context: RunContext<'_>,
 ) -> Result<RunOutcome> {
     let RunContext {
-        workspace_id,
         standing_launch,
         preferences_path,
         config,
@@ -116,16 +114,17 @@ pub fn run(
     let mut pending_fold = false;
     let mut interactions_refreshed = Instant::now();
     loop {
+        let workspace_id = app.workspace.id.clone().unwrap_or_default();
         app.notices.expire();
         // Workspace launch policy is a server-owned read model. Refresh it
         // independently of input so edits from another Styra client flow into
         // this Driva view and invalidate its planned options.
-        if let Ok(policy) = client.workspace_launch(workspace_id) {
+        if let Ok(policy) = client.workspace_launch(&workspace_id) {
             if policy != app.launch.workspace {
                 app.launch.sync_workspace(policy);
             }
         }
-        session::ensure_driva_plan(app, client, workspace_id);
+        session::ensure_driva_plan(app, client, &workspace_id);
         let mut disconnected = false;
         if let Live::Running { cursor } = live {
             match client.updates(&app.session_id, *cursor) {
@@ -316,7 +315,7 @@ pub fn run(
                     &mut pending_fold,
                     preferences_path,
                 ),
-                Focus::Input => keys::handle_input_key(app, client, workspace_id, live, key),
+                Focus::Input => keys::handle_input_key(app, client, &workspace_id, live, key),
             }
         }
 
@@ -359,7 +358,7 @@ pub fn run(
                 }
             }
             Some(Request::SetWorktreesEnabled(enabled)) => {
-                match client.set_workspace_worktrees_enabled(workspace_id, enabled) {
+                match client.set_workspace_worktrees_enabled(&workspace_id, enabled) {
                     Ok(workspace) => {
                         app.show_workspace(&workspace);
                         app.show_action_message(format!(
@@ -374,7 +373,7 @@ pub fn run(
             }
             Some(Request::OpenSession(id)) => return Ok(RunOutcome::OpenSession(id)),
             Some(Request::Sessions) => {
-                let mut sessions = client.list_sessions(workspace_id)?;
+                let mut sessions = client.list_sessions(&workspace_id)?;
                 if sessions.is_empty() {
                     app.push_log(LogEntry::warn("no sessions found in the current Workspace"));
                     continue;
@@ -412,7 +411,7 @@ pub fn run(
                 }
             }
             Some(Request::Templates) => {
-                let templates = match client.list_templates(workspace_id) {
+                let templates = match client.list_templates(&workspace_id) {
                     Ok(templates) => templates,
                     Err(error) => {
                         app.push_log(LogEntry::error(format!(
@@ -444,7 +443,7 @@ pub fn run(
             Some(Request::ChangeWorkspaceLaunch {
                 change,
                 clear_interaction,
-            }) => match client.change_workspace_launch(workspace_id, change) {
+            }) => match client.change_workspace_launch(&workspace_id, change) {
                 Ok(policy) if clear_interaction => {
                     app.launch.adopt_workspace(policy);
                     app.show_action_message(
