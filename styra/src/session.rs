@@ -9,8 +9,7 @@ use styra_server::protocol::{
     CreateSession, CreateWorkspace, PlanSession, ResumeSession, SendMessage, SessionInfo,
 };
 use styra_server::{
-    Client, Contract, InteractionSummary, InteractionUpdate, LogEntry, SessionSummary,
-    WorkspaceSummary,
+    Client, Contract, InteractionUpdate, LogEntry, SessionSummary, WorkspaceSummary,
 };
 
 /// Whether this client is attached to a server interaction, plus the only
@@ -210,23 +209,21 @@ pub fn launch_live_session(
 /// Attach to a live interaction: rebuild an `App` from its summary and replay the
 /// updates the server has accumulated for it, so the view matches what the interaction
 /// has done so far and the event loop can continue polling from the cursor.
-pub fn attach_live_interaction(
-    client: &Client,
-    interaction: InteractionSummary,
-) -> Result<(App, Attachment)> {
+pub fn attach_live_interaction(client: &Client, interaction_id: &str) -> Result<(App, Attachment)> {
+    let loaded = client.load_interaction(interaction_id)?;
+    let interaction = loaded.summary;
     let mut app = App::new(interaction.selection.clone(), interaction.id.clone());
     app.session_name = interaction.name.clone();
     app.workspace.id = Some(interaction.workspace_id.clone());
     app.workspace.enter(interaction.workspace.clone());
     app.launch.record(interaction.driva.clone());
-    let updates = client.updates(&interaction.id, 0)?;
+    let updates = loaded.updates;
     let cursor = updates.next;
     for sequenced in updates.updates {
         apply_update(&mut app, sequenced.update);
     }
     app.select_last();
-    app.outbox
-        .replace_queued(client.queued_messages(&interaction.id)?);
+    app.outbox.replace_queued(loaded.queued);
     let accepting = interaction.accepting;
     let live = if accepting {
         Attachment::Attached { cursor }
@@ -279,7 +276,7 @@ pub fn open_session(client: &Client, session_id: &str) -> Result<(App, Attachmen
         .into_iter()
         .find(|interaction| interaction.id == session_id)
     {
-        return attach_live_interaction(client, interaction);
+        return attach_live_interaction(client, &interaction.id);
     }
     open_stored(client, session_id)
 }

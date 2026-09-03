@@ -197,6 +197,15 @@ pub struct Updates {
     pub next: u64,
 }
 
+/// Everything a client needs to make one live interaction current, returned
+/// by one ordinary blocking request.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LoadedInteraction {
+    pub summary: InteractionSummary,
+    pub updates: Updates,
+    pub queued: Vec<QueuedMessage>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct StoredSession {
     pub summary: SessionSummary,
@@ -308,10 +317,6 @@ pub enum Request {
     SendQueuedMessage {
         id: String,
     },
-    /// Read back the session's durably queued, not-yet-sent messages.
-    QueuedMessages {
-        id: String,
-    },
     /// Discard the session's durably queued messages.
     ClearQueuedMessages {
         id: String,
@@ -326,6 +331,9 @@ pub enum Request {
     /// is only what is stored on disk: it no longer appears in the
     /// current-interactions list and can be resumed like any other history.
     CloseInteraction {
+        id: String,
+    },
+    LoadInteraction {
         id: String,
     },
     Updates {
@@ -405,6 +413,7 @@ pub enum Response {
     Queued(usize),
     SentQueuedMessage(Option<QueuedMessage>, Vec<QueuedMessage>),
     QueuedMessages(Vec<QueuedMessage>),
+    InteractionLoaded(LoadedInteraction),
     Updates(Updates),
     Interactions(Vec<InteractionSummary>),
     StoredSessions(Vec<SessionSummary>),

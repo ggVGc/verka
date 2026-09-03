@@ -58,7 +58,7 @@ fn make_interaction_current(
         return;
     }
     let id = interaction.id.clone();
-    match session::attach_live_interaction(client, interaction) {
+    match session::attach_live_interaction(client, &id) {
         Ok((mut next, next_live)) => {
             next.adopt(app.take_operator_state());
             next.launch.interaction = standing_launch.clone();

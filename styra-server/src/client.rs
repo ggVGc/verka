@@ -2,8 +2,8 @@
 
 use crate::protocol::{
     Answer, Contract, CreateSession, CreateWorkspace, DrivaOptions, Health, LaunchPolicy,
-    PlanSession, QueuedMessage, RenameSession, Request, Response, ResumeSession, SendMessage,
-    SessionInfo, ShellInfo, StoredSession, TemplateSummary, Updates, WireResponse,
+    LoadedInteraction, PlanSession, QueuedMessage, RenameSession, Request, Response, ResumeSession,
+    SendMessage, SessionInfo, ShellInfo, StoredSession, TemplateSummary, Updates, WireResponse,
     WorkspaceLaunchChange,
 };
 use crate::protocol::{InteractionSummary, SessionSummary, WorkspaceSummary};
@@ -307,14 +307,6 @@ impl Client {
         }
     }
 
-    /// Read back the session's durably queued, not-yet-sent messages.
-    pub fn queued_messages(&self, id: &str) -> Result<Vec<QueuedMessage>> {
-        match self.request(Request::QueuedMessages { id: id.to_owned() })? {
-            Response::QueuedMessages(messages) => Ok(messages),
-            other => unexpected("queued_messages", other),
-        }
-    }
-
     /// Discard the session's durably queued messages. Returns how many were
     /// cleared.
     pub fn clear_queued_messages(&self, id: &str) -> Result<usize> {
@@ -349,6 +341,13 @@ impl Client {
 
     pub fn updates(&self, id: &str, after: u64) -> Result<Updates> {
         self.updates_filtered(id, after, true)
+    }
+
+    pub fn load_interaction(&self, id: &str) -> Result<LoadedInteraction> {
+        match self.request(Request::LoadInteraction { id: id.to_owned() })? {
+            Response::InteractionLoaded(interaction) => Ok(interaction),
+            other => unexpected("interaction_loaded", other),
+        }
     }
 
     /// Updates without the verbatim wire lines, for a client that renders no

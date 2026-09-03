@@ -10,8 +10,9 @@ use crate::protocol::{
     TemplateSummary,
 };
 use crate::protocol::{
-    CreateSession, CreateWorkspace, Health, Request, Response, ResumeSession, SequencedUpdate,
-    SessionInfo, ShellInfo, StoredSession, Updates, WireResponse, MAX_REQUEST_BYTES,
+    CreateSession, CreateWorkspace, Health, LoadedInteraction, Request, Response, ResumeSession,
+    SequencedUpdate, SessionInfo, ShellInfo, StoredSession, Updates, WireResponse,
+    MAX_REQUEST_BYTES,
 };
 use anyhow::{Context, Result};
 use std::collections::{HashMap, HashSet};
@@ -1325,9 +1326,6 @@ impl ServerState {
                 let (sent, queued) = self.interaction(&id)?.send_queued_message()?;
                 Ok(Response::SentQueuedMessage(sent, queued))
             }
-            Request::QueuedMessages { id } => Ok(Response::QueuedMessages(
-                self.interaction(&id)?.queued_messages(),
-            )),
             Request::ClearQueuedMessages { id } => {
                 Ok(Response::Queued(self.interaction(&id)?.clear_queue()?))
             }
@@ -1351,6 +1349,25 @@ impl ServerState {
                     .expect("server interaction lock poisoned")
                     .remove(&id);
                 Ok(Response::Accepted)
+            }
+            Request::LoadInteraction { id } => {
+                let interaction = self.interaction(&id)?;
+                let summary = interaction.summary();
+                let all = interaction
+                    .updates
+                    .lock()
+                    .expect("interaction update lock poisoned");
+                let updates = Updates {
+                    updates: all.clone(),
+                    next: all.last().map(|update| update.sequence).unwrap_or(0),
+                };
+                drop(all);
+                let queued = interaction.queued_messages();
+                Ok(Response::InteractionLoaded(LoadedInteraction {
+                    summary,
+                    updates,
+                    queued,
+                }))
             }
             Request::Updates { id, after, raw } => {
                 let interaction = self.interaction(&id)?;
