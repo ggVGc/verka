@@ -32,7 +32,7 @@ styra [OPTIONS] [-- PROMPT]
 styra shell [--session <ID>]
 
   --socket <PATH>      Server socket (default: $XDG_RUNTIME_DIR/styra/styra.sock)
-  --workspace <DIR>    Host directory mounted writable as the agent workspace
+  --workspace <DIR>    Host directory mounted writable at its canonical path
   --network            Permit agent networking (providers may default this on)
   --template <NAME>    Layer a Driva execution template onto the sandbox;
                        repeatable, later names win on conflict

@@ -40,6 +40,19 @@ impl Default for SandboxLayout {
     }
 }
 
+impl SandboxLayout {
+    /// Use `workspace` as its own destination inside the isolation.
+    ///
+    /// This is appropriate when the host directory is a durable, canonical
+    /// project path. Hosts that construct ephemeral worktrees should keep using
+    /// an explicit fixed layout instead.
+    pub fn same_path(workspace: impl Into<PathBuf>) -> Self {
+        Self {
+            workspace: workspace.into(),
+        }
+    }
+}
+
 /// Which coding agent a session launches, and thus which command line and wire
 /// protocol it gets. The model and reasoning effort are chosen separately (see
 /// [`Selection`]); a provider is only the agent itself.

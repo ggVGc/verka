@@ -38,7 +38,6 @@ struct ServerInner {
     /// The socket the server is bound to, removed on an explicit shutdown so
     /// the next client sees no stale socket to trip over.
     socket: PathBuf,
-    layout: SandboxLayout,
     interactions: Mutex<HashMap<String, Arc<ManagedInteraction>>>,
     /// Workspace metadata is one JSON document. Serialize read-modify-write
     /// launch edits so concurrent clients cannot overwrite each other's
@@ -280,7 +279,6 @@ impl ServerState {
             inner: Arc::new(ServerInner {
                 store_root,
                 socket,
-                layout: SandboxLayout::default(),
                 interactions: Mutex::new(HashMap::new()),
                 workspace_metadata: Mutex::new(()),
                 shutdown: AtomicBool::new(false),
@@ -365,6 +363,7 @@ impl ServerState {
             .map(|worktrees| vec![worktrees.tool()])
             .unwrap_or_default();
         let workspace = owning_workspace.host_path;
+        let layout = workspace_layout(&workspace);
         let selection = request.selection;
         let name = journal::normalize_session_name(request.name.as_deref())?
             .or_else(|| journal::name_from_message(request.message.as_deref()));
@@ -372,7 +371,7 @@ impl ServerState {
         // here rather than in the client so every launch path resolves the same
         // way, and a client cannot launch under something the plan did not show.
         let launch = LaunchPolicy::merge(&owning_workspace.launch, &request.launch);
-        let mut profile = crate::agent::resolve_profile(&selection, &self.inner.layout)?;
+        let mut profile = crate::agent::resolve_profile(&selection, &layout)?;
         profile.network = profile.network || launch.grants_network();
         let template = resolve_templates(&workspace, &launch.templates)?;
         let extra_mounts = resolve_launch_mounts(&launch.mounts)?;
@@ -395,10 +394,10 @@ impl ServerState {
         let spec = InteractionSpec {
             profile,
             resume_provider_session_id: None,
-            working_directory: self.inner.layout.workspace.clone(),
+            working_directory: layout.workspace.clone(),
             workspace: MountSpec {
                 source: workspace.clone(),
-                destination: self.inner.layout.workspace.clone(),
+                destination: layout.workspace.clone(),
                 writable: true,
             },
             repository_mounts,
@@ -635,8 +634,9 @@ impl ServerState {
             .map(|worktrees| vec![worktrees.tool()])
             .unwrap_or_default();
         let workspace = owning_workspace.host_path;
+        let layout = workspace_layout(&workspace);
         let launch = LaunchPolicy::merge(&owning_workspace.launch, &request.launch);
-        let mut profile = crate::agent::resolve_profile(&request.selection, &self.inner.layout)?;
+        let mut profile = crate::agent::resolve_profile(&request.selection, &layout)?;
         profile.network = profile.network || launch.grants_network();
         let template = resolve_templates(&workspace, &launch.templates)?;
         let extra_mounts = resolve_launch_mounts(&launch.mounts)?;
@@ -645,10 +645,10 @@ impl ServerState {
         let spec = InteractionSpec {
             profile,
             resume_provider_session_id: None,
-            working_directory: self.inner.layout.workspace.clone(),
+            working_directory: layout.workspace.clone(),
             workspace: MountSpec {
                 source: workspace,
-                destination: self.inner.layout.workspace.clone(),
+                destination: layout.workspace.clone(),
                 writable: true,
             },
             repository_mounts,
@@ -719,9 +719,10 @@ impl ServerState {
             .map(|worktrees| vec![worktrees.tool()])
             .unwrap_or_default();
         let workspace = owning_workspace.host_path;
+        let layout = workspace_layout(&workspace);
         let selection = summary.selection;
         let launch = LaunchPolicy::merge(&owning_workspace.launch, &request.launch);
-        let mut profile = crate::agent::resolve_profile(&selection, &self.inner.layout)?;
+        let mut profile = crate::agent::resolve_profile(&selection, &layout)?;
         profile.resume(selection.provider, &provider_session_id)?;
         profile.network = profile.network || launch.grants_network();
         let template = resolve_templates(&workspace, &launch.templates)?;
@@ -742,10 +743,10 @@ impl ServerState {
         let spec = InteractionSpec {
             profile,
             resume_provider_session_id: Some(provider_session_id),
-            working_directory: self.inner.layout.workspace.clone(),
+            working_directory: layout.workspace.clone(),
             workspace: MountSpec {
                 source: workspace.clone(),
-                destination: self.inner.layout.workspace.clone(),
+                destination: layout.workspace.clone(),
                 writable: true,
             },
             repository_mounts,
@@ -1010,7 +1011,7 @@ impl ServerState {
         } else {
             Selection::new(to_provider)
         };
-        let profile = crate::agent::resolve_profile(&selection, &self.inner.layout)?;
+        let profile = crate::agent::resolve_profile(&selection, &workspace_layout(&cwd))?;
         let (mut journal, new_id) = Journal::create_in_workspace(
             &self.inner.store_root,
             &summary.workspace_id,
@@ -1727,6 +1728,12 @@ fn resolve_templates(workspace: &Path, names: &[String]) -> Result<Option<Resolv
         }
     }
     ResolvedTemplate::resolve(merged.expect("non-empty names produces a merged template")).map(Some)
+}
+
+/// Styra Workspaces are durable host directories, so keep their canonical path
+/// meaningful inside the sandbox.
+fn workspace_layout(workspace: &Path) -> SandboxLayout {
+    SandboxLayout::same_path(workspace)
 }
 
 /// The Driva configuration a launch in this Workspace resolves against: the

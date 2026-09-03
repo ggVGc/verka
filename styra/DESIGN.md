@@ -138,9 +138,15 @@ interface: an interactive, bidirectional session composes from the same
 validated-request-plus-streams primitive as a batch run.
 
 Isolation policy follows Orka's proven shape and is owned by Styra's agent
-profile: a writable workspace mount (the project or a throwaway worktree), a
+profile: a writable workspace mount, a
 writable agent-auth mount, networking enabled for the agent, and everything else
 denied. Styra does not invent new isolation concepts; it selects Driva policy.
+
+A Styra Workspace is a durable canonical host directory, so its writable mount
+and working directory keep that same path inside the sandbox. This preserves
+absolute-path tooling and makes provider session state stable for that project.
+Hosts that mount ephemeral worktrees instead select an explicit fixed sandbox
+layout, such as Orka's `/tmp/orka/workspace`.
 
 ## The agent profile
 
@@ -974,7 +980,7 @@ Dependencies: `styra-server` depends on `driva` and `genta` (path),
 styra [OPTIONS] [-- PROMPT]
 
   --socket <PATH>      styra-server socket (default: $XDG_RUNTIME_DIR/styra/styra.sock)
-  --workspace <DIR>    Host directory mounted writable as the agent workspace
+  --workspace <DIR>    Host directory mounted writable at its canonical path
   --network            Permit agent networking (providers may default this on)
   --view <SESSION>     Open a captured journal read-only instead of launching
   -d, --daemon         Start the background daemon and exit (no interface)

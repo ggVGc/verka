@@ -16,7 +16,7 @@ pub struct Cli {
     /// live interactions it owns are ended with it.
     #[arg(long)]
     pub stop: bool,
-    /// Host directory mounted writable as the agent workspace (default: cwd).
+    /// Host directory mounted writable at its canonical path (default: cwd).
     #[arg(long)]
     pub workspace: Option<PathBuf>,
     /// Permit agent networking (providers may default this on). Adds to the
