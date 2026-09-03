@@ -1,3 +1,4 @@
+- Styra: renaming of interactions
 - Stopping with an error should become a different state than just Idle, and should show differently in the live interactions list
 - If an interaction has stopped because of rate limit. Automatically try to continue it when rate new window opens, unless interaction explicitly stopped.
 - Start new session from single entry (or selection of multiple entries) in an interaction log. Should carry a link to where it originated from.
