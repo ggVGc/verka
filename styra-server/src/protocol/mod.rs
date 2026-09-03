@@ -304,8 +304,8 @@ pub enum Request {
         id: String,
         message: SendMessage,
     },
-    /// Pop the oldest durably queued message, if any, for the client to send.
-    TakeQueuedMessage {
+    /// Send and remove the oldest durably queued message, if any.
+    SendQueuedMessage {
         id: String,
     },
     /// Read back the session's durably queued, not-yet-sent messages.
@@ -403,7 +403,7 @@ pub enum Response {
     WorkspaceLaunchUpdated(LaunchPolicy),
     Accepted,
     Queued(usize),
-    TakenQueuedMessage(Option<QueuedMessage>),
+    SentQueuedMessage(Option<QueuedMessage>, Vec<QueuedMessage>),
     QueuedMessages(Vec<QueuedMessage>),
     Updates(Updates),
     Interactions(Vec<InteractionSummary>),

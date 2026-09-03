@@ -209,9 +209,7 @@ pub fn launch_live_session(
         "journal: {}",
         info.journal_path.display()
     )));
-    for message in &info.queued {
-        app.outbox.queue(message.clone());
-    }
+    app.outbox.replace_queued(info.queued.clone());
     Ok((app, info))
 }
 
@@ -233,9 +231,8 @@ pub fn attach_live_interaction(
         apply_update(&mut app, sequenced.update);
     }
     app.select_last();
-    for message in client.queued_messages(&interaction.id)? {
-        app.outbox.queue(message);
-    }
+    app.outbox
+        .replace_queued(client.queued_messages(&interaction.id)?);
     let accepting = interaction.accepting;
     let live = attached_live(cursor, accepting);
     if !accepting && app.activity.status.is_active() {
@@ -320,9 +317,7 @@ pub fn resume_and_send(
             app.workspace.enter(info.workspace);
             app.launch.record(info.driva);
             app.push_log(LogEntry::info("resumed with provider-native context"));
-            for message in &info.queued {
-                app.outbox.queue(message.clone());
-            }
+            app.outbox.replace_queued(info.queued.clone());
             let session_id = info.id;
             app.session_id = session_id.clone();
             app.activity.status = Status::Running;
@@ -350,12 +345,18 @@ pub fn pause_interaction(app: &mut App, client: &Client, live: &mut Live) {
         if let Err(error) = client.stop_interaction(&app.session_id) {
             app.push_log(LogEntry::error(format!("pause failed: {error:#}")));
         } else {
-            if let Err(error) = client.clear_queued_messages(&app.session_id) {
-                app.push_log(LogEntry::error(format!(
-                    "could not clear the durable message queue: {error:#}"
-                )));
-            }
-            let cleared = app.outbox.clear_queued();
+            let cleared = match client.clear_queued_messages(&app.session_id) {
+                Ok(cleared) => {
+                    app.outbox.replace_queued(Vec::new());
+                    cleared
+                }
+                Err(error) => {
+                    app.push_log(LogEntry::error(format!(
+                        "could not clear the durable message queue: {error:#}"
+                    )));
+                    app.outbox.queued_count()
+                }
+            };
             app.push_log(LogEntry::info(if cleared == 0 {
                 "interaction paused; send a new message to start again".into()
             } else {

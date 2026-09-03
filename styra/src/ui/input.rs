@@ -122,7 +122,7 @@ mod tests {
     fn queued_messages_use_the_additional_information_color() {
         let mut app = testing::app("s1");
         app.outbox
-            .queue(styra_server::QueuedMessage::new("send this later"));
+            .replace_queued(vec![styra_server::QueuedMessage::new("send this later")]);
 
         let display = modal_input::display(&modal(&app), 40);
         let queued = display.lines[0]

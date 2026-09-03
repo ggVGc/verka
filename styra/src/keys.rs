@@ -8,7 +8,7 @@ use crate::launch;
 use crate::preferences;
 use crate::session::{self, Live};
 use crate::terminal;
-use styra_server::{Client, Contract, LogEntry, QueuedMessage};
+use styra_server::{Client, Contract, LogEntry};
 
 /// Keys for the launch picker: `j`/`k` within a column, `Tab`/`h`/`l` between
 /// them, `Enter` to apply the choice to this workspace, `D` to also save it as
@@ -401,17 +401,18 @@ pub fn handle_input_key(
                         // chosen for this question and is asked for whenever
                         // the agent gets to it.
                         let turn = session::turn(&message, &app.selection, contract);
-                        if let Err(error) = client.queue_turn(&app.session_id, turn) {
-                            app.push_log(LogEntry::error(format!(
+                        match client.queue_turn(&app.session_id, turn) {
+                            Ok(queued) => {
+                                app.outbox.replace_queued(queued);
+                                app.push_log(LogEntry::info(format!(
+                                    "message queued ({} waiting)",
+                                    app.outbox.queued_count()
+                                )));
+                            }
+                            Err(error) => app.push_log(LogEntry::error(format!(
                                 "could not persist queued message: {error:#}"
-                            )));
+                            ))),
                         }
-                        app.outbox
-                            .queue(QueuedMessage::new(message).asking_for(contract));
-                        app.push_log(LogEntry::info(format!(
-                            "message queued ({} waiting)",
-                            app.outbox.queued_count()
-                        )));
                     }
                     Live::Running { .. }
                         if matches!(app.activity.status, Status::Idle | Status::Background) =>

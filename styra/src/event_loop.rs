@@ -154,32 +154,21 @@ pub fn run(
         }
 
         if let Live::Running { .. } = live {
-            if app.activity.status == Status::Idle {
-                if let Some(message) = app.outbox.take_queued() {
-                    // Sent as it was composed: a message queued asking for a
-                    // shape still asks for it when the agent frees up.
-                    let turn = session::turn(&message.text, &app.selection, message.contract);
-                    match client.send_turn(&app.session_id, turn) {
-                        Ok(()) => {
-                            app.activity.status = Status::Running;
-                            let waiting = app.outbox.queued_count();
-                            app.show_action_message(if waiting == 0 {
-                                "sent queued message automatically".into()
-                            } else {
-                                format!(
-                                    "sent queued message automatically ({waiting} still waiting)"
-                                )
-                            });
-                            if let Err(error) = client.take_queued_message(&app.session_id) {
-                                app.push_log(LogEntry::error(format!(
-                                    "could not clear sent message from the durable queue: {error:#}"
-                                )));
-                            }
-                        }
-                        Err(error) => {
-                            app.outbox.queue(message);
-                            app.push_log(LogEntry::error(format!("queued send failed: {error:#}")));
-                        }
+            if app.activity.status == Status::Idle && app.outbox.queued_count() > 0 {
+                match client.send_queued_message(&app.session_id) {
+                    Ok((Some(_), queued)) => {
+                        app.outbox.replace_queued(queued);
+                        app.activity.status = Status::Running;
+                        let waiting = app.outbox.queued_count();
+                        app.show_action_message(if waiting == 0 {
+                            "sent queued message automatically".into()
+                        } else {
+                            format!("sent queued message automatically ({waiting} still waiting)")
+                        });
+                    }
+                    Ok((None, queued)) => app.outbox.replace_queued(queued),
+                    Err(error) => {
+                        app.push_log(LogEntry::error(format!("queued send failed: {error:#}")));
                     }
                 }
             }

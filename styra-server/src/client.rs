@@ -277,31 +277,33 @@ impl Client {
 
     /// Durably queue an operator message on the server without sending it,
     /// so it survives the client disconnecting before the interaction is idle
-    /// enough to accept it. Returns the new queue length.
-    pub fn queue_message(&self, id: &str, text: &str) -> Result<usize> {
+    /// enough to accept it. Returns the authoritative queue.
+    pub fn queue_message(&self, id: &str, text: &str) -> Result<Vec<QueuedMessage>> {
         self.queue_turn(id, SendMessage::new(text))
     }
 
     /// Queue a turn as composed, so a contract chosen while the agent was busy
     /// survives the wait rather than being dropped at the moment the operator
     /// could least do anything about it.
-    pub fn queue_turn(&self, id: &str, message: SendMessage) -> Result<usize> {
+    pub fn queue_turn(&self, id: &str, message: SendMessage) -> Result<Vec<QueuedMessage>> {
         match self.request(Request::QueueMessage {
             id: id.to_owned(),
             message,
         })? {
-            Response::Queued(count) => Ok(count),
-            other => unexpected("queued", other),
+            Response::QueuedMessages(messages) => Ok(messages),
+            other => unexpected("queued_messages", other),
         }
     }
 
-    /// Pop the oldest durably queued message, if any. It carries the contract
-    /// it was queued under, so a caller sending it asks for the same shape the
-    /// operator chose when the agent was still busy.
-    pub fn take_queued_message(&self, id: &str) -> Result<Option<QueuedMessage>> {
-        match self.request(Request::TakeQueuedMessage { id: id.to_owned() })? {
-            Response::TakenQueuedMessage(message) => Ok(message),
-            other => unexpected("taken_queued_message", other),
+    /// Ask the server to send the oldest queued message. The returned queue is
+    /// the complete authoritative remainder for presentation.
+    pub fn send_queued_message(
+        &self,
+        id: &str,
+    ) -> Result<(Option<QueuedMessage>, Vec<QueuedMessage>)> {
+        match self.request(Request::SendQueuedMessage { id: id.to_owned() })? {
+            Response::SentQueuedMessage(message, queued) => Ok((message, queued)),
+            other => unexpected("sent_queued_message", other),
         }
     }
 

@@ -11,19 +11,16 @@
 //! The buffer the message is written in is [`Composer`](crate::composer),
 //! which does not depend on there being a session at all.
 
-use std::collections::VecDeque;
-
 use styra_server::{Contract, QueuedMessage};
 
-/// The pending contract and the queue of messages waiting to be sent.
+/// The pending contract and a read-only projection of the server-owned queue.
 #[derive(Default)]
 pub struct Outbox {
     /// The shape the next message asks its reply to come back in, or `None`
     /// for an ordinary turn.
     contract: Option<Contract>,
-    /// Messages submitted while the current turn was running. They remain
-    /// visible until sent or the interaction is stopped.
-    queued: VecDeque<QueuedMessage>,
+    /// Messages waiting on the server, retained here only for presentation.
+    queued: Vec<QueuedMessage>,
 }
 
 impl Outbox {
@@ -61,21 +58,9 @@ impl Outbox {
         self.queued.len()
     }
 
-    pub fn queue(&mut self, message: QueuedMessage) {
-        self.queued.push_back(message);
-    }
-
-    /// Take the message that has waited longest, for sending.
-    pub fn take_queued(&mut self) -> Option<QueuedMessage> {
-        self.queued.pop_front()
-    }
-
-    /// Drop everything waiting, returning how many there were, so the caller
-    /// can say what it discarded.
-    pub fn clear_queued(&mut self) -> usize {
-        let count = self.queued.len();
-        self.queued.clear();
-        count
+    /// Replace the display projection with the server's authoritative state.
+    pub fn replace_queued(&mut self, queued: Vec<QueuedMessage>) {
+        self.queued = queued;
     }
 }
 
@@ -115,39 +100,12 @@ mod tests {
     }
 
     #[test]
-    fn queued_messages_are_sent_in_the_order_they_were_written() {
+    fn the_server_queue_projection_is_replaced_as_a_whole() {
         let mut outbox = Outbox::default();
-        outbox.queue(QueuedMessage::new("first"));
-        outbox.queue(QueuedMessage::new("second"));
+        outbox.replace_queued(vec![QueuedMessage::new("one"), QueuedMessage::new("two")]);
         assert_eq!(outbox.queued_count(), 2);
 
-        assert_eq!(outbox.take_queued().unwrap().text, "first");
-        assert_eq!(outbox.take_queued().unwrap().text, "second");
-        assert!(outbox.take_queued().is_none());
-    }
-
-    /// A queued message carries the shape it was written under, so a contract
-    /// chosen for it is still asked for whenever the agent gets to it.
-    #[test]
-    fn a_queued_message_keeps_its_own_contract() {
-        let mut outbox = Outbox::default();
-        outbox.cycle_contract();
-        let contract = outbox.take_contract();
-        outbox.queue(QueuedMessage::new("typed").asking_for(contract));
-        outbox.queue(QueuedMessage::new("untyped"));
-
-        assert_eq!(outbox.take_queued().unwrap().contract, contract);
-        assert_eq!(outbox.take_queued().unwrap().contract, None);
-    }
-
-    #[test]
-    fn clearing_says_how_many_were_discarded() {
-        let mut outbox = Outbox::default();
-        outbox.queue(QueuedMessage::new("one"));
-        outbox.queue(QueuedMessage::new("two"));
-
-        assert_eq!(outbox.clear_queued(), 2);
+        outbox.replace_queued(Vec::new());
         assert_eq!(outbox.queued_count(), 0);
-        assert_eq!(outbox.clear_queued(), 0);
     }
 }

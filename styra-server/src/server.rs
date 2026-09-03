@@ -206,6 +206,27 @@ impl ManagedInteraction {
         Ok(())
     }
 
+    fn send_message(&self, message: SendMessage) -> Result<()> {
+        if let Some(selection) = message.selection {
+            self.set_selection(selection)?;
+        }
+        if !self.accepting_messages.load(Ordering::Acquire) {
+            anyhow::bail!(
+                "session {} is not accepting messages",
+                self.interaction.session_id()
+            );
+        }
+        let text = match message.contract {
+            Some(contract) => {
+                journal::store_session_contract(&self.session_path, contract)?;
+                crate::contract::frame(&message.text, contract)
+            }
+            None => message.text,
+        };
+        self.interaction
+            .send_with_selection(&text, Some(&self.selection()))
+    }
+
     fn stop(&self) {
         self.accepting_messages.store(false, Ordering::Release);
         self.interaction.stop();
@@ -218,27 +239,50 @@ impl ManagedInteraction {
 
     /// Queue a message as it was composed, contract and all: it is sent later
     /// but asked for now, and the shape belongs to the question.
-    fn queue_message(&self, message: &SendMessage) -> Result<usize> {
+    fn queue_message(&self, message: &SendMessage) -> Result<Vec<QueuedMessage>> {
         let mut queue = self.queue.lock().expect("interaction queue lock poisoned");
         queue.push_back(QueuedMessage::new(&message.text).asking_for(message.contract));
-        self.persist_queue(&queue)?;
-        Ok(queue.len())
+        if let Err(error) = self.persist_queue(&queue) {
+            queue.pop_back();
+            return Err(error);
+        }
+        Ok(queue.iter().cloned().collect())
     }
 
-    fn take_queued_message(&self) -> Result<Option<QueuedMessage>> {
+    fn send_queued_message(&self) -> Result<(Option<QueuedMessage>, Vec<QueuedMessage>)> {
         let mut queue = self.queue.lock().expect("interaction queue lock poisoned");
-        let next = queue.pop_front();
-        if next.is_some() {
-            self.persist_queue(&queue)?;
+        let Some(next) = queue.pop_front() else {
+            return Ok((None, Vec::new()));
+        };
+        if let Err(error) = self.persist_queue(&queue) {
+            queue.push_front(next);
+            return Err(error);
         }
-        Ok(next)
+
+        let message = SendMessage {
+            text: next.text.clone(),
+            selection: None,
+            contract: next.contract,
+        };
+        if let Err(error) = self.send_message(message) {
+            queue.push_front(next);
+            self.persist_queue(&queue)
+                .context("restore queued message after send failed")?;
+            return Err(error);
+        }
+        let remaining = queue.iter().cloned().collect();
+        Ok((Some(next), remaining))
     }
 
     fn clear_queue(&self) -> Result<usize> {
         let mut queue = self.queue.lock().expect("interaction queue lock poisoned");
         let count = queue.len();
+        let previous = queue.clone();
         queue.clear();
-        self.persist_queue(&queue)?;
+        if let Err(error) = self.persist_queue(&queue) {
+            *queue = previous;
+            return Err(error);
+        }
         Ok(count)
     }
 
@@ -1262,26 +1306,7 @@ impl ServerState {
             }
             Request::SendMessage { id, message } => {
                 let interaction = self.interaction(&id)?;
-                // A client that names a selection on the turn is switching the
-                // session onto it, not just this message: adopt it durably and
-                // then send under whatever the session now runs.
-                if let Some(selection) = message.selection {
-                    interaction.set_selection(selection)?;
-                }
-                // A typed turn is framed here, not by the client, so every
-                // caller asks for a shape in the same words. Recorded before
-                // sending: an answer that arrives against an unrecorded
-                // contract could not be parsed.
-                let text = match message.contract {
-                    Some(contract) => {
-                        journal::store_session_contract(&interaction.session_path, contract)?;
-                        crate::contract::frame(&message.text, contract)
-                    }
-                    None => message.text,
-                };
-                interaction
-                    .interaction
-                    .send_with_selection(&text, Some(&interaction.selection()))?;
+                interaction.send_message(message)?;
                 Ok(Response::Accepted)
             }
             Request::SetSessionSelection { id, selection } => {
@@ -1293,12 +1318,13 @@ impl ServerState {
                 self.interaction(&id)?.set_working_directory(directory)?;
                 Ok(Response::Accepted)
             }
-            Request::QueueMessage { id, message } => Ok(Response::Queued(
+            Request::QueueMessage { id, message } => Ok(Response::QueuedMessages(
                 self.interaction(&id)?.queue_message(&message)?,
             )),
-            Request::TakeQueuedMessage { id } => Ok(Response::TakenQueuedMessage(
-                self.interaction(&id)?.take_queued_message()?,
-            )),
+            Request::SendQueuedMessage { id } => {
+                let (sent, queued) = self.interaction(&id)?.send_queued_message()?;
+                Ok(Response::SentQueuedMessage(sent, queued))
+            }
             Request::QueuedMessages { id } => Ok(Response::QueuedMessages(
                 self.interaction(&id)?.queued_messages(),
             )),
