@@ -44,7 +44,7 @@ use app::{App, LaunchPolicy};
 use cli::{Cli, CliCommand};
 use config::Config;
 use event_loop::RunOutcome;
-use session::Live;
+use session::Attachment;
 use styra_server::{Client, LogEntry, WorkspaceSummary};
 
 /// Point the app at the Workspace it is now showing: its display name, and the
@@ -270,7 +270,7 @@ fn main() -> Result<()> {
     // first message, a live session up front so a setup failure is reported
     // plainly before the terminal is taken over.
     let mut app;
-    let mut live: Live;
+    let mut live: Attachment;
     // The launch inputs this client works with, kept alongside `app` because
     // every rebuilt App adopts them: they belong to the operator's session at
     // the terminal, not to whichever Session is on screen.
@@ -299,7 +299,7 @@ fn main() -> Result<()> {
                     Some(seed),
                 )?;
                 app = new_app;
-                live = Live::Running {
+                live = Attachment::Attached {
                     cursor: info.updates_after,
                 };
             }
@@ -308,7 +308,7 @@ fn main() -> Result<()> {
             // main screen with `a`; there is no separate startup picker.
             None => {
                 app = pending_app(selection, launch.clone(), &active_workspace);
-                live = Live::Pending;
+                live = Attachment::Detached;
             }
         }
     }
@@ -361,7 +361,7 @@ fn main() -> Result<()> {
                         let (selection, standing) = standing_launch(&preferences_path, &cli)?;
                         launch = standing;
                         app = pending_app(selection, launch.clone(), &active_workspace);
-                        live = Live::Pending;
+                        live = Attachment::Detached;
                     }
                 }
             }
@@ -382,7 +382,7 @@ fn main() -> Result<()> {
             // Return to the blank start screen. Reset has already stopped the
             // current interaction and returns to the standing launch default.
             RunOutcome::Reset => {
-                live = Live::Pending;
+                live = Attachment::Detached;
                 let (selection, standing) = standing_launch(&preferences_path, &cli)?;
                 launch = standing;
                 app = pending_app(selection, launch.clone(), &active_workspace);
@@ -392,7 +392,7 @@ fn main() -> Result<()> {
             // Interaction picker and therefore belongs to another Workspace.
             // The outgoing interaction remains server-owned and keeps running.
             RunOutcome::NewSession => {
-                live = Live::Pending;
+                live = Attachment::Detached;
                 let selection = app.selection.clone();
                 // The sandbox policy is part of that inherited context: a new
                 // session started from here begins with whatever the operator
@@ -531,7 +531,7 @@ mod cli_tests {
 
     #[test]
     fn quitting_and_switching_detach_but_reset_stops_the_running_interaction() {
-        let live = Live::Running { cursor: 7 };
+        let live = Attachment::Attached { cursor: 7 };
 
         assert_eq!(
             event_loop::stops_current_interaction(&RunOutcome::Quit, &live),

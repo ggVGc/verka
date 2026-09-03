@@ -6,7 +6,7 @@ use crate::app::{App, Request, View};
 use crate::insert;
 use crate::launch;
 use crate::preferences;
-use crate::session::{self, Live};
+use crate::session::{self, Attachment};
 use crate::terminal;
 use styra_server::{Client, Contract, LogEntry};
 
@@ -77,7 +77,7 @@ pub fn handle_mount_prompt_key(app: &mut App, key: KeyEvent) {
 pub fn handle_list_key(
     app: &mut App,
     client: &Client,
-    live: &mut Live,
+    live: &mut Attachment,
     key: KeyEvent,
     pending_fold: &mut bool,
     preferences_path: &Path,
@@ -96,7 +96,7 @@ pub fn handle_list_key(
         KeyCode::Char('S') => return session::pause_interaction(app, client, live),
         KeyCode::Char('b') => return session::branch_session(app, client),
         KeyCode::Char('!') => {
-            let Live::Running { .. } = live else {
+            let Attachment::Attached { .. } = live else {
                 return app.show_action_message("no live interaction to open a shell for");
             };
             match terminal::open_shell(client, &app.session_id) {
@@ -357,7 +357,7 @@ pub fn handle_input_key(
     app: &mut App,
     client: &Client,
     workspace_id: &str,
-    live: &mut Live,
+    live: &mut Attachment,
     key: KeyEvent,
 ) {
     match key.code {
@@ -372,7 +372,7 @@ pub fn handle_input_key(
             if let Some(message) = app.take_message() {
                 app.enter_list();
                 if let Some(directory) = message.strip_prefix("/cd ") {
-                    let Live::Running { .. } = live else {
+                    let Attachment::Attached { .. } = live else {
                         return app
                             .push_log(LogEntry::warn("/cd requires a live Codex interaction"));
                     };
@@ -396,7 +396,7 @@ pub fn handle_input_key(
                 // and travels with it down whichever send path applies.
                 let contract = app.outbox.take_contract();
                 match live {
-                    Live::Running { .. } if app.activity.status == Status::Running => {
+                    Attachment::Attached { .. } if app.activity.status == Status::Running => {
                         // Queued as composed, contract included: the shape was
                         // chosen for this question and is asked for whenever
                         // the agent gets to it.
@@ -414,7 +414,7 @@ pub fn handle_input_key(
                             ))),
                         }
                     }
-                    Live::Running { .. }
+                    Attachment::Attached { .. }
                         if matches!(app.activity.status, Status::Idle | Status::Background) =>
                     {
                         let turn = session::turn(&message, &app.selection, contract);
@@ -425,10 +425,13 @@ pub fn handle_input_key(
                             }
                         }
                     }
-                    Live::Running { .. } | Live::Viewing => {
+                    Attachment::Attached { .. } => {
                         session::resume_and_send(app, client, live, message, contract)
                     }
-                    Live::Pending => {
+                    Attachment::Detached if !app.session_id.is_empty() => {
+                        session::resume_and_send(app, client, live, message, contract)
+                    }
+                    Attachment::Detached => {
                         let selection = app.selection.clone();
                         let launch = app.launch.interaction.clone();
                         match session::create_session(
@@ -451,7 +454,7 @@ pub fn handle_input_key(
                                     info.journal_path.display()
                                 )));
                                 app.activity.status = Status::Running;
-                                *live = Live::Running {
+                                *live = Attachment::Attached {
                                     cursor: info.updates_after,
                                 };
                             }
@@ -537,7 +540,7 @@ mod tests {
         let mut app = app(&root);
         app.enter_list();
         let client = Client::new(root.join("missing.sock"));
-        let mut live = Live::Pending;
+        let mut live = Attachment::Detached;
         let mut pending_fold = false;
 
         handle_list_key(

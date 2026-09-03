@@ -13,21 +13,15 @@ use styra_server::{
     WorkspaceSummary,
 };
 
-/// The live-agent side of the interactive loop: no process yet (awaiting the
-/// operator's first message), a spawned agent, or a replayed journal with no
-/// live agent to send to.
+/// Whether this client is attached to a server interaction, plus the only
+/// client-side state that attachment needs: its update cursor.
+///
+/// Session lifecycle belongs to [`App::activity`](crate::app::App::activity),
+/// and whether a Session exists belongs to [`App::session_id`](crate::app::App::session_id).
 #[derive(Debug, PartialEq, Eq)]
-pub enum Live {
-    /// Nothing has been launched; the event loop spawns the session itself
-    /// the moment the operator submits a message from `Focus::Input`.
-    Pending,
-    /// A server-owned agent process. Its identity is `App::session_id`; the
-    /// cursor makes polling incremental and preserves the server's update order.
-    Running { cursor: u64 },
-    /// A replayed journal (`--view`, a reopened Session, or one this client
-    /// lost its connection to); no live agent is attached. Sending a message
-    /// resumes it through the provider's native mechanism.
-    Viewing,
+pub enum Attachment {
+    Attached { cursor: u64 },
+    Detached,
 }
 
 pub fn resolve_workspace(workspace: Option<&Path>) -> Result<PathBuf> {
@@ -219,7 +213,7 @@ pub fn launch_live_session(
 pub fn attach_live_interaction(
     client: &Client,
     interaction: InteractionSummary,
-) -> Result<(App, Live)> {
+) -> Result<(App, Attachment)> {
     let mut app = App::new(interaction.selection.clone(), interaction.id.clone());
     app.session_name = interaction.name.clone();
     app.workspace.id = Some(interaction.workspace_id.clone());
@@ -234,7 +228,11 @@ pub fn attach_live_interaction(
     app.outbox
         .replace_queued(client.queued_messages(&interaction.id)?);
     let accepting = interaction.accepting;
-    let live = attached_live(cursor, accepting);
+    let live = if accepting {
+        Attachment::Attached { cursor }
+    } else {
+        Attachment::Detached
+    };
     if !accepting && app.activity.status.is_active() {
         // Stopped interactions remain in the server's interaction list until
         // another interaction replaces them. Treat that stale record like a
@@ -248,7 +246,7 @@ pub fn attach_live_interaction(
 /// Replay a stored journal into a fresh `App`, with no live agent attached.
 /// This is what `--view` opens directly, and what [`open_session`] falls back
 /// to once it finds no interaction serving the Session.
-pub fn open_stored(client: &Client, session_id: &str) -> Result<(App, Live)> {
+pub fn open_stored(client: &Client, session_id: &str) -> Result<(App, Attachment)> {
     let stored = client.stored_session(session_id)?;
     let mut app = App::new(stored.summary.selection, stored.summary.id);
     app.session_name = stored.summary.name;
@@ -272,10 +270,10 @@ pub fn open_stored(client: &Client, session_id: &str) -> Result<(App, Live)> {
         exit_code: None,
         error: None,
     });
-    Ok((app, Live::Viewing))
+    Ok((app, Attachment::Detached))
 }
 
-pub fn open_session(client: &Client, session_id: &str) -> Result<(App, Live)> {
+pub fn open_session(client: &Client, session_id: &str) -> Result<(App, Attachment)> {
     if let Some(interaction) = client
         .list_interactions()?
         .into_iter()
@@ -300,7 +298,7 @@ pub fn session_id_from_target(target: &Path) -> Result<String> {
 pub fn resume_and_send(
     app: &mut App,
     client: &Client,
-    live: &mut Live,
+    live: &mut Attachment,
     message: String,
     contract: Option<Contract>,
 ) {
@@ -321,7 +319,7 @@ pub fn resume_and_send(
             let session_id = info.id;
             app.session_id = session_id.clone();
             app.activity.status = Status::Running;
-            *live = Live::Running {
+            *live = Attachment::Attached {
                 cursor: info.updates_after,
             };
             if let Err(error) =
@@ -340,8 +338,8 @@ pub fn resume_and_send(
     }
 }
 
-pub fn pause_interaction(app: &mut App, client: &Client, live: &mut Live) {
-    if let Live::Running { .. } = live {
+pub fn pause_interaction(app: &mut App, client: &Client, live: &mut Attachment) {
+    if let Attachment::Attached { .. } = live {
         if let Err(error) = client.stop_interaction(&app.session_id) {
             app.push_log(LogEntry::error(format!("pause failed: {error:#}")));
         } else {
@@ -399,8 +397,8 @@ pub fn branch_session(app: &mut App, client: &Client) {
     }
 }
 
-pub fn interrupt_interaction(app: &mut App, client: &Client, live: &Live) {
-    let Live::Running { .. } = live else {
+pub fn interrupt_interaction(app: &mut App, client: &Client, live: &Attachment) {
+    let Attachment::Attached { .. } = live else {
         return app.push_log(LogEntry::warn("no live interaction to interrupt"));
     };
     match client.interrupt_interaction(&app.session_id) {
@@ -424,21 +422,9 @@ pub fn apply_update(app: &mut App, update: InteractionUpdate) {
     }
 }
 
-fn mark_stopped(app: &mut App, live: &mut Live) {
+fn mark_stopped(app: &mut App, live: &mut Attachment) {
     app.activity.status = Status::Stopped;
-    // This App still represents the same durable Session. `Pending` is
-    // reserved for a blank screen with no Session id; marking a stopped
-    // Session pending makes the next message create an unrelated session and
-    // therefore lose the conversation context.
-    *live = Live::Viewing;
-}
-
-fn attached_live(cursor: u64, accepting: bool) -> Live {
-    if accepting {
-        Live::Running { cursor }
-    } else {
-        Live::Viewing
-    }
+    *live = Attachment::Detached;
 }
 
 #[cfg(test)]
@@ -476,19 +462,13 @@ mod tests {
     #[test]
     fn stopped_session_is_viewed_until_its_next_message_resumes_it() {
         let mut app = app();
-        let mut live = Live::Running { cursor: 7 };
+        let mut live = Attachment::Attached { cursor: 7 };
 
         mark_stopped(&mut app, &mut live);
 
         assert_eq!(app.session_id, "session-1");
         assert_eq!(app.activity.status, Status::Stopped);
-        assert_eq!(live, Live::Viewing);
-    }
-
-    #[test]
-    fn stopped_server_interaction_is_opened_as_resumable_history() {
-        assert_eq!(attached_live(7, false), Live::Viewing);
-        assert_eq!(attached_live(7, true), Live::Running { cursor: 7 });
+        assert_eq!(live, Attachment::Detached);
     }
 
     #[test]

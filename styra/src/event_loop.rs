@@ -14,7 +14,7 @@ use crate::keys;
 use crate::launch::{self, LaunchScope};
 use crate::picker;
 use crate::preferences;
-use crate::session::{self, Live};
+use crate::session::{self, Attachment};
 use crate::ui;
 use styra_server::{Client, InteractionSummary, LogEntry, WorkspaceSummary};
 
@@ -49,7 +49,7 @@ fn interaction_navigator_passthrough(code: &KeyCode) -> bool {
 /// step. There is no separate loader-owned target or pending-load state.
 fn make_interaction_current(
     app: &mut App,
-    live: &mut Live,
+    live: &mut Attachment,
     client: &Client,
     standing_launch: &LaunchPolicy,
     interaction: InteractionSummary,
@@ -85,9 +85,9 @@ fn make_interaction_current(
 }
 
 /// Return the running interaction an in-client transition explicitly stops.
-pub fn stops_current_interaction(outcome: &RunOutcome, live: &Live) -> bool {
+pub fn stops_current_interaction(outcome: &RunOutcome, live: &Attachment) -> bool {
     match (outcome, live) {
-        (RunOutcome::Reset, Live::Running { .. }) => true,
+        (RunOutcome::Reset, Attachment::Attached { .. }) => true,
         _ => false,
     }
 }
@@ -98,7 +98,7 @@ pub fn run(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     app: &mut App,
     client: &Client,
-    live: &mut Live,
+    live: &mut Attachment,
     context: RunContext<'_>,
 ) -> Result<RunOutcome> {
     let RunContext {
@@ -124,7 +124,7 @@ pub fn run(
         }
         session::ensure_driva_plan(app, client, &workspace_id);
         let mut disconnected = false;
-        if let Live::Running { cursor } = live {
+        if let Attachment::Attached { cursor } = live {
             match client.updates(&app.session_id, *cursor) {
                 Ok(batch) => {
                     *cursor = batch.next;
@@ -143,7 +143,7 @@ pub fn run(
             }
         }
         if disconnected {
-            *live = Live::Viewing;
+            *live = Attachment::Detached;
         }
 
         if app.interactions.open && interactions_refreshed.elapsed() >= INTERACTIONS_REFRESH {
@@ -153,7 +153,7 @@ pub fn run(
             }
         }
 
-        if let Live::Running { .. } = live {
+        if let Attachment::Attached { .. } = live {
             if app.activity.status == Status::Idle && app.outbox.queued_count() > 0 {
                 match client.send_queued_message(&app.session_id) {
                     Ok((Some(_), queued)) => {
@@ -382,7 +382,7 @@ pub fn run(
             Some(Request::Reset) => return Ok(RunOutcome::Reset),
             Some(Request::NewSession) => return Ok(RunOutcome::NewSession),
             Some(Request::ApplySelection) => {
-                let Live::Running { .. } = live else {
+                let Attachment::Attached { .. } = live else {
                     continue;
                 };
                 let selection = app.selection.clone();
