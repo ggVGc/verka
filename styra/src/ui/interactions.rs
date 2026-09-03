@@ -46,7 +46,12 @@ pub(crate) fn render(frame: &mut Frame, app: &App, area: Rect) {
             Row::Workspace(name) => workspace_heading(name),
             Row::Interaction(index) => {
                 let interaction = &app.interactions.items[*index];
-                item(interaction, *index == app.interactions.selected, item_width)
+                item(
+                    interaction,
+                    *index == app.interactions.selected,
+                    item_width,
+                    app.progress().events,
+                )
             }
         })
         .collect::<Vec<_>>();
@@ -111,13 +116,23 @@ fn workspace_heading(name: &str) -> ListItem<'static> {
     )))
 }
 
-fn item(interaction: &InteractionSummary, selected: bool, width: u16) -> ListItem<'static> {
+fn item(
+    interaction: &InteractionSummary,
+    selected: bool,
+    width: u16,
+    events: usize,
+) -> ListItem<'static> {
     let status = status(interaction);
     let color = status_color(&status);
     let name = interaction
         .name
         .clone()
         .unwrap_or_else(|| short_id(&interaction.id).to_owned());
+    let marker = if status == Status::Running {
+        super::running_indicator(events).to_owned()
+    } else {
+        status.glyph().to_string()
+    };
     let main = Line::from(vec![
         Span::styled(
             if selected { "• " } else { "  " },
@@ -128,7 +143,7 @@ fn item(interaction: &InteractionSummary, selected: bool, width: u16) -> ListIte
             }),
         ),
         Span::styled(
-            format!("{} ", status.glyph()),
+            format!("{marker} "),
             Style::default().fg(color).add_modifier(Modifier::BOLD),
         ),
         Span::styled(name, Style::default().fg(palette::TEXT)),
@@ -223,6 +238,22 @@ mod tests {
         let response_row = screen.find("« The checks are green.").unwrap() / 80;
 
         assert_eq!(response_row, interaction_row + 1, "{screen}");
+    }
+
+    #[test]
+    fn navigator_uses_the_running_spinner_instead_of_the_static_glyph() {
+        let mut app = testing::app("s-1");
+        let mut interaction = interaction("s-1", "working");
+        interaction.activity = InteractionActivity::Running;
+        app.interactions.open(vec![interaction], vec![], "s-1");
+
+        let screen = testing::rendered(&app);
+
+        assert!(
+            screen.contains(super::super::running_indicator(0)),
+            "{screen}"
+        );
+        assert!(!screen.contains("> working"), "{screen}");
     }
 
     #[test]

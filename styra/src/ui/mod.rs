@@ -64,6 +64,14 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 use std::time::Duration;
 
+/// Braille spinner frames shared by every view that represents active agent
+/// work. The phase advances only when an agent event arrives.
+const RUNNING_INDICATOR: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+pub(crate) fn running_indicator(events: usize) -> &'static str {
+    RUNNING_INDICATOR[events % RUNNING_INDICATOR.len()]
+}
+
 /// Cap on detail lines shown for one expanded entry, so a single noisy command
 /// cannot bury the rest of the session.
 const MAX_DETAIL_LINES: usize = 40;

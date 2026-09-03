@@ -293,11 +293,6 @@ fn rows_after_selection(
     after
 }
 
-/// Braille spinner frames. It steps once per event received rather than on a
-/// timer: a still spinner then means nothing has come back, which is what
-/// distinguishes a session that is still working from one that has hung.
-const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-
 /// Gaps shorter than this are not named: while output is streaming the figure
 /// would flicker between `0s` and `1s` and say nothing. Only a real pause is
 /// worth reporting.
@@ -337,7 +332,7 @@ fn status_tail(app: &App) -> Line<'static> {
 fn running_tail(progress: &Progress) -> String {
     let mut text = format!(
         "  {} working {}",
-        SPINNER[progress.events % SPINNER.len()],
+        super::running_indicator(progress.events),
         format_duration(progress.in_status)
     );
     if let Some(gap) = progress.since_event.filter(|gap| *gap >= QUIET_THRESHOLD) {
