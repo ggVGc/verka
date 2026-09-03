@@ -26,7 +26,6 @@ mod keymap;
 mod keys;
 mod launch;
 mod launcher;
-mod loader;
 mod mount;
 mod notices;
 mod outbox;

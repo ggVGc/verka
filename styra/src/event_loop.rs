@@ -12,12 +12,11 @@ use crate::config::Config;
 use crate::keymap::HELP;
 use crate::keys;
 use crate::launch::{self, LaunchScope};
-use crate::loader::{LoadEvent, Loads};
 use crate::picker;
 use crate::preferences;
 use crate::session::{self, Live};
 use crate::ui;
-use styra_server::{Client, InteractionSnapshotScope, LogEntry, WorkspaceSummary};
+use styra_server::{Client, InteractionSummary, LogEntry, WorkspaceSummary};
 
 /// What the interactive loop returned control to `main` for.
 pub enum RunOutcome {
@@ -32,7 +31,6 @@ pub enum RunOutcome {
 }
 
 const INTERACTIONS_REFRESH: Duration = Duration::from_millis(250);
-const INTERACTION_RECENT_UPDATES: usize = 5;
 
 pub struct RunContext<'a> {
     pub workspace_id: &'a str,
@@ -47,96 +45,45 @@ fn interaction_navigator_passthrough(code: &KeyCode) -> bool {
     matches!(code, KeyCode::Char('i') | KeyCode::Char('S'))
 }
 
-/// Apply an incoming interaction payload only when it still belongs to this
-/// Styra instance's active view. The generation also rejects an older preview
-/// of the same interaction after a full load has been requested.
-fn apply_interaction_load(
-    app: &mut App,
-    live: &mut Live,
-    standing_launch: &LaunchPolicy,
-    loads: &mut Loads,
-    event: LoadEvent,
-) {
-    if !loads.accepts(&event) {
-        return;
-    }
-    let request_id = Loads::request_id_of(&event).to_owned();
-    loads.answered();
-    let snapshot = match event.result {
-        Ok(snapshot) if loads.matches(&snapshot, &request_id) => snapshot,
-        Ok(_) => return,
-        Err(error) => {
-            loads.settle_on(app.session_id.clone());
-            app.interactions.select_id(&app.session_id);
-            app.push_log(LogEntry::error(format!(
-                "could not load interaction {}: {error:#}",
-                event.id
-            )));
-            return;
-        }
-    };
-
-    let (mut next, next_live) = session::app_from_interaction_snapshot(snapshot);
-    next.adopt(app.take_operator_state());
-    next.interactions.select_id(loads.active_id());
-    // Only the newest few updates were asked for, so the list starts out with
-    // holes an unfiltered view would show as gaps; see DESIGN.md. This is the
-    // one display choice a switch overrides.
-    next.timeline.conversation_only = true;
-    next.launch.interaction = standing_launch.clone();
-    if let Some(workspace) = next
-        .interactions
-        .workspaces
-        .iter()
-        .find(|workspace| Some(workspace.id.as_str()) == next.workspace.id.as_deref())
-        .cloned()
-    {
-        next.show_workspace(&workspace);
-    }
-    next.view = crate::app::View::Events;
-    next.focus = Focus::List;
-    *app = next;
-    *live = next_live;
-}
-
-/// Fill the raw history omitted by lightweight list navigation and open the
-/// raw view. Rebuilding once here restores event-to-wire indices as well as
-/// the lines themselves, so branching and raw selection retain their exact
-/// semantics after lazy loading.
-fn open_raw_history(
+/// Make `interaction` current immediately. Its complete state is loaded on the
+/// event-loop thread, then replaces the previous interaction's state in one
+/// step. There is no separate loader-owned target or pending-load state.
+fn make_interaction_current(
     app: &mut App,
     live: &mut Live,
     client: &Client,
     standing_launch: &LaunchPolicy,
+    interaction: InteractionSummary,
 ) {
-    let id = app.session_id.clone();
-    let Some(interaction) = app
-        .interactions
-        .items
-        .iter()
-        .find(|interaction| interaction.id == id)
-        .cloned()
-    else {
-        app.push_log(LogEntry::error(
-            "could not find the current live interaction",
-        ));
+    if interaction.id == app.session_id {
         return;
-    };
+    }
+    let id = interaction.id.clone();
     match session::attach_live_interaction(client, interaction) {
         Ok((mut next, next_live)) => {
             next.adopt(app.take_operator_state());
+            next.interactions.select_id(&id);
             next.launch.interaction = standing_launch.clone();
-            // The same Interaction in the same Workspace, so its identity is
-            // already known and there is nothing to ask the server for.
-            next.workspace.name.clone_from(&app.workspace.name);
-            next.launch.workspace = app.launch.workspace.clone();
-            next.toggle_raw();
+            if let Some(workspace) = next
+                .interactions
+                .workspaces
+                .iter()
+                .find(|workspace| Some(workspace.id.as_str()) == next.workspace.id.as_deref())
+                .cloned()
+            {
+                next.show_workspace(&workspace);
+            }
+            next.view = crate::app::View::Events;
+            next.focus = Focus::List;
             *app = next;
             *live = next_live;
         }
-        Err(error) => app.push_log(LogEntry::error(format!(
-            "could not load raw history for interaction {id}: {error:#}"
-        ))),
+        Err(error) => {
+            app.interactions.select_id(&app.session_id);
+            app.push_log(LogEntry::error(format!(
+                "could not make interaction {id} current: {error:#}"
+            )));
+        }
     }
 }
 
@@ -166,16 +113,9 @@ pub fn run(
     // The model column's ordering is remembered across runs, so pick it up
     // before the picker can be opened.
     app.recent_models = preferences::load_recent_models(preferences_path);
-    // This belongs to the client process, not the server: two Styra instances
-    // may browse different interactions and independently reject payloads that
-    // are late for their own current selection.
-    let (mut loads, interaction_events) = Loads::start(client.clone(), app.session_id.clone());
     let mut pending_fold = false;
     let mut interactions_refreshed = Instant::now();
     loop {
-        while let Ok(event) = interaction_events.try_recv() {
-            apply_interaction_load(app, live, standing_launch, &mut loads, event);
-        }
         app.notices.expire();
         // Workspace launch policy is a server-owned read model. Refresh it
         // independently of input so edits from another Styra client flow into
@@ -188,22 +128,20 @@ pub fn run(
         session::ensure_driva_plan(app, client, workspace_id);
         let mut disconnected = false;
         if let Live::Running { session_id, cursor } = live {
-            if loads.is_on(session_id) {
-                match client.updates(session_id, *cursor) {
-                    Ok(batch) => {
-                        *cursor = batch.next;
-                        for sequenced in batch.updates {
-                            session::apply_update(app, sequenced.update);
-                        }
+            match client.updates(session_id, *cursor) {
+                Ok(batch) => {
+                    *cursor = batch.next;
+                    for sequenced in batch.updates {
+                        session::apply_update(app, sequenced.update);
                     }
-                    Err(error) => {
-                        app.push_log(LogEntry::error(format!("update poll failed: {error:#}")));
-                        app.on_ended(styra_server::InteractionEnd {
-                            exit_code: None,
-                            error: Some(error.to_string()),
-                        });
-                        disconnected = true;
-                    }
+                }
+                Err(error) => {
+                    app.push_log(LogEntry::error(format!("update poll failed: {error:#}")));
+                    app.on_ended(styra_server::InteractionEnd {
+                        exit_code: None,
+                        error: Some(error.to_string()),
+                    });
+                    disconnected = true;
                 }
             }
         }
@@ -222,7 +160,7 @@ pub fn run(
         }
 
         if let Live::Running { session_id, .. } = live {
-            if loads.is_on(session_id) && app.activity.status == Status::Idle {
+            if app.activity.status == Status::Idle {
                 if let Some(message) = app.outbox.take_queued() {
                     // Sent as it was composed: a message queued asking for a
                     // shape still asks for it when the agent frees up.
@@ -302,31 +240,18 @@ pub fn run(
         }
 
         // The embedded interaction list owns navigation while it is open.
-        // Moving its cursor changes the current timeline immediately with a
-        // short conversation tail. Enter confirms it by loading the complete
-        // interaction before closing the navigator.
+        // Moving its cursor makes that interaction current immediately. Enter
+        // only closes the navigator; there is no preview or deferred attach.
         if app.interactions.open && app.focus == Focus::List {
             match key.code {
-                KeyCode::Char('a') | KeyCode::Esc => {
+                KeyCode::Char('a') | KeyCode::Esc | KeyCode::Enter => {
                     app.interactions.open = false;
-                    continue;
-                }
-                KeyCode::Enter => {
-                    if let Some(interaction) = app.interactions.selected().cloned() {
-                        app.interactions.open = false;
-                        loads.request(interaction.id, InteractionSnapshotScope::Full);
-                    }
                     continue;
                 }
                 KeyCode::Char('j') | KeyCode::Down => {
                     app.interactions.select_next(app.workspace.id.as_deref());
                     if let Some(interaction) = app.interactions.selected().cloned() {
-                        loads.request(
-                            interaction.id,
-                            InteractionSnapshotScope::Preview {
-                                limit: INTERACTION_RECENT_UPDATES,
-                            },
-                        );
+                        make_interaction_current(app, live, client, standing_launch, interaction);
                     }
                     continue;
                 }
@@ -334,12 +259,7 @@ pub fn run(
                     app.interactions
                         .select_previous(app.workspace.id.as_deref());
                     if let Some(interaction) = app.interactions.selected().cloned() {
-                        loads.request(
-                            interaction.id,
-                            InteractionSnapshotScope::Preview {
-                                limit: INTERACTION_RECENT_UPDATES,
-                            },
-                        );
+                        make_interaction_current(app, live, client, standing_launch, interaction);
                     }
                     continue;
                 }
@@ -373,24 +293,12 @@ pub fn run(
                         app.interactions.open = false;
                         return Ok(RunOutcome::Reset);
                     };
-                    loads.request(
-                        next.id,
-                        InteractionSnapshotScope::Preview {
-                            limit: INTERACTION_RECENT_UPDATES,
-                        },
-                    );
+                    make_interaction_current(app, live, client, standing_launch, next);
                     continue;
                 }
                 code if interaction_navigator_passthrough(&code) => {}
                 _ => app.interactions.open = false,
             }
-        }
-
-        // Selection changes the local active id immediately, before its
-        // asynchronous payload has rebuilt `app`. Do not let a fast follow-up
-        // key act on the interaction that this instance has just left.
-        if !loads.is_on(&app.session_id) {
-            continue;
         }
 
         // The picker raises requests of its own (applying a model change to the
@@ -486,12 +394,7 @@ pub fn run(
                 app.view = crate::app::View::Events;
                 app.focus = Focus::List;
                 app.interactions.open(interactions, workspaces, &current);
-                loads.settle_on(current);
                 interactions_refreshed = Instant::now();
-            }
-            Some(Request::Raw) => {
-                loads.settle_on(app.session_id.clone());
-                open_raw_history(app, live, client, standing_launch);
             }
             Some(Request::Reset) => return Ok(RunOutcome::Reset),
             Some(Request::NewSession) => return Ok(RunOutcome::NewSession),
@@ -603,170 +506,6 @@ pub fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::loader;
-    use std::path::PathBuf;
-    use styra_server::protocol::{SequencedUpdate, Updates};
-    use styra_server::InteractionSnapshot;
-    use styra_server::{DrivaOptions, InteractionActivity, InteractionSummary, InteractionUpdate};
-
-    fn app(id: &str) -> App {
-        App::new(styra_server::agent::Selection::parse("codex").unwrap(), id)
-    }
-
-    fn snapshot(id: &str, scope: InteractionSnapshotScope) -> InteractionSnapshot {
-        InteractionSnapshot {
-            request_id: "request-3".into(),
-            interaction: InteractionSummary {
-                id: id.into(),
-                name: Some("target session".into()),
-                workspace_id: "workspace".into(),
-                selection: styra_server::agent::Selection::parse("codex").unwrap(),
-                workspace: PathBuf::from("/workspace"),
-                driva: DrivaOptions {
-                    isolation_backend: "none".into(),
-                    command: vec![],
-                    working_directory: PathBuf::from("/workspace"),
-                    network: false,
-                    mounts: vec![],
-                },
-                accepting: true,
-                activity: InteractionActivity::Running,
-                last_message: Some("payload body".into()),
-            },
-            background_work: false,
-            updates: Updates {
-                updates: vec![SequencedUpdate {
-                    sequence: 12,
-                    update: InteractionUpdate::Event(
-                        styra_server::event::AgentEvent::AgentMessage {
-                            text: "payload body".into(),
-                        },
-                    ),
-                }],
-                next: 12,
-            },
-            queued: vec![],
-            scope,
-        }
-    }
-
-    #[test]
-    fn matching_payload_populates_the_main_view_without_a_navigator() {
-        let mut app = app("before");
-        let mut live = Live::Viewing;
-        let mut loads = loader::waiting_for("target", "request-3", 3);
-
-        apply_interaction_load(
-            &mut app,
-            &mut live,
-            &LaunchPolicy::default(),
-            &mut loads,
-            loader::load_event(
-                "request-3",
-                3,
-                "target",
-                Ok(snapshot(
-                    "target",
-                    InteractionSnapshotScope::Preview { limit: 5 },
-                )),
-            ),
-        );
-
-        assert_eq!(app.session_id, "target");
-        assert_eq!(app.timeline.entries.len(), 1);
-        assert!(app.raw.needs_hydration());
-        assert_eq!(
-            live,
-            Live::Running {
-                session_id: "target".into(),
-                cursor: 12,
-            }
-        );
-        assert!(!app.interactions.open);
-        assert!(!loads.is_waiting());
-    }
-
-    /// Switching Interactions rebuilds the whole screen from the server, so
-    /// anything the operator put on it themselves has to be carried across
-    /// deliberately. A half-written message is the one that costs them work.
-    #[test]
-    fn switching_interactions_keeps_what_the_operator_put_on_the_screen() {
-        let mut app = app("before");
-        app.set_input("half a thought".into());
-        app.preview.show();
-        app.recent_models = vec!["gpt-5.6-sol".into()];
-        let mut live = Live::Viewing;
-        let mut loads = loader::waiting_for("target", "request-3", 3);
-
-        apply_interaction_load(
-            &mut app,
-            &mut live,
-            &LaunchPolicy::default(),
-            &mut loads,
-            loader::load_event(
-                "request-3",
-                3,
-                "target",
-                Ok(snapshot(
-                    "target",
-                    InteractionSnapshotScope::Preview { limit: 5 },
-                )),
-            ),
-        );
-
-        assert_eq!(app.session_id, "target", "a different Interaction");
-        assert_eq!(app.composer.text, "half a thought");
-        assert!(app.preview.open);
-        assert_eq!(app.recent_models, vec!["gpt-5.6-sol".to_owned()]);
-    }
-
-    #[test]
-    fn incoming_interaction_payloads_are_scoped_to_this_clients_active_view() {
-        let mut app = app("current");
-        let mut live = Live::Viewing;
-        let mut loads = loader::waiting_for("current", "request-4", 4);
-
-        apply_interaction_load(
-            &mut app,
-            &mut live,
-            &LaunchPolicy::default(),
-            &mut loads,
-            loader::load_event(
-                "request-4",
-                4,
-                "another-clients-view",
-                Err(anyhow::anyhow!("must never reach the current log")),
-            ),
-        );
-
-        assert_eq!(app.session_id, "current");
-        assert!(app.log.is_empty());
-        assert_eq!(loads.active_id(), "current");
-    }
-
-    #[test]
-    fn an_older_preview_cannot_replace_a_newer_load_of_the_same_interaction() {
-        let mut app = app("before");
-        let mut live = Live::Viewing;
-        let mut loads = loader::waiting_for("target", "request-8", 8);
-
-        apply_interaction_load(
-            &mut app,
-            &mut live,
-            &LaunchPolicy::default(),
-            &mut loads,
-            loader::load_event(
-                "request-7",
-                7,
-                "target",
-                Err(anyhow::anyhow!("obsolete preview")),
-            ),
-        );
-
-        assert_eq!(app.session_id, "before");
-        assert!(app.log.is_empty());
-        assert_eq!(loads.active_id(), "target");
-    }
 
     #[test]
     fn stopping_is_a_navigator_passthrough_action() {

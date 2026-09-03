@@ -40,7 +40,7 @@ pub(crate) fn render(frame: &mut Frame, app: &App, area: Rect) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(palette::ACCENT))
         .title(format!(
-            " {scope} · live interactions · j/k preview · Enter load · S stop · D delete stopped · w scope · a close "
+            " {scope} · live interactions · j/k load · Enter close · S stop · D delete stopped · w scope · a close "
         ));
     let items = rows
         .iter()

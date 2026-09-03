@@ -7,11 +7,7 @@
 //! which could leave the selection following a line that is no longer the
 //! last one. Here it is stated once, and the fields it holds are private.
 //!
-//! Browsing the live Interaction list attaches without the wire history, since
-//! it is by far the largest part of an Interaction and most switches never
-//! look at it. That makes "loaded" part of this state rather than a flag
-//! beside it: see [`RawView::needs_hydration`], which is what the `r` key asks
-//! before opening the view. [`crate::ui::raw`] renders it.
+//! [`crate::ui::raw`] renders it.
 
 use styra_server::RawLine;
 
@@ -25,8 +21,6 @@ pub struct RawView {
     selected: usize,
     /// When true, `selected` tracks the newest line as it arrives.
     follow: bool,
-    /// Whether `lines` holds this Interaction's history from its beginning.
-    loaded: bool,
     /// How far the selected line's pretty-printed preview is scrolled.
     pub preview: Scroll,
 }
@@ -39,7 +33,6 @@ impl Default for RawView {
             // A screen with no lines yet is at its tail by definition, so the
             // first line to arrive is the one shown.
             follow: true,
-            loaded: true,
             preview: Scroll::default(),
         }
     }
@@ -89,17 +82,6 @@ impl RawView {
     #[cfg(test)]
     pub fn is_following(&self) -> bool {
         self.follow
-    }
-
-    /// Whether the wire history still has to be fetched before this view can
-    /// show anything true. Lightweight Interaction-list navigation attaches
-    /// without it; see [`styra_server::InteractionSnapshotScope`].
-    pub fn needs_hydration(&self) -> bool {
-        !self.loaded
-    }
-
-    pub fn set_loaded(&mut self, loaded: bool) {
-        self.loaded = loaded;
     }
 
     /// Open the view on `line`, or on the tail when there is no particular
@@ -262,20 +244,5 @@ mod tests {
 
         assert_eq!(raw.selected_index(), 0);
         assert!(raw.is_empty());
-    }
-
-    #[test]
-    fn a_view_attached_without_history_asks_for_it_once() {
-        let mut raw = RawView::default();
-        assert!(
-            !raw.needs_hydration(),
-            "a fresh screen has nothing to fetch"
-        );
-
-        raw.set_loaded(false);
-        assert!(raw.needs_hydration());
-
-        raw.set_loaded(true);
-        assert!(!raw.needs_hydration());
     }
 }

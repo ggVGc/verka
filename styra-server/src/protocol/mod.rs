@@ -197,36 +197,6 @@ pub struct Updates {
     pub next: u64,
 }
 
-/// How much interaction history a client wants in an [`InteractionSnapshot`].
-///
-/// A preview is intentionally conversation-only and bounded. A full snapshot
-/// carries the complete update stream, including raw wire lines, for making an
-/// interaction the client's fully loaded current view.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum InteractionSnapshotScope {
-    Preview { limit: usize },
-    Full,
-}
-
-/// Everything small and immediately useful for populating an interaction
-/// view, returned as one payload so clients need not make follow-up requests
-/// for lifecycle or queue state.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct InteractionSnapshot {
-    /// Client-generated identity used to correlate and cancel this fetch.
-    pub request_id: String,
-    pub interaction: InteractionSummary,
-    /// Whether work survives outside the foreground turn. This is separate
-    /// from `interaction.activity`: `Running` can coexist with background
-    /// work, and a bounded preview may have omitted the event that started it.
-    #[serde(default)]
-    pub background_work: bool,
-    pub updates: Updates,
-    pub queued: Vec<QueuedMessage>,
-    pub scope: InteractionSnapshotScope,
-}
-
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct StoredSession {
     pub summary: SessionSummary,
@@ -368,24 +338,6 @@ pub enum Request {
         #[serde(default = "yes")]
         raw: bool,
     },
-    /// Return at most the newest `limit` conversation events. The response
-    /// cursor still points to the true end of the complete stream.
-    RecentUpdates {
-        id: String,
-        limit: usize,
-    },
-    /// Build either a bounded preview or a complete interaction-view payload.
-    /// Clients commonly issue this from a background request worker and apply
-    /// the resulting event only if `id` is still their locally active view.
-    InteractionSnapshot {
-        request_id: String,
-        id: String,
-        scope: InteractionSnapshotScope,
-    },
-    /// Cancel a snapshot fetch previously identified by `request_id`.
-    CancelInteractionSnapshot {
-        request_id: String,
-    },
     ListInteractions,
     ListSessions {
         workspace_id: String,
@@ -454,7 +406,6 @@ pub enum Response {
     TakenQueuedMessage(Option<QueuedMessage>),
     QueuedMessages(Vec<QueuedMessage>),
     Updates(Updates),
-    InteractionSnapshot(InteractionSnapshot),
     Interactions(Vec<InteractionSummary>),
     StoredSessions(Vec<SessionSummary>),
     StoredSession(StoredSession),
@@ -519,35 +470,6 @@ mod tests {
             serde_json::from_str::<Request>(r#"{"api_version":"v3","operation":"health"}"#)
                 .is_err()
         );
-
-        let recent = Request::RecentUpdates {
-            id: "s-1".into(),
-            limit: 5,
-        };
-        let json = serde_json::to_value(&recent).unwrap();
-        assert_eq!(json["operation"], "recent_updates");
-        assert_eq!(json["data"]["limit"], 5);
-        assert_eq!(serde_json::from_value::<Request>(json).unwrap(), recent);
-
-        let snapshot = Request::InteractionSnapshot {
-            request_id: "client-1-fetch-9".into(),
-            id: "s-1".into(),
-            scope: InteractionSnapshotScope::Preview { limit: 5 },
-        };
-        let json = serde_json::to_value(&snapshot).unwrap();
-        assert_eq!(json["operation"], "interaction_snapshot");
-        assert_eq!(json["data"]["id"], "s-1");
-        assert_eq!(json["data"]["request_id"], "client-1-fetch-9");
-        assert_eq!(json["data"]["scope"]["kind"], "preview");
-        assert_eq!(json["data"]["scope"]["limit"], 5);
-        assert_eq!(serde_json::from_value::<Request>(json).unwrap(), snapshot);
-
-        let cancel = Request::CancelInteractionSnapshot {
-            request_id: "client-1-fetch-9".into(),
-        };
-        let json = serde_json::to_value(&cancel).unwrap();
-        assert_eq!(json["operation"], "cancel_interaction_snapshot");
-        assert_eq!(json["data"]["request_id"], "client-1-fetch-9");
     }
 
     #[test]

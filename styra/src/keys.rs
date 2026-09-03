@@ -108,10 +108,7 @@ pub fn handle_list_key(
             return;
         }
         KeyCode::Char('i') if app.view != View::Preview => return app.enter_input(),
-        KeyCode::Char('r') if app.view == View::Raw || !app.raw.needs_hydration() => {
-            return app.toggle_raw()
-        }
-        KeyCode::Char('r') => return app.ask(Request::Raw),
+        KeyCode::Char('r') => return app.toggle_raw(),
         KeyCode::Char('l') => return app.toggle_view(View::Log),
         // Opening the view also refreshes it: the log lives in the daemon's
         // memory, so there is nothing local to show without asking.
@@ -532,30 +529,6 @@ mod tests {
             handle_insert_key(app, KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
         }
         handle_insert_key(app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    }
-
-    #[test]
-    fn raw_view_requests_missing_history_before_opening() {
-        let root = tree("lazy-raw");
-        let mut app = app(&root);
-        app.enter_list();
-        app.raw.set_loaded(false);
-        let client = Client::new(root.join("missing.sock"));
-        let mut live = Live::Pending;
-        let mut pending_fold = false;
-
-        handle_list_key(
-            &mut app,
-            &client,
-            &mut live,
-            KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE),
-            &mut pending_fold,
-            &root.join("preferences.toml"),
-        );
-
-        assert_eq!(app.view, View::Events);
-        assert_eq!(app.take_request(), Some(Request::Raw));
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

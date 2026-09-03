@@ -254,8 +254,6 @@ pub enum Request {
     OpenSession(String),
     /// Open the server's live interactions above the main event timeline.
     Interactions,
-    /// Hydrate the current live interaction's raw history, then open it.
-    Raw,
     /// Stop the current interaction and return to the blank start screen.
     Reset,
     /// Return to the blank start screen without stopping the current interaction.
@@ -1823,7 +1821,6 @@ mod tests {
             Request::Sessions,
             Request::OpenSession("s-1".into()),
             Request::Interactions,
-            Request::Raw,
             Request::Reset,
             Request::NewSession,
             Request::EditFile,

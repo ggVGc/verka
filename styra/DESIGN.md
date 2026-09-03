@@ -684,30 +684,11 @@ Two client-facing shortcuts:
 
 `a` opens the server's live Interactions as a navigator above the main event
 list. There is no separate picker or conversation preview: moving with `j`/`k`
-marks the highlighted Interaction as this client's current target and sends a
-preview request without waiting in the key handler. Its eventual payload fills
-the ordinary event list below. The Interaction previously shown keeps running
-on the server; only this client's current view changes.
-
-Moving initially asks for only the five newest conversation events, and a newly
-selected Interaction returns to conversation-only mode focused on its newest
-visible entry. The returned cursor is still the true stream tail, so live
-polling continues from there rather than filling in the omitted prefix. The
-payload also carries the current lifecycle summary and durable input queue, so
-populating the view needs no follow-up round trips. `Enter` confirms the
-highlighted Interaction, requests its complete history including raw wire data,
-and closes the navigator immediately. The same incoming-event handler applies
-preview and full payloads whether or not the navigator remains open.
-
-Every payload is tagged with its Interaction id and the local request
-generation. Each Styra instance keeps its own active id and applies only a
-matching latest payload. A late response for a row that instance has already
-moved past—and an old preview arriving after a full request—is ignored. The
-instance also sends the server an explicit cancellation for its outstanding
-request before fetching the newly selected row; client-generated request ids
-keep this cancellation private to that Styra instance. The
-first `r` can also hydrate complete history on demand; subsequent raw-view
-toggles use the local history.
+makes the highlighted Interaction current immediately by loading its complete
+update history and durable input queue through the ordinary blocking client.
+The Interaction previously shown keeps running on the server; only this
+client's current view changes. No separate loader state shadows the current
+screen. `Enter` merely closes the navigator.
 
 The navigator refreshes its summaries while open. Pending work is listed
 first, running work next, and stopped Interactions last, with server order
@@ -715,8 +696,7 @@ retained within each group. Each row shows the latest received agent message
 on a subordinate line, updated along with those live summaries. All-Workspaces
 mode always groups the rows beneath
 Workspace headings; current-Workspace mode omits the one redundant heading.
-`w` switches between those scopes. `a` or `Esc` closes the navigator while
-leaving its lightweight tail current. `D` removes a highlighted
+`w` switches between those scopes. `a` or `Esc` closes the navigator. `D` removes a highlighted
 stopped Interaction from the server. The next available Interaction becomes
 current without closing the navigator; deleting the last one closes it and
 returns Styra to its blank default state.
@@ -927,7 +907,7 @@ styra/                   # the terminal client application
     timeline.rs          # the event list: rows, selection, filters, expansion
     ingest.rs            # how one AgentEvent changes that list and the status
     activity.rs          # the Interaction's status, background work, and progress
-    raw.rs               # the wire lines, the place in them, and whether they are loaded
+    raw.rs               # the wire lines and the place in them
     tail.rs              # a list read from its end: the log and the quota readings
     answer.rs            # the last turn's typed answer and the selection within it
     files.rs             # files the agent named, and where they are on this host
@@ -936,7 +916,6 @@ styra/                   # the terminal client application
     notices.rs           # short-lived notices, each on its own five-second clock
     help.rs              # the keyboard reference: whether it is open, and where in it
     interactions.rs      # the live Interactions navigator
-    loader.rs            # fetching Interaction snapshots, and which answers still matter
     workspace.rs         # which Workspace is on screen and where it is on this host
     launch.rs            # the sandbox policy's two layers, and the keys that edit them
     mount.rs             # writing, reading and locating host mounts (pure)
@@ -955,7 +934,7 @@ event loop) does the part that is not its business to know about.
 What earns a module is a rule, not a field count: the wire view's selection
 tracking its tail, a preview offset that stops meaning anything when the
 content changes, a contract belonging to the one question it was chosen for,
-an answer from the snapshot loader that a later one has already superseded.
+an Interaction switch carrying operator-owned state to the newly loaded screen.
 Those rules were each re-established at several call sites over public fields
 before they had a type to live in. What is left on `App` is the state that
 belongs to no single module and the few methods that join two of them —
