@@ -49,6 +49,9 @@ struct ServerInner {
     /// than per-interaction because the quota is the account's, so a reading
     /// taken on one session is what every other session is also spending.
     quota: Arc<crate::quota::QuotaLog>,
+    /// Client-generated snapshot request ids mapped to cancellation flags.
+    /// Request ids keep different Styra instances from cancelling each other.
+    snapshot_cancellations: Mutex<HashMap<String, Arc<AtomicBool>>>,
 }
 
 struct ManagedInteraction {
@@ -262,12 +265,55 @@ impl ServerState {
                 workspace_metadata: Mutex::new(()),
                 shutdown: AtomicBool::new(false),
                 quota: Arc::new(crate::quota::QuotaLog::new()),
+                snapshot_cancellations: Mutex::new(HashMap::new()),
             }),
         }
     }
 
     pub fn store_root(&self) -> &Path {
         &self.inner.store_root
+    }
+
+    fn snapshot_cancellation(&self, request_id: &str) -> Arc<AtomicBool> {
+        self.inner
+            .snapshot_cancellations
+            .lock()
+            .expect("snapshot cancellation lock poisoned")
+            .entry(request_id.to_owned())
+            .or_insert_with(|| Arc::new(AtomicBool::new(false)))
+            .clone()
+    }
+
+    fn cancel_snapshot(&self, request_id: &str) {
+        let mut cancellations = self
+            .inner
+            .snapshot_cancellations
+            .lock()
+            .expect("snapshot cancellation lock poisoned");
+        // Cancellation may beat the fetch connection to the server, so retain
+        // a tombstone. Bound abandoned/late tombstones while preserving active
+        // (false) tokens; request ids are unique per client process.
+        if cancellations.len() >= 1024 {
+            cancellations.retain(|_, token| !token.load(Ordering::Acquire));
+        }
+        cancellations
+            .entry(request_id.to_owned())
+            .or_insert_with(|| Arc::new(AtomicBool::new(false)))
+            .store(true, Ordering::Release);
+    }
+
+    fn finish_snapshot(&self, request_id: &str, token: &Arc<AtomicBool>) {
+        let mut cancellations = self
+            .inner
+            .snapshot_cancellations
+            .lock()
+            .expect("snapshot cancellation lock poisoned");
+        if cancellations
+            .get(request_id)
+            .is_some_and(|registered| Arc::ptr_eq(registered, token))
+        {
+            cancellations.remove(request_id);
+        }
     }
 
     /// If a client asked the server to shut down, remove the socket and exit.
@@ -1306,21 +1352,37 @@ impl ServerState {
                     .expect("interaction update lock poisoned");
                 Ok(Response::Updates(recent_conversation_updates(&all, limit)))
             }
-            Request::InteractionSnapshot { id, scope } => {
-                let interaction = self.interaction(&id)?;
-                let updates = {
-                    let all = interaction
-                        .updates
-                        .lock()
-                        .expect("interaction update lock poisoned");
-                    snapshot_updates(&all, scope)
-                };
-                Ok(Response::InteractionSnapshot(InteractionSnapshot {
-                    interaction: interaction.summary(),
-                    updates,
-                    queued: interaction.queued_messages(),
-                    scope,
-                }))
+            Request::InteractionSnapshot {
+                request_id,
+                id,
+                scope,
+            } => {
+                let cancelled = self.snapshot_cancellation(&request_id);
+                let result = (|| {
+                    ensure_snapshot_not_cancelled(&cancelled)?;
+                    let interaction = self.interaction(&id)?;
+                    let updates = {
+                        let all = interaction
+                            .updates
+                            .lock()
+                            .expect("interaction update lock poisoned");
+                        snapshot_updates(&all, scope, &cancelled)?
+                    };
+                    ensure_snapshot_not_cancelled(&cancelled)?;
+                    Ok(Response::InteractionSnapshot(InteractionSnapshot {
+                        request_id: request_id.clone(),
+                        interaction: interaction.summary(),
+                        updates,
+                        queued: interaction.queued_messages(),
+                        scope,
+                    }))
+                })();
+                self.finish_snapshot(&request_id, &cancelled);
+                result
+            }
+            Request::CancelInteractionSnapshot { request_id } => {
+                self.cancel_snapshot(&request_id);
+                Ok(Response::Accepted)
             }
             Request::ListInteractions => {
                 let interactions = self
@@ -1390,14 +1452,34 @@ fn recent_conversation_updates(all: &[SequencedUpdate], limit: usize) -> Updates
     Updates { updates, next }
 }
 
-fn snapshot_updates(all: &[SequencedUpdate], scope: InteractionSnapshotScope) -> Updates {
-    match scope {
+fn snapshot_updates(
+    all: &[SequencedUpdate],
+    scope: InteractionSnapshotScope,
+    cancelled: &AtomicBool,
+) -> Result<Updates> {
+    ensure_snapshot_not_cancelled(cancelled)?;
+    let updates = match scope {
         InteractionSnapshotScope::Preview { limit } => recent_conversation_updates(all, limit),
         InteractionSnapshotScope::Full => Updates {
-            updates: all.to_vec(),
+            updates: all
+                .iter()
+                .map(|update| {
+                    ensure_snapshot_not_cancelled(cancelled)?;
+                    Ok(update.clone())
+                })
+                .collect::<Result<Vec<_>>>()?,
             next: all.last().map(|update| update.sequence).unwrap_or(0),
         },
+    };
+    ensure_snapshot_not_cancelled(cancelled)?;
+    Ok(updates)
+}
+
+fn ensure_snapshot_not_cancelled(cancelled: &AtomicBool) -> Result<()> {
+    if cancelled.load(Ordering::Acquire) {
+        anyhow::bail!("interaction snapshot request was cancelled");
     }
+    Ok(())
 }
 
 fn replayed_session_updates(
@@ -1783,9 +1865,30 @@ mod tests {
             [4, 7]
         );
         assert!(recent_conversation_updates(&all, 0).updates.is_empty());
-        let full = snapshot_updates(&all, InteractionSnapshotScope::Full);
+        let cancelled = AtomicBool::new(false);
+        let full = snapshot_updates(&all, InteractionSnapshotScope::Full, &cancelled).unwrap();
         assert_eq!(full.next, 7);
         assert_eq!(full.updates, all);
+    }
+
+    #[test]
+    fn snapshot_building_observes_cancellation() {
+        let cancelled = AtomicBool::new(true);
+        let error = snapshot_updates(&[], InteractionSnapshotScope::Full, &cancelled).unwrap_err();
+        assert!(error.to_string().contains("cancelled"));
+    }
+
+    #[test]
+    fn cancellation_can_arrive_before_the_snapshot_fetch() {
+        let socket = temp_path("snapshot-cancel");
+        let state = ServerState::new(socket.with_extension("store"), socket);
+
+        state.cancel_snapshot("client-fetch-1");
+        let token = state.snapshot_cancellation("client-fetch-1");
+
+        assert!(token.load(Ordering::Acquire));
+        assert!(ensure_snapshot_not_cancelled(&token).is_err());
+        state.finish_snapshot("client-fetch-1", &token);
     }
 
     #[test]

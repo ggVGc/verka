@@ -243,6 +243,7 @@ pub fn attach_live_interaction(
 /// same view through the event loop's single incoming-event path.
 pub fn app_from_interaction_snapshot(snapshot: InteractionSnapshot) -> (App, Live) {
     let InteractionSnapshot {
+        request_id: _,
         interaction,
         updates,
         queued,

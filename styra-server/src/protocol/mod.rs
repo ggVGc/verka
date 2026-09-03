@@ -221,6 +221,8 @@ pub enum InteractionSnapshotScope {
 /// for lifecycle or queue state.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct InteractionSnapshot {
+    /// Client-generated identity used to correlate and cancel this fetch.
+    pub request_id: String,
     pub interaction: InteractionSummary,
     pub updates: Updates,
     pub queued: Vec<QueuedMessage>,
@@ -374,8 +376,13 @@ pub enum Request {
     /// Clients commonly issue this from a background request worker and apply
     /// the resulting event only if `id` is still their locally active view.
     InteractionSnapshot {
+        request_id: String,
         id: String,
         scope: InteractionSnapshotScope,
+    },
+    /// Cancel a snapshot fetch previously identified by `request_id`.
+    CancelInteractionSnapshot {
+        request_id: String,
     },
     ListInteractions,
     ListSessions {
@@ -522,15 +529,24 @@ mod tests {
         assert_eq!(serde_json::from_value::<Request>(json).unwrap(), recent);
 
         let snapshot = Request::InteractionSnapshot {
+            request_id: "client-1-fetch-9".into(),
             id: "s-1".into(),
             scope: InteractionSnapshotScope::Preview { limit: 5 },
         };
         let json = serde_json::to_value(&snapshot).unwrap();
         assert_eq!(json["operation"], "interaction_snapshot");
         assert_eq!(json["data"]["id"], "s-1");
+        assert_eq!(json["data"]["request_id"], "client-1-fetch-9");
         assert_eq!(json["data"]["scope"]["kind"], "preview");
         assert_eq!(json["data"]["scope"]["limit"], 5);
         assert_eq!(serde_json::from_value::<Request>(json).unwrap(), snapshot);
+
+        let cancel = Request::CancelInteractionSnapshot {
+            request_id: "client-1-fetch-9".into(),
+        };
+        let json = serde_json::to_value(&cancel).unwrap();
+        assert_eq!(json["operation"], "cancel_interaction_snapshot");
+        assert_eq!(json["data"]["request_id"], "client-1-fetch-9");
     }
 
     #[test]

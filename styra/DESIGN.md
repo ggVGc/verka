@@ -673,6 +673,9 @@ Every payload is tagged with its Interaction id and the local request
 generation. Each Styra instance keeps its own active id and applies only a
 matching latest payload. A late response for a row that instance has already
 moved past—and an old preview arriving after a full request—is ignored. The
+instance also sends the server an explicit cancellation for its outstanding
+request before fetching the newly selected row; client-generated request ids
+keep this cancellation private to that Styra instance. The
 first `r` can also hydrate complete history on demand; subsequent raw-view
 toggles use the local history.
 

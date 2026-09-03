@@ -47,45 +47,63 @@ pub struct RunContext<'a> {
 /// loop and its background interaction loader.
 #[derive(Clone, Debug)]
 struct InteractionLoadRequest {
+    request_id: String,
     generation: u64,
     id: String,
     scope: InteractionSnapshotScope,
 }
 
 struct InteractionLoadEvent {
+    request_id: String,
     generation: u64,
     id: String,
     result: anyhow::Result<InteractionSnapshot>,
 }
 
-/// A single background worker keeps interaction-list movement non-blocking.
-/// Before each request it coalesces queued movement and asks only for the most
-/// recent target, avoiding a trail of obsolete previews when a key is held.
+#[derive(Clone, Debug)]
+enum InteractionLoaderCommand {
+    Load(InteractionLoadRequest),
+    Cancel(String),
+}
+
+/// A coordinator keeps interaction-list movement non-blocking. Fetches use
+/// their own threads so the coordinator remains able to tell the server to
+/// cancel an outstanding request as soon as selection moves elsewhere.
 fn interaction_loader(
     client: Client,
 ) -> (
-    Sender<InteractionLoadRequest>,
+    Sender<InteractionLoaderCommand>,
     Receiver<InteractionLoadEvent>,
 ) {
-    let (requests_tx, requests_rx) = mpsc::channel::<InteractionLoadRequest>();
+    let (requests_tx, requests_rx) = mpsc::channel::<InteractionLoaderCommand>();
     let (events_tx, events_rx) = mpsc::channel();
     std::thread::Builder::new()
         .name("styra-interaction-preview".into())
         .spawn(move || {
-            while let Ok(mut request) = requests_rx.recv() {
-                while let Ok(newer) = requests_rx.try_recv() {
-                    request = newer;
-                }
-                let result = client.interaction_snapshot(&request.id, request.scope);
-                if events_tx
-                    .send(InteractionLoadEvent {
-                        generation: request.generation,
-                        id: request.id,
-                        result,
-                    })
-                    .is_err()
-                {
-                    break;
+            while let Ok(command) = requests_rx.recv() {
+                match command {
+                    InteractionLoaderCommand::Cancel(request_id) => {
+                        let _ = client.cancel_interaction_snapshot(&request_id);
+                    }
+                    InteractionLoaderCommand::Load(request) => {
+                        let fetch_client = client.clone();
+                        let fetch_events = events_tx.clone();
+                        let _ = std::thread::Builder::new()
+                            .name("styra-interaction-fetch".into())
+                            .spawn(move || {
+                                let result = fetch_client.interaction_snapshot_requested(
+                                    &request.request_id,
+                                    &request.id,
+                                    request.scope,
+                                );
+                                let _ = fetch_events.send(InteractionLoadEvent {
+                                    request_id: request.request_id,
+                                    generation: request.generation,
+                                    id: request.id,
+                                    result,
+                                });
+                            });
+                    }
                 }
             }
         })
@@ -94,19 +112,33 @@ fn interaction_loader(
 }
 
 fn request_interaction_load(
-    requests: &Sender<InteractionLoadRequest>,
+    requests: &Sender<InteractionLoaderCommand>,
+    pending_request: &mut Option<String>,
     generation: &mut u64,
     active_id: &mut String,
     id: String,
     scope: InteractionSnapshotScope,
 ) {
+    cancel_pending_interaction_load(requests, pending_request);
     *generation = generation.wrapping_add(1);
     active_id.clone_from(&id);
-    let _ = requests.send(InteractionLoadRequest {
+    let request_id = Client::interaction_snapshot_request_id();
+    pending_request.clone_from(&Some(request_id.clone()));
+    let _ = requests.send(InteractionLoaderCommand::Load(InteractionLoadRequest {
+        request_id,
         generation: *generation,
         id,
         scope,
-    });
+    }));
+}
+
+fn cancel_pending_interaction_load(
+    requests: &Sender<InteractionLoaderCommand>,
+    pending_request: &mut Option<String>,
+) {
+    if let Some(request_id) = pending_request.take() {
+        let _ = requests.send(InteractionLoaderCommand::Cancel(request_id));
+    }
 }
 
 /// Global actions which operate on the current interaction without dismissing
@@ -123,14 +155,23 @@ fn apply_interaction_load(
     live: &mut Live,
     standing_launch: &LaunchPolicy,
     active_id: &mut String,
+    pending_request: &mut Option<String>,
     generation: u64,
     event: InteractionLoadEvent,
 ) {
-    if event.generation != generation || event.id != *active_id {
+    if event.generation != generation
+        || event.id != *active_id
+        || pending_request.as_deref() != Some(event.request_id.as_str())
+    {
         return;
     }
+    *pending_request = None;
     let snapshot = match event.result {
-        Ok(snapshot) if snapshot.interaction.id == *active_id => snapshot,
+        Ok(snapshot)
+            if snapshot.request_id == event.request_id && snapshot.interaction.id == *active_id =>
+        {
+            snapshot
+        }
         Ok(_) => return,
         Err(error) => {
             active_id.clone_from(&app.session_id);
@@ -243,6 +284,7 @@ pub fn run(
     // are late for their own current selection.
     let mut active_interaction_id = app.session_id.clone();
     let mut interaction_generation = 0_u64;
+    let mut pending_interaction_request = None;
     let mut pending_fold = false;
     let mut interactions_refreshed = Instant::now();
     loop {
@@ -252,6 +294,7 @@ pub fn run(
                 live,
                 standing_launch,
                 &mut active_interaction_id,
+                &mut pending_interaction_request,
                 interaction_generation,
                 event,
             );
@@ -405,6 +448,7 @@ pub fn run(
                         app.interactions.open = false;
                         request_interaction_load(
                             &interaction_requests,
+                            &mut pending_interaction_request,
                             &mut interaction_generation,
                             &mut active_interaction_id,
                             interaction.id,
@@ -418,6 +462,7 @@ pub fn run(
                     if let Some(interaction) = app.interactions.selected().cloned() {
                         request_interaction_load(
                             &interaction_requests,
+                            &mut pending_interaction_request,
                             &mut interaction_generation,
                             &mut active_interaction_id,
                             interaction.id,
@@ -434,6 +479,7 @@ pub fn run(
                     if let Some(interaction) = app.interactions.selected().cloned() {
                         request_interaction_load(
                             &interaction_requests,
+                            &mut pending_interaction_request,
                             &mut interaction_generation,
                             &mut active_interaction_id,
                             interaction.id,
@@ -476,6 +522,7 @@ pub fn run(
                     };
                     request_interaction_load(
                         &interaction_requests,
+                        &mut pending_interaction_request,
                         &mut interaction_generation,
                         &mut active_interaction_id,
                         next.id,
@@ -576,11 +623,19 @@ pub fn run(
                 app.view = crate::app::View::Events;
                 app.focus = Focus::List;
                 app.interactions.open(interactions, workspaces, &current);
+                cancel_pending_interaction_load(
+                    &interaction_requests,
+                    &mut pending_interaction_request,
+                );
                 active_interaction_id = current;
                 interaction_generation = interaction_generation.wrapping_add(1);
                 interactions_refreshed = Instant::now();
             }
             Some(Request::Raw) => {
+                cancel_pending_interaction_load(
+                    &interaction_requests,
+                    &mut pending_interaction_request,
+                );
                 interaction_generation = interaction_generation.wrapping_add(1);
                 active_interaction_id.clone_from(&app.session_id);
                 open_raw_history(app, live, client, standing_launch);
@@ -705,6 +760,7 @@ mod tests {
 
     fn snapshot(id: &str, scope: InteractionSnapshotScope) -> InteractionSnapshot {
         InteractionSnapshot {
+            request_id: "request-3".into(),
             interaction: InteractionSummary {
                 id: id.into(),
                 name: Some("target session".into()),
@@ -743,14 +799,17 @@ mod tests {
         let mut app = app("before");
         let mut live = Live::Viewing;
         let mut active = "target".to_owned();
+        let mut pending = Some("request-3".to_owned());
 
         apply_interaction_load(
             &mut app,
             &mut live,
             &LaunchPolicy::default(),
             &mut active,
+            &mut pending,
             3,
             InteractionLoadEvent {
+                request_id: "request-3".into(),
                 generation: 3,
                 id: "target".into(),
                 result: Ok(snapshot(
@@ -771,6 +830,7 @@ mod tests {
             }
         );
         assert!(!app.interactions.open);
+        assert!(pending.is_none());
     }
 
     #[test]
@@ -778,14 +838,17 @@ mod tests {
         let mut app = app("current");
         let mut live = Live::Viewing;
         let mut active = "current".to_owned();
+        let mut pending = Some("request-4".to_owned());
 
         apply_interaction_load(
             &mut app,
             &mut live,
             &LaunchPolicy::default(),
             &mut active,
+            &mut pending,
             4,
             InteractionLoadEvent {
+                request_id: "request-4".into(),
                 generation: 4,
                 id: "another-clients-view".into(),
                 result: Err(anyhow::anyhow!("must never reach the current log")),
@@ -802,14 +865,17 @@ mod tests {
         let mut app = app("before");
         let mut live = Live::Viewing;
         let mut active = "target".to_owned();
+        let mut pending = Some("request-8".to_owned());
 
         apply_interaction_load(
             &mut app,
             &mut live,
             &LaunchPolicy::default(),
             &mut active,
+            &mut pending,
             8,
             InteractionLoadEvent {
+                request_id: "request-7".into(),
                 generation: 7,
                 id: "target".into(),
                 result: Err(anyhow::anyhow!("obsolete preview")),
@@ -826,5 +892,34 @@ mod tests {
         assert!(interaction_navigator_passthrough(&KeyCode::Char('S')));
         assert!(interaction_navigator_passthrough(&KeyCode::Char('i')));
         assert!(!interaction_navigator_passthrough(&KeyCode::Char('l')));
+    }
+
+    #[test]
+    fn moving_to_another_entry_cancels_the_outstanding_fetch_first() {
+        let (commands, received) = mpsc::channel();
+        let mut pending = Some("old-request".to_owned());
+        let mut generation = 4;
+        let mut active = "old".to_owned();
+
+        request_interaction_load(
+            &commands,
+            &mut pending,
+            &mut generation,
+            &mut active,
+            "new".into(),
+            InteractionSnapshotScope::Preview { limit: 5 },
+        );
+
+        assert!(matches!(
+            received.recv().unwrap(),
+            InteractionLoaderCommand::Cancel(request_id) if request_id == "old-request"
+        ));
+        let InteractionLoaderCommand::Load(request) = received.recv().unwrap() else {
+            panic!("the replacement fetch must follow cancellation");
+        };
+        assert_eq!(request.id, "new");
+        assert_eq!(pending.as_deref(), Some(request.request_id.as_str()));
+        assert_eq!(active, "new");
+        assert_eq!(generation, 5);
     }
 }
