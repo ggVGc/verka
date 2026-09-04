@@ -479,7 +479,10 @@ it was seen, and the view leads its rows with both. One log holds every
 Interaction's readings and the two providers are separate subscriptions, so a
 row that named only its window would be ambiguous about which pool is filling;
 and because a reading is a live figure rather than a running total, a 90%
-seen an hour ago and one seen a minute ago call for different reactions.
+seen an hour ago and one seen a minute ago call for different reactions. Both
+that time and the window's reset are shown on the operator's own clock — the
+zone comes from the system's tzdata through `localtime_r`, so they read the
+same as every other tool on the machine.
 Announcements are deduplicated per provider window for the same reason: a
 Claude window filling up says nothing about the Codex one, even where the two
 happen to be named alike.

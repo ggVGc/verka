@@ -101,11 +101,41 @@ fn status_label(status: QuotaStatus) -> &'static str {
     }
 }
 
-/// A wall-clock `HH:MM` in UTC. The reset only matters to the minute, and
-/// deriving it here keeps the view free of a date-formatting dependency.
+/// A wall-clock `HH:MM` in the operator's own zone. Both times this shows —
+/// when a reading was taken, and when its window resets — are read against the
+/// clock on the wall, so they are rendered in the zone that clock is in.
 fn clock(at_ms: u64) -> String {
-    let minutes_of_day = (at_ms / 60_000) % 1_440;
-    format!("{:02}:{:02}Z", minutes_of_day / 60, minutes_of_day % 60)
+    minute_of_day(at_ms, local_offset_seconds(at_ms))
+}
+
+/// The minute `at_ms` falls on, `offset_seconds` east of UTC.
+fn minute_of_day(at_ms: u64, offset_seconds: i64) -> String {
+    let minutes = (at_ms / 60_000) as i64 + offset_seconds / 60;
+    let minute_of_day = minutes.rem_euclid(1_440);
+    format!("{:02}:{:02}", minute_of_day / 60, minute_of_day % 60)
+}
+
+/// How far the operator's zone is from UTC at that moment, in seconds — the
+/// moment matters, since a zone's offset moves across a daylight-saving
+/// boundary.
+///
+/// The lookup goes through the C library rather than a date crate: the zone
+/// rules live in the system's tzdata either way, and `localtime_r` reads them
+/// (and `TZ`) exactly as every other tool on the operator's machine does. A
+/// machine whose zone cannot be resolved gets UTC, which is what the view
+/// showed before it knew how to ask. Both glibc and musl load the zone on the
+/// first conversion, so no separate `tzset` is needed.
+fn local_offset_seconds(at_ms: u64) -> i64 {
+    let seconds = (at_ms / 1_000) as libc::time_t;
+    let mut broken_down: libc::tm = unsafe { std::mem::zeroed() };
+    // SAFETY: `seconds` is a valid `time_t` and `broken_down` a valid, owned
+    // `tm` that outlives the call; `localtime_r` writes only into it and
+    // returns null rather than touching it when the time cannot be converted.
+    let converted = unsafe { libc::localtime_r(&seconds, &mut broken_down) };
+    if converted.is_null() {
+        return 0;
+    }
+    broken_down.tm_gmtoff as i64
 }
 
 #[cfg(test)]
@@ -182,7 +212,7 @@ mod tests {
         let screen = rendered(&app);
         assert!(screen.contains("claude"));
         assert!(screen.contains("codex"));
-        assert!(screen.contains("19:20Z"));
+        assert!(screen.contains(&clock(1_788_290_400_000)));
     }
 
     /// A permitted Claude reading genuinely carries no figure; the view has to
@@ -235,11 +265,31 @@ mod tests {
         assert!(app.log.newest().unwrap().message.contains("exhausted"));
     }
 
+    /// Times are shown on the operator's own clock, so the minute a moment
+    /// lands on depends on the zone the machine is in.
     #[test]
-    fn reset_times_render_as_a_wall_clock_minute() {
-        assert_eq!(clock(0), "00:00Z");
-        // A real five-hour reset, as UTC rather than whatever the operator's
-        // zone happens to be — the suffix says which.
-        assert_eq!(clock(1_788_290_400_000), "19:20Z");
+    fn times_render_as_a_wall_clock_minute_in_the_operators_zone() {
+        // A real five-hour reset, at 19:20 UTC.
+        let reset = 1_788_290_400_000;
+        assert_eq!(minute_of_day(reset, 0), "19:20");
+        // An hour east, and India's half-hour offset.
+        assert_eq!(minute_of_day(reset, 3_600), "20:20");
+        assert_eq!(minute_of_day(reset, 5 * 3_600 + 1_800), "00:50");
+        // West far enough to fall back into the previous day.
+        assert_eq!(minute_of_day(reset, -8 * 3_600), "11:20");
+        assert_eq!(minute_of_day(0, -3_600), "23:00");
+    }
+
+    /// The offset has to come from the machine's own zone rather than be
+    /// assumed: `TZ` is what every other tool on it obeys.
+    #[test]
+    fn the_offset_is_the_machines_own() {
+        // Whatever this machine's zone is, a rendered clock has to agree with
+        // the offset the C library reports for that same moment.
+        let at_ms = 1_788_290_400_000;
+        assert_eq!(
+            clock(at_ms),
+            minute_of_day(at_ms, local_offset_seconds(at_ms))
+        );
     }
 }
