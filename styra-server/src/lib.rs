@@ -113,5 +113,6 @@ pub mod interaction;
 pub mod journal;
 pub mod quota;
 pub mod server;
+pub mod tooling;
 pub mod workspace;
 pub mod worktree;

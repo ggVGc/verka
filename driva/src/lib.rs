@@ -4,7 +4,7 @@ mod bwrap;
 mod config;
 mod runtime;
 
-pub use bwrap::BwrapIsolation;
+pub use bwrap::{host_runtime, BwrapIsolation, RuntimeEntry};
 pub use config::{
     BwrapConfig, Config, IsolationConfig, MountConfig, MountKind, NetworkConfig, TemplateConfig,
 };

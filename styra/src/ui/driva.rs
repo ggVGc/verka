@@ -193,6 +193,47 @@ fn sandbox_lines(app: &App, options: Option<&DrivaOptions>) -> Vec<Line<'static>
         )),
     ]);
     lines.extend(grouped_mount_lines(&options.mounts));
+    lines.extend(private_root_lines(options));
+    lines
+}
+
+/// What the sandbox holds before any mount: Driva's private root.
+///
+/// The mounts above are the whole of what this launch *asked* for, but not the
+/// whole of what the agent can reach — a sandbox still needs the host's `sh`,
+/// its libraries, and its certificates. Naming them keeps the answer to "what
+/// can this agent touch" complete, and makes the absence of the operator's
+/// home from that list something an operator can see rather than assume.
+fn private_root_lines(options: &DrivaOptions) -> Vec<Line<'static>> {
+    if options.system_runtime.is_empty() {
+        return Vec::new();
+    }
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "private root — read-only, no host home or data paths",
+            Style::default()
+                .fg(palette::ACCENT)
+                .add_modifier(Modifier::BOLD),
+        )),
+    ];
+    lines.push(Line::from(vec![
+        Span::styled(
+            "    ro  ",
+            Style::default()
+                .fg(palette::MUTED_TEXT)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            options
+                .system_runtime
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(" "),
+            Style::default().fg(palette::TEXT),
+        ),
+    ]));
     lines
 }
 
@@ -795,6 +836,7 @@ mod tests {
             command: vec!["codex".into(), "app-server".into()],
             working_directory: PathBuf::from("/tmp/styra/workspace"),
             network: false,
+            system_runtime: Vec::new(),
             mounts: vec![AttributedMount {
                 origin: MountOrigin::Workspace,
                 mount: Mount::Bind {
@@ -956,6 +998,7 @@ mod tests {
                 command: vec!["codex".into(), "app-server".into()],
                 working_directory: PathBuf::from("/tmp/styra/workspace"),
                 network: true,
+                system_runtime: Vec::new(),
                 mounts: Vec::new(),
             }),
         );
@@ -979,6 +1022,7 @@ mod tests {
                 command: vec!["codex".into()],
                 working_directory: PathBuf::from("/tmp/styra/workspace"),
                 network: false,
+                system_runtime: Vec::new(),
                 mounts: Vec::new(),
             }),
         );
@@ -1160,6 +1204,7 @@ mod tests {
                 command: vec!["codex".into()],
                 working_directory: PathBuf::from("/tmp/styra/workspace"),
                 network: true,
+                system_runtime: Vec::new(),
                 mounts: Vec::new(),
             }),
         );
@@ -1177,6 +1222,7 @@ mod tests {
                 command: vec!["codex".into()],
                 working_directory: PathBuf::from("/tmp/styra/workspace"),
                 network: false,
+                system_runtime: Vec::new(),
                 mounts: Vec::new(),
             }),
         );
@@ -1204,6 +1250,7 @@ mod tests {
                 command: vec!["codex".into()],
                 working_directory: PathBuf::from("/tmp/styra/workspace"),
                 network: true,
+                system_runtime: Vec::new(),
                 mounts: Vec::new(),
             }),
         );
@@ -1231,6 +1278,7 @@ mod tests {
             command: vec!["codex".into()],
             working_directory: PathBuf::from("/tmp/styra/workspace"),
             network: false,
+            system_runtime: Vec::new(),
             mounts: Vec::new(),
         });
         let screen = tall(&app);
@@ -1252,6 +1300,7 @@ mod tests {
             command: vec!["codex".into()],
             working_directory: PathBuf::from("/tmp/styra/workspace"),
             network: false,
+            system_runtime: Vec::new(),
             mounts: Vec::new(),
         });
         app.activity.status = Status::Stopped;

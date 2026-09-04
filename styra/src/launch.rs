@@ -641,6 +641,7 @@ mod tests {
             command: vec!["codex".into()],
             working_directory: PathBuf::from("/tmp/styra/workspace"),
             network: false,
+            system_runtime: Vec::new(),
             mounts: Vec::new(),
         }
     }
@@ -959,6 +960,7 @@ mod tests {
                 command: vec!["codex".into()],
                 working_directory: PathBuf::from("/tmp/styra/workspace"),
                 network: false,
+                system_runtime: Vec::new(),
                 mounts: Vec::new(),
             }),
         );

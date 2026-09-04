@@ -447,6 +447,52 @@ fn missing_rootfs_uses_a_private_host_runtime_instead_of_the_host_root() {
     assert!(!args.windows(3).any(|args| args == ["--ro-bind", "/", "/"]));
 }
 
+/// The list a caller can *show* is the list that is bound: every entry of the
+/// reported host runtime turns up in the invocation, and none of it is the
+/// operator's own home.
+#[test]
+fn the_reported_host_runtime_is_what_the_private_root_binds() {
+    let backend = BwrapIsolation {
+        executable: "bwrap".into(),
+        rootfs: None,
+    };
+    let request = ExecutionRequest {
+        command: vec!["/bin/sh".into()],
+        working_directory: "/tmp".into(),
+        mounts: vec![],
+        writable_mounts: WritableMountMode::Direct,
+        environment: BTreeMap::new(),
+        network: false,
+        interactive: true,
+        new_session: true,
+    };
+
+    let command = backend.command(&request).unwrap();
+    let args: Vec<_> = command
+        .get_args()
+        .map(|value| value.to_string_lossy().into_owned())
+        .collect();
+    let runtime = driva::host_runtime().unwrap();
+    assert!(!runtime.is_empty());
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    for entry in runtime {
+        let path = entry.path().to_string_lossy().into_owned();
+        assert!(
+            args.windows(3).any(|args| {
+                (args[0] == "--ro-bind" && args[1] == path && args[2] == path)
+                    || (args[0] == "--symlink" && args[2] == path)
+            }),
+            "{path} is reported but not laid down"
+        );
+        assert!(
+            !home
+                .as_ref()
+                .is_some_and(|home| Path::new(&path).starts_with(home)),
+            "{path} is inside the operator's home"
+        );
+    }
+}
+
 #[test]
 fn shell_dry_run_works_without_configuration() {
     let directory = TestRootfs::new();
