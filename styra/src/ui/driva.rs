@@ -197,15 +197,20 @@ fn sandbox_lines(app: &App, options: Option<&DrivaOptions>) -> Vec<Line<'static>
     lines
 }
 
-/// What the sandbox holds before any mount: Driva's private root.
+/// What the sandbox holds before any mount: the base its private root is
+/// built from, under the capability that asked for each part.
 ///
 /// The mounts above are the whole of what this launch *asked* for, but not the
 /// whole of what the agent can reach — a sandbox still needs the host's `sh`,
 /// its libraries, and its certificates. Naming them keeps the answer to "what
 /// can this agent touch" complete, and makes the absence of the operator's
 /// home from that list something an operator can see rather than assume.
+///
+/// Grouping by capability answers the next question with it: a path here is
+/// not an arbitrary grant but the local meaning of something the sandbox
+/// needs, and a host that keeps that thing elsewhere says so in one place.
 fn private_root_lines(options: &DrivaOptions) -> Vec<Line<'static>> {
-    if options.system_runtime.is_empty() {
+    if options.base.is_empty() {
         return Vec::new();
     }
     let mut lines = vec![
@@ -217,23 +222,45 @@ fn private_root_lines(options: &DrivaOptions) -> Vec<Line<'static>> {
                 .add_modifier(Modifier::BOLD),
         )),
     ];
-    lines.push(Line::from(vec![
-        Span::styled(
-            "    ro  ",
-            Style::default()
-                .fg(palette::MUTED_TEXT)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            options
-                .system_runtime
-                .iter()
-                .map(|path| path.display().to_string())
-                .collect::<Vec<_>>()
-                .join(" "),
-            Style::default().fg(palette::TEXT),
-        ),
-    ]));
+    for capability in &options.base {
+        lines.push(Line::from(Span::styled(
+            format!("  {} — {}", capability.name, capability.description),
+            Style::default().fg(palette::ADDITIONAL_INFO),
+        )));
+        for entry in &capability.entries {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    "    ro  ",
+                    Style::default()
+                        .fg(palette::MUTED_TEXT)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    match &entry.source {
+                        Some(source) => {
+                            format!("{} → {}", entry.path.display(), source.display())
+                        }
+                        None => entry.path.display().to_string(),
+                    },
+                    Style::default().fg(palette::TEXT),
+                ),
+            ]));
+        }
+        if !capability.environment.is_empty() {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    "    env ",
+                    Style::default()
+                        .fg(palette::MUTED_TEXT)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    capability.environment.join(" "),
+                    Style::default().fg(palette::TEXT),
+                ),
+            ]));
+        }
+    }
     lines
 }
 
@@ -872,7 +899,7 @@ mod tests {
             command: vec!["codex".into(), "app-server".into()],
             working_directory: PathBuf::from("/tmp/styra/workspace"),
             network: false,
-            system_runtime: Vec::new(),
+            base: Vec::new(),
             mounts: vec![AttributedMount {
                 origin: MountOrigin::Workspace,
                 mount: Mount::Bind {
@@ -1020,6 +1047,62 @@ mod tests {
         );
     }
 
+    /// The private root is shown under the mounts, grouped by the capability
+    /// that asked for each part: a path there is not an arbitrary grant but
+    /// the local meaning of something the sandbox needs, and a host that keeps
+    /// that thing elsewhere is legible in one place. A forwarded variable is
+    /// named too — it crosses the boundary as surely as a path does.
+    #[test]
+    fn the_private_root_reads_as_the_capabilities_it_is_built_from() {
+        use styra_server::{BaseCapability, BaseEntry, DrivaOptions};
+
+        let options = DrivaOptions {
+            isolation_backend: "bwrap".into(),
+            command: vec!["codex".into()],
+            working_directory: PathBuf::from("/tmp/styra/workspace"),
+            network: true,
+            mounts: Vec::new(),
+            base: vec![
+                BaseCapability {
+                    name: "core".into(),
+                    description: "Run a program at all".into(),
+                    entries: vec![BaseEntry {
+                        path: PathBuf::from("/usr"),
+                        source: None,
+                    }],
+                    environment: Vec::new(),
+                },
+                BaseCapability {
+                    name: "dns".into(),
+                    description: "Resolve host names".into(),
+                    entries: vec![BaseEntry {
+                        path: PathBuf::from("/etc/resolv.conf"),
+                        source: Some(PathBuf::from("/run/systemd/resolve/stub-resolv.conf")),
+                    }],
+                    environment: vec!["HTTPS_PROXY".into()],
+                },
+            ],
+        };
+
+        let lines = private_root_lines(&options)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            lines,
+            vec![
+                "",
+                "private root — read-only, no host home or data paths",
+                "  core — Run a program at all",
+                "    ro  /usr",
+                "  dns — Resolve host names",
+                "    ro  /etc/resolv.conf → /run/systemd/resolve/stub-resolv.conf",
+                "    env HTTPS_PROXY",
+            ]
+        );
+    }
+
     #[test]
     fn driva_view_marks_the_policy_a_not_yet_started_interaction_would_launch_under() {
         use styra_server::DrivaOptions;
@@ -1035,7 +1118,7 @@ mod tests {
                 command: vec!["codex".into(), "app-server".into()],
                 working_directory: PathBuf::from("/tmp/styra/workspace"),
                 network: true,
-                system_runtime: Vec::new(),
+                base: Vec::new(),
                 mounts: Vec::new(),
             }),
         );
@@ -1059,7 +1142,7 @@ mod tests {
                 command: vec!["codex".into()],
                 working_directory: PathBuf::from("/tmp/styra/workspace"),
                 network: false,
-                system_runtime: Vec::new(),
+                base: Vec::new(),
                 mounts: Vec::new(),
             }),
         );
@@ -1275,7 +1358,7 @@ mod tests {
                 command: vec!["codex".into()],
                 working_directory: PathBuf::from("/tmp/styra/workspace"),
                 network: true,
-                system_runtime: Vec::new(),
+                base: Vec::new(),
                 mounts: Vec::new(),
             }),
         );
@@ -1293,7 +1376,7 @@ mod tests {
                 command: vec!["codex".into()],
                 working_directory: PathBuf::from("/tmp/styra/workspace"),
                 network: false,
-                system_runtime: Vec::new(),
+                base: Vec::new(),
                 mounts: Vec::new(),
             }),
         );
@@ -1321,7 +1404,7 @@ mod tests {
                 command: vec!["codex".into()],
                 working_directory: PathBuf::from("/tmp/styra/workspace"),
                 network: true,
-                system_runtime: Vec::new(),
+                base: Vec::new(),
                 mounts: Vec::new(),
             }),
         );
@@ -1349,7 +1432,7 @@ mod tests {
             command: vec!["codex".into()],
             working_directory: PathBuf::from("/tmp/styra/workspace"),
             network: false,
-            system_runtime: Vec::new(),
+            base: Vec::new(),
             mounts: Vec::new(),
         });
         let screen = tall(&app);
@@ -1371,7 +1454,7 @@ mod tests {
             command: vec!["codex".into()],
             working_directory: PathBuf::from("/tmp/styra/workspace"),
             network: false,
-            system_runtime: Vec::new(),
+            base: Vec::new(),
             mounts: Vec::new(),
         });
         app.activity.status = Status::Stopped;

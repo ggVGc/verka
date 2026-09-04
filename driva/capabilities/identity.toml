@@ -1,0 +1,9 @@
+description = "Resolve users and groups, so a program can name who it runs as"
+
+path = [
+  { at = "/etc/passwd" },
+  { at = "/etc/group" },
+  { at = "/etc/nsswitch.conf", optional = true },
+]
+
+probe = { run = ["/usr/bin/id", "-u"] }

@@ -1,10 +1,16 @@
 //! Portable policy and execution interface for isolated commands.
 
+pub mod base;
 mod bwrap;
 mod config;
+pub mod probe;
 mod runtime;
 
-pub use bwrap::{host_runtime, BwrapIsolation, RuntimeEntry};
+pub use base::{
+    resolve_base, Base, BaseConfig, BaseSection, CapabilityConfig, EntryConfig, EntryMode, Probe,
+    ResolvedCapability, RuntimeEntry, DEFAULT_CAPABILITIES,
+};
+pub use bwrap::BwrapIsolation;
 pub use config::{
     BwrapConfig, Config, IsolationConfig, MountConfig, MountKind, NetworkConfig, TemplateConfig,
 };

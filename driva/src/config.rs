@@ -1,3 +1,4 @@
+use crate::base::{BaseConfig, BaseSection, CapabilityConfig};
 use crate::{Mount, MountAccess};
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
@@ -20,6 +21,15 @@ pub struct Config {
     /// `driva run --template NAME`.
     #[serde(default, rename = "template")]
     pub templates: BTreeMap<String, TemplateConfig>,
+    /// Which capabilities the sandbox's base system is built from. Absent, the
+    /// built-in list applies.
+    #[serde(default)]
+    pub base: BaseSection,
+    /// Capability definitions, keyed by the name `base.include` and
+    /// `--capability` use. A definition here replaces the built-in of the same
+    /// name, which is how a host states where it keeps something.
+    #[serde(default, rename = "capability")]
+    pub capabilities: BTreeMap<String, CapabilityConfig>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -157,6 +167,12 @@ pub struct TemplateConfig {
     /// Host directories mounted read-only and prepended to PATH.
     #[serde(default, rename = "path")]
     pub paths: Vec<PathBuf>,
+    /// Base capabilities this template's command needs — an agent that talks
+    /// to a service names `dns` and `certificates`. A template states what it
+    /// requires; only configuration says what that means on this host, so a
+    /// template can ask for a capability but never define one.
+    #[serde(default, rename = "capability")]
+    pub capabilities: Vec<String>,
     pub network: Option<bool>,
     pub interactive: Option<bool>,
     /// Start a new terminal session (Bubblewrap's `--new-session`, which
@@ -219,6 +235,17 @@ impl Config {
         templates.extend(self.templates.clone());
         templates
     }
+
+    /// The base system this configuration selects: the built-in capabilities,
+    /// with this project's definitions over them and its `include` in place of
+    /// the default list.
+    pub fn base(&self) -> BaseConfig {
+        let section = BaseSection {
+            include: self.base.include.clone(),
+            definitions: self.capabilities.clone(),
+        };
+        BaseConfig::default().with_section(&section)
+    }
 }
 
 impl TemplateConfig {
@@ -253,6 +280,7 @@ impl TemplateConfig {
         }
         self.mounts.extend(later.mounts);
         self.paths.extend(later.paths);
+        self.capabilities.extend(later.capabilities);
         if later.network.is_some() {
             self.network = later.network;
         }

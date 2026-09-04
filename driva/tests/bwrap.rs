@@ -1,4 +1,6 @@
-use driva::{BwrapIsolation, Config, ExecutionRequest, Mount, MountAccess, WritableMountMode};
+use driva::{
+    BaseConfig, BwrapIsolation, Config, ExecutionRequest, Mount, MountAccess, WritableMountMode,
+};
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -32,6 +34,7 @@ fn translates_request_without_implicit_host_access() {
     let backend = BwrapIsolation {
         executable: "bwrap".into(),
         rootfs: Some(rootfs.0.clone()),
+        base: BaseConfig::default(),
     };
     let request = ExecutionRequest {
         command: vec!["printf".into(), "hello".into()],
@@ -93,6 +96,7 @@ fn overlay_mount_reads_host_source_with_a_discarded_tmpfs_upper_layer() {
     let backend = BwrapIsolation {
         executable: "bwrap".into(),
         rootfs: Some(rootfs.0.clone()),
+        base: BaseConfig::default(),
     };
     let request = ExecutionRequest {
         command: vec!["printf".into(), "hello".into()],
@@ -128,6 +132,7 @@ fn a_writable_mount_nested_in_a_read_only_one_is_mounted_last() {
     let backend = BwrapIsolation {
         executable: "bwrap".into(),
         rootfs: Some(rootfs.0.clone()),
+        base: BaseConfig::default(),
     };
     let request = ExecutionRequest {
         command: vec!["true".into()],
@@ -179,6 +184,7 @@ fn overlay_write_mode_is_rendered_by_the_bubblewrap_mount_plan() {
     let backend = BwrapIsolation {
         executable: "bwrap".into(),
         rootfs: Some(rootfs.0.clone()),
+        base: BaseConfig::default(),
     };
     let request = ExecutionRequest {
         command: vec!["true".into()],
@@ -228,6 +234,7 @@ fn omits_new_session_when_disabled() {
     let backend = BwrapIsolation {
         executable: "bwrap".into(),
         rootfs: Some(rootfs.0.clone()),
+        base: BaseConfig::default(),
     };
     let request = ExecutionRequest {
         command: vec!["true".into()],
@@ -252,6 +259,7 @@ fn shares_network_only_when_granted() {
     let backend = BwrapIsolation {
         executable: "bwrap".into(),
         rootfs: Some(rootfs.0.clone()),
+        base: BaseConfig::default(),
     };
     let request = ExecutionRequest {
         command: vec!["true".into()],
@@ -276,6 +284,7 @@ fn creates_private_tmpfs_before_nested_file_mounts() {
     let backend = BwrapIsolation {
         executable: "bwrap".into(),
         rootfs: Some(rootfs.0.clone()),
+        base: BaseConfig::default(),
     };
     let request = ExecutionRequest {
         command: vec!["true".into()],
@@ -318,6 +327,7 @@ fn permits_paths_created_beneath_private_tmpfs() {
     let backend = BwrapIsolation {
         executable: "bwrap".into(),
         rootfs: Some(rootfs.0.clone()),
+        base: BaseConfig::default(),
     };
     let request = ExecutionRequest {
         command: vec!["true".into()],
@@ -361,6 +371,7 @@ fn rejects_destinations_missing_from_read_only_rootfs() {
     let backend = BwrapIsolation {
         executable: "bwrap".into(),
         rootfs: Some(rootfs.0.clone()),
+        base: BaseConfig::default(),
     };
     let request = ExecutionRequest {
         command: vec!["true".into()],
@@ -423,6 +434,7 @@ fn missing_rootfs_uses_a_private_host_runtime_instead_of_the_host_root() {
     let backend = BwrapIsolation {
         executable: "bwrap".into(),
         rootfs: None,
+        base: BaseConfig::default(),
     };
     let request = ExecutionRequest {
         command: vec!["/bin/sh".into()],
@@ -448,13 +460,14 @@ fn missing_rootfs_uses_a_private_host_runtime_instead_of_the_host_root() {
 }
 
 /// The list a caller can *show* is the list that is bound: every entry of the
-/// reported host runtime turns up in the invocation, and none of it is the
-/// operator's own home.
+/// resolved base turns up in the invocation, and none of it is the operator's
+/// own home.
 #[test]
-fn the_reported_host_runtime_is_what_the_private_root_binds() {
+fn the_reported_base_is_what_the_private_root_binds() {
     let backend = BwrapIsolation {
         executable: "bwrap".into(),
         rootfs: None,
+        base: BaseConfig::default(),
     };
     let request = ExecutionRequest {
         command: vec!["/bin/sh".into()],
@@ -472,12 +485,12 @@ fn the_reported_host_runtime_is_what_the_private_root_binds() {
         .get_args()
         .map(|value| value.to_string_lossy().into_owned())
         .collect();
-    let runtime = driva::host_runtime().unwrap();
-    assert!(!runtime.is_empty());
+    let base = driva::resolve_base(&BaseConfig::default()).unwrap();
+    assert!(base.entries().count() > 5);
     let home = std::env::var_os("HOME").map(PathBuf::from);
-    for entry in runtime {
+    for entry in base.entries() {
         let path = entry.path().to_string_lossy().into_owned();
-        let source = match &entry {
+        let source = match entry {
             driva::RuntimeEntry::ReadOnly { source, .. } => source.to_string_lossy().into_owned(),
             driva::RuntimeEntry::Symlink { .. } => path.clone(),
         };
@@ -503,9 +516,9 @@ fn the_reported_host_runtime_is_what_the_private_root_binds() {
 /// a directory the sandbox does not have.
 #[test]
 fn the_private_root_carries_a_usable_resolver() {
-    let runtime = driva::host_runtime().unwrap();
-    let Some(entry) = runtime
-        .iter()
+    let base = driva::resolve_base(&BaseConfig::default()).unwrap();
+    let Some(entry) = base
+        .entries()
         .find(|entry| entry.path() == Path::new("/etc/resolv.conf"))
     else {
         eprintln!("skipping: this host has no /etc/resolv.conf");
@@ -523,7 +536,7 @@ fn the_private_root_carries_a_usable_resolver() {
             let resolved = Path::new("/etc/resolv.conf").canonicalize();
             assert!(
                 resolved.is_err()
-                    || runtime.iter().any(|entry| matches!(
+                    || base.entries().any(|entry| matches!(
                         entry,
                         driva::RuntimeEntry::ReadOnly { source, .. }
                             if resolved.as_ref().is_ok_and(|path| path.starts_with(source))
@@ -564,6 +577,7 @@ fn overlay_of_a_file_binds_a_private_copy_instead_of_stacking_overlayfs() {
     let backend = BwrapIsolation {
         executable: "bwrap".into(),
         rootfs: None,
+        base: BaseConfig::default(),
     };
     let request = ExecutionRequest {
         command: vec!["true".into()],

@@ -445,7 +445,8 @@ impl ServerState {
         // missing tmux or broker executable cannot leave an empty journal.
         let tmux = genta::agent::resolve_executable(Path::new("tmux"))
             .context("tmux is required for Styra session shells")?;
-        let tooling_mounts = tooling_mounts(&profile, &tmux)?;
+        let base = launch_base(&workspace, template.as_ref())?;
+        let tooling_mounts = tooling_mounts(&profile, &tmux, &base)?;
         let (journal, id) = Journal::create_in_workspace(
             &self.inner.store_root,
             &request.workspace_id,
@@ -470,6 +471,7 @@ impl ServerState {
             repository_mounts,
             automatic_mounts,
             tooling_mounts,
+            base: base.clone(),
             temporary_mounts: Vec::new(),
             extra_mounts,
             dynamic_tools,
@@ -494,6 +496,7 @@ impl ServerState {
         let backend = Box::new(driva::BwrapIsolation {
             executable: "bwrap".into(),
             rootfs: None,
+            base,
         });
         let (interaction, receiver) =
             match Interaction::spawn(spec, backend, journal, id.clone(), diagnostics) {
@@ -718,7 +721,8 @@ impl ServerState {
         let extra_mounts = resolve_launch_mounts(&launch.mounts)?;
         let tmux = genta::agent::resolve_executable(Path::new("tmux"))
             .context("tmux is required for Styra session shells")?;
-        let tooling_mounts = tooling_mounts(&profile, &tmux)?;
+        let base = launch_base(&workspace, template.as_ref())?;
+        let tooling_mounts = tooling_mounts(&profile, &tmux, &base)?;
         let spec = InteractionSpec {
             profile,
             resume_provider_session_id: None,
@@ -731,6 +735,7 @@ impl ServerState {
             repository_mounts,
             automatic_mounts,
             tooling_mounts,
+            base: base.clone(),
             temporary_mounts: Vec::new(),
             extra_mounts,
             dynamic_tools,
@@ -808,7 +813,8 @@ impl ServerState {
 
         let tmux = genta::agent::resolve_executable(Path::new("tmux"))
             .context("tmux is required for Styra session shells")?;
-        let tooling_mounts = tooling_mounts(&profile, &tmux)?;
+        let base = launch_base(&workspace, template.as_ref())?;
+        let tooling_mounts = tooling_mounts(&profile, &tmux, &base)?;
         // Seed the live update stream before the provider starts. Clients
         // attaching from cursor zero then receive the stored conversation and
         // all subsequent native-resume traffic as one sequence. The client
@@ -831,6 +837,7 @@ impl ServerState {
             repository_mounts,
             automatic_mounts,
             tooling_mounts,
+            base: base.clone(),
             temporary_mounts: Vec::new(),
             extra_mounts,
             dynamic_tools,
@@ -852,6 +859,7 @@ impl ServerState {
         let backend = Box::new(driva::BwrapIsolation {
             executable: "bwrap".into(),
             rootfs: None,
+            base,
         });
         let (interaction, receiver) =
             Interaction::spawn(spec, backend, journal, request.id.clone(), diagnostics)?;
@@ -1796,6 +1804,22 @@ fn resolve_launch_mounts(mounts: &[LaunchMount]) -> Result<Vec<MountSpec>> {
         .collect()
 }
 
+/// The base system a launch in this Workspace runs on.
+///
+/// The Workspace's own `driva.toml` states which capabilities its sandboxes
+/// are built from and, where the built-in definition is wrong for this host,
+/// what they mean here. A selected template adds the capabilities its command
+/// requires — an agent that talks to a service asks for `dns` — and can only
+/// ask: what a capability means stays configuration's business, so choosing a
+/// template can never quietly widen the private root.
+fn launch_base(workspace: &Path, template: Option<&ResolvedTemplate>) -> Result<driva::BaseConfig> {
+    let mut base = workspace_driva_config(workspace)?.base();
+    for name in template.iter().flat_map(|value| value.capabilities.iter()) {
+        base.include(name);
+    }
+    Ok(base)
+}
+
 /// The host executables one launch has to run, as read-only mounts.
 ///
 /// Styra launches into Driva's private root, which carries the host system
@@ -1804,12 +1828,16 @@ fn resolve_launch_mounts(mounts: &[LaunchMount]) -> Result<Vec<MountSpec>> {
 /// therefore have to be named as mounts like anything else the sandbox holds.
 /// Deriving them here, from the profile that is about to be launched, keeps
 /// each grant tied to the command it exists for.
-fn tooling_mounts(profile: &genta::agent::Profile, tmux: &Path) -> Result<Vec<MountSpec>> {
+fn tooling_mounts(
+    profile: &genta::agent::Profile,
+    tmux: &Path,
+    base: &driva::BaseConfig,
+) -> Result<Vec<MountSpec>> {
     let agent = profile
         .command
         .first()
         .context("the agent profile names no executable")?;
-    crate::tooling::executable_mounts(&[PathBuf::from(agent), tmux.to_path_buf()])
+    crate::tooling::executable_mounts(&[PathBuf::from(agent), tmux.to_path_buf()], base)
 }
 
 /// Reject a policy that binds two things at the same place inside the sandbox.
@@ -2183,7 +2211,7 @@ mod tests {
             command: vec!["codex".into()],
             working_directory: PathBuf::from("/tmp/styra/workspace"),
             network: false,
-            system_runtime: Vec::new(),
+            base: Vec::new(),
             mounts: vec![
                 AttributedMount {
                     origin: MountOrigin::Workspace,

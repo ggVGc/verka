@@ -4,9 +4,11 @@ Driva runs a command in a disposable isolated environment. By default, the
 current directory is mounted writable at its canonical host path and used as
 the workspace; other host data and network access must be explicitly granted.
 Bubblewrap is the isolation backend. Without configuration, it constructs a
-private root containing only the host's read-only system runtime in addition
-to that workspace, so `/bin/sh` and normal OS tools remain available without
-exposing the host root or home directory.
+private root from the built-in *base* — the host's loader, libraries, users,
+certificates, resolver, and time zone, read-only — in addition to that
+workspace, so `/bin/sh` and normal OS tools remain available without exposing
+the host root or home directory. `driva capabilities` lists what the base is
+built from and `driva doctor` reports whether each part works on this host.
 
 ```sh
 cargo run -- run -- cargo test
@@ -137,9 +139,11 @@ interface. `validate_request` resolves host sources and rejects invalid or
 conflicting grants; `execute` validates before dispatching to a backend.
 
 Bubblewrap is the default for lightweight Linux execution. Its
-configuration-free mode exposes conventional system runtime paths read-only
-inside an otherwise private root. A prepared root filesystem can be selected
-when commands need a different userspace:
+configuration-free mode builds an otherwise private root from the default base
+capabilities, which `[base]` and `[capability.NAME]` in `driva.toml` replace or
+extend when a host keeps something elsewhere (see `docs/cli.md`). A prepared
+root filesystem can be selected when commands need a different userspace, and
+brings its own system in place of a base:
 
 ```toml
 [isolation]

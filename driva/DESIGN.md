@@ -190,12 +190,59 @@ semantics match.
 
 The Bubblewrap adapter translates requests into unprivileged Linux
 namespaces. With an explicit rootfs it mounts that prepared tree read-only.
-Without one it creates a private root and mounts only conventional host system
-runtime paths read-only, making `/bin/sh` and normal OS tools available without
-exposing the host root or home directory. The launch layer adds the default
-workspace mount when applicable. Bubblewrap adds fresh `/proc`, `/dev`, and
-`/tmp` mounts, clears the inherited host environment, and shares the host
-network namespace only when networking is granted.
+Without one it creates a private root and builds it from the configured *base*
+(below), making `/bin/sh` and normal OS tools available without exposing the
+host root or home directory. The launch layer adds the default workspace mount
+when applicable. Bubblewrap adds fresh `/proc`, `/dev`, and `/tmp` mounts,
+clears the inherited host environment, and shares the host network namespace
+only when networking is granted.
+
+## The base system
+
+A private root starts as an empty filesystem, so a command in it cannot run
+until the host's loader, libraries, and system files are there. That floor is
+the *base*, and it is deliberately a different concept from a mount: a mount
+grants access to the operator's own data and is a choice, while the base is
+what any program needs in order to run at all and is not.
+
+The base is a list of named **capabilities** rather than one list of paths,
+because the two questions differ in kind. "This sandbox must be able to resolve
+host names" is portable; `/run/systemd/resolve` is one machine's answer to it.
+Separating them is what lets a single set of built-ins work across
+distributions, and lets an operator state the difference where it does not:
+
+- a capability names host paths, each `optional` or not, in one of four modes
+  (`auto`, `bind`, `symlink`, `follow`) that say what to do about a host
+  symlink;
+- it may forward named host environment variables — a proxy, an overridden
+  certificate bundle — which is the only way a value a program cannot find on
+  disk crosses the boundary;
+- it may declare a **probe**, a closed-set check (`resolve`, `connect`, `run`)
+  that answers whether it actually works here;
+- it may `suggest` paths worth reporting when the probe fails.
+
+The built-ins (`core`, `identity`, `certificates`, `dns`, `timezone`) are
+embedded TOML deserialized through the same schema as a project's own, and a
+project definition of a name replaces the built-in. `driva doctor` builds a
+sandbox from each included capability and probes it, so a host whose layout the
+built-ins do not describe produces a precise report and a configuration
+suggestion rather than a failure inside whatever was launched.
+
+Three properties hold this together, and they are the reason the mechanism is
+worth its size:
+
+- **Nothing is implied.** A capability is a declaration in configuration; a
+  suggestion is printed, never applied. Discovery reports, it does not grant.
+- **A gap is loud where it is cheap.** A path that is not `optional` and not on
+  the host fails resolution, naming the capability. Probes catch what a path
+  list cannot state.
+- **What is shown is what is bound.** `resolve_base` returns the entries the
+  adapter lays down, so a host that displays its sandboxes (Styra does) cannot
+  drift from what they hold.
+
+A template may `capability = [...]` to state what its command requires, but
+never defines one: what a capability means on a host is configuration's
+business, so selecting a template cannot widen the root by itself.
 
 Tests for Driva's policy use a fake `Isolation` implementation. Each production
 backend also has focused integration tests for its request translation, I/O,

@@ -249,16 +249,16 @@ pub struct DrivaOptions {
     pub working_directory: PathBuf,
     pub network: bool,
     pub mounts: Vec<AttributedMount>,
-    /// The host system paths the sandbox's private root carries, read-only,
-    /// before any mount is laid on top: Driva's own base filesystem
-    /// ([`driva::host_runtime`]).
+    /// The base system the sandbox's private root is built from, resolved
+    /// against this host and grouped by the capability that asked for each
+    /// part (see [`driva::base`]).
     ///
     /// These are not mounts anyone asked for and none of them can be taken
     /// back, but leaving them out would make the mount list read as the whole
     /// of what the agent can reach when it is not. A client that predates the
     /// field shows the mounts alone, as it always did.
     #[serde(default)]
-    pub system_runtime: Vec<PathBuf>,
+    pub base: Vec<BaseCapability>,
 }
 
 impl DrivaOptions {
@@ -270,6 +270,32 @@ impl DrivaOptions {
             .map(|mount| mount.mount.clone())
             .collect()
     }
+}
+
+/// One capability of the sandbox's base system, as it resolved on this host.
+///
+/// A capability is the portable statement ("this sandbox can resolve host
+/// names"); the paths are what that means on this machine. Reporting both lets
+/// an operator see not only what the private root holds but why it holds it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BaseCapability {
+    pub name: String,
+    pub description: String,
+    pub entries: Vec<BaseEntry>,
+    /// Host environment variables this capability forwards, and that are set
+    /// here — a proxy or a certificate bundle the sandbox would otherwise have
+    /// no way to learn about.
+    #[serde(default)]
+    pub environment: Vec<String>,
+}
+
+/// One path the base lays down, and where its content comes from when that is
+/// not the same place (a host link followed out of the base).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BaseEntry {
+    pub path: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<PathBuf>,
 }
 
 /// Which layer of the launch policy put a mount in the sandbox.

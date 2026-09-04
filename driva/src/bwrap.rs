@@ -1,3 +1,4 @@
+use crate::base::{Base, BaseConfig, RuntimeEntry};
 use crate::{
     effective_policy, ExecutionControl, ExecutionEvidence, ExecutionIo, ExecutionOutcome,
     ExecutionRequest, Isolation, Mount, MountAccess, ProcessExit, WritableMountMode, DEFAULT_PATH,
@@ -59,13 +60,26 @@ impl BwrapMountPlan {
 }
 
 /// A synchronous Bubblewrap backend using either a prepared filesystem tree
-/// or a private root containing the host's system runtime.
-#[derive(Clone, Debug)]
+/// or a private root built from the configured base system.
+#[derive(Clone, Debug, Default)]
 pub struct BwrapIsolation {
     pub executable: PathBuf,
     /// A prepared root filesystem. When absent, Driva constructs a private
-    /// root containing only the host's read-only system runtime.
+    /// root from `base`.
     pub rootfs: Option<PathBuf>,
+    /// The capabilities the private root carries (see [`crate::base`]).
+    /// Ignored when a prepared rootfs brings its own system.
+    pub base: BaseConfig,
+}
+
+impl BwrapIsolation {
+    /// A backend using the host's `bwrap` and the default base.
+    pub fn new() -> Self {
+        Self {
+            executable: PathBuf::from("bwrap"),
+            ..Self::default()
+        }
+    }
 }
 
 impl BwrapIsolation {
@@ -90,10 +104,22 @@ impl BwrapIsolation {
             self.validate_rootfs_runtime(rootfs)?;
             self.validate_rootfs_paths(rootfs, request, mounts, &temporary_mounts)?;
         }
+        // A prepared rootfs brings its own system, so the base — paths and
+        // forwarded variables alike — belongs to the private root only.
+        let base = match &rootfs {
+            Some(_) => None,
+            None => Some(crate::base::resolve_base(&self.base)?),
+        };
 
         let mut command = Command::new(&self.executable);
-        append_isolation_options(&mut command, request);
-        self.append_filesystem(&mut command, request, rootfs.as_deref(), &temporary_mounts)?;
+        append_isolation_options(&mut command, request, base.as_ref());
+        self.append_filesystem(
+            &mut command,
+            request,
+            rootfs.as_deref(),
+            base.as_ref(),
+            &temporary_mounts,
+        );
         append_mounts(&mut command, mounts);
         command
             .arg("--chdir")
@@ -161,12 +187,15 @@ impl BwrapIsolation {
         command: &mut Command,
         request: &ExecutionRequest,
         rootfs: Option<&Path>,
+        base: Option<&Base>,
         temporary_mounts: &[PathBuf],
-    ) -> Result<()> {
-        if let Some(rootfs) = rootfs {
-            command.arg("--ro-bind").arg(rootfs).arg("/");
-        } else {
-            append_host_runtime(command)?;
+    ) {
+        match (rootfs, base) {
+            (Some(rootfs), _) => {
+                command.arg("--ro-bind").arg(rootfs).arg("/");
+            }
+            (None, Some(base)) => append_base(command, base),
+            (None, None) => unreachable!("private root without a resolved base"),
         }
         command
             .arg("--proc")
@@ -183,7 +212,6 @@ impl BwrapIsolation {
         if rootfs.is_none() {
             command.arg("--dir").arg(&request.working_directory);
         }
-        Ok(())
     }
 
     fn require_rootfs_directory(&self, rootfs: &Path, path: &Path, label: &str) -> Result<()> {
@@ -250,7 +278,11 @@ fn collect_temporary_mounts(mounts: &BwrapMountPlan) -> Result<Vec<PathBuf>> {
     Ok(temporary_mounts)
 }
 
-fn append_isolation_options(command: &mut Command, request: &ExecutionRequest) {
+fn append_isolation_options(
+    command: &mut Command,
+    request: &ExecutionRequest,
+    base: Option<&Base>,
+) {
     command.arg("--unshare-all");
     if request.new_session {
         command.arg("--new-session");
@@ -264,6 +296,15 @@ fn append_isolation_options(command: &mut Command, request: &ExecutionRequest) {
         .arg("--setenv")
         .arg("PATH")
         .arg(DEFAULT_PATH);
+    // The base is the floor for the environment the way its entries are the
+    // floor for the filesystem: a request value takes precedence.
+    if let Some(base) = base {
+        for (key, value) in base.environment() {
+            if !request.environment.contains_key(&key) {
+                command.arg("--setenv").arg(key).arg(value);
+            }
+        }
+    }
     for (key, value) in &request.environment {
         command.arg("--setenv").arg(key).arg(value);
     }
@@ -310,130 +351,14 @@ fn append_mounts(command: &mut Command, mounts: &BwrapMountPlan) {
     }
 }
 
-/// The conventional system paths a private root exposes, in the order they are
-/// laid down. Enough to run the host's `/bin/sh` and normal OS tools, and
-/// deliberately nothing else: no host root, home, current directory, or other
-/// data path appears here.
-const HOST_RUNTIME_PATHS: [&str; 21] = [
-    "/usr",
-    "/bin",
-    "/sbin",
-    "/lib",
-    "/lib64",
-    // Where a systemd host actually keeps its resolver: the nameservers
-    // `/etc/resolv.conf` points at, and the socket `nss_resolve` asks when
-    // `/etc/nsswitch.conf` says `resolve`. Without it a sandbox that is
-    // *permitted* to reach the network still cannot resolve a name.
-    "/run/systemd/resolve",
-    "/etc/alternatives",
-    "/etc/ca-certificates",
-    "/etc/group",
-    "/etc/hosts",
-    "/etc/ld.so.cache",
-    "/etc/ld.so.conf",
-    "/etc/ld.so.conf.d",
-    "/etc/localtime",
-    "/etc/nsswitch.conf",
-    "/etc/passwd",
-    "/etc/pki",
-    "/etc/protocols",
-    "/etc/resolv.conf",
-    "/etc/services",
-    "/etc/ssl",
-];
-
-/// One element of the base filesystem a private root is built from.
+/// Lay the resolved base down on a tmpfs root that starts empty.
 ///
-/// A caller that wants to *state* what its sandboxes hold reads these rather
-/// than re-deriving the list, so what is shown and what is bound cannot drift.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum RuntimeEntry {
-    /// Host content exposed read-only inside the isolation. `source` and
-    /// `path` are the same host path, except where the host keeps a symlink
-    /// at `path` aimed outside the runtime — see [`host_runtime`].
-    ReadOnly { source: PathBuf, path: PathBuf },
-    /// A symlink the host keeps at that path, recreated rather than followed,
-    /// so a distro that points `/bin` at `usr/bin` keeps working.
-    Symlink { target: PathBuf, path: PathBuf },
-}
-
-impl RuntimeEntry {
-    /// Where this entry lands inside the isolation.
-    pub fn path(&self) -> &Path {
-        match self {
-            Self::ReadOnly { path, .. } | Self::Symlink { path, .. } => path,
-        }
-    }
-}
-
-/// The host system runtime a private root exposes on this machine: the subset
-/// of [`HOST_RUNTIME_PATHS`] that exists here, each resolved to how it will be
-/// laid down. Paths absent from the host are absent from the list.
-///
-/// A host symlink is normally recreated rather than followed, so the shape of
-/// the host's own layout survives. That only works while the link still leads
-/// somewhere the runtime carries: `/bin` → `usr/bin` resolves through `/usr`,
-/// but `/etc/resolv.conf` → `../run/NetworkManager/resolv.conf` would land on
-/// nothing and leave the sandbox unable to resolve a name. A link aimed
-/// outside the runtime is therefore followed, and its content bound where the
-/// link stands.
-pub fn host_runtime() -> Result<Vec<RuntimeEntry>> {
-    let mut entries: Vec<RuntimeEntry> = Vec::new();
-    for path in HOST_RUNTIME_PATHS {
-        let path = Path::new(path);
-        let metadata = match std::fs::symlink_metadata(path) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => {
-                return Err(error).with_context(|| {
-                    format!("failed to inspect host runtime path {}", path.display())
-                })
-            }
-        };
-        if !metadata.file_type().is_symlink() {
-            entries.push(RuntimeEntry::ReadOnly {
-                source: path.to_path_buf(),
-                path: path.to_path_buf(),
-            });
-            continue;
-        }
-        let target = std::fs::read_link(path)
-            .with_context(|| format!("failed to read host runtime link {}", path.display()))?;
-        // A link the host cannot follow either is left as the host has it:
-        // reproducing a broken link is the honest translation, and it is not
-        // Driva's business to repair the host's own layout.
-        let resolved = match path.canonicalize() {
-            Ok(resolved) if !carried_by(&entries, &resolved) => Some(resolved),
-            _ => None,
-        };
-        entries.push(match resolved {
-            Some(source) => RuntimeEntry::ReadOnly {
-                source,
-                path: path.to_path_buf(),
-            },
-            None => RuntimeEntry::Symlink {
-                target,
-                path: path.to_path_buf(),
-            },
-        });
-    }
-    Ok(entries)
-}
-
-/// Whether `path` is already inside something the runtime binds, and so
-/// reachable through the entries laid down before it.
-fn carried_by(entries: &[RuntimeEntry], path: &Path) -> bool {
-    entries.iter().any(|entry| match entry {
-        RuntimeEntry::ReadOnly { source, .. } => path.starts_with(source),
-        RuntimeEntry::Symlink { .. } => false,
-    })
-}
-
-/// Construct a useful base filesystem out of [`host_runtime`], on a tmpfs root
-/// that starts empty.
-fn append_host_runtime(command: &mut Command) -> Result<()> {
+/// This is the single translation point from a declared base to Bubblewrap's
+/// primitives, so what [`crate::base::resolve_base`] reports and what the
+/// sandbox holds are the same list.
+fn append_base(command: &mut Command, base: &Base) {
     command.arg("--tmpfs").arg("/");
-    for entry in host_runtime()? {
+    for entry in base.entries() {
         match entry {
             RuntimeEntry::ReadOnly { source, path } => {
                 command.arg("--ro-bind").arg(source).arg(path);
@@ -443,7 +368,6 @@ fn append_host_runtime(command: &mut Command) -> Result<()> {
             }
         }
     }
-    Ok(())
 }
 
 fn is_regular_file(path: &Path) -> bool {

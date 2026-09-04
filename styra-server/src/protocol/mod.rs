@@ -14,10 +14,11 @@ mod types;
 
 pub use transport::{read_message, read_message_limited, write_message, MAX_REQUEST_BYTES};
 pub use types::{
-    Answer, AnswerValue, AttributedMount, Contract, Direction, DrivaOptions, FileLocation,
-    InteractionActivity, InteractionEnd, InteractionSummary, InteractionUpdate, LaunchMount,
-    LaunchPolicy, LogEntry, LogLevel, MountOrigin, QueuedMessage, QuotaEvent, QuotaStatus, RawLine,
-    SessionOrigin, SessionSummary, TemplateSummary, WorkspaceSummary,
+    Answer, AnswerValue, AttributedMount, BaseCapability, BaseEntry, Contract, Direction,
+    DrivaOptions, FileLocation, InteractionActivity, InteractionEnd, InteractionSummary,
+    InteractionUpdate, LaunchMount, LaunchPolicy, LogEntry, LogLevel, MountOrigin, QueuedMessage,
+    QuotaEvent, QuotaStatus, RawLine, SessionOrigin, SessionSummary, TemplateSummary,
+    WorkspaceSummary,
 };
 
 // These external vocabularies are serialized inside protocol payloads. Re-export
@@ -541,7 +542,15 @@ mod tests {
             working_directory: PathBuf::from("/tmp/styra/workspace"),
             network: true,
             mounts: Vec::new(),
-            system_runtime: vec![PathBuf::from("/usr")],
+            base: vec![BaseCapability {
+                name: "core".into(),
+                description: "Run a program at all".into(),
+                entries: vec![BaseEntry {
+                    path: PathBuf::from("/usr"),
+                    source: None,
+                }],
+                environment: Vec::new(),
+            }],
         });
         let json = serde_json::to_value(&response).unwrap();
         assert_eq!(json["type"], "session_plan");

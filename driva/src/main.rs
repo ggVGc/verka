@@ -38,6 +38,15 @@ enum Operation {
     },
     /// List built-in and project-defined execution templates.
     Templates,
+    /// List the base capabilities a private root can be built from, and which
+    /// of them this configuration includes.
+    Capabilities,
+    /// Report whether each included capability works on this host, by building
+    /// a sandbox from it and probing it.
+    Doctor {
+        #[command(flatten)]
+        policy: PolicyArgs,
+    },
     /// Manage prepared read-only runtimes for Bubblewrap templates.
     Runtime {
         #[command(subcommand)]
@@ -93,6 +102,17 @@ struct PolicyArgs {
     /// Add a host directory read-only and prepend it to the isolated PATH.
     #[arg(long = "path", value_name = "DIRECTORY")]
     paths: Vec<PathBuf>,
+    /// Add a base capability to the private root; may be repeated
+    /// (see `driva capabilities`).
+    #[arg(long = "capability", value_name = "NAME")]
+    capabilities: Vec<String>,
+    /// Leave a base capability out, overriding configuration and templates.
+    #[arg(long = "no-capability", value_name = "NAME")]
+    no_capabilities: Vec<String>,
+    /// Build the private root with no base at all: an empty filesystem holding
+    /// only what is mounted into it.
+    #[arg(long)]
+    no_base: bool,
     /// Select the isolation backend.
     #[arg(long, value_name = "BACKEND")]
     backend: Option<String>,
@@ -150,6 +170,15 @@ impl ResolvedBackend {
 }
 
 fn main() {
+    // Driva answers its own network probes from inside a sandbox, so the
+    // sentinel is handled before the public command line exists.
+    if let Some(result) = driva::probe::exit_if_requested() {
+        if let Err(error) = result {
+            eprintln!("driva: {error:#}");
+            std::process::exit(1);
+        }
+        return;
+    }
     if let Err(error) = real_main() {
         eprintln!("driva: {error:#}");
         std::process::exit(1);
@@ -178,6 +207,8 @@ fn real_main() -> Result<()> {
             }
             return Ok(());
         }
+        Operation::Capabilities => return capabilities_command(&config),
+        Operation::Doctor { policy } => return doctor_command(&config, &policy),
         Operation::Runtime { command } => return runtime_command(command),
     };
     let mut template: Option<driva::TemplateConfig> = None;
@@ -213,6 +244,7 @@ fn real_main() -> Result<()> {
         .unwrap_or(&config.isolation.backend);
     let backend = resolve_backend(requested_backend, &policy, template.as_ref(), &config)?;
     let backend_name = backend.name();
+    let base = effective_base(&config, template.as_ref(), &policy);
     let configured_workdir = match backend_name {
         "bwrap" => &config.isolation.bwrap.workdir,
         backend => bail!("unsupported isolation backend {backend:?}"),
@@ -368,6 +400,7 @@ fn real_main() -> Result<()> {
             let backend = BwrapIsolation {
                 executable: config.isolation.bwrap.executable,
                 rootfs,
+                base,
             };
             let invocation = backend.command(&request).with_context(|| {
                 if policy.template.iter().any(|name| name == "codex-runtime") {
@@ -379,6 +412,119 @@ fn real_main() -> Result<()> {
             finish("bwrap", &backend, invocation, &request, policy.dry_run)
         }
     }
+}
+
+/// The base system one invocation runs on.
+///
+/// Configuration states the list, a template adds what its command requires,
+/// and the command line has the last word — the same precedence the mount and
+/// network policy already follow. A template may ask for a capability but
+/// never defines one: what a capability *means* on this host is the
+/// configuration's business, so a template cannot quietly widen the root.
+fn effective_base(
+    config: &Config,
+    template: Option<&driva::TemplateConfig>,
+    policy: &PolicyArgs,
+) -> driva::BaseConfig {
+    let mut base = config.base();
+    if policy.no_base {
+        base.include.clear();
+        return base;
+    }
+    for name in template.iter().flat_map(|value| value.capabilities.iter()) {
+        base.include(name);
+    }
+    for name in &policy.capabilities {
+        base.include(name);
+    }
+    for name in &policy.no_capabilities {
+        base.exclude(name);
+    }
+    base
+}
+
+/// List the capabilities available here, marking the ones the effective base
+/// includes and in what order they are laid down.
+fn capabilities_command(config: &Config) -> Result<()> {
+    let base = config.base();
+    for (name, capability) in &base.definitions {
+        let position = base.include.iter().position(|included| included == name);
+        let marker = match position {
+            Some(index) => format!("{}", index + 1),
+            None => "-".to_owned(),
+        };
+        println!("{marker}\t{name}\t{}", capability.description);
+    }
+    Ok(())
+}
+
+/// Report whether each included capability works on this host.
+///
+/// A capability is a claim about where this machine keeps something, and the
+/// only honest test of a claim is to build a sandbox from it and use it. The
+/// exit status is non-zero when a probe fails, so this is usable as a check.
+fn doctor_command(config: &Config, policy: &PolicyArgs) -> Result<()> {
+    let declared = effective_base(config, None, policy);
+    let base = driva::resolve_base(&declared)?;
+    let executable = &config.isolation.bwrap.executable;
+    let mut failed = false;
+    for capability in &base.capabilities {
+        let outcome = driva::probe::probe_capability(executable, &declared, capability)?;
+        println!(
+            "{:<14} {:<9} {} path(s){}",
+            capability.name,
+            outcome.label(),
+            capability.entries.len(),
+            match capability.environment.len() {
+                0 => String::new(),
+                count => format!(", {count} forwarded variable(s)"),
+            }
+        );
+        for entry in &capability.entries {
+            match entry {
+                driva::RuntimeEntry::ReadOnly { source, path } if source != path => {
+                    println!("               {} → {}", path.display(), source.display())
+                }
+                entry => println!("               {}", entry.path().display()),
+            }
+        }
+        match outcome {
+            driva::probe::ProbeOutcome::Failed(reason) => {
+                failed = true;
+                println!("               probe: {reason}");
+                let suggestions = driva::probe::suggestions(&base, capability);
+                if !suggestions.is_empty() {
+                    println!(
+                        "               this host also has {}, which no capability carries.",
+                        suggestions
+                            .iter()
+                            .map(|path| path.display().to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
+                    println!(
+                        "               add it with:\n\
+                         \x20                [capability.{}]\n\
+                         \x20                path = [{}]",
+                        capability.name,
+                        suggestions
+                            .iter()
+                            .map(|path| format!("{{ at = \"{}\" }}", path.display()))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
+                }
+            }
+            driva::probe::ProbeOutcome::Unprobed(reason) => {
+                println!("               probe: not made ({reason})")
+            }
+            driva::probe::ProbeOutcome::Passed | driva::probe::ProbeOutcome::None => {}
+        }
+    }
+    if failed {
+        bail!("a capability of the sandbox base does not work on this host");
+    }
+    Ok(())
 }
 
 fn resolve_backend(

@@ -302,6 +302,7 @@ mod tests {
         let backend = BwrapIsolation {
             executable: "bwrap".into(),
             rootfs: Some(rootfs.clone()),
+            base: driva::BaseConfig::default(),
         };
 
         backend.command(&request).unwrap();

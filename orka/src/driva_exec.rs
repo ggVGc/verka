@@ -41,6 +41,9 @@ impl DrivaExecutor {
             backend: Box::new(driva::BwrapIsolation {
                 executable: executable.into(),
                 rootfs: Some(rootfs.into()),
+                // Orka runs on a prepared rootfs, which brings its own system;
+                // the base applies to a private root only.
+                base: driva::BaseConfig::empty(),
             }),
             temporary_mounts,
         }

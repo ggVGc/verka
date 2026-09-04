@@ -1,0 +1,25 @@
+description = "Resolve host names, for a sandbox that is permitted a network"
+
+# `/etc/resolv.conf` is where a host keeps a pointer, not always an answer:
+# on a systemd host it is a link into `/run/systemd/resolve`, or a stub with
+# no nameserver at all while `nsswitch.conf` sends the lookup to a socket
+# there. The default `auto` mode follows a link that leads out of the base,
+# and the resolver directory is carried for the socket.
+path = [
+  { at = "/etc/resolv.conf" },
+  { at = "/etc/nsswitch.conf", optional = true },
+  { at = "/etc/hosts", optional = true },
+  { at = "/etc/services", optional = true },
+  { at = "/etc/protocols", optional = true },
+  { at = "/run/systemd/resolve", optional = true },
+]
+
+probe = { resolve = "one.one.one.one" }
+
+suggest = [
+  "/run/systemd/resolve",
+  "/run/NetworkManager",
+  "/run/connman",
+  "/run/resolvconf",
+  "/run/dbus/system_bus_socket",
+]

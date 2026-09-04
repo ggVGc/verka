@@ -1,0 +1,22 @@
+description = "Run a program at all: the host's loader, libraries, and tools"
+
+# `/usr` and `/bin` are the two paths no Linux host is without — one of them
+# usually a symlink to the other. Everything else here is layout that varies,
+# and the probe is what says whether the result can actually run something.
+path = [
+  { at = "/usr" },
+  { at = "/bin" },
+  { at = "/sbin", optional = true },
+  { at = "/lib", optional = true },
+  { at = "/lib64", optional = true },
+  { at = "/nix/store", optional = true },
+  { at = "/gnu/store", optional = true },
+  { at = "/etc/ld.so.cache", optional = true },
+  { at = "/etc/ld.so.conf", optional = true },
+  { at = "/etc/ld.so.conf.d", optional = true },
+  { at = "/etc/alternatives", optional = true },
+]
+
+probe = { run = ["/bin/sh", "-c", "exit 0"] }
+
+suggest = ["/nix/store", "/gnu/store", "/opt", "/usr/local/lib"]

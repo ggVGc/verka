@@ -97,10 +97,11 @@ pub use client::Client;
 pub use daemon::{in_process, run, serve_if_requested, ServerConfig};
 pub use protocol::WorkspaceLaunchChange;
 pub use protocol::{
-    Answer, AnswerValue, AttributedMount, Contract, Direction, DrivaOptions, FileLocation,
-    InteractionActivity, InteractionEnd, InteractionSummary, InteractionUpdate, LaunchMount,
-    LaunchPolicy, LoadedInteraction, LogEntry, LogLevel, MountOrigin, QueuedMessage, QuotaEvent,
-    QuotaStatus, RawLine, SessionOrigin, SessionSummary, TemplateSummary, WorkspaceSummary,
+    Answer, AnswerValue, AttributedMount, BaseCapability, BaseEntry, Contract, Direction,
+    DrivaOptions, FileLocation, InteractionActivity, InteractionEnd, InteractionSummary,
+    InteractionUpdate, LaunchMount, LaunchPolicy, LoadedInteraction, LogEntry, LogLevel,
+    MountOrigin, QueuedMessage, QuotaEvent, QuotaStatus, RawLine, SessionOrigin, SessionSummary,
+    TemplateSummary, WorkspaceSummary,
 };
 pub use spawn::ensure_server;
 

@@ -17,8 +17,8 @@ use crate::agent::{MountSpec, Profile, Selection};
 use crate::event::{decode_line, AgentEvent};
 use crate::journal::Journal;
 use crate::protocol::{
-    AttributedMount, Direction, DrivaOptions, InteractionEnd, InteractionUpdate, LogEntry,
-    MountOrigin, RawLine,
+    AttributedMount, BaseCapability, BaseEntry, Direction, DrivaOptions, InteractionEnd,
+    InteractionUpdate, LogEntry, MountOrigin, RawLine,
 };
 use anyhow::{Context, Result};
 use driva::{
@@ -76,6 +76,11 @@ pub struct InteractionSpec {
     /// Hidden launcher and control mount used to keep an interactive tmux
     /// shell in the exact sandbox that runs the agent.
     pub broker: Option<SandboxBroker>,
+    /// The base system the sandbox's private root is built from: the
+    /// Workspace's `driva.toml` capabilities, plus whatever the selected
+    /// templates require. Declarative — it resolves against the host when the
+    /// launch is captured and again when Bubblewrap is invoked.
+    pub base: driva::BaseConfig,
 }
 
 pub struct SandboxBroker {
@@ -93,10 +98,16 @@ pub struct ResolvedTemplate {
     pub mounts: Vec<Mount>,
     pub environment: BTreeMap<OsString, OsString>,
     pub network: bool,
+    /// Base capabilities this template's command requires. A template states
+    /// what it needs; only the Workspace's configuration says what that means
+    /// on this host, so selecting one can add a capability but never define a
+    /// new host path by itself.
+    pub capabilities: Vec<String>,
 }
 
 impl ResolvedTemplate {
     pub fn resolve(template: driva::TemplateConfig) -> Result<Self> {
+        let capabilities = template.capabilities.clone();
         let mut mounts: Vec<Mount> = template
             .mounts
             .into_iter()
@@ -116,6 +127,7 @@ impl ResolvedTemplate {
             mounts,
             environment,
             network: template.network.unwrap_or(false),
+            capabilities,
         })
     }
 }
@@ -129,18 +141,13 @@ impl DrivaOptions {
     /// is the same thing that would stop the launch itself.
     pub fn capture(spec: &InteractionSpec, isolation_backend: impl Into<String>) -> Result<Self> {
         let request = build_request(spec);
-        let system_runtime = driva::host_runtime()
-            .context("resolving Driva's host system runtime")?
-            .into_iter()
-            .map(|entry| entry.path().to_path_buf())
-            .collect();
         Ok(Self {
             isolation_backend: isolation_backend.into(),
             command: spec.profile.command.clone(),
             working_directory: request.working_directory,
             network: request.network,
             mounts: attributed_mounts(spec),
-            system_runtime,
+            base: captured_base(&spec.base)?,
         })
     }
 }
@@ -634,6 +641,43 @@ fn apply_appserver_actions(
     }
 }
 
+/// The declared base, resolved against this host for reporting.
+///
+/// Resolution is the same call Bubblewrap makes when the sandbox is built, so
+/// what an operator is shown is what the private root will hold — and a base
+/// this host cannot satisfy is an error here, while the launch is being
+/// planned, rather than a sandbox missing part of its floor.
+fn captured_base(config: &driva::BaseConfig) -> Result<Vec<BaseCapability>> {
+    Ok(driva::resolve_base(config)
+        .context("resolving the sandbox base for this host")?
+        .capabilities
+        .into_iter()
+        .map(|capability| BaseCapability {
+            name: capability.name,
+            description: capability.description,
+            entries: capability
+                .entries
+                .iter()
+                .map(|entry| match entry {
+                    driva::RuntimeEntry::ReadOnly { source, path } => BaseEntry {
+                        path: path.clone(),
+                        source: (source != path).then(|| source.clone()),
+                    },
+                    driva::RuntimeEntry::Symlink { target, path } => BaseEntry {
+                        path: path.clone(),
+                        source: Some(target.clone()),
+                    },
+                })
+                .collect(),
+            environment: capability
+                .environment
+                .iter()
+                .map(|name| name.to_string_lossy().into_owned())
+                .collect(),
+        })
+        .collect())
+}
+
 /// Every mount the sandbox will hold, each carrying the layer that asked for
 /// it. This is the one place the effective mount list is assembled — the
 /// request Driva executes takes the same list with the attribution dropped —
@@ -927,6 +971,7 @@ mod tests {
             repository_mounts: Vec::new(),
             automatic_mounts: Vec::new(),
             tooling_mounts: Vec::new(),
+            base: driva::BaseConfig::default(),
             dynamic_tools: Vec::new(),
             temporary_mounts: Vec::new(),
             extra_mounts: Vec::new(),
@@ -1385,26 +1430,51 @@ mod tests {
         )));
     }
 
-    /// What the private root carries is reported alongside the mounts. It is
-    /// the rest of the answer to "what can this agent reach", and it is only
-    /// the host's system runtime — the operator's home is not in it.
+    /// What the private root carries is reported alongside the mounts, grouped
+    /// by the capability that asked for it. It is the rest of the answer to
+    /// "what can this agent reach", and none of it is the operator's home.
     #[test]
-    fn the_captured_policy_states_the_private_root_it_runs_on() {
+    fn the_captured_policy_states_the_base_it_runs_on() {
         let dir = PathBuf::from("/tmp/styra/workspace");
         let options = DrivaOptions::capture(&workspace_spec(&dir), "bwrap").unwrap();
 
-        assert_eq!(
-            options.system_runtime,
-            driva::host_runtime()
-                .unwrap()
-                .into_iter()
-                .map(|entry| entry.path().to_path_buf())
-                .collect::<Vec<_>>()
-        );
+        let names: Vec<&str> = options
+            .base
+            .iter()
+            .map(|capability| capability.name.as_str())
+            .collect();
+        assert!(names.contains(&"core"), "{names:?}");
+        assert!(names.contains(&"dns"), "{names:?}");
         let home = std::env::var_os("HOME").map(PathBuf::from);
         assert!(options
-            .system_runtime
+            .base
             .iter()
-            .all(|path| Some(path) != home.as_ref()));
+            .flat_map(|capability| capability.entries.iter())
+            .all(|entry| !home
+                .as_ref()
+                .is_some_and(|home| entry.path.starts_with(home))));
+    }
+
+    /// A capability a template requires reaches the base the launch runs on,
+    /// so a template can state what its command needs without the Workspace
+    /// having to know.
+    #[test]
+    fn a_template_requirement_reaches_the_captured_base() {
+        let dir = PathBuf::from("/tmp/styra/workspace");
+        let mut spec = workspace_spec(&dir);
+        spec.base.include.retain(|name| name == "core");
+        let before = DrivaOptions::capture(&spec, "bwrap").unwrap();
+        assert_eq!(before.base.len(), 1);
+
+        spec.base.include("timezone");
+        let after = DrivaOptions::capture(&spec, "bwrap").unwrap();
+        assert_eq!(
+            after
+                .base
+                .iter()
+                .map(|capability| capability.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["core", "timezone"]
+        );
     }
 }

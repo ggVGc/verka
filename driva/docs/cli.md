@@ -20,11 +20,13 @@ Run a command with explicit, deny-by-default isolation
 Usage: driva [OPTIONS] <COMMAND>
 
 Commands:
-  run        Run a command in a disposable isolated environment
-  shell      Open /bin/sh in a disposable isolated environment
-  templates  List built-in and project-defined execution templates
-  runtime    Manage prepared read-only runtimes for Bubblewrap templates
-  help       Print this message or the help of the given subcommand(s)
+  run           Run a command in a disposable isolated environment
+  shell         Open /bin/sh in a disposable isolated environment
+  templates     List built-in and project-defined execution templates
+  capabilities  List the base capabilities a private root can be built from, and which of them this configuration includes
+  doctor        Report whether each included capability works on this host, by building a sandbox from it and probing it
+  runtime       Manage prepared read-only runtimes for Bubblewrap templates
+  help          Print this message or the help of the given subcommand(s)
 
 Options:
       --config <CONFIG>  Configuration file (defaults to ./driva.toml when present)
@@ -70,6 +72,9 @@ Options:
       --no-write               Make every host mount read-only, overriding configuration and templates
       --overlay-writes         Turn writable host mounts into overlays: the sandbox reads the host content and can write to it, but writes are discarded and never reach the host
       --path <DIRECTORY>       Add a host directory read-only and prepend it to the isolated PATH
+      --capability <NAME>      Add a base capability to the private root; may be repeated (see `driva capabilities`)
+      --no-capability <NAME>   Leave a base capability out, overriding configuration and templates
+      --no-base                Build the private root with no base at all: an empty filesystem holding only what is mounted into it
       --backend <BACKEND>      Select the isolation backend
       --network                Permit networking (disabled otherwise)
       --no-network             Disable networking, overriding configuration and templates
@@ -171,6 +176,74 @@ When a template is selected and the effective configuration does not set
 Bubblewrap also inherits `TERM` from the host when the effective configuration
 does not set it. An explicit project, template, or `--env` value takes
 precedence.
+
+### The base system
+
+A private root starts as an empty filesystem, so nothing runs in it until the
+host's loader, libraries, and system files are there. That floor is the *base*,
+and it is built from named capabilities rather than one fixed list of paths,
+because where a host keeps its resolver or its certificates differs from
+machine to machine while what a sandbox needs does not.
+
+List them, and see which ones the effective base includes and in what order:
+
+```console
+$ driva capabilities
+3	certificates	Verify TLS certificates, and reach a network through a proxy
+1	core	Run a program at all: the host's loader, libraries, and tools
+4	dns	Resolve host names, for a sandbox that is permitted a network
+2	identity	Resolve users and groups, so a program can name who it runs as
+5	timezone	Report local time as the host does
+```
+
+`--capability NAME` adds one to an invocation, `--no-capability NAME` leaves
+one out, and `--no-base` builds a root holding only what is mounted into it. A
+project states the standing list in `driva.toml`, and defines what a capability
+means on this host when the built-in definition is wrong for it:
+
+```toml
+[base]
+include = ["core", "identity", "certificates", "dns"]
+
+[capability.dns]
+description = "Resolve host names"
+path = [
+  { at = "/etc/resolv.conf" },              # `auto`: a link out of the base is followed
+  { at = "/etc/nsswitch.conf", optional = true },
+  { at = "/run/my-resolver", optional = true },
+]
+probe = { resolve = "one.one.one.one" }
+```
+
+A path that is not `optional` and not on the host fails the launch, naming the
+capability, rather than producing a sandbox quietly missing part of its floor.
+Each entry may set `mode` to `auto` (the default: recreate a host symlink while
+it still lands inside the base, follow it when it would not), `bind`, `symlink`,
+or `follow`. A capability may also name host environment variables to forward
+when they are set — a proxy, an overridden certificate bundle — which a
+template or `--env` still overrides.
+
+Whether the result works on *this* host is a question only the host can answer,
+so `driva doctor` builds a sandbox from each capability and uses it:
+
+```text
+$ driva doctor
+core           ok        6 path(s)
+               /usr
+               ...
+dns            FAILED    2 path(s)
+               /etc/resolv.conf
+               /etc/nsswitch.conf
+               probe: resolving one.one.one.one: failed to lookup address information
+               this host also has /run/systemd/resolve, which no capability carries.
+               add it with:
+                 [capability.dns]
+                 path = [{ at = "/run/systemd/resolve" }]
+```
+
+The exit status is non-zero when a probe fails, so it doubles as a check. A
+suggestion is only ever printed: what to do about it is configuration the
+operator writes, never a path Driva adds to a sandbox by itself.
 
 ### Execution templates
 
@@ -369,6 +442,9 @@ Options:
       --no-write               Make every host mount read-only, overriding configuration and templates
       --overlay-writes         Turn writable host mounts into overlays: the sandbox reads the host content and can write to it, but writes are discarded and never reach the host
       --path <DIRECTORY>       Add a host directory read-only and prepend it to the isolated PATH
+      --capability <NAME>      Add a base capability to the private root; may be repeated (see `driva capabilities`)
+      --no-capability <NAME>   Leave a base capability out, overriding configuration and templates
+      --no-base                Build the private root with no base at all: an empty filesystem holding only what is mounted into it
       --backend <BACKEND>      Select the isolation backend
       --network                Permit networking (disabled otherwise)
       --no-network             Disable networking, overriding configuration and templates

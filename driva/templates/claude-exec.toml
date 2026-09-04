@@ -5,8 +5,13 @@ backend = "bwrap"
 network = true
 interactive = false
 
+# The agent talks to a service over TLS, so the sandbox base has to be able
+# to resolve a name and verify a certificate wherever it runs.
+capability = ["dns", "certificates"]
+
 [environment]
 DISABLE_AUTOUPDATER = "1"
+
 
 [[mount]]
 source = "~/.local/share"

@@ -124,10 +124,13 @@ interaction that asks for nothing runs under exactly the Workspace's policy; `I`
 makes one ignore it entirely, which is how a single interaction drops a grant the
 Workspace makes.
 
-Sessions run on Driva's private root: the host system runtime read-only and
-nothing else — no host root, no home. The details view lists it under the
-mounts, so the two together are the whole of what a session can reach. The
-agent binary and `tmux` are mounts like everything else, shown as `host
+Sessions run on Driva's private root: the base system read-only and nothing
+else — no host root, no home. The details view lists it under the mounts,
+grouped by the capability that asked for each part, so the two together are the
+whole of what a session can reach. The Workspace's `driva.toml` chooses those
+capabilities and says what they mean on this host (`driva doctor` reports
+whether each works); a selected template adds the ones its command requires.
+The agent binary and `tmux` are mounts like everything else, shown as `host
 tooling`; state a session needs beyond that (a git identity, a toolchain) is
 granted as a mount or a template.
 

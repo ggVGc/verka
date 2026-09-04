@@ -1,8 +1,8 @@
 //! The host executables a launch has to run, as mounts an operator can see.
 //!
-//! A Styra sandbox is Driva's private root: a tmpfs carrying the host system
-//! runtime read-only ([`driva::host_runtime`]) and nothing else. An agent
-//! installed outside that runtime — `~/.local/bin/claude`, a toolchain under
+//! A Styra sandbox is Driva's private root: a tmpfs carrying the base system
+//! read-only (see [`driva::base`]) and nothing else. An agent installed
+//! outside that base — `~/.local/bin/claude`, a toolchain under
 //! `~/.local/share` — is simply not there unless the launch puts it there, and
 //! the rule is that everything the sandbox holds is a mount, attributed to the
 //! layer that asked for it. So the launch names the executables it needs and
@@ -23,8 +23,12 @@ use std::path::{Path, PathBuf};
 /// has to exist inside the sandbox, and the file it resolves to has to exist
 /// at its own path too, so a tool that locates its runtime relative to where
 /// it really lives still finds it.
-pub fn executable_mounts(executables: &[PathBuf]) -> Result<Vec<MountSpec>> {
-    let runtime = driva::host_runtime().context("resolving Driva's host system runtime")?;
+pub fn executable_mounts(
+    executables: &[PathBuf],
+    base: &driva::BaseConfig,
+) -> Result<Vec<MountSpec>> {
+    let base = driva::resolve_base(base).context("resolving the sandbox base for this host")?;
+    let runtime: Vec<RuntimeEntry> = base.entries().cloned().collect();
     let mut mounts: Vec<MountSpec> = Vec::new();
     for executable in executables {
         let resolved = executable.canonicalize().with_context(|| {
@@ -103,7 +107,11 @@ mod tests {
         std::fs::write(&installed, b"#!/bin/sh\n").expect("write agent");
         std::os::unix::fs::symlink(&installed, &launcher).expect("link agent");
 
-        let mounts = executable_mounts(&[launcher.clone(), launcher.clone()]).expect("mounts");
+        let mounts = executable_mounts(
+            &[launcher.clone(), launcher.clone()],
+            &driva::BaseConfig::default(),
+        )
+        .expect("mounts");
 
         let destinations: Vec<&Path> = mounts
             .iter()
@@ -125,6 +133,6 @@ mod tests {
     #[test]
     fn a_missing_executable_is_an_error() {
         let missing = PathBuf::from("/nonexistent/styra/agent");
-        assert!(executable_mounts(&[missing]).is_err());
+        assert!(executable_mounts(&[missing], &driva::BaseConfig::default()).is_err());
     }
 }

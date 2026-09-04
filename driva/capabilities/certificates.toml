@@ -1,0 +1,39 @@
+description = "Verify TLS certificates, and reach a network through a proxy"
+
+path = [
+  { at = "/etc/ssl", optional = true },
+  { at = "/etc/pki", optional = true },
+  { at = "/etc/ca-certificates", optional = true },
+  { at = "/usr/local/share/ca-certificates", optional = true },
+]
+
+# A private certificate bundle and a proxy are configuration a program cannot
+# find on disk by itself. They are part of this capability on the hosts that
+# have them, and absent everywhere else.
+environment = [
+  "SSL_CERT_FILE",
+  "SSL_CERT_DIR",
+  "CURL_CA_BUNDLE",
+  "REQUESTS_CA_BUNDLE",
+  "NODE_EXTRA_CA_CERTS",
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "ALL_PROXY",
+  "NO_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "all_proxy",
+  "no_proxy",
+]
+
+# Verifying a certificate needs a client that verifies certificates. Where the
+# host has none, the check is reported as not made rather than as a failure.
+probe = { run = ["/usr/bin/curl", "-sS", "-o", "/dev/null", "https://example.com"] }
+
+suggest = [
+  "/etc/ssl/certs",
+  "/etc/pki/tls",
+  "/etc/ca-certificates",
+  "/usr/local/share/ca-certificates",
+  "/var/lib/ca-certificates",
+]

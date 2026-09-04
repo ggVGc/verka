@@ -1,0 +1,6 @@
+description = "Report local time as the host does"
+
+# The zone data itself lives under `/usr`, which `core` already carries.
+path = [{ at = "/etc/localtime", optional = true }]
+
+environment = ["TZ"]
