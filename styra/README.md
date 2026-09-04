@@ -17,6 +17,9 @@ by an operator rather than run to completion against a Linka node.
 See [`DESIGN.md`](DESIGN.md) for the architecture and [`TASKS.md`](TASKS.md) for
 the implementation plan.
 
+For a compact operational reference covering every CLI option, view, and
+keyboard feature, see [`USER_GUIDE.md`](USER_GUIDE.md).
+
 ## Usage
 
 Start the server:
