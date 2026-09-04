@@ -405,10 +405,6 @@ impl Launch {
 /// grant came from is still worth reading.
 pub fn toggle_scope(app: &mut App) {
     app.launch.scope = app.launch.scope.other();
-    app.show_action_message(match app.launch.scope {
-        LaunchScope::Workspace => "editing the Workspace policy — every launch here starts from it",
-        LaunchScope::Interaction => "editing this interaction's own settings",
-    });
 }
 
 /// Permit or forbid agent networking, for whichever layer is being edited.
@@ -711,6 +707,17 @@ mod tests {
         cycle_network(&mut app);
         assert_eq!(app.launch.interaction.network, None);
         assert!(app.launch.effective().grants_network());
+    }
+
+    #[test]
+    fn moving_between_policy_layers_is_silent() {
+        let mut app = pending_in_a_workspace_with_a_policy();
+
+        toggle_scope(&mut app);
+        assert_eq!(app.launch.scope, LaunchScope::Workspace);
+        toggle_scope(&mut app);
+        assert_eq!(app.launch.scope, LaunchScope::Interaction);
+        assert!(app.notices.is_empty());
     }
 
     /// A mount the Workspace already grants identically needs no overlay, and
