@@ -445,6 +445,7 @@ impl ServerState {
         // missing tmux or broker executable cannot leave an empty journal.
         let tmux = genta::agent::resolve_executable(Path::new("tmux"))
             .context("tmux is required for Styra session shells")?;
+        let tooling_mounts = tooling_mounts(&profile, &tmux)?;
         let (journal, id) = Journal::create_in_workspace(
             &self.inner.store_root,
             &request.workspace_id,
@@ -468,13 +469,14 @@ impl ServerState {
             },
             repository_mounts,
             automatic_mounts,
+            tooling_mounts,
             temporary_mounts: Vec::new(),
             extra_mounts,
             dynamic_tools,
             template,
             broker: Some(self.prepare_broker(&id, tmux)?),
         };
-        let driva = DrivaOptions::capture(&spec, "bwrap");
+        let driva = DrivaOptions::capture(&spec, "bwrap")?;
         let prepared_broker = spec.broker.as_ref().expect("broker was prepared");
         let shell = ShellInfo {
             tmux: prepared_broker.tmux.clone(),
@@ -491,7 +493,7 @@ impl ServerState {
         }
         let backend = Box::new(driva::BwrapIsolation {
             executable: "bwrap".into(),
-            rootfs: Some(PathBuf::from("/")),
+            rootfs: None,
         });
         let (interaction, receiver) =
             match Interaction::spawn(spec, backend, journal, id.clone(), diagnostics) {
@@ -716,6 +718,7 @@ impl ServerState {
         let extra_mounts = resolve_launch_mounts(&launch.mounts)?;
         let tmux = genta::agent::resolve_executable(Path::new("tmux"))
             .context("tmux is required for Styra session shells")?;
+        let tooling_mounts = tooling_mounts(&profile, &tmux)?;
         let spec = InteractionSpec {
             profile,
             resume_provider_session_id: None,
@@ -727,13 +730,14 @@ impl ServerState {
             },
             repository_mounts,
             automatic_mounts,
+            tooling_mounts,
             temporary_mounts: Vec::new(),
             extra_mounts,
             dynamic_tools,
             template,
             broker: Some(self.describe_broker(PENDING_SESSION_ID, tmux)),
         };
-        let options = DrivaOptions::capture(&spec, "bwrap");
+        let options = DrivaOptions::capture(&spec, "bwrap")?;
         // Planning is also where a policy gets checked: an operator editing
         // mounts before launch learns that two of them collide now, from the
         // view they are editing, rather than from a failed launch later.
@@ -804,6 +808,7 @@ impl ServerState {
 
         let tmux = genta::agent::resolve_executable(Path::new("tmux"))
             .context("tmux is required for Styra session shells")?;
+        let tooling_mounts = tooling_mounts(&profile, &tmux)?;
         // Seed the live update stream before the provider starts. Clients
         // attaching from cursor zero then receive the stored conversation and
         // all subsequent native-resume traffic as one sequence. The client
@@ -825,13 +830,14 @@ impl ServerState {
             },
             repository_mounts,
             automatic_mounts,
+            tooling_mounts,
             temporary_mounts: Vec::new(),
             extra_mounts,
             dynamic_tools,
             template,
             broker: Some(self.prepare_broker(&request.id, tmux)?),
         };
-        let driva = DrivaOptions::capture(&spec, "bwrap");
+        let driva = DrivaOptions::capture(&spec, "bwrap")?;
         let prepared_broker = spec.broker.as_ref().expect("broker was prepared");
         let shell = ShellInfo {
             tmux: prepared_broker.tmux.clone(),
@@ -845,7 +851,7 @@ impl ServerState {
         }
         let backend = Box::new(driva::BwrapIsolation {
             executable: "bwrap".into(),
-            rootfs: Some(PathBuf::from("/")),
+            rootfs: None,
         });
         let (interaction, receiver) =
             Interaction::spawn(spec, backend, journal, request.id.clone(), diagnostics)?;
@@ -1790,6 +1796,22 @@ fn resolve_launch_mounts(mounts: &[LaunchMount]) -> Result<Vec<MountSpec>> {
         .collect()
 }
 
+/// The host executables one launch has to run, as read-only mounts.
+///
+/// Styra launches into Driva's private root, which carries the host system
+/// runtime and nothing else — no host home, and no `/` passthrough. An agent
+/// installed outside that runtime, and the `tmux` behind the session shell,
+/// therefore have to be named as mounts like anything else the sandbox holds.
+/// Deriving them here, from the profile that is about to be launched, keeps
+/// each grant tied to the command it exists for.
+fn tooling_mounts(profile: &genta::agent::Profile, tmux: &Path) -> Result<Vec<MountSpec>> {
+    let agent = profile
+        .command
+        .first()
+        .context("the agent profile names no executable")?;
+    crate::tooling::executable_mounts(&[PathBuf::from(agent), tmux.to_path_buf()])
+}
+
 /// Reject a policy that binds two things at the same place inside the sandbox.
 ///
 /// Driva itself refuses this when it validates the request, but that is at
@@ -2161,6 +2183,7 @@ mod tests {
             command: vec!["codex".into()],
             working_directory: PathBuf::from("/tmp/styra/workspace"),
             network: false,
+            system_runtime: Vec::new(),
             mounts: vec![
                 AttributedMount {
                     origin: MountOrigin::Workspace,

@@ -249,6 +249,16 @@ pub struct DrivaOptions {
     pub working_directory: PathBuf,
     pub network: bool,
     pub mounts: Vec<AttributedMount>,
+    /// The host system paths the sandbox's private root carries, read-only,
+    /// before any mount is laid on top: Driva's own base filesystem
+    /// ([`driva::host_runtime`]).
+    ///
+    /// These are not mounts anyone asked for and none of them can be taken
+    /// back, but leaving them out would make the mount list read as the whole
+    /// of what the agent can reach when it is not. A client that predates the
+    /// field shows the mounts alone, as it always did.
+    #[serde(default)]
+    pub system_runtime: Vec<PathBuf>,
 }
 
 impl DrivaOptions {
@@ -283,6 +293,9 @@ pub enum MountOrigin {
     Profile,
     /// Granted by one of the selected Driva templates.
     Template,
+    /// A host executable the launch has to run — the agent itself, or the
+    /// `tmux` the session shell needs — that the private root does not carry.
+    Tooling,
     /// Asked for by hand, through the launch policy's mount key.
     Operator,
     /// The hidden control mount the sandbox broker needs for its tmux shell.
@@ -298,6 +311,7 @@ impl MountOrigin {
             Self::Scratch => "scratch",
             Self::Profile => "agent profile",
             Self::Template => "templates",
+            Self::Tooling => "host tooling",
             Self::Operator => "your mounts",
             Self::Broker => "broker control",
         }

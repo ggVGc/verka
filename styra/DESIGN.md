@@ -161,6 +161,27 @@ profile: a writable workspace mount, a
 writable agent-auth mount, networking enabled for the agent, and everything else
 denied. Styra does not invent new isolation concepts; it selects Driva policy.
 
+Sessions launch into Driva's **private root**: a tmpfs carrying the host system
+runtime read-only (`driva::host_runtime` — `/usr`, `/bin`, the handful of `/etc`
+files a program needs to resolve users, certificates, and DNS) and nothing else.
+No host root is passed through, so the operator's home is not in the sandbox at
+all, and the mount list is the whole of what a session can reach. Anything the
+agent needs from outside that runtime is a mount someone asked for and can see:
+the workspace, the Git metadata, the profile's own state directory, a template,
+or the operator's own grant.
+
+That includes the executables. An agent installed outside the system runtime
+(`~/.local/bin/claude`), and the `tmux` behind the session shell, are bound
+read-only at their host paths under the `host tooling` layer, resolved from the
+profile that is about to be launched (`styra_server::tooling`). A launcher
+symlink is bound at both the path the command names and the path it resolves
+to, so a tool that finds its runtime next to its real location still works.
+
+Nothing that is not named this way is there. A host `~/.gitconfig`, for
+instance, is not mounted, so an agent that commits inside the sandbox needs the
+identity granted like any other capability — a mount in the launch policy, or
+git configuration inside the workspace itself.
+
 A Styra Workspace is a durable canonical host directory, so its writable mount
 and working directory keep that same path inside the sandbox. This preserves
 absolute-path tooling and makes provider session state stable for that project.

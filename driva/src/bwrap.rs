@@ -310,47 +310,89 @@ fn append_mounts(command: &mut Command, mounts: &BwrapMountPlan) {
     }
 }
 
-/// Construct a useful base filesystem without exposing the host root, home,
-/// current directory, or other data paths. The small set of conventional
-/// system paths is enough to run the host's `/bin/sh` and normal OS tools.
+/// The conventional system paths a private root exposes, in the order they are
+/// laid down. Enough to run the host's `/bin/sh` and normal OS tools, and
+/// deliberately nothing else: no host root, home, current directory, or other
+/// data path appears here.
+const HOST_RUNTIME_PATHS: [&str; 20] = [
+    "/usr",
+    "/bin",
+    "/sbin",
+    "/lib",
+    "/lib64",
+    "/etc/alternatives",
+    "/etc/ca-certificates",
+    "/etc/group",
+    "/etc/hosts",
+    "/etc/ld.so.cache",
+    "/etc/ld.so.conf",
+    "/etc/ld.so.conf.d",
+    "/etc/localtime",
+    "/etc/nsswitch.conf",
+    "/etc/passwd",
+    "/etc/pki",
+    "/etc/protocols",
+    "/etc/resolv.conf",
+    "/etc/services",
+    "/etc/ssl",
+];
+
+/// One element of the base filesystem a private root is built from.
+///
+/// A caller that wants to *state* what its sandboxes hold reads these rather
+/// than re-deriving the list, so what is shown and what is bound cannot drift.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RuntimeEntry {
+    /// A host path bound read-only at that same path inside the isolation.
+    ReadOnly(PathBuf),
+    /// A symlink the host keeps at that path, recreated rather than followed,
+    /// so a distro that points `/bin` at `usr/bin` keeps working.
+    Symlink { target: PathBuf, path: PathBuf },
+}
+
+impl RuntimeEntry {
+    /// Where this entry lands inside the isolation.
+    pub fn path(&self) -> &Path {
+        match self {
+            Self::ReadOnly(path) | Self::Symlink { path, .. } => path,
+        }
+    }
+}
+
+/// The host system runtime a private root exposes on this machine: the subset
+/// of [`HOST_RUNTIME_PATHS`] that exists here, each resolved to how it will be
+/// laid down. Paths absent from the host are absent from the list.
+pub fn host_runtime() -> Result<Vec<RuntimeEntry>> {
+    let mut entries = Vec::new();
+    for path in HOST_RUNTIME_PATHS {
+        if let Some(entry) = runtime_entry(Path::new(path))? {
+            entries.push(entry);
+        }
+    }
+    Ok(entries)
+}
+
+/// Construct a useful base filesystem out of [`host_runtime`], on a tmpfs root
+/// that starts empty.
 fn append_host_runtime(command: &mut Command) -> Result<()> {
     command.arg("--tmpfs").arg("/");
-
-    for path in [
-        "/usr",
-        "/bin",
-        "/sbin",
-        "/lib",
-        "/lib64"
-    ] {
-        append_runtime_path(command, Path::new(path))?;
-    }
-    for path in [
-        "/etc/alternatives",
-        "/etc/ca-certificates",
-        "/etc/group",
-        "/etc/hosts",
-        "/etc/ld.so.cache",
-        "/etc/ld.so.conf",
-        "/etc/ld.so.conf.d",
-        "/etc/localtime",
-        "/etc/nsswitch.conf",
-        "/etc/passwd",
-        "/etc/pki",
-        "/etc/protocols",
-        "/etc/resolv.conf",
-        "/etc/services",
-        "/etc/ssl",
-    ] {
-        append_runtime_path(command, Path::new(path))?;
+    for entry in host_runtime()? {
+        match entry {
+            RuntimeEntry::ReadOnly(path) => {
+                command.arg("--ro-bind").arg(&path).arg(&path);
+            }
+            RuntimeEntry::Symlink { target, path } => {
+                command.arg("--symlink").arg(target).arg(path);
+            }
+        }
     }
     Ok(())
 }
 
-fn append_runtime_path(command: &mut Command, path: &Path) -> Result<()> {
+fn runtime_entry(path: &Path) -> Result<Option<RuntimeEntry>> {
     let metadata = match std::fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => {
             return Err(error)
                 .with_context(|| format!("failed to inspect host runtime path {}", path.display()))
@@ -359,11 +401,13 @@ fn append_runtime_path(command: &mut Command, path: &Path) -> Result<()> {
     if metadata.file_type().is_symlink() {
         let target = std::fs::read_link(path)
             .with_context(|| format!("failed to read host runtime link {}", path.display()))?;
-        command.arg("--symlink").arg(target).arg(path);
+        Ok(Some(RuntimeEntry::Symlink {
+            target,
+            path: path.to_path_buf(),
+        }))
     } else {
-        command.arg("--ro-bind").arg(path).arg(path);
+        Ok(Some(RuntimeEntry::ReadOnly(path.to_path_buf())))
     }
-    Ok(())
 }
 
 fn is_regular_file(path: &Path) -> bool {

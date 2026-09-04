@@ -541,6 +541,7 @@ mod tests {
             working_directory: PathBuf::from("/tmp/styra/workspace"),
             network: true,
             mounts: Vec::new(),
+            system_runtime: vec![PathBuf::from("/usr")],
         });
         let json = serde_json::to_value(&response).unwrap();
         assert_eq!(json["type"], "session_plan");

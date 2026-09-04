@@ -860,6 +860,7 @@ mod tests {
                 command: vec![selection.into()],
                 working_directory: std::path::PathBuf::from("/tmp/styra/workspace"),
                 network: false,
+                system_runtime: Vec::new(),
                 mounts: Vec::new(),
             },
             accepting,

@@ -188,6 +188,7 @@ mod tests {
                 command: vec![],
                 working_directory: PathBuf::from("/workspace"),
                 network: false,
+                system_runtime: Vec::new(),
                 mounts: vec![],
             },
             accepting: true,

@@ -524,6 +524,7 @@ mod tests {
             command: vec!["codex".into()],
             working_directory: PathBuf::from("/workspace"),
             network: false,
+            system_runtime: Vec::new(),
             mounts: vec![AttributedMount {
                 origin: MountOrigin::Workspace,
                 mount: Mount::Bind {

@@ -37,30 +37,6 @@ fn integration_tools_available() -> bool {
             .is_ok_and(|status| status.success())
 }
 
-/// Whether a host path is still readable from inside a sandbox shaped like the
-/// one Driva builds. The agent command is an absolute host path handed to the
-/// sandboxed process, and Driva replaces `/tmp` with a private tmpfs — so a
-/// fixture living under `/tmp` (as it does when the checkout itself is inside a
-/// sandboxed workspace) is invisible to the agent and could never start.
-fn reachable_inside_sandbox(path: &Path) -> bool {
-    Command::new("bwrap")
-        .args(["--ro-bind", "/", "/", "--proc", "/proc", "--dev", "/dev"])
-        .args([
-            "--tmpfs",
-            "/tmp",
-            "--unshare-all",
-            "--die-with-parent",
-            "--",
-        ])
-        .arg("/bin/sh")
-        .arg("-c")
-        .arg(format!("test -x {}", path.display()))
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
-}
-
 /// Owns everything the test creates outside its own process, so a failed
 /// assertion tears the server and its fixtures down instead of leaving an
 /// orphaned daemon and a `styra-tmux-integration-*` directory behind.
@@ -109,8 +85,9 @@ fn tmux_shell_runs_in_the_live_agent_sandbox_without_replacing_protocol_pipes() 
         return;
     }
 
-    // Bubblewrap replaces /tmp with a private tmpfs, so the fake agent binary
-    // must live at a host path that remains visible through the read-only root.
+    // The fake agent lives outside the private root's system runtime, which is
+    // the case that matters: it can only start if the launch mounted it, so
+    // this exercises the `host tooling` grant as well as the shell.
     let root = std::env::current_dir()
         .unwrap()
         .join("target")
@@ -135,15 +112,6 @@ done
     )
     .unwrap();
     std::fs::set_permissions(&codex, std::fs::Permissions::from_mode(0o755)).unwrap();
-    if !reachable_inside_sandbox(&codex) {
-        eprintln!(
-            "skipping: {} is not visible inside a Driva-shaped sandbox, so the fake agent \
-             cannot be launched (this happens when the checkout lives under /tmp)",
-            codex.display()
-        );
-        std::fs::remove_dir_all(&root).ok();
-        return;
-    }
 
     let runtime = std::env::temp_dir().join(format!("styra-tmux-runtime-{}", std::process::id()));
     let socket = runtime.join("styra.sock");

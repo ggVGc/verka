@@ -56,6 +56,10 @@ pub struct InteractionSpec {
     pub repository_mounts: Vec<MountSpec>,
     /// Workspace-managed linked worktrees and their shared Git metadata.
     pub automatic_mounts: Vec<MountSpec>,
+    /// The host executables this launch runs — the agent, and the `tmux` the
+    /// session shell needs — for those the sandbox's private root does not
+    /// already carry (see [`crate::tooling`]). Read-only.
+    pub tooling_mounts: Vec<MountSpec>,
     /// Host-executed functions exposed by supporting providers.
     pub dynamic_tools: Vec<DynamicTool>,
     /// Empty writable filesystems discarded after the run (e.g. `/root`).
@@ -121,15 +125,23 @@ impl ResolvedTemplate {
 /// interaction, taken from the same [`ExecutionRequest`] Driva executes, so it can
 /// never drift from what is actually running.
 impl DrivaOptions {
-    pub fn capture(spec: &InteractionSpec, isolation_backend: impl Into<String>) -> Self {
+    /// Fails only if the host's own system runtime cannot be inspected, which
+    /// is the same thing that would stop the launch itself.
+    pub fn capture(spec: &InteractionSpec, isolation_backend: impl Into<String>) -> Result<Self> {
         let request = build_request(spec);
-        Self {
+        let system_runtime = driva::host_runtime()
+            .context("resolving Driva's host system runtime")?
+            .into_iter()
+            .map(|entry| entry.path().to_path_buf())
+            .collect();
+        Ok(Self {
             isolation_backend: isolation_backend.into(),
             command: spec.profile.command.clone(),
             working_directory: request.working_directory,
             network: request.network,
             mounts: attributed_mounts(spec),
-        }
+            system_runtime,
+        })
     }
 }
 
@@ -660,6 +672,11 @@ fn attributed_mounts(spec: &InteractionSpec) -> Vec<AttributedMount> {
             .map(|mount| bind(MountOrigin::GitRepository, mount)),
     );
     mounts.extend(
+        spec.tooling_mounts
+            .iter()
+            .map(|mount| bind(MountOrigin::Tooling, mount)),
+    );
+    mounts.extend(
         spec.profile
             .mounts
             .iter()
@@ -909,6 +926,7 @@ mod tests {
             },
             repository_mounts: Vec::new(),
             automatic_mounts: Vec::new(),
+            tooling_mounts: Vec::new(),
             dynamic_tools: Vec::new(),
             temporary_mounts: Vec::new(),
             extra_mounts: Vec::new(),
@@ -973,7 +991,7 @@ mod tests {
         .unwrap();
         spec.profile.mounts.clear();
 
-        let command = DrivaOptions::capture(&spec, "bwrap").command;
+        let command = DrivaOptions::capture(&spec, "bwrap").unwrap().command;
         assert_eq!(spec.profile.name, "codex:gpt-5.6-terra/xhigh");
         assert!(
             command.contains(&r#"model="gpt-5.6-terra""#.to_string()),
@@ -1005,7 +1023,7 @@ mod tests {
             socket: PathBuf::from("/tmp/styra/control/tmux.sock"),
         });
 
-        let displayed = DrivaOptions::capture(&spec, "bwrap");
+        let displayed = DrivaOptions::capture(&spec, "bwrap").unwrap();
         let request = build_request(&spec);
         assert_eq!(displayed.command, agent_command);
         assert_eq!(
@@ -1215,7 +1233,7 @@ mod tests {
             },
         ];
 
-        let options = DrivaOptions::capture(&spec, "bwrap");
+        let options = DrivaOptions::capture(&spec, "bwrap").unwrap();
         assert!(options.mounts.iter().any(|mount| matches!(
             mount,
             AttributedMount {
@@ -1322,7 +1340,7 @@ mod tests {
         let dir = PathBuf::from("/tmp/styra/workspace");
         let spec = workspace_spec(&dir);
         let command = spec.profile.command.clone();
-        let options = DrivaOptions::capture(&spec, "bwrap");
+        let options = DrivaOptions::capture(&spec, "bwrap").unwrap();
 
         assert_eq!(options.isolation_backend, "bwrap");
         assert_eq!(options.command, command);
@@ -1335,5 +1353,58 @@ mod tests {
                 mount: Mount::Bind { destination, .. },
             } if destination == &dir
         )));
+    }
+
+    /// The agent binary is in the sandbox because the launch mounted it, and
+    /// it says so: with no host root behind the policy, a tool the private
+    /// root does not carry is a grant like any other and is attributed to its
+    /// own layer rather than arriving unannounced.
+    #[test]
+    fn a_host_tool_is_a_read_only_mount_of_its_own() {
+        let dir = PathBuf::from("/tmp/styra/workspace");
+        let mut spec = workspace_spec(&dir);
+        spec.tooling_mounts = vec![MountSpec {
+            source: PathBuf::from("/home/operator/.local/bin/claude"),
+            destination: PathBuf::from("/home/operator/.local/bin/claude"),
+            writable: false,
+        }];
+
+        let options = DrivaOptions::capture(&spec, "bwrap").unwrap();
+
+        assert!(options.mounts.iter().any(|attributed| matches!(
+            attributed,
+            AttributedMount {
+                origin: MountOrigin::Tooling,
+                mount: Mount::Bind { destination, access: MountAccess::ReadOnly, .. },
+            } if destination == std::path::Path::new("/home/operator/.local/bin/claude")
+        )));
+        assert!(build_request(&spec).mounts.iter().any(|mount| matches!(
+            mount,
+            Mount::Bind { destination, access: MountAccess::ReadOnly, .. }
+                if destination == std::path::Path::new("/home/operator/.local/bin/claude")
+        )));
+    }
+
+    /// What the private root carries is reported alongside the mounts. It is
+    /// the rest of the answer to "what can this agent reach", and it is only
+    /// the host's system runtime — the operator's home is not in it.
+    #[test]
+    fn the_captured_policy_states_the_private_root_it_runs_on() {
+        let dir = PathBuf::from("/tmp/styra/workspace");
+        let options = DrivaOptions::capture(&workspace_spec(&dir), "bwrap").unwrap();
+
+        assert_eq!(
+            options.system_runtime,
+            driva::host_runtime()
+                .unwrap()
+                .into_iter()
+                .map(|entry| entry.path().to_path_buf())
+                .collect::<Vec<_>>()
+        );
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        assert!(options
+            .system_runtime
+            .iter()
+            .all(|path| Some(path) != home.as_ref()));
     }
 }
