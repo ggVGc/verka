@@ -58,7 +58,7 @@ pub fn executable_mounts(executables: &[PathBuf]) -> Result<Vec<MountSpec>> {
 /// elsewhere is what the executable's own resolved path is tested against.
 fn carried_by_runtime(runtime: &[RuntimeEntry], path: &Path) -> bool {
     runtime.iter().any(|entry| match entry {
-        RuntimeEntry::ReadOnly(carried) => path.starts_with(carried),
+        RuntimeEntry::ReadOnly { path: carried, .. } => path.starts_with(carried),
         RuntimeEntry::Symlink { .. } => false,
     })
 }
@@ -72,7 +72,10 @@ mod tests {
     #[test]
     fn only_executables_outside_the_private_root_become_mounts() {
         let runtime = vec![
-            RuntimeEntry::ReadOnly(PathBuf::from("/usr")),
+            RuntimeEntry::ReadOnly {
+                source: PathBuf::from("/usr"),
+                path: PathBuf::from("/usr"),
+            },
             RuntimeEntry::Symlink {
                 target: PathBuf::from("usr/bin"),
                 path: PathBuf::from("/bin"),

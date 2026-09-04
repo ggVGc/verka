@@ -163,7 +163,8 @@ denied. Styra does not invent new isolation concepts; it selects Driva policy.
 
 Sessions launch into Driva's **private root**: a tmpfs carrying the host system
 runtime read-only (`driva::host_runtime` — `/usr`, `/bin`, the handful of `/etc`
-files a program needs to resolve users, certificates, and DNS) and nothing else.
+files a program needs to resolve users and certificates, and the host resolver
+a session permitted to reach the network needs) and nothing else.
 No host root is passed through, so the operator's home is not in the sandbox at
 all, and the mount list is the whole of what a session can reach. Anything the
 agent needs from outside that runtime is a mount someone asked for and can see:

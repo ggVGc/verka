@@ -314,12 +314,17 @@ fn append_mounts(command: &mut Command, mounts: &BwrapMountPlan) {
 /// laid down. Enough to run the host's `/bin/sh` and normal OS tools, and
 /// deliberately nothing else: no host root, home, current directory, or other
 /// data path appears here.
-const HOST_RUNTIME_PATHS: [&str; 20] = [
+const HOST_RUNTIME_PATHS: [&str; 21] = [
     "/usr",
     "/bin",
     "/sbin",
     "/lib",
     "/lib64",
+    // Where a systemd host actually keeps its resolver: the nameservers
+    // `/etc/resolv.conf` points at, and the socket `nss_resolve` asks when
+    // `/etc/nsswitch.conf` says `resolve`. Without it a sandbox that is
+    // *permitted* to reach the network still cannot resolve a name.
+    "/run/systemd/resolve",
     "/etc/alternatives",
     "/etc/ca-certificates",
     "/etc/group",
@@ -343,8 +348,10 @@ const HOST_RUNTIME_PATHS: [&str; 20] = [
 /// than re-deriving the list, so what is shown and what is bound cannot drift.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RuntimeEntry {
-    /// A host path bound read-only at that same path inside the isolation.
-    ReadOnly(PathBuf),
+    /// Host content exposed read-only inside the isolation. `source` and
+    /// `path` are the same host path, except where the host keeps a symlink
+    /// at `path` aimed outside the runtime — see [`host_runtime`].
+    ReadOnly { source: PathBuf, path: PathBuf },
     /// A symlink the host keeps at that path, recreated rather than followed,
     /// so a distro that points `/bin` at `usr/bin` keeps working.
     Symlink { target: PathBuf, path: PathBuf },
@@ -354,7 +361,7 @@ impl RuntimeEntry {
     /// Where this entry lands inside the isolation.
     pub fn path(&self) -> &Path {
         match self {
-            Self::ReadOnly(path) | Self::Symlink { path, .. } => path,
+            Self::ReadOnly { path, .. } | Self::Symlink { path, .. } => path,
         }
     }
 }
@@ -362,14 +369,64 @@ impl RuntimeEntry {
 /// The host system runtime a private root exposes on this machine: the subset
 /// of [`HOST_RUNTIME_PATHS`] that exists here, each resolved to how it will be
 /// laid down. Paths absent from the host are absent from the list.
+///
+/// A host symlink is normally recreated rather than followed, so the shape of
+/// the host's own layout survives. That only works while the link still leads
+/// somewhere the runtime carries: `/bin` → `usr/bin` resolves through `/usr`,
+/// but `/etc/resolv.conf` → `../run/NetworkManager/resolv.conf` would land on
+/// nothing and leave the sandbox unable to resolve a name. A link aimed
+/// outside the runtime is therefore followed, and its content bound where the
+/// link stands.
 pub fn host_runtime() -> Result<Vec<RuntimeEntry>> {
-    let mut entries = Vec::new();
+    let mut entries: Vec<RuntimeEntry> = Vec::new();
     for path in HOST_RUNTIME_PATHS {
-        if let Some(entry) = runtime_entry(Path::new(path))? {
-            entries.push(entry);
+        let path = Path::new(path);
+        let metadata = match std::fs::symlink_metadata(path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!("failed to inspect host runtime path {}", path.display())
+                })
+            }
+        };
+        if !metadata.file_type().is_symlink() {
+            entries.push(RuntimeEntry::ReadOnly {
+                source: path.to_path_buf(),
+                path: path.to_path_buf(),
+            });
+            continue;
         }
+        let target = std::fs::read_link(path)
+            .with_context(|| format!("failed to read host runtime link {}", path.display()))?;
+        // A link the host cannot follow either is left as the host has it:
+        // reproducing a broken link is the honest translation, and it is not
+        // Driva's business to repair the host's own layout.
+        let resolved = match path.canonicalize() {
+            Ok(resolved) if !carried_by(&entries, &resolved) => Some(resolved),
+            _ => None,
+        };
+        entries.push(match resolved {
+            Some(source) => RuntimeEntry::ReadOnly {
+                source,
+                path: path.to_path_buf(),
+            },
+            None => RuntimeEntry::Symlink {
+                target,
+                path: path.to_path_buf(),
+            },
+        });
     }
     Ok(entries)
+}
+
+/// Whether `path` is already inside something the runtime binds, and so
+/// reachable through the entries laid down before it.
+fn carried_by(entries: &[RuntimeEntry], path: &Path) -> bool {
+    entries.iter().any(|entry| match entry {
+        RuntimeEntry::ReadOnly { source, .. } => path.starts_with(source),
+        RuntimeEntry::Symlink { .. } => false,
+    })
 }
 
 /// Construct a useful base filesystem out of [`host_runtime`], on a tmpfs root
@@ -378,8 +435,8 @@ fn append_host_runtime(command: &mut Command) -> Result<()> {
     command.arg("--tmpfs").arg("/");
     for entry in host_runtime()? {
         match entry {
-            RuntimeEntry::ReadOnly(path) => {
-                command.arg("--ro-bind").arg(&path).arg(&path);
+            RuntimeEntry::ReadOnly { source, path } => {
+                command.arg("--ro-bind").arg(source).arg(path);
             }
             RuntimeEntry::Symlink { target, path } => {
                 command.arg("--symlink").arg(target).arg(path);
@@ -387,27 +444,6 @@ fn append_host_runtime(command: &mut Command) -> Result<()> {
         }
     }
     Ok(())
-}
-
-fn runtime_entry(path: &Path) -> Result<Option<RuntimeEntry>> {
-    let metadata = match std::fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => {
-            return Err(error)
-                .with_context(|| format!("failed to inspect host runtime path {}", path.display()))
-        }
-    };
-    if metadata.file_type().is_symlink() {
-        let target = std::fs::read_link(path)
-            .with_context(|| format!("failed to read host runtime link {}", path.display()))?;
-        Ok(Some(RuntimeEntry::Symlink {
-            target,
-            path: path.to_path_buf(),
-        }))
-    } else {
-        Ok(Some(RuntimeEntry::ReadOnly(path.to_path_buf())))
-    }
 }
 
 fn is_regular_file(path: &Path) -> bool {

@@ -477,9 +477,13 @@ fn the_reported_host_runtime_is_what_the_private_root_binds() {
     let home = std::env::var_os("HOME").map(PathBuf::from);
     for entry in runtime {
         let path = entry.path().to_string_lossy().into_owned();
+        let source = match &entry {
+            driva::RuntimeEntry::ReadOnly { source, .. } => source.to_string_lossy().into_owned(),
+            driva::RuntimeEntry::Symlink { .. } => path.clone(),
+        };
         assert!(
             args.windows(3).any(|args| {
-                (args[0] == "--ro-bind" && args[1] == path && args[2] == path)
+                (args[0] == "--ro-bind" && args[1] == source && args[2] == path)
                     || (args[0] == "--symlink" && args[2] == path)
             }),
             "{path} is reported but not laid down"
@@ -490,6 +494,44 @@ fn the_reported_host_runtime_is_what_the_private_root_binds() {
                 .is_some_and(|home| Path::new(&path).starts_with(home)),
             "{path} is inside the operator's home"
         );
+    }
+}
+
+/// A sandbox permitted to reach the network has to be able to resolve a name,
+/// so the private root carries the host's resolver: whatever
+/// `/etc/resolv.conf` names, reachable at that path rather than as a link into
+/// a directory the sandbox does not have.
+#[test]
+fn the_private_root_carries_a_usable_resolver() {
+    let runtime = driva::host_runtime().unwrap();
+    let Some(entry) = runtime
+        .iter()
+        .find(|entry| entry.path() == Path::new("/etc/resolv.conf"))
+    else {
+        eprintln!("skipping: this host has no /etc/resolv.conf");
+        return;
+    };
+    match entry {
+        // Followed, not reproduced as a link that lands on nothing.
+        driva::RuntimeEntry::ReadOnly { source, .. } => assert!(
+            source.exists(),
+            "{} is bound from a source that is not there",
+            source.display()
+        ),
+        // Left as a link only when it resolves inside the runtime anyway.
+        driva::RuntimeEntry::Symlink { target, .. } => {
+            let resolved = Path::new("/etc/resolv.conf").canonicalize();
+            assert!(
+                resolved.is_err()
+                    || runtime.iter().any(|entry| matches!(
+                        entry,
+                        driva::RuntimeEntry::ReadOnly { source, .. }
+                            if resolved.as_ref().is_ok_and(|path| path.starts_with(source))
+                    )),
+                "/etc/resolv.conf is kept as a link to {} that the runtime does not carry",
+                target.display()
+            );
+        }
     }
 }
 
