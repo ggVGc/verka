@@ -3,8 +3,10 @@
 //!
 //! The readings come from the server, which reads them off every interaction's
 //! wire and keeps them in memory (see `styra_server::quota`). They are
-//! account-wide rather than per-session, so this view shows every interaction's
-//! readings and names the session each came from.
+//! account-wide *per provider* rather than per-session, so this view shows
+//! every interaction's readings and names the provider, the session, and the
+//! minute each came from — a stale 90% reading and a fresh one mean different
+//! things, and a Claude window says nothing about a Codex one.
 
 use super::{palette, render_placeholder, view_block};
 use crate::app::App;
@@ -36,14 +38,24 @@ pub(crate) fn render_quota(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(paragraph, area);
 }
 
-/// One reading: its window, how full it is, when it resets, and where it was
-/// seen. The percentage leads, since that is what the view is consulted for.
+/// One reading: when it was seen, how full it is, whose plan and which window,
+/// when it resets, and where it was seen. The percentage leads, since that is
+/// what the view is consulted for, with the reading's own time ahead of it so
+/// a column of readings reads as a timeline.
 fn quota_line(reading: &QuotaEvent) -> Line<'static> {
     let color = status_color(reading.status);
     let mut spans = vec![
         Span::styled(
+            format!("{} ", clock(reading.at_ms)),
+            Style::default().fg(palette::MUTED_TEXT),
+        ),
+        Span::styled(
             format!("{:>5} ", reading.utilization_label()),
             Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("{:<10} ", reading.provider.as_str()),
+            Style::default().fg(palette::TEXT),
         ),
         Span::styled(
             format!("{:<10} ", reading.window),
@@ -103,6 +115,7 @@ mod tests {
     use crate::app::View;
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
+    use styra_server::protocol::Provider;
 
     fn rendered(app: &App) -> String {
         let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
@@ -127,6 +140,7 @@ mod tests {
         QuotaEvent {
             at_ms: 1_000,
             session_id: "s1".into(),
+            provider: Provider::Claude,
             window: window.into(),
             status,
             utilization,
@@ -150,6 +164,25 @@ mod tests {
         assert!(screen.contains("warning"));
         // 12.5% renders as 12: `{:.0}` rounds half to even.
         assert!(screen.contains("12%"));
+    }
+
+    /// The log mixes both accounts' readings, so each row has to say whose
+    /// plan it measures and when it was taken.
+    #[test]
+    fn each_reading_names_its_provider_and_the_minute_it_was_seen() {
+        let mut app = app();
+        let mut codex = reading("7d", QuotaStatus::Allowed, Some(0.4));
+        codex.provider = Provider::Codex;
+        codex.at_ms = 1_788_290_400_000;
+        app.quota.replace(vec![
+            reading("five_hour", QuotaStatus::Warning, Some(0.91)),
+            codex,
+        ]);
+        app.toggle_view(View::Quota);
+        let screen = rendered(&app);
+        assert!(screen.contains("claude"));
+        assert!(screen.contains("codex"));
+        assert!(screen.contains("19:20Z"));
     }
 
     /// A permitted Claude reading genuinely carries no figure; the view has to

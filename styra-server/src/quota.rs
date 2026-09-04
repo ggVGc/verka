@@ -23,6 +23,7 @@
 //! costs one announcement, not one per turn. How an announcement is *shown* is
 //! the client's business; this decides only that it is worth showing.
 
+use crate::agent::Provider;
 use crate::protocol::{QuotaEvent, QuotaStatus};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -43,10 +44,12 @@ const CAPACITY: usize = 512;
 #[derive(Default)]
 pub struct QuotaLog {
     entries: Mutex<VecDeque<QuotaEvent>>,
-    /// The last reading reported to the operator per window, as its status and
-    /// its usage decile. A window whose reading lands on the same pair is not
-    /// worth a second message.
-    reported: Mutex<HashMap<String, (QuotaStatus, u8)>>,
+    /// The last reading reported to the operator per provider window, as its
+    /// status and its usage decile. A window whose reading lands on the same
+    /// pair is not worth a second message. Keyed by provider as well as name
+    /// because the providers name their windows independently, and one
+    /// account's Claude limit says nothing about its Codex one.
+    reported: Mutex<HashMap<(Provider, String), (QuotaStatus, u8)>>,
 }
 
 impl QuotaLog {
@@ -59,8 +62,14 @@ impl QuotaLog {
     ///
     /// A line carrying no quota figures — nearly all of them — costs one
     /// substring scan and nothing else.
-    pub fn observe(&self, session_id: &str, at_ms: u64, raw: &str) -> Vec<QuotaEvent> {
-        let readings = parse(session_id, at_ms, raw);
+    pub fn observe(
+        &self,
+        session_id: &str,
+        provider: Provider,
+        at_ms: u64,
+        raw: &str,
+    ) -> Vec<QuotaEvent> {
+        let readings = parse(session_id, provider, at_ms, raw);
         if readings.is_empty() {
             return Vec::new();
         }
@@ -86,10 +95,11 @@ impl QuotaLog {
             .map(|used| (used * 10.0) as u8)
             .unwrap_or_default();
         let mut reported = self.reported.lock().expect("quota report lock poisoned");
-        match reported.get(&reading.window) {
+        let key = (reading.provider, reading.window.clone());
+        match reported.get(&key) {
             Some((status, seen)) if *status == reading.status && *seen >= decile => false,
             _ => {
-                reported.insert(reading.window.clone(), (reading.status, decile));
+                reported.insert(key, (reading.status, decile));
                 true
             }
         }
@@ -120,7 +130,7 @@ impl QuotaLog {
 /// Claude puts `rate_limit_info` at the top level of a `rate_limit_event`,
 /// Codex nests `rate_limits` inside a notification's `params`, and neither
 /// shape is worth restating here to find a field both simply name.
-fn parse(session_id: &str, at_ms: u64, raw: &str) -> Vec<QuotaEvent> {
+fn parse(session_id: &str, provider: Provider, at_ms: u64, raw: &str) -> Vec<QuotaEvent> {
     // Cheap reject first: parsing every tool result and message body as JSON
     // to look for a field almost none of them have is the common case.
     if !raw.contains("rate_limit") {
@@ -136,10 +146,10 @@ fn parse(session_id: &str, at_ms: u64, raw: &str) -> Vec<QuotaEvent> {
         .into_iter()
         .chain(find_all(&line, "rate_limit"))
     {
-        readings.extend(claude_reading(session_id, at_ms, found));
+        readings.extend(claude_reading(session_id, provider, at_ms, found));
     }
     for found in find_all(&line, "rate_limits") {
-        readings.extend(codex_readings(session_id, at_ms, found));
+        readings.extend(codex_readings(session_id, provider, at_ms, found));
     }
     readings
 }
@@ -174,7 +184,12 @@ fn collect<'a>(value: &'a Value, key: &str, found: &mut Vec<&'a Value>) {
 /// provider decides for itself. `utilization` is only present once the
 /// provider has something to warn about, so a plain `allowed` reading records
 /// the window and its reset without claiming to know how full it is.
-fn claude_reading(session_id: &str, at_ms: u64, info: &Value) -> Option<QuotaEvent> {
+fn claude_reading(
+    session_id: &str,
+    provider: Provider,
+    at_ms: u64,
+    info: &Value,
+) -> Option<QuotaEvent> {
     let info = info.as_object()?;
     let status = match info.get("status").and_then(Value::as_str)? {
         "allowed" | "ok" => QuotaStatus::Allowed,
@@ -187,6 +202,7 @@ fn claude_reading(session_id: &str, at_ms: u64, info: &Value) -> Option<QuotaEve
     Some(QuotaEvent {
         at_ms,
         session_id: session_id.to_owned(),
+        provider,
         window: info
             .get("rateLimitType")
             .and_then(Value::as_str)
@@ -209,7 +225,12 @@ fn claude_reading(session_id: &str, at_ms: u64, info: &Value) -> Option<QuotaEve
 /// length and percentage. It reports a number on every turn and no status of
 /// its own, so the status here comes from the percentage against
 /// [`WARN_THRESHOLD`].
-fn codex_readings(session_id: &str, at_ms: u64, limits: &Value) -> Vec<QuotaEvent> {
+fn codex_readings(
+    session_id: &str,
+    provider: Provider,
+    at_ms: u64,
+    limits: &Value,
+) -> Vec<QuotaEvent> {
     let Some(limits) = limits.as_object() else {
         return Vec::new();
     };
@@ -225,6 +246,7 @@ fn codex_readings(session_id: &str, at_ms: u64, limits: &Value) -> Vec<QuotaEven
         readings.push(QuotaEvent {
             at_ms,
             session_id: session_id.to_owned(),
+            provider,
             window: window
                 .get("limit_name")
                 .and_then(Value::as_str)
@@ -290,7 +312,7 @@ mod tests {
 
     #[test]
     fn a_claude_warning_is_read_with_its_window_and_usage() {
-        let readings = parse("s-1", 1_000, CLAUDE_WARNING);
+        let readings = parse("s-1", Provider::Claude, 1_000, CLAUDE_WARNING);
         assert_eq!(readings.len(), 1);
         let reading = &readings[0];
         assert_eq!(reading.session_id, "s-1");
@@ -306,7 +328,7 @@ mod tests {
     /// about the provider worth keeping rather than a zero worth inventing.
     #[test]
     fn a_permitted_claude_reading_has_no_usage_figure_and_is_not_notable() {
-        let readings = parse("s-1", 1_000, CLAUDE_ALLOWED);
+        let readings = parse("s-1", Provider::Claude, 1_000, CLAUDE_ALLOWED);
         assert_eq!(readings.len(), 1);
         assert_eq!(readings[0].status, QuotaStatus::Allowed);
         assert_eq!(readings[0].utilization, None);
@@ -316,7 +338,7 @@ mod tests {
 
     #[test]
     fn a_rejection_is_notable_even_without_a_usage_figure() {
-        let readings = parse("s-1", 1_000, CLAUDE_REJECTED);
+        let readings = parse("s-1", Provider::Claude, 1_000, CLAUDE_REJECTED);
         assert_eq!(readings[0].status, QuotaStatus::Exhausted);
         assert!(readings[0].is_notable());
     }
@@ -325,7 +347,7 @@ mod tests {
     /// fractions, and says nothing about severity.
     #[test]
     fn both_codex_windows_are_read_and_their_percentages_normalized() {
-        let readings = parse("s-2", 2_000, CODEX_USAGE);
+        let readings = parse("s-2", Provider::Codex, 2_000, CODEX_USAGE);
         assert_eq!(readings.len(), 2);
         assert_eq!(readings[0].window, "1h");
         assert_eq!(readings[0].utilization, Some(0.0));
@@ -345,28 +367,46 @@ mod tests {
                 r#"{{"params":{{"rate_limits":{{"primary":{{"used_percent":{percent},"window_minutes":60}}}}}}}}"#
             )
         };
-        assert_eq!(parse("s-1", 0, &line(93.0))[0].status, QuotaStatus::Warning);
         assert_eq!(
-            parse("s-1", 0, &line(100.0))[0].status,
+            parse("s-1", Provider::Claude, 0, &line(93.0))[0].status,
+            QuotaStatus::Warning
+        );
+        assert_eq!(
+            parse("s-1", Provider::Claude, 0, &line(100.0))[0].status,
             QuotaStatus::Exhausted
         );
-        assert_eq!(parse("s-1", 0, &line(40.0))[0].status, QuotaStatus::Allowed);
+        assert_eq!(
+            parse("s-1", Provider::Claude, 0, &line(40.0))[0].status,
+            QuotaStatus::Allowed
+        );
     }
 
     #[test]
     fn lines_carrying_no_quota_figures_are_ignored() {
-        assert!(parse("s-1", 0, r#"{"type":"assistant","message":{}}"#).is_empty());
-        assert!(parse("s-1", 0, "not json at all").is_empty());
+        assert!(parse(
+            "s-1",
+            Provider::Claude,
+            0,
+            r#"{"type":"assistant","message":{}}"#
+        )
+        .is_empty());
+        assert!(parse("s-1", Provider::Claude, 0, "not json at all").is_empty());
         // A message that merely mentions the field name must not be mistaken
         // for a reading.
-        assert!(parse("s-1", 0, r#"{"text":"grep rate_limit journal.jsonl"}"#).is_empty());
+        assert!(parse(
+            "s-1",
+            Provider::Claude,
+            0,
+            r#"{"text":"grep rate_limit journal.jsonl"}"#
+        )
+        .is_empty());
     }
 
     #[test]
     fn readings_are_logged_in_arrival_order_and_bounded() {
         let log = QuotaLog::new();
         for at_ms in 0..(CAPACITY as u64 + 10) {
-            log.observe("s-1", at_ms, CODEX_USAGE);
+            log.observe("s-1", Provider::Codex, at_ms, CODEX_USAGE);
         }
         let entries = log.entries();
         assert_eq!(entries.len(), CAPACITY);
@@ -382,12 +422,16 @@ mod tests {
     #[test]
     fn a_repeated_warning_is_announced_once_but_still_logged_each_time() {
         let log = QuotaLog::new();
-        let first = log.observe("s-1", 1, CLAUDE_WARNING);
+        let first = log.observe("s-1", Provider::Claude, 1, CLAUDE_WARNING);
         assert_eq!(first.len(), 1);
         assert_eq!(first[0].status, QuotaStatus::Warning);
         assert!(first[0].describe().contains("91%"));
-        assert!(log.observe("s-1", 2, CLAUDE_WARNING).is_empty());
-        assert!(log.observe("s-1", 3, CLAUDE_WARNING).is_empty());
+        assert!(log
+            .observe("s-1", Provider::Claude, 2, CLAUDE_WARNING)
+            .is_empty());
+        assert!(log
+            .observe("s-1", Provider::Claude, 3, CLAUDE_WARNING)
+            .is_empty());
         assert_eq!(log.entries().len(), 3);
     }
 
@@ -402,12 +446,20 @@ mod tests {
             )
         };
         let log = QuotaLog::new();
-        assert_eq!(log.observe("s-1", 1, &reading(0.91)).len(), 1);
+        assert_eq!(
+            log.observe("s-1", Provider::Claude, 1, &reading(0.91))
+                .len(),
+            1
+        );
         // Still the same decile: already said.
-        assert!(log.observe("s-1", 2, &reading(0.95)).is_empty());
-        assert!(log.observe("s-1", 3, &reading(0.99)).is_empty());
+        assert!(log
+            .observe("s-1", Provider::Claude, 2, &reading(0.95))
+            .is_empty());
+        assert!(log
+            .observe("s-1", Provider::Claude, 3, &reading(0.99))
+            .is_empty());
         // A full window is a different status, so it is announced again.
-        let exhausted = log.observe("s-1", 4, CLAUDE_REJECTED);
+        let exhausted = log.observe("s-1", Provider::Claude, 4, CLAUDE_REJECTED);
         assert_eq!(exhausted.len(), 1);
         assert_eq!(exhausted[0].status, QuotaStatus::Exhausted);
     }
@@ -420,10 +472,38 @@ mod tests {
         let line = r#"{"params":{"rate_limits":{
             "primary":{"used_percent":95.0,"window_minutes":60},
             "secondary":{"used_percent":92.0,"window_minutes":10080}}}}"#;
-        let announced = log.observe("s-1", 1, line);
+        let announced = log.observe("s-1", Provider::Codex, 1, line);
         assert_eq!(announced.len(), 2);
         assert_eq!(announced[0].window, "1h");
         assert_eq!(announced[1].window, "7d");
+    }
+
+    /// The reading has to say whose plan it is: the two providers are
+    /// separate subscriptions, and the log mixes both accounts' readings.
+    #[test]
+    fn a_reading_names_the_provider_whose_plan_it_measures() {
+        let claude = parse("s-1", Provider::Claude, 1_000, CLAUDE_WARNING);
+        assert_eq!(claude[0].provider, Provider::Claude);
+        assert!(claude[0].describe().starts_with("claude plan quota"));
+        let codex = parse("s-2", Provider::Codex, 2_000, CODEX_USAGE);
+        assert!(codex.iter().all(|r| r.provider == Provider::Codex));
+    }
+
+    /// Two providers can name a window alike — and even when they do not, one
+    /// account filling up says nothing about the other, so each is announced
+    /// on its own.
+    #[test]
+    fn the_same_window_name_on_two_providers_is_announced_once_each() {
+        let log = QuotaLog::new();
+        let line = r#"{"rate_limit_info":{"status":"allowed_warning",
+            "rateLimitType":"5h","utilization":0.91}}"#;
+        assert_eq!(log.observe("s-1", Provider::Claude, 1, line).len(), 1);
+        let codex = log.observe("s-2", Provider::Codex, 2, line);
+        assert_eq!(codex.len(), 1);
+        assert_eq!(codex[0].provider, Provider::Codex);
+        // Each provider has now been reported, so neither repeats.
+        assert!(log.observe("s-1", Provider::Claude, 3, line).is_empty());
+        assert!(log.observe("s-2", Provider::Codex, 4, line).is_empty());
     }
 
     #[test]

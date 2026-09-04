@@ -56,7 +56,7 @@ impl SandboxLayout {
 /// Which coding agent a session launches, and thus which command line and wire
 /// protocol it gets. The model and reasoning effort are chosen separately (see
 /// [`Selection`]); a provider is only the agent itself.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Provider {
     /// Multi-turn codex over the `app-server` JSON-RPC protocol.

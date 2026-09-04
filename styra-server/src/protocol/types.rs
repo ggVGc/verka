@@ -133,6 +133,11 @@ pub struct QuotaEvent {
     /// The interaction whose wire carried it. Quota is account-wide, so this
     /// says where the reading came from, not what it applies to.
     pub session_id: String,
+    /// The provider whose plan the reading is about. Quota is account-wide
+    /// *per provider*, so two readings only describe the same pool when this
+    /// matches — a Claude window and a Codex window named alike are not one
+    /// window.
+    pub provider: crate::agent::Provider,
     /// The window the reading is about, as the provider names it
     /// (`five_hour`) or as its length (`1h`, `7d`).
     pub window: String,
@@ -161,19 +166,27 @@ impl QuotaEvent {
         }
     }
 
-    /// The reading as one line of prose. Carries no timestamp: the reset is a
-    /// moment, and only the caller knows what "now" is to measure it against.
+    /// The reading as one line of prose, naming the provider whose plan it is.
+    /// Carries no timestamp: the reset is a moment, and only the caller knows
+    /// what "now" is to measure it against.
     pub fn describe(&self) -> String {
         let mut line = match (self.status, self.utilization) {
-            (QuotaStatus::Exhausted, _) => {
-                format!("plan quota exhausted: the {} window is full", self.window)
-            }
+            (QuotaStatus::Exhausted, _) => format!(
+                "{} plan quota exhausted: the {} window is full",
+                self.provider.as_str(),
+                self.window
+            ),
             (_, Some(utilization)) => format!(
-                "plan quota: the {} window is {:.0}% used",
+                "{} plan quota: the {} window is {:.0}% used",
+                self.provider.as_str(),
                 self.window,
                 utilization * 100.0
             ),
-            (_, None) => format!("plan quota: the {} window is nearly full", self.window),
+            (_, None) => format!(
+                "{} plan quota: the {} window is nearly full",
+                self.provider.as_str(),
+                self.window
+            ),
         };
         if let Some(detail) = &self.detail {
             line.push_str(&format!(" ({detail})"));

@@ -474,6 +474,16 @@ long window inside its token-count notification, and says nothing about
 severity. Genta's decoder keeps neither, so the server reads them off the
 verbatim line before anything discards them (`styra_server::quota`).
 
+Each reading carries the **provider** whose plan it measures and the **moment**
+it was seen, and the view leads its rows with both. One log holds every
+Interaction's readings and the two providers are separate subscriptions, so a
+row that named only its window would be ambiguous about which pool is filling;
+and because a reading is a live figure rather than a running total, a 90%
+seen an hour ago and one seen a minute ago call for different reactions.
+Announcements are deduplicated per provider window for the same reason: a
+Claude window filling up says nothing about the Codex one, even where the two
+happen to be named alike.
+
 The log is **server-wide and in-memory**, which is the whole design in one
 sentence: quota belongs to the account rather than to a session, so a reading
 taken on one Interaction is what every other Interaction is also spending, and

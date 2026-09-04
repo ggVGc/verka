@@ -459,6 +459,7 @@ impl ServerState {
         });
         let quota = Arc::clone(&self.inner.quota);
         let quota_session = id.clone();
+        let quota_provider = selection.provider;
         std::thread::Builder::new()
             .name(format!("styra-updates-{id}"))
             .spawn(move || {
@@ -537,7 +538,7 @@ impl ServerState {
                         InteractionUpdate::Raw(line)
                             if line.direction == crate::protocol::Direction::FromAgent =>
                         {
-                            quota.observe(&quota_session, line.at_ms, &line.text)
+                            quota.observe(&quota_session, quota_provider, line.at_ms, &line.text)
                         }
                         _ => Vec::new(),
                     };
@@ -798,6 +799,7 @@ impl ServerState {
         let id = request.id.clone();
         let quota = Arc::clone(&self.inner.quota);
         let quota_session = id.clone();
+        let quota_provider = selection.provider;
         std::thread::Builder::new()
             .name(format!("styra-updates-{id}"))
             .spawn(move || {
@@ -876,7 +878,7 @@ impl ServerState {
                         InteractionUpdate::Raw(line)
                             if line.direction == crate::protocol::Direction::FromAgent =>
                         {
-                            quota.observe(&quota_session, line.at_ms, &line.text)
+                            quota.observe(&quota_session, quota_provider, line.at_ms, &line.text)
                         }
                         _ => Vec::new(),
                     };
