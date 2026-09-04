@@ -487,12 +487,29 @@ Announcements are deduplicated per provider window for the same reason: a
 Claude window filling up says nothing about the Codex one, even where the two
 happen to be named alike.
 
-The log is **server-wide and in-memory**, which is the whole design in one
-sentence: quota belongs to the account rather than to a session, so a reading
-taken on one Interaction is what every other Interaction is also spending, and
-it is a live reading rather than a record worth keeping, so it dies with the
-daemon instead of accumulating in the store beside the journals. `Q` therefore
-also refreshes the view — there is nothing local to show without asking.
+The log is **server-wide and kept in the store**. Server-wide because quota
+belongs to the account rather than to a session: a reading taken on one
+Interaction is what every other Interaction is also spending. Kept because the
+figures arrive only when a provider volunteers one, so a daemon that forgot
+them on restart would show an empty view until the next turn happened to
+produce a reading — precisely when an operator restarting after an exhausted
+window most wants to know how long the wait is. `Q` still refreshes the view:
+the readings live in the server, and the client holds only what it has been
+sent.
+
+Durable is not unbounded. `quota.jsonl` sits beside the workspaces (the
+account's quota is no workspace's business) and is rewritten whole and
+atomically as readings arrive, having first been trimmed by two rules: nothing
+older than a fortnight, since the longest window either provider reports is a
+week and a reading from before that describes a window that has turned over
+twice; and at most 512 readings, except that the newest reading of each
+provider window is never the one dropped, so a session reporting one window
+every turn cannot push another window's last known figure out of a log whose
+purpose is to say where each of them stands. Age is measured against the newest
+reading held rather than the wall clock, so an idle log keeps what it last knew
+rather than quietly emptying itself. What is deliberately *not* restored is the
+announcement state: a window still sitting at 95% is worth saying once more to
+the operator of the new run.
 
 A reading is *announced* rather than merely recorded when a window is nearly
 full (the provider's own warning, or past 90% for Codex, which states no

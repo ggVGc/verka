@@ -49,7 +49,8 @@ struct ServerInner {
     shutdown: AtomicBool,
     /// Plan-quota readings seen on any interaction's wire. Server-wide rather
     /// than per-interaction because the quota is the account's, so a reading
-    /// taken on one session is what every other session is also spending.
+    /// taken on one session is what every other session is also spending, and
+    /// kept in the store so a restart reopens knowing where each window stood.
     quota: Arc<crate::quota::QuotaLog>,
 }
 
@@ -319,12 +320,12 @@ impl ServerState {
     pub fn new(store_root: PathBuf, socket: PathBuf) -> Self {
         Self {
             inner: Arc::new(ServerInner {
+                quota: Arc::new(crate::quota::QuotaLog::open(&store_root)),
                 store_root,
                 socket,
                 interactions: Mutex::new(HashMap::new()),
                 workspace_metadata: Mutex::new(()),
                 shutdown: AtomicBool::new(false),
-                quota: Arc::new(crate::quota::QuotaLog::new()),
             }),
         }
     }

@@ -2,10 +2,12 @@
 //! left.
 //!
 //! The readings come from the server, which reads them off every interaction's
-//! wire and keeps them in memory (see `styra_server::quota`). They are
-//! account-wide *per provider* rather than per-session, so this view shows
-//! every interaction's readings and names the provider, the session, and the
-//! minute each came from — a stale 90% reading and a fresh one mean different
+//! wire and keeps a trimmed log of them in its store (see
+//! `styra_server::quota`), so this view has something to show from the moment
+//! a session is attached rather than only once a provider volunteers a figure.
+//! They are account-wide *per provider* rather than per-session, so this view
+//! shows every interaction's readings and names the provider, the session, and
+//! the minute each came from — a stale 90% reading and a fresh one mean different
 //! things, and a Claude window says nothing about a Codex one.
 
 use super::{palette, render_placeholder, view_block};
