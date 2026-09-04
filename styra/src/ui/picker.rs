@@ -473,6 +473,24 @@ pub fn render_template_picker(
     frame.render_stateful_widget(list, area, &mut state);
 }
 
+/// Keep the root frame visibly alive while template discovery runs on the
+/// launch-effect worker. The picker replaces this screen in place when the
+/// response arrives.
+pub fn render_template_picker_loading(frame: &mut Frame) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(palette::ACCENT))
+        .title(" styra · Driva templates · Esc cancel ");
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            "  loading Driva templates…",
+            Style::default().fg(palette::MUTED_TEXT),
+        )))
+        .block(block),
+        frame.area(),
+    );
+}
+
 fn session_item(session: &SessionSummary, selected: bool) -> ListItem<'static> {
     let provider = session.selection.provider.as_str();
     let display_name = session.name.as_deref().unwrap_or(&session.id);

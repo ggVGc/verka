@@ -14,6 +14,7 @@
 //! `main` feeds it input and session updates.
 
 use std::cell::Cell;
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use styra_server::agent::{Provider, Selection};
 use styra_server::event::{AgentEvent, DetailBlock};
@@ -32,6 +33,7 @@ use crate::launch::{self, Launch};
 use crate::launcher::Launcher;
 use crate::notices::Notices;
 use crate::outbox::Outbox;
+use crate::picker::TemplatePicker;
 use crate::preview::{self, Preview};
 use crate::raw::RawView;
 use crate::tail::Tail;
@@ -192,6 +194,14 @@ pub struct App {
     pub selection: Selection,
     /// The open launch picker, while the operator is choosing.
     pub launcher: Option<Launcher>,
+    /// The Driva template chooser, including its server-loading state. Unlike
+    /// the older nested picker loop this belongs to the root application loop,
+    /// so session updates and rendering continue while templates are fetched.
+    pub template_picker: Option<TemplatePicker>,
+    /// Number of durable Workspace-policy edits accepted by the background
+    /// worker but not yet acknowledged. Policy controls pause while nonzero so
+    /// a second toggle cannot be derived from a stale server snapshot.
+    pub workspace_launch_pending: usize,
     /// Models the operator has confirmed in the launch picker, most recent
     /// first. Loaded from the saved preferences when the loop starts and
     /// written back as the picker is used, so the ordering of the model
@@ -233,9 +243,11 @@ pub struct App {
     /// [`crate::insert`]. Held here rather than in [`Composer`] because its
     /// second question is about the sandbox, not about the message.
     pub insert: Option<Prompt>,
-    /// Set when the operator asks for something only the event loop can do;
-    /// it takes the request and acts on it.
-    pub request: Option<Request>,
+    /// Ordered effects the operator has asked the event loop to perform.
+    /// A queue is essential here: handling one effect can produce another
+    /// (template discovery followed by a Workspace edit), and no later key is
+    /// allowed to overwrite that follow-up.
+    pub requests: VecDeque<Request>,
 }
 
 /// Something the operator asked for that [`App`] cannot carry out itself,
@@ -335,6 +347,8 @@ impl App {
             preview: Preview::default(),
             selection,
             launcher: None,
+            template_picker: None,
+            workspace_launch_pending: 0,
             recent_models: Vec::new(),
             reported_model: None,
             workspace: Location::default(),
@@ -348,7 +362,7 @@ impl App {
             files: FilesView::default(),
             answer: AnswerView::default(),
             insert: None,
-            request: None,
+            requests: VecDeque::new(),
         }
     }
 
@@ -775,6 +789,10 @@ impl App {
     /// this process to do its work (writing the defaults file) and must refuse
     /// with the same words as the rest.
     pub fn allow_launch_edit(&mut self) -> bool {
+        if self.workspace_launch_pending > 0 {
+            self.show_action_message("the Workspace launch policy is still saving");
+            return false;
+        }
         if self.can_edit_launch() {
             return true;
         }
@@ -849,12 +867,24 @@ impl App {
     /// Ask the event loop for something this screen cannot do itself; see
     /// [`Request`].
     pub fn ask(&mut self, request: Request) {
-        self.request = Some(request);
+        self.requests.push_back(request);
     }
 
     /// Take the operator's pending request, if any, for the event loop to act on.
     pub fn take_request(&mut self) -> Option<Request> {
-        self.request.take()
+        self.requests.pop_front()
+    }
+
+    /// Take the next effect only when it is a Workspace launch edit. Modal
+    /// launch controls use this to dispatch their own follow-up immediately
+    /// without consuming an unrelated request that was already ahead of it.
+    pub fn take_workspace_launch_request(&mut self) -> Option<Request> {
+        matches!(
+            self.requests.front(),
+            Some(Request::ChangeWorkspaceLaunch { .. })
+        )
+        .then(|| self.requests.pop_front())
+        .flatten()
     }
 }
 
@@ -1833,6 +1863,17 @@ mod tests {
             // than reopening the same picker on the next frame.
             assert_eq!(app.take_request(), None);
         }
+    }
+
+    #[test]
+    fn requests_are_ordered_and_cannot_overwrite_each_other() {
+        let mut app = app();
+        app.ask(Request::Templates);
+        app.ask(Request::Quit);
+
+        assert_eq!(app.take_request(), Some(Request::Templates));
+        assert_eq!(app.take_request(), Some(Request::Quit));
+        assert_eq!(app.take_request(), None);
     }
 
     #[test]

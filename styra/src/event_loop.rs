@@ -4,6 +4,9 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use std::io::Stdout;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::activity::Status;
@@ -16,7 +19,9 @@ use crate::picker;
 use crate::preferences;
 use crate::session::{self, Attachment};
 use crate::ui;
-use styra_server::{Client, InteractionSummary, LogEntry, WorkspaceSummary};
+use styra_server::{
+    Client, InteractionSummary, LogEntry, TemplateSummary, WorkspaceLaunchChange, WorkspaceSummary,
+};
 
 /// What the interactive loop returned control to `main` for.
 pub enum RunOutcome {
@@ -31,6 +36,206 @@ pub enum RunOutcome {
 }
 
 const INTERACTIONS_REFRESH: Duration = Duration::from_millis(250);
+
+/// Launch-policy work is serialized off the terminal thread. Serialization
+/// preserves the operator's edit order; the channel back to the root loop lets
+/// it keep rendering and consuming input while the daemon or filesystem is
+/// slow.
+enum LaunchEffect {
+    ListTemplates {
+        request_id: u64,
+        workspace_id: String,
+    },
+    ChangeWorkspace {
+        workspace_id: String,
+        change: WorkspaceLaunchChange,
+        clear_interaction: bool,
+    },
+}
+
+enum LaunchEffectResult {
+    Templates {
+        request_id: u64,
+        workspace_id: String,
+        result: std::result::Result<Vec<TemplateSummary>, String>,
+    },
+    WorkspaceChanged {
+        workspace_id: String,
+        clear_interaction: bool,
+        result: std::result::Result<LaunchPolicy, String>,
+    },
+}
+
+struct LaunchEffects {
+    send: Option<Sender<LaunchEffect>>,
+    receive: Receiver<LaunchEffectResult>,
+    worker: Option<thread::JoinHandle<()>>,
+    next_template_request: AtomicU64,
+}
+
+impl LaunchEffects {
+    fn new(client: Client) -> Self {
+        let (send, jobs) = mpsc::channel();
+        let (results, receive) = mpsc::channel();
+        let worker = thread::Builder::new()
+            .name("styra-launch-effects".into())
+            .spawn(move || {
+                while let Ok(effect) = jobs.recv() {
+                    let response = match effect {
+                        LaunchEffect::ListTemplates {
+                            request_id,
+                            workspace_id,
+                        } => {
+                            let result = client
+                                .list_templates(&workspace_id)
+                                .map_err(|error| format!("{error:#}"));
+                            LaunchEffectResult::Templates {
+                                request_id,
+                                workspace_id,
+                                result,
+                            }
+                        }
+                        LaunchEffect::ChangeWorkspace {
+                            workspace_id,
+                            change,
+                            clear_interaction,
+                        } => {
+                            let result = client
+                                .change_workspace_launch(&workspace_id, change)
+                                .map_err(|error| format!("{error:#}"));
+                            LaunchEffectResult::WorkspaceChanged {
+                                workspace_id,
+                                clear_interaction,
+                                result,
+                            }
+                        }
+                    };
+                    if results.send(response).is_err() {
+                        break;
+                    }
+                }
+            })
+            .expect("spawning launch-effect worker");
+        Self {
+            send: Some(send),
+            receive,
+            worker: Some(worker),
+            next_template_request: AtomicU64::new(1),
+        }
+    }
+
+    fn submit(&self, effect: LaunchEffect) {
+        // The receiver lives for the duration of the event loop. A panic here
+        // means the worker itself died, which is not a recoverable UI error.
+        self.send
+            .as_ref()
+            .expect("launch-effect sender missing")
+            .send(effect)
+            .expect("launch-effect worker stopped");
+    }
+
+    fn submit_templates(&self, workspace_id: String) -> u64 {
+        let request_id = self.next_template_request.fetch_add(1, Ordering::Relaxed);
+        self.submit(LaunchEffect::ListTemplates {
+            request_id,
+            workspace_id,
+        });
+        request_id
+    }
+
+    fn apply_ready(&self, app: &mut App, workspace_id: &str) {
+        while let Ok(response) = self.receive.try_recv() {
+            match response {
+                LaunchEffectResult::Templates {
+                    request_id,
+                    workspace_id: answered_for,
+                    result,
+                } => {
+                    let current_picker = app.template_picker.as_ref().is_some_and(|picker| {
+                        picker.request_id == request_id
+                            && picker.workspace_id == answered_for
+                            && workspace_id == answered_for
+                    });
+                    if !current_picker {
+                        continue;
+                    }
+                    match result {
+                        Ok(templates) if templates.is_empty() => {
+                            app.template_picker = None;
+                            app.push_log(LogEntry::warn("no Driva templates are available"));
+                        }
+                        Ok(templates) => {
+                            if let Some(picker) = app.template_picker.as_mut() {
+                                picker.loaded(templates);
+                            }
+                        }
+                        Err(error) => {
+                            app.template_picker = None;
+                            app.push_log(LogEntry::error(format!(
+                                "could not list Driva templates: {error}"
+                            )));
+                        }
+                    }
+                }
+                LaunchEffectResult::WorkspaceChanged {
+                    workspace_id: answered_for,
+                    clear_interaction,
+                    result,
+                } => {
+                    if workspace_id != answered_for {
+                        continue;
+                    }
+                    app.workspace_launch_pending = app.workspace_launch_pending.saturating_sub(1);
+                    match result {
+                        Ok(policy) if clear_interaction => {
+                            app.launch.adopt_workspace(policy);
+                            app.show_action_message(
+                                "moved into this Workspace's policy — every launch here starts from it",
+                            );
+                        }
+                        Ok(policy) => {
+                            app.launch.sync_workspace(policy);
+                            app.show_action_message("Workspace launch policy saved");
+                        }
+                        Err(error) => {
+                            let message =
+                                format!("could not change the Workspace launch policy: {error}");
+                            app.show_action_message(message.clone());
+                            app.push_log(LogEntry::error(message));
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl Drop for LaunchEffects {
+    fn drop(&mut self) {
+        // Finish already-accepted edits before this run is allowed to leave.
+        // Otherwise quitting immediately after Enter could terminate the
+        // process between enqueueing a durable Workspace edit and writing it.
+        self.send.take();
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+fn submit_workspace_launch(
+    effects: &LaunchEffects,
+    app: &mut App,
+    workspace_id: String,
+    change: WorkspaceLaunchChange,
+    clear_interaction: bool,
+) {
+    app.workspace_launch_pending += 1;
+    effects.submit(LaunchEffect::ChangeWorkspace {
+        workspace_id,
+        change,
+        clear_interaction,
+    });
+}
 
 pub struct RunContext<'a> {
     pub standing_launch: &'a LaunchPolicy,
@@ -109,11 +314,13 @@ pub fn run(
     // The model column's ordering is remembered across runs, so pick it up
     // before the picker can be opened.
     app.recent_models = preferences::load_recent_models(preferences_path);
+    let launch_effects = LaunchEffects::new(client.clone());
     let mut pending_fold = false;
     let mut interactions_refreshed = Instant::now();
     loop {
         let workspace_id = app.workspace.id.clone().unwrap_or_default();
         app.notices.expire();
+        launch_effects.apply_ready(app, &workspace_id);
         // Workspace launch policy is a server-owned read model. Refresh it
         // independently of input so edits from another Styra client flow into
         // this Driva view and invalidate its planned options.
@@ -187,6 +394,43 @@ pub fn run(
             continue;
         }
 
+        // Template discovery and choice are part of this root loop. Even the
+        // loading state is cancellable, and no nested event loop can defer the
+        // edit produced by Enter until some unrelated future keypress.
+        if let Some(template_picker) = app.template_picker.as_mut() {
+            let action = template_picker.handle_key(key.code);
+            match action {
+                picker::TemplatePickerAction::None => {}
+                picker::TemplatePickerAction::Cancel => app.template_picker = None,
+                picker::TemplatePickerAction::Unchanged => {
+                    app.template_picker = None;
+                    app.show_action_message(
+                        "templates unchanged — Space toggles the highlighted template",
+                    );
+                }
+                picker::TemplatePickerAction::Apply { scope, chosen } => {
+                    app.template_picker = None;
+                    launch::set_templates_for(app, scope, chosen);
+                }
+            }
+            // An Apply can have queued a Workspace effect. Dispatch it now,
+            // before returning to drawing, without waiting for another key.
+            if let Some(Request::ChangeWorkspaceLaunch {
+                change,
+                clear_interaction,
+            }) = app.take_workspace_launch_request()
+            {
+                submit_workspace_launch(
+                    &launch_effects,
+                    app,
+                    workspace_id,
+                    change,
+                    clear_interaction,
+                );
+            }
+            continue;
+        }
+
         // While the reference is open it is modal, so none of the commands
         // described by it can accidentally act on the session underneath.
         if app.help.is_open() {
@@ -214,6 +458,21 @@ pub fn run(
         // of a path, including the characters that are shortcuts elsewhere.
         if app.launch.prompt.is_some() {
             keys::handle_mount_prompt_key(app, key);
+            // Confirming a Workspace mount closes the prompt and emits an
+            // effect. It must leave on this key, not sit behind the next one.
+            if let Some(Request::ChangeWorkspaceLaunch {
+                change,
+                clear_interaction,
+            }) = app.take_workspace_launch_request()
+            {
+                submit_workspace_launch(
+                    &launch_effects,
+                    app,
+                    workspace_id,
+                    change,
+                    clear_interaction,
+                );
+            }
             continue;
         }
         // In input focus, `?` is message text rather than a shortcut.
@@ -395,19 +654,6 @@ pub fn run(
                 }
             }
             Some(Request::Templates) => {
-                let templates = match client.list_templates(&workspace_id) {
-                    Ok(templates) => templates,
-                    Err(error) => {
-                        app.push_log(LogEntry::error(format!(
-                            "could not list Driva templates: {error:#}"
-                        )));
-                        continue;
-                    }
-                };
-                if templates.is_empty() {
-                    app.push_log(LogEntry::warn("no Driva templates are available"));
-                    continue;
-                }
                 // Which templates the picker starts from is the layer being
                 // edited. For the Workspace's own that is exactly its list. For
                 // this interaction's, the picker offers and returns the whole
@@ -419,26 +665,26 @@ pub fn run(
                     LaunchScope::Workspace => app.launch.workspace.templates.clone(),
                     LaunchScope::Interaction => app.launch.effective().templates,
                 };
-                let chosen = picker::run_template_picker(terminal, &templates, &current)?;
-                if let Some(chosen) = chosen {
-                    launch::set_templates(app, chosen);
-                }
+                let request_id = launch_effects.submit_templates(workspace_id.clone());
+                app.template_picker = Some(picker::TemplatePicker::loading(
+                    request_id,
+                    workspace_id.clone(),
+                    app.launch.scope,
+                    current,
+                ));
             }
             Some(Request::ChangeWorkspaceLaunch {
                 change,
                 clear_interaction,
-            }) => match client.change_workspace_launch(&workspace_id, change) {
-                Ok(policy) if clear_interaction => {
-                    app.launch.adopt_workspace(policy);
-                    app.show_action_message(
-                        "moved into this Workspace's policy — every launch here starts from it",
-                    );
-                }
-                Ok(policy) => app.launch.sync_workspace(policy),
-                Err(error) => app.push_log(LogEntry::error(format!(
-                    "could not change the Workspace launch policy: {error:#}"
-                ))),
-            },
+            }) => {
+                submit_workspace_launch(
+                    &launch_effects,
+                    app,
+                    workspace_id.clone(),
+                    change,
+                    clear_interaction,
+                );
+            }
             // Parsing is the server's, since it holds the session's recorded
             // contract and the journal the answer is read from; this client
             // only asks and renders.
@@ -490,10 +736,75 @@ pub fn run(
 mod tests {
     use super::*;
 
+    fn effects_for_test() -> (LaunchEffects, Sender<LaunchEffectResult>) {
+        let (send, _jobs) = mpsc::channel();
+        let (results, receive) = mpsc::channel();
+        (
+            LaunchEffects {
+                send: Some(send),
+                receive,
+                worker: None,
+                next_template_request: AtomicU64::new(1),
+            },
+            results,
+        )
+    }
+
     #[test]
     fn stopping_is_a_navigator_passthrough_action() {
         assert!(interaction_navigator_passthrough(&KeyCode::Char('S')));
         assert!(interaction_navigator_passthrough(&KeyCode::Char('i')));
         assert!(!interaction_navigator_passthrough(&KeyCode::Char('l')));
+    }
+
+    #[test]
+    fn workspace_acknowledgement_updates_the_snapshot_and_clears_pending() {
+        let (effects, results) = effects_for_test();
+        let mut app =
+            App::pending(styra_server::agent::Selection::parse("codex:gpt-5.6-sol/high").unwrap());
+        app.workspace_launch_pending = 1;
+        let policy = LaunchPolicy {
+            templates: vec!["rust".into()],
+            ..LaunchPolicy::default()
+        };
+        results
+            .send(LaunchEffectResult::WorkspaceChanged {
+                workspace_id: "workspace".into(),
+                clear_interaction: false,
+                result: Ok(policy.clone()),
+            })
+            .unwrap();
+
+        effects.apply_ready(&mut app, "workspace");
+
+        assert_eq!(app.workspace_launch_pending, 0);
+        assert_eq!(app.launch.workspace, policy);
+        assert!(app
+            .notices
+            .iter()
+            .any(|notice| notice.text == "Workspace launch policy saved"));
+    }
+
+    #[test]
+    fn workspace_edit_failure_is_visible_without_opening_the_log() {
+        let (effects, results) = effects_for_test();
+        let mut app =
+            App::pending(styra_server::agent::Selection::parse("codex:gpt-5.6-sol/high").unwrap());
+        app.workspace_launch_pending = 1;
+        results
+            .send(LaunchEffectResult::WorkspaceChanged {
+                workspace_id: "workspace".into(),
+                clear_interaction: false,
+                result: Err("disk full".into()),
+            })
+            .unwrap();
+
+        effects.apply_ready(&mut app, "workspace");
+
+        assert_eq!(app.workspace_launch_pending, 0);
+        assert!(app
+            .notices
+            .iter()
+            .any(|notice| notice.text.contains("disk full")));
     }
 }

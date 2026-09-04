@@ -645,18 +645,22 @@ fn hint_lines(app: &App) -> Vec<Line<'static>> {
         muted,
     ))];
     lines.push(Line::from(Span::styled(
-        match app.launch.scope {
-            LaunchScope::Workspace => {
-                "  changes are stored by the server and shared by every client".to_owned()
-            }
-            LaunchScope::Interaction => format!(
-                "  I {} · U move up into it · D save as default",
-                if app.launch.interaction.standalone {
-                    "inherit the Workspace"
-                } else {
-                    "ignore the Workspace"
+        if app.workspace_launch_pending > 0 {
+            "  saving Workspace launch policy…".to_owned()
+        } else {
+            match app.launch.scope {
+                LaunchScope::Workspace => {
+                    "  changes are stored by the server and shared by every client".to_owned()
                 }
-            ),
+                LaunchScope::Interaction => format!(
+                    "  I {} · U move up into it · D save as default",
+                    if app.launch.interaction.standalone {
+                        "inherit the Workspace"
+                    } else {
+                        "ignore the Workspace"
+                    }
+                ),
+            }
         },
         muted,
     )));
@@ -1022,6 +1026,24 @@ mod tests {
         let screen = tall(&app);
         assert!(screen.contains("rust, browser"), "{screen}");
         assert!(screen.contains("/srv/data → /mnt/data (rw)"), "{screen}");
+    }
+
+    #[test]
+    fn saving_is_shown_only_from_live_pending_state() {
+        let mut app = editable_app();
+        app.workspace_launch_pending = 1;
+        let screen = tall(&app);
+        assert!(
+            screen.contains("saving Workspace launch policy…"),
+            "{screen}"
+        );
+
+        app.workspace_launch_pending = 0;
+        let screen = tall(&app);
+        assert!(
+            !screen.contains("saving Workspace launch policy…"),
+            "{screen}"
+        );
     }
 
     /// The two layers are separately visible and separately edited: what the

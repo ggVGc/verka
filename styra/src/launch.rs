@@ -290,22 +290,15 @@ impl Launch {
         }
     }
 
-    /// Adopt the templates chosen in the picker, for the layer being edited.
+    /// Adopt the effective templates chosen for this interaction.
     ///
-    /// On the Workspace's layer the list is the list: the picker offered exactly
-    /// that layer's templates and what came back replaces them.
-    ///
-    /// On this interaction's, the picker shows and returns the *effective* list,
+    /// The picker shows and returns the *effective* list,
     /// so the choice has to be turned back into an overlay. Keeping everything
     /// the Workspace grants means the overlay is just the additions. Dropping one
     /// of them cannot be said by adding, so the interaction stops inheriting and
     /// carries the list itself — otherwise deselecting a Workspace template would
     /// silently do nothing. Whether that happened is what comes back.
-    fn set_templates(&mut self, chosen: Vec<String>) -> Option<&'static str> {
-        if self.scope == LaunchScope::Workspace {
-            self.workspace.templates = chosen;
-            return None;
-        }
+    fn set_interaction_templates(&mut self, chosen: Vec<String>) -> Option<&'static str> {
         let base = &self.workspace.templates;
         if !self.interaction.standalone && base.iter().all(|name| chosen.contains(name)) {
             self.interaction.templates = chosen
@@ -447,15 +440,23 @@ pub fn toggle_standalone(app: &mut App) {
 }
 
 /// Adopt the templates the picker came back with.
+#[cfg(test)]
 pub fn set_templates(app: &mut App, chosen: Vec<String>) {
+    set_templates_for(app, app.launch.scope, chosen);
+}
+
+/// Adopt a picker result for the layer it was opened from. The explicit scope
+/// matters now that template discovery is asynchronous: changing the visible
+/// pane while the server answers must not redirect the eventual edit.
+pub fn set_templates_for(app: &mut App, scope: LaunchScope, chosen: Vec<String>) {
     if !app.allow_launch_edit() {
         return;
     }
-    if app.launch.scope == LaunchScope::Workspace {
+    if scope == LaunchScope::Workspace {
         workspace_change(app, WorkspaceLaunchChange::SetTemplates(chosen));
         return;
     }
-    let note = app.launch.set_templates(chosen);
+    let note = app.launch.set_interaction_templates(chosen);
     if let Some(note) = note {
         app.show_action_message(note);
     }
@@ -1086,5 +1087,22 @@ mod tests {
         assert!(pending.can_edit_launch());
         cycle_network(&mut pending);
         assert_eq!(pending.launch.interaction.network, Some(true));
+    }
+
+    #[test]
+    fn another_launch_edit_waits_for_the_workspace_snapshot_being_saved() {
+        let mut app = pending_in_a_workspace_with_a_policy();
+        app.workspace_launch_pending = 1;
+        let before = app.launch.effective();
+
+        cycle_network(&mut app);
+        set_templates(&mut app, vec!["browser".into()]);
+
+        assert_eq!(app.launch.effective(), before);
+        assert_eq!(app.take_request(), None);
+        assert!(app
+            .notices
+            .iter()
+            .all(|message| message.text == "the Workspace launch policy is still saving"));
     }
 }

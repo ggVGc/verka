@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 use styra_server::{Client, InteractionSummary, InteractionUpdate, LogEntry, WorkspaceSummary};
 
+use crate::launch::LaunchScope;
 use crate::ui;
 
 /// How long the cursor must rest on a Session or Workspace before its preview
@@ -295,56 +296,94 @@ pub fn run_workspace_picker(
     }
 }
 
-/// The Driva template picker. Templates layer rather than replace one another,
-/// so this is a multi-select: j/k or arrows to move, Space to add or drop the
-/// template under the cursor, Enter to accept the whole set, Esc or q to leave
-/// it as it was.
-///
-/// Selection order is preserved because Driva applies templates in order and
-/// later ones win on conflict, so the sequence the operator built is the
-/// policy they get.
-pub fn run_template_picker(
-    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
-    templates: &[styra_server::TemplateSummary],
-    selected_names: &[String],
-) -> Result<Option<Vec<String>>> {
-    let mut chosen: Vec<String> = selected_names
-        .iter()
-        .filter(|name| templates.iter().any(|template| &template.name == *name))
-        .cloned()
-        .collect();
-    let mut cursor = 0usize;
-    loop {
-        terminal.draw(|frame| ui::render_template_picker(frame, templates, &chosen, cursor))?;
-        if !event::poll(Duration::from_millis(100))? {
-            continue;
-        }
-        let Event::Key(key) = event::read()? else {
-            continue;
-        };
-        if key.kind != KeyEventKind::Press {
-            continue;
-        }
-        match key.code {
-            KeyCode::Char('q') | KeyCode::Esc => return Ok(None),
-            KeyCode::Char('j') | KeyCode::Down => {
-                cursor = (cursor + 1).min(templates.len().saturating_sub(1));
-            }
-            KeyCode::Char('k') | KeyCode::Up => cursor = cursor.saturating_sub(1),
-            KeyCode::Char(' ') => {
-                if let Some(template) = templates.get(cursor) {
-                    match chosen.iter().position(|name| name == &template.name) {
-                        Some(index) => {
-                            chosen.remove(index);
-                        }
-                        None => chosen.push(template.name.clone()),
-                    }
-                }
-            }
-            KeyCode::Enter => return Ok(Some(chosen)),
-            _ => {}
+/// Root-loop-owned state for the Driva template chooser. `templates` is `None`
+/// while discovery is running on the launch-effect worker; keeping that state
+/// in `App` lets the ordinary frame loop remain alive throughout the request.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TemplatePicker {
+    pub request_id: u64,
+    pub workspace_id: String,
+    pub scope: LaunchScope,
+    pub templates: Option<Vec<styra_server::TemplateSummary>>,
+    initial: Vec<String>,
+    pub chosen: Vec<String>,
+    pub cursor: usize,
+}
+
+impl TemplatePicker {
+    pub fn loading(
+        request_id: u64,
+        workspace_id: String,
+        scope: LaunchScope,
+        chosen: Vec<String>,
+    ) -> Self {
+        Self {
+            request_id,
+            workspace_id,
+            scope,
+            templates: None,
+            initial: chosen.clone(),
+            chosen,
+            cursor: 0,
         }
     }
+
+    pub fn loaded(&mut self, templates: Vec<styra_server::TemplateSummary>) {
+        self.chosen
+            .retain(|name| templates.iter().any(|template| &template.name == name));
+        self.initial.clone_from(&self.chosen);
+        self.templates = Some(templates);
+        self.cursor = 0;
+    }
+
+    pub fn handle_key(&mut self, code: KeyCode) -> TemplatePickerAction {
+        let Some(templates) = self.templates.as_ref() else {
+            return if matches!(code, KeyCode::Char('q') | KeyCode::Esc) {
+                TemplatePickerAction::Cancel
+            } else {
+                TemplatePickerAction::None
+            };
+        };
+        match code {
+            KeyCode::Char('q') | KeyCode::Esc => TemplatePickerAction::Cancel,
+            KeyCode::Char('j') | KeyCode::Down => {
+                self.cursor = (self.cursor + 1).min(templates.len().saturating_sub(1));
+                TemplatePickerAction::None
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                self.cursor = self.cursor.saturating_sub(1);
+                TemplatePickerAction::None
+            }
+            KeyCode::Char(' ') => {
+                if let Some(template) = templates.get(self.cursor) {
+                    match self.chosen.iter().position(|name| name == &template.name) {
+                        Some(index) => {
+                            self.chosen.remove(index);
+                        }
+                        None => self.chosen.push(template.name.clone()),
+                    }
+                }
+                TemplatePickerAction::None
+            }
+            KeyCode::Enter if self.chosen == self.initial => TemplatePickerAction::Unchanged,
+            KeyCode::Enter => TemplatePickerAction::Apply {
+                scope: self.scope,
+                chosen: self.chosen.clone(),
+            },
+            _ => TemplatePickerAction::None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TemplatePickerAction {
+    None,
+    Cancel,
+    Unchanged,
+    Apply {
+        scope: LaunchScope,
+        chosen: Vec<String>,
+    },
 }
 
 /// Order Workspaces for the picker: those holding a live interaction first,
@@ -421,6 +460,43 @@ mod tests {
             last_accessed_at_ms,
             launch: Default::default(),
         }
+    }
+
+    fn template(name: &str) -> styra_server::TemplateSummary {
+        styra_server::TemplateSummary {
+            name: name.into(),
+            description: String::new(),
+        }
+    }
+
+    #[test]
+    fn template_picker_keeps_loading_and_choice_in_root_loop_state() {
+        let mut picker = TemplatePicker::loading(
+            1,
+            "workspace".into(),
+            LaunchScope::Workspace,
+            vec!["rust".into(), "removed".into()],
+        );
+        assert_eq!(
+            picker.handle_key(KeyCode::Enter),
+            TemplatePickerAction::None
+        );
+
+        picker.loaded(vec![template("rust"), template("browser")]);
+        assert_eq!(picker.chosen, vec!["rust"]);
+        assert_eq!(
+            picker.handle_key(KeyCode::Enter),
+            TemplatePickerAction::Unchanged
+        );
+        picker.handle_key(KeyCode::Down);
+        picker.handle_key(KeyCode::Char(' '));
+        assert_eq!(
+            picker.handle_key(KeyCode::Enter),
+            TemplatePickerAction::Apply {
+                scope: LaunchScope::Workspace,
+                chosen: vec!["rust".into(), "browser".into()],
+            }
+        );
     }
 
     #[test]

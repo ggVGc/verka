@@ -44,7 +44,7 @@ use messages::{message_area_height, render_messages};
 pub(crate) use picker::short_id;
 pub use picker::{
     render_message_popup, render_name_prompt, render_picker, render_template_picker,
-    render_workspace_picker, Preview, SessionsPreview,
+    render_template_picker_loading, render_workspace_picker, Preview, SessionsPreview,
 };
 pub(crate) use preview::preview_scroll_limit;
 use preview::{render_fullscreen_preview, render_preview};
@@ -285,6 +285,19 @@ pub fn render(frame: &mut Frame, app: &App) {
     // pickers do, rather than overlaying a screen whose keys are inert.
     if let Some(launcher) = &app.launcher {
         render_launcher(frame, launcher, frame.area());
+        return;
+    }
+
+    // Template discovery and selection are root-loop modals. In particular,
+    // loading is rendered here rather than inside a blocking picker loop, so
+    // the terminal continues to redraw while the server answers.
+    if let Some(picker) = &app.template_picker {
+        match &picker.templates {
+            Some(templates) => {
+                render_template_picker(frame, templates, &picker.chosen, picker.cursor)
+            }
+            None => render_template_picker_loading(frame),
+        }
         return;
     }
 
