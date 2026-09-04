@@ -1,6 +1,6 @@
-//! What the session was launched with — the isolation backend, the command it
-//! runs, and the mount/network policy enforced around it — an answer to "what
-//! can this agent touch" without having to go dig through `main.rs`.
+//! The server's general account of the current Workspace and Interaction:
+//! durable Workspace metadata, live Interaction state, and the Driva sandbox
+//! it runs in (or would run in before the first message).
 //!
 //! Before anything has launched the same fields describe the policy the next
 //! interaction would start under, marked as planned so the two are not read as
@@ -19,11 +19,11 @@
 //! actually gets — including the parts neither pane can change: the workspace
 //! mount, the profile's credential mounts, the broker's control mount.
 
-use super::{palette, render_placeholder, view_block};
+use super::{palette, view_block};
 use crate::app::App;
 use crate::launch::LaunchScope;
 use crate::mount;
-use ratatui::layout::Rect;
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
@@ -40,21 +40,15 @@ const SUMMARY_MIN_HEIGHT: u16 = 5;
 const SETTING_LABEL: usize = 10;
 
 pub(crate) fn render_driva(frame: &mut Frame, app: &App, area: Rect) {
-    let block = view_block(app, Some("driva"));
-
-    let Some(options) = &app.launch.driva else {
-        render_placeholder(frame, block, area, "  no launch policy to describe");
-        render_prompt(frame, app, area);
-        return;
-    };
+    let block = view_block(app, Some("details"));
+    let options = app.launch.driva.as_ref();
 
     // A live interaction's policy is a record: there is nothing to choose, so
     // the panes and their keys are not drawn over it at all.
     if !app.can_edit_launch() {
-        let paragraph = Paragraph::new(summary_lines(app, options))
-            .block(block)
-            .wrap(Wrap { trim: false });
-        frame.render_widget(paragraph, area);
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+        render_summary(frame, app, options, inner);
         render_prompt(frame, app, area);
         return;
     }
@@ -73,10 +67,7 @@ pub(crate) fn render_driva(frame: &mut Frame, app: &App, area: Rect) {
     let interaction_area = take_bottom(&mut rest, interaction.len() as u16 + 2, SUMMARY_MIN_HEIGHT);
     let workspace_area = take_bottom(&mut rest, workspace.len() as u16 + 2, SUMMARY_MIN_HEIGHT);
 
-    frame.render_widget(
-        Paragraph::new(summary_lines(app, options)).wrap(Wrap { trim: false }),
-        rest,
-    );
+    render_summary(frame, app, options, rest);
     render_pane(
         frame,
         app,
@@ -111,8 +102,60 @@ fn take_bottom(area: &mut Rect, wanted: u16, floor: u16) -> Rect {
 
 /// The policy the two settings panes resolve to: what the sandbox will actually
 /// be, including everything neither pane can change.
-fn summary_lines(app: &App, options: &DrivaOptions) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
+fn render_summary(frame: &mut Frame, app: &App, options: Option<&DrivaOptions>, area: Rect) {
+    let workspace = workspace_lines(app);
+    let interaction = interaction_lines(app);
+    let mut sandbox_area = area;
+
+    // The two objects are peers in this overview. Columns keep their complete
+    // metadata from pushing the sandbox below the policy editors; narrow
+    // terminals fall back to a readable vertical sequence.
+    if area.width >= 72 {
+        let left_width = area.width / 2;
+        let right_width = area.width.saturating_sub(left_width);
+        let workspace = Paragraph::new(workspace).wrap(Wrap { trim: false });
+        let interaction = Paragraph::new(interaction).wrap(Wrap { trim: false });
+        let height = workspace
+            .line_count(left_width.max(1))
+            .max(interaction.line_count(right_width.max(1)))
+            .min(usize::from(area.height)) as u16;
+        let overview = Rect { height, ..area };
+        let columns = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(overview);
+        frame.render_widget(workspace, columns[0]);
+        frame.render_widget(interaction, columns[1]);
+        sandbox_area.y += height;
+        sandbox_area.height = sandbox_area.height.saturating_sub(height);
+    } else {
+        let mut overview = workspace;
+        overview.push(Line::from(""));
+        overview.extend(interaction);
+        let overview = Paragraph::new(overview).wrap(Wrap { trim: false });
+        let height = overview
+            .line_count(area.width.max(1))
+            .min(usize::from(area.height)) as u16;
+        frame.render_widget(overview, Rect { height, ..area });
+        sandbox_area.y += height;
+        sandbox_area.height = sandbox_area.height.saturating_sub(height);
+    }
+    frame.render_widget(
+        Paragraph::new(sandbox_lines(app, options)).wrap(Wrap { trim: false }),
+        sandbox_area,
+    );
+}
+
+fn sandbox_lines(app: &App, options: Option<&DrivaOptions>) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::from(""), section_line("sandbox")];
+
+    let Some(options) = options else {
+        lines.push(detail_field_line(
+            "state",
+            "unavailable — the server has not resolved a launch policy",
+        ));
+        return lines;
+    };
     // Before launch this is a plan, not a record: say so, so an operator does
     // not read it as the sandbox some agent is already running in.
     if app.launch.planned {
@@ -151,6 +194,177 @@ fn summary_lines(app: &App, options: &DrivaOptions) -> Vec<Line<'static>> {
     ]);
     lines.extend(grouped_mount_lines(&options.mounts));
     lines
+}
+
+/// The complete durable Workspace snapshot retained by the client. These are
+/// all fields the server's `WorkspaceSummary` reports, rather than only the
+/// name and worktree toggle that happen to be used elsewhere in the UI.
+fn workspace_lines(app: &App) -> Vec<Line<'static>> {
+    let mut lines = vec![section_line("Workspace")];
+    lines.push(detail_field_line(
+        "identity",
+        &format!(
+            "{} · {}",
+            match (&app.workspace.given_name, &app.workspace.name) {
+                (Some(name), _) => name.clone(),
+                (None, Some(display)) => format!("unnamed (shown as {display})"),
+                (None, None) => "unknown".into(),
+            },
+            app.workspace.id.as_deref().unwrap_or("unknown")
+        ),
+    ));
+    lines.push(detail_field_line(
+        "host path",
+        &app.workspace
+            .host_path
+            .as_deref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "unknown".into()),
+    ));
+    lines.push(detail_field_line(
+        "git repo",
+        &app.workspace
+            .git_repository
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "none".into()),
+    ));
+    lines.push(detail_field_line(
+        "server path",
+        &app.workspace
+            .server_path
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "unknown".into()),
+    ));
+    let sessions = app
+        .workspace
+        .session_count
+        .map(|count| count.to_string())
+        .unwrap_or_else(|| "unknown".into());
+    lines.push(detail_field_line(
+        "created",
+        &match (&app.workspace.age, app.workspace.created_at_ms) {
+            (Some(age), Some(at)) => format!("{age} · {at} ms"),
+            (Some(age), None) => age.clone(),
+            (None, Some(at)) => format!("{at} ms"),
+            (None, None) => "unknown".into(),
+        },
+    ));
+    lines.push(detail_field_line(
+        "tracked",
+        &format!(
+            "{sessions} session(s) · accessed {} ms",
+            app.workspace
+                .last_accessed_at_ms
+                .map(|at| at.to_string())
+                .unwrap_or_else(|| "unknown".into())
+        ),
+    ));
+    let standing = &app.launch.workspace;
+    lines.push(detail_field_line(
+        "capabilities",
+        &format!(
+            "worktrees {} · network {} · {} template(s) · {} mount(s)",
+            if app.workspace.worktrees_enabled {
+                "on"
+            } else {
+                "off"
+            },
+            if standing.grants_network() {
+                "on"
+            } else {
+                "off"
+            },
+            standing.templates.len(),
+            standing.mounts.len()
+        ),
+    ));
+    lines
+}
+
+/// The current server Interaction projected through the state the client keeps
+/// synchronized from its summary and update stream.
+fn interaction_lines(app: &App) -> Vec<Line<'static>> {
+    let mut lines = vec![section_line("current interaction")];
+    if app.session_id.is_empty() {
+        lines.push(detail_field_line("state", "none — not started"));
+        lines.push(detail_field_line("profile", &app.selection.name()));
+        return lines;
+    }
+    lines.extend([
+        detail_field_line(
+            "identity",
+            &format!(
+                "{} · {}",
+                app.session_name.as_deref().unwrap_or("unnamed"),
+                app.session_id
+            ),
+        ),
+        detail_field_line(
+            "Workspace id",
+            app.workspace.id.as_deref().unwrap_or("unknown"),
+        ),
+        detail_field_line("profile", &app.selection.name()),
+        detail_field_line("status", &app.activity.status.label()),
+        detail_field_line(
+            "accepting",
+            if matches!(
+                app.activity.status,
+                crate::activity::Status::Running
+                    | crate::activity::Status::Idle
+                    | crate::activity::Status::Background
+            ) {
+                "yes"
+            } else {
+                "no"
+            },
+        ),
+        detail_field_line(
+            "workspace",
+            &app.workspace
+                .root()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "unknown".into()),
+        ),
+        detail_field_line(
+            "working dir",
+            &app.workspace
+                .working_directory_or_current()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "unknown".into()),
+        ),
+        detail_field_line("queued", &app.outbox.queued_count().to_string()),
+    ]);
+    if let Some(message) = app.timeline.entries.iter().rev().find_map(|entry| {
+        matches!(
+            entry.event,
+            styra_server::event::AgentEvent::AgentMessage { .. }
+        )
+        .then(|| entry.event.summary())
+    }) {
+        lines.push(detail_field_line("last message", &message));
+    }
+    lines
+}
+
+fn section_line(title: &str) -> Line<'static> {
+    Line::from(Span::styled(
+        title.to_owned(),
+        Style::default()
+            .fg(palette::ACCENT)
+            .add_modifier(Modifier::BOLD),
+    ))
+}
+
+fn detail_field_line(label: &str, value: &str) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            format!("  {label:<13} "),
+            Style::default().fg(palette::ADDITIONAL_INFO),
+        ),
+        Span::styled(value.to_owned(), Style::default().fg(palette::TEXT)),
+    ])
 }
 
 /// The effective mounts under a heading per layer that contributed them.
@@ -561,14 +775,16 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
-    fn driva_view_shows_the_launch_policy_or_a_placeholder_before_launch() {
+    fn details_view_shows_workspace_even_without_a_launch_policy() {
         use styra_server::DrivaOptions;
         use styra_server::{Mount, MountAccess};
 
         let mut app = testing::app("s1");
         app.toggle_view(View::Driva);
         let placeholder = rendered(&app);
-        assert!(placeholder.contains("no launch policy"));
+        assert!(placeholder.contains("Workspace"));
+        assert!(placeholder.contains("current interaction"));
+        assert!(placeholder.contains("server has not resolved a launch policy"));
 
         app.launch.record(DrivaOptions {
             isolation_backend: "bwrap".into(),
@@ -584,8 +800,8 @@ mod tests {
                 },
             }],
         });
-        let screen = rendered(&app);
-        assert!(screen.contains("driva"));
+        let screen = tall(&app);
+        assert!(screen.contains("details"));
         assert!(screen.contains("bwrap"));
         assert!(screen.contains("codex app-server"));
         assert!(screen.contains("off"));
@@ -593,6 +809,86 @@ mod tests {
         assert!(screen.contains("/tmp/styra/workspace"));
         assert!(screen.contains("workspace"));
         assert!(!screen.contains("planned"));
+    }
+
+    #[test]
+    fn details_include_the_complete_server_workspace_snapshot() {
+        let mut app = testing::pending_app();
+        let workspace = styra_server::WorkspaceSummary {
+            id: "w-42".into(),
+            name: Some("payments".into()),
+            host_path: "/work/payments".into(),
+            git_repository: Some("/git/payments".into()),
+            worktrees_enabled: true,
+            path: "/state/workspaces/w-42".into(),
+            session_count: 7,
+            age: "2h ago".into(),
+            created_at_ms: 100,
+            last_accessed_at_ms: 200,
+            launch: styra_server::LaunchPolicy {
+                network: Some(true),
+                templates: vec!["rust".into()],
+                mounts: vec![styra_server::LaunchMount::default()],
+                standalone: false,
+            },
+        };
+        app.workspace.enter(workspace.host_path.clone());
+        app.show_workspace(&workspace);
+
+        let lines = workspace_lines(&app)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        for value in [
+            "payments",
+            "w-42",
+            "/work/payments",
+            "/git/payments",
+            "/state/workspaces/w-42",
+            "7 session(s)",
+            "2h ago · 100 ms",
+            "accessed 200 ms",
+            "worktrees on",
+            "network on",
+            "1 template(s)",
+            "1 mount(s)",
+        ] {
+            assert!(lines.contains(value), "missing {value:?} from {lines}");
+        }
+    }
+
+    #[test]
+    fn details_include_current_interaction_state_and_latest_message() {
+        let mut app = testing::app("s-7");
+        app.session_name = Some("refactor".into());
+        app.workspace.id = Some("w-42".into());
+        app.workspace.enter("/work/payments/api".into());
+        app.outbox.replace_queued(vec![
+            styra_server::QueuedMessage::new("one"),
+            styra_server::QueuedMessage::new("two"),
+        ]);
+        app.push_event(styra_server::event::AgentEvent::AgentMessage {
+            text: "Implemented the change".into(),
+        });
+
+        let lines = interaction_lines(&app)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        for value in [
+            "refactor · s-7",
+            "w-42",
+            testing::PROFILE,
+            "running",
+            "accepting     yes",
+            "/work/payments/api",
+            "queued        2",
+            "Implemented the change",
+        ] {
+            assert!(lines.contains(value), "missing {value:?} from {lines}");
+        }
     }
 
     #[test]
@@ -659,7 +955,7 @@ mod tests {
                 mounts: Vec::new(),
             }),
         );
-        let screen = rendered(&app);
+        let screen = tall(&app);
         assert!(screen.contains("planned — applied when the next interaction starts"));
         assert!(screen.contains("codex app-server"));
         assert!(screen.contains("network  on"));

@@ -617,7 +617,7 @@ writable, `n` insert without mounting — because the alternative is a message
 that names something the sandbox has never heard of and a turn spent finding
 that out. A grant lands in *this interaction's* layer, never the Workspace's:
 the path came up in one message, which is the smallest claim available, and `U`
-in the driva view moves it up a layer if it turns out to belong to the work.
+in the details view moves it up a layer if it turns out to belong to the work.
 Like every mount edit it takes effect at the next launch or resume, which the
 confirmation says. While an interaction is running its mounts are fixed, so
 there is no question to ask: the path is inserted and the limit is stated.
@@ -781,10 +781,11 @@ Changing provider still requires a new Session. A running turn cannot be
 changed in place.
 Opening another Session (`V`) adopts that Session's recorded launch selection.
 
-### The sandbox is shown before it exists
+### Workspace, interaction, and sandbox details
 
-The driva view (`d`) answers "what can this agent touch": isolation backend,
-command, working directory, network policy, and every mount. On a live
+The details view (`d`) shows the complete server snapshot of the Workspace,
+the current Interaction's state, and answers "what can this agent touch":
+isolation backend, command, working directory, network policy, and every mount. On a live
 interaction that is a record, captured at spawn from the same `ExecutionRequest`
 Driva executes. On the blank start screen there is nothing running to record,
 but the policy is already decided — by the selection, the Workspace's standing
@@ -800,7 +801,7 @@ the plan.
 
 ### The sandbox is chosen where it is shown
 
-While nothing has launched, the driva view is also where the policy is decided.
+While nothing has launched, the details view is also where the policy is decided.
 Networking (`w`), the Driva templates to layer (`T`), and extra host mounts (`m`
 to add, `x` to remove) are all editable there.
 

@@ -25,8 +25,24 @@ pub struct Location {
     /// metadata (with the host directory name as its fallback) by the client,
     /// since Sessions only carry the durable Workspace id.
     pub name: Option<String>,
+    /// The name actually stored by the server, kept separately because
+    /// `name` above applies the host-directory display fallback.
+    pub given_name: Option<String>,
     /// Whether future launches expose linked-worktree creation.
     pub worktrees_enabled: bool,
+    /// Canonical Git checkout the server has associated with this Workspace.
+    pub git_repository: Option<PathBuf>,
+    /// Canonical host directory in the durable Workspace metadata. This can
+    /// differ from `root` while the current Interaction uses a linked worktree.
+    pub host_path: Option<PathBuf>,
+    /// Server-owned directory containing the Workspace metadata and Sessions.
+    pub server_path: Option<PathBuf>,
+    /// Number of durable Sessions in the last Workspace snapshot.
+    pub session_count: Option<usize>,
+    /// Human-readable age and exact server timestamps from that snapshot.
+    pub age: Option<String>,
+    pub created_at_ms: Option<u64>,
+    pub last_accessed_at_ms: Option<u64>,
     /// The host directory backing the agent's sandboxed workspace, when known.
     /// A replayed journal has no live workspace.
     root: Option<PathBuf>,
@@ -45,7 +61,15 @@ impl Location {
     pub fn show(&mut self, workspace: &WorkspaceSummary) {
         self.id = Some(workspace.id.clone());
         self.name = Some(display_name(workspace));
+        self.given_name = workspace.name.clone();
         self.worktrees_enabled = workspace.worktrees_enabled;
+        self.git_repository = workspace.git_repository.clone();
+        self.host_path = Some(workspace.host_path.clone());
+        self.server_path = Some(workspace.path.clone());
+        self.session_count = Some(workspace.session_count);
+        self.age = Some(workspace.age.clone());
+        self.created_at_ms = Some(workspace.created_at_ms);
+        self.last_accessed_at_ms = Some(workspace.last_accessed_at_ms);
     }
 
     /// The host directory backing the agent's workspace, if there is a live

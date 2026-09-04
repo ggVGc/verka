@@ -91,8 +91,10 @@ same metadata. Every launch then mounts the checkout at its host path read-only
 and mounts its `.git` metadata writable. Linked worktrees additionally expose
 the main checkout and common Git directory at the absolute paths recorded in
 their `.git` pointer.
-An individual interaction adds its own on top. The driva view (`d`) shows the two
-as two panes and edits either one: `Tab` moves the keys between them, and the
+An individual interaction adds its own on top. The details view (`d`) shows
+the Workspace and current interaction metadata alongside the effective
+sandbox. Before launch it also shows the two policy layers as panes and edits
+either one: `Tab` moves the keys between them, and the
 focused pane is the one `w`, `T`, `m` and `x` change. Edits to the Workspace
 pane are stored with the Workspace as they are made, so every client launching
 there picks them up; `D` keeps this interaction's own settings as this client's
@@ -199,7 +201,7 @@ The path must exist, since a path that is not there cannot be mounted either.
 
 A path no mount carries asks before it is inserted: `r` mounts it readable, `w`
 writable, and `n` inserts it without mounting anything. The grant lands in this
-interaction's own layer of the launch policy (visible in the driva view under
+interaction's own layer of the launch policy (visible in the details view under
 `d`, and movable up to the Workspace with `U`), so like every mount edit it
 applies when the Session next launches or resumes. A running interaction's
 mounts are fixed for its lifetime, so there the path is inserted with a note

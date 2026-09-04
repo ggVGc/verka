@@ -29,7 +29,7 @@ server directly. State defaults to `$XDG_STATE_HOME/styra` (or
 `--workspace` is writable in the sandbox at its canonical host path.
 `--template NAME` is repeatable and ordered; later templates override conflicts.
 `--network` grants networking for that launch layer. These can be refined before
-the first message in the Driva view.
+the first message in the details view.
 
 ## First turn and model choice
 
@@ -71,7 +71,7 @@ interaction (the durable Session remains).
 
 | Key | View or action |
 | --- | --- |
-| `r`, `l`, `t`, `d` | raw provider records, client/server log, transcript, Driva policy; press again for events |
+| `r`, `l`, `t`, `d` | raw provider records, client/server log, transcript, Workspace/interaction details; press again for events |
 | `Q` | quota readings observed by the server |
 | `f` | files associated with the selected event (or the whole session) |
 | `X` | typed answer from the last turn |

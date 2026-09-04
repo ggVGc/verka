@@ -124,7 +124,7 @@ mod tests {
             "Global",
             "Events and previews",
             "Raw, log, quota, and transcript",
-            "Driva (launch policy",
+            "Details (Workspace, interaction",
             "choose Driva templates",
             "Message editor",
             "Launch and selection screens",

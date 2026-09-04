@@ -66,7 +66,7 @@ pub(crate) const REFERENCE: &[ReferenceRow] = &[
     },
     ReferenceRow::Binding {
         keys: "r / l / t / d",
-        action: "raw / log / transcript / driva; press again for events",
+        action: "raw / log / transcript / details; press again for events",
     },
     ReferenceRow::Binding {
         keys: "Q",
@@ -149,7 +149,7 @@ pub(crate) const REFERENCE: &[ReferenceRow] = &[
         action: "copy selected line to clipboard (raw view)",
     },
     ReferenceRow::Blank,
-    ReferenceRow::Section("Driva (launch policy, before an interaction starts)"),
+    ReferenceRow::Section("Details (Workspace, interaction, and launch policy)"),
     ReferenceRow::Binding {
         keys: "Tab; j/k or ↓/↑",
         action: "edit the Workspace's policy / this interaction's; its mounts",

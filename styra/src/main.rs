@@ -74,7 +74,17 @@ fn refresh_workspace_context(app: &mut App, client: &Client, active: &WorkspaceS
         Some(workspace) => app.show_workspace(&workspace),
         // Nothing to name it with: the Workspace it belongs to is not one this
         // server still lists.
-        None => app.workspace.name = None,
+        None => {
+            app.workspace.name = None;
+            app.workspace.given_name = None;
+            app.workspace.git_repository = None;
+            app.workspace.host_path = None;
+            app.workspace.server_path = None;
+            app.workspace.session_count = None;
+            app.workspace.age = None;
+            app.workspace.created_at_ms = None;
+            app.workspace.last_accessed_at_ms = None;
+        }
     }
 }
 

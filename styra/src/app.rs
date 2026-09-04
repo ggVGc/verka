@@ -48,7 +48,7 @@ pub enum Focus {
 }
 
 /// What the main region shows: the decoded event list, the raw wire stream,
-/// the diagnostic log, the rendered transcript, the session's Driva policy,
+/// the diagnostic log, the rendered transcript, server details and Driva policy,
 /// or the selected entry's full-screen preview.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum View {
