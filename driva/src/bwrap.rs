@@ -279,14 +279,12 @@ impl BwrapIsolation {
 /// laid down. Enough to run the host's `/bin/sh` and normal OS tools, and
 /// deliberately nothing else: no host root, home, current directory, or other
 /// data path appears here.
-const HOST_RUNTIME_PATHS: [&str; 23] = [
+const HOST_RUNTIME_PATHS: [&str; 21] = [
     "/usr",
     "/bin",
     "/sbin",
     "/lib",
     "/lib64",
-    "/nix/store",
-    "/gnu/store",
     // Where a systemd host actually keeps its resolver: the nameservers
     // `/etc/resolv.conf` points at, and the socket `nss_resolve` asks when
     // `/etc/nsswitch.conf` says `resolve`. Without it a sandbox that is
