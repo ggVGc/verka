@@ -25,15 +25,7 @@ pub(crate) fn render_transcript_view(frame: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    let events = app
-        .timeline
-        .entries
-        .iter()
-        .enumerate()
-        .filter(|(idx, _)| app.timeline.is_visible(*idx))
-        .map(|(_, entry)| entry.event.clone())
-        .collect::<Vec<_>>();
-    let text = styra_server::render::render_events(&events, false, app.timeline.show_minor);
+    let text = app.transcript_text();
     let lines: Vec<Line<'static>> = text
         .lines()
         .map(|line| {

@@ -842,27 +842,43 @@ impl App {
         }
     }
 
+    /// The session as the transcript view shows it: the entries the list's
+    /// filters leave visible, laid out by genta's `render_events`. The view
+    /// renders this fresh each frame, so a filter change needs no other wiring.
+    pub fn transcript_text(&self) -> String {
+        self.render_entries(|app, idx, _| app.timeline.is_visible(idx))
+    }
+
     /// The whole session as a readable exchange, for the `Y` shortcut. Only
     /// the conversational events go in — the same set the `c` filter leaves on
-    /// screen ([`AgentEvent::is_conversation`]), so what `Y` copies is what an
-    /// operator reading the conversation sees, not the tool calls and
-    /// lifecycle lines underneath it.
+    /// screen ([`AgentEvent::is_conversation`]) — but they are laid out by the
+    /// same renderer the transcript view uses, so what lands on the clipboard
+    /// is the transcript an operator has been reading rather than a second
+    /// formatting of the same events.
     ///
-    /// Message text is taken from the event rather than its summary, which is
-    /// flattened to one truncated line for the list. `None` when the session
-    /// has said nothing yet, so `Y` reports that instead of copying a blank.
+    /// The list's own conversation-only filter is deliberately not consulted:
+    /// `Y` says what it copies, and an operator who has the tool calls on
+    /// screen still asked for the conversation.
+    ///
+    /// `None` when the session has said nothing yet, so `Y` reports that
+    /// instead of copying a blank.
     pub fn conversation_text(&self) -> Option<String> {
-        let mut text = String::new();
-        for entry in &self.timeline.entries {
-            let Some(turn) = conversation_turn(&entry.event) else {
-                continue;
-            };
-            if !text.is_empty() {
-                text.push_str("\n\n");
-            }
-            text.push_str(&turn);
-        }
-        (!text.is_empty()).then_some(text)
+        let text = self.render_entries(|_, _, entry| entry.event.is_conversation());
+        (!text.trim().is_empty()).then_some(text)
+    }
+
+    /// Render the entries `keep` selects, the one way this program lays events
+    /// out as text.
+    fn render_entries(&self, keep: impl Fn(&Self, usize, &Entry) -> bool) -> String {
+        let events = self
+            .timeline
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(idx, entry)| keep(self, *idx, entry))
+            .map(|(_, entry)| entry.event.clone())
+            .collect::<Vec<_>>();
+        styra_server::render::render_events(&events, false, self.timeline.show_minor)
     }
 
     // --- Focus ---------------------------------------------------------------
@@ -908,22 +924,6 @@ impl App {
         )
         .then(|| self.requests.pop_front())
         .flatten()
-    }
-}
-
-/// One event as a turn of copied conversation, or `None` if it is not part of
-/// the conversation at all. Speakers are named in words rather than with the
-/// list's `»`/`«` markers, since the text is read away from Styra — in an
-/// issue, a mail, a paste to someone else — where the markers mean nothing.
-fn conversation_turn(event: &AgentEvent) -> Option<String> {
-    match event {
-        AgentEvent::UserMessage { text } => Some(format!("you:\n{}", text.trim_end())),
-        AgentEvent::AgentMessage { text } => Some(format!("agent:\n{}", text.trim_end())),
-        AgentEvent::Error { message } => Some(format!("error: {}", message.trim_end())),
-        // Which model answered is part of reading the exchange back; its
-        // summary already states the change as a single line.
-        AgentEvent::ModelChanged { .. } => Some(event.summary()),
-        _ => None,
     }
 }
 
@@ -2023,8 +2023,17 @@ mod tests {
 
         assert_eq!(
             app.conversation_text().unwrap(),
-            "you:\nmake it faster\nthe inner loop especially\n\nagent:\nhoisted the bounds check",
-            "both messages in full, and neither the command nor the thinking"
+            concat!(
+                "    user make it faster\n",
+                "         the inner loop especially\n",
+                "   agent hoisted the bounds check\n",
+            ),
+            "both messages in full, laid out as the transcript lays them out, \
+             and neither the command nor the thinking"
+        );
+        assert!(
+            app.transcript_text().contains("cargo bench"),
+            "the transcript itself still shows what the conversation copy drops"
         );
     }
 
@@ -2041,7 +2050,10 @@ mod tests {
 
         assert_eq!(
             app.conversation_text().unwrap(),
-            "model → claude-opus-5 (same effort)\n\nerror: the agent stopped"
+            concat!(
+                "   model model → claude-opus-5 (same effort)\n",
+                "   error the agent stopped\n",
+            )
         );
     }
 
