@@ -130,6 +130,10 @@ pub(crate) const REFERENCE: &[ReferenceRow] = &[
         keys: "y",
         action: "copy selected entry to clipboard",
     },
+    ReferenceRow::Binding {
+        keys: "Y",
+        action: "copy the whole conversation (any view)",
+    },
     ReferenceRow::Blank,
     ReferenceRow::Section("Raw, log, quota, and transcript"),
     ReferenceRow::Binding {

@@ -108,6 +108,9 @@ pub fn handle_list_key(
             return;
         }
         KeyCode::Char('i') if app.view != View::Preview => return app.enter_input(),
+        // Global, unlike `y`: what it copies is the session's exchange, which
+        // does not change with the view the operator happens to be in.
+        KeyCode::Char('Y') => return copy_conversation(app),
         KeyCode::Char('r') => return app.toggle_raw(),
         KeyCode::Char('l') => return app.toggle_view(View::Log),
         // Opening the view also refreshes it: the log lives in the daemon's
@@ -294,14 +297,28 @@ pub fn handle_list_key(
 }
 
 /// Copy whatever the current view treats as the selected entry to the
-/// clipboard (see `App::copy_text`), reporting the outcome the same way
-/// [`terminal::open_shell`](crate::terminal::open_shell) does.
+/// clipboard (see `App::copy_text`).
 fn copy_selection(app: &mut App) {
     let Some(text) = app.copy_text() else {
         return app.show_action_message("nothing selected to copy");
     };
+    copy(app, text, "copied to clipboard");
+}
+
+/// Copy the session's whole conversation — messages, errors, and model
+/// changes, without the tool calls between them.
+fn copy_conversation(app: &mut App) {
+    let Some(text) = app.conversation_text() else {
+        return app.show_action_message("no conversation to copy yet");
+    };
+    copy(app, text, "copied the conversation to clipboard");
+}
+
+/// Send text to the clipboard, reporting the outcome the same way
+/// [`terminal::open_shell`](crate::terminal::open_shell) does.
+fn copy(app: &mut App, text: String, done: &str) {
     match crate::clipboard::copy(&text) {
-        Ok(()) => app.show_action_message("copied to clipboard"),
+        Ok(()) => app.show_action_message(done),
         Err(error) => app.push_log(LogEntry::error(format!(
             "could not copy to clipboard: {error:#}"
         ))),

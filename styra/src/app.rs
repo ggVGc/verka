@@ -842,6 +842,29 @@ impl App {
         }
     }
 
+    /// The whole session as a readable exchange, for the `Y` shortcut. Only
+    /// the conversational events go in — the same set the `c` filter leaves on
+    /// screen ([`AgentEvent::is_conversation`]), so what `Y` copies is what an
+    /// operator reading the conversation sees, not the tool calls and
+    /// lifecycle lines underneath it.
+    ///
+    /// Message text is taken from the event rather than its summary, which is
+    /// flattened to one truncated line for the list. `None` when the session
+    /// has said nothing yet, so `Y` reports that instead of copying a blank.
+    pub fn conversation_text(&self) -> Option<String> {
+        let mut text = String::new();
+        for entry in &self.timeline.entries {
+            let Some(turn) = conversation_turn(&entry.event) else {
+                continue;
+            };
+            if !text.is_empty() {
+                text.push_str("\n\n");
+            }
+            text.push_str(&turn);
+        }
+        (!text.is_empty()).then_some(text)
+    }
+
     // --- Focus ---------------------------------------------------------------
 
     pub fn enter_input(&mut self) {
@@ -885,6 +908,22 @@ impl App {
         )
         .then(|| self.requests.pop_front())
         .flatten()
+    }
+}
+
+/// One event as a turn of copied conversation, or `None` if it is not part of
+/// the conversation at all. Speakers are named in words rather than with the
+/// list's `»`/`«` markers, since the text is read away from Styra — in an
+/// issue, a mail, a paste to someone else — where the markers mean nothing.
+fn conversation_turn(event: &AgentEvent) -> Option<String> {
+    match event {
+        AgentEvent::UserMessage { text } => Some(format!("you:\n{}", text.trim_end())),
+        AgentEvent::AgentMessage { text } => Some(format!("agent:\n{}", text.trim_end())),
+        AgentEvent::Error { message } => Some(format!("error: {}", message.trim_end())),
+        // Which model answered is part of reading the exchange back; its
+        // summary already states the change as a single line.
+        AgentEvent::ModelChanged { .. } => Some(event.summary()),
+        _ => None,
     }
 }
 
@@ -1961,6 +2000,49 @@ mod tests {
         assert_eq!(app.transcript.clamped(), 10, "the last page, not past it");
         app.transcript.reset();
         assert_eq!(app.transcript.clamped(), 0);
+    }
+
+    #[test]
+    fn copying_the_conversation_leaves_out_everything_that_is_not_it() {
+        let mut app = app();
+        assert_eq!(app.conversation_text(), None, "nothing said yet");
+
+        app.push_event(AgentEvent::UserMessage {
+            text: "make it faster\nthe inner loop especially".into(),
+        });
+        app.push_event(AgentEvent::CommandStarted {
+            command: "cargo bench".into(),
+        });
+        app.push_event(AgentEvent::Thinking {
+            text: "considering the loop".into(),
+            tokens: Some(120),
+        });
+        app.push_event(AgentEvent::AgentMessage {
+            text: "hoisted the bounds check\n".into(),
+        });
+
+        assert_eq!(
+            app.conversation_text().unwrap(),
+            "you:\nmake it faster\nthe inner loop especially\n\nagent:\nhoisted the bounds check",
+            "both messages in full, and neither the command nor the thinking"
+        );
+    }
+
+    #[test]
+    fn a_copied_conversation_says_which_model_answered_and_what_failed() {
+        let mut app = app();
+        app.push_event(AgentEvent::ModelChanged {
+            model: Some("claude-opus-5".into()),
+            effort: None,
+        });
+        app.push_event(AgentEvent::Error {
+            message: "the agent stopped".into(),
+        });
+
+        assert_eq!(
+            app.conversation_text().unwrap(),
+            "model → claude-opus-5 (same effort)\n\nerror: the agent stopped"
+        );
     }
 
     #[test]
