@@ -543,6 +543,14 @@ pub struct SessionSummary {
     /// The millisecond timestamp embedded in `id`, used to sort newest
     /// first; `None` for an id that doesn't match the expected shape.
     pub created_at_ms: Option<u64>,
+    /// When the Session last saw an event, taken from the journal's write
+    /// time; `None` when it has no journal yet. Callers that order by
+    /// activity fall back to `created_at_ms`.
+    #[serde(default)]
+    pub last_event_at_ms: Option<u64>,
+    /// Roughly how long ago that last event was, e.g. "3h ago".
+    #[serde(default)]
+    pub last_event_age: String,
     /// Set when this Session was branched from another one, rather than
     /// launched fresh.
     #[serde(default, skip_serializing_if = "Option::is_none")]

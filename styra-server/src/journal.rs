@@ -290,6 +290,7 @@ pub fn session_summary_at(path: &Path, workspace_id: &str) -> Result<SessionSumm
         .unwrap_or_default();
     let meta = read_stored_session_meta(path)?;
     let created_at_ms = session_created_at_ms(&id);
+    let last_event_at_ms = last_event_at_ms(path).or(created_at_ms);
     Ok(SessionSummary {
         id,
         name: meta.name,
@@ -298,6 +299,8 @@ pub fn session_summary_at(path: &Path, workspace_id: &str) -> Result<SessionSumm
         selection: meta.agent.selection,
         age: humanize_age(now_ms(), created_at_ms),
         created_at_ms,
+        last_event_at_ms,
+        last_event_age: humanize_age(now_ms(), last_event_at_ms),
         origin: meta.origin,
     })
 }
@@ -330,6 +333,18 @@ fn list_sessions_at(dir: &Path, workspace_id: &str) -> Result<Vec<SessionSummary
     }
     sort_newest_first(&mut sessions);
     Ok(sessions)
+}
+
+/// When the Session's journal was last written, in milliseconds since the
+/// epoch. The journal is appended to for every event, so its write time is
+/// the Session's last activity without reading a byte of it.
+fn last_event_at_ms(directory: &Path) -> Option<u64> {
+    let modified = std::fs::metadata(directory.join(JOURNAL_FILE))
+        .ok()?
+        .modified()
+        .ok()?;
+    let since_epoch = modified.duration_since(std::time::UNIX_EPOCH).ok()?;
+    u64::try_from(since_epoch.as_millis()).ok()
 }
 
 fn sort_newest_first(sessions: &mut [SessionSummary]) {
@@ -900,6 +915,19 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// The last-activity time is read from the journal's write time; a
+    /// Session that has not written one yet reports none, and orders by its
+    /// creation instead.
+    #[test]
+    fn the_last_event_time_comes_from_the_journal_write_time() {
+        let dir = temp_dir("last-event");
+        assert_eq!(last_event_at_ms(&dir), None);
+        std::fs::write(dir.join(JOURNAL_FILE), "{}\n").unwrap();
+        let written = last_event_at_ms(&dir).expect("a written journal has a write time");
+        assert!(written > 0);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// Sessions written before typed turns existed have no `contract` field,
     /// and must still load — as untyped, which is what they were.
     #[test]
@@ -935,6 +963,8 @@ mod tests {
             selection: crate::agent::Selection::new(crate::agent::Provider::Codex),
             age: String::new(),
             created_at_ms,
+            last_event_at_ms: created_at_ms,
+            last_event_age: String::new(),
             origin: None,
         };
         let mut sessions = vec![

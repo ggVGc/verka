@@ -9,6 +9,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
+use crate::session::SessionOrder;
 use styra_server::{InteractionSummary, InteractionUpdate, SessionSummary, WorkspaceSummary};
 
 /// Whether the picker has the selected session's conversation yet. Loading is
@@ -20,14 +21,16 @@ pub enum Preview<'a> {
     Ready(&'a [InteractionUpdate]),
 }
 
-/// Render the session picker screen: every stored session, newest first,
-/// with `selected` highlighted. Standalone from [`crate::app::App`] — the
+/// Render the session picker screen: every stored session in `order`, newest
+/// first, with `selected` highlighted. Each row shows the age `order` sorts
+/// on, so the list never looks unsorted. Standalone from [`crate::app::App`] — the
 /// picker runs before any session is loaded, so it has no state of its own
 /// to render.
 pub fn render_picker(
     frame: &mut Frame,
     sessions: &[SessionSummary],
     selected: usize,
+    order: SessionOrder,
     preview: Preview<'_>,
 ) {
     let area = frame.area();
@@ -38,9 +41,10 @@ pub fn render_picker(
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(palette::ACCENT))
-        .title(
-            " styra · choose a session · Enter open · r rename · x convert provider · q cancel ",
-        );
+        .title(format!(
+            " styra · choose a session · Enter open · r rename · x convert provider · s sort: {} · q cancel ",
+            order.label(),
+        ));
 
     if sessions.is_empty() {
         render_placeholder(frame, block, panes[0], "  no sessions found");
@@ -52,7 +56,7 @@ pub fn render_picker(
     let items: Vec<ListItem> = sessions
         .iter()
         .enumerate()
-        .map(|(index, session)| session_item(session, index == selected))
+        .map(|(index, session)| session_item(session, index == selected, order))
         .collect();
     let list = List::new(items).block(block).highlight_style(
         Style::default()
@@ -491,7 +495,11 @@ pub fn render_template_picker_loading(frame: &mut Frame) {
     );
 }
 
-fn session_item(session: &SessionSummary, selected: bool) -> ListItem<'static> {
+fn session_item(
+    session: &SessionSummary,
+    selected: bool,
+    order: SessionOrder,
+) -> ListItem<'static> {
     let provider = session.selection.provider.as_str();
     let display_name = session.name.as_deref().unwrap_or(&session.id);
     let mut lines = vec![
@@ -517,7 +525,12 @@ fn session_item(session: &SessionSummary, selected: bool) -> ListItem<'static> {
                 Style::default().fg(palette::ACCENT),
             ),
             Span::styled(
-                session.age.clone(),
+                match order {
+                    SessionOrder::LastActivity if !session.last_event_age.is_empty() => {
+                        session.last_event_age.clone()
+                    }
+                    _ => session.age.clone(),
+                },
                 Style::default().fg(palette::MUTED_TEXT),
             ),
             Span::styled(
@@ -569,6 +582,8 @@ mod tests {
             selection: styra_server::agent::Selection::parse(selection).unwrap(),
             age: age.into(),
             created_at_ms: None,
+            last_event_at_ms: None,
+            last_event_age: String::new(),
             origin: None,
         }
     }
@@ -576,7 +591,13 @@ mod tests {
     fn rendered_picker(sessions: &[SessionSummary], selected: usize) -> String {
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
         terminal
-            .draw(|frame| render_picker(frame, sessions, selected, Preview::Ready(&[])))
+            .draw(|frame| render_picker(
+                    frame,
+                    sessions,
+                    selected,
+                    SessionOrder::LastActivity,
+                    Preview::Ready(&[]),
+                ))
             .unwrap();
         screen_text(terminal.backend().buffer())
     }
@@ -667,7 +688,13 @@ mod tests {
         ];
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
         terminal
-            .draw(|frame| render_picker(frame, &sessions, 0, Preview::Ready(&updates)))
+            .draw(|frame| render_picker(
+                    frame,
+                    &sessions,
+                    0,
+                    SessionOrder::LastActivity,
+                    Preview::Ready(&updates),
+                ))
             .unwrap();
         let screen = terminal
             .backend()
@@ -846,7 +873,13 @@ mod tests {
 
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
         terminal
-            .draw(|frame| render_picker(frame, &sessions, 1, Preview::Ready(&[])))
+            .draw(|frame| render_picker(
+                    frame,
+                    &sessions,
+                    1,
+                    SessionOrder::LastActivity,
+                    Preview::Ready(&[]),
+                ))
             .unwrap();
         let buffer = terminal.backend().buffer().clone();
 

@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use styra_server::{Client, InteractionSummary, InteractionUpdate, LogEntry, WorkspaceSummary};
 
 use crate::launch::LaunchScope;
+use crate::session::{sort_sessions, SessionOrder};
 use crate::ui;
 
 /// How long the cursor must rest on a Session or Workspace before its preview
@@ -31,12 +32,15 @@ pub enum WorkspaceChoice {
 }
 
 /// The session picker loop: j/k or arrows to move, Enter to choose a
-/// session, Esc or q to back out.
+/// session, `s` to switch between ordering by last activity and by creation,
+/// Esc or q to back out.
 pub fn run_session_picker(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     client: &Client,
     sessions: &mut [styra_server::SessionSummary],
 ) -> Result<Option<String>> {
+    let mut order = SessionOrder::LastActivity;
+    sort_sessions(sessions, order);
     let mut selected = 0usize;
     let mut preview_id = String::new();
     let mut preview_cursor = 0u64;
@@ -113,7 +117,7 @@ pub fn run_session_picker(
         } else {
             ui::Preview::Ready(&preview_updates)
         };
-        terminal.draw(|frame| ui::render_picker(frame, sessions, selected, preview))?;
+        terminal.draw(|frame| ui::render_picker(frame, sessions, selected, order, preview))?;
 
         if !event::poll(Duration::from_millis(100))? {
             continue;
@@ -130,6 +134,17 @@ pub fn run_session_picker(
                 selected = (selected + 1).min(sessions.len().saturating_sub(1));
             }
             KeyCode::Char('k') | KeyCode::Up => selected = selected.saturating_sub(1),
+            // Re-ordering keeps the cursor on the Session it was on: the
+            // operator is changing how the list is arranged, not which
+            // conversation they were looking at.
+            KeyCode::Char('s') => {
+                let cursor_id = sessions.get(selected).map(|session| session.id.clone());
+                order = order.toggled();
+                sort_sessions(sessions, order);
+                selected = cursor_id
+                    .and_then(|id| sessions.iter().position(|session| session.id == id))
+                    .unwrap_or(0);
+            }
             KeyCode::Enter if !sessions.is_empty() => {
                 return Ok(Some(sessions[selected].id.clone()));
             }
@@ -138,6 +153,7 @@ pub fn run_session_picker(
                     terminal,
                     sessions,
                     selected,
+                    order,
                     sessions[selected].name.as_deref().unwrap_or(""),
                 )? {
                     sessions[selected] = client.rename_session(
@@ -153,6 +169,7 @@ pub fn run_session_picker(
                         terminal,
                         sessions,
                         selected,
+                        order,
                         "could not convert session",
                         &format!("{error:#}"),
                     )?,
@@ -170,12 +187,19 @@ fn show_message(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     sessions: &[styra_server::SessionSummary],
     selected: usize,
+    order: SessionOrder,
     title: &str,
     message: &str,
 ) -> Result<()> {
     loop {
         terminal.draw(|frame| {
-            ui::render_picker(frame, sessions, selected, ui::Preview::Ready(&[]));
+            ui::render_picker(
+                frame,
+                sessions,
+                selected,
+                order,
+                ui::Preview::Ready(&[]),
+            );
             ui::render_message_popup(frame, title, message);
         })?;
         if let Event::Key(key) = event::read()? {
@@ -190,12 +214,19 @@ fn read_session_name(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     sessions: &[styra_server::SessionSummary],
     selected: usize,
+    order: SessionOrder,
     initial: &str,
 ) -> Result<Option<String>> {
     let mut value = initial.to_owned();
     loop {
         terminal.draw(|frame| {
-            ui::render_picker(frame, sessions, selected, ui::Preview::Ready(&[]));
+            ui::render_picker(
+                frame,
+                sessions,
+                selected,
+                order,
+                ui::Preview::Ready(&[]),
+            );
             ui::render_name_prompt(frame, &value);
         })?;
         let Event::Key(key) = event::read()? else {

@@ -73,12 +73,54 @@ pub fn find_workspace_for_host(
         .cloned()
 }
 
+/// How the session picker orders its list. Recency of activity is the
+/// default: what the operator is looking for is almost always the
+/// conversation they last spoke in, not the one they opened first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionOrder {
+    LastActivity,
+    Created,
+}
+
+impl SessionOrder {
+    pub fn toggled(self) -> Self {
+        match self {
+            Self::LastActivity => Self::Created,
+            Self::Created => Self::LastActivity,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::LastActivity => "last activity",
+            Self::Created => "created",
+        }
+    }
+}
+
+/// The timestamp `SessionOrder::LastActivity` sorts on. A Session with no
+/// journal yet has seen no events, so its creation is its last activity.
+fn last_activity_at_ms(session: &SessionSummary) -> Option<u64> {
+    session.last_event_at_ms.or(session.created_at_ms)
+}
+
+/// Order Sessions newest first under `order`, ties broken by creation so the
+/// list stays stable when several share a timestamp.
+pub fn sort_sessions(sessions: &mut [SessionSummary], order: SessionOrder) {
+    sessions.sort_by(|a, b| match order {
+        SessionOrder::LastActivity => last_activity_at_ms(b)
+            .cmp(&last_activity_at_ms(a))
+            .then_with(|| b.created_at_ms.cmp(&a.created_at_ms)),
+        SessionOrder::Created => b.created_at_ms.cmp(&a.created_at_ms),
+    });
+}
+
 pub fn all_sessions(client: &Client) -> Result<Vec<SessionSummary>> {
     let mut sessions = Vec::new();
     for workspace in client.list_workspaces()? {
         sessions.extend(client.list_sessions(&workspace.id)?);
     }
-    sessions.sort_by(|a, b| b.created_at_ms.cmp(&a.created_at_ms));
+    sort_sessions(&mut sessions, SessionOrder::LastActivity);
     Ok(sessions)
 }
 
@@ -443,6 +485,47 @@ mod tests {
             last_accessed_at_ms: 1,
             launch: Default::default(),
         }
+    }
+
+    fn summary(id: &str, created_at_ms: u64, last_event_at_ms: Option<u64>) -> SessionSummary {
+        SessionSummary {
+            id: id.into(),
+            name: None,
+            workspace_id: "w-1".into(),
+            path: PathBuf::from(id),
+            selection: Selection::new(Provider::Codex),
+            age: String::new(),
+            created_at_ms: Some(created_at_ms),
+            last_event_at_ms,
+            last_event_age: String::new(),
+            origin: None,
+        }
+    }
+
+    #[test]
+    fn sessions_order_by_last_activity_or_by_creation() {
+        let mut sessions = vec![
+            summary("old-but-active", 100, Some(900)),
+            summary("new-and-quiet", 300, Some(300)),
+            summary("never-ran", 200, None),
+        ];
+
+        sort_sessions(&mut sessions, SessionOrder::LastActivity);
+        let ids: Vec<&str> = sessions.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, ["old-but-active", "new-and-quiet", "never-ran"]);
+
+        sort_sessions(&mut sessions, SessionOrder::Created);
+        let ids: Vec<&str> = sessions.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, ["new-and-quiet", "never-ran", "old-but-active"]);
+    }
+
+    #[test]
+    fn toggling_the_order_returns_to_where_it_started() {
+        assert_eq!(SessionOrder::LastActivity.toggled(), SessionOrder::Created);
+        assert_eq!(
+            SessionOrder::LastActivity.toggled().toggled(),
+            SessionOrder::LastActivity
+        );
     }
 
     fn app() -> App {
