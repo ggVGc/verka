@@ -1,9 +1,35 @@
-description = "Resolve users and groups, so a program can name who it runs as"
+description = "Name the user and group a program runs as"
+
+# A sandbox keeps the operator's numeric uid, but a number is not an answer to
+# `getpwuid`. Without these files a program that asks who it is gets a failure
+# rather than a name, and tools react to that badly out of proportion to the
+# question: `id` and `whoami` fail, `ssh` and `git` refuse to guess an author,
+# shells report "I have no name!", and anything that derives a path from the
+# passwd entry falls back to something wrong.
+#
+# This is identity only. The same NSS machinery also answers host names, and
+# that half lives in the `dns` capability.
 
 path = [
-  { at = "/etc/passwd" },
-  { at = "/etc/group" },
-  { at = "/etc/nsswitch.conf", optional = true },
+  # The user database `getpwuid`/`getpwnam` read. The sandbox's own uid must
+  # appear here or the process has no name, no shell, and no home entry.
+  { at = "/etc/passwd", doc = "The user database a program's own identity comes from" },
+
+  # The group database, for `getgrgid` and anything that reports or checks
+  # group membership.
+  { at = "/etc/group", doc = "The group database, for group names and membership" },
+
+  # Which sources glibc consults for each database, this one included. Not
+  # required: with the file absent glibc falls back to a built-in default that
+  # reads the two files above, which is exactly what is wanted here. It is
+  # carried so a host that answers users from somewhere else — LDAP, systemd's
+  # userdb — is described accurately rather than silently reduced to `files`.
+  # `dns` carries the same path for the same reason on the resolver side.
+  { at = "/etc/nsswitch.conf", optional = true, doc = "Which sources answer the user, group, and host databases" },
 ]
 
+# `id -u` is the smallest program that fails when this capability is wrong.
+# A host without it in `/usr/bin` reports the check as not made.
 probe = { run = ["/usr/bin/id", "-u"] }
+
+suggest = ["/etc/nsswitch.conf", "/run/systemd/userdb", "/var/lib/extrausers"]

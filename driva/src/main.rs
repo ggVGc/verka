@@ -39,8 +39,13 @@ enum Operation {
     /// List built-in and project-defined execution templates.
     Templates,
     /// List the base capabilities a private root can be built from, and which
-    /// of them this configuration includes.
-    Capabilities,
+    /// of them this configuration includes. Name one to describe it: every
+    /// path it carries, what needs that path, and how it is checked.
+    Capabilities {
+        /// Capability to describe in full.
+        #[arg(value_name = "NAME")]
+        name: Option<String>,
+    },
     /// Report whether each included capability works on this host, by building
     /// a sandbox from it and probing it.
     Doctor {
@@ -207,7 +212,7 @@ fn real_main() -> Result<()> {
             }
             return Ok(());
         }
-        Operation::Capabilities => return capabilities_command(&config),
+        Operation::Capabilities { name } => return capabilities_command(&config, name.as_deref()),
         Operation::Doctor { policy } => return doctor_command(&config, &policy),
         Operation::Runtime { command } => return runtime_command(command),
     };
@@ -444,18 +449,82 @@ fn effective_base(
 }
 
 /// List the capabilities available here, marking the ones the effective base
-/// includes and in what order they are laid down.
-fn capabilities_command(config: &Config) -> Result<()> {
+/// includes and in what order they are laid down — or describe one in full.
+///
+/// The detailed form is where a path list becomes readable: `/etc/ld.so.cache`
+/// and `/etc/alternatives` look alike as strings and are in the base for
+/// entirely different reasons, and an operator deciding whether to drop a
+/// capability, or where their own host keeps the same thing, is asking exactly
+/// that. Each path carries its own answer, so the reason travels with the
+/// declaration instead of living in a comment in Driva's source.
+fn capabilities_command(config: &Config, name: Option<&str>) -> Result<()> {
     let base = config.base();
-    for (name, capability) in &base.definitions {
-        let position = base.include.iter().position(|included| included == name);
-        let marker = match position {
-            Some(index) => format!("{}", index + 1),
-            None => "-".to_owned(),
+    let Some(name) = name else {
+        for (name, capability) in &base.definitions {
+            let position = base.include.iter().position(|included| included == name);
+            let marker = match position {
+                Some(index) => format!("{}", index + 1),
+                None => "-".to_owned(),
+            };
+            println!("{marker}\t{name}\t{}", capability.description);
+        }
+        return Ok(());
+    };
+
+    let capability = base.definition(name)?;
+    println!("{name}\t{}", capability.description);
+    println!(
+        "included: {}",
+        match base.include.iter().position(|included| included == name) {
+            Some(index) => format!("yes, laid down {} of {}", index + 1, base.include.len()),
+            None => "no — add it with --capability, or in [base] include".to_owned(),
+        }
+    );
+    println!();
+    for entry in &capability.paths {
+        let mut notes = Vec::new();
+        if entry.optional {
+            notes.push("optional".to_owned());
+        }
+        if entry.mode != driva::EntryMode::Auto {
+            notes.push(format!("{:?}", entry.mode).to_lowercase());
+        }
+        if !entry.at.exists() {
+            notes.push("not on this host".to_owned());
+        }
+        let notes = match notes.is_empty() {
+            true => String::new(),
+            false => format!("  [{}]", notes.join(", ")),
         };
-        println!("{marker}\t{name}\t{}", capability.description);
+        println!("  {}{notes}", entry.at.display());
+        if !entry.doc.is_empty() {
+            println!("      {}", entry.doc);
+        }
+    }
+    if !capability.environment.is_empty() {
+        println!("\nforwarded when the host sets them:");
+        for name in &capability.environment {
+            let state = match std::env::var_os(name) {
+                Some(_) => "set here",
+                None => "unset",
+            };
+            println!("  {name}  [{state}]");
+        }
+    }
+    match &capability.probe {
+        Some(probe) => println!("\nchecked by `driva doctor` with: {}", probe_label(probe)),
+        None => println!("\nnot checked by `driva doctor`: it declares no probe"),
     }
     Ok(())
+}
+
+/// How a probe reads in a line of output.
+fn probe_label(probe: &driva::Probe) -> String {
+    match probe {
+        driva::Probe::Resolve(name) => format!("resolving {name} inside the sandbox"),
+        driva::Probe::Connect(target) => format!("connecting to {target} from inside the sandbox"),
+        driva::Probe::Run(command) => format!("running `{}` in the sandbox", command.join(" ")),
+    }
 }
 
 /// Report whether each included capability works on this host.

@@ -3,8 +3,9 @@
 Driva runs a command in a disposable isolated environment using Bubblewrap
 with explicit, deny-by-default isolation: the command gets no host data access
 and no network unless each grant is stated on the command line or in
-`driva.toml`. Bubblewrap exposes the host's system runtime read-only so basic
-executables are available.
+`driva.toml`. Bubblewrap builds the root from a declared *base system* — the
+host's executables, libraries, users, certificates, resolver, and time zone,
+read-only — so ordinary programs run without the host's data being present.
 
 The `console` blocks below are verified against the compiled binary by
 `tests/cli_docs.rs`. If a flag or help text changes, that test fails; run
@@ -23,7 +24,7 @@ Commands:
   run           Run a command in a disposable isolated environment
   shell         Open /bin/sh in a disposable isolated environment
   templates     List built-in and project-defined execution templates
-  capabilities  List the base capabilities a private root can be built from, and which of them this configuration includes
+  capabilities  List the base capabilities a private root can be built from, and which of them this configuration includes. Name one to describe it: every path it carries, what needs that path, and how it is checked
   doctor        Report whether each included capability works on this host, by building a sandbox from it and probing it
   runtime       Manage prepared read-only runtimes for Bubblewrap templates
   help          Print this message or the help of the given subcommand(s)
@@ -40,9 +41,9 @@ Every subcommand accepts the global option:
   and no configured working directory). When the effective working directory
   is omitted, Driva mounts the current directory writable at its canonical
   same-path destination and uses it as the workspace. Without a configured
-  rootfs, Bubblewrap builds a private root containing only conventional
-  read-only system runtime paths in addition to that workspace; the host root
-  and home are not selected implicitly.
+  rootfs, Bubblewrap builds a private root from the base capabilities (see
+  [The base system](#the-base-system)) in addition to that workspace; the host
+  root and home are not selected implicitly.
 
 On any internal error Driva prints `driva: <error>` to stderr and exits with
 status 1. Commands that proxy an isolated process exit with that process's
@@ -189,12 +190,34 @@ List them, and see which ones the effective base includes and in what order:
 
 ```console
 $ driva capabilities
-3	certificates	Verify TLS certificates, and reach a network through a proxy
-1	core	Run a program at all: the host's loader, libraries, and tools
-4	dns	Resolve host names, for a sandbox that is permitted a network
-2	identity	Resolve users and groups, so a program can name who it runs as
+3	certificates	Verify a TLS certificate, and reach a network through a proxy
+1	core	Run a program at all: the host's executables, libraries, and loader
+4	dns	Turn a host name into an address, for a sandbox permitted a network
+2	identity	Name the user and group a program runs as
 5	timezone	Report local time as the host does
 ```
+
+Name one to see what it actually carries here, and why:
+
+```console
+$ driva capabilities timezone
+timezone	Report local time as the host does
+included: yes, laid down 5 of 5
+
+  /etc/localtime  [optional]
+      The host's own time zone, as the C library reads it
+
+forwarded when the host sets them:
+  TZ  [unset]
+
+not checked by `driva doctor`: it declares no probe
+```
+
+Every path says what needs it, because a bare list is unreadable:
+`/etc/ld.so.cache` and `/etc/alternatives` look alike as strings and are in the
+base for entirely unrelated reasons. That is the question an operator asks when
+deciding whether to drop a capability, or where their own host keeps the same
+thing, so the answer travels with the declaration.
 
 `--capability NAME` adds one to an invocation, `--no-capability NAME` leaves
 one out, and `--no-base` builds a root holding only what is mounted into it. A
@@ -206,11 +229,13 @@ means on this host when the built-in definition is wrong for it:
 include = ["core", "identity", "certificates", "dns"]
 
 [capability.dns]
-description = "Resolve host names"
+description = "Turn a host name into an address"
 path = [
-  { at = "/etc/resolv.conf" },              # `auto`: a link out of the base is followed
-  { at = "/etc/nsswitch.conf", optional = true },
-  { at = "/run/my-resolver", optional = true },
+  # `auto` (the default): a link out of the base is followed rather than
+  # reproduced as a link to nothing.
+  { at = "/etc/resolv.conf", doc = "The nameservers a DNS lookup uses" },
+  { at = "/etc/nsswitch.conf", optional = true, doc = "Which sources answer a host name" },
+  { at = "/run/my-resolver", optional = true, doc = "This site's resolver socket" },
 ]
 probe = { resolve = "one.one.one.one" }
 ```
@@ -219,9 +244,9 @@ A path that is not `optional` and not on the host fails the launch, naming the
 capability, rather than producing a sandbox quietly missing part of its floor.
 Each entry may set `mode` to `auto` (the default: recreate a host symlink while
 it still lands inside the base, follow it when it would not), `bind`, `symlink`,
-or `follow`. A capability may also name host environment variables to forward
-when they are set — a proxy, an overridden certificate bundle — which a
-template or `--env` still overrides.
+or `follow`, and `doc` to say in one line what needs it. A capability may also
+name host environment variables to forward when they are set — a proxy, an
+overridden certificate bundle — which a template or `--env` still overrides.
 
 Whether the result works on *this* host is a question only the host can answer,
 so `driva doctor` builds a sandbox from each capability and uses it:

@@ -1,6 +1,21 @@
 description = "Report local time as the host does"
 
-# The zone data itself lives under `/usr`, which `core` already carries.
-path = [{ at = "/etc/localtime", optional = true }]
+# The smallest capability, and the one whose absence is easiest to misread: a
+# sandbox without it does not fail, it quietly runs in UTC. Timestamps in a
+# log, a commit date, a file mtime an agent reasons about — all shift by the
+# operator's offset, which looks like a bug somewhere else entirely.
 
+path = [
+  # The compiled zone the C library reads for local time. Usually a symlink
+  # into `/usr/share/zoneinfo`, which `core` already carries, so the default
+  # mode reproduces the link and the data comes along with `/usr`. Optional
+  # because a container-derived host often has neither, and UTC is then the
+  # honest answer rather than a failure.
+  { at = "/etc/localtime", optional = true, doc = "The host's own time zone, as the C library reads it" },
+]
+
+# A zone named in the environment overrides the file for programs that respect
+# it, so it is forwarded when the host sets one.
 environment = ["TZ"]
+
+suggest = ["/etc/timezone", "/usr/share/zoneinfo", "/etc/static/localtime"]

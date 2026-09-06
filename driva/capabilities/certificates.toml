@@ -1,21 +1,53 @@
-description = "Verify TLS certificates, and reach a network through a proxy"
+description = "Verify a TLS certificate, and reach a network through a proxy"
+
+# Resolving a name gets a connection; trusting the other end needs the host's
+# certificate authorities. Without them every HTTPS client in the sandbox
+# fails at the handshake — "unable to get local issuer certificate", "self
+# signed certificate in certificate chain" — which reads like a network fault
+# and is not one.
+#
+# Where the trust store lives is the least standardised path in the base:
+# every entry below is optional because no host has all of them, and a host
+# with a private authority may have it in none of them. The forwarded
+# variables matter as much as the paths: a bundle chosen by `SSL_CERT_FILE`,
+# or a proxy that terminates TLS with its own authority, is configuration a
+# program cannot discover on disk and cannot work without.
 
 path = [
-  { at = "/etc/ssl", optional = true },
-  { at = "/etc/pki", optional = true },
-  { at = "/etc/ca-certificates", optional = true },
-  { at = "/usr/local/share/ca-certificates", optional = true },
+  # The usual store on Debian, Arch, SUSE, and Alpine: `certs/` full of
+  # authorities plus the concatenated `ca-certificates.crt` bundle most
+  # clients open by default.
+  { at = "/etc/ssl", optional = true, doc = "The usual trust store: individual authorities and the concatenated bundle" },
+
+  # The Red Hat family's equivalent, under `pki/tls`. Present as a symlink to
+  # or from `/etc/ssl` on some hosts, which the default mode handles.
+  { at = "/etc/pki", optional = true, doc = "The Red Hat family's trust store" },
+
+  # The configuration and source directories the `update-ca-certificates`
+  # tooling maintains. Some clients read the authorities from here directly.
+  { at = "/etc/ca-certificates", optional = true, doc = "The trust store's own configuration and sources" },
+
+  # Where a site adds its own authority on a Debian-family host. This is the
+  # path that makes a corporate TLS-inspecting proxy work, and the one most
+  # often missing from a hand-written list.
+  { at = "/usr/local/share/ca-certificates", optional = true, doc = "Locally added authorities, including a site's own" },
 ]
 
-# A private certificate bundle and a proxy are configuration a program cannot
-# find on disk by itself. They are part of this capability on the hosts that
-# have them, and absent everywhere else.
+# Values a program cannot find on disk and cannot work without. Each is
+# forwarded only when the host has it set, and anything the invocation states
+# itself still wins.
 environment = [
+  # A bundle or directory chosen explicitly, overriding the compiled-in
+  # default. Common on Nix, and on any host with a non-standard store.
   "SSL_CERT_FILE",
   "SSL_CERT_DIR",
+  # The same answer for clients that read their own variable instead.
   "CURL_CA_BUNDLE",
   "REQUESTS_CA_BUNDLE",
   "NODE_EXTRA_CA_CERTS",
+  # A proxy the sandbox must go through to reach anything at all, and the
+  # exceptions to it. Uppercase and lowercase are both conventional, and
+  # different clients read different ones.
   "HTTP_PROXY",
   "HTTPS_PROXY",
   "ALL_PROXY",
@@ -27,7 +59,8 @@ environment = [
 ]
 
 # Verifying a certificate needs a client that verifies certificates. Where the
-# host has none, the check is reported as not made rather than as a failure.
+# host has no `curl`, the check is reported as not made rather than as a
+# failure — an unprobed capability is unknown, not broken.
 probe = { run = ["/usr/bin/curl", "-sS", "-o", "/dev/null", "https://example.com"] }
 
 suggest = [
@@ -36,4 +69,5 @@ suggest = [
   "/etc/ca-certificates",
   "/usr/local/share/ca-certificates",
   "/var/lib/ca-certificates",
+  "/etc/static/ssl",
 ]

@@ -241,6 +241,40 @@ capability = ["dns"]
     assert!(with.contains("\"/etc/resolv.conf\""), "{with}");
 }
 
+/// Naming a capability describes it: every path, what needs that path, which
+/// of them this host actually has, the variables it forwards, and how `doctor`
+/// checks it. This is where a base stops being a list of strings.
+#[test]
+fn capabilities_describes_one_capability_in_full() {
+    let project = Project::new("describe", "");
+    let output = project.run(&["capabilities", "dns"]);
+    let described = String::from_utf8_lossy(&output.stdout);
+
+    assert!(output.status.success());
+    assert!(described.contains("/etc/resolv.conf"), "{described}");
+    assert!(
+        described.contains("The nameservers and search domains a DNS lookup uses"),
+        "{described}"
+    );
+    assert!(described.contains("[optional]"), "{described}");
+    assert!(
+        described.contains("resolving one.one.one.one inside the sandbox"),
+        "{described}"
+    );
+
+    // A capability that forwards variables says which ones, and whether this
+    // host has them: a proxy the sandbox will not inherit is worth seeing
+    // before something fails at a TLS handshake.
+    let output = project.run(&["capabilities", "certificates"]);
+    let described = String::from_utf8_lossy(&output.stdout);
+    assert!(described.contains("HTTPS_PROXY"), "{described}");
+    assert!(described.contains("unset") || described.contains("set here"));
+
+    // An unknown name is the same typo as anywhere else in policy.
+    let output = project.run(&["capabilities", "speling"]);
+    assert!(!output.status.success());
+}
+
 /// `driva capabilities` says what is available and, by position, which ones
 /// this configuration includes and in what order they are laid down.
 #[test]

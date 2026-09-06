@@ -1,22 +1,62 @@
-description = "Run a program at all: the host's loader, libraries, and tools"
+description = "Run a program at all: the host's executables, libraries, and loader"
 
-# `/usr` and `/bin` are the two paths no Linux host is without — one of them
-# usually a symlink to the other. Everything else here is layout that varies,
-# and the probe is what says whether the result can actually run something.
+# Nothing in an empty root can execute, not even `/bin/sh`. This capability is
+# the floor under every other one: the executables themselves, the shared
+# libraries they are linked against, and the three kinds of indirection a host
+# puts between a program's path and the bytes that actually run — the merged
+# `/usr` layout, the dynamic loader's own configuration, and package-manager
+# stores that hold the real files.
+#
+# `/usr` and `/bin` are the two paths no Linux host is without, one of them
+# usually a symlink to the other; everything after them is layout that varies,
+# so it is optional and the probe is what says whether the result can run.
+
 path = [
-  { at = "/usr" },
-  { at = "/bin" },
-  { at = "/sbin", optional = true },
-  { at = "/lib", optional = true },
-  { at = "/lib64", optional = true },
-  { at = "/nix/store", optional = true },
-  { at = "/gnu/store", optional = true },
-  { at = "/etc/ld.so.cache", optional = true },
-  { at = "/etc/ld.so.conf", optional = true },
-  { at = "/etc/ld.so.conf.d", optional = true },
-  { at = "/etc/alternatives", optional = true },
+  # The system itself: binaries, shared libraries, and the read-only data they
+  # load (locales, terminfo, time-zone tables, certificates' own store on some
+  # hosts). On a merged-`/usr` distribution this single path is most of the
+  # host's userspace, which is why the rest of this list is mostly symlinks
+  # into it.
+  { at = "/usr", doc = "Binaries, shared libraries, and their read-only data" },
+
+  # Where a command's path resolves before `/usr` does. Almost always a
+  # symlink to `usr/bin` today, and reproduced as one so a `#!/bin/sh` shebang
+  # keeps working; on a host that never merged `/usr` it is a real directory
+  # holding the shell and core tools.
+  { at = "/bin", doc = "The shell and core tools, or the symlink standing in for them" },
+
+  # The same for administrative tools. Absent on hosts that merged it into
+  # `/usr/bin` without leaving a link behind.
+  { at = "/sbin", optional = true, doc = "Administrative tools, where the host still separates them" },
+
+  # The dynamic linker and the libraries it opens. `/lib64` carries the 64-bit
+  # `ld-linux` on x86-64 — a dynamically linked binary cannot start without
+  # the exact interpreter path recorded in its own headers, which is why both
+  # are here rather than only `/usr/lib`.
+  { at = "/lib", optional = true, doc = "The dynamic linker and shared libraries, or the link to them" },
+  { at = "/lib64", optional = true, doc = "The 64-bit dynamic linker a binary names in its own headers" },
+
+  # On Nix and Guix systems every executable and every library it needs lives
+  # in the store, and `/usr` is nearly empty. Without these the sandbox has
+  # paths that resolve to nothing on exactly the hosts where the store *is*
+  # the system. Absent, and skipped, everywhere else.
+  { at = "/nix/store", optional = true, doc = "Where a Nix host keeps the programs and libraries themselves" },
+  { at = "/gnu/store", optional = true, doc = "Where a Guix host keeps the programs and libraries themselves" },
+
+  # The loader's own configuration. Without the cache, `ld.so` falls back to
+  # searching the directories named in `ld.so.conf` and its fragments; without
+  # either, a binary that needs a library outside the default search path
+  # fails to start with a message about a missing `.so`.
+  { at = "/etc/ld.so.cache", optional = true, doc = "The loader's index of installed libraries" },
+  { at = "/etc/ld.so.conf", optional = true, doc = "Extra library directories the loader searches" },
+  { at = "/etc/ld.so.conf.d", optional = true, doc = "Per-package additions to the loader's search path" },
+
+  # Debian's symlink farm: `/usr/bin/editor` and friends point into it, so a
+  # command that exists in `/usr/bin` still resolves to nothing without it.
+  { at = "/etc/alternatives", optional = true, doc = "Where a Debian host's generic command names point" },
 ]
 
+# The one check that matters here: can this base start a process at all.
 probe = { run = ["/bin/sh", "-c", "exit 0"] }
 
-suggest = ["/nix/store", "/gnu/store", "/opt", "/usr/local/lib"]
+suggest = ["/nix/store", "/gnu/store", "/opt", "/usr/local/lib", "/run/current-system/sw"]

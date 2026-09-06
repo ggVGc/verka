@@ -156,7 +156,7 @@ pub struct CapabilityConfig {
 }
 
 /// One host path a capability needs.
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct EntryConfig {
     /// Where it is on the host, and where it lands in the isolation.
@@ -168,6 +168,18 @@ pub struct EntryConfig {
     /// sandbox that is quietly missing part of its floor.
     #[serde(default)]
     pub optional: bool,
+    /// What needs this path, in one line: which program reads it, and what
+    /// stops working when it is not there.
+    ///
+    /// A path list is unreadable without this. `/etc/ld.so.cache` and
+    /// `/etc/alternatives` look alike as strings and are in the base for
+    /// completely different reasons, and an operator deciding whether to trim
+    /// a capability, or where their own host keeps the same thing, is asking
+    /// exactly this question. `driva capabilities NAME` prints it, so the
+    /// answer lives with the declaration rather than in a comment only a
+    /// reader of Driva's source would find.
+    #[serde(default)]
+    pub doc: String,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
@@ -397,8 +409,7 @@ mod tests {
     fn entry(at: &str) -> EntryConfig {
         EntryConfig {
             at: PathBuf::from(at),
-            mode: EntryMode::Auto,
-            optional: false,
+            ..EntryConfig::default()
         }
     }
 
@@ -414,6 +425,26 @@ mod tests {
                 "{name} has no description"
             );
             assert!(!capability.paths.is_empty(), "{name} names no paths");
+        }
+    }
+
+    /// Every built-in path says what needs it. A path list nobody can read is
+    /// how the constant this replaced went wrong: `/etc/ld.so.cache` and
+    /// `/etc/alternatives` are alike as strings and unrelated in purpose, and
+    /// an operator trimming a capability or porting it to their own host is
+    /// asking exactly what each one is for. Enforced rather than trusted, so a
+    /// path added later cannot arrive unexplained.
+    #[test]
+    fn every_built_in_path_documents_what_needs_it() {
+        let config = BaseConfig::default();
+        for name in DEFAULT_CAPABILITIES {
+            for entry in &config.definition(name).unwrap().paths {
+                assert!(
+                    entry.doc.len() > 20,
+                    "{name} carries {} without saying what needs it",
+                    entry.at.display()
+                );
+            }
         }
     }
 
