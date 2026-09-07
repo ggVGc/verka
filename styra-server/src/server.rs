@@ -1767,6 +1767,7 @@ mod tests {
     use super::*;
     use crate::client::Client;
     use crate::protocol::{AttributedMount, MountOrigin};
+    use driva::{Mount, MountAccess};
 
     fn temp_path(tag: &str) -> PathBuf {
         std::env::temp_dir().join(format!("styra-server-{tag}-{}.sock", std::process::id(),))
@@ -1797,6 +1798,77 @@ mod tests {
             crate::workspace::set_worktrees_enabled(&store, &workspace.id, true).unwrap();
         assert!(state.workspace_worktrees(&workspace).unwrap().is_some());
         assert!(worktrees_path.is_dir());
+
+        std::fs::remove_dir_all(store).ok();
+        std::fs::remove_dir_all(host).ok();
+    }
+
+    /// A Workspace opened on a linked worktree names the same directory twice:
+    /// as the Workspace and as the checkout root its repository mounts carry.
+    /// Planning there has to succeed — the repeat asks for nothing the
+    /// Workspace mount does not already provide.
+    #[test]
+    fn a_workspace_on_a_linked_worktree_plans_without_a_mount_conflict() {
+        let store = temp_path("worktree-workspace-store");
+        let host = temp_path("worktree-workspace-host");
+        std::fs::remove_dir_all(&store).ok();
+        std::fs::remove_dir_all(&host).ok();
+        std::fs::create_dir_all(&host).unwrap();
+        let git = |arguments: &[&str]| {
+            assert!(std::process::Command::new("git")
+                .arg("-C")
+                .arg(&host)
+                .args(arguments)
+                .status()
+                .unwrap()
+                .success());
+        };
+        git(&["init", "--quiet"]);
+        git(&["config", "user.email", "test@example.com"]);
+        git(&["config", "user.name", "test"]);
+        git(&["commit", "--quiet", "--allow-empty", "-m", "root"]);
+        let worktree = host.join(".worktrees/sandbox-base");
+        git(&[
+            "worktree",
+            "add",
+            "--quiet",
+            "-b",
+            "sandbox-base",
+            worktree.to_str().unwrap(),
+        ]);
+
+        let state = ServerState::new(store.clone(), store.with_extension("sock"));
+        // Exactly what a client launching from inside the worktree records:
+        // the nearest enclosing checkout is the worktree itself.
+        let workspace =
+            crate::workspace::create_with_repository(&store, &worktree, None, Some(&worktree))
+                .unwrap();
+        let workspace =
+            crate::workspace::set_worktrees_enabled(&store, &workspace.id, true).unwrap();
+
+        let plan = state
+            .plan_session(crate::protocol::PlanSession {
+                workspace_id: workspace.id,
+                selection: crate::agent::Selection::new(crate::agent::Provider::Codex),
+                launch: LaunchPolicy::default(),
+            })
+            .unwrap();
+        let canonical = worktree.canonicalize().unwrap();
+        let at_worktree: Vec<_> = plan
+            .mounts
+            .iter()
+            .filter(|attributed| attributed.mount.destination() == canonical)
+            .collect();
+        assert!(matches!(
+            at_worktree.as_slice(),
+            [AttributedMount {
+                origin: MountOrigin::Workspace,
+                mount: Mount::Bind {
+                    access: MountAccess::ReadWrite,
+                    ..
+                },
+            }]
+        ));
 
         std::fs::remove_dir_all(store).ok();
         std::fs::remove_dir_all(host).ok();

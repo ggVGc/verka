@@ -658,7 +658,51 @@ fn attributed_mounts(spec: &InteractionSpec) -> Vec<AttributedMount> {
                 }),
         );
     }
-    mounts
+    coalesce_repeated_binds(mounts)
+}
+
+/// Drop a bind that asks for something already bound identically.
+///
+/// The layers above are derived independently and legitimately overlap: a
+/// Workspace that *is* a checkout root is mounted once as the Workspace and
+/// again as the repository, and a Workspace with worktrees enabled names the
+/// Git common directory both in its repository mounts and in its automatic
+/// ones. Repeating the same source at the same destination asks for nothing
+/// new, so the first request keeps the destination and a later one only widens
+/// its access. A destination claimed by a *different* source is left in place:
+/// that is a real conflict, and rejecting it is how an operator hears about a
+/// policy that would shadow the Workspace instead of extending it.
+fn coalesce_repeated_binds(mounts: Vec<AttributedMount>) -> Vec<AttributedMount> {
+    let mut kept: Vec<AttributedMount> = Vec::with_capacity(mounts.len());
+    for candidate in mounts {
+        let Mount::Bind {
+            source,
+            destination,
+            access,
+        } = &candidate.mount
+        else {
+            kept.push(candidate);
+            continue;
+        };
+        let repeat = kept.iter_mut().find(|existing| {
+            matches!(
+                &existing.mount,
+                Mount::Bind { source: kept_source, destination: kept_destination, .. }
+                    if kept_source == source && kept_destination == destination
+            )
+        });
+        match repeat {
+            Some(existing) => {
+                if *access == MountAccess::ReadWrite {
+                    if let Mount::Bind { access, .. } = &mut existing.mount {
+                        *access = MountAccess::ReadWrite;
+                    }
+                }
+            }
+            None => kept.push(candidate),
+        }
+    }
+    kept
 }
 
 fn build_request(spec: &InteractionSpec) -> ExecutionRequest {
@@ -1090,6 +1134,91 @@ mod tests {
                 mount: Mount::Bind { destination, access: MountAccess::ReadWrite, .. },
             } if destination == std::path::Path::new("/host/repository/.git")
         )));
+    }
+
+    /// A Workspace that is itself a checkout root — or a linked worktree — is
+    /// named twice: once as the Workspace and once as the repository. The two
+    /// requests are the same mount, so the effective list holds it once, with
+    /// the Workspace's write access.
+    #[test]
+    fn a_repository_mount_repeating_the_workspace_is_bound_once() {
+        let dir = PathBuf::from("/tmp/styra/workspace");
+        let mut spec = workspace_spec(&dir);
+        spec.repository_mounts = vec![MountSpec {
+            source: dir.clone(),
+            destination: dir.clone(),
+            writable: false,
+        }];
+
+        let options = DrivaOptions::capture(&spec, "bwrap");
+        let at_workspace: Vec<_> = options
+            .mounts
+            .iter()
+            .filter(|attributed| attributed.mount.destination() == dir)
+            .collect();
+        assert!(matches!(
+            at_workspace.as_slice(),
+            [AttributedMount {
+                origin: MountOrigin::Workspace,
+                mount: Mount::Bind {
+                    access: MountAccess::ReadWrite,
+                    ..
+                },
+            }]
+        ));
+    }
+
+    /// The Git common directory reaches an interaction from both the
+    /// repository mounts and, with worktrees enabled, the automatic ones.
+    #[test]
+    fn an_automatic_mount_repeating_a_repository_mount_is_bound_once() {
+        let dir = PathBuf::from("/tmp/styra/workspace");
+        let common = PathBuf::from("/tmp/styra/workspace/.git");
+        let mut spec = workspace_spec(&dir);
+        spec.repository_mounts = vec![MountSpec {
+            source: common.clone(),
+            destination: common.clone(),
+            writable: true,
+        }];
+        spec.automatic_mounts = vec![MountSpec {
+            source: common.clone(),
+            destination: common.clone(),
+            writable: true,
+        }];
+
+        let options = DrivaOptions::capture(&spec, "bwrap");
+        assert_eq!(
+            options
+                .mounts
+                .iter()
+                .filter(|attributed| attributed.mount.destination() == common)
+                .count(),
+            1
+        );
+    }
+
+    /// Coalescing is only for a repeat of the same mount. A different source
+    /// at the same destination stays in the list, so the policy check still
+    /// reports it.
+    #[test]
+    fn a_different_source_at_the_same_destination_is_kept_as_a_conflict() {
+        let dir = PathBuf::from("/tmp/styra/workspace");
+        let mut spec = workspace_spec(&dir);
+        spec.extra_mounts = vec![MountSpec {
+            source: PathBuf::from("/srv/elsewhere"),
+            destination: dir.clone(),
+            writable: false,
+        }];
+
+        let options = DrivaOptions::capture(&spec, "bwrap");
+        assert_eq!(
+            options
+                .mounts
+                .iter()
+                .filter(|attributed| attributed.mount.destination() == dir)
+                .count(),
+            2
+        );
     }
 
     #[test]
