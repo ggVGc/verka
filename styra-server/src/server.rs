@@ -2082,6 +2082,19 @@ mod tests {
         // An error comes back as an error, not as a wire-encoded string.
         assert!(client.workspace("styra-nothing").is_err());
 
+        let clone = client.clone();
+        client.shutdown().unwrap();
+        assert!(clone
+            .health()
+            .unwrap_err()
+            .to_string()
+            .contains("shut down"));
+        assert!(client
+            .shutdown()
+            .unwrap_err()
+            .to_string()
+            .contains("already shut down"));
+
         std::fs::remove_dir_all(root).ok();
     }
 

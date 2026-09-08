@@ -18,6 +18,7 @@ use anyhow::{bail, Context, Result};
 use std::io::BufReader;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock};
 
 #[derive(Clone)]
 pub struct Client {
@@ -30,8 +31,9 @@ enum Transport {
     /// A daemon listening on this socket, reached with one connection per
     /// request.
     Socket(PathBuf),
-    /// A server owned by this process, called directly.
-    InProcess(crate::server::ServerState),
+    /// A server owned by this process, called directly. Every cloned client
+    /// shares the slot so shutdown can take the server away from all of them.
+    InProcess(Arc<RwLock<Option<crate::server::ServerState>>>),
 }
 
 impl Client {
@@ -46,7 +48,7 @@ impl Client {
     /// process does. See [`crate::daemon::in_process`].
     pub(crate) fn in_process(state: crate::server::ServerState) -> Self {
         Self {
-            transport: Transport::InProcess(state),
+            transport: Transport::InProcess(Arc::new(RwLock::new(Some(state)))),
         }
     }
 
@@ -452,13 +454,27 @@ impl Client {
         }
     }
 
-    /// Ask the server to shut down. It acknowledges before exiting, so a
-    /// successful return means the daemon received the request and is on its
-    /// way out (any live interactions it owns go with it).
+    /// Ask the server to shut down. A daemon acknowledges before exiting. An
+    /// in-process server is removed from every clone of this client and dropped
+    /// here, which gracefully ends its interactions and releases its store
+    /// lock before this method returns.
     pub fn shutdown(&self) -> Result<()> {
-        match self.request(Request::Shutdown)? {
-            Response::Accepted => Ok(()),
-            other => unexpected("accepted", other),
+        match &self.transport {
+            Transport::Socket(_) => match self.request(Request::Shutdown)? {
+                Response::Accepted => Ok(()),
+                other => unexpected("accepted", other),
+            },
+            Transport::InProcess(server) => {
+                let state = {
+                    let mut slot = server
+                        .write()
+                        .map_err(|_| anyhow::anyhow!("in-process Styra server lock poisoned"))?;
+                    slot.take()
+                        .context("the in-process Styra server is already shut down")?
+                };
+                drop(state);
+                Ok(())
+            }
         }
     }
 
@@ -467,7 +483,15 @@ impl Client {
             Transport::Socket(socket) => Self::request_over_socket(socket, request),
             // The in-process server's error is the caller's error already, so
             // it travels whole rather than being flattened into a wire string.
-            Transport::InProcess(state) => state.handle(request),
+            Transport::InProcess(server) => {
+                let slot = server
+                    .read()
+                    .map_err(|_| anyhow::anyhow!("in-process Styra server lock poisoned"))?;
+                let state = slot
+                    .as_ref()
+                    .context("the in-process Styra server is shut down")?;
+                state.handle(request)
+            }
         }
     }
 
