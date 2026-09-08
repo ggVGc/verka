@@ -321,9 +321,7 @@ fn append_host_runtime(command: &mut Command) -> Result<()> {
         "/bin",
         "/sbin",
         "/lib",
-        "/lib64",
-        "/nix/store",
-        "/gnu/store",
+        "/lib64"
     ] {
         append_runtime_path(command, Path::new(path))?;
     }
