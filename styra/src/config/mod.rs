@@ -9,14 +9,18 @@ pub mod defaults;
 
 pub use defaults::Defaults;
 
+use std::path::Path;
+use std::process::Command;
+
 /// The settings the terminal client reads.
 pub trait Configuration {
-    /// The program a file is handed to when the operator opens one — from the
-    /// Files view, a typed `files` answer, or a reference in a reply.
-    fn file_opener(&self) -> &str;
-
-    /// The terminal emulator the opener is started in. The client itself owns
-    /// this terminal, so an opener that draws on one of its own needs a window
-    /// to draw in.
-    fn terminal(&self) -> &str;
+    /// The command that opens `path` for the operator — from the Files view, a
+    /// typed `files` answer, or a reference in a reply.
+    ///
+    /// A whole command rather than a program name, because how a file is
+    /// opened is as much configuration as what opens it: a terminal editor has
+    /// to be wrapped in an emulator, a graphical one must not be, and either
+    /// may want arguments of its own. Deciding that here leaves the client with
+    /// nothing to assume — it spawns what it is given.
+    fn open_command(&self, path: &Path) -> Command;
 }

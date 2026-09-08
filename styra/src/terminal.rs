@@ -26,16 +26,30 @@ pub fn restore(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> 
     Ok(())
 }
 
-/// Open a file in the configured editor in a new terminal window.
-pub fn open_editor(terminal: &str, editor: &str, path: &Path) -> Result<()> {
-    let mut command = editor_terminal_command(OsStr::new(terminal), editor, path);
+/// Start a configured command and let it live on its own.
+///
+/// Every stream is closed: the command shares this process's terminal, which
+/// Styra is drawing in, so anything it writes there would land in the middle
+/// of the interface.
+pub fn spawn_detached(command: &mut Command) -> Result<()> {
     command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .with_context(|| format!("starting terminal {terminal}"))?;
+        .with_context(|| format!("starting {}", describe(command)))?;
     Ok(())
+}
+
+/// A command as the operator would have typed it, for the message that says
+/// what was run. Lossy on purpose: this is prose, not something to re-execute.
+pub fn describe(command: &Command) -> String {
+    let mut described = command.get_program().to_string_lossy().into_owned();
+    for arg in command.get_args() {
+        described.push(' ');
+        described.push_str(&arg.to_string_lossy());
+    }
+    described
 }
 
 /// Open a live session's persistent sandbox shell in a new terminal window.
@@ -150,26 +164,6 @@ fn terminal_command(program: &OsStr, tmux: &Path, socket: &Path) -> Command {
     command
 }
 
-fn editor_terminal_command(program: &OsStr, editor: &str, path: &Path) -> Command {
-    let mut command = Command::new(program);
-    let name = Path::new(program)
-        .file_name()
-        .unwrap_or(program)
-        .to_string_lossy()
-        .to_ascii_lowercase();
-    if name == "open" {
-        command.args(["-a", "Terminal", "--args"]);
-    } else if name == "wezterm" {
-        command.args(["start", "--"]);
-    } else if matches!(name.as_str(), "gnome-terminal" | "kitty" | "foot") {
-        command.arg("--");
-    } else {
-        command.arg("-e");
-    }
-    command.arg(editor).arg(path);
-    command
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -218,21 +212,11 @@ mod tests {
     }
 
     #[test]
-    fn editor_is_launched_in_a_new_terminal() {
-        let command = editor_terminal_command(
-            OsStr::new("urxvt"),
-            "nvim",
-            Path::new("/workspace/src/main.rs"),
-        );
-        let args: Vec<_> = command.get_args().collect();
-        assert_eq!(
-            args,
-            [
-                OsStr::new("-e"),
-                OsStr::new("nvim"),
-                OsStr::new("/workspace/src/main.rs"),
-            ]
-        );
+    fn a_command_is_described_as_it_would_have_been_typed() {
+        let mut command = Command::new("urxvt");
+        command.args(["-e", "nvim", "/workspace/src/main.rs"]);
+
+        assert_eq!(describe(&command), "urxvt -e nvim /workspace/src/main.rs");
     }
 
     #[test]

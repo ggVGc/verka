@@ -250,15 +250,14 @@ pub struct RunContext<'a> {
 /// typed `files` answer, a reference in a reply — obeys the same configuration
 /// and says the same thing about it afterwards.
 fn open_path(app: &mut App, config: &dyn Configuration, path: &Path) {
-    let opener = config.file_opener();
-    let terminal = config.terminal();
-    match crate::terminal::open_editor(terminal, opener, path) {
-        Ok(()) => app.show_action_message(format!(
-            "opened {} in {opener} ({terminal})",
-            path.display()
-        )),
+    let mut command = config.open_command(path);
+    // Named in both messages, because what opens a file is configuration: an
+    // operator who set it needs to see which command Styra actually ran.
+    let described = crate::terminal::describe(&command);
+    match crate::terminal::spawn_detached(&mut command) {
+        Ok(()) => app.show_action_message(format!("opened {described}")),
         Err(error) => app.push_log(LogEntry::error(format!(
-            "could not open {} in {opener} using {terminal}: {error:#}",
+            "could not open {}: {error:#}",
             path.display()
         ))),
     }
