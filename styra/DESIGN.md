@@ -519,9 +519,36 @@ the plan subscription is left. Both interactive agents volunteer these figures
 unprompted and in different shapes — Claude sends a `rate_limit_event` naming
 one window (`five_hour`) and its reset, adding a `utilization` figure only once
 it has something to warn about; Codex reports a percentage for a short and a
-long window inside its token-count notification, and says nothing about
-severity. Genta's decoder keeps neither, so the server reads them off the
+long window on an `account/rateLimits/updated` notification, and says nothing
+about severity. Genta's decoder keeps neither, so the server reads them off the
 verbatim line before anything discards them (`styra_server::quota`).
+
+Reading the verbatim line means tracking what the providers call things, and
+Codex renamed all of it — the figures moved out of the token-count notification
+they used to ride in, and every field went camelCase (`rateLimits`,
+`usedPercent`, `windowDurationMins`, `resetsAt`). Nothing failed when that
+happened; the reader simply stopped matching, and no Codex reading reached the
+log again. A wire rename that reads as silence is the failure mode this whole
+section has to survive, so each field is asked for under every spelling it has
+had, and the store is the evidence: a quota log with readings from one provider
+only is a bug, not a quiet account.
+
+The figures also go quiet exactly when they matter. Codex reports its
+percentages on turns that *run*, so the turn it refuses because the plan is
+spent carries none at all — only an `error` notification and a failed
+`turn/completed`, both naming `usageLimitExceeded`, which is how a limit hit
+could pass the view entirely. Both are read as readings in their own right: an
+exhausted window, filed under `plan` because the refusal names none, carrying no
+percentage because it states none. So is `rateLimitReachedType`, which Codex
+sets on the limits object when the plan is spent rather than filling — an
+account out of credits reports its windows as null, so that flag is the only
+thing left saying so, and it waits on somebody topping the account up rather
+than on the clock. What the refusal's prose carries is the one actionable fact —
+when the plan is usable again — and that sentence is kept verbatim as the
+reading's detail rather than parsed into a reset moment, because Codex writes it
+as local prose ("try again at Sep 9th, 2026 2:01 AM") naming no zone, and a
+reset shown as a confidently wrong minute is worse than one quoted as the
+provider said it.
 
 Each reading carries the **provider** whose plan it measures and the **moment**
 it was seen, and the view leads its rows with both. One log holds every
@@ -572,10 +599,23 @@ actually changes — status moving, or usage climbing another ten percent — so
 provider that repeats the same warning every turn costs one message, not one
 per turn. Every reading is logged either way.
 
+Said once is not said forever, though. A window that reads empty again has
+turned over, and the next time it fills is news, so a reading below half the
+warning threshold forgets what was announced about that window — and about the
+provider's `plan` window with it, since a provider reporting room is a provider
+running turns again, which is precisely what its refusal said it would not do.
+Only a genuinely empty reading re-arms the announcement: a figure hovering at
+88% is the same nearly-full window that was announced already, and re-arming on
+that would let it wobble either side of the threshold and repeat itself all
+afternoon.
+
 Note that what the providers volunteer is thinner than a quota display would
 want: Claude reports no figure at all below 90%, so a permitted window shows
-`?` rather than a misleading `0%`, and neither provider names the plan or its
-credit balance on the wire.
+`?` rather than a misleading `0%`, and never names the plan or its credit
+balance on the wire. Codex now does name both — `planType`, and a `credits`
+object with a balance and a `hasCredits` flag — which a reading does not yet
+carry; the flag's consequence is read (a spent account's
+`rateLimitReachedType`) but the balance itself is not shown.
 
 ### The transcript view
 
