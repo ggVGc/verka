@@ -763,9 +763,15 @@ fn print_dry_run(name: &str, command: Command, request: &ExecutionRequest) {
             ),
         }
     }
-    print!("invocation:");
-    for arg in std::iter::once(command.get_program()).chain(command.get_args()) {
-        print!(" {:?}", arg);
+    println!("invocation:");
+    print!("  {}", command.get_program().to_string_lossy());
+    for argument in command.get_args() {
+        let argument = argument.to_string_lossy();
+        if argument.starts_with("--") {
+            print!(" \\\n  {argument}");
+        } else {
+            print!(" {argument}");
+        }
     }
     println!();
 }

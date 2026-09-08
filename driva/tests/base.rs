@@ -54,13 +54,13 @@ fn the_default_base_is_laid_down_without_configuration() {
     let project = Project::new("default", "");
     let invocation = project.dry_run(&[]);
 
-    assert!(invocation.contains("\"--tmpfs\" \"/\""));
-    assert!(invocation.contains("\"--ro-bind\" \"/usr\" \"/usr\""));
-    assert!(!invocation.contains("\"--ro-bind\" \"/\" \"/\""));
+    assert!(invocation.contains("  --tmpfs /"));
+    assert!(invocation.contains("  --ro-bind /usr /usr"));
+    assert!(!invocation.contains("  --ro-bind / /"));
     if let Some(home) = std::env::var_os("HOME") {
         let home = Path::new(&home).display().to_string();
         assert!(
-            !invocation.contains(&format!("\"--ro-bind\" \"{home}\"")),
+            !invocation.contains(&format!("  --ro-bind {home}")),
             "{invocation}"
         );
     }
@@ -73,8 +73,8 @@ fn no_base_leaves_the_root_empty() {
     let project = Project::new("empty", "");
     let invocation = project.dry_run(&["--no-base"]);
 
-    assert!(invocation.contains("\"--tmpfs\" \"/\""));
-    assert!(!invocation.contains("\"--ro-bind\" \"/usr\" \"/usr\""));
+    assert!(invocation.contains("  --tmpfs /"));
+    assert!(!invocation.contains("  --ro-bind /usr /usr"));
 }
 
 /// A capability left out is left out, and the rest of the base is untouched:
@@ -85,9 +85,9 @@ fn a_capability_can_be_dropped_from_one_invocation() {
     let with = project.dry_run(&[]);
     let without = project.dry_run(&["--no-capability", "timezone"]);
 
-    assert!(with.contains("\"/etc/localtime\""), "{with}");
-    assert!(!without.contains("\"/etc/localtime\""), "{without}");
-    assert!(without.contains("\"--ro-bind\" \"/usr\" \"/usr\""));
+    assert!(with.contains("/etc/localtime"), "{with}");
+    assert!(!without.contains("/etc/localtime"), "{without}");
+    assert!(without.contains("  --ro-bind /usr /usr"));
 }
 
 /// A project chooses from Driva's fixed capabilities.
@@ -102,10 +102,10 @@ include = ["core", "dns"]
     );
     let invocation = project.dry_run(&[]);
 
-    assert!(invocation.contains("\"--ro-bind\" \"/usr\" \"/usr\""));
-    assert!(invocation.contains("\"/etc/resolv.conf\""), "{invocation}");
+    assert!(invocation.contains("  --ro-bind /usr /usr"));
+    assert!(invocation.contains("/etc/resolv.conf"), "{invocation}");
     // `identity` and `timezone` are not in the project's list.
-    assert!(!invocation.contains("\"/etc/localtime\""), "{invocation}");
+    assert!(!invocation.contains("/etc/localtime"), "{invocation}");
 }
 
 /// Capabilities are not configuration objects; only the static names may be
@@ -180,7 +180,7 @@ include = ["core", "certificates"]
 
     let invocation = forwarded(&[], "http://proxy.invalid:3128");
     assert!(
-        invocation.contains("\"--setenv\" \"HTTPS_PROXY\" \"http://proxy.invalid:3128\""),
+        invocation.contains("  --setenv HTTPS_PROXY http://proxy.invalid:3128"),
         "{invocation}"
     );
 
@@ -191,11 +191,11 @@ include = ["core", "certificates"]
         "http://proxy.invalid:3128",
     );
     assert!(
-        overridden.contains("\"--setenv\" \"HTTPS_PROXY\" \"http://stated.invalid:3128\""),
+        overridden.contains("  --setenv HTTPS_PROXY http://stated.invalid:3128"),
         "{overridden}"
     );
     assert!(
-        !overridden.contains("\"http://proxy.invalid:3128\""),
+        !overridden.contains("  http://proxy.invalid:3128"),
         "{overridden}"
     );
 }
@@ -219,8 +219,8 @@ capability = ["dns"]
     let without = project.dry_run(&[]);
     let with = project.dry_run(&["--template", "probe"]);
 
-    assert!(!without.contains("\"/etc/resolv.conf\""), "{without}");
-    assert!(with.contains("\"/etc/resolv.conf\""), "{with}");
+    assert!(!without.contains("/etc/resolv.conf"), "{without}");
+    assert!(with.contains("/etc/resolv.conf"), "{with}");
 }
 
 /// Naming a capability describes it: every path, what needs that path, which

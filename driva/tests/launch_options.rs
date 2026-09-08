@@ -49,7 +49,7 @@ fn cli_defaults_to_the_bubblewrap_backend() {
     let output = stdout(directory.run(&["run", "--dry-run", "--", "true"]));
 
     assert!(output.contains("backend: bwrap"));
-    assert!(output.contains("\"--\" \"true\""));
+    assert!(output.contains("  -- true\n"));
 }
 
 #[test]
@@ -58,7 +58,7 @@ fn shell_keeps_the_callers_terminal_session_by_default() {
     let output = stdout(directory.run(&["shell", "--dry-run"]));
 
     assert!(output.contains("interactive: true"));
-    assert!(!output.contains("\"--new-session\""));
+    assert!(!output.contains("  --new-session"));
 }
 
 #[test]
@@ -73,7 +73,11 @@ fn omitted_workdir_mounts_the_current_directory_as_a_writable_workspace() {
         workspace.display(),
         workspace.display()
     )));
-    assert!(output.contains(&format!("\"--bind\" {:?} {:?}", workspace, workspace)));
+    assert!(output.contains(&format!(
+        "  --bind {} {}",
+        workspace.display(),
+        workspace.display()
+    )));
 }
 
 #[test]
@@ -174,8 +178,8 @@ fn cli_rootfs_and_temporary_mount_reach_bubblewrap() {
     ]));
 
     assert!(output.contains("backend: bwrap"));
-    assert!(output.contains(&format!("\"--ro-bind\" {:?} \"/\"", rootfs)));
-    assert!(output.contains("\"--tmpfs\" \"/home\""));
+    assert!(output.contains(&format!("  --ro-bind {} /", rootfs.display())));
+    assert!(output.contains("  --tmpfs /home"));
 }
 
 #[test]
@@ -191,7 +195,7 @@ fn temporary_config_mount_reaches_the_backend() {
     let output = stdout(directory.run(&["run", "--dry-run", "--template", "check", "--", "true"]));
 
     assert!(output.contains("mount: temporary -> /state (read-write)"));
-    assert!(output.contains("\"--tmpfs\" \"/state\""));
+    assert!(output.contains("  --tmpfs /state"));
 }
 
 #[test]
@@ -261,7 +265,7 @@ fn cli_command_overrides_the_template_command() {
         "argument",
     ]));
 
-    assert!(output.contains("\"override-command\" \"argument\""));
+    assert!(output.contains("  -- override-command argument"));
     assert!(!output.contains("template-command"));
     assert!(!output.contains("template-argument"));
 }
@@ -314,14 +318,14 @@ fn multiple_templates_accumulate_with_later_templates_taking_precedence() {
 
     assert!(output.contains("backend: bwrap"));
     assert!(output.contains("network: disabled"));
-    assert!(output.contains("\"second-command\" \"argument\""));
+    assert!(output.contains("  -- second-command argument"));
     assert!(!output.contains("first-command"));
     assert!(output.contains(" -> /first (read-only)"));
     assert!(output.contains(" -> /second (read-only)"));
-    assert!(output.contains("\"FIRST_ONLY\" \"first\""));
-    assert!(output.contains("\"SHARED\" \"second\""));
-    assert!(!output.contains("\"SHARED\" \"first\""));
-    assert!(output.contains("\"SECOND_ONLY\" \"second\""));
+    assert!(output.contains("  --setenv FIRST_ONLY first"));
+    assert!(output.contains("  --setenv SHARED second"));
+    assert!(!output.contains("  --setenv SHARED first"));
+    assert!(output.contains("  --setenv SECOND_ONLY second"));
 
     let first_path = directory.0.join("first-path").canonicalize().unwrap();
     let second_path = directory.0.join("second-path").canonicalize().unwrap();
@@ -354,7 +358,7 @@ fn later_template_without_a_command_keeps_the_previous_command() {
         "policy",
     ]));
 
-    assert!(output.contains("\"template-command\""));
+    assert!(output.contains("  -- template-command"));
     assert!(output.contains("network: enabled"));
 }
 
@@ -400,7 +404,7 @@ fn cli_command_can_supply_an_executable_without_a_template() {
         "argument",
     ]));
 
-    assert!(output.contains("\"override-command\" \"argument\""));
+    assert!(output.contains("  -- override-command argument"));
 }
 
 #[test]
@@ -484,7 +488,7 @@ fn template_inherits_home_from_the_host_when_it_is_not_configured() {
         .unwrap();
     let output = stdout(output);
 
-    assert!(output.contains("\"--setenv\" \"HOME\" \"/host/home\""));
+    assert!(output.contains("  --setenv HOME /host/home"));
 }
 
 #[test]
@@ -506,7 +510,7 @@ fn configured_home_overrides_the_inherited_host_home() {
         .unwrap();
     let output = stdout(output);
 
-    assert!(output.contains("\"--setenv\" \"HOME\" \"/template/home\""));
+    assert!(output.contains("  --setenv HOME /template/home"));
     assert!(!output.contains("/host/home"));
 }
 
@@ -522,7 +526,7 @@ fn inherit_env_passes_the_host_environment_to_the_session() {
         .unwrap();
     let output = stdout(output);
 
-    assert!(output.contains("\"--setenv\" \"DRIVA_HOST_VALUE\" \"from-host\""));
+    assert!(output.contains("  --setenv DRIVA_HOST_VALUE from-host"));
 }
 
 #[test]
@@ -560,10 +564,10 @@ fn explicit_environment_overrides_inherited_values() {
         .unwrap();
     let output = stdout(output);
 
-    assert!(output.contains("\"FROM_PROJECT\" \"project\""));
-    assert!(output.contains("\"FROM_TEMPLATE\" \"template\""));
-    assert!(output.contains("\"FROM_CLI\" \"cli\""));
-    assert!(!output.contains("\"host\""));
+    assert!(output.contains("  --setenv FROM_PROJECT project"));
+    assert!(output.contains("  --setenv FROM_TEMPLATE template"));
+    assert!(output.contains("  --setenv FROM_CLI cli"));
+    assert!(!output.contains("  host"));
 }
 
 #[test]
@@ -592,7 +596,7 @@ fn bwrap_inherits_term_from_the_host_when_it_is_not_configured() {
         .unwrap();
     let output = stdout(output);
 
-    assert!(output.contains("\"--setenv\" \"TERM\" \"host-terminal\""));
+    assert!(output.contains("  --setenv TERM host-terminal"));
 }
 
 #[test]
@@ -623,7 +627,7 @@ fn configured_term_overrides_the_inherited_host_term_in_bwrap() {
         .unwrap();
     let output = stdout(output);
 
-    assert!(output.contains("\"--setenv\" \"TERM\" \"configured-terminal\""));
+    assert!(output.contains("  --setenv TERM configured-terminal"));
     assert!(!output.contains("host-terminal"));
 }
 
@@ -799,8 +803,8 @@ fn template_environment_expands_a_leading_home_marker() {
     ]));
     let home = std::env::var("HOME").unwrap();
 
-    assert!(output.contains(&format!("\"TOOL_HOME\" \"{home}/.tool\"")));
-    assert!(output.contains("\"LITERAL\" \"not/~/a/prefix\""));
+    assert!(output.contains(&format!("  --setenv TOOL_HOME {home}/.tool")));
+    assert!(output.contains("  --setenv LITERAL not/~/a/prefix"));
 }
 
 #[test]
