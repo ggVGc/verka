@@ -50,8 +50,33 @@ impl LiveInteractions {
             .collect()
     }
 
-    pub fn next(&self, current: &str, workspace_id: Option<&str>) -> Option<InteractionSummary> {
+    /// The visible indices in the order [`crate::ui::interactions`] draws
+    /// them: in All scope the entries are grouped under their Workspace
+    /// heading, so j/k has to walk that order rather than the raw item order.
+    pub fn display_indices(&self, workspace_id: Option<&str>) -> Vec<usize> {
         let visible = self.visible_indices(workspace_id);
+        if self.only_current_workspace {
+            return visible;
+        }
+
+        let mut ordered = Vec::with_capacity(visible.len());
+        for leader in &visible {
+            if ordered.contains(leader) {
+                continue;
+            }
+            let workspace_id = &self.items[*leader].workspace_id;
+            ordered.extend(
+                visible
+                    .iter()
+                    .copied()
+                    .filter(|index| self.items[*index].workspace_id == *workspace_id),
+            );
+        }
+        ordered
+    }
+
+    pub fn next(&self, current: &str, workspace_id: Option<&str>) -> Option<InteractionSummary> {
+        let visible = self.display_indices(workspace_id);
         let index = visible
             .iter()
             .position(|index| self.items[*index].id == current)
@@ -68,7 +93,7 @@ impl LiveInteractions {
         current: &str,
         workspace_id: Option<&str>,
     ) -> Option<InteractionSummary> {
-        let visible = self.visible_indices(workspace_id);
+        let visible = self.display_indices(workspace_id);
         let position = visible
             .iter()
             .position(|index| self.items[*index].id == current)
@@ -225,6 +250,57 @@ mod tests {
         live.toggle_workspace_scope();
         assert!(!live.only_current_workspace);
         assert_eq!(live.visible_indices(Some("workspace")), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn navigation_follows_the_workspace_grouped_display_order() {
+        // Sorting by activity interleaves the two Workspaces, so raw item
+        // order and the grouped order the navigator draws disagree.
+        let mut other_pending = interaction("other-pending", true, InteractionActivity::Pending);
+        other_pending.workspace_id = "other-workspace".into();
+        let mut other_running = interaction("other-running", true, InteractionActivity::Running);
+        other_running.workspace_id = "other-workspace".into();
+        let mut live = LiveInteractions::default();
+        live.open(
+            vec![
+                interaction("pending", true, InteractionActivity::Pending),
+                other_pending,
+                interaction("running", true, InteractionActivity::Running),
+                other_running,
+            ],
+            vec![],
+        );
+
+        let ordered = live
+            .display_indices(Some("workspace"))
+            .into_iter()
+            .map(|index| live.items[index].id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ordered,
+            ["pending", "running", "other-pending", "other-running"]
+        );
+
+        assert_eq!(
+            live.next("pending", Some("workspace")).unwrap().id,
+            "running"
+        );
+        assert_eq!(
+            live.next("running", Some("workspace")).unwrap().id,
+            "other-pending"
+        );
+        assert_eq!(
+            live.previous("other-pending", Some("workspace"))
+                .unwrap()
+                .id,
+            "running"
+        );
+        assert_eq!(
+            live.previous("other-running", Some("workspace"))
+                .unwrap()
+                .id,
+            "other-pending"
+        );
     }
 
     #[test]

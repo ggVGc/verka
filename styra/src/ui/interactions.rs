@@ -75,27 +75,24 @@ enum Row {
 }
 
 fn rows(app: &App) -> Vec<Row> {
-    let visible = app
+    let ordered = app
         .interactions
-        .visible_indices(app.workspace.id.as_deref());
+        .display_indices(app.workspace.id.as_deref());
     if app.interactions.only_current_workspace {
-        return visible.into_iter().map(Row::Interaction).collect();
+        return ordered.into_iter().map(Row::Interaction).collect();
     }
 
+    // `display_indices` already groups the entries by Workspace, so a heading
+    // is due wherever the Workspace changes.
     let mut rows = Vec::new();
-    let mut placed = vec![false; app.interactions.items.len()];
-    for leader in &visible {
-        if placed[*leader] {
-            continue;
+    let mut heading = None;
+    for index in ordered {
+        let workspace_id = &app.interactions.items[index].workspace_id;
+        if heading.as_ref() != Some(workspace_id) {
+            rows.push(Row::Workspace(workspace_name(app, workspace_id)));
+            heading = Some(workspace_id.clone());
         }
-        let workspace_id = &app.interactions.items[*leader].workspace_id;
-        rows.push(Row::Workspace(workspace_name(app, workspace_id)));
-        for index in &visible {
-            if !placed[*index] && app.interactions.items[*index].workspace_id == *workspace_id {
-                placed[*index] = true;
-                rows.push(Row::Interaction(*index));
-            }
-        }
+        rows.push(Row::Interaction(index));
     }
     rows
 }
