@@ -1,6 +1,7 @@
 //! The main event list: each entry a summary line that grows inline when
 //! expanded, plus the empty-list start screen and the trailing status tail.
 
+use super::code::{code_block_lines, is_error_diagnostic};
 use super::markdown::{keeps_line_structure, markdown_block_lines};
 use super::{
     conversation_only_title, format_duration, message_text_color, palette, render_placeholder,
@@ -555,11 +556,7 @@ pub(crate) fn wrap_or_clip(
 /// text stays aligned with the text following its `«`/`»` marker (and detail
 /// rows retain their body indent) instead of jumping to the far-left edge.
 /// `List` does not wrap on its own, so long lines would otherwise be clipped.
-fn wrap_line(
-    line: Line<'static>,
-    width: usize,
-    continuation_indent: usize,
-) -> Vec<Line<'static>> {
+fn wrap_line(line: Line<'static>, width: usize, continuation_indent: usize) -> Vec<Line<'static>> {
     if width == 0 {
         return vec![line];
     }
@@ -831,7 +828,7 @@ fn failed_shell_result(event: &AgentEvent) -> bool {
 /// A successful shell result whose own output strongly suggests that a nested
 /// command failed. This is deliberately conservative: arbitrary mentions of
 /// "error" (test names, grep results, documentation) remain green.
-fn suspicious_shell_success(event: &AgentEvent) -> bool {
+pub(crate) fn suspicious_shell_success(event: &AgentEvent) -> bool {
     if failed_shell_result(event) {
         return false;
     }
@@ -841,17 +838,6 @@ fn suspicious_shell_success(event: &AgentEvent) -> bool {
         _ => return false,
     };
     output.lines().any(is_error_diagnostic)
-}
-
-fn is_error_diagnostic(line: &str) -> bool {
-    let line = line.trim_start().to_ascii_lowercase();
-    line.starts_with("error:")
-        || line.starts_with("error[")
-        || line.starts_with("fatal:")
-        || line.contains(": no such file or directory")
-        || line.contains(": permission denied")
-        || line.contains(": read-only file system")
-        || line.ends_with(": command not found")
 }
 
 /// File-event summaries should say what happened, not merely repeat paths
@@ -906,18 +892,14 @@ pub(crate) fn detail_lines(
                 let base_style = Style::default().fg(text_color);
                 lines.extend(markdown_block_lines(&text, base_style, DETAIL_INDENT));
             }
-            DetailBlock::Code { text, .. } => {
-                for line in text.lines() {
-                    let color = if suspicious_shell && is_error_diagnostic(line) {
-                        palette::ERROR
-                    } else {
-                        palette::TEXT
-                    };
-                    lines.push(Line::from(vec![Span::styled(
-                        format!("{DETAIL_INDENT}{line}"),
-                        Style::default().fg(color),
-                    )]));
-                }
+            DetailBlock::Code { text, language } => {
+                lines.extend(code_block_lines(
+                    &text,
+                    language.as_deref(),
+                    text_color,
+                    suspicious_shell,
+                    DETAIL_INDENT,
+                ));
             }
         }
     }

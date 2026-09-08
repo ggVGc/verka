@@ -2,7 +2,11 @@
 //! uncapped expanded content of the selected entry, regardless of whether it
 //! is folded in the list.
 
-use super::{message_text_color, palette, summary_line, wrap_or_clip, DETAIL_INDENT};
+use super::code::code_block_lines;
+use super::{
+    message_text_color, palette, summary_line, suspicious_shell_success, wrap_or_clip,
+    DETAIL_INDENT,
+};
 use crate::app::App;
 use crate::preview::PreviewTarget;
 use ratatui::layout::Rect;
@@ -141,6 +145,10 @@ pub(crate) fn preview_lines(app: &App) -> Vec<Line<'static>> {
         false,
         protocol,
     )];
+    // Raw mode shows the wire text as it is, so the suspicious-shell marking
+    // — like every other pretty-mode color — is left off there.
+    let suspicious_shell =
+        app.preview.mode() == PresentationMode::Pretty && suspicious_shell_success(&entry.event);
     let mut blocks = protocol
         .presented_detail(&entry.event, app.preview.mode())
         .into_iter();
@@ -149,6 +157,7 @@ pub(crate) fn preview_lines(app: &App) -> Vec<Line<'static>> {
             first,
             message_text_color(entry.event.tag()),
             app.preview.mode(),
+            suspicious_shell,
         ));
         for block in blocks {
             lines.push(Line::from(""));
@@ -156,6 +165,7 @@ pub(crate) fn preview_lines(app: &App) -> Vec<Line<'static>> {
                 block,
                 message_text_color(entry.event.tag()),
                 app.preview.mode(),
+                suspicious_shell,
             ));
         }
     }
@@ -166,10 +176,11 @@ fn presented_block_lines(
     block: DetailBlock,
     text_color: Color,
     mode: PresentationMode,
+    suspicious_shell: bool,
 ) -> Vec<Line<'static>> {
     // Prose blocks carry the agent's markdown, so the pretty preview styles it
-    // the same way the expanded list entry does. Code blocks (commands,
-    // output, diffs) stay verbatim, and raw mode stays raw by definition.
+    // the same way the expanded list entry does. Raw mode stays raw by
+    // definition, so its text is shown verbatim.
     if mode == PresentationMode::Pretty {
         if let DetailBlock::Text(text) = &block {
             let base_style = Style::default().fg(text_color);
@@ -180,84 +191,13 @@ fn presented_block_lines(
         DetailBlock::Text(text) => (text, None),
         DetailBlock::Code { language, text } => (text, language),
     };
-    text.lines()
-        .map(|line| {
-            if language.as_deref() == Some("bash") {
-                let mut spans = vec![Span::styled(
-                    DETAIL_INDENT.to_owned(),
-                    Style::default().fg(palette::TEXT),
-                )];
-                spans.extend(bash_spans(line));
-                return Line::from(spans);
-            }
-            let color = if line.starts_with('+') && !line.starts_with("+++") {
-                palette::SUCCESS
-            } else if line.starts_with('-') && !line.starts_with("---") {
-                palette::ERROR
-            } else if line.starts_with("@@") {
-                palette::ACCENT
-            } else {
-                text_color
-            };
-            Line::from(Span::styled(
-                format!("{DETAIL_INDENT}{}", line.replace('\t', "    ")),
-                Style::default().fg(color),
-            ))
-        })
-        .collect()
-}
-
-/// Small shell highlighter for command previews. Genta identifies the code as
-/// Bash; Styra owns the terminal palette.
-fn bash_spans(line: &str) -> Vec<Span<'static>> {
-    let mut spans = Vec::new();
-    let mut rest = line;
-    while !rest.is_empty() {
-        if rest.starts_with('#') {
-            spans.push(Span::styled(
-                rest.to_owned(),
-                Style::default().fg(palette::ADDITIONAL_INFO),
-            ));
-            break;
-        }
-        let first = rest.chars().next().unwrap();
-        let (len, color) = if first == '\'' || first == '"' {
-            let end = rest[1..]
-                .find(first)
-                .map(|offset| offset + 2)
-                .unwrap_or(rest.len());
-            (end, palette::SUCCESS)
-        } else if first.is_whitespace() {
-            (
-                rest.find(|ch: char| !ch.is_whitespace())
-                    .unwrap_or(rest.len()),
-                palette::TEXT,
-            )
-        } else {
-            let end = rest
-                .find(|ch: char| ch.is_whitespace() || "|&;<>".contains(ch))
-                .unwrap_or(rest.len());
-            if end == 0 {
-                (first.len_utf8(), palette::SPECIAL)
-            } else {
-                let token = &rest[..end];
-                let color = if token.starts_with('-') {
-                    palette::ACCENT
-                } else if token.contains('$') {
-                    palette::WARNING
-                } else {
-                    palette::TEXT
-                };
-                (end, color)
-            }
-        };
-        spans.push(Span::styled(
-            rest[..len].to_owned(),
-            Style::default().fg(color),
-        ));
-        rest = &rest[len..];
-    }
-    spans
+    code_block_lines(
+        &text,
+        language.as_deref(),
+        text_color,
+        suspicious_shell,
+        DETAIL_INDENT,
+    )
 }
 
 #[cfg(test)]
@@ -287,6 +227,52 @@ mod tests {
             }
         }
         panic!("no cell contains {needle:?}");
+    }
+
+    /// The expanded list entry and the preview render the same detail blocks,
+    /// so a command highlighted in one must be highlighted the same way in the
+    /// other. They used to be two separate implementations and had drifted:
+    /// only the preview colored bash and diffs, only the list marked a
+    /// suspicious success.
+    #[test]
+    fn the_list_and_the_preview_style_a_command_identically() {
+        let mut app = testing::app("s1");
+        let event = AgentEvent::CommandCompleted {
+            command: "grep -n 'needle' $FILE".into(),
+            status: "completed".into(),
+            exit_code: Some(0),
+            output: "error: no needle here".into(),
+        };
+        app.push_event(event.clone());
+
+        let protocol = app.selection.provider.protocol();
+        let from_list = super::super::list::detail_lines(&event, protocol, None);
+        // The preview leads with the summary line the list keeps separate.
+        let from_preview: Vec<Line<'static>> = preview_lines(&app).into_iter().skip(1).collect();
+
+        let styled = |lines: &[Line<'static>]| -> Vec<(String, Vec<Option<Color>>)> {
+            lines
+                .iter()
+                .map(|line| {
+                    (
+                        line.spans.iter().map(|s| s.content.as_ref()).collect(),
+                        line.spans.iter().map(|s| s.style.fg).collect(),
+                    )
+                })
+                .filter(|(text, _): &(String, _)| !text.trim().is_empty())
+                .collect()
+        };
+        assert_eq!(styled(&from_list), styled(&from_preview));
+
+        // And the shared styling is the real thing, not two matching blanks:
+        // the output contradicting the reported success is red in both views.
+        // (Bash and diff coloring are covered by `code`'s own tests.)
+        let colors: Vec<Option<Color>> = from_list
+            .iter()
+            .flat_map(|line| &line.spans)
+            .map(|span| span.style.fg)
+            .collect();
+        assert!(colors.contains(&Some(palette::ERROR)), "{from_list:?}");
     }
 
     #[test]
