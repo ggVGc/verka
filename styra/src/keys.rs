@@ -200,6 +200,9 @@ pub fn handle_list_key(
         View::Driva => match key.code {
             KeyCode::Tab | KeyCode::BackTab => launch::toggle_scope(app),
             KeyCode::Char('w') => launch::cycle_network(app),
+            // `R` for read-only: the workspace mount's access. Lowercase `r`
+            // is claimed globally above (the raw view) and never gets here.
+            KeyCode::Char('R') => launch::cycle_workspace_access(app),
             // `I` for whether this launch inherits: `S` is claimed globally
             // above (stopping the interaction) and never reaches this match.
             KeyCode::Char('I') => launch::toggle_standalone(app),

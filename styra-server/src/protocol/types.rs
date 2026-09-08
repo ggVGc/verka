@@ -356,6 +356,17 @@ pub struct LaunchPolicy {
     /// ORs the profile's and the templates' own network policy in afterwards.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub network: Option<bool>,
+    /// Whether the Workspace directory itself is bound writable. `None`
+    /// inherits — from the Workspace's policy on an overlay, and from nothing
+    /// at all on the Workspace's own, where it means the default: writable.
+    ///
+    /// Unlike `network` this is a real veto: the workspace mount is the
+    /// server's own, assembled from this one answer, so `Some(false)` binds
+    /// the agent's own directory read-only and nothing ORs write access back
+    /// in. Another layer can still grant a writable mount *inside* it by
+    /// naming that path in `mounts`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub writable_workspace: Option<bool>,
     /// Named Driva templates, layered in the order given (later names win on
     /// conflict). On an overlay these are appended after the Workspace's,
     /// so an interaction's template wins over the Workspace's.
@@ -384,6 +395,7 @@ impl LaunchPolicy {
     /// is why the field is skipped on the wire when it is empty.
     pub fn is_empty(&self) -> bool {
         self.network.is_none()
+            && self.writable_workspace.is_none()
             && self.templates.is_empty()
             && self.mounts.is_empty()
             && !self.standalone
@@ -395,7 +407,8 @@ impl LaunchPolicy {
     /// Additive by default, because that is what a standing policy is for: the
     /// Workspace grants the mounts and templates every launch there needs, and
     /// an interaction says what is particular to it. An overlay overrides
-    /// rather than adds in exactly three ways — a stated `network`, a template
+    /// rather than adds in exactly four ways — a stated `network`, a stated
+    /// `writable_workspace`, a template
     /// name repeating one of the Workspace's (which moves it later in the
     /// layering, where it wins), and a mount on a destination the Workspace
     /// already binds. `standalone` is the escape hatch for the case none of
@@ -412,6 +425,7 @@ impl LaunchPolicy {
         }
         let mut merged = Self {
             network: overlay.network.or(base.network),
+            writable_workspace: overlay.writable_workspace.or(base.writable_workspace),
             templates: base.templates.clone(),
             mounts: base.mounts.clone(),
             standalone: false,
@@ -434,6 +448,14 @@ impl LaunchPolicy {
     /// ever reports what the operator asked for.
     pub fn grants_network(&self) -> bool {
         self.network.unwrap_or(false)
+    }
+
+    /// Whether the workspace mount is writable. An absent answer is "yes":
+    /// binding the directory the agent works in read-write is what a launch
+    /// does unless someone says otherwise, so this is the one policy question
+    /// whose default is the permissive one.
+    pub fn grants_writable_workspace(&self) -> bool {
+        self.writable_workspace.unwrap_or(true)
     }
 }
 
@@ -742,6 +764,7 @@ mod tests {
     fn a_launch_adds_to_the_workspace_policy_by_default() {
         let base = LaunchPolicy {
             network: Some(true),
+            writable_workspace: None,
             templates: vec!["rust".into()],
             mounts: vec![mount("/srv/corpus", None, false)],
             standalone: false,
@@ -767,18 +790,21 @@ mod tests {
     }
 
     /// Overriding, in the three ways an additive overlay can express it: a
-    /// stated network answer, a template name that moves later in the layering,
-    /// and a mount on a destination the Workspace already binds.
+    /// stated network answer, a stated workspace access, a template name that
+    /// moves later in the layering, and a mount on a destination the Workspace
+    /// already binds.
     #[test]
     fn an_overlay_overrides_the_workspace_on_the_grants_it_names() {
         let base = LaunchPolicy {
             network: Some(true),
+            writable_workspace: None,
             templates: vec!["rust".into(), "browser".into()],
             mounts: vec![mount("/srv/corpus", Some("/mnt/corpus"), false)],
             standalone: false,
         };
         let overlay = LaunchPolicy {
             network: Some(false),
+            writable_workspace: None,
             templates: vec!["rust".into()],
             mounts: vec![mount("/srv/other", Some("/mnt/corpus"), true)],
             standalone: false,
@@ -820,6 +846,7 @@ mod tests {
     fn a_standalone_launch_ignores_the_workspace_policy_entirely() {
         let base = LaunchPolicy {
             network: Some(true),
+            writable_workspace: None,
             templates: vec!["rust".into()],
             mounts: vec![mount("/srv/corpus", None, false)],
             standalone: false,
@@ -845,11 +872,64 @@ mod tests {
     fn an_empty_overlay_leaves_the_workspace_policy_as_it_is() {
         let base = LaunchPolicy {
             network: Some(true),
+            writable_workspace: None,
             templates: vec!["rust".into()],
             mounts: vec![mount("/srv/corpus", None, false)],
             standalone: false,
         };
         assert!(LaunchPolicy::default().is_empty());
         assert_eq!(LaunchPolicy::merge(&base, &LaunchPolicy::default()), base);
+    }
+
+    /// The workspace mount is writable unless some layer says otherwise, and
+    /// either layer can say it: this is the one grant whose absent answer is
+    /// the permissive one, so the default has to survive a merge that states
+    /// nothing and be overridable from both sides.
+    #[test]
+    fn the_workspace_mount_is_writable_until_a_layer_says_otherwise() {
+        assert!(LaunchPolicy::default().grants_writable_workspace());
+        // Stating it is asking for something, so the Workspace that holds it is
+        // not one with no policy at all.
+        assert!(!LaunchPolicy {
+            writable_workspace: Some(false),
+            ..LaunchPolicy::default()
+        }
+        .is_empty());
+
+        let read_only = LaunchPolicy {
+            writable_workspace: Some(false),
+            ..LaunchPolicy::default()
+        };
+        // Stated by the Workspace, inherited by a launch that says nothing.
+        let merged = LaunchPolicy::merge(&read_only, &LaunchPolicy::default());
+        assert_eq!(merged.writable_workspace, Some(false));
+        assert!(!merged.grants_writable_workspace());
+
+        // And taken back by one that does say something.
+        let merged = LaunchPolicy::merge(
+            &read_only,
+            &LaunchPolicy {
+                writable_workspace: Some(true),
+                ..LaunchPolicy::default()
+            },
+        );
+        assert!(merged.grants_writable_workspace());
+
+        // Stated by the launch alone, over a Workspace with no answer.
+        let merged = LaunchPolicy::merge(&LaunchPolicy::default(), &read_only);
+        assert!(!merged.grants_writable_workspace());
+
+        // A standalone launch carries its own answer and nothing else's.
+        let merged = LaunchPolicy::merge(
+            &LaunchPolicy {
+                writable_workspace: Some(false),
+                ..LaunchPolicy::default()
+            },
+            &LaunchPolicy {
+                standalone: true,
+                ..LaunchPolicy::default()
+            },
+        );
+        assert!(merged.grants_writable_workspace());
     }
 }

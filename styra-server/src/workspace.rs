@@ -250,6 +250,9 @@ pub fn change_launch(
     let mut meta = read_meta(&path)?;
     match change {
         WorkspaceLaunchChange::SetNetwork(network) => meta.launch.network = network,
+        WorkspaceLaunchChange::SetWritableWorkspace(writable) => {
+            meta.launch.writable_workspace = writable
+        }
         WorkspaceLaunchChange::SetTemplates(templates) => meta.launch.templates = templates,
         WorkspaceLaunchChange::AddMounts(mounts) => {
             for mount in mounts {
@@ -376,6 +379,7 @@ mod tests {
 
         let launch = LaunchPolicy {
             network: Some(true),
+            writable_workspace: None,
             templates: vec!["rust".into()],
             mounts: vec![crate::protocol::LaunchMount {
                 source: PathBuf::from("/srv/corpus"),
@@ -394,6 +398,17 @@ mod tests {
         .unwrap();
         assert!(!stored.standalone);
         assert_eq!(stored.templates, launch.templates);
+
+        // Each field is edited on its own too, against the latest stored copy
+        // rather than a client's cached one.
+        let stored = change_launch(
+            &store,
+            &workspace.id,
+            WorkspaceLaunchChange::SetWritableWorkspace(Some(false)),
+        )
+        .unwrap();
+        assert!(!stored.grants_writable_workspace());
+        assert_eq!(stored.templates, launch.templates, "the rest is untouched");
 
         // The access bump the picker relies on rewrites `workspace.json`;
         // it is not allowed to drop the policy.

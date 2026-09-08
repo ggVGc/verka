@@ -85,7 +85,8 @@ Workspace outside Git receives neither these mounts nor the tool. Turning the
 setting off affects future launches and does not delete existing worktrees.
 
 `workspace.json` also holds the Workspace's standing launch policy: the Driva
-templates, extra mounts, and network permission every launch there starts from.
+templates, extra mounts, network permission, and workspace mount access every
+launch there starts from.
 When a client associates a Git checkout, its canonical root is stored in the
 same metadata. Every launch then mounts the checkout at its host path read-only
 and mounts its `.git` metadata writable. Linked worktrees additionally expose
@@ -95,7 +96,13 @@ An individual interaction adds its own on top. The details view (`d`) shows
 the Workspace and current interaction metadata alongside the effective
 sandbox. Before launch it also shows the two policy layers as panes and edits
 either one: `Tab` moves the keys between them, and the
-focused pane is the one `w`, `T`, `m` and `x` change. Edits to the Workspace
+focused pane is the one `w`, `R`, `T`, `m` and `x` change. The Workspace
+directory itself is mounted read-write unless a layer says otherwise, which is
+what `R` says: it is the one mount `m` and `x` cannot reach, since the server
+assembles it from the Workspace's host path rather than from a policy row. A
+read-only workspace still leaves a Git checkout's `.git` metadata writable, so
+an agent confined this way can read history without editing the tree. Edits to
+the Workspace
 pane are stored with the Workspace as they are made, so every client launching
 there picks them up; `D` keeps this interaction's own settings as this client's
 starting point instead, and `U` moves them up into the Workspace's policy. An

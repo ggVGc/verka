@@ -163,6 +163,10 @@ pub(crate) const REFERENCE: &[ReferenceRow] = &[
         action: "permit/forbid agent networking, in the focused layer",
     },
     ReferenceRow::Binding {
+        keys: "R",
+        action: "mount the workspace read-write/read-only, in the focused layer",
+    },
+    ReferenceRow::Binding {
         keys: "T",
         action: "choose Driva templates",
     },

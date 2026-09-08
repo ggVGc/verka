@@ -101,6 +101,7 @@ pub struct RenameSession {
 #[serde(tag = "change", content = "value", rename_all = "snake_case")]
 pub enum WorkspaceLaunchChange {
     SetNetwork(Option<bool>),
+    SetWritableWorkspace(Option<bool>),
     SetTemplates(Vec<String>),
     AddMounts(Vec<LaunchMount>),
     RemoveMount(LaunchMount),
@@ -509,6 +510,7 @@ mod tests {
             selection: crate::agent::Selection::new(crate::agent::Provider::Codex),
             launch: LaunchPolicy {
                 network: Some(true),
+                writable_workspace: None,
                 templates: vec!["browser".into()],
                 mounts: vec![LaunchMount {
                     source: PathBuf::from("/srv/data"),
@@ -583,6 +585,7 @@ mod tests {
     fn a_workspace_carries_the_policy_its_launches_start_from() {
         let launch = LaunchPolicy {
             network: Some(true),
+            writable_workspace: None,
             templates: vec!["rust".into()],
             mounts: vec![LaunchMount {
                 source: PathBuf::from("/srv/corpus"),

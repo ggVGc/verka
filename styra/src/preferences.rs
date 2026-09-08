@@ -234,6 +234,7 @@ mod tests {
             },
             launch: LaunchPolicy {
                 network: Some(true),
+                writable_workspace: None,
                 templates: vec!["rust".into()],
                 mounts: vec![styra_server::LaunchMount {
                     source: PathBuf::from("/srv/data"),

@@ -290,6 +290,32 @@ impl Launch {
         }
     }
 
+    /// What `R` means on the layer being edited, as the new state and the words
+    /// for it.
+    ///
+    /// The same two-state shape as [`Self::cycle_network`], around the opposite
+    /// default: nothing stated means the workspace is bound writable, which is
+    /// what a launch does when no layer says otherwise. So the first press
+    /// always changes the effective answer and the second always returns to
+    /// inheriting.
+    fn cycle_writable_workspace(&mut self) -> String {
+        let inherited = self.workspace.grants_writable_workspace();
+        self.interaction.writable_workspace = match self.interaction.writable_workspace {
+            None => Some(!inherited),
+            Some(_) => None,
+        };
+        match self.interaction.writable_workspace {
+            // Unlike the network answer this is the whole of the question: the
+            // workspace mount is assembled from it alone, so it can be promised.
+            Some(false) => "the workspace is mounted read-only for this interaction".to_owned(),
+            Some(true) => "the workspace is mounted read-write for this interaction".to_owned(),
+            None => format!(
+                "the workspace mount follows the Workspace policy again ({})",
+                access_word(inherited)
+            ),
+        }
+    }
+
     /// Adopt the effective templates chosen for this interaction.
     ///
     /// The picker shows and returns the *effective* list,
@@ -415,6 +441,43 @@ pub fn cycle_network(app: &mut App) {
         });
     }
     let message = app.launch.cycle_network();
+    app.show_action_message(message);
+}
+
+/// How a mount's access reads, in the words the mount rows already use.
+pub fn access_word(writable: bool) -> &'static str {
+    if writable {
+        "rw"
+    } else {
+        "ro"
+    }
+}
+
+/// Bind the workspace — the directory the agent is launched in — writable or
+/// read-only, for whichever layer is being edited.
+///
+/// It is the one mount an operator cannot reach with `m` and `x`: the server
+/// assembles it from the Workspace's own host path rather than from any policy
+/// row, so `rw` was the only thing it could ever be. Read-only is what a review
+/// or an exploration of someone else's checkout wants, and it is a stronger
+/// claim than a withdrawn network permission — nothing ORs write access back in.
+pub fn cycle_workspace_access(app: &mut App) {
+    if !app.allow_launch_edit() {
+        return;
+    }
+    if app.launch.scope == LaunchScope::Workspace {
+        let writable = !app.launch.workspace.grants_writable_workspace();
+        workspace_change(
+            app,
+            WorkspaceLaunchChange::SetWritableWorkspace(Some(writable)),
+        );
+        return app.show_action_message(if writable {
+            "the workspace is mounted read-write for every launch in this Workspace"
+        } else {
+            "the workspace is mounted read-only for every launch in this Workspace"
+        });
+    }
+    let message = app.launch.cycle_writable_workspace();
     app.show_action_message(message);
 }
 
@@ -615,6 +678,7 @@ mod tests {
     fn workspace_policy() -> LaunchPolicy {
         LaunchPolicy {
             network: Some(true),
+            writable_workspace: None,
             templates: vec!["rust".into()],
             mounts: vec![LaunchMount {
                 source: PathBuf::from("/srv/corpus"),
@@ -708,6 +772,66 @@ mod tests {
         cycle_network(&mut app);
         assert_eq!(app.launch.interaction.network, None);
         assert!(app.launch.effective().grants_network());
+    }
+
+    /// The workspace mount is `rw` unless a layer says otherwise, and `R` is
+    /// the only way to say it: it is the one mount `m` and `x` cannot reach.
+    /// Like `w`, the first press changes the effective answer and the second
+    /// returns to inheriting.
+    #[test]
+    fn the_workspace_mount_is_made_read_only_against_what_would_be_inherited() {
+        let mut app = pending();
+        assert!(app.launch.effective().grants_writable_workspace());
+
+        cycle_workspace_access(&mut app);
+        assert_eq!(app.launch.interaction.writable_workspace, Some(false));
+        assert!(!app.launch.effective().grants_writable_workspace());
+        // Changing it changes what would be launched, so the plan is re-asked.
+        assert!(wants_plan(&app));
+
+        cycle_workspace_access(&mut app);
+        assert_eq!(app.launch.interaction.writable_workspace, None);
+        assert!(app.launch.effective().grants_writable_workspace());
+
+        // Against a Workspace that has already withdrawn it, the first press is
+        // the one that grants it back.
+        app.launch.sync_workspace(LaunchPolicy {
+            writable_workspace: Some(false),
+            ..LaunchPolicy::default()
+        });
+        assert!(!app.launch.effective().grants_writable_workspace());
+        cycle_workspace_access(&mut app);
+        assert_eq!(app.launch.interaction.writable_workspace, Some(true));
+        assert!(app.launch.effective().grants_writable_workspace());
+    }
+
+    /// The Workspace's own answer is the server's to keep, so `R` on that pane
+    /// sends the edit rather than mutating the client's snapshot.
+    #[test]
+    fn the_workspace_layers_mount_access_is_sent_to_the_server() {
+        let mut app = pending_in_a_workspace_with_a_policy();
+        toggle_scope(&mut app);
+
+        cycle_workspace_access(&mut app);
+        assert_eq!(app.launch.workspace.writable_workspace, None);
+        assert_eq!(
+            app.take_request(),
+            Some(Request::ChangeWorkspaceLaunch {
+                change: WorkspaceLaunchChange::SetWritableWorkspace(Some(false)),
+                clear_interaction: false,
+            })
+        );
+        assert_eq!(app.launch.interaction.writable_workspace, None);
+    }
+
+    /// A launch policy is not editable once something is running, and this key
+    /// is no exception: the sandbox on screen is then a record of a mount that
+    /// is already in place.
+    #[test]
+    fn a_running_interactions_workspace_mount_is_not_re_bound() {
+        let mut app = running();
+        cycle_workspace_access(&mut app);
+        assert_eq!(app.launch.interaction.writable_workspace, None);
     }
 
     #[test]

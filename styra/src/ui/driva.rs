@@ -534,6 +534,12 @@ fn pane_rows(app: &App, scope: LaunchScope) -> Vec<Line<'static>> {
     rows.push(setting_line(
         style,
         false,
+        "workspace",
+        &scope_workspace_label(app, scope),
+    ));
+    rows.push(setting_line(
+        style,
+        false,
         "templates",
         &if policy.templates.is_empty() {
             "none".to_owned()
@@ -580,6 +586,36 @@ fn scope_network_label(app: &App, scope: LaunchScope) -> String {
                 format!(
                     "not stated — inherits {}",
                     if inherited { "on" } else { "off" }
+                )
+            }
+        },
+    }
+}
+
+/// What one layer says about the workspace mount — the directory the agent is
+/// launched in, which `m` and `x` cannot reach.
+///
+/// The Workspace's is a plain read-write/read-only, with the default named as
+/// such: nothing sits under it to inherit from, and an unstated answer there
+/// still means writable. This interaction's has the third answer, saying
+/// nothing, and what that resolves to is printed next to it for the same reason
+/// the network row does it.
+fn scope_workspace_label(app: &App, scope: LaunchScope) -> String {
+    match scope {
+        LaunchScope::Workspace => match app.launch.workspace.writable_workspace {
+            Some(true) => "read-write".to_owned(),
+            Some(false) => "read-only".to_owned(),
+            None => "read-write — not stated".to_owned(),
+        },
+        LaunchScope::Interaction => match app.launch.interaction.writable_workspace {
+            Some(true) => "read-write".to_owned(),
+            Some(false) => "read-only — withdrawn here".to_owned(),
+            None => {
+                let inherited = app.launch.interaction.standalone
+                    || app.launch.workspace.grants_writable_workspace();
+                format!(
+                    "not stated — inherits {}",
+                    if inherited { "read-write" } else { "read-only" }
                 )
             }
         },
@@ -639,7 +675,7 @@ fn hint_lines(app: &App) -> Vec<Line<'static>> {
     let muted = Style::default().fg(palette::ADDITIONAL_INFO);
     let mut lines = vec![Line::from(Span::styled(
         format!(
-            "  Tab {} · m mount · x remove · T templates · w network",
+            "  Tab {} · m mount · x remove · T templates · w network · R workspace ro/rw",
             app.launch.scope.other().phrase()
         ),
         muted,
@@ -831,6 +867,7 @@ mod tests {
             last_accessed_at_ms: 200,
             launch: styra_server::LaunchPolicy {
                 network: Some(true),
+                writable_workspace: None,
                 templates: vec!["rust".into()],
                 mounts: vec![styra_server::LaunchMount::default()],
                 standalone: false,
@@ -1054,6 +1091,7 @@ mod tests {
         let mut app = editable_app();
         app.launch.set_workspace(styra_server::LaunchPolicy {
             network: Some(true),
+            writable_workspace: None,
             templates: vec!["rust".into()],
             mounts: vec![styra_server::LaunchMount {
                 source: PathBuf::from("/srv/corpus"),
@@ -1139,6 +1177,39 @@ mod tests {
             "{screen}"
         );
         assert!(screen.contains("I inherit the Workspace"), "{screen}");
+    }
+
+    /// The workspace mount cannot be edited as a mount row, so its access is a
+    /// setting of its own — shown in the layer that states it, with the key for
+    /// it, and reading back off the effective mount list.
+    #[test]
+    fn the_workspace_mounts_access_is_a_row_of_the_pane_that_states_it() {
+        let mut app = editable_app();
+        let screen = tall(&app);
+        assert!(screen.contains("workspace not stated"), "{screen}");
+        assert!(screen.contains("R workspace ro/rw"), "{screen}");
+
+        crate::launch::cycle_workspace_access(&mut app);
+        let screen = tall(&app);
+        assert!(
+            screen.contains("read-only — withdrawn here"),
+            "this interaction's own answer: {screen}"
+        );
+
+        // The Workspace's is a plain rw/ro, with the unstated default named.
+        crate::launch::toggle_scope(&mut app);
+        let screen = tall(&app);
+        assert!(screen.contains("read-write — not stated"), "{screen}");
+        app.launch.sync_workspace(styra_server::LaunchPolicy {
+            writable_workspace: Some(false),
+            ..Default::default()
+        });
+        app.launch.interaction = styra_server::LaunchPolicy::default();
+        let screen = tall(&app);
+        assert!(
+            screen.contains("not stated — inherits read-only"),
+            "{screen}"
+        );
     }
 
     /// A network answer the operator did not give themselves has to name the

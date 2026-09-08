@@ -398,7 +398,7 @@ impl ServerState {
             workspace: MountSpec {
                 source: workspace.clone(),
                 destination: layout.workspace.clone(),
-                writable: true,
+                writable: launch.grants_writable_workspace(),
             },
             repository_mounts,
             automatic_mounts,
@@ -649,7 +649,7 @@ impl ServerState {
             workspace: MountSpec {
                 source: workspace,
                 destination: layout.workspace.clone(),
-                writable: true,
+                writable: launch.grants_writable_workspace(),
             },
             repository_mounts,
             automatic_mounts,
@@ -747,7 +747,7 @@ impl ServerState {
             workspace: MountSpec {
                 source: workspace.clone(),
                 destination: layout.workspace.clone(),
-                writable: true,
+                writable: launch.grants_writable_workspace(),
             },
             repository_mounts,
             automatic_mounts,
@@ -1874,6 +1874,71 @@ mod tests {
         std::fs::remove_dir_all(host).ok();
     }
 
+    /// The workspace mount is the one grant no policy row can name, so the
+    /// policy answer for it has to reach the plan — and the plan is what the
+    /// operator is shown before their first message.
+    #[test]
+    fn a_read_only_workspace_policy_plans_the_workspace_mount_read_only() {
+        let store = temp_path("read-only-workspace-store");
+        let host = temp_path("read-only-workspace-host");
+        std::fs::remove_dir_all(&store).ok();
+        std::fs::remove_dir_all(&host).ok();
+        std::fs::create_dir_all(&host).unwrap();
+
+        let state = ServerState::new(store.clone(), store.with_extension("sock"));
+        let workspace = crate::workspace::create(&store, &host, None).unwrap();
+        let canonical = host.canonicalize().unwrap();
+        let access_at_workspace = |launch: LaunchPolicy| {
+            let plan = state
+                .plan_session(crate::protocol::PlanSession {
+                    workspace_id: workspace.id.clone(),
+                    selection: crate::agent::Selection::new(crate::agent::Provider::Codex),
+                    launch,
+                })
+                .unwrap();
+            plan.mounts
+                .iter()
+                .find_map(|attributed| match &attributed.mount {
+                    Mount::Bind {
+                        destination,
+                        access,
+                        ..
+                    } if *destination == canonical => Some(*access),
+                    _ => None,
+                })
+                .expect("the workspace is always mounted")
+        };
+
+        // Writable is what a launch does when no layer says otherwise.
+        assert_eq!(
+            access_at_workspace(LaunchPolicy::default()),
+            MountAccess::ReadWrite
+        );
+        assert_eq!(
+            access_at_workspace(LaunchPolicy {
+                writable_workspace: Some(false),
+                ..LaunchPolicy::default()
+            }),
+            MountAccess::ReadOnly
+        );
+
+        // And the Workspace's standing answer applies to a launch that asks
+        // for nothing, because the two are merged before the spec is built.
+        crate::workspace::change_launch(
+            &store,
+            &workspace.id,
+            crate::protocol::WorkspaceLaunchChange::SetWritableWorkspace(Some(false)),
+        )
+        .unwrap();
+        assert_eq!(
+            access_at_workspace(LaunchPolicy::default()),
+            MountAccess::ReadOnly
+        );
+
+        std::fs::remove_dir_all(store).ok();
+        std::fs::remove_dir_all(host).ok();
+    }
+
     #[test]
     fn socket_health_reports_the_service() {
         let socket = temp_path("health");
@@ -2293,6 +2358,7 @@ mod tests {
 
         let launch = LaunchPolicy {
             network: Some(true),
+            writable_workspace: None,
             templates: vec!["rust".into()],
             mounts: vec![LaunchMount {
                 source: PathBuf::from("/srv/corpus"),
