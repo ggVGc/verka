@@ -81,8 +81,9 @@ is precisely what the daemon exists for: the server dies with the client, so its
 Interactions end when the interface exits. Its durable state lives in a
 separate `styra-standalone` store, preventing a concurrently running daemon and
 standalone client from mutating the same metadata. Later standalone runs can
-reopen those Sessions. What it gains is a Styra that needs no runtime directory
-and no background process.
+reopen those Sessions. An advisory lock held by the in-process server makes the
+standalone store single-owner as well. What it gains is a Styra that needs no
+runtime directory and no background process.
 
 Each live interaction also has a persistent interactive shell. A hidden broker is
 the top-level command inside Bubblewrap: it starts a detached tmux server and

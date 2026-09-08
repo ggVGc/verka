@@ -7,7 +7,10 @@
 use crate::client::Client;
 use crate::server::{serve, ServerState};
 use anyhow::{bail, Context, Result};
+use std::fs::{File, OpenOptions};
+use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::io::AsRawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 
@@ -92,7 +95,38 @@ pub fn run(config: ServerConfig) -> Result<()> {
 pub fn in_process() -> Result<Client> {
     let store = crate::paths::default_standalone_store()?;
     ensure_private_directory(&store)?;
-    Ok(Client::in_process(ServerState::in_process(store)))
+    let lock = lock_standalone_store(&store)?;
+    Ok(Client::in_process(ServerState::in_process(store, lock)))
+}
+
+const STANDALONE_LOCK_FILE: &str = "standalone.lock";
+
+/// Take exclusive ownership of the standalone store for this process. The
+/// returned file keeps the advisory lock until the in-process server drops.
+fn lock_standalone_store(store: &Path) -> Result<File> {
+    let path = store.join(STANDALONE_LOCK_FILE);
+    let file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .mode(0o600)
+        .open(&path)
+        .with_context(|| format!("opening standalone lock {}", path.display()))?;
+    let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if result == -1 {
+        let error = std::io::Error::last_os_error();
+        if error
+            .raw_os_error()
+            .is_some_and(|code| code == libc::EWOULDBLOCK || code == libc::EAGAIN)
+        {
+            bail!(
+                "another Styra standalone process is already using {}",
+                store.display()
+            );
+        }
+        return Err(error).with_context(|| format!("locking standalone store {}", store.display()));
+    }
+    Ok(file)
 }
 
 fn bind_socket(path: &Path, private_parent: bool) -> Result<UnixListener> {
@@ -155,6 +189,24 @@ mod tests {
         assert_eq!(socket_mode, 0o600);
 
         drop(listener);
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn only_one_process_owner_can_lock_the_standalone_store() {
+        let root =
+            std::env::temp_dir().join(format!("styra-standalone-lock-{}", std::process::id()));
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::create_dir_all(&root).unwrap();
+
+        let first = lock_standalone_store(&root).unwrap();
+        let error = lock_standalone_store(&root).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("another Styra standalone process"));
+
+        drop(first);
+        lock_standalone_store(&root).unwrap();
         std::fs::remove_dir_all(root).ok();
     }
 }

@@ -47,6 +47,9 @@ struct ServerInner {
     /// server's equivalent.
     control_root: PathBuf,
     interactions: Mutex<HashMap<String, Arc<ManagedInteraction>>>,
+    /// Holds the standalone store's advisory lock for this server's lifetime.
+    /// Socket servers have no lock here.
+    _standalone_lock: Option<std::fs::File>,
     /// Workspace metadata is one JSON document. Serialize read-modify-write
     /// launch edits so concurrent clients cannot overwrite each other's
     /// templates or mounts with stale intermediate documents.
@@ -350,16 +353,20 @@ impl ServerState {
         .map(Some)
     }
     pub fn new(store_root: PathBuf, socket: PathBuf) -> Self {
-        Self::with_socket(store_root, Some(socket))
+        Self::with_socket(store_root, Some(socket), None)
     }
 
     /// A server for a host process that drives it directly, with no socket
     /// bound and so nothing listening for other clients.
-    pub(crate) fn in_process(store_root: PathBuf) -> Self {
-        Self::with_socket(store_root, None)
+    pub(crate) fn in_process(store_root: PathBuf, lock: std::fs::File) -> Self {
+        Self::with_socket(store_root, None, Some(lock))
     }
 
-    fn with_socket(store_root: PathBuf, socket: Option<PathBuf>) -> Self {
+    fn with_socket(
+        store_root: PathBuf,
+        socket: Option<PathBuf>,
+        standalone_lock: Option<std::fs::File>,
+    ) -> Self {
         // With no socket to sit beside, the brokers go to the per-user runtime
         // directory when there is one and into the store otherwise, so a
         // standalone server still works on a host that has no runtime
@@ -380,6 +387,7 @@ impl ServerState {
                 socket,
                 control_root,
                 interactions: Mutex::new(HashMap::new()),
+                _standalone_lock: standalone_lock,
                 workspace_metadata: Mutex::new(()),
                 shutdown: AtomicBool::new(false),
             }),
@@ -2048,7 +2056,9 @@ mod tests {
         let host = root.join("work");
         std::fs::create_dir_all(&host).unwrap();
 
-        let client = Client::in_process(ServerState::in_process(store.clone()));
+        let lock_path = root.join("test.lock");
+        let lock = std::fs::File::create(lock_path).unwrap();
+        let client = Client::in_process(ServerState::in_process(store.clone(), lock));
         assert!(client.socket_path().is_none());
         assert_eq!(client.health().unwrap().service, "styra");
 

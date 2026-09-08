@@ -64,7 +64,8 @@ lives separately at `$XDG_STATE_HOME/styra-standalone` (or
 run concurrently without writing the same metadata. The trade is the daemon's
 whole point: standalone Interactions do not outlive the interface, and quitting
 ends them. Their journals, Sessions, and Workspaces remain available to later
-standalone runs.
+standalone runs. The store is locked for that lifetime, so a second standalone
+process refuses to start until the first exits.
 
 The server accepts `--store <DIR>` and `--socket <PATH>`. By default, durable
 Workspaces and Sessions live under `$XDG_STATE_HOME/styra`, or

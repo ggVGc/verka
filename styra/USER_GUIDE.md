@@ -32,6 +32,7 @@ process. Its state lives separately at `$XDG_STATE_HOME/styra-standalone` (or
 `~/.local/state/styra-standalone`), so it never shares the daemon's default
 store. No daemon is started and no other client can attach; interactions end
 when the interface exits, leaving their Sessions for later standalone runs.
+Only one standalone process may own that store at a time.
 
 `--workspace` is writable in the sandbox at its canonical host path.
 `--template NAME` is repeatable and ordered; later templates override conflicts.
