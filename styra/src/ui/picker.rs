@@ -865,6 +865,7 @@ mod tests {
             accepting,
             activity: styra_server::InteractionActivity::Pending,
             last_message: None,
+            events: 0,
         }
     }
 

@@ -525,6 +525,13 @@ pub struct InteractionSummary {
     /// talking about. `None` before the agent has said anything.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_message: Option<String>,
+    /// How many events have arrived from this interaction's agent. A listing
+    /// client steps its running indicator with this rather than with the
+    /// clock, so the motion means "this interaction produced something"
+    /// instead of "the frame was redrawn" — and each row moves at its own
+    /// pace, whichever interaction the client happens to be attached to.
+    #[serde(default)]
+    pub events: usize,
 }
 
 /// Where a Session came from, when it was not launched fresh but branched

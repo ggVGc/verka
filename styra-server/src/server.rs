@@ -20,7 +20,7 @@ use std::io::BufReader;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -59,6 +59,10 @@ struct ManagedInteraction {
     updates: Arc<Mutex<Vec<SequencedUpdate>>>,
     accepting_messages: Arc<AtomicBool>,
     activity: Arc<Mutex<InteractionActivity>>,
+    /// How many agent events this interaction has produced. Counted as they
+    /// arrive rather than derived from `updates` on each listing, so a summary
+    /// costs a load instead of a scan of the whole history.
+    events: Arc<AtomicUsize>,
     /// Captured at spawn so the interaction can be listed and reattached to without
     /// re-deriving them: the agent selection, host workspace, and launch policy.
     workspace_id: String,
@@ -101,6 +105,7 @@ impl ManagedInteraction {
                 .lock()
                 .expect("interaction activity lock poisoned"),
             last_message: self.last_message(),
+            events: self.events.load(Ordering::Acquire),
         }
     }
 
@@ -440,12 +445,14 @@ impl ServerState {
         let updates = Arc::new(Mutex::new(Vec::new()));
         let accepting_messages = Arc::new(AtomicBool::new(true));
         let activity = Arc::new(Mutex::new(InteractionActivity::Pending));
+        let events = Arc::new(AtomicUsize::new(0));
         let background_work = Arc::new(AtomicBool::new(false));
         let managed = Arc::new(ManagedInteraction {
             interaction,
             updates: Arc::clone(&updates),
             accepting_messages: Arc::clone(&accepting_messages),
             activity: Arc::clone(&activity),
+            events: Arc::clone(&events),
             workspace_id: request.workspace_id.clone(),
             name: Mutex::new(name.clone()),
             selection: Mutex::new(selection.clone()),
@@ -545,6 +552,12 @@ impl ServerState {
                     };
                     if matches!(update, InteractionUpdate::Ended(_)) {
                         accepting_messages.store(false, Ordering::Release);
+                    }
+                    // Counted here, beside the history it is a count of, so a
+                    // listing client's running indicator steps once per event
+                    // this interaction produced — whatever the event was.
+                    if matches!(update, InteractionUpdate::Event(_)) {
+                        events.fetch_add(1, Ordering::Release);
                     }
                     let mut history = updates.lock().expect("interaction update lock poisoned");
                     let sequence = history.len() as u64 + 1;
@@ -775,9 +788,17 @@ impl ServerState {
         });
         let (interaction, receiver) =
             Interaction::spawn(spec, backend, journal, request.id.clone(), diagnostics)?;
+        // The replayed conversation counts: a resumed interaction carries on
+        // from the phase its history left the indicator at rather than
+        // restarting it.
+        let replayed_events = seeded_updates
+            .iter()
+            .filter(|sequenced| matches!(sequenced.update, InteractionUpdate::Event(_)))
+            .count();
         let updates = Arc::new(Mutex::new(seeded_updates));
         let accepting_messages = Arc::new(AtomicBool::new(true));
         let activity = Arc::new(Mutex::new(InteractionActivity::Pending));
+        let events = Arc::new(AtomicUsize::new(replayed_events));
         let background_work = Arc::new(AtomicBool::new(false));
         // A resumed Session may carry over messages that were durably queued
         // on a previous attachment (one stopped before the interaction went
@@ -788,6 +809,7 @@ impl ServerState {
             updates: Arc::clone(&updates),
             accepting_messages: Arc::clone(&accepting_messages),
             activity: Arc::clone(&activity),
+            events: Arc::clone(&events),
             workspace_id: summary.workspace_id.clone(),
             name: Mutex::new(summary.name.clone()),
             selection: Mutex::new(selection.clone()),
@@ -885,6 +907,12 @@ impl ServerState {
                     };
                     if matches!(update, InteractionUpdate::Ended(_)) {
                         accepting_messages.store(false, Ordering::Release);
+                    }
+                    // Counted here, beside the history it is a count of, so a
+                    // listing client's running indicator steps once per event
+                    // this interaction produced — whatever the event was.
+                    if matches!(update, InteractionUpdate::Event(_)) {
+                        events.fetch_add(1, Ordering::Release);
                     }
                     let mut history = updates.lock().expect("interaction update lock poisoned");
                     let sequence = history.len() as u64 + 1;

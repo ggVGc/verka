@@ -48,12 +48,7 @@ pub(crate) fn render(frame: &mut Frame, app: &App, area: Rect) {
             Row::Workspace(name) => workspace_heading(name),
             Row::Interaction(index) => {
                 let interaction = &app.interactions.items[*index];
-                item(
-                    interaction,
-                    interaction.id == app.session_id,
-                    item_width,
-                    app.activity.progress().events,
-                )
+                item(interaction, interaction.id == app.session_id, item_width)
             }
         })
         .collect::<Vec<_>>();
@@ -115,12 +110,7 @@ fn workspace_heading(name: &str) -> ListItem<'static> {
     )))
 }
 
-fn item(
-    interaction: &InteractionSummary,
-    selected: bool,
-    width: u16,
-    events: usize,
-) -> ListItem<'static> {
+fn item(interaction: &InteractionSummary, selected: bool, width: u16) -> ListItem<'static> {
     let status = status(interaction);
     let color = status_color(&status);
     let name = interaction
@@ -128,7 +118,9 @@ fn item(
         .clone()
         .unwrap_or_else(|| short_id(&interaction.id).to_owned());
     let marker = if status == Status::Running {
-        super::running_indicator(events).to_owned()
+        // Each row's own event count, not the attached session's: the rows
+        // that are working animate whether or not this client's session is.
+        super::running_indicator(interaction.events).to_owned()
     } else {
         status.glyph().to_string()
     };
@@ -201,6 +193,7 @@ mod tests {
             accepting: true,
             activity: InteractionActivity::Pending,
             last_message: None,
+            events: 0,
         }
     }
 
@@ -252,6 +245,33 @@ mod tests {
             "{screen}"
         );
         assert!(!screen.contains("> working"), "{screen}");
+    }
+
+    #[test]
+    fn navigator_steps_each_spinner_with_that_interactions_own_events() {
+        // The attached session is idle and has seen nothing, so a shared
+        // counter would freeze both rows on frame zero.
+        let mut app = testing::app("s-1");
+        let mut first = interaction("s-1", "first");
+        first.activity = InteractionActivity::Running;
+        let mut second = interaction("s-2", "second");
+        second.activity = InteractionActivity::Running;
+        second.events = 3;
+        app.interactions.open(vec![first, second], vec![]);
+
+        let screen = testing::rendered(&app);
+        let phases = ["first", "second"].map(|name| {
+            let row = screen.find(&format!("{name} · codex")).unwrap() / 80;
+            (0..super::super::RUNNING_INDICATOR.len())
+                .find(|frame| {
+                    screen
+                        .find(super::super::running_indicator(*frame))
+                        .is_some_and(|at| at / 80 == row)
+                })
+                .unwrap()
+        });
+
+        assert_eq!(phases, [0, 3], "{screen}");
     }
 
     #[test]
