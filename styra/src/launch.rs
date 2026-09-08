@@ -326,18 +326,18 @@ impl Launch {
     /// silently do nothing. Whether that happened is what comes back.
     fn set_interaction_templates(&mut self, chosen: Vec<String>) -> Option<&'static str> {
         let base = &self.workspace.templates;
-        if !self.interaction.standalone && base.iter().all(|name| chosen.contains(name)) {
+        if !self.interaction.ignore_workspace && base.iter().all(|name| chosen.contains(name)) {
             self.interaction.templates = chosen
                 .into_iter()
                 .filter(|name| !base.contains(name))
                 .collect();
             return None;
         }
-        let now_standalone = !self.interaction.standalone;
-        self.interaction.standalone = true;
+        let newly_ignoring_workspace = !self.interaction.ignore_workspace;
+        self.interaction.ignore_workspace = true;
         self.interaction.templates = chosen;
-        now_standalone.then_some(
-            "standalone — dropping a Workspace template means this interaction carries its own list",
+        newly_ignoring_workspace.then_some(
+            "ignoring the Workspace — dropping one of its templates means this interaction carries its own list",
         )
     }
 
@@ -377,7 +377,7 @@ impl Launch {
                 if self.interaction.mounts.contains(&mount) {
                     return Err("this interaction already asks for that mount");
                 }
-                if !self.interaction.standalone && self.workspace.mounts.contains(&mount) {
+                if !self.interaction.ignore_workspace && self.workspace.mounts.contains(&mount) {
                     return Err("the Workspace policy already grants that mount");
                 }
                 self.interaction.mounts.push(mount);
@@ -486,7 +486,7 @@ pub fn cycle_workspace_access(app: &mut App) {
 ///
 /// This one is only ever the interaction's own answer: there is nothing for the
 /// Workspace's own policy to stand apart from.
-pub fn toggle_standalone(app: &mut App) {
+pub fn toggle_ignore_workspace(app: &mut App) {
     if !app.allow_launch_edit() {
         return;
     }
@@ -494,9 +494,9 @@ pub fn toggle_standalone(app: &mut App) {
         return app
             .show_action_message("inheriting is this interaction's answer — press Tab to edit it");
     }
-    app.launch.interaction.standalone = !app.launch.interaction.standalone;
-    app.show_action_message(if app.launch.interaction.standalone {
-        "standalone — the Workspace policy does not apply to this interaction"
+    app.launch.interaction.ignore_workspace = !app.launch.interaction.ignore_workspace;
+    app.show_action_message(if app.launch.interaction.ignore_workspace {
+        "ignoring the Workspace policy for this interaction"
     } else {
         "this interaction adds to the Workspace policy again"
     });
@@ -685,7 +685,7 @@ mod tests {
                 destination: None,
                 writable: false,
             }],
-            standalone: false,
+            ignore_workspace: false,
         }
     }
 
@@ -730,7 +730,7 @@ mod tests {
         set_templates(&mut app, vec!["rust".into(), "browser".into()]);
         // Only the addition is this interaction's; the Workspace keeps its own.
         assert_eq!(app.launch.interaction.templates, vec!["browser"]);
-        assert!(!app.launch.interaction.standalone);
+        assert!(!app.launch.interaction.ignore_workspace);
         assert_eq!(
             app.launch.effective().templates,
             vec!["rust".to_owned(), "browser".to_owned()]
@@ -744,11 +744,11 @@ mod tests {
     /// Dropping a template the Workspace grants cannot be said by adding to it,
     /// so the interaction stops inheriting instead of silently doing nothing.
     #[test]
-    fn deselecting_a_workspace_template_makes_the_launch_standalone() {
+    fn deselecting_a_workspace_template_makes_the_launch_ignore_workspace() {
         let mut app = pending_in_a_workspace_with_a_policy();
         set_templates(&mut app, vec!["browser".into()]);
 
-        assert!(app.launch.interaction.standalone);
+        assert!(app.launch.interaction.ignore_workspace);
         assert_eq!(app.launch.interaction.templates, vec!["browser"]);
         let effective = app.launch.effective();
         assert_eq!(effective.templates, vec!["browser"]);
@@ -858,7 +858,7 @@ mod tests {
 
         // Standalone is the way out, and it leaves the interaction with nothing
         // but its own inputs.
-        toggle_standalone(&mut app);
+        toggle_ignore_workspace(&mut app);
         assert!(app.launch.effective().mounts.is_empty());
     }
 
@@ -944,13 +944,13 @@ mod tests {
     fn inheriting_stays_this_interactions_own_answer() {
         let mut app = pending_in_a_workspace_with_a_policy();
         toggle_scope(&mut app);
-        toggle_standalone(&mut app);
-        assert!(!app.launch.interaction.standalone);
-        assert!(!app.launch.workspace.standalone);
+        toggle_ignore_workspace(&mut app);
+        assert!(!app.launch.interaction.ignore_workspace);
+        assert!(!app.launch.workspace.ignore_workspace);
 
         toggle_scope(&mut app);
-        toggle_standalone(&mut app);
-        assert!(app.launch.interaction.standalone);
+        toggle_ignore_workspace(&mut app);
+        assert!(app.launch.interaction.ignore_workspace);
     }
 
     /// The mount cursor is per layer: moving between the panes returns to where
@@ -1204,8 +1204,8 @@ mod tests {
         assert!(app.launch.interaction.templates.is_empty());
         open_prompt(&mut app);
         assert!(app.launch.prompt.is_none());
-        toggle_standalone(&mut app);
-        assert!(!app.launch.interaction.standalone);
+        toggle_ignore_workspace(&mut app);
+        assert!(!app.launch.interaction.ignore_workspace);
 
         let mut pending = pending();
         assert!(pending.can_edit_launch());

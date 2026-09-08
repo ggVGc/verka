@@ -266,9 +266,9 @@ pub fn change_launch(
         }
         WorkspaceLaunchChange::Replace(launch) => meta.launch = launch,
     }
-    // `standalone` says "ignore the layer below me", and a Workspace policy has
-    // no layer below it.
-    meta.launch.standalone = false;
+    // `ignore_workspace` says "ignore the layer below me", and a Workspace
+    // policy has no layer below it.
+    meta.launch.ignore_workspace = false;
     write_meta(&path, &meta)?;
     Ok(meta.launch)
 }
@@ -388,7 +388,7 @@ mod tests {
             }],
             // A Workspace policy has no layer below it to ignore, so this is
             // dropped rather than stored as a contradiction.
-            standalone: true,
+            ignore_workspace: true,
         };
         let stored = change_launch(
             &store,
@@ -396,7 +396,7 @@ mod tests {
             WorkspaceLaunchChange::Replace(launch.clone()),
         )
         .unwrap();
-        assert!(!stored.standalone);
+        assert!(!stored.ignore_workspace);
         assert_eq!(stored.templates, launch.templates);
 
         // Each field is edited on its own too, against the latest stored copy

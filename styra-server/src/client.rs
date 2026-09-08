@@ -1,4 +1,11 @@
-//! Blocking client for Styra's JSON protocol over a Unix domain socket.
+//! Blocking client for Styra's JSON protocol.
+//!
+//! Every call goes through one [`Client::request`], so the same client serves
+//! two transports: the ordinary one, a JSON exchange over a Unix domain socket
+//! with the daemon; and the standalone one, a direct call into a
+//! [`ServerState`] this very process owns. Standalone trades the daemon's
+//! survival across client exits for needing no socket, no spawn and no
+//! serialization — the server *is* the client.
 
 use crate::protocol::{
     Answer, Contract, CreateSession, CreateWorkspace, DrivaOptions, Health, LaunchPolicy,
@@ -14,18 +21,42 @@ use std::path::{Path, PathBuf};
 
 #[derive(Clone)]
 pub struct Client {
-    socket: PathBuf,
+    transport: Transport,
+}
+
+/// How a [`Client`] reaches the server.
+#[derive(Clone)]
+enum Transport {
+    /// A daemon listening on this socket, reached with one connection per
+    /// request.
+    Socket(PathBuf),
+    /// A server owned by this process, called directly.
+    InProcess(crate::server::ServerState),
 }
 
 impl Client {
     pub fn new(socket: impl Into<PathBuf>) -> Self {
         Self {
-            socket: socket.into(),
+            transport: Transport::Socket(socket.into()),
         }
     }
 
-    pub fn socket_path(&self) -> &Path {
-        &self.socket
+    /// A client onto a server running in this process. Nothing is serialized
+    /// and no socket exists, so the server's live interactions end when this
+    /// process does. See [`crate::daemon::in_process`].
+    pub(crate) fn in_process(state: crate::server::ServerState) -> Self {
+        Self {
+            transport: Transport::InProcess(state),
+        }
+    }
+
+    /// The socket this client speaks over, or `None` when the server runs in
+    /// this process.
+    pub fn socket_path(&self) -> Option<&Path> {
+        match &self.transport {
+            Transport::Socket(socket) => Some(socket),
+            Transport::InProcess(_) => None,
+        }
     }
 
     pub fn health(&self) -> Result<Health> {
@@ -432,8 +463,17 @@ impl Client {
     }
 
     fn request(&self, request: Request) -> Result<Response> {
-        let mut stream = UnixStream::connect(&self.socket)
-            .with_context(|| format!("connecting to Styra socket {}", self.socket.display()))?;
+        match &self.transport {
+            Transport::Socket(socket) => Self::request_over_socket(socket, request),
+            // The in-process server's error is the caller's error already, so
+            // it travels whole rather than being flattened into a wire string.
+            Transport::InProcess(state) => state.handle(request),
+        }
+    }
+
+    fn request_over_socket(socket: &Path, request: Request) -> Result<Response> {
+        let mut stream = UnixStream::connect(socket)
+            .with_context(|| format!("connecting to Styra socket {}", socket.display()))?;
         crate::protocol::write_message(&mut stream, &request)
             .context("writing the Styra request")?;
 

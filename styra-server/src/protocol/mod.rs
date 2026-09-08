@@ -517,7 +517,7 @@ mod tests {
                     destination: None,
                     writable: true,
                 }],
-                standalone: false,
+                ignore_workspace: false,
             },
         });
         let json = serde_json::to_value(&request).unwrap();
@@ -532,7 +532,7 @@ mod tests {
             .is_none());
         // An overlay that asks for nothing says nothing on the wire, so a
         // Workspace's standing policy is what a bare launch runs under.
-        assert!(json["data"]["launch"].get("standalone").is_none());
+        assert!(json["data"]["launch"].get("ignore_workspace").is_none());
         assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
 
         let response = Response::SessionPlan(DrivaOptions {
@@ -592,7 +592,7 @@ mod tests {
                 destination: Some(PathBuf::from("/mnt/corpus")),
                 writable: false,
             }],
-            standalone: false,
+            ignore_workspace: false,
         };
         let request = Request::ChangeWorkspaceLaunch {
             workspace_id: "w-1".into(),

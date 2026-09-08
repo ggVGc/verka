@@ -71,6 +71,19 @@ calls Driva. The headless example uses the same client. Public wire types live
 in `api.rs`, the reusable Rust client in `client.rs`, and server dispatch in
 `server.rs`.
 
+That boundary is a `Client` method calling `ServerState::handle`, so it does not
+have to be a socket. In standalone mode (`styra --standalone`) the client builds
+a `ServerState` in its own process and calls `handle` directly: no socket is
+bound, no daemon is spawned, nothing is serialized, and no other client can
+attach. The client-side rule is unchanged — it still only speaks requests — so
+the mode is a transport swap rather than a second architecture. What it gives up
+is precisely what the daemon exists for: the server dies with the client, so its
+Interactions end when the interface exits. Its durable state lives in a
+separate `styra-standalone` store, preventing a concurrently running daemon and
+standalone client from mutating the same metadata. Later standalone runs can
+reopen those Sessions. What it gains is a Styra that needs no runtime directory
+and no background process.
+
 Each live interaction also has a persistent interactive shell. A hidden broker is
 the top-level command inside Bubblewrap: it starts a detached tmux server and
 `/bin/sh`, then launches the profile's agent with the inherited protocol
@@ -85,6 +98,11 @@ Durable Workspaces and Sessions default to `$XDG_STATE_HOME/styra` (falling back
 at `$XDG_RUNTIME_DIR/styra/styra.sock`. Default Styra directories use mode
 `0700`, and the socket uses mode `0600`. This is deliberately a local API: it
 has no TCP listener or remote-access configuration.
+
+Standalone durable state instead defaults to
+`$XDG_STATE_HOME/styra-standalone` (falling back to
+`$HOME/.local/state/styra-standalone`) and is never opened by the default
+daemon.
 
 ## Ownership and boundaries
 
@@ -828,8 +846,8 @@ overlay's templates layer after the Workspace's (so a repeated name moves later,
 where it wins), its mounts add to them (except one landing on a destination the
 Workspace already binds, which replaces it rather than colliding with it), and a
 stated `network` overrides an inherited one. Adding cannot express *dropping*
-something the Workspace grants, so `standalone` (`I`) does: that launch ignores
-the Workspace's policy entirely and carries its own.
+something the Workspace grants, so `ignore_workspace` (`I`) does: that launch
+ignores the Workspace's policy entirely and carries its own.
 
 The two layers are kept in two different places, so an edit to each is made
 durable differently. This client owns the overlay: it lives in memory until `D`

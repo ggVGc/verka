@@ -94,7 +94,7 @@ pub mod protocol;
 pub mod spawn;
 
 pub use client::Client;
-pub use daemon::{run, serve_if_requested, ServerConfig};
+pub use daemon::{in_process, run, serve_if_requested, ServerConfig};
 pub use protocol::WorkspaceLaunchChange;
 pub use protocol::{
     Answer, AnswerValue, AttributedMount, Contract, Direction, DrivaOptions, FileLocation,

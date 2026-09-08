@@ -205,7 +205,7 @@ pub fn handle_list_key(
             KeyCode::Char('R') => launch::cycle_workspace_access(app),
             // `I` for whether this launch inherits: `S` is claimed globally
             // above (stopping the interaction) and never reaches this match.
-            KeyCode::Char('I') => launch::toggle_standalone(app),
+            KeyCode::Char('I') => launch::toggle_ignore_workspace(app),
             KeyCode::Char('T') => {
                 if app.allow_launch_edit() {
                     app.ask(Request::Templates);

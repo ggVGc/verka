@@ -4,6 +4,7 @@
 //! with the [`SERVE_ENV`] sentinel to spawn its own detached daemon rather than
 //! shelling out to a separate `styra-server` binary (see [`crate::spawn`]).
 
+use crate::client::Client;
 use crate::server::{serve, ServerState};
 use anyhow::{bail, Context, Result};
 use std::os::unix::fs::PermissionsExt;
@@ -78,6 +79,20 @@ pub fn run(config: ServerConfig) -> Result<()> {
     );
     let state = ServerState::new(store, socket);
     serve(listener, state)
+}
+
+/// Bring up a server *inside this process* and return a [`Client`] that calls
+/// it directly, with no socket bound and no daemon spawned.
+///
+/// This is the standalone mode: one process is both client and server, so
+/// there is nothing to connect to, nothing to outlive the client, and no other
+/// client can join. `config.socket` is ignored — a standalone server has no
+/// address. Its durable state is separate from the daemon's, so the two modes
+/// can run concurrently without writing the same metadata.
+pub fn in_process() -> Result<Client> {
+    let store = crate::paths::default_standalone_store()?;
+    ensure_private_directory(&store)?;
+    Ok(Client::in_process(ServerState::in_process(store)))
 }
 
 fn bind_socket(path: &Path, private_parent: bool) -> Result<UnixListener> {

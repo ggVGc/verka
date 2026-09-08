@@ -163,24 +163,32 @@ fn main() -> Result<()> {
     }
     let cli = Cli::parse();
     let config = Config::default();
-    let socket = match &cli.socket {
-        Some(path) => path.clone(),
-        None => styra_server::paths::default_socket()?,
+
+    // `--standalone` never involves a socket, so it is settled before one is
+    // resolved: on a host with no `XDG_RUNTIME_DIR` it is the mode that still
+    // works.
+    let client = if cli.standalone {
+        styra_server::in_process().context("starting the in-process Styra server")?
+    } else {
+        let socket = match &cli.socket {
+            Some(path) => path.clone(),
+            None => styra_server::paths::default_socket()?,
+        };
+
+        // Daemon lifecycle commands run without opening the interface at all.
+        if cli.stop {
+            return stop_daemon(&socket);
+        }
+        if cli.daemon {
+            return start_daemon(&socket);
+        }
+
+        // Connect-or-spawn: use the running server if one answers, otherwise
+        // start a detached daemon bound to this socket and wait for it. The
+        // daemon outlives this client, so live sessions survive detach/quit.
+        styra_server::ensure_server(&socket)
+            .with_context(|| format!("Styra server is unavailable at {}", socket.display()))?
     };
-
-    // Daemon lifecycle commands run without opening the interface at all.
-    if cli.stop {
-        return stop_daemon(&socket);
-    }
-    if cli.daemon {
-        return start_daemon(&socket);
-    }
-
-    // Connect-or-spawn: use the running server if one answers, otherwise start
-    // a detached daemon bound to this socket and wait for it. The daemon
-    // outlives this client, so live sessions survive detach/quit.
-    let client = styra_server::ensure_server(&socket)
-        .with_context(|| format!("Styra server is unavailable at {}", socket.display()))?;
     if let Some(CliCommand::Shell { session }) = &cli.command {
         return match session {
             Some(session) => attach_shell(&client, session),
@@ -330,7 +338,9 @@ fn main() -> Result<()> {
     };
 
     // Runs until the operator quits. Workspace and Session selection only
-    // changes what this client views; server-owned Interactions continue.
+    // changes what this client views; server-owned Interactions continue. In
+    // standalone mode the server owner's teardown ends them when this process
+    // leaves, after the terminal has been restored below.
     let result = loop {
         let outcome = match event_loop::run(
             &mut terminal,

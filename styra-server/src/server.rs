@@ -37,8 +37,15 @@ pub struct ServerState {
 struct ServerInner {
     store_root: PathBuf,
     /// The socket the server is bound to, removed on an explicit shutdown so
-    /// the next client sees no stale socket to trip over.
-    socket: PathBuf,
+    /// the next client sees no stale socket to trip over. `None` for a server
+    /// running in its client's process, which has no socket to clean up and no
+    /// life of its own to end.
+    socket: Option<PathBuf>,
+    /// Where per-session broker control directories are staged. Beside the
+    /// socket when there is one, since that is already a private per-user
+    /// runtime directory; see [`ServerState::with_socket`] for the standalone
+    /// server's equivalent.
+    control_root: PathBuf,
     interactions: Mutex<HashMap<String, Arc<ManagedInteraction>>>,
     /// Workspace metadata is one JSON document. Serialize read-modify-write
     /// launch edits so concurrent clients cannot overwrite each other's
@@ -52,6 +59,26 @@ struct ServerInner {
     /// taken on one session is what every other session is also spending, and
     /// kept in the store so a restart reopens knowing where each window stood.
     quota: Arc<crate::quota::QuotaLog>,
+}
+
+/// The server owns every process represented by its interaction map. When the
+/// last owner of an in-process server goes away, close their stdin here and let
+/// the interactions' own destructors join their worker threads. This is also a
+/// safe graceful teardown for a socket server whose serve loop returns.
+///
+/// Deliberately do not remove interactions through `CloseInteraction`: that
+/// operation clears queued messages, while shutting down a server must leave
+/// its durable queues available to the next run.
+impl Drop for ServerInner {
+    fn drop(&mut self) {
+        let interactions = self
+            .interactions
+            .get_mut()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        for interaction in interactions.values() {
+            interaction.stop();
+        }
+    }
 }
 
 struct ManagedInteraction {
@@ -323,11 +350,35 @@ impl ServerState {
         .map(Some)
     }
     pub fn new(store_root: PathBuf, socket: PathBuf) -> Self {
+        Self::with_socket(store_root, Some(socket))
+    }
+
+    /// A server for a host process that drives it directly, with no socket
+    /// bound and so nothing listening for other clients.
+    pub(crate) fn in_process(store_root: PathBuf) -> Self {
+        Self::with_socket(store_root, None)
+    }
+
+    fn with_socket(store_root: PathBuf, socket: Option<PathBuf>) -> Self {
+        // With no socket to sit beside, the brokers go to the per-user runtime
+        // directory when there is one and into the store otherwise, so a
+        // standalone server still works on a host that has no runtime
+        // directory at all — the case that rules out the socket in the first
+        // place.
+        let control_root = match socket.as_deref().and_then(Path::parent) {
+            Some(parent) => parent.to_path_buf(),
+            None => crate::paths::default_socket()
+                .ok()
+                .and_then(|socket| socket.parent().map(Path::to_path_buf))
+                .unwrap_or_else(|| store_root.clone()),
+        }
+        .join("sandboxes");
         Self {
             inner: Arc::new(ServerInner {
                 quota: Arc::new(crate::quota::QuotaLog::open(&store_root)),
                 store_root,
                 socket,
+                control_root,
                 interactions: Mutex::new(HashMap::new()),
                 workspace_metadata: Mutex::new(()),
                 shutdown: AtomicBool::new(false),
@@ -344,7 +395,9 @@ impl ServerState {
     /// flushed, so the requester learns the daemon is going down.
     fn shutdown_if_requested(&self) {
         if self.inner.shutdown.load(Ordering::Acquire) {
-            std::fs::remove_file(&self.inner.socket).ok();
+            if let Some(socket) = &self.inner.socket {
+                std::fs::remove_file(socket).ok();
+            }
             std::process::exit(0);
         }
     }
@@ -1081,12 +1134,7 @@ impl ServerState {
     /// policy be described — for a session that does not exist yet — without
     /// staging anything on disk for it.
     fn describe_broker(&self, id: &str, tmux: PathBuf) -> SandboxBroker {
-        let control_root = self
-            .inner
-            .socket
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .join("sandboxes");
+        let control_root = &self.inner.control_root;
         SandboxBroker {
             executable: PathBuf::from("/tmp/styra/control/styra-broker"),
             tmux,
@@ -1213,7 +1261,10 @@ impl ServerState {
         anyhow::bail!("stored session {id:?} was not found")
     }
 
-    fn handle(&self, request: Request) -> Result<Response> {
+    /// Serve one request. Available to a host running the server in-process so
+    /// it can call the same dispatch without a socket (see
+    /// [`crate::Client::in_process`]).
+    pub(crate) fn handle(&self, request: Request) -> Result<Response> {
         match request {
             Request::Health => Ok(Response::Health(Health {
                 service: "styra".into(),
@@ -1987,6 +2038,43 @@ mod tests {
         std::fs::remove_dir_all(store).ok();
     }
 
+    /// The standalone transport answers the same requests as the socket one,
+    /// with no listener, no daemon and no socket file anywhere.
+    #[test]
+    fn an_in_process_client_serves_requests_without_a_socket() {
+        let root = std::env::temp_dir().join(format!("styra-in-process-{}", std::process::id()));
+        std::fs::remove_dir_all(&root).ok();
+        let store = root.join("store");
+        let host = root.join("work");
+        std::fs::create_dir_all(&host).unwrap();
+
+        let client = Client::in_process(ServerState::in_process(store.clone()));
+        assert!(client.socket_path().is_none());
+        assert_eq!(client.health().unwrap().service, "styra");
+
+        let workspace = client
+            .create_workspace(&CreateWorkspace {
+                host_path: host.clone(),
+                name: Some("standalone".into()),
+                git_repository: None,
+            })
+            .unwrap();
+        assert_eq!(workspace.host_path, host);
+        assert_eq!(
+            client
+                .list_workspaces()
+                .unwrap()
+                .iter()
+                .map(|workspace| workspace.id.clone())
+                .collect::<Vec<_>>(),
+            vec![workspace.id]
+        );
+        // An error comes back as an error, not as a wire-encoded string.
+        assert!(client.workspace("styra-nothing").is_err());
+
+        std::fs::remove_dir_all(root).ok();
+    }
+
     /// An operator's mount request is resolved against the host now, so a path
     /// that is not there is reported while the policy is being chosen.
     #[test]
@@ -2393,7 +2481,7 @@ mod tests {
                 destination: None,
                 writable: false,
             }],
-            standalone: false,
+            ignore_workspace: false,
         };
         let updated = match state
             .handle(Request::ChangeWorkspaceLaunch {

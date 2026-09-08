@@ -35,6 +35,7 @@ styra [OPTIONS] [-- PROMPT]
 styra shell [--session <ID>]
 
   --socket <PATH>      Server socket (default: $XDG_RUNTIME_DIR/styra/styra.sock)
+  --standalone         Run the server in this process; no socket, no daemon
   --workspace <DIR>    Host directory mounted writable at its canonical path
   --network            Permit agent networking (providers may default this on)
   --template <NAME>    Layer a Driva execution template onto the sandbox;
@@ -52,6 +53,18 @@ as hints before trying common installed terminal emulators.
 Stopping the Interaction ends the agent and tmux but preserves its Session,
 journal, and Workspace. The agent remains on its original piped machine
 protocol, so shell traffic never enters the raw event journal.
+
+### Standalone mode
+
+`styra --standalone` runs the server inside the TUI process and calls it
+directly instead of over the socket, so nothing is bound, nothing is spawned,
+and no other client can attach. It needs no `XDG_RUNTIME_DIR`. Its durable state
+lives separately at `$XDG_STATE_HOME/styra-standalone` (or
+`$HOME/.local/state/styra-standalone`), so standalone and daemon processes can
+run concurrently without writing the same metadata. The trade is the daemon's
+whole point: standalone Interactions do not outlive the interface, and quitting
+ends them. Their journals, Sessions, and Workspaces remain available to later
+standalone runs.
 
 The server accepts `--store <DIR>` and `--socket <PATH>`. By default, durable
 Workspaces and Sessions live under `$XDG_STATE_HOME/styra`, or

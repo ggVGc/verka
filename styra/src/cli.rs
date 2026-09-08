@@ -16,6 +16,12 @@ pub struct Cli {
     /// live interactions it owns are ended with it.
     #[arg(long)]
     pub stop: bool,
+    /// Run the server in this process instead of talking to a daemon: no
+    /// socket is used or bound, and no other client can attach. Interactions
+    /// end when the interface exits. Its durable state is kept separately from
+    /// the daemon's store and is available on the next standalone run.
+    #[arg(long, conflicts_with_all = ["daemon", "stop", "socket"])]
+    pub standalone: bool,
     /// Host directory mounted writable at its canonical path (default: cwd).
     #[arg(long)]
     pub workspace: Option<PathBuf>,

@@ -426,7 +426,7 @@ fn templates_label(app: &App) -> String {
     if effective.is_empty() {
         return "none".to_owned();
     }
-    let from_workspace = if app.launch.interaction.standalone {
+    let from_workspace = if app.launch.interaction.ignore_workspace {
         &[][..]
     } else {
         &app.launch.workspace.templates
@@ -459,7 +459,7 @@ struct PaneStyle {
 
 fn pane_style(app: &App, scope: LaunchScope) -> PaneStyle {
     let focused = app.launch.scope == scope;
-    let ignored = scope == LaunchScope::Workspace && app.launch.interaction.standalone;
+    let ignored = scope == LaunchScope::Workspace && app.launch.interaction.ignore_workspace;
     let mut value = if focused {
         Style::default().fg(palette::TEXT)
     } else {
@@ -517,8 +517,8 @@ fn pane_rows(app: &App, scope: LaunchScope) -> Vec<Line<'static>> {
             style,
             false,
             "inherits",
-            if policy.standalone {
-                "nothing — standalone, the Workspace policy does not apply"
+            if policy.ignore_workspace {
+                "nothing — the Workspace policy is ignored"
             } else {
                 "the Workspace policy above"
             },
@@ -581,8 +581,8 @@ fn scope_network_label(app: &App, scope: LaunchScope) -> String {
             Some(true) => "on".to_owned(),
             Some(false) => "off — withdrawn here".to_owned(),
             None => {
-                let inherited =
-                    !app.launch.interaction.standalone && app.launch.workspace.grants_network();
+                let inherited = !app.launch.interaction.ignore_workspace
+                    && app.launch.workspace.grants_network();
                 format!(
                     "not stated — inherits {}",
                     if inherited { "on" } else { "off" }
@@ -611,7 +611,7 @@ fn scope_workspace_label(app: &App, scope: LaunchScope) -> String {
             Some(true) => "read-write".to_owned(),
             Some(false) => "read-only — withdrawn here".to_owned(),
             None => {
-                let inherited = app.launch.interaction.standalone
+                let inherited = app.launch.interaction.ignore_workspace
                     || app.launch.workspace.grants_writable_workspace();
                 format!(
                     "not stated — inherits {}",
@@ -690,7 +690,7 @@ fn hint_lines(app: &App) -> Vec<Line<'static>> {
                 }
                 LaunchScope::Interaction => format!(
                     "  I {} · U move up into it · D save as default",
-                    if app.launch.interaction.standalone {
+                    if app.launch.interaction.ignore_workspace {
                         "inherit the Workspace"
                     } else {
                         "ignore the Workspace"
@@ -870,7 +870,7 @@ mod tests {
                 writable_workspace: None,
                 templates: vec!["rust".into()],
                 mounts: vec![styra_server::LaunchMount::default()],
-                standalone: false,
+                ignore_workspace: false,
             },
         };
         app.workspace.enter(workspace.host_path.clone());
@@ -1098,7 +1098,7 @@ mod tests {
                 destination: Some(PathBuf::from("/mnt/corpus")),
                 writable: false,
             }],
-            standalone: false,
+            ignore_workspace: false,
         });
         crate::launch::set_templates(&mut app, vec!["rust".into(), "browser".into()]);
         app.launch.prompt = Some("/srv/scratch:rw".into());
@@ -1157,10 +1157,10 @@ mod tests {
         );
     }
 
-    /// Standalone is this interaction's own row, and it says what it does to the
-    /// other layer where that layer is shown.
+    /// Ignoring the Workspace is this interaction's own row, and it says what
+    /// it does to the other layer where that layer is shown.
     #[test]
-    fn standalone_is_a_row_of_this_interactions_pane_and_strikes_the_other_out() {
+    fn ignore_workspace_is_a_row_of_this_interactions_pane_and_strikes_the_other_out() {
         let mut app = editable_app();
         app.launch.set_workspace(styra_server::LaunchPolicy {
             templates: vec!["rust".into()],
@@ -1170,10 +1170,10 @@ mod tests {
         assert!(screen.contains("the Workspace policy above"), "{screen}");
         assert!(screen.contains("I ignore the Workspace"), "{screen}");
 
-        crate::launch::toggle_standalone(&mut app);
+        crate::launch::toggle_ignore_workspace(&mut app);
         let screen = tall(&app);
         assert!(
-            screen.contains("nothing — standalone, the Workspace policy does not apply"),
+            screen.contains("nothing — the Workspace policy is ignored"),
             "{screen}"
         );
         assert!(screen.contains("I inherit the Workspace"), "{screen}");

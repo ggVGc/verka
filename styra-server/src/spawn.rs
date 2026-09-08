@@ -41,7 +41,7 @@ pub fn ensure_server(socket: impl Into<PathBuf>) -> Result<Client> {
         return Ok(client);
     }
     spawn_detached(&socket).context("starting the Styra server")?;
-    wait_until_healthy(&client, STARTUP_TIMEOUT)?;
+    wait_until_healthy(&client, &socket, STARTUP_TIMEOUT)?;
     Ok(client)
 }
 
@@ -119,7 +119,7 @@ fn server_log_path(socket: &Path) -> PathBuf {
 
 /// Poll the health endpoint until the server answers or `timeout` elapses,
 /// backing off from a tight initial interval so a fast startup returns quickly.
-fn wait_until_healthy(client: &Client, timeout: Duration) -> Result<()> {
+fn wait_until_healthy(client: &Client, socket: &Path, timeout: Duration) -> Result<()> {
     let deadline = Instant::now() + timeout;
     let mut delay = Duration::from_millis(20);
     loop {
@@ -130,7 +130,7 @@ fn wait_until_healthy(client: &Client, timeout: Duration) -> Result<()> {
             bail!(
                 "the Styra server did not start within {}s; see {}",
                 timeout.as_secs(),
-                server_log_path(client.socket_path()).display()
+                server_log_path(socket).display()
             );
         }
         std::thread::sleep(delay);

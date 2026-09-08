@@ -16,6 +16,7 @@ styra --view                  # browse saved sessions read-only
 styra --view SESSION_ID       # view one saved session read-only
 styra -d                      # start the local daemon
 styra --stop                  # stop the daemon and its live interactions
+styra --standalone            # run the server in this process, with no daemon
 styra shell                   # choose and attach to a live sandbox shell
 styra shell --session ID      # attach to that live session's shell
 ```
@@ -25,6 +26,12 @@ another Unix socket. `styra-server [--store DIR] [--socket PATH]` runs the
 server directly. State defaults to `$XDG_STATE_HOME/styra` (or
 `~/.local/state/styra`); the socket defaults to
 `$XDG_RUNTIME_DIR/styra/styra.sock`.
+
+`--standalone` skips the socket entirely and runs the server in the client's own
+process. Its state lives separately at `$XDG_STATE_HOME/styra-standalone` (or
+`~/.local/state/styra-standalone`), so it never shares the daemon's default
+store. No daemon is started and no other client can attach; interactions end
+when the interface exits, leaving their Sessions for later standalone runs.
 
 `--workspace` is writable in the sandbox at its canonical host path.
 `--template NAME` is repeatable and ordered; later templates override conflicts.

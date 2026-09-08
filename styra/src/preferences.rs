@@ -241,7 +241,7 @@ mod tests {
                     destination: None,
                     writable: false,
                 }],
-                standalone: false,
+                ignore_workspace: false,
             },
         };
 

@@ -381,8 +381,8 @@ pub struct LaunchPolicy {
     /// than adding to it. This is how a single interaction drops a template or
     /// a mount the Workspace grants, which appending alone cannot express.
     /// Meaningless on a Workspace's own policy, which has nothing below it.
-    #[serde(skip_serializing_if = "is_false")]
-    pub standalone: bool,
+    #[serde(alias = "standalone", skip_serializing_if = "is_false")]
+    pub ignore_workspace: bool,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -398,7 +398,7 @@ impl LaunchPolicy {
             && self.writable_workspace.is_none()
             && self.templates.is_empty()
             && self.mounts.is_empty()
-            && !self.standalone
+            && !self.ignore_workspace
     }
 
     /// The single policy a launch runs under: the Workspace's `base` with one
@@ -411,15 +411,15 @@ impl LaunchPolicy {
     /// `writable_workspace`, a template
     /// name repeating one of the Workspace's (which moves it later in the
     /// layering, where it wins), and a mount on a destination the Workspace
-    /// already binds. `standalone` is the escape hatch for the case none of
-    /// those cover: dropping something the Workspace grants.
+    /// already binds. `ignore_workspace` is the escape hatch for the case none
+    /// of those cover: dropping something the Workspace grants.
     ///
-    /// The result is always additive-shaped (`standalone` cleared): it is a
-    /// resolved policy, with nothing left below it to ignore.
+    /// The result is always additive-shaped (`ignore_workspace` cleared): it
+    /// is a resolved policy, with nothing left below it to ignore.
     pub fn merge(base: &Self, overlay: &Self) -> Self {
-        if overlay.standalone {
+        if overlay.ignore_workspace {
             return Self {
-                standalone: false,
+                ignore_workspace: false,
                 ..overlay.clone()
             };
         }
@@ -428,7 +428,7 @@ impl LaunchPolicy {
             writable_workspace: overlay.writable_workspace.or(base.writable_workspace),
             templates: base.templates.clone(),
             mounts: base.mounts.clone(),
-            standalone: false,
+            ignore_workspace: false,
         };
         for name in &overlay.templates {
             merged.templates.retain(|existing| existing != name);
@@ -774,7 +774,7 @@ mod tests {
             writable_workspace: None,
             templates: vec!["rust".into()],
             mounts: vec![mount("/srv/corpus", None, false)],
-            standalone: false,
+            ignore_workspace: false,
         };
         let overlay = LaunchPolicy {
             templates: vec!["browser".into()],
@@ -807,14 +807,14 @@ mod tests {
             writable_workspace: None,
             templates: vec!["rust".into(), "browser".into()],
             mounts: vec![mount("/srv/corpus", Some("/mnt/corpus"), false)],
-            standalone: false,
+            ignore_workspace: false,
         };
         let overlay = LaunchPolicy {
             network: Some(false),
             writable_workspace: None,
             templates: vec!["rust".into()],
             mounts: vec![mount("/srv/other", Some("/mnt/corpus"), true)],
-            standalone: false,
+            ignore_workspace: false,
         };
 
         let merged = LaunchPolicy::merge(&base, &overlay);
@@ -848,19 +848,19 @@ mod tests {
     }
 
     /// Dropping a grant the Workspace makes cannot be said by adding to it, so
-    /// `standalone` is the one way a launch says "not that policy, this one".
+    /// `ignore_workspace` is the one way a launch says "not that policy, this one".
     #[test]
-    fn a_standalone_launch_ignores_the_workspace_policy_entirely() {
+    fn an_ignore_workspace_launch_ignores_the_workspace_policy_entirely() {
         let base = LaunchPolicy {
             network: Some(true),
             writable_workspace: None,
             templates: vec!["rust".into()],
             mounts: vec![mount("/srv/corpus", None, false)],
-            standalone: false,
+            ignore_workspace: false,
         };
         let overlay = LaunchPolicy {
             templates: vec!["browser".into()],
-            standalone: true,
+            ignore_workspace: true,
             ..LaunchPolicy::default()
         };
 
@@ -870,7 +870,18 @@ mod tests {
         assert_eq!(merged.network, None);
         assert!(!merged.grants_network());
         // The result is a resolved policy: there is nothing left below it.
-        assert!(!merged.standalone);
+        assert!(!merged.ignore_workspace);
+    }
+
+    #[test]
+    fn the_old_standalone_spelling_loads_as_ignore_workspace() {
+        let policy: LaunchPolicy =
+            serde_json::from_value(serde_json::json!({ "standalone": true })).unwrap();
+        assert!(policy.ignore_workspace);
+
+        let stored = serde_json::to_value(policy).unwrap();
+        assert_eq!(stored["ignore_workspace"], true);
+        assert!(stored.get("standalone").is_none());
     }
 
     /// A launch that asks for nothing runs under exactly the Workspace's
@@ -882,7 +893,7 @@ mod tests {
             writable_workspace: None,
             templates: vec!["rust".into()],
             mounts: vec![mount("/srv/corpus", None, false)],
-            standalone: false,
+            ignore_workspace: false,
         };
         assert!(LaunchPolicy::default().is_empty());
         assert_eq!(LaunchPolicy::merge(&base, &LaunchPolicy::default()), base);
@@ -926,14 +937,14 @@ mod tests {
         let merged = LaunchPolicy::merge(&LaunchPolicy::default(), &read_only);
         assert!(!merged.grants_writable_workspace());
 
-        // A standalone launch carries its own answer and nothing else's.
+        // An ignore-workspace launch carries its own answer and nothing else's.
         let merged = LaunchPolicy::merge(
             &LaunchPolicy {
                 writable_workspace: Some(false),
                 ..LaunchPolicy::default()
             },
             &LaunchPolicy {
-                standalone: true,
+                ignore_workspace: true,
                 ..LaunchPolicy::default()
             },
         );
