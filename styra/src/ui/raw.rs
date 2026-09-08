@@ -113,10 +113,94 @@ fn raw_line(line: &styra_server::RawLine, selected: bool) -> Line<'static> {
     } else {
         marker_color
     };
-    Line::from(vec![
-        Span::styled(marker, Style::default().fg(marker_color)),
-        Span::styled(line.text.clone(), Style::default().fg(text_color)),
-    ])
+    let mut spans = vec![Span::styled(marker, Style::default().fg(marker_color))];
+    match serde_json::from_str::<serde_json::Value>(&line.text)
+        .ok()
+        .and_then(|value| entry_tag(&value).map(|tag| (tag, entry_detail(&value))))
+    {
+        Some((tag, detail)) => {
+            let tag_color = if selected {
+                palette::WARNING
+            } else {
+                palette::ADDITIONAL_INFO
+            };
+            spans.push(Span::styled(pad_tag(&tag), Style::default().fg(tag_color)));
+            spans.push(Span::styled(detail, Style::default().fg(text_color)));
+        }
+        // A line that is not JSON, or whose shape neither decoder recognises,
+        // has nothing better to show than itself.
+        None => spans.push(Span::styled(
+            line.text.clone(),
+            Style::default().fg(text_color),
+        )),
+    }
+    Line::from(spans)
+}
+
+/// The tag column's width. Wide enough for the codex method names actually on
+/// the wire (`item/tool/call`, `turn/interrupt`) so their payloads still line
+/// up in one column; a longer tag pushes its own payload right rather than
+/// widening the column for every other row.
+const TAG_WIDTH: usize = 18;
+
+fn pad_tag(tag: &str) -> String {
+    format!("{tag:<TAG_WIDTH$} ")
+}
+
+/// The name of the kind of entry a wire line is, as the agent's own protocol
+/// names it: codex's JSON-RPC `method`, or Claude's `type` refined by the
+/// `subtype` that carries the actual meaning of a `system` line. A JSON-RPC
+/// reply carries neither, so it is named for the field that distinguishes a
+/// result from a failure.
+fn entry_tag(value: &serde_json::Value) -> Option<String> {
+    if let Some(method) = value.get("method").and_then(serde_json::Value::as_str) {
+        return Some(method.to_owned());
+    }
+    if let Some(wire_type) = value.get("type").and_then(serde_json::Value::as_str) {
+        return Some(match value.get("subtype").and_then(serde_json::Value::as_str) {
+            Some(subtype) => format!("{wire_type}:{subtype}"),
+            None => wire_type.to_owned(),
+        });
+    }
+    if value.get("result").is_some() {
+        return Some("result".into());
+    }
+    if value.get("error").is_some() {
+        return Some("error".into());
+    }
+    None
+}
+
+/// What is left of a tagged line once the envelope the tag already states is
+/// removed: the payload the operator is actually reading the row for, on one
+/// compact line. The entry panel still holds the whole line, so dropping the
+/// envelope here loses nothing.
+fn entry_detail(value: &serde_json::Value) -> String {
+    for key in ["params", "message", "result", "error"] {
+        if let Some(payload) = value.get(key) {
+            return compact(payload);
+        }
+    }
+    let Some(object) = value.as_object() else {
+        return compact(value);
+    };
+    let rest: serde_json::Map<_, _> = object
+        .iter()
+        .filter(|(key, _)| !matches!(key.as_str(), "type" | "subtype" | "method"))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    if rest.is_empty() {
+        String::new()
+    } else {
+        compact(&serde_json::Value::Object(rest))
+    }
+}
+
+fn compact(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(text) => text.clone(),
+        other => serde_json::to_string(other).unwrap_or_default(),
+    }
 }
 
 /// Pretty-print and syntax-highlight a JSON value for the raw view's entry
@@ -276,6 +360,40 @@ mod tests {
     }
 
     #[test]
+    fn raw_rows_lead_with_the_entrys_protocol_name_and_drop_the_envelope() {
+        use styra_server::{Direction, RawLine};
+        let codex = RawLine {
+            at_ms: 0,
+            direction: Direction::FromAgent,
+            text: r#"{"method":"item/completed","params":{"item":{"type":"agentMessage"}}}"#.into(),
+        };
+        let row = raw_line(&codex, false);
+        assert_eq!(row.spans[1].content.trim(), "item/completed");
+        assert_eq!(row.spans[2].content, r#"{"item":{"type":"agentMessage"}}"#);
+
+        let claude = RawLine {
+            at_ms: 0,
+            direction: Direction::FromAgent,
+            text: r#"{"type":"system","subtype":"init","session_id":"s-1"}"#.into(),
+        };
+        let row = raw_line(&claude, false);
+        assert_eq!(row.spans[1].content.trim(), "system:init");
+        assert_eq!(row.spans[2].content, r#"{"session_id":"s-1"}"#);
+    }
+
+    #[test]
+    fn an_untagged_raw_line_still_shows_its_own_text() {
+        use styra_server::{Direction, RawLine};
+        let line = RawLine {
+            at_ms: 0,
+            direction: Direction::FromAgent,
+            text: "not json at all".into(),
+        };
+        let row = raw_line(&line, false);
+        assert_eq!(row.spans[1].content, "not json at all");
+    }
+
+    #[test]
     fn raw_preview_pretty_prints_and_highlights_the_selected_line() {
         use styra_server::{Direction, RawLine};
         let mut app = testing::app("s1");
@@ -337,3 +455,4 @@ mod tests {
             .any(|span| span.style.fg == Some(palette::WARNING)));
     }
 }
+
