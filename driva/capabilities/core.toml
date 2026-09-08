@@ -36,13 +36,6 @@ path = [
   { at = "/lib", optional = true, doc = "The dynamic linker and shared libraries, or the link to them" },
   { at = "/lib64", optional = true, doc = "The 64-bit dynamic linker a binary names in its own headers" },
 
-  # On Nix and Guix systems every executable and every library it needs lives
-  # in the store, and `/usr` is nearly empty. Without these the sandbox has
-  # paths that resolve to nothing on exactly the hosts where the store *is*
-  # the system. Absent, and skipped, everywhere else.
-  { at = "/nix/store", optional = true, doc = "Where a Nix host keeps the programs and libraries themselves" },
-  { at = "/gnu/store", optional = true, doc = "Where a Guix host keeps the programs and libraries themselves" },
-
   # The loader's own configuration. Without the cache, `ld.so` falls back to
   # searching the directories named in `ld.so.conf` and its fragments; without
   # either, a binary that needs a library outside the default search path
@@ -59,4 +52,4 @@ path = [
 # The one check that matters here: can this base start a process at all.
 probe = { run = ["/bin/sh", "-c", "exit 0"] }
 
-suggest = ["/nix/store", "/gnu/store", "/opt", "/usr/local/lib", "/run/current-system/sw"]
+suggest = ["/opt", "/usr/local/lib", "/run/current-system/sw"]
