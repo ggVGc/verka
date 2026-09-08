@@ -1,11 +1,11 @@
 use crate::{
-    effective_policy, ExecutionEvidence, ExecutionIo, ExecutionOutcome, ExecutionRequest,
-    Isolation, Mount, MountAccess, ProcessExit, WritableMountMode, DEFAULT_PATH,
+    effective_policy, ExecutionControl, ExecutionEvidence, ExecutionIo, ExecutionOutcome,
+    ExecutionRequest, Isolation, Mount, MountAccess, ProcessExit, WritableMountMode, DEFAULT_PATH,
 };
 use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::time::SystemTime;
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::time::{Duration, SystemTime};
 
 /// Concrete filesystem operations used to construct one Bubblewrap sandbox.
 /// This is the single translation point from portable mount intent to
@@ -445,16 +445,37 @@ fn expand_home(path: &Path) -> Result<PathBuf> {
 
 impl Isolation for BwrapIsolation {
     fn run(&self, request: &ExecutionRequest, io: ExecutionIo) -> Result<ExecutionOutcome> {
+        self.run_inner(request, io, None)
+    }
+
+    fn run_controlled(
+        &self,
+        request: &ExecutionRequest,
+        io: ExecutionIo,
+        control: &ExecutionControl,
+    ) -> Result<ExecutionOutcome> {
+        self.run_inner(request, io, Some(control))
+    }
+}
+
+impl BwrapIsolation {
+    fn run_inner(
+        &self,
+        request: &ExecutionRequest,
+        io: ExecutionIo,
+        control: Option<&ExecutionControl>,
+    ) -> Result<ExecutionOutcome> {
         let started_at = SystemTime::now();
         let mounts = BwrapMountPlan::new(request);
         let private_copies = materialize_private_copies(mounts.mounts())?;
-        let status = self
+        let child = self
             .command_with_mounts(request, &mounts)?
             .stdin(Stdio::from(io.stdin))
             .stdout(Stdio::from(io.stdout))
             .stderr(Stdio::from(io.stderr))
-            .status()
+            .spawn()
             .with_context(|| format!("failed to start {}", self.executable.display()));
+        let status = child.and_then(|child| wait_for_child(child, control));
         if let Some(root) = private_copies {
             let _ = std::fs::remove_dir_all(root);
         }
@@ -472,5 +493,57 @@ impl Isolation for BwrapIsolation {
                 finished_at: SystemTime::now(),
             },
         })
+    }
+}
+
+fn wait_for_child(mut child: Child, control: Option<&ExecutionControl>) -> Result<ExitStatus> {
+    let Some(control) = control else {
+        return child.wait().context("waiting for Bubblewrap");
+    };
+    loop {
+        if let Some(status) = child.try_wait().context("checking Bubblewrap status")? {
+            return Ok(status);
+        }
+        if control.termination_requested() {
+            // Bubblewrap is launched with --die-with-parent, so killing it also
+            // tears down the sandbox process it supervises.
+            match child.kill() {
+                Ok(()) => return child.wait().context("waiting for terminated Bubblewrap"),
+                Err(error) => {
+                    if let Some(status) = child
+                        .try_wait()
+                        .context("checking Bubblewrap after termination failed")?
+                    {
+                        return Ok(status);
+                    }
+                    return Err(error).context("terminating Bubblewrap");
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    #[test]
+    fn controlled_wait_force_terminates_a_running_child() {
+        let child = Command::new("sleep").arg("30").spawn().unwrap();
+        let control = Arc::new(ExecutionControl::default());
+        let trigger = Arc::clone(&control);
+        let terminator = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(40));
+            trigger.terminate();
+        });
+
+        let started = std::time::Instant::now();
+        let status = wait_for_child(child, Some(&control)).unwrap();
+        terminator.join().unwrap();
+
+        assert!(!status.success());
+        assert!(started.elapsed() < Duration::from_secs(2));
     }
 }

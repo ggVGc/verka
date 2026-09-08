@@ -107,6 +107,7 @@ fn lock_standalone_store(store: &Path) -> Result<File> {
     let path = store.join(STANDALONE_LOCK_FILE);
     let file = OpenOptions::new()
         .create(true)
+        .truncate(false)
         .read(true)
         .write(true)
         .mode(0o600)
@@ -194,9 +195,11 @@ mod tests {
 
     #[test]
     fn only_one_process_owner_can_lock_the_standalone_store() {
-        let root =
-            std::env::temp_dir().join(format!("styra-standalone-lock-{}", std::process::id()));
-        std::fs::remove_dir_all(&root).ok();
+        let root = std::env::temp_dir().join(format!(
+            "styra-standalone-lock-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
         std::fs::create_dir_all(&root).unwrap();
 
         let first = lock_standalone_store(&root).unwrap();
@@ -206,7 +209,22 @@ mod tests {
             .contains("another Styra standalone process"));
 
         drop(first);
-        lock_standalone_store(&root).unwrap();
+        // Other tests may fork while `first` is open. A fork briefly inherits
+        // the flock until exec closes the descriptor, so allow that handoff to
+        // finish before asserting that ownership was released.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        loop {
+            match lock_standalone_store(&root) {
+                Ok(lock) => {
+                    drop(lock);
+                    break;
+                }
+                Err(_) if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Err(error) => panic!("standalone lock was not released: {error:#}"),
+            }
+        }
         std::fs::remove_dir_all(root).ok();
     }
 }

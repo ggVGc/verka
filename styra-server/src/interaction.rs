@@ -21,7 +21,10 @@ use crate::protocol::{
     MountOrigin, RawLine,
 };
 use anyhow::{Context, Result};
-use driva::{ExecutionIo, ExecutionRequest, Isolation, Mount, MountAccess, WritableMountMode};
+use driva::{
+    ExecutionControl, ExecutionIo, ExecutionRequest, Isolation, Mount, MountAccess,
+    WritableMountMode,
+};
 use genta::appserver::DynamicTool;
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -32,6 +35,12 @@ use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
+
+#[cfg(not(test))]
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
+#[cfg(test)]
+const SHUTDOWN_GRACE: Duration = Duration::from_millis(50);
 
 /// What Styra needs to launch one interaction: an agent profile plus the concrete
 /// workspace mount and working directory the operator selected.
@@ -138,6 +147,7 @@ pub struct Interaction {
     /// Present for Claude Code's bidirectional stream protocol; coordinates
     /// acknowledged model changes with the following user turn.
     claude_stream: Option<Arc<crate::claude_stream::ClaudeStream>>,
+    execution_control: Arc<ExecutionControl>,
     exec: Option<JoinHandle<()>>,
     reader: Option<JoinHandle<()>>,
     stderr: Option<JoinHandle<()>>,
@@ -176,6 +186,7 @@ impl Interaction {
         let (updates, receiver) = channel();
         let journal = Arc::new(Mutex::new(journal));
         let stdin = Arc::new(Mutex::new(Some(stdin_write)));
+        let execution_control = Arc::new(ExecutionControl::default());
 
         // A stateful protocol gets a client that owns its handshake; the
         // reader thread routes lines through it instead of plain decoding.
@@ -328,10 +339,16 @@ impl Interaction {
 
         // Worker thread: run Driva, blocking until the child exits, then report.
         let exec_updates = updates.clone();
+        let worker_control = Arc::clone(&execution_control);
         let exec = std::thread::Builder::new()
             .name("styra-exec".into())
             .spawn(move || {
-                let end = match driva::execute(backend.as_ref(), &request, io) {
+                let end = match driva::execute_controlled(
+                    backend.as_ref(),
+                    &request,
+                    io,
+                    &worker_control,
+                ) {
                     Ok(outcome) => {
                         let code = outcome.exit.code();
                         let _ = exec_updates.send(InteractionUpdate::Log(LogEntry::info(format!(
@@ -373,6 +390,7 @@ impl Interaction {
             updates,
             appserver,
             claude_stream,
+            execution_control,
             exec: Some(exec),
             reader: Some(reader),
             stderr: Some(stderr),
@@ -532,10 +550,26 @@ impl Interaction {
 impl Drop for Interaction {
     fn drop(&mut self) {
         self.stop();
-        if let Some(handle) = self.reader.take() {
-            let _ = handle.join();
+
+        // Give protocol agents a brief chance to honor stdin EOF. A stubborn
+        // sandbox is then terminated through Driva before any unbounded thread
+        // join can hold shutdown open forever.
+        if let Some(handle) = self.exec.as_ref() {
+            let deadline = Instant::now() + SHUTDOWN_GRACE;
+            while !handle.is_finished() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            if !handle.is_finished() {
+                let _ = self.updates.send(InteractionUpdate::Log(LogEntry::warn(
+                    "agent did not exit after stdin closed; terminating its sandbox",
+                )));
+                self.execution_control.terminate();
+            }
         }
         if let Some(handle) = self.exec.take() {
+            let _ = handle.join();
+        }
+        if let Some(handle) = self.reader.take() {
             let _ = handle.join();
         }
         if let Some(handle) = self.stderr.take() {
@@ -774,6 +808,7 @@ mod tests {
     use driva::{ExecutionOutcome, ProcessExit};
     use std::collections::BTreeMap;
     use std::os::unix::fs::PermissionsExt;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::{Duration, SystemTime};
 
     /// A backend that speaks a tiny protocol: for each submission line it reads
@@ -809,6 +844,40 @@ mod tests {
                 exit: ProcessExit::Code(0),
                 evidence: driva::ExecutionEvidence {
                     isolation_backend: "echo".into(),
+                    effective_policy: driva::effective_policy(request),
+                    started_at: now,
+                    finished_at: now,
+                },
+            })
+        }
+    }
+
+    /// Ignores stdin EOF and exits only when the execution owner asks it to be
+    /// terminated, modelling a provider that does not shut down gracefully.
+    struct StubbornBackend {
+        terminated: Arc<AtomicBool>,
+    }
+
+    impl Isolation for StubbornBackend {
+        fn run(&self, _request: &ExecutionRequest, _io: ExecutionIo) -> Result<ExecutionOutcome> {
+            unreachable!("Styra runs interactions with execution control")
+        }
+
+        fn run_controlled(
+            &self,
+            request: &ExecutionRequest,
+            _io: ExecutionIo,
+            control: &ExecutionControl,
+        ) -> Result<ExecutionOutcome> {
+            while !control.termination_requested() {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            self.terminated.store(true, Ordering::Release);
+            let now = SystemTime::now();
+            Ok(ExecutionOutcome {
+                exit: ProcessExit::Signaled,
+                evidence: driva::ExecutionEvidence {
+                    isolation_backend: "stubborn-test".into(),
                     effective_policy: driva::effective_policy(request),
                     started_at: now,
                     finished_at: now,
@@ -1041,6 +1110,33 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn dropping_an_interaction_force_terminates_a_backend_that_ignores_eof() {
+        let dir =
+            std::env::temp_dir().join(format!("styra-stubborn-session-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        let journal = Journal::create(&dir).unwrap();
+        let terminated = Arc::new(AtomicBool::new(false));
+
+        let (interaction, _updates) = Interaction::spawn(
+            workspace_spec(&dir),
+            Box::new(StubbornBackend {
+                terminated: Arc::clone(&terminated),
+            }),
+            journal,
+            "stubborn-session".into(),
+            dir.join("diagnostics.log"),
+        )
+        .unwrap();
+
+        let started = Instant::now();
+        drop(interaction);
+        assert!(terminated.load(Ordering::Acquire));
+        assert!(started.elapsed() < Duration::from_secs(1));
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]

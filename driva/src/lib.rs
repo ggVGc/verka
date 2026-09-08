@@ -17,6 +17,7 @@ use std::ffi::OsString;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::SystemTime;
 
 /// Conventional executable search path used when an isolated request does not
@@ -168,6 +169,34 @@ impl ExecutionIo {
 
 pub trait Isolation {
     fn run(&self, request: &ExecutionRequest, io: ExecutionIo) -> Result<ExecutionOutcome>;
+
+    /// Run with a cooperative termination signal. Backends that own a child
+    /// process should override this and force that child down when requested.
+    /// The default preserves compatibility for immediate/in-memory backends.
+    fn run_controlled(
+        &self,
+        request: &ExecutionRequest,
+        io: ExecutionIo,
+        _control: &ExecutionControl,
+    ) -> Result<ExecutionOutcome> {
+        self.run(request, io)
+    }
+}
+
+/// A thread-safe request to terminate one running isolation backend.
+#[derive(Default)]
+pub struct ExecutionControl {
+    terminate: AtomicBool,
+}
+
+impl ExecutionControl {
+    pub fn terminate(&self) {
+        self.terminate.store(true, Ordering::Release);
+    }
+
+    pub fn termination_requested(&self) -> bool {
+        self.terminate.load(Ordering::Acquire)
+    }
 }
 
 /// Resolve mount sources and enforce Driva's portable policy.
@@ -309,4 +338,14 @@ pub fn execute(
     io: ExecutionIo,
 ) -> Result<ExecutionOutcome> {
     backend.run(&validate_request(request)?, io)
+}
+
+/// Validate once, then run with a signal the owner can use to bound shutdown.
+pub fn execute_controlled(
+    backend: &dyn Isolation,
+    request: &ExecutionRequest,
+    io: ExecutionIo,
+    control: &ExecutionControl,
+) -> Result<ExecutionOutcome> {
+    backend.run_controlled(&validate_request(request)?, io, control)
 }
