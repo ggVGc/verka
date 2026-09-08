@@ -129,7 +129,7 @@ impl Provider {
     pub fn models(&self) -> &'static [&'static str] {
         match self {
             Provider::Codex | Provider::CodexExec => {
-                &["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]
+                &["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-astra"]
             }
             Provider::Claude => &[
                 "claude-fable-5",
