@@ -99,7 +99,7 @@ pub struct ResolvedTemplate {
     pub environment: BTreeMap<OsString, OsString>,
     pub network: bool,
     /// Static Driva capabilities this template's command requires.
-    pub capabilities: Vec<String>,
+    pub capabilities: Vec<driva::Capability>,
 }
 
 impl ResolvedTemplate {
@@ -650,7 +650,7 @@ fn captured_base(config: &driva::BaseConfig) -> Result<Vec<BaseCapability>> {
         .capabilities
         .into_iter()
         .map(|capability| BaseCapability {
-            name: capability.name,
+            name: capability.name.to_string(),
             description: capability.description,
             entries: capability
                 .entries
@@ -1459,11 +1459,13 @@ mod tests {
     fn a_template_requirement_reaches_the_captured_base() {
         let dir = PathBuf::from("/tmp/styra/workspace");
         let mut spec = workspace_spec(&dir);
-        spec.base.include.retain(|name| name == "core");
+        spec.base
+            .include
+            .retain(|name| *name == driva::Capability::Core);
         let before = DrivaOptions::capture(&spec, "bwrap").unwrap();
         assert_eq!(before.base.len(), 1);
 
-        spec.base.include("timezone");
+        spec.base.include(driva::Capability::Timezone);
         let after = DrivaOptions::capture(&spec, "bwrap").unwrap();
         assert_eq!(
             after

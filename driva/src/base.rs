@@ -10,6 +10,7 @@
 //! Configuration only chooses which of them are enabled.
 
 use anyhow::{bail, Context, Result};
+use clap::ValueEnum;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -18,19 +19,54 @@ use std::path::{Path, PathBuf};
 /// The capabilities included when configuration says nothing, in the order
 /// they are laid down. `core` comes first because everything else resolves
 /// through it.
-pub const DEFAULT_CAPABILITIES: [&str; 5] = ["core", "identity", "certificates", "dns", "timezone"];
+pub const DEFAULT_CAPABILITIES: [Capability; 5] = [
+    Capability::Core,
+    Capability::Identity,
+    Capability::Certificates,
+    Capability::Dns,
+    Capability::Timezone,
+];
+
+/// A capability built into Driva.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, ValueEnum)]
+#[serde(rename_all = "lowercase")]
+pub enum Capability {
+    Core,
+    Identity,
+    Certificates,
+    Dns,
+    Timezone,
+}
+
+impl Capability {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Core => "core",
+            Self::Identity => "identity",
+            Self::Certificates => "certificates",
+            Self::Dns => "dns",
+            Self::Timezone => "timezone",
+        }
+    }
+}
+
+impl std::fmt::Display for Capability {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
 
 /// Which of Driva's static capabilities a private root is built from.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct BaseConfig {
-    /// Capability names, in the order they are laid down.
+    /// Capabilities, in the order they are laid down.
     #[serde(default = "default_capabilities")]
-    pub include: Vec<String>,
+    pub include: Vec<Capability>,
 }
 
-fn default_capabilities() -> Vec<String> {
-    DEFAULT_CAPABILITIES.map(str::to_owned).to_vec()
+fn default_capabilities() -> Vec<Capability> {
+    DEFAULT_CAPABILITIES.to_vec()
 }
 
 impl Default for BaseConfig {
@@ -51,22 +87,21 @@ impl BaseConfig {
     }
 
     /// Add a capability, keeping the existing order when it is already there.
-    pub fn include(&mut self, name: &str) {
-        if !self.include.iter().any(|existing| existing == name) {
-            self.include.push(name.to_owned());
+    pub fn include(&mut self, capability: Capability) {
+        if !self.include.contains(&capability) {
+            self.include.push(capability);
         }
     }
 
     /// Drop a capability the configuration or a template asked for.
-    pub fn exclude(&mut self, name: &str) {
-        self.include.retain(|existing| existing != name);
+    pub fn exclude(&mut self, capability: Capability) {
+        self.include.retain(|existing| *existing != capability);
     }
 }
 
-/// One of Driva's fixed capabilities.
+/// The fixed contents of one capability.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Capability {
-    pub name: &'static str,
+pub struct CapabilityInfo {
     pub description: &'static str,
     pub paths: Vec<Entry>,
     pub environment: &'static [&'static str],
@@ -104,10 +139,14 @@ fn entry(at: &str, optional: bool, doc: &'static str) -> Entry {
 }
 
 /// All capabilities known to this Driva build.
-pub fn capabilities() -> Vec<Capability> {
-    vec![
-        Capability {
-            name: "core",
+pub fn capabilities() -> impl Iterator<Item = Capability> {
+    DEFAULT_CAPABILITIES.into_iter()
+}
+
+/// The paths, environment, and probe belonging to a capability.
+pub fn capability_info(capability: Capability) -> CapabilityInfo {
+    match capability {
+        Capability::Core => CapabilityInfo {
             description: "Run a program: the host's executables, libraries, and loader",
             paths: vec![
                 entry(
@@ -163,8 +202,7 @@ pub fn capabilities() -> Vec<Capability> {
                 "exit 0".into(),
             ])),
         },
-        Capability {
-            name: "identity",
+        Capability::Identity => CapabilityInfo {
             description: "Name the user and group a program runs as",
             paths: vec![
                 entry(
@@ -186,8 +224,7 @@ pub fn capabilities() -> Vec<Capability> {
             environment: &[],
             probe: Some(Probe::Run(vec!["/usr/bin/id".into(), "-u".into()])),
         },
-        Capability {
-            name: "certificates",
+        Capability::Certificates => CapabilityInfo {
             description: "Verify TLS certificates and reach a network through a proxy",
             paths: vec![
                 entry("/etc/ssl", true, "The usual certificate authority store"),
@@ -230,8 +267,7 @@ pub fn capabilities() -> Vec<Capability> {
                 "https://example.com".into(),
             ])),
         },
-        Capability {
-            name: "dns",
+        Capability::Dns => CapabilityInfo {
             description: "Turn a host name into an address when networking is permitted",
             paths: vec![
                 entry(
@@ -256,8 +292,7 @@ pub fn capabilities() -> Vec<Capability> {
             environment: &[],
             probe: Some(Probe::Resolve("one.one.one.one".into())),
         },
-        Capability {
-            name: "timezone",
+        Capability::Timezone => CapabilityInfo {
             description: "Report local time as the host does",
             paths: vec![entry(
                 "/etc/localtime",
@@ -267,20 +302,7 @@ pub fn capabilities() -> Vec<Capability> {
             environment: &["TZ"],
             probe: None,
         },
-    ]
-}
-
-/// Find a capability known to this Driva build.
-pub fn capability(name: &str) -> Result<Capability> {
-    capabilities()
-        .into_iter()
-        .find(|capability| capability.name == name)
-        .with_context(|| {
-            format!(
-                "unknown capability {name:?}; available capabilities: {}",
-                DEFAULT_CAPABILITIES.join(", ")
-            )
-        })
+    }
 }
 
 /// How to tell whether a capability works in a real sandbox built from it.
@@ -306,7 +328,7 @@ pub struct Base {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedCapability {
-    pub name: String,
+    pub name: Capability,
     pub description: String,
     pub entries: Vec<RuntimeEntry>,
     /// The forwarded variables that are actually set on this host.
@@ -369,7 +391,7 @@ impl RuntimeEntry {
 pub fn resolve_base(config: &BaseConfig) -> Result<Base> {
     let mut base = Base::default();
     for name in &config.include {
-        let capability = capability(name)?;
+        let capability = capability_info(*name);
         let mut entries = Vec::new();
         for entry in &capability.paths {
             match resolve_entry(entry, &base, &entries)
@@ -380,7 +402,7 @@ pub fn resolve_base(config: &BaseConfig) -> Result<Base> {
             }
         }
         base.capabilities.push(ResolvedCapability {
-            name: capability.name.to_owned(),
+            name: *name,
             description: capability.description.to_owned(),
             entries,
             environment: capability
@@ -465,7 +487,7 @@ mod tests {
     #[test]
     fn the_built_in_capabilities_are_well_formed() {
         for name in DEFAULT_CAPABILITIES {
-            let capability = capability(name).unwrap();
+            let capability = capability_info(name);
             assert!(
                 !capability.description.is_empty(),
                 "{name} has no description"
@@ -483,7 +505,7 @@ mod tests {
     #[test]
     fn every_built_in_path_documents_what_needs_it() {
         for name in DEFAULT_CAPABILITIES {
-            for entry in &capability(name).unwrap().paths {
+            for entry in &capability_info(name).paths {
                 assert!(
                     entry.doc.len() > 20,
                     "{name} carries {} without saying what needs it",
@@ -569,20 +591,18 @@ mod tests {
     #[test]
     fn configuration_selects_static_capabilities() {
         let config: BaseConfig = toml::from_str("include = [\"core\"]").unwrap();
-        assert_eq!(config.include, vec!["core".to_owned()]);
+        assert_eq!(config.include, vec![Capability::Core]);
         let base = resolve_base(&config).unwrap();
         assert_eq!(base.capabilities.len(), 1);
         assert!(base.entries().count() > 1);
     }
 
-    /// A capability nobody defined is a typo in policy. Failing names what is
-    /// available, since the fix is almost always one of those.
+    /// Unknown names are rejected while configuration is parsed.
     #[test]
-    fn an_unknown_capability_is_an_error_naming_the_known_ones() {
-        let mut config = BaseConfig::default();
-        config.include("speling");
-        let message = format!("{:#}", resolve_base(&config).unwrap_err());
+    fn an_unknown_capability_is_rejected() {
+        let message = toml::from_str::<BaseConfig>("include = [\"speling\"]")
+            .unwrap_err()
+            .to_string();
         assert!(message.contains("speling"), "{message}");
-        assert!(message.contains("certificates"), "{message}");
     }
 }

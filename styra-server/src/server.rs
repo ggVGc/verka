@@ -1811,7 +1811,7 @@ fn resolve_launch_mounts(mounts: &[LaunchMount]) -> Result<Vec<MountSpec>> {
 fn launch_base(workspace: &Path, template: Option<&ResolvedTemplate>) -> Result<driva::BaseConfig> {
     let mut base = workspace_driva_config(workspace)?.base();
     for name in template.iter().flat_map(|value| value.capabilities.iter()) {
-        base.include(name);
+        base.include(*name);
     }
     Ok(base)
 }

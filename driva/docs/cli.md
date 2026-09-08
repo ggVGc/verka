@@ -73,8 +73,8 @@ Options:
       --no-write               Make every host mount read-only, overriding configuration and templates
       --overlay-writes         Turn writable host mounts into overlays: the sandbox reads the host content and can write to it, but writes are discarded and never reach the host
       --path <DIRECTORY>       Add a host directory read-only and prepend it to the isolated PATH
-      --capability <NAME>      Add a base capability to the private root; may be repeated (see `driva capabilities`)
-      --no-capability <NAME>   Leave a base capability out, overriding configuration and templates
+      --capability <NAME>      Add a base capability to the private root; may be repeated (see `driva capabilities`) [possible values: core, identity, certificates, dns, timezone]
+      --no-capability <NAME>   Leave a base capability out, overriding configuration and templates [possible values: core, identity, certificates, dns, timezone]
       --no-base                Build the private root with no base at all: an empty filesystem holding only what is mounted into it
       --backend <BACKEND>      Select the isolation backend
       --network                Permit networking (disabled otherwise)
@@ -446,8 +446,8 @@ Options:
       --no-write               Make every host mount read-only, overriding configuration and templates
       --overlay-writes         Turn writable host mounts into overlays: the sandbox reads the host content and can write to it, but writes are discarded and never reach the host
       --path <DIRECTORY>       Add a host directory read-only and prepend it to the isolated PATH
-      --capability <NAME>      Add a base capability to the private root; may be repeated (see `driva capabilities`)
-      --no-capability <NAME>   Leave a base capability out, overriding configuration and templates
+      --capability <NAME>      Add a base capability to the private root; may be repeated (see `driva capabilities`) [possible values: core, identity, certificates, dns, timezone]
+      --no-capability <NAME>   Leave a base capability out, overriding configuration and templates [possible values: core, identity, certificates, dns, timezone]
       --no-base                Build the private root with no base at all: an empty filesystem holding only what is mounted into it
       --backend <BACKEND>      Select the isolation backend
       --network                Permit networking (disabled otherwise)

@@ -43,8 +43,8 @@ enum Operation {
     /// path it carries, what needs that path, and how it is checked.
     Capabilities {
         /// Capability to describe in full.
-        #[arg(value_name = "NAME")]
-        name: Option<String>,
+        #[arg(value_name = "NAME", value_enum)]
+        name: Option<driva::Capability>,
     },
     /// Report whether each included capability works on this host, by building
     /// a sandbox from it and probing it.
@@ -109,11 +109,11 @@ struct PolicyArgs {
     paths: Vec<PathBuf>,
     /// Add a base capability to the private root; may be repeated
     /// (see `driva capabilities`).
-    #[arg(long = "capability", value_name = "NAME")]
-    capabilities: Vec<String>,
+    #[arg(long = "capability", value_name = "NAME", value_enum)]
+    capabilities: Vec<driva::Capability>,
     /// Leave a base capability out, overriding configuration and templates.
-    #[arg(long = "no-capability", value_name = "NAME")]
-    no_capabilities: Vec<String>,
+    #[arg(long = "no-capability", value_name = "NAME", value_enum)]
+    no_capabilities: Vec<driva::Capability>,
     /// Build the private root with no base at all: an empty filesystem holding
     /// only what is mounted into it.
     #[arg(long)]
@@ -212,7 +212,7 @@ fn real_main() -> Result<()> {
             }
             return Ok(());
         }
-        Operation::Capabilities { name } => return capabilities_command(&config, name.as_deref()),
+        Operation::Capabilities { name } => return capabilities_command(&config, name),
         Operation::Doctor { policy } => return doctor_command(&config, &policy),
         Operation::Runtime { command } => return runtime_command(command),
     };
@@ -436,13 +436,13 @@ fn effective_base(
         return base;
     }
     for name in template.iter().flat_map(|value| value.capabilities.iter()) {
-        base.include(name);
+        base.include(*name);
     }
     for name in &policy.capabilities {
-        base.include(name);
+        base.include(*name);
     }
     for name in &policy.no_capabilities {
-        base.exclude(name);
+        base.exclude(*name);
     }
     base
 }
@@ -456,12 +456,12 @@ fn effective_base(
 /// capability, or where their own host keeps the same thing, is asking exactly
 /// that. Each path carries its own answer, so the reason travels with the
 /// declaration instead of living in a comment in Driva's source.
-fn capabilities_command(config: &Config, name: Option<&str>) -> Result<()> {
+fn capabilities_command(config: &Config, name: Option<driva::Capability>) -> Result<()> {
     let base = config.base();
     let Some(name) = name else {
-        for capability in driva::capabilities() {
-            let name = capability.name;
-            let position = base.include.iter().position(|included| included == name);
+        for name in driva::capabilities() {
+            let capability = driva::capability_info(name);
+            let position = base.include.iter().position(|included| *included == name);
             let marker = match position {
                 Some(index) => format!("{}", index + 1),
                 None => "-".to_owned(),
@@ -471,11 +471,11 @@ fn capabilities_command(config: &Config, name: Option<&str>) -> Result<()> {
         return Ok(());
     };
 
-    let capability = driva::capability(name)?;
+    let capability = driva::capability_info(name);
     println!("{name}\t{}", capability.description);
     println!(
         "included: {}",
-        match base.include.iter().position(|included| included == name) {
+        match base.include.iter().position(|included| *included == name) {
             Some(index) => format!("yes, laid down {} of {}", index + 1, base.include.len()),
             None => "no — add it with --capability, or in [base] include".to_owned(),
         }

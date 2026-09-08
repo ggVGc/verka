@@ -163,7 +163,7 @@ pub struct TemplateConfig {
     pub paths: Vec<PathBuf>,
     /// Static capabilities this template's command needs.
     #[serde(default, rename = "capability")]
-    pub capabilities: Vec<String>,
+    pub capabilities: Vec<crate::Capability>,
     pub network: Option<bool>,
     pub interactive: Option<bool>,
     /// Start a new terminal session (Bubblewrap's `--new-session`, which

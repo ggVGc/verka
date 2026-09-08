@@ -14,7 +14,7 @@
 //! the [`PROBE_ENV`] sentinel, so they test the sandbox's own resolver and
 //! routing rather than the host's, and need nothing installed to do it.
 
-use crate::base::{BaseConfig, Probe, ResolvedCapability};
+use crate::base::{BaseConfig, Capability, Probe, ResolvedCapability};
 use crate::{
     execute, BwrapIsolation, ExecutionIo, ExecutionRequest, Mount, MountAccess, WritableMountMode,
 };
@@ -106,9 +106,9 @@ pub fn probe_capability(
     let Some(probe) = &capability.probe else {
         return Ok(ProbeOutcome::None);
     };
-    let mut include = vec!["core".to_owned()];
-    if capability.name != "core" {
-        include.push(capability.name.clone());
+    let mut include = vec![Capability::Core];
+    if capability.name != Capability::Core {
+        include.push(capability.name);
     }
     let backend = BwrapIsolation {
         executable: executable.to_path_buf(),

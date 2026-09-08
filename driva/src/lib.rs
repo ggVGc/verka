@@ -7,8 +7,8 @@ pub mod probe;
 mod runtime;
 
 pub use base::{
-    capabilities, capability, resolve_base, Base, BaseConfig, Capability, Entry, Probe,
-    ResolvedCapability, RuntimeEntry, DEFAULT_CAPABILITIES,
+    capabilities, capability_info, resolve_base, Base, BaseConfig, Capability, CapabilityInfo,
+    Entry, Probe, ResolvedCapability, RuntimeEntry, DEFAULT_CAPABILITIES,
 };
 pub use bwrap::BwrapIsolation;
 pub use config::{
