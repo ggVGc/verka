@@ -7,7 +7,6 @@ use crate::insert;
 use crate::launch;
 use crate::preferences;
 use crate::session::{self, Attachment};
-use crate::terminal;
 use styra_server::{Client, Contract, LogEntry};
 
 /// Keys for the launch picker: `j`/`k` within a column, `Tab`/`h`/`l` between
@@ -99,13 +98,7 @@ pub fn handle_list_key(
             let Attachment::Attached { .. } = live else {
                 return app.show_action_message("no live interaction to open a shell for");
             };
-            match terminal::open_shell(client, &app.session_id) {
-                Ok(program) => app.show_action_message(format!("opened shell in {program}")),
-                Err(error) => app.push_log(LogEntry::error(format!(
-                    "could not open session shell: {error:#}"
-                ))),
-            }
-            return;
+            return app.ask(Request::OpenShell);
         }
         KeyCode::Char('i') if app.view != View::Preview => return app.enter_input(),
         // Global, unlike `y`: what it copies is the session's exchange, which

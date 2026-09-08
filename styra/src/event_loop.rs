@@ -747,6 +747,14 @@ pub fn run(
                 open_path(app, config, &path);
             }
             Some(Request::OpenPath(path)) => open_path(app, config, &path),
+            Some(Request::OpenShell) => {
+                match crate::terminal::open_shell(client, &app.session_id, config) {
+                    Ok(program) => app.show_action_message(format!("opened shell in {program}")),
+                    Err(error) => app.push_log(LogEntry::error(format!(
+                        "could not open session shell: {error:#}"
+                    ))),
+                }
+            }
         }
     }
 }

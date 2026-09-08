@@ -65,7 +65,7 @@ live interactions.
 | `s` / `S` | interrupt the active turn / stop its interaction |
 | `n` / `N` | new session / stop then start a new session |
 | `b` | branch a session from the selected event/history point |
-| `!` | open this live session's sandbox shell in a new terminal |
+| `!` | open this live session's sandbox shell in the configured terminal |
 | `a` / `A` / `V` | live interactions / sessions in this Workspace / Workspaces |
 | `W` | enable or disable linked-worktree creation for future launches |
 | `L` | choose provider, model, and effort |

@@ -278,6 +278,10 @@ pub enum Request {
     NewSession,
     /// Open the selected entry in the Files view in the configured opener.
     EditFile,
+    /// Open the live Session's sandbox shell in a terminal window of its own.
+    /// The window is the operator's to configure, so the event loop — which
+    /// holds the configuration — runs it rather than the key handler.
+    OpenShell,
     /// Open one already-resolved host path in the configured opener. Unlike
     /// [`Request::EditFile`] the path travels with the request, because the
     /// reference picker that asks for it closes as it does.
