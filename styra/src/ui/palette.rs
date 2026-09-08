@@ -15,7 +15,7 @@ pub(crate) const ADDITIONAL_INFO: Color = Color::Rgb(211, 158, 96);
 
 pub(crate) const ACCENT: Color = Color::Cyan;
 pub(crate) const LIGHT_ACCENT: Color = Color::LightCyan;
-pub(crate) const INFO: Color = Color::Blue;
+pub(crate) const INFO: Color = Color::Rgb(250, 182, 179);
 pub(crate) const SUCCESS: Color = Color::Green;
 pub(crate) const WARNING: Color = Color::Yellow;
 pub(crate) const ERROR: Color = Color::Red;
