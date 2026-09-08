@@ -12,6 +12,7 @@
 //! copies of an ordering is one copy too many when a disagreement between them
 //! means opening the wrong file.
 
+use pulldown_cmark::{Event, Options, Parser, Tag};
 use std::path::{Path, PathBuf};
 
 use styra_server::agent::SandboxLayout;
@@ -151,19 +152,8 @@ pub fn mentioned<'a>(entries: impl Iterator<Item = &'a Entry>, root: Option<&Pat
         if let AgentEvent::FileChanged { paths: changed, .. } = &entry.event {
             paths.extend(changed.iter().cloned());
         }
-        let mut text = entry.event.summary();
-        for block in entry.event.detail() {
-            text.push('\n');
-            match block {
-                DetailBlock::Text(part) | DetailBlock::Code { text: part, .. } => {
-                    text.push_str(&part)
-                }
-            }
-        }
-        for token in text.split_whitespace() {
-            let Some(candidate) = path_like(token) else {
-                continue;
-            };
+        for candidate in candidates(&entry_text(entry)) {
+            let candidate = candidate.as_str();
             // Without a Workspace there is nothing to resolve a relative
             // mention against, so only absolute ones can be confirmed.
             let resolved = match (Path::new(candidate).is_absolute(), root) {
@@ -184,9 +174,65 @@ pub fn mentioned<'a>(entries: impl Iterator<Item = &'a Entry>, root: Option<&Pat
     paths
 }
 
+/// Everything one entry says, as one blob of text: its summary and every
+/// detail block under it.
+///
+/// The text a path can be named in, and the one definition of it — both this
+/// module's own scan for mentions and [`crate::references`]'s scan for
+/// `path:line` references read an entry through here, so neither can look at
+/// less of it than the other.
+pub fn entry_text(entry: &Entry) -> String {
+    let mut text = entry.event.summary();
+    for block in entry.event.detail() {
+        text.push('\n');
+        match block {
+            DetailBlock::Text(part) | DetailBlock::Code { text: part, .. } => text.push_str(&part),
+        }
+    }
+    text
+}
+
+/// Every stretch of `text` that could be a path, in the order it appears.
+///
+/// Agent replies are markdown, so they are read as markdown: the same
+/// `pulldown-cmark` the message renderer uses ([`crate::ui`]) walks the text,
+/// and a link's destination is taken as the parser reports it. That is the
+/// whole reason for parsing rather than scanning — in
+/// `[monitor.c:484](/home/me/src/monitor.c:484)` the destination *is* the
+/// path, with no syntax left around it to guess at, and a scan of the raw text
+/// would see one token that looks like nothing at all.
+///
+/// Prose and code spans are still tokenized on whitespace, because a bare
+/// citation in a sentence is not markup and the parser hands those back as
+/// plain text. What that leaves for [`path_like`] is only the punctuation a
+/// sentence ends with.
+pub fn candidates(text: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut push = |token: &str| {
+        if let Some(candidate) = path_like(token) {
+            found.push(candidate.to_owned());
+        }
+    };
+    for event in Parser::new_ext(text, Options::ENABLE_STRIKETHROUGH) {
+        match event {
+            // Both halves of a citation reach the list: the destination here,
+            // and the link's text as the `Event::Text` inside it. They name one
+            // file, which the callers settle by the path each resolves to.
+            Event::Start(Tag::Link { dest_url, .. }) => push(&dest_url),
+            Event::Text(text) | Event::Code(text) => text.split_whitespace().for_each(&mut push),
+            _ => {}
+        }
+    }
+    found
+}
+
 /// A token stripped of the punctuation prose wraps paths in, if what is left
 /// could be a path at all.
-fn path_like(token: &str) -> Option<&str> {
+///
+/// A colon is trimmed only at the ends, where it is punctuation. Inside a
+/// token it separates a path from the line it cites (`monitor.c:484`) and is
+/// [`crate::references`]'s to read.
+pub fn path_like(token: &str) -> Option<&str> {
     let candidate = token.trim_matches(|ch: char| {
         matches!(
             ch,
@@ -276,6 +322,24 @@ mod tests {
         assert_eq!(path_like("`src/main.rs`"), Some("src/main.rs"));
         assert_eq!(path_like("(src/main.rs)"), Some("src/main.rs"));
         assert_eq!(path_like("src/main.rs,"), Some("src/main.rs"));
+    }
+
+    /// A markdown link names a path twice — once as its text, once as its
+    /// destination — and the destination arrives from the parser with no
+    /// syntax left around it.
+    #[test]
+    fn both_paths_in_a_markdown_link_are_candidates() {
+        let found = candidates("At [monitor.c:484](/home/me/src/monitor.c:484), the");
+
+        assert_eq!(found, ["/home/me/src/monitor.c:484", "monitor.c:484"]);
+    }
+
+    /// Code spans and inline emphasis are markup, not part of the path the
+    /// span holds.
+    #[test]
+    fn a_path_in_a_code_span_is_a_candidate_without_its_backticks() {
+        assert_eq!(candidates("touched `src/main.rs` today"), ["src/main.rs"]);
+        assert_eq!(candidates("touched **src/main.rs**"), ["src/main.rs"]);
     }
 
     #[test]

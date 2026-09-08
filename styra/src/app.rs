@@ -36,6 +36,7 @@ use crate::outbox::Outbox;
 use crate::picker::TemplatePicker;
 use crate::preview::{self, Preview};
 use crate::raw::RawView;
+use crate::references::{self, References};
 use crate::tail::Tail;
 use crate::timeline::{Entry, Step, Timeline};
 use crate::workspace::Location;
@@ -239,6 +240,11 @@ pub struct App {
     /// The typed answer last fetched for this session, and the selection
     /// within it; see [`AnswerView`].
     pub answer: AnswerView,
+    /// The open list of files the focused reply cites, while the operator is
+    /// choosing one to open; see [`References`]. Modal, so it is held here
+    /// rather than inside any one view: it is opened over whichever view the
+    /// reply was being read in.
+    pub references: Option<References>,
     /// The open "insert a path" prompt, while the operator is using it; see
     /// [`crate::insert`]. Held here rather than in [`Composer`] because its
     /// second question is about the sandbox, not about the message.
@@ -270,8 +276,12 @@ pub enum Request {
     Reset,
     /// Return to the blank start screen without stopping the current interaction.
     NewSession,
-    /// Open the selected entry in the Files view in the configured editor.
+    /// Open the selected entry in the Files view in the configured opener.
     EditFile,
+    /// Open one already-resolved host path in the configured opener. Unlike
+    /// [`Request::EditFile`] the path travels with the request, because the
+    /// reference picker that asks for it closes as it does.
+    OpenPath(PathBuf),
     /// Choose which Driva templates the next interaction launches with. The
     /// list of them lives on the server, so the event loop fetches it and runs
     /// the picker.
@@ -361,6 +371,7 @@ impl App {
             transcript: Scroll::default(),
             files: FilesView::default(),
             answer: AnswerView::default(),
+            references: None,
             insert: None,
             requests: VecDeque::new(),
         }
@@ -763,6 +774,36 @@ impl App {
             .map(|item| item.resolved.clone())
     }
 
+    // --- File references in a reply -------------------------------------------
+
+    /// Open the list of files the focused reply cites; see
+    /// [`crate::references`]. The reply is the entry the preview and `y`
+    /// already act on, so what the picker offers is what the operator is
+    /// looking at.
+    ///
+    /// A reply that cites nothing on this host opens nothing and says so: an
+    /// empty modal would be a worse answer than a one-line notice.
+    pub fn open_references(&mut self) {
+        let Some(text) = self.preview_entry().map(files::entry_text) else {
+            return self.show_action_message("no entry to take file references from");
+        };
+        let root = self.workspace.root_or_current_directory();
+        self.references = References::new(references::in_reply(&text, root.as_deref()));
+        if self.references.is_none() {
+            self.show_action_message("no file references in this entry");
+        }
+    }
+
+    /// Close the picker and ask the event loop to open what it was on. The
+    /// path is resolved here rather than after the picker closes, since the
+    /// selection it was taken from does not outlive this call.
+    pub fn open_selected_reference(&mut self) {
+        if let Some(references) = self.references.take() {
+            let path = references.selected().resolved.clone();
+            self.ask(Request::OpenPath(path));
+        }
+    }
+
     /// The entry the preview panel and the `y` shortcut act on: the selected
     /// one, or — in [`PreviewTarget::Command`] — the newest shell entry. That
     /// entry holds both the command and its result, since a completion
@@ -912,6 +953,16 @@ impl App {
     /// Take the operator's pending request, if any, for the event loop to act on.
     pub fn take_request(&mut self) -> Option<Request> {
         self.requests.pop_front()
+    }
+
+    /// Take the next effect only when it is "open this file". The reference
+    /// picker uses this to open on the key that chose the file, the same way
+    /// the modal launch controls dispatch their own edit, and without
+    /// consuming an unrelated request that was already ahead of it.
+    pub fn take_open_path_request(&mut self) -> Option<Request> {
+        matches!(self.requests.front(), Some(Request::OpenPath(_)))
+            .then(|| self.requests.pop_front())
+            .flatten()
     }
 
     /// Take the next effect only when it is a Workspace launch edit. Modal

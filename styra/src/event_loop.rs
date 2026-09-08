@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use crate::activity::Status;
 use crate::app::{App, Focus, LaunchPolicy, Request};
-use crate::config::Config;
+use crate::config::Configuration;
 use crate::keymap::HELP;
 use crate::keys;
 use crate::launch::{self, LaunchScope};
@@ -240,7 +240,28 @@ fn submit_workspace_launch(
 pub struct RunContext<'a> {
     pub standing_launch: &'a LaunchPolicy,
     pub preferences_path: &'a Path,
-    pub config: &'a Config,
+    pub config: &'a dyn Configuration,
+}
+
+/// Hand one host path to the configured opener, reporting the outcome the way
+/// [`terminal::open_shell`](crate::terminal::open_shell) does.
+///
+/// The one place a file is opened, so every route to it — the Files view, a
+/// typed `files` answer, a reference in a reply — obeys the same configuration
+/// and says the same thing about it afterwards.
+fn open_path(app: &mut App, config: &dyn Configuration, path: &Path) {
+    let opener = config.file_opener();
+    let terminal = config.terminal();
+    match crate::terminal::open_editor(terminal, opener, path) {
+        Ok(()) => app.show_action_message(format!(
+            "opened {} in {opener} ({terminal})",
+            path.display()
+        )),
+        Err(error) => app.push_log(LogEntry::error(format!(
+            "could not open {} in {opener} using {terminal}: {error:#}",
+            path.display()
+        ))),
+    }
 }
 
 /// Global actions which operate on the current interaction without dismissing
@@ -431,6 +452,17 @@ pub fn run(
             continue;
         }
 
+        // The list of files a reply cites is modal: while it is open nothing
+        // underneath it can be acted on, `?` included.
+        if app.references.is_some() {
+            keys::handle_references_key(app, key);
+            // Choosing a file closes the picker and asks for that file. It has
+            // to open on this key rather than sit behind the next one.
+            if let Some(Request::OpenPath(path)) = app.take_open_path_request() {
+                open_path(app, config, &path);
+            }
+            continue;
+        }
         // While the reference is open it is modal, so none of the commands
         // described by it can accidentally act on the session underneath.
         if app.help.is_open() {
@@ -713,21 +745,9 @@ pub fn run(
                 let Some(path) = app.selected_file_path() else {
                     continue;
                 };
-                match crate::terminal::open_editor(&config.terminal, &config.editor, &path) {
-                    Ok(()) => app.show_action_message(format!(
-                        "opened {} in {} ({})",
-                        path.display(),
-                        config.editor,
-                        config.terminal
-                    )),
-                    Err(error) => app.push_log(LogEntry::error(format!(
-                        "could not open {} in {} using {}: {error:#}",
-                        path.display(),
-                        config.editor,
-                        config.terminal
-                    ))),
-                }
+                open_path(app, config, &path);
             }
+            Some(Request::OpenPath(path)) => open_path(app, config, &path),
         }
     }
 }

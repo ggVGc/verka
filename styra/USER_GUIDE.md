@@ -82,6 +82,7 @@ interaction (the durable Session remains).
 | `r`, `l`, `t`, `d` | raw provider records, client/server log, transcript, Workspace/interaction details; press again for events |
 | `Q` | quota readings observed by the server |
 | `f` | files associated with the selected event (or the whole session) |
+| `F` | open a file the selected event cites (`path:line` included) |
 | `X` | typed answer from the last turn |
 | `p` / `P` | toggle side preview / full-screen preview |
 | `v` / `C` | pretty versus diff preview / preview newest command |
@@ -94,7 +95,14 @@ expands only it, `z R` expands all, `z M` collapses all, and `m` hides/shows
 minor events. `PgUp`/`PgDn` scrolls a preview. Raw, log, quota, and transcript
 use `j`/`k` plus `g`/`G` to navigate.
 
-In Files: `e` opens the selected path in the configured editor, `a` switches
+`F` — in the event list, transcript, or full-screen preview — lists every file
+the selected event names that exists on this host, including citations of the
+form `monitor.c:484`. `j`/`k` and `g`/`G` move, `Enter` opens the highlighted
+file in the configured opener (`nvim` by default), and `q` or `Esc` cancels.
+The cited line is shown but not jumped to: only the opener knows how it is
+asked to.
+
+In Files: `e` opens the selected path in the configured opener, `a` switches
 focused-event/all-session files, `p` previews, `y` copies its path, and `J`/`K`
 changes the source event. In Typed answer: `T`, `L`, `F`, `J` re-read the last
 answer as text, lines, files, JSON; `R` uses the turn's original requested

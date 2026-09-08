@@ -991,6 +991,8 @@ styra/                   # the terminal client application
     tail.rs              # a list read from its end: the log and the quota readings
     answer.rs            # the last turn's typed answer and the selection within it
     files.rs             # files the agent named, and where they are on this host
+    references.rs        # the files one reply cites (`path:line`), and the choice among them
+    config/              # the configuration trait and the compiled-in defaults
     preview.rs           # the panel showing one entry in full, and how
     outbox.rs            # the pending contract and the queue of messages to send
     notices.rs           # short-lived notices, each on its own five-second clock

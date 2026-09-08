@@ -33,6 +33,7 @@ mod picker;
 mod preferences;
 mod preview;
 mod raw;
+mod references;
 mod session;
 mod tail;
 mod terminal;
@@ -42,7 +43,7 @@ mod workspace;
 
 use app::{App, LaunchPolicy};
 use cli::{Cli, CliCommand};
-use config::Config;
+use config::Defaults;
 use event_loop::RunOutcome;
 use session::Attachment;
 use styra_server::{Client, LogEntry, WorkspaceSummary};
@@ -162,7 +163,7 @@ fn main() -> Result<()> {
         return result;
     }
     let cli = Cli::parse();
-    let config = Config::default();
+    let config = Defaults;
 
     // `--standalone` never involves a socket, so it is settled before one is
     // resolved: on a host with no `XDG_RUNTIME_DIR` it is the mode that still

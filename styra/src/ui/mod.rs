@@ -24,6 +24,7 @@ mod picker;
 mod preview;
 pub(crate) mod quota;
 mod raw;
+mod references;
 #[cfg(test)]
 mod testing;
 mod transcript;
@@ -308,6 +309,11 @@ pub fn render(frame: &mut Frame, app: &App) {
     // text, cleanly selectable and copyable.
     if app.view == View::Preview {
         render_fullscreen_preview(frame, app, frame.area());
+        // Except for the citations of the entry it is showing, which are
+        // opened from this view as much as from the list.
+        if let Some(references) = &app.references {
+            references::render(frame, references, frame.area());
+        }
         return;
     }
 
@@ -353,6 +359,13 @@ pub fn render(frame: &mut Frame, app: &App) {
     // screen and floats over the middle of it.
     if input_active {
         render_input(frame, app);
+    }
+
+    // The citations of the entry being read, floating over it. Opened from
+    // the list rather than from the message box, so it cannot be on screen at
+    // the same time as the path prompt below.
+    if let Some(references) = &app.references {
+        references::render(frame, references, frame.area());
     }
 
     // Last, because it is the innermost modal: it is opened from the message

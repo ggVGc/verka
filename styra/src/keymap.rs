@@ -127,6 +127,10 @@ pub(crate) const REFERENCE: &[ReferenceRow] = &[
         action: "scroll preview (full-screen: j/k, entry: J/K)",
     },
     ReferenceRow::Binding {
+        keys: "F",
+        action: "open a file the entry cites (Enter opens, q cancels)",
+    },
+    ReferenceRow::Binding {
         keys: "y",
         action: "copy selected entry to clipboard",
     },
