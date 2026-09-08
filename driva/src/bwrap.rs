@@ -84,8 +84,27 @@ impl BwrapIsolation {
         request: &ExecutionRequest,
         mounts: &BwrapMountPlan,
     ) -> Result<Command> {
-        let rootfs = self
-            .rootfs
+        let rootfs = self.resolve_rootfs()?;
+        let temporary_mounts = collect_temporary_mounts(mounts)?;
+        if let Some(rootfs) = &rootfs {
+            self.validate_rootfs_runtime(rootfs)?;
+            self.validate_rootfs_paths(rootfs, request, mounts, &temporary_mounts)?;
+        }
+
+        let mut command = Command::new(&self.executable);
+        append_isolation_options(&mut command, request);
+        self.append_filesystem(&mut command, request, rootfs.as_deref(), &temporary_mounts)?;
+        append_mounts(&mut command, mounts);
+        command
+            .arg("--chdir")
+            .arg(&request.working_directory)
+            .arg("--")
+            .args(&request.command);
+        Ok(command)
+    }
+
+    fn resolve_rootfs(&self) -> Result<Option<PathBuf>> {
+        self.rootfs
             .as_deref()
             .map(|configured| {
                 let configured = expand_home(configured)?;
@@ -97,73 +116,57 @@ impl BwrapIsolation {
                 }
                 Ok(rootfs)
             })
-            .transpose()?;
+            .transpose()
+    }
 
-        if let Some(rootfs) = &rootfs {
-            self.require_rootfs_directory(rootfs, Path::new("/proc"), "proc mount point")?;
-            self.require_rootfs_directory(rootfs, Path::new("/dev"), "device mount point")?;
-            self.require_rootfs_directory(rootfs, Path::new("/tmp"), "temporary directory")?;
+    fn validate_rootfs_runtime(&self, rootfs: &Path) -> Result<()> {
+        self.require_rootfs_directory(rootfs, Path::new("/proc"), "proc mount point")?;
+        self.require_rootfs_directory(rootfs, Path::new("/dev"), "device mount point")?;
+        self.require_rootfs_directory(rootfs, Path::new("/tmp"), "temporary directory")
+    }
+
+    fn validate_rootfs_paths(
+        &self,
+        rootfs: &Path,
+        request: &ExecutionRequest,
+        mounts: &BwrapMountPlan,
+        temporary_mounts: &[PathBuf],
+    ) -> Result<()> {
+        for destination in temporary_mounts {
+            self.require_rootfs_directory(rootfs, destination, "temporary mount point")?;
         }
-        let mut temporary_mounts = Vec::new();
+        self.require_rootfs_path_or_temporary(
+            rootfs,
+            temporary_mounts,
+            &request.working_directory,
+            "working directory",
+        )?;
         for mount in mounts.mounts() {
-            let Mount::Temporary { destination } = mount else {
-                continue;
+            let destination = match mount {
+                Mount::Bind { destination, .. } | Mount::Overlay { destination, .. } => destination,
+                Mount::Temporary { .. } => continue,
             };
-            let destination = crate::expand_home(destination, "temporary mount destination")?;
-            if !temporary_mounts.contains(&destination) {
-                temporary_mounts.push(destination);
-            }
-        }
-        temporary_mounts.sort_by_key(|destination| destination.components().count());
-        for destination in &temporary_mounts {
-            if let Some(rootfs) = &rootfs {
-                self.require_rootfs_directory(rootfs, destination, "temporary mount point")?;
-            }
-        }
-        if let Some(rootfs) = &rootfs {
             self.require_rootfs_path_or_temporary(
                 rootfs,
-                &temporary_mounts,
-                &request.working_directory,
-                "working directory",
+                temporary_mounts,
+                destination,
+                "mount destination",
             )?;
-            for mount in mounts.mounts() {
-                let destination = match mount {
-                    Mount::Bind { destination, .. } | Mount::Overlay { destination, .. } => {
-                        destination
-                    }
-                    Mount::Temporary { .. } => continue,
-                };
-                self.require_rootfs_path_or_temporary(
-                    rootfs,
-                    &temporary_mounts,
-                    destination,
-                    "mount destination",
-                )?;
-            }
         }
+        Ok(())
+    }
 
-        let mut command = Command::new(&self.executable);
-        command.arg("--unshare-all");
-        if request.new_session {
-            command.arg("--new-session");
-        }
-        command.arg("--die-with-parent");
-        if request.network {
-            command.arg("--share-net");
-        }
-        command
-            .arg("--clearenv")
-            .arg("--setenv")
-            .arg("PATH")
-            .arg(DEFAULT_PATH);
-        for (key, value) in &request.environment {
-            command.arg("--setenv").arg(key).arg(value);
-        }
-        if let Some(rootfs) = &rootfs {
+    fn append_filesystem(
+        &self,
+        command: &mut Command,
+        request: &ExecutionRequest,
+        rootfs: Option<&Path>,
+        temporary_mounts: &[PathBuf],
+    ) -> Result<()> {
+        if let Some(rootfs) = rootfs {
             command.arg("--ro-bind").arg(rootfs).arg("/");
         } else {
-            append_host_runtime(&mut command)?;
+            append_host_runtime(command)?;
         }
         command
             .arg("--proc")
@@ -172,7 +175,7 @@ impl BwrapIsolation {
             .arg("/dev")
             .arg("--tmpfs")
             .arg("/tmp");
-        for destination in &temporary_mounts {
+        for destination in temporary_mounts {
             if destination != Path::new("/tmp") {
                 command.arg("--tmpfs").arg(destination);
             }
@@ -180,50 +183,7 @@ impl BwrapIsolation {
         if rootfs.is_none() {
             command.arg("--dir").arg(&request.working_directory);
         }
-        for mount in mounts.mounts() {
-            match mount {
-                Mount::Bind {
-                    source,
-                    destination,
-                    access,
-                } => {
-                    command.arg(match access {
-                        MountAccess::ReadOnly => "--ro-bind",
-                        MountAccess::ReadWrite => "--bind",
-                    });
-                    command.arg(source).arg(destination);
-                }
-                Mount::Overlay {
-                    source,
-                    destination,
-                } if is_regular_file(source) => {
-                    // Overlayfs stacks only on directories, so a file source gets a
-                    // private copy bound in its place. `run` materialises the copy
-                    // before the invocation starts and removes it afterwards.
-                    command
-                        .arg("--bind")
-                        .arg(private_copy_path(destination))
-                        .arg(destination);
-                }
-                Mount::Overlay {
-                    source,
-                    destination,
-                } => {
-                    command
-                        .arg("--overlay-src")
-                        .arg(source)
-                        .arg("--tmp-overlay")
-                        .arg(destination);
-                }
-                Mount::Temporary { .. } => continue,
-            }
-        }
-        command
-            .arg("--chdir")
-            .arg(&request.working_directory)
-            .arg("--")
-            .args(&request.command);
-        Ok(command)
+        Ok(())
     }
 
     fn require_rootfs_directory(&self, rootfs: &Path, path: &Path, label: &str) -> Result<()> {
@@ -272,6 +232,81 @@ impl BwrapIsolation {
             );
         }
         Ok(resolved)
+    }
+}
+
+fn collect_temporary_mounts(mounts: &BwrapMountPlan) -> Result<Vec<PathBuf>> {
+    let mut temporary_mounts = Vec::new();
+    for mount in mounts.mounts() {
+        let Mount::Temporary { destination } = mount else {
+            continue;
+        };
+        let destination = crate::expand_home(destination, "temporary mount destination")?;
+        if !temporary_mounts.contains(&destination) {
+            temporary_mounts.push(destination);
+        }
+    }
+    temporary_mounts.sort_by_key(|destination| destination.components().count());
+    Ok(temporary_mounts)
+}
+
+fn append_isolation_options(command: &mut Command, request: &ExecutionRequest) {
+    command.arg("--unshare-all");
+    if request.new_session {
+        command.arg("--new-session");
+    }
+    command.arg("--die-with-parent");
+    if request.network {
+        command.arg("--share-net");
+    }
+    command
+        .arg("--clearenv")
+        .arg("--setenv")
+        .arg("PATH")
+        .arg(DEFAULT_PATH);
+    for (key, value) in &request.environment {
+        command.arg("--setenv").arg(key).arg(value);
+    }
+}
+
+fn append_mounts(command: &mut Command, mounts: &BwrapMountPlan) {
+    for mount in mounts.mounts() {
+        match mount {
+            Mount::Bind {
+                source,
+                destination,
+                access,
+            } => {
+                command.arg(match access {
+                    MountAccess::ReadOnly => "--ro-bind",
+                    MountAccess::ReadWrite => "--bind",
+                });
+                command.arg(source).arg(destination);
+            }
+            Mount::Overlay {
+                source,
+                destination,
+            } if is_regular_file(source) => {
+                // Overlayfs stacks only on directories, so a file source gets a
+                // private copy bound in its place. `run` materialises the copy
+                // before the invocation starts and removes it afterwards.
+                command
+                    .arg("--bind")
+                    .arg(private_copy_path(destination))
+                    .arg(destination);
+            }
+            Mount::Overlay {
+                source,
+                destination,
+            } => {
+                command
+                    .arg("--overlay-src")
+                    .arg(source)
+                    .arg("--tmp-overlay")
+                    .arg(destination);
+            }
+            Mount::Temporary { .. } => continue,
+        }
     }
 }
 
