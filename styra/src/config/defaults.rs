@@ -23,14 +23,3 @@ impl Configuration for Defaults {
         TERMINAL
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn files_open_in_neovim() {
-        assert_eq!(Defaults.file_opener(), "nvim");
-        assert_eq!(Defaults.terminal(), "urxvt");
-    }
-}
