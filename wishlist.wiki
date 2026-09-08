@@ -1,3 +1,4 @@
+- styra: currently the driva sessions allows writes anywhere, under tmpfs, which makes things go missing, even when written outside /tmp. That should not be possible. Do not use a tmpfs / mount as base.
 - styra: quota tracking:
   - Doesn't say which provider
   - Should show local time rather than UTC
