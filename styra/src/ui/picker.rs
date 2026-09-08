@@ -591,13 +591,15 @@ mod tests {
     fn rendered_picker(sessions: &[SessionSummary], selected: usize) -> String {
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
         terminal
-            .draw(|frame| render_picker(
+            .draw(|frame| {
+                render_picker(
                     frame,
                     sessions,
                     selected,
                     SessionOrder::LastActivity,
                     Preview::Ready(&[]),
-                ))
+                )
+            })
             .unwrap();
         screen_text(terminal.backend().buffer())
     }
@@ -688,13 +690,15 @@ mod tests {
         ];
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
         terminal
-            .draw(|frame| render_picker(
+            .draw(|frame| {
+                render_picker(
                     frame,
                     &sessions,
                     0,
                     SessionOrder::LastActivity,
                     Preview::Ready(&updates),
-                ))
+                )
+            })
             .unwrap();
         let screen = terminal
             .backend()
@@ -873,13 +877,15 @@ mod tests {
 
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
         terminal
-            .draw(|frame| render_picker(
+            .draw(|frame| {
+                render_picker(
                     frame,
                     &sessions,
                     1,
                     SessionOrder::LastActivity,
                     Preview::Ready(&[]),
-                ))
+                )
+            })
             .unwrap();
         let buffer = terminal.backend().buffer().clone();
 

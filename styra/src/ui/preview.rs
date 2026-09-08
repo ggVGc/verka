@@ -2,7 +2,7 @@
 //! uncapped expanded content of the selected entry, regardless of whether it
 //! is folded in the list.
 
-use super::{message_text_color, palette, summary_line, wrap_line, DETAIL_INDENT};
+use super::{message_text_color, palette, summary_line, wrap_or_clip, DETAIL_INDENT};
 use crate::app::App;
 use crate::preview::PreviewTarget;
 use ratatui::layout::Rect;
@@ -90,7 +90,7 @@ fn wrap_preview_lines(
             } else {
                 DETAIL_INDENT.len()
             };
-            wrap_line(line, width, continuation_indent)
+            wrap_or_clip(line, width, continuation_indent)
         })
         .collect()
 }

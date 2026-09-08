@@ -1,7 +1,7 @@
 //! The main event list: each entry a summary line that grows inline when
 //! expanded, plus the empty-list start screen and the trailing status tail.
 
-use super::markdown::markdown_block_lines;
+use super::markdown::{keeps_line_structure, markdown_block_lines};
 use super::{
     conversation_only_title, format_duration, message_text_color, palette, render_placeholder,
     render_preview, tag_color, view_block, DETAIL_INDENT, MAX_DETAIL_LINES,
@@ -16,11 +16,6 @@ use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 use std::time::Duration;
 use styra_server::event::{AgentEvent, DetailBlock, PresentationMode, Protocol};
-
-/// Keep conversational prose readable on wide terminals. This includes the
-/// human/agent marker and hanging indent; narrower panes still use all of the
-/// space available to them.
-const MAX_CONVERSATION_WIDTH: usize = 120;
 
 pub(crate) fn render_list(frame: &mut Frame, app: &App, area: Rect) {
     let area = if app.preview.open && app.view == View::Events {
@@ -380,11 +375,6 @@ fn entry_item_with_max_rows(
         AgentEvent::UserMessage { .. } | AgentEvent::AgentMessage { .. }
     );
     let summary_indent = if is_conversation { 2 } else { 0 };
-    let width = if is_conversation {
-        width.min(MAX_CONVERSATION_WIDTH)
-    } else {
-        width
-    };
     let summary = selected_summary_line(
         summary_line(entry, expanded, entry.has_detail(), true, protocol),
         is_conversation,
@@ -429,7 +419,7 @@ fn entry_item_with_max_rows(
             } else {
                 DETAIL_INDENT.len()
             };
-            wrap_line(line, width, continuation_indent)
+            wrap_or_clip(line, width, continuation_indent)
         })
         .collect();
     // The cap above bounds logical detail lines, which say nothing about how
@@ -546,12 +536,26 @@ fn truncate_line(line: Line<'static>, width: usize, has_marker: bool) -> Line<'s
     Line::from(kept)
 }
 
+/// Wrap a rendered line, unless it is one whose own structure carries meaning
+/// — a table row or a list item — in which case it is clipped at the pane edge
+/// instead. See [`keeps_line_structure`].
+pub(crate) fn wrap_or_clip(
+    line: Line<'static>,
+    width: usize,
+    continuation_indent: usize,
+) -> Vec<Line<'static>> {
+    if keeps_line_structure(&line) {
+        return vec![truncate_line(line, width, false)];
+    }
+    wrap_line(line, width, continuation_indent)
+}
+
 /// Word-wrap one logical line to `width` columns, preserving each span's
 /// style across the break. Continuation rows use a hanging indent so message
 /// text stays aligned with the text following its `«`/`»` marker (and detail
 /// rows retain their body indent) instead of jumping to the far-left edge.
 /// `List` does not wrap on its own, so long lines would otherwise be clipped.
-pub(crate) fn wrap_line(
+fn wrap_line(
     line: Line<'static>,
     width: usize,
     continuation_indent: usize,
@@ -1686,9 +1690,9 @@ mod tests {
     }
 
     #[test]
-    fn conversation_messages_are_capped_at_120_columns() {
+    fn conversation_messages_use_the_full_pane_width() {
         let mut app = testing::app("s1");
-        let long_word = "x".repeat(MAX_CONVERSATION_WIDTH + 10);
+        let long_word = "x".repeat(130);
         app.push_event(AgentEvent::UserMessage {
             text: long_word.clone(),
         });
@@ -1699,10 +1703,49 @@ mod tests {
         for entry in &app.timeline.entries {
             assert_eq!(
                 entry_item(entry, entry.expanded, 200, 18, protocol, false).height(),
-                2,
-                "both human and agent messages should wrap at the conversation cap"
+                1,
+                "a 130-column message fits on one row of a 200-column pane"
             );
         }
+    }
+
+    #[test]
+    fn a_long_bullet_is_clipped_to_one_row_rather_than_wrapped() {
+        let mut app = testing::app("s1");
+        app.push_event(AgentEvent::AgentMessage {
+            text: format!("here:\n- {}", "word ".repeat(40)),
+        });
+        app.timeline.expand_all();
+
+        let protocol = app.selection.provider.protocol();
+        let entry = &app.timeline.entries[0];
+        // The summary row, the list's leading blank, and the single clipped
+        // item row: wrapping would have spread that 200-column bullet over
+        // half a dozen rows and buried the marker of whatever followed.
+        assert_eq!(
+            entry_item(entry, entry.expanded, 40, 18, protocol, false).height(),
+            3
+        );
+    }
+
+    #[test]
+    fn table_rows_keep_their_borders_intact_when_the_pane_is_narrow() {
+        let mut app = testing::app("s1");
+        app.push_event(AgentEvent::AgentMessage {
+            text: format!(
+                "here:\n\n| {0} | {0} |\n|---|---|\n| a | b |",
+                "h".repeat(30)
+            ),
+        });
+        app.timeline.expand_all();
+
+        let protocol = app.selection.provider.protocol();
+        let entry = &app.timeline.entries[0];
+        let item = entry_item(entry, entry.expanded, 30, 18, protocol, false);
+        let rows = format!("{item:?}");
+        // Every drawn row is clipped at the pane edge, so no continuation row
+        // starts mid-table with a stray border glyph out of column.
+        assert!(rows.contains('\u{2026}'), "{rows}");
     }
 
     /// Before anything is launched, the empty list must name the launch and

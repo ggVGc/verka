@@ -55,6 +55,43 @@ pub(crate) fn markdown_block_lines(
         .collect()
 }
 
+/// Whether a rendered Markdown line should keep its own line structure rather
+/// than be word-wrapped to the pane width.
+///
+/// Flowing prose reads better wrapped, but tables and list items carry their
+/// meaning in their column and marker alignment: wrapping a table row shears
+/// its borders apart, and wrapping a bullet buries the next marker mid-row.
+/// Those lines are clipped at the pane edge instead — the preview (`p`) shows
+/// them in full.
+pub(crate) fn keeps_line_structure(line: &Line<'_>) -> bool {
+    let text: String = line
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect();
+    let trimmed = text.trim_start();
+    is_table_row(trimmed) || is_list_item(trimmed)
+}
+
+/// Table rows and borders as `tui-markdown` draws them: box-drawing glyphs.
+fn is_table_row(trimmed: &str) -> bool {
+    trimmed.starts_with(['│', '┌', '├', '└', '┬', '┼', '┴', '─', '|'])
+}
+
+/// A bullet (as [`bulletize`] rewrites it, or a raw `-`/`*`/`+`) or an ordered
+/// marker such as `1.` / `2)`.
+fn is_list_item(trimmed: &str) -> bool {
+    if let Some(rest) = trimmed.strip_prefix(['\u{2022}', '-', '*', '+']) {
+        return rest.starts_with(' ');
+    }
+    let digits: String = trimmed.chars().take_while(char::is_ascii_digit).collect();
+    if digits.is_empty() {
+        return false;
+    }
+    let rest = &trimmed[digits.len()..];
+    matches!(rest.strip_prefix(['.', ')']), Some(after) if after.starts_with(' '))
+}
+
 fn bulletize(content: &str) -> Option<String> {
     let indent = content.strip_suffix("- ")?;
     indent
@@ -338,6 +375,22 @@ mod tests {
 
         let rendered: Vec<String> = lines.iter().map(rendered_line).collect();
         assert!(rendered.iter().any(|line| line == "fn f() {}"));
+    }
+
+    #[test]
+    fn tables_and_list_items_keep_their_line_structure_but_prose_does_not() {
+        let base = Style::default();
+        let table = markdown_block_lines("| A | B |\n|---|---|\n| 1 | 2 |", base, "  ");
+        assert!(table.iter().all(keeps_line_structure));
+
+        let list = markdown_block_lines("- one\n2. two", base, "  ");
+        assert!(list
+            .iter()
+            .filter(|line| !rendered_line(line).trim().is_empty())
+            .all(keeps_line_structure));
+
+        let prose = markdown_block_lines("a sentence - with a dash", base, "  ");
+        assert!(!prose.iter().any(keeps_line_structure));
     }
 
     #[test]

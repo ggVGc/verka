@@ -193,13 +193,7 @@ fn show_message(
 ) -> Result<()> {
     loop {
         terminal.draw(|frame| {
-            ui::render_picker(
-                frame,
-                sessions,
-                selected,
-                order,
-                ui::Preview::Ready(&[]),
-            );
+            ui::render_picker(frame, sessions, selected, order, ui::Preview::Ready(&[]));
             ui::render_message_popup(frame, title, message);
         })?;
         if let Event::Key(key) = event::read()? {
@@ -220,13 +214,7 @@ fn read_session_name(
     let mut value = initial.to_owned();
     loop {
         terminal.draw(|frame| {
-            ui::render_picker(
-                frame,
-                sessions,
-                selected,
-                order,
-                ui::Preview::Ready(&[]),
-            );
+            ui::render_picker(frame, sessions, selected, order, ui::Preview::Ready(&[]));
             ui::render_name_prompt(frame, &value);
         })?;
         let Event::Key(key) = event::read()? else {
