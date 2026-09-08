@@ -74,7 +74,10 @@ live interactions.
 Sending a message to a stopped or viewed Session automatically attempts native
 provider resume. `a` opens the live-interaction list; there, `w` switches
 current/all-Workspace scope, `j`/`k` selects, and `D` deletes a stopped
-interaction (the durable Session remains).
+interaction (the durable Session remains). The interaction under the cursor is
+loaded once the cursor rests on it, so the list can be crossed without waiting
+for every row on the way; the row being loaded says so, and any other key acts
+on it as soon as it arrives.
 
 ## Read the session
 

@@ -49,13 +49,26 @@ pub(crate) fn render(frame: &mut Frame, app: &App, area: Rect) {
         .title(format!(
             " {scope} · live interactions · j/k load · {jump}Enter close · S stop · D delete stopped · w scope · a close "
         ));
+    // The cursor and the interaction on screen part company while a move is
+    // settling or its load is running: the cursor is where the operator is,
+    // the marked row is what the panes below still show.
+    let cursor = app.interactions.cursor(&app.session_id);
+    let loading = app
+        .interactions
+        .pending(&app.session_id)
+        .map(|interaction| interaction.id.as_str());
     let items = rows
         .iter()
         .map(|row| match row {
             Row::Workspace(name) => workspace_heading(name),
             Row::Interaction(index) => {
                 let interaction = &app.interactions.items[*index];
-                item(interaction, interaction.id == app.session_id, item_width)
+                item(
+                    interaction,
+                    interaction.id == app.session_id,
+                    loading == Some(interaction.id.as_str()),
+                    item_width,
+                )
             }
         })
         .collect::<Vec<_>>();
@@ -66,7 +79,7 @@ pub(crate) fn render(frame: &mut Frame, app: &App, area: Rect) {
     );
     let mut state = ListState::default();
     state.select(rows.iter().position(
-        |row| matches!(row, Row::Interaction(index) if app.interactions.items[*index].id == app.session_id),
+        |row| matches!(row, Row::Interaction(index) if app.interactions.items[*index].id == cursor),
     ));
     frame.render_stateful_widget(list, area, &mut state);
 }
@@ -117,7 +130,15 @@ fn workspace_heading(name: &str) -> ListItem<'static> {
     )))
 }
 
-fn item(interaction: &InteractionSummary, selected: bool, width: u16) -> ListItem<'static> {
+/// One interaction's row. `current` is the interaction the panes below show,
+/// which carries the marker; `loading` is set on the row the cursor has come
+/// to but which has not replaced it yet.
+fn item(
+    interaction: &InteractionSummary,
+    current: bool,
+    loading: bool,
+    width: u16,
+) -> ListItem<'static> {
     let status = status(interaction);
     let color = status_color(&status);
     let name = interaction
@@ -131,10 +152,10 @@ fn item(interaction: &InteractionSummary, selected: bool, width: u16) -> ListIte
     } else {
         status.glyph().to_string()
     };
-    let main = Line::from(vec![
+    let mut main = vec![
         Span::styled(
-            if selected { "• " } else { "  " },
-            Style::default().fg(if selected {
+            if current { "• " } else { "  " },
+            Style::default().fg(if current {
                 palette::SELECTION_MARKER
             } else {
                 palette::INACTIVE
@@ -149,8 +170,17 @@ fn item(interaction: &InteractionSummary, selected: bool, width: u16) -> ListIte
             format!(" · {}", interaction.selection.provider.as_str()),
             Style::default().fg(palette::ACCENT),
         ),
-    ]);
-    let mut lines = vec![main];
+    ];
+    // Said on the row rather than left to the panes below, which go on showing
+    // the marked interaction until this one arrives: a screen that has not
+    // caught up with the cursor and one that has look nothing alike.
+    if loading {
+        main.push(Span::styled(
+            " · loading…",
+            Style::default().fg(palette::INACTIVE),
+        ));
+    }
+    let mut lines = vec![Line::from(main)];
     if let Some(text) = &interaction.last_message {
         let body = format!("    « {text}");
         let padding = (width as usize).saturating_sub(body.chars().count());
@@ -280,6 +310,42 @@ mod tests {
         });
 
         assert_eq!(phases, [0, 3], "{screen}");
+    }
+
+    /// While a move settles, the cursor and the interaction on screen are two
+    /// different rows, and the navigator has to say which is which: the panes
+    /// below still belong to the marked one.
+    #[test]
+    fn a_cursor_that_has_moved_off_the_current_interaction_says_it_is_loading() {
+        let mut app = testing::app("s-1");
+        app.workspace.id = Some("payments".into());
+        app.interactions.open(
+            vec![interaction("s-1", "first"), interaction("s-2", "second")],
+            vec![],
+        );
+        app.push_event(AgentEvent::AgentMessage {
+            text: "first's timeline".into(),
+        });
+
+        app.interactions.cursor_next("s-1", Some("payments"));
+
+        let screen = testing::screen(&app);
+        let (_, current) = screen.find("first · codex");
+        let (cursor_x, cursor) = screen.find("second · codex");
+        assert!(screen.row(cursor).contains("loading…"), "{}", screen.all());
+        assert!(!screen.row(current).contains("loading"), "{}", screen.all());
+        assert!(screen.row(current).contains('•'), "{}", screen.all());
+        // The cursor is highlighted where the marker is not, and the screen
+        // below is still the interaction the marker names.
+        assert_eq!(
+            screen.buffer().cell((cursor_x, cursor)).unwrap().style().bg,
+            Some(palette::SELECTION_BACKGROUND)
+        );
+        assert!(
+            screen.all().contains("first's timeline"),
+            "{}",
+            screen.all()
+        );
     }
 
     #[test]

@@ -272,9 +272,26 @@ fn interaction_navigator_passthrough(code: &KeyCode) -> bool {
     matches!(code, KeyCode::Char('i') | KeyCode::Char('S'))
 }
 
-/// Make `interaction` current immediately. Its complete state is loaded on the
-/// event-loop thread, then replaces the previous interaction's state in one
-/// step. There is no separate loader-owned target or pending-load state.
+/// Load the interaction the navigator's cursor has moved onto, if it is not
+/// the one already on screen. Called when the cursor settles, and ahead of any
+/// key that acts on the row under it, so an outstanding move never leaves a
+/// command addressing the interaction the operator has already moved off.
+fn load_cursored_interaction(
+    app: &mut App,
+    live: &mut Attachment,
+    client: &Client,
+    standing_launch: &LaunchPolicy,
+) {
+    let Some(interaction) = app.interactions.pending(&app.session_id).cloned() else {
+        return;
+    };
+    make_interaction_current(app, live, client, standing_launch, interaction);
+}
+
+/// Make `interaction` current. Its complete state is loaded on the event-loop
+/// thread, then replaces the previous interaction's state in one step. There
+/// is no separate loader-owned target: the cursor is the only pending state,
+/// and it rests here whether the load lands or fails.
 fn make_interaction_current(
     app: &mut App,
     live: &mut Attachment,
@@ -303,8 +320,13 @@ fn make_interaction_current(
             next.focus = Focus::List;
             *app = next;
             *live = next_live;
+            app.interactions.rest();
         }
         Err(error) => {
+            // The cursor comes home on a failed load too, so a server that
+            // cannot answer for one interaction is reported once rather than
+            // re-asked on every frame.
+            app.interactions.rest();
             app.push_log(LogEntry::error(format!(
                 "could not make interaction {id} current: {error:#}"
             )));
@@ -401,6 +423,13 @@ pub fn run(
             if let Ok(interactions) = client.list_interactions() {
                 app.interactions.refresh(interactions);
             }
+        }
+
+        // A cursor that has come to rest loads the interaction under it. Until
+        // then the navigator says that row is loading and the screen below is
+        // still the interaction it was.
+        if app.interactions.due(&app.session_id).is_some() {
+            load_cursored_interaction(app, live, client, standing_launch);
         }
 
         if let Attachment::Attached { .. } = live {
@@ -548,51 +577,46 @@ pub fn run(
         }
 
         // The embedded interaction list owns navigation while it is open.
-        // Moving its cursor makes that interaction current immediately. Enter
-        // only closes the navigator; there is no preview or deferred attach.
+        // Moving its cursor makes that interaction current once the cursor
+        // rests, so the list can be walked across faster than interactions can
+        // be loaded. Enter only closes the navigator; there is no preview.
         if app.interactions.open && app.focus == Focus::List {
+            let session_id = app.session_id.clone();
             match key.code {
-                KeyCode::Char('a') | KeyCode::Esc | KeyCode::Enter => {
-                    app.interactions.open = false;
-                    continue;
-                }
                 // In All scope the entries are grouped under Workspace
                 // headings, and ctrl-j/ctrl-k skip whole groups: one press per
-                // Workspace rather than one per interaction.
+                // Workspace rather than one per interaction. They move the
+                // cursor like j/k, so a skip across several groups costs no
+                // more loads than a step across one row.
                 KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    if let Some(interaction) = app
-                        .interactions
-                        .next_workspace(&app.session_id, app.workspace.id.as_deref())
-                    {
-                        make_interaction_current(app, live, client, standing_launch, interaction);
-                    }
+                    app.interactions
+                        .cursor_next_workspace(&session_id, app.workspace.id.as_deref());
                     continue;
                 }
                 KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    if let Some(interaction) = app
-                        .interactions
-                        .previous_workspace(&app.session_id, app.workspace.id.as_deref())
-                    {
-                        make_interaction_current(app, live, client, standing_launch, interaction);
-                    }
+                    app.interactions
+                        .cursor_previous_workspace(&session_id, app.workspace.id.as_deref());
                     continue;
                 }
                 KeyCode::Char('j') | KeyCode::Down => {
-                    if let Some(interaction) = app
-                        .interactions
-                        .next(&app.session_id, app.workspace.id.as_deref())
-                    {
-                        make_interaction_current(app, live, client, standing_launch, interaction);
-                    }
+                    app.interactions
+                        .cursor_next(&session_id, app.workspace.id.as_deref());
                     continue;
                 }
                 KeyCode::Char('k') | KeyCode::Up => {
-                    if let Some(interaction) = app
-                        .interactions
-                        .previous(&app.session_id, app.workspace.id.as_deref())
-                    {
-                        make_interaction_current(app, live, client, standing_launch, interaction);
-                    }
+                    app.interactions
+                        .cursor_previous(&session_id, app.workspace.id.as_deref());
+                    continue;
+                }
+                _ => {}
+            }
+            // Every other key acts on the row under the cursor, so a move
+            // still waiting out its settle is completed first rather than
+            // abandoned.
+            load_cursored_interaction(app, live, client, standing_launch);
+            match key.code {
+                KeyCode::Char('a') | KeyCode::Esc | KeyCode::Enter => {
+                    app.interactions.open = false;
                     continue;
                 }
                 KeyCode::Char('w') => {

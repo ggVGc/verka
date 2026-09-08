@@ -4,7 +4,15 @@
 //! Held apart from [`App`](crate::app::App) because none of it depends on the
 //! Interaction currently on screen. [`crate::ui::interactions`] renders it.
 
+use std::time::{Duration, Instant};
+
 use styra_server::{InteractionSummary, WorkspaceSummary};
+
+/// How long the cursor must rest on an entry before that Interaction is
+/// loaded, matching the Session and Workspace pickers' settle: short enough to
+/// feel immediate once the cursor stops, long enough that walking the list
+/// costs no loads at all.
+const LOAD_SETTLE: Duration = Duration::from_millis(120);
 
 /// The live interactions navigator embedded above the main event list.
 ///
@@ -17,6 +25,15 @@ pub struct LiveInteractions {
     pub only_current_workspace: bool,
     pub items: Vec<InteractionSummary>,
     pub workspaces: Vec<WorkspaceSummary>,
+    /// Where the cursor is while that is not the Interaction on screen.
+    /// `None` — the resting state — means the cursor is on the current
+    /// Interaction, so there is no move outstanding.
+    cursor: Option<String>,
+    /// Set while the cursor has moved but the Interaction under it has not
+    /// been loaded yet. Loading is a blocking round-trip for a whole screen,
+    /// so holding `j` must not queue one load per row it passes over; the load
+    /// waits for the cursor to settle.
+    settle_from: Option<Instant>,
 }
 
 impl LiveInteractions {
@@ -30,6 +47,15 @@ impl LiveInteractions {
     pub fn refresh(&mut self, mut items: Vec<InteractionSummary>) {
         sort_interactions(&mut items);
         self.items = items;
+        // An entry another client closed cannot be loaded, and a cursor left
+        // pointing at one would keep asking for it every frame.
+        if self
+            .cursor
+            .as_deref()
+            .is_some_and(|id| !self.items.iter().any(|interaction| interaction.id == id))
+        {
+            self.rest();
+        }
     }
 
     pub fn current(&self, current: &str) -> Option<&InteractionSummary> {
@@ -75,7 +101,87 @@ impl LiveInteractions {
         ordered
     }
 
-    pub fn next(&self, current: &str, workspace_id: Option<&str>) -> Option<InteractionSummary> {
+    /// The entry the cursor rests on. That is the Interaction on screen except
+    /// while a move is waiting to settle, or while its load is running.
+    pub fn cursor<'a>(&'a self, current: &'a str) -> &'a str {
+        self.cursor.as_deref().unwrap_or(current)
+    }
+
+    /// The entry under the cursor while it is not yet the one on screen: what
+    /// a settled cursor loads, and what the navigator marks as loading.
+    pub fn pending(&self, current: &str) -> Option<&InteractionSummary> {
+        let cursor = self.cursor.as_deref()?;
+        if cursor == current {
+            return None;
+        }
+        self.items
+            .iter()
+            .find(|interaction| interaction.id == cursor)
+    }
+
+    /// The Interaction a rested cursor is due to load, once the move it
+    /// followed has settled.
+    pub fn due(&self, current: &str) -> Option<&InteractionSummary> {
+        if self
+            .settle_from
+            .is_none_or(|since| since.elapsed() < LOAD_SETTLE)
+        {
+            return None;
+        }
+        self.pending(current)
+    }
+
+    /// Put the cursor back on the Interaction the screen shows. Called once a
+    /// load lands — or fails — so no cursor can ask for the same entry twice.
+    pub fn rest(&mut self) {
+        self.cursor = None;
+        self.settle_from = None;
+    }
+
+    pub fn cursor_next(&mut self, current: &str, workspace_id: Option<&str>) {
+        let from = self.cursor(current).to_owned();
+        if let Some(next) = self.next(&from, workspace_id) {
+            self.move_cursor_to(next.id, current);
+        }
+    }
+
+    pub fn cursor_previous(&mut self, current: &str, workspace_id: Option<&str>) {
+        let from = self.cursor(current).to_owned();
+        if let Some(previous) = self.previous(&from, workspace_id) {
+            self.move_cursor_to(previous.id, current);
+        }
+    }
+
+    /// The ctrl-j/ctrl-k group skips move the cursor exactly as j/k do, so
+    /// crossing several Workspaces costs the one load the cursor comes to rest
+    /// on rather than one per group passed through.
+    pub fn cursor_next_workspace(&mut self, current: &str, workspace_id: Option<&str>) {
+        let from = self.cursor(current).to_owned();
+        if let Some(next) = self.next_workspace(&from, workspace_id) {
+            self.move_cursor_to(next.id, current);
+        }
+    }
+
+    pub fn cursor_previous_workspace(&mut self, current: &str, workspace_id: Option<&str>) {
+        let from = self.cursor(current).to_owned();
+        if let Some(previous) = self.previous_workspace(&from, workspace_id) {
+            self.move_cursor_to(previous.id, current);
+        }
+    }
+
+    /// A cursor that lands back on the Interaction already on screen — by
+    /// walking off the end of the list, or straight back to where it started —
+    /// has nothing to load, so it cancels the move rather than timing one out.
+    fn move_cursor_to(&mut self, id: String, current: &str) {
+        if id == current {
+            self.rest();
+            return;
+        }
+        self.cursor = Some(id);
+        self.settle_from = Some(Instant::now());
+    }
+
+    fn next(&self, current: &str, workspace_id: Option<&str>) -> Option<InteractionSummary> {
         let visible = self.display_indices(workspace_id);
         let index = visible
             .iter()
@@ -88,11 +194,7 @@ impl LiveInteractions {
             .cloned()
     }
 
-    pub fn previous(
-        &self,
-        current: &str,
-        workspace_id: Option<&str>,
-    ) -> Option<InteractionSummary> {
+    fn previous(&self, current: &str, workspace_id: Option<&str>) -> Option<InteractionSummary> {
         let visible = self.display_indices(workspace_id);
         let position = visible
             .iter()
@@ -108,7 +210,7 @@ impl LiveInteractions {
     /// ctrl-j jump. Only meaningful in All scope, where the display is grouped
     /// under Workspace headings; in Workspace scope there is a single group and
     /// no jump to make.
-    pub fn next_workspace(
+    fn next_workspace(
         &self,
         current: &str,
         workspace_id: Option<&str>,
@@ -125,7 +227,7 @@ impl LiveInteractions {
     /// it lands on that group's own first entry, so ctrl-k always walks up to a
     /// heading before leaving it; from a group's first entry it moves to the
     /// group above.
-    pub fn previous_workspace(
+    fn previous_workspace(
         &self,
         current: &str,
         workspace_id: Option<&str>,
@@ -191,6 +293,9 @@ impl LiveInteractions {
             .iter()
             .position(|interaction| interaction.id == id)?;
         self.items.remove(removed);
+        // Whatever the caller does with the entry chosen here, the cursor is
+        // not left on the one that no longer exists.
+        self.rest();
         if self.items.is_empty() {
             return None;
         }
@@ -318,6 +423,83 @@ mod tests {
             live.current("two").unwrap().last_message.as_deref(),
             Some("new response")
         );
+    }
+
+    /// Loading an Interaction replaces the whole screen, so a cursor crossing
+    /// the list must not ask for one row's load per row it passes over.
+    #[test]
+    fn a_moving_cursor_defers_its_load_until_it_comes_to_rest() {
+        let mut live = LiveInteractions::default();
+        live.open(
+            vec![
+                interaction("one", true, InteractionActivity::Pending),
+                interaction("two", true, InteractionActivity::Pending),
+                interaction("three", true, InteractionActivity::Pending),
+            ],
+            vec![],
+        );
+
+        live.cursor_next("one", Some("workspace"));
+        live.cursor_next("one", Some("workspace"));
+
+        // Two rows crossed, and neither of the interactions passed over — nor
+        // the one now under the cursor — has been asked for yet.
+        assert_eq!(live.cursor("one"), "three");
+        assert_eq!(
+            live.pending("one")
+                .map(|interaction| interaction.id.as_str()),
+            Some("three")
+        );
+        assert!(live.due("one").is_none());
+
+        std::thread::sleep(LOAD_SETTLE + Duration::from_millis(20));
+        assert_eq!(
+            live.due("one").map(|interaction| interaction.id.as_str()),
+            Some("three")
+        );
+
+        // Once the load has landed the cursor is home again, so the settled
+        // move is not made a second time.
+        live.rest();
+        assert_eq!(live.cursor("three"), "three");
+        assert!(live.due("three").is_none());
+    }
+
+    #[test]
+    fn a_cursor_walked_back_onto_the_current_interaction_loads_nothing() {
+        let mut live = LiveInteractions::default();
+        live.open(
+            vec![
+                interaction("one", true, InteractionActivity::Pending),
+                interaction("two", true, InteractionActivity::Pending),
+            ],
+            vec![],
+        );
+
+        live.cursor_next("one", Some("workspace"));
+        live.cursor_previous("one", Some("workspace"));
+
+        assert_eq!(live.cursor("one"), "one");
+        assert!(live.pending("one").is_none());
+        assert!(live.due("one").is_none());
+    }
+
+    #[test]
+    fn a_cursored_interaction_that_leaves_the_list_releases_the_cursor() {
+        let mut live = LiveInteractions::default();
+        live.open(
+            vec![
+                interaction("one", true, InteractionActivity::Pending),
+                interaction("two", true, InteractionActivity::Pending),
+            ],
+            vec![],
+        );
+        live.cursor_next("one", Some("workspace"));
+
+        live.refresh(vec![interaction("one", true, InteractionActivity::Pending)]);
+
+        assert_eq!(live.cursor("one"), "one");
+        assert!(live.pending("one").is_none());
     }
 
     #[test]
@@ -450,6 +632,39 @@ mod tests {
             "pending"
         );
         assert!(live.previous_workspace("pending", workspace).is_none());
+    }
+
+    /// The group jump crosses more of the list per press than j/k, so it has
+    /// all the more reason to load only where the cursor stops.
+    #[test]
+    fn workspace_jumps_defer_their_load_like_the_row_moves_do() {
+        let mut other = interaction("other-pending", true, InteractionActivity::Pending);
+        other.workspace_id = "other-workspace".into();
+        let mut third = interaction("third", true, InteractionActivity::Pending);
+        third.workspace_id = "third-workspace".into();
+        let mut live = LiveInteractions::default();
+        live.open(
+            vec![
+                interaction("pending", true, InteractionActivity::Pending),
+                other,
+                third,
+            ],
+            vec![],
+        );
+        let workspace = Some("workspace");
+
+        live.cursor_next_workspace("pending", workspace);
+        live.cursor_next_workspace("pending", workspace);
+
+        assert_eq!(live.cursor("pending"), "third");
+        assert!(live.due("pending").is_none());
+
+        // Back the way it came, onto the interaction already on screen: two
+        // groups crossed in each direction, and nothing to load at the end.
+        live.cursor_previous_workspace("pending", workspace);
+        live.cursor_previous_workspace("pending", workspace);
+        assert_eq!(live.cursor("pending"), "pending");
+        assert!(live.pending("pending").is_none());
     }
 
     #[test]
