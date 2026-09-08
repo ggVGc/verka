@@ -205,34 +205,22 @@ the *base*, and it is deliberately a different concept from a mount: a mount
 grants access to the operator's own data and is a choice, while the base is
 what any program needs in order to run at all and is not.
 
-The base is a list of named **capabilities** rather than one list of paths,
-because the two questions differ in kind. "This sandbox must be able to resolve
-host names" is portable; `/run/systemd/resolve` is one machine's answer to it.
-Separating them is what lets a single set of built-ins work across
-distributions, and lets an operator state the difference where it does not:
+The base is a list of named **capabilities** rather than one list of paths.
+Driva owns the fixed set (`core`, `identity`, `certificates`, `dns`, and
+`timezone`) and the paths, environment, and probes that make up each one:
 
-- a capability names host paths, each `optional` or not, in one of four modes
-  (`auto`, `bind`, `symlink`, `follow`) that say what to do about a host
-  symlink;
+- a capability names host paths, each required or optional;
 - it may forward named host environment variables — a proxy, an overridden
   certificate bundle — which is the only way a value a program cannot find on
   disk crosses the boundary;
 - it may declare a **probe**, a closed-set check (`resolve`, `connect`, `run`)
   that answers whether it actually works here;
-- it may `suggest` paths worth reporting when the probe fails.
-
-The built-ins (`core`, `identity`, `certificates`, `dns`, `timezone`) are
-embedded TOML deserialized through the same schema as a project's own, and a
-project definition of a name replaces the built-in. `driva doctor` builds a
-sandbox from each included capability and probes it, so a host whose layout the
-built-ins do not describe produces a precise report and a configuration
-suggestion rather than a failure inside whatever was launched.
 
 Three properties hold this together, and they are the reason the mechanism is
 worth its size:
 
-- **Nothing is implied.** A capability is a declaration in configuration; a
-  suggestion is printed, never applied. Discovery reports, it does not grant.
+- **The vocabulary is closed.** Configuration and CLI arguments only enable
+  or disable capabilities compiled into Driva.
 - **A gap is loud where it is cheap.** A path that is not `optional` and not on
   the host fails resolution, naming the capability. Probes catch what a path
   list cannot state.
@@ -240,9 +228,8 @@ worth its size:
   adapter lays down, so a host that displays its sandboxes (Styra does) cannot
   drift from what they hold.
 
-A template may `capability = [...]` to state what its command requires, but
-never defines one: what a capability means on a host is configuration's
-business, so selecting a template cannot widen the root by itself.
+A template may `capability = [...]` to enable the static capabilities its
+command requires.
 
 Tests for Driva's policy use a fake `Isolation` implementation. Each production
 backend also has focused integration tests for its request translation, I/O,

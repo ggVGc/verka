@@ -423,9 +423,8 @@ fn real_main() -> Result<()> {
 ///
 /// Configuration states the list, a template adds what its command requires,
 /// and the command line has the last word — the same precedence the mount and
-/// network policy already follow. A template may ask for a capability but
-/// never defines one: what a capability *means* on this host is the
-/// configuration's business, so a template cannot quietly widen the root.
+/// network policy already follow. Every name refers to a capability built
+/// into Driva.
 fn effective_base(
     config: &Config,
     template: Option<&driva::TemplateConfig>,
@@ -460,7 +459,8 @@ fn effective_base(
 fn capabilities_command(config: &Config, name: Option<&str>) -> Result<()> {
     let base = config.base();
     let Some(name) = name else {
-        for (name, capability) in &base.definitions {
+        for capability in driva::capabilities() {
+            let name = capability.name;
             let position = base.include.iter().position(|included| included == name);
             let marker = match position {
                 Some(index) => format!("{}", index + 1),
@@ -471,7 +471,7 @@ fn capabilities_command(config: &Config, name: Option<&str>) -> Result<()> {
         return Ok(());
     };
 
-    let capability = base.definition(name)?;
+    let capability = driva::capability(name)?;
     println!("{name}\t{}", capability.description);
     println!(
         "included: {}",
@@ -485,9 +485,6 @@ fn capabilities_command(config: &Config, name: Option<&str>) -> Result<()> {
         let mut notes = Vec::new();
         if entry.optional {
             notes.push("optional".to_owned());
-        }
-        if entry.mode != driva::EntryMode::Auto {
-            notes.push(format!("{:?}", entry.mode).to_lowercase());
         }
         if !entry.at.exists() {
             notes.push("not on this host".to_owned());
@@ -503,7 +500,7 @@ fn capabilities_command(config: &Config, name: Option<&str>) -> Result<()> {
     }
     if !capability.environment.is_empty() {
         println!("\nforwarded when the host sets them:");
-        for name in &capability.environment {
+        for name in capability.environment {
             let state = match std::env::var_os(name) {
                 Some(_) => "set here",
                 None => "unset",
@@ -538,7 +535,7 @@ fn doctor_command(config: &Config, policy: &PolicyArgs) -> Result<()> {
     let executable = &config.isolation.bwrap.executable;
     let mut failed = false;
     for capability in &base.capabilities {
-        let outcome = driva::probe::probe_capability(executable, &declared, capability)?;
+        let outcome = driva::probe::probe_capability(executable, capability)?;
         println!(
             "{:<14} {:<9} {} path(s){}",
             capability.name,
@@ -561,28 +558,6 @@ fn doctor_command(config: &Config, policy: &PolicyArgs) -> Result<()> {
             driva::probe::ProbeOutcome::Failed(reason) => {
                 failed = true;
                 println!("               probe: {reason}");
-                let suggestions = driva::probe::suggestions(&base, capability);
-                if !suggestions.is_empty() {
-                    println!(
-                        "               this host also has {}, which no capability carries.",
-                        suggestions
-                            .iter()
-                            .map(|path| path.display().to_string())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    );
-                    println!(
-                        "               add it with:\n\
-                         \x20                [capability.{}]\n\
-                         \x20                path = [{}]",
-                        capability.name,
-                        suggestions
-                            .iter()
-                            .map(|path| format!("{{ at = \"{}\" }}", path.display()))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    );
-                }
             }
             driva::probe::ProbeOutcome::Unprobed(reason) => {
                 println!("               probe: not made ({reason})")

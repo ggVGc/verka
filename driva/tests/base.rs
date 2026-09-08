@@ -90,54 +90,40 @@ fn a_capability_can_be_dropped_from_one_invocation() {
     assert!(without.contains("\"--ro-bind\" \"/usr\" \"/usr\""));
 }
 
-/// A project states which capabilities its sandboxes are built from, and what
-/// one means on this host when the built-in definition is wrong for it.
+/// A project chooses from Driva's fixed capabilities.
 #[test]
-fn a_project_replaces_the_list_and_a_definition() {
+fn a_project_selects_capabilities() {
     let project = Project::new(
         "configured",
         r#"
 [base]
-include = ["core", "site"]
-
-[capability.site]
-description = "This site's own additions"
-path = [{ at = "/etc/hosts" }, { at = "/nonexistent/site", optional = true }]
+include = ["core", "dns"]
 "#,
     );
     let invocation = project.dry_run(&[]);
 
     assert!(invocation.contains("\"--ro-bind\" \"/usr\" \"/usr\""));
-    assert!(invocation.contains("\"/etc/hosts\""), "{invocation}");
+    assert!(invocation.contains("\"/etc/resolv.conf\""), "{invocation}");
     // `identity` and `timezone` are not in the project's list.
     assert!(!invocation.contains("\"/etc/localtime\""), "{invocation}");
-    assert!(
-        !invocation.contains("\"/nonexistent/site\""),
-        "{invocation}"
-    );
 }
 
-/// A path a capability requires and this host does not have fails the launch,
-/// naming the capability. A sandbox missing part of its floor is the failure
-/// this replaces — one that would otherwise surface inside whatever ran.
+/// Capabilities are not configuration objects; only the static names may be
+/// selected under `[base]`.
 #[test]
-fn a_missing_required_path_fails_the_launch_by_name() {
+fn capability_definitions_are_rejected() {
     let project = Project::new(
-        "missing",
+        "definition",
         r#"
-[base]
-include = ["core", "site"]
-
 [capability.site]
-path = [{ at = "/nonexistent/site" }]
+path = [{ at = "/etc/hosts" }]
 "#,
     );
-    let output = project.run(&["run", "--dry-run", "--", "/bin/sh", "-c", "true"]);
+    let output = project.run(&["capabilities"]);
     let message = String::from_utf8_lossy(&output.stderr);
 
     assert!(!output.status.success());
-    assert!(message.contains("site"), "{message}");
-    assert!(message.contains("/nonexistent/site"), "{message}");
+    assert!(message.contains("unknown field `capability`"), "{message}");
 }
 
 /// A capability nobody defined is a typo in policy, and the error says which
@@ -171,11 +157,7 @@ fn a_capability_forwards_named_host_variables() {
         "environment",
         r#"
 [base]
-include = ["core", "site"]
-
-[capability.site]
-path = [{ at = "/etc/hosts" }]
-environment = ["DRIVA_TEST_PROXY"]
+include = ["core", "certificates"]
 "#,
     );
     let forwarded = |arguments: &[&str], value: &str| {
@@ -184,7 +166,7 @@ environment = ["DRIVA_TEST_PROXY"]
         all.extend_from_slice(&["--", "/bin/sh", "-c", "true"]);
         let output = Command::new(env!("CARGO_BIN_EXE_driva"))
             .current_dir(&project.0)
-            .env("DRIVA_TEST_PROXY", value)
+            .env("HTTPS_PROXY", value)
             .args(&all)
             .output()
             .expect("failed to execute the driva binary");
@@ -198,18 +180,18 @@ environment = ["DRIVA_TEST_PROXY"]
 
     let invocation = forwarded(&[], "http://proxy.invalid:3128");
     assert!(
-        invocation.contains("\"--setenv\" \"DRIVA_TEST_PROXY\" \"http://proxy.invalid:3128\""),
+        invocation.contains("\"--setenv\" \"HTTPS_PROXY\" \"http://proxy.invalid:3128\""),
         "{invocation}"
     );
 
     // The base is the floor for the environment the way its paths are for the
     // filesystem: what the invocation names is what the command sees.
     let overridden = forwarded(
-        &["--env", "DRIVA_TEST_PROXY=http://stated.invalid:3128"],
+        &["--env", "HTTPS_PROXY=http://stated.invalid:3128"],
         "http://proxy.invalid:3128",
     );
     assert!(
-        overridden.contains("\"--setenv\" \"DRIVA_TEST_PROXY\" \"http://stated.invalid:3128\""),
+        overridden.contains("\"--setenv\" \"HTTPS_PROXY\" \"http://stated.invalid:3128\""),
         "{overridden}"
     );
     assert!(

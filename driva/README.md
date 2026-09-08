@@ -140,10 +140,9 @@ conflicting grants; `execute` validates before dispatching to a backend.
 
 Bubblewrap is the default for lightweight Linux execution. Its
 configuration-free mode builds an otherwise private root from the default base
-capabilities, which `[base]` and `[capability.NAME]` in `driva.toml` replace or
-extend when a host keeps something elsewhere (see `docs/cli.md`). A prepared
-root filesystem can be selected when commands need a different userspace, and
-brings its own system in place of a base:
+capabilities. `[base].include` selects from that fixed set (see `docs/cli.md`).
+A prepared root filesystem can be selected when commands need a different
+userspace, and brings its own system in place of a base:
 
 ```toml
 [isolation]

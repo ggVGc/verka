@@ -190,10 +190,10 @@ List them, and see which ones the effective base includes and in what order:
 
 ```console
 $ driva capabilities
-3	certificates	Verify a TLS certificate, and reach a network through a proxy
-1	core	Run a program at all: the host's executables, libraries, and loader
-4	dns	Turn a host name into an address, for a sandbox permitted a network
+1	core	Run a program: the host's executables, libraries, and loader
 2	identity	Name the user and group a program runs as
+3	certificates	Verify TLS certificates and reach a network through a proxy
+4	dns	Turn a host name into an address when networking is permitted
 5	timezone	Report local time as the host does
 ```
 
@@ -205,7 +205,7 @@ timezone	Report local time as the host does
 included: yes, laid down 5 of 5
 
   /etc/localtime  [optional]
-      The host's own time zone, as the C library reads it
+      The host's time zone as the C library reads it
 
 forwarded when the host sets them:
   TZ  [unset]
@@ -221,32 +221,17 @@ thing, so the answer travels with the declaration.
 
 `--capability NAME` adds one to an invocation, `--no-capability NAME` leaves
 one out, and `--no-base` builds a root holding only what is mounted into it. A
-project states the standing list in `driva.toml`, and defines what a capability
-means on this host when the built-in definition is wrong for it:
+project states the standing list in `driva.toml`:
 
 ```toml
 [base]
 include = ["core", "identity", "certificates", "dns"]
-
-[capability.dns]
-description = "Turn a host name into an address"
-path = [
-  # `auto` (the default): a link out of the base is followed rather than
-  # reproduced as a link to nothing.
-  { at = "/etc/resolv.conf", doc = "The nameservers a DNS lookup uses" },
-  { at = "/etc/nsswitch.conf", optional = true, doc = "Which sources answer a host name" },
-  { at = "/run/my-resolver", optional = true, doc = "This site's resolver socket" },
-]
-probe = { resolve = "one.one.one.one" }
 ```
 
-A path that is not `optional` and not on the host fails the launch, naming the
-capability, rather than producing a sandbox quietly missing part of its floor.
-Each entry may set `mode` to `auto` (the default: recreate a host symlink while
-it still lands inside the base, follow it when it would not), `bind`, `symlink`,
-or `follow`, and `doc` to say in one line what needs it. A capability may also
-name host environment variables to forward when they are set — a proxy, an
-overridden certificate bundle — which a template or `--env` still overrides.
+Capabilities are part of Driva, not configuration: projects cannot define new
+ones or change their paths. A required path missing from the host fails the
+launch. Capability environment variables are forwarded when set; a template
+or `--env` still overrides them.
 
 Whether the result works on *this* host is a question only the host can answer,
 so `driva doctor` builds a sandbox from each capability and uses it:
@@ -260,15 +245,9 @@ dns            FAILED    2 path(s)
                /etc/resolv.conf
                /etc/nsswitch.conf
                probe: resolving one.one.one.one: failed to lookup address information
-               this host also has /run/systemd/resolve, which no capability carries.
-               add it with:
-                 [capability.dns]
-                 path = [{ at = "/run/systemd/resolve" }]
 ```
 
-The exit status is non-zero when a probe fails, so it doubles as a check. A
-suggestion is only ever printed: what to do about it is configuration the
-operator writes, never a path Driva adds to a sandbox by itself.
+The exit status is non-zero when a probe fails, so it doubles as a check.
 
 ### Execution templates
 

@@ -14,7 +14,7 @@
 //! the [`PROBE_ENV`] sentinel, so they test the sandbox's own resolver and
 //! routing rather than the host's, and need nothing installed to do it.
 
-use crate::base::{Base, BaseConfig, Probe, ResolvedCapability};
+use crate::base::{BaseConfig, Probe, ResolvedCapability};
 use crate::{
     execute, BwrapIsolation, ExecutionIo, ExecutionRequest, Mount, MountAccess, WritableMountMode,
 };
@@ -101,7 +101,6 @@ impl ProbeOutcome {
 /// other one happened to bring along.
 pub fn probe_capability(
     executable: &std::path::Path,
-    config: &BaseConfig,
     capability: &ResolvedCapability,
 ) -> Result<ProbeOutcome> {
     let Some(probe) = &capability.probe else {
@@ -114,10 +113,7 @@ pub fn probe_capability(
     let backend = BwrapIsolation {
         executable: executable.to_path_buf(),
         rootfs: None,
-        base: BaseConfig {
-            include,
-            definitions: config.definitions.clone(),
-        },
+        base: BaseConfig { include },
     };
     let (command, mounts) = probe_command(probe)?;
     let request = ExecutionRequest {
@@ -223,25 +219,6 @@ fn read_back(mut file: File) -> String {
     }
 }
 
-/// Host paths a failed capability suggests looking at, filtered to the ones
-/// this machine actually has and does not already carry.
-///
-/// Discovery only ever reports: what to do about it is configuration the
-/// operator writes, never a path Driva adds to a sandbox by itself.
-pub fn suggestions(base: &Base, capability: &ResolvedCapability) -> Vec<PathBuf> {
-    capability
-        .suggest
-        .iter()
-        .filter(|path| path.exists())
-        .filter(|path| {
-            !base
-                .entries()
-                .any(|entry| path.starts_with(entry.path()) || entry.path().starts_with(path))
-        })
-        .cloned()
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -272,30 +249,6 @@ mod tests {
             probe_environment(&Probe::Resolve("example.com".into()))
                 .get(&OsString::from(PROBE_ENV)),
             Some(&OsString::from("resolve:example.com"))
-        );
-    }
-
-    /// Only paths this host has, and does not already carry, are worth
-    /// reporting: a suggestion is something an operator can act on.
-    #[test]
-    fn suggestions_name_only_what_is_here_and_missing() {
-        let capability = ResolvedCapability {
-            name: "dns".into(),
-            description: String::new(),
-            entries: Vec::new(),
-            environment: Vec::new(),
-            probe: None,
-            suggest: vec![
-                PathBuf::from("/usr"),
-                PathBuf::from("/nonexistent/driva/resolver"),
-            ],
-        };
-        let base = crate::base::resolve_base(&BaseConfig::default()).unwrap();
-        assert!(suggestions(&base, &capability).is_empty());
-        let empty = Base::default();
-        assert_eq!(
-            suggestions(&empty, &capability),
-            vec![PathBuf::from("/usr")]
         );
     }
 }

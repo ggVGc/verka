@@ -98,10 +98,7 @@ pub struct ResolvedTemplate {
     pub mounts: Vec<Mount>,
     pub environment: BTreeMap<OsString, OsString>,
     pub network: bool,
-    /// Base capabilities this template's command requires. A template states
-    /// what it needs; only the Workspace's configuration says what that means
-    /// on this host, so selecting one can add a capability but never define a
-    /// new host path by itself.
+    /// Static Driva capabilities this template's command requires.
     pub capabilities: Vec<String>,
 }
 
@@ -1309,7 +1306,7 @@ mod tests {
             writable: false,
         }];
 
-        let options = DrivaOptions::capture(&spec, "bwrap");
+        let options = DrivaOptions::capture(&spec, "bwrap").unwrap();
         let at_workspace: Vec<_> = options
             .mounts
             .iter()
@@ -1345,7 +1342,7 @@ mod tests {
             writable: true,
         }];
 
-        let options = DrivaOptions::capture(&spec, "bwrap");
+        let options = DrivaOptions::capture(&spec, "bwrap").unwrap();
         assert_eq!(
             options
                 .mounts
@@ -1369,7 +1366,7 @@ mod tests {
             writable: false,
         }];
 
-        let options = DrivaOptions::capture(&spec, "bwrap");
+        let options = DrivaOptions::capture(&spec, "bwrap").unwrap();
         assert_eq!(
             options
                 .mounts

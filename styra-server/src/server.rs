@@ -1806,12 +1806,8 @@ fn resolve_launch_mounts(mounts: &[LaunchMount]) -> Result<Vec<MountSpec>> {
 
 /// The base system a launch in this Workspace runs on.
 ///
-/// The Workspace's own `driva.toml` states which capabilities its sandboxes
-/// are built from and, where the built-in definition is wrong for this host,
-/// what they mean here. A selected template adds the capabilities its command
-/// requires — an agent that talks to a service asks for `dns` — and can only
-/// ask: what a capability means stays configuration's business, so choosing a
-/// template can never quietly widen the private root.
+/// The Workspace's `driva.toml` enables static Driva capabilities. A selected
+/// template adds the capabilities its command requires.
 fn launch_base(workspace: &Path, template: Option<&ResolvedTemplate>) -> Result<driva::BaseConfig> {
     let mut base = workspace_driva_config(workspace)?.base();
     for name in template.iter().flat_map(|value| value.capabilities.iter()) {
