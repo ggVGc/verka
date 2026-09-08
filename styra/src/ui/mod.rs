@@ -40,7 +40,7 @@ use input::render_input;
 use insert::render_insert;
 use launcher::render_launcher;
 use list::render_list;
-pub(crate) use list::{summary_line, suspicious_shell_success, wrap_or_clip};
+pub(crate) use list::{summary_line, suspicious_shell_success, wrap_rendered};
 use log::render_log;
 use messages::{message_area_height, render_messages};
 pub(crate) use picker::short_id;

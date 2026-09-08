@@ -4,7 +4,7 @@
 
 use super::code::code_block_lines;
 use super::{
-    message_text_color, palette, summary_line, suspicious_shell_success, wrap_or_clip,
+    message_text_color, palette, summary_line, suspicious_shell_success, wrap_rendered,
     DETAIL_INDENT,
 };
 use crate::app::App;
@@ -94,7 +94,7 @@ fn wrap_preview_lines(
             } else {
                 DETAIL_INDENT.len()
             };
-            wrap_or_clip(line, width, continuation_indent)
+            wrap_rendered(line, width, continuation_indent)
         })
         .collect()
 }

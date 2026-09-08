@@ -55,41 +55,56 @@ pub(crate) fn markdown_block_lines(
         .collect()
 }
 
-/// Whether a rendered Markdown line should keep its own line structure rather
-/// than be word-wrapped to the pane width.
+/// The column a rendered Markdown line's continuation rows should be indented
+/// to when it has to wrap.
 ///
-/// Flowing prose reads better wrapped, but tables and list items carry their
-/// meaning in their column and marker alignment: wrapping a table row shears
-/// its borders apart, and wrapping a bullet buries the next marker mid-row.
-/// Those lines are clipped at the pane edge instead — the preview (`p`) shows
-/// them in full.
-pub(crate) fn keeps_line_structure(line: &Line<'_>) -> bool {
+/// Everything wraps at the pane edge — nothing is worth hiding off-screen —
+/// but a line whose structure carries meaning should not lose it in the wrap.
+/// A list item's continuation is aligned under its own text, so the marker
+/// column stays free and the next bullet still reads as a bullet; a table row
+/// is aligned under its left border. Flowing prose has no such column and
+/// falls back to the caller's own indent.
+pub(crate) fn structural_indent(line: &Line<'_>) -> Option<usize> {
     let text: String = line
         .spans
         .iter()
         .map(|span| span.content.as_ref())
         .collect();
     let trimmed = text.trim_start();
-    is_table_row(trimmed) || is_list_item(trimmed)
+    let leading = text.chars().count() - trimmed.chars().count();
+    if is_table_row(trimmed) {
+        return Some(leading);
+    }
+    list_marker_width(trimmed).map(|marker| leading + marker)
 }
 
 /// Table rows and borders as `tui-markdown` draws them: box-drawing glyphs.
 fn is_table_row(trimmed: &str) -> bool {
-    trimmed.starts_with(['│', '┌', '├', '└', '┬', '┼', '┴', '─', '|'])
+    trimmed.starts_with([
+        '\u{2502}', '\u{250c}', '\u{251c}', '\u{2514}', '\u{252c}', '\u{253c}', '\u{2534}',
+        '\u{2500}', '|',
+    ])
 }
 
-/// A bullet (as [`bulletize`] rewrites it, or a raw `-`/`*`/`+`) or an ordered
-/// marker such as `1.` / `2)`.
-fn is_list_item(trimmed: &str) -> bool {
-    if let Some(rest) = trimmed.strip_prefix(['\u{2022}', '-', '*', '+']) {
-        return rest.starts_with(' ');
+/// The width of a leading list marker — a bullet (as [`bulletize`] rewrites
+/// it, or a raw `-`/`*`/`+`) or an ordered marker such as `1.` / `2)` —
+/// including the space that follows it.
+fn list_marker_width(trimmed: &str) -> Option<usize> {
+    let mut chars = trimmed.chars();
+    let first = chars.next()?;
+    if matches!(first, '\u{2022}' | '-' | '*' | '+') {
+        // Columns, not bytes: the bullet glyph is one column wide.
+        return (chars.next() == Some(' ')).then_some(2);
     }
-    let digits: String = trimmed.chars().take_while(char::is_ascii_digit).collect();
-    if digits.is_empty() {
-        return false;
+    let digits = trimmed.chars().take_while(char::is_ascii_digit).count();
+    if digits == 0 {
+        return None;
     }
-    let rest = &trimmed[digits.len()..];
-    matches!(rest.strip_prefix(['.', ')']), Some(after) if after.starts_with(' '))
+    let rest = &trimmed[digits..];
+    match rest.strip_prefix(['.', ')']) {
+        Some(after) if after.starts_with(' ') => Some(digits + 2),
+        _ => None,
+    }
 }
 
 fn bulletize(content: &str) -> Option<String> {
@@ -378,19 +393,23 @@ mod tests {
     }
 
     #[test]
-    fn tables_and_list_items_keep_their_line_structure_but_prose_does_not() {
+    fn tables_and_list_items_get_a_structural_indent_but_prose_does_not() {
         let base = Style::default();
         let table = markdown_block_lines("| A | B |\n|---|---|\n| 1 | 2 |", base, "  ");
-        assert!(table.iter().all(keeps_line_structure));
+        // Under the row's left border, which sits just past the indent.
+        assert!(table.iter().all(|line| structural_indent(line) == Some(2)));
 
         let list = markdown_block_lines("- one\n2. two", base, "  ");
-        assert!(list
+        let indents: Vec<Option<usize>> = list
             .iter()
             .filter(|line| !rendered_line(line).trim().is_empty())
-            .all(keeps_line_structure));
+            .map(structural_indent)
+            .collect();
+        // Two indent columns plus the marker and its space: "• " and "2. ".
+        assert_eq!(indents, vec![Some(4), Some(5)]);
 
         let prose = markdown_block_lines("a sentence - with a dash", base, "  ");
-        assert!(!prose.iter().any(keeps_line_structure));
+        assert!(prose.iter().all(|line| structural_indent(line).is_none()));
     }
 
     #[test]

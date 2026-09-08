@@ -2,7 +2,7 @@
 //! expanded, plus the empty-list start screen and the trailing status tail.
 
 use super::code::{code_block_lines, is_error_diagnostic};
-use super::markdown::{keeps_line_structure, markdown_block_lines};
+use super::markdown::{markdown_block_lines, structural_indent};
 use super::{
     conversation_only_title, format_duration, message_text_color, palette, render_placeholder,
     render_preview, tag_color, view_block, DETAIL_INDENT, MAX_DETAIL_LINES,
@@ -420,7 +420,7 @@ fn entry_item_with_max_rows(
             } else {
                 DETAIL_INDENT.len()
             };
-            wrap_or_clip(line, width, continuation_indent)
+            wrap_rendered(line, width, continuation_indent)
         })
         .collect();
     // The cap above bounds logical detail lines, which say nothing about how
@@ -537,18 +537,17 @@ fn truncate_line(line: Line<'static>, width: usize, has_marker: bool) -> Line<'s
     Line::from(kept)
 }
 
-/// Wrap a rendered line, unless it is one whose own structure carries meaning
-/// — a table row or a list item — in which case it is clipped at the pane edge
-/// instead. See [`keeps_line_structure`].
-pub(crate) fn wrap_or_clip(
+/// Wrap a rendered line at the pane edge, aligning its continuation rows
+/// under the structure the line already has — a list item's text or a table
+/// row's border — and falling back to `continuation_indent` for flowing prose.
+/// See [`structural_indent`].
+pub(crate) fn wrap_rendered(
     line: Line<'static>,
     width: usize,
     continuation_indent: usize,
 ) -> Vec<Line<'static>> {
-    if keeps_line_structure(&line) {
-        return vec![truncate_line(line, width, false)];
-    }
-    wrap_line(line, width, continuation_indent)
+    let indent = structural_indent(&line).unwrap_or(continuation_indent);
+    wrap_line(line, width, indent)
 }
 
 /// Word-wrap one logical line to `width` columns, preserving each span's
@@ -592,8 +591,10 @@ fn wrap_line(line: Line<'static>, width: usize, continuation_indent: usize) -> V
                 continue;
             }
 
-            if token_width > width {
-                // A single token longer than the line: hard-split it.
+            // A token that would not fit even on a continuation row of its
+            // own has to be hard-split; wrapping it whole would push it past
+            // the pane edge, where the widget clips it out of sight.
+            if token_width > width.saturating_sub(continuation_indent) {
                 let mut remaining = token.as_str();
                 while !remaining.is_empty() {
                     if current_width >= width {
@@ -1692,7 +1693,7 @@ mod tests {
     }
 
     #[test]
-    fn a_long_bullet_is_clipped_to_one_row_rather_than_wrapped() {
+    fn a_long_bullet_wraps_under_its_own_text_and_keeps_the_marker_column_clear() {
         let mut app = testing::app("s1");
         app.push_event(AgentEvent::AgentMessage {
             text: format!("here:\n- {}", "word ".repeat(40)),
@@ -1701,17 +1702,27 @@ mod tests {
 
         let protocol = app.selection.provider.protocol();
         let entry = &app.timeline.entries[0];
-        // The summary row, the list's leading blank, and the single clipped
-        // item row: wrapping would have spread that 200-column bullet over
-        // half a dozen rows and buried the marker of whatever followed.
-        assert_eq!(
-            entry_item(entry, entry.expanded, 40, 18, protocol, false).height(),
-            3
-        );
+        let item = entry_item(entry, entry.expanded, 40, 18, protocol, false);
+        // Nothing is cut off: a 200-column bullet needs several 40-column rows.
+        assert!(item.height() > 5, "{}", item.height());
+
+        let rows = rendered_rows(entry, 40, protocol);
+        let bullet = rows
+            .iter()
+            .position(|row| row.contains('\u{2022}'))
+            .unwrap();
+        // Continuations line up under the item's text, leaving the marker
+        // column clear so the next bullet still reads as one.
+        for row in &rows[bullet + 1..] {
+            assert!(
+                row.starts_with("      ") && row.trim().starts_with("word"),
+                "{rows:?}"
+            );
+        }
     }
 
     #[test]
-    fn table_rows_keep_their_borders_intact_when_the_pane_is_narrow() {
+    fn table_rows_wrap_under_their_left_border_rather_than_vanishing() {
         let mut app = testing::app("s1");
         app.push_event(AgentEvent::AgentMessage {
             text: format!(
@@ -1722,12 +1733,45 @@ mod tests {
         app.timeline.expand_all();
 
         let protocol = app.selection.provider.protocol();
-        let entry = &app.timeline.entries[0];
-        let item = entry_item(entry, entry.expanded, 30, 18, protocol, false);
-        let rows = format!("{item:?}");
-        // Every drawn row is clipped at the pane edge, so no continuation row
-        // starts mid-table with a stray border glyph out of column.
-        assert!(rows.contains('\u{2026}'), "{rows}");
+        let rows = rendered_rows(&app.timeline.entries[0], 30, protocol);
+        // Every row fits the pane, and the wide header still shows all its
+        // content instead of being clipped at the edge.
+        assert!(rows.iter().all(|row| row.chars().count() <= 30), "{rows:?}");
+        let hs: usize = rows
+            .iter()
+            .map(|row| row.chars().filter(|&c| c == 'h').count())
+            .sum();
+        assert_eq!(hs, 60, "{rows:?}");
+    }
+
+    #[test]
+    fn a_hanging_indent_never_pushes_a_wrapped_row_past_the_pane_edge() {
+        // The widget clips whatever overflows, so a row wider than the pane
+        // hides text rather than merely looking untidy.
+        let line = Line::from(Span::raw("x".repeat(50)));
+        let rows = wrap_rendered(line, 20, 6);
+
+        assert!(
+            rows.iter().all(|row| row.width() <= 20),
+            "{:?}",
+            rows.iter().map(Line::width).collect::<Vec<_>>()
+        );
+    }
+
+    /// The wrapped rows of an expanded entry, as plain strings.
+    fn rendered_rows(entry: &Entry, width: usize, protocol: Protocol) -> Vec<String> {
+        let mut detail = detail_lines(&entry.event, protocol, None);
+        detail.remove(0);
+        detail
+            .into_iter()
+            .flat_map(|line| wrap_rendered(line, width, DETAIL_INDENT.len()))
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect()
     }
 
     /// Before anything is launched, the empty list must name the launch and
