@@ -20,7 +20,7 @@ const FILE_OPENER: &str = "nvim";
 const TERMINAL: &str = "urxvt";
 
 impl Configuration for Defaults {
-    fn open_command(&self, path: &Path) -> Command {
+    fn open_file(&self, path: &Path) -> Command {
         let mut command = Command::new(TERMINAL);
         command.arg("-e").arg(FILE_OPENER).arg(path);
         command
@@ -34,7 +34,7 @@ mod tests {
 
     #[test]
     fn files_open_in_neovim_in_a_new_terminal_window() {
-        let command = Defaults.open_command(Path::new("/work/src/monitor.c"));
+        let command = Defaults.open_file(Path::new("/work/src/monitor.c"));
 
         assert_eq!(command.get_program(), OsStr::new("urxvt"));
         assert_eq!(

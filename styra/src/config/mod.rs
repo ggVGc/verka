@@ -22,5 +22,5 @@ pub trait Configuration {
     /// to be wrapped in an emulator, a graphical one must not be, and either
     /// may want arguments of its own. Deciding that here leaves the client with
     /// nothing to assume — it spawns what it is given.
-    fn open_command(&self, path: &Path) -> Command;
+    fn open_file(&self, path: &Path) -> Command;
 }

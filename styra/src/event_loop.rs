@@ -250,7 +250,7 @@ pub struct RunContext<'a> {
 /// typed `files` answer, a reference in a reply — obeys the same configuration
 /// and says the same thing about it afterwards.
 fn open_path(app: &mut App, config: &dyn Configuration, path: &Path) {
-    let mut command = config.open_command(path);
+    let mut command = config.open_file(path);
     // Named in both messages, because what opens a file is configuration: an
     // operator who set it needs to see which command Styra actually ran.
     let described = crate::terminal::describe(&command);
