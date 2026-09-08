@@ -3,6 +3,7 @@
 target/
 .claude/
 .orka/
+.worktrees
 
 # styra runtime session store and stray temp files
 styra/.styra/
