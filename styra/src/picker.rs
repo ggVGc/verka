@@ -140,6 +140,8 @@ pub fn run_session_picker(
                 selected = (selected + 1).min(sessions.len().saturating_sub(1));
             }
             KeyCode::Char('k') | KeyCode::Up => selected = selected.saturating_sub(1),
+            KeyCode::Char('g') => selected = 0,
+            KeyCode::Char('G') => selected = sessions.len().saturating_sub(1),
             // Re-ordering keeps the cursor on the Session it was on: the
             // operator is changing how the list is arranged, not which
             // conversation they were looking at.
