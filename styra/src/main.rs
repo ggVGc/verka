@@ -35,7 +35,6 @@ mod preferences;
 mod preview;
 mod raw;
 mod references;
-mod retry;
 mod session;
 mod tail;
 mod terminal;

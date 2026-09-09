@@ -323,15 +323,9 @@ fn follow_visible_tail(app: &mut App) {
 }
 
 /// Record that the session ended. This is terminal regardless of `Stopped`.
-///
-/// An exhausted plan window is one of the ways a session ends — the agent
-/// process itself exits — so this is also where a stopped turn is set waiting
-/// for the window to reset, when the operator asked for that; see
-/// [`App::arm_retry`].
 pub fn on_ended(app: &mut App, end: InteractionEnd) {
     app.activity.status = Status::Ended {
         exit_code: end.exit_code,
         error: end.error,
     };
-    app.arm_retry(crate::retry::now_ms());
 }

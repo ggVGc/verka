@@ -48,9 +48,7 @@ impl<T> Tail<T> {
         self.items.is_empty()
     }
 
-    /// Every entry, oldest first — and reversible, for the readers that want
-    /// the newest entry answering some question rather than the whole tail.
-    pub fn iter(&self) -> impl DoubleEndedIterator<Item = &T> {
+    pub fn iter(&self) -> impl Iterator<Item = &T> {
         self.items.iter()
     }
 

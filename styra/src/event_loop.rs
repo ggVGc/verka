@@ -17,7 +17,6 @@ use crate::keys;
 use crate::launch::{self, LaunchScope};
 use crate::picker;
 use crate::preferences;
-use crate::retry;
 use crate::session::{self, Attachment};
 use crate::ui;
 use styra_server::{
@@ -454,17 +453,6 @@ pub fn run(
             }
         }
 
-        // A rate limit is waited out here rather than in a key handler:
-        // nothing the operator presses is what sends this turn. The window has
-        // turned over by the time it is due, so the Session is resumed exactly
-        // as the operator's own next message would have resumed it.
-        if let Some(due) = app.take_due_retry(retry::now_ms()) {
-            let announcement = format!("{} reset — sending your last turn again", due.window);
-            app.push_log(LogEntry::info(announcement.clone()));
-            app.show_action_message(announcement);
-            session::resume_and_send(app, client, live, due.message, None);
-        }
-
         app.activity.note_progress();
         terminal.draw(|frame| ui::render(frame, app))?;
 
@@ -849,7 +837,7 @@ pub fn run(
             // interaction's wire, so one client asking gets every session's
             // readings rather than only this one's.
             Some(Request::Quota) => match client.quota_log() {
-                Ok(readings) => app.show_quota_log(readings, retry::now_ms()),
+                Ok(readings) => app.quota.replace(readings),
                 Err(error) => app.push_log(LogEntry::error(format!(
                     "could not read the quota log: {error:#}"
                 ))),
