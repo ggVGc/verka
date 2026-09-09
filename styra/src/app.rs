@@ -248,6 +248,14 @@ pub struct App {
     /// holds the log — quota belongs to the account, so this is every
     /// interaction's readings, not just this session's.
     pub quota: Tail<QuotaEvent>,
+    /// Whether the server will pick this interaction back up when the plan
+    /// window that refused it turns over.
+    ///
+    /// The server's answer, not this client's opinion: the waiting is its, the
+    /// setting is stored with the Session, and this is read from the
+    /// interaction summary whenever one is attached. Changed only by asking
+    /// (see [`Request::SetAutoRetry`]), so what is shown is what was accepted.
+    pub auto_retry: bool,
     /// How far down the rendered transcript is scrolled; 0 shows its start.
     /// Unlike the raw/log views, the transcript reads as a document from the
     /// beginning rather than anchoring to the tail.
@@ -325,6 +333,10 @@ pub enum Request {
     /// Fetch the server's plan-quota log, which is server-wide and lives only
     /// in the daemon's memory, so there is nothing to read locally.
     Quota,
+    /// Ask the server to keep this interaction at it after a rate limit, or to
+    /// stop doing so. The waiting is the server's — it outlives this client
+    /// and the interaction the limit stopped — so this only asks.
+    SetAutoRetry(bool),
     /// Fetch the last turn's typed answer from the server, which parses it.
     /// `contract` names a shape to read the reply under instead of the one the
     /// turn was sent with, which is how a mis-shaped answer is recovered
@@ -397,6 +409,7 @@ impl App {
             provider_raw_open: false,
             log: Tail::default(),
             quota: Tail::default(),
+            auto_retry: false,
             transcript: Scroll::default(),
             files: FilesView::default(),
             answer: AnswerView::default(),

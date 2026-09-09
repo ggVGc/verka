@@ -20,7 +20,7 @@ use ratatui::Frame;
 use styra_server::{QuotaEvent, QuotaStatus};
 
 pub(crate) fn render_quota(frame: &mut Frame, app: &App, area: Rect) {
-    let block = view_block(app, Some("quota"));
+    let block = view_block(app, Some("quota")).title_bottom(retry_title(app));
 
     if app.quota.is_empty() {
         render_placeholder(
@@ -38,6 +38,27 @@ pub(crate) fn render_quota(frame: &mut Frame, app: &App, area: Rect) {
     let start = max_start.saturating_sub(app.quota.scroll_back() as usize) as u16;
     let paragraph = Paragraph::new(lines).block(block).scroll((start, 0));
     frame.render_widget(paragraph, area);
+}
+
+/// The bottom border's note on what happens to this interaction if a plan
+/// window refuses it: nothing, or the server picking it up again once the
+/// window turns over.
+///
+/// It rides this view's border rather than the shared chrome because this is
+/// where `R` sets it and where the rejection that stopped a session is on the
+/// record, with the minute its window resets beside it. An operator who has
+/// just been cut off comes here to see the limit; the answer to "and will it
+/// pick itself back up" belongs in the same glance.
+fn retry_title(app: &App) -> Line<'static> {
+    let (text, color) = if app.auto_retry {
+        (" R rate-limit retry: on ", palette::SUCCESS)
+    } else {
+        (" R rate-limit retry: off ", palette::INACTIVE)
+    };
+    Line::from(Span::styled(
+        text,
+        Style::default().fg(color).add_modifier(Modifier::BOLD),
+    ))
 }
 
 /// One reading: when it was seen, how full it is, whose plan and which window,
@@ -228,6 +249,20 @@ mod tests {
         let screen = rendered(&app);
         assert!(screen.contains("?"));
         assert!(!screen.contains("0%"));
+    }
+
+    /// `R` is pressed in this view, so this view has to say which way it is
+    /// set — including before any reading has arrived to set it over.
+    #[test]
+    fn the_quota_view_says_whether_a_refused_session_would_be_asked_again() {
+        let mut app = app();
+        app.toggle_view(View::Quota);
+        assert!(rendered(&app).contains("R rate-limit retry: off"));
+
+        // The server's answer, adopted when the interaction was attached.
+        app.auto_retry = true;
+
+        assert!(rendered(&app).contains("R rate-limit retry: on"));
     }
 
     #[test]

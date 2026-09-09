@@ -842,6 +842,26 @@ pub fn run(
                     "could not read the quota log: {error:#}"
                 ))),
             },
+            // The setting is the server's to keep — it is stored with the
+            // Session and acted on long after this client has gone — so what
+            // is shown is what the server accepted, not what was pressed.
+            Some(Request::SetAutoRetry(enabled)) => {
+                match client.set_interaction_auto_retry(&app.session_id, enabled) {
+                    Ok(()) => {
+                        app.auto_retry = enabled;
+                        app.show_action_message(if enabled {
+                            "rate-limit retry on — this session will be asked again after a reset"
+                        } else {
+                            "rate-limit retry off"
+                        });
+                    }
+                    Err(error) => {
+                        let message = format!("could not change the rate-limit retry: {error:#}");
+                        app.show_action_message(message.clone());
+                        app.push_log(LogEntry::error(message));
+                    }
+                }
+            }
             Some(Request::EditFile) => {
                 let Some(path) = app.selected_file_path() else {
                     continue;

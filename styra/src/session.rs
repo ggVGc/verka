@@ -375,6 +375,10 @@ pub fn attach_live_interaction(client: &Client, interaction_id: &str) -> Result<
     app.workspace.id = Some(interaction.workspace_id.clone());
     app.workspace.enter(interaction.workspace.clone());
     app.launch.record(interaction.driva.clone());
+    // Whether a rate limit will be waited out is the server's answer, kept
+    // with the Session, so it is adopted from the interaction rather than
+    // carried over from whatever this client was last showing.
+    app.auto_retry = interaction.auto_retry;
     let updates = loaded.updates;
     let cursor = updates.next;
     for sequenced in updates.updates {

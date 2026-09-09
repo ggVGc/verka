@@ -211,7 +211,13 @@ pub fn handle_list_key(
             KeyCode::Char('G') => app.log.scroll_to_bottom(),
             _ => {}
         },
+        // `R` for retry, in the view that shows the limit and the minute it
+        // resets. It belongs here rather than among the global bindings
+        // because that is where an operator whose session has just been cut
+        // off is already looking: the notice saying the window is exhausted is
+        // the reason they pressed `Q`.
         View::Quota => match key.code {
+            KeyCode::Char('R') => app.ask(Request::SetAutoRetry(!app.auto_retry)),
             KeyCode::Char('j') | KeyCode::Down => app.quota.scroll_down(),
             KeyCode::Char('k') | KeyCode::Up => app.quota.scroll_up(),
             _ => {}
