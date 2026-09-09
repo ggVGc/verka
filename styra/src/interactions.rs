@@ -139,6 +139,26 @@ impl LiveInteractions {
     }
 }
 
+/// The Interaction the navigator would land on first within `workspace_id`:
+/// the live ones in the order [`sort_interactions`] gives them, so one waiting
+/// on the operator outranks one mid-turn.
+///
+/// Stopped Interactions are not candidates. Entering a Workspace should land on
+/// work that can still be talked to, and a stopped Interaction is reached the
+/// same way it always was, through the Session picker.
+pub fn first_live_in_workspace(
+    interactions: &[InteractionSummary],
+    workspace_id: &str,
+) -> Option<InteractionSummary> {
+    let mut live = interactions
+        .iter()
+        .filter(|interaction| interaction.accepting && interaction.workspace_id == workspace_id)
+        .cloned()
+        .collect::<Vec<_>>();
+    sort_interactions(&mut live);
+    live.into_iter().next()
+}
+
 fn sort_interactions(interactions: &mut [InteractionSummary]) {
     interactions.sort_by_key(|interaction| {
         if !interaction.accepting {
@@ -303,6 +323,42 @@ mod tests {
                 .id,
             "other-pending"
         );
+    }
+
+    #[test]
+    fn first_live_in_workspace_prefers_the_one_waiting_on_the_operator() {
+        let mut other = interaction("other", true, InteractionActivity::Pending);
+        other.workspace_id = "other-workspace".into();
+        let interactions = vec![
+            other,
+            interaction("stopped", false, InteractionActivity::Pending),
+            interaction("running", true, InteractionActivity::Running),
+            interaction("idle", true, InteractionActivity::Pending),
+        ];
+
+        assert_eq!(
+            first_live_in_workspace(&interactions, "workspace")
+                .unwrap()
+                .id,
+            "idle"
+        );
+        assert_eq!(
+            first_live_in_workspace(&interactions, "other-workspace")
+                .unwrap()
+                .id,
+            "other"
+        );
+    }
+
+    #[test]
+    fn a_workspace_whose_interactions_all_stopped_has_no_live_entry() {
+        let interactions = vec![
+            interaction("stopped", false, InteractionActivity::Pending),
+            interaction("also-stopped", false, InteractionActivity::Running),
+        ];
+
+        assert!(first_live_in_workspace(&interactions, "workspace").is_none());
+        assert!(first_live_in_workspace(&interactions, "unknown").is_none());
     }
 
     #[test]

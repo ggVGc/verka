@@ -29,6 +29,9 @@ pub enum RunOutcome {
     OpenWorkspace {
         workspace: Box<WorkspaceSummary>,
         session_id: Option<String>,
+        /// Land in the Workspace with the live Interactions navigator open,
+        /// as entering one that has work in flight does.
+        open_interactions: bool,
     },
     OpenSession(String),
     Reset,
@@ -307,6 +310,26 @@ fn make_interaction_current(
             )));
         }
     }
+}
+
+/// Open the live Interactions navigator over the main Interaction view, as `a`
+/// does.
+///
+/// Best-effort: a server that cannot answer, or has nothing live left to list,
+/// leaves the navigator closed rather than failing the transition that asked
+/// for it. The root loop uses this when entering a Workspace it already knows
+/// holds live work.
+pub fn open_interaction_navigator(app: &mut App, client: &Client) {
+    let Ok(interactions) = client.list_interactions() else {
+        return;
+    };
+    if interactions.is_empty() {
+        return;
+    }
+    let workspaces = client.list_workspaces().unwrap_or_default();
+    app.view = crate::app::View::Events;
+    app.focus = Focus::List;
+    app.interactions.open(interactions, workspaces);
 }
 
 /// Return the running interaction an in-client transition explicitly stops.
@@ -618,17 +641,33 @@ pub fn run(
                         session::create_workspace(client, host_path, None)?
                     }
                 };
+                // A Workspace with work in flight is entered at that work: the
+                // first live Interaction becomes current and its navigator
+                // opens, so the operator sees the rest of the live list without
+                // being asked which Session they meant.
+                let live_interaction = client.list_interactions().ok().and_then(|interactions| {
+                    crate::interactions::first_live_in_workspace(&interactions, &workspace.id)
+                });
+                if let Some(interaction) = live_interaction {
+                    return Ok(RunOutcome::OpenWorkspace {
+                        workspace: Box::new(workspace),
+                        session_id: Some(interaction.id),
+                        open_interactions: true,
+                    });
+                }
                 let mut sessions = client.list_sessions(&workspace.id)?;
                 if sessions.is_empty() {
                     return Ok(RunOutcome::OpenWorkspace {
                         workspace: Box::new(workspace),
                         session_id: None,
+                        open_interactions: false,
                     });
                 }
                 if let Some(id) = picker::run_session_picker(terminal, client, &mut sessions)? {
                     return Ok(RunOutcome::OpenWorkspace {
                         workspace: Box::new(workspace),
                         session_id: Some(id),
+                        open_interactions: false,
                     });
                 }
             }

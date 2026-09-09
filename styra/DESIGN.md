@@ -699,7 +699,14 @@ round-trip to the server, so it waits for the cursor to settle (as the Session
 picker's conversation preview does) and the pane says `loading…` until it
 lands: a Workspace with no Sessions and an unread one must not read the same.
 
-Choosing a Workspace then opens its Session picker; choosing a Session
+Choosing a Workspace that holds live Interactions skips the Session picker
+entirely: the first live one — the ordering the Interactions navigator uses, so
+one waiting on the operator outranks one mid-turn — becomes current, and the
+client lands on the main Interaction view with the live Interactions list open.
+The green dot the row carried is what `Enter` then acts on, and the rest of that
+Workspace's live work is on screen rather than a second picker away.
+
+Otherwise choosing a Workspace opens its Session picker; choosing a Session
 attaches to its Interaction when live, otherwise it replays the stored
 journal read-only. Neither step stops the Interaction the
 client was previously viewing. An empty Workspace opens a blank pending Session

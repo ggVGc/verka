@@ -365,6 +365,7 @@ fn main() -> Result<()> {
             RunOutcome::OpenWorkspace {
                 workspace,
                 session_id,
+                open_interactions,
             } => {
                 active_workspace = *workspace;
                 match session_id {
@@ -373,6 +374,9 @@ fn main() -> Result<()> {
                             new_app.launch.interaction = launch.clone();
                             app = new_app;
                             live = new_live;
+                            if open_interactions {
+                                event_loop::open_interaction_navigator(&mut app, &client);
+                            }
                         }
                         Err(error) => app.push_log(LogEntry::error(format!(
                             "could not open Session {session_id}: {error:#}"
