@@ -8,17 +8,7 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
-use std::time::{SystemTime, UNIX_EPOCH};
 use unicode_width::UnicodeWidthStr;
-
-/// Now, in milliseconds since the epoch — the clock a quota window's reset is
-/// read against, so a window that has already turned over stops warning.
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|since| since.as_millis() as u64)
-        .unwrap_or(0)
-}
 
 pub(crate) fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     let working_directory = app
@@ -48,11 +38,9 @@ pub(crate) fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
         .unwrap_or_default()
         .min(area.width.saturating_sub(worktrees_width) as usize)
         as u16;
-    // The quota warning rides the footer because what it says is true of the
-    // account rather than of the view: a plan window filling up is worth
-    // knowing in the event list, the raw view, or anywhere else, and the footer
-    // is the one line every view keeps. `Q` opens the readings behind it.
-    let quota_alert = super::quota::alert(app, now_ms());
+    // The latest Codex limits ride the footer because they are true of the
+    // account rather than this view. `Q` opens the readings behind them.
+    let quota_alert = super::quota::alert(app);
     let quota_width = quota_alert
         .as_ref()
         .map(Line::width)

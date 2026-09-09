@@ -17,7 +17,11 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
+use styra_server::agent::Provider;
 use styra_server::{QuotaEvent, QuotaStatus};
+
+const FOOTER_WARNING_THRESHOLD: f64 = 0.75;
+const FOOTER_ERROR_THRESHOLD: f64 = 0.90;
 
 pub(crate) fn render_quota(frame: &mut Frame, app: &App, area: Rect) {
     let block = view_block(app, Some("quota")).title_bottom(retry_title(app));
@@ -108,20 +112,11 @@ fn quota_line(reading: &QuotaEvent) -> Line<'static> {
     Line::from(spans)
 }
 
-/// The footer's warning badge: the provider whose plan is closest to refusing
-/// work, named with how full that window is, or `None` while every window the
-/// server has spoken about is still comfortable.
-///
-/// It reads the same log the view does rather than a second piece of state,
-/// so the badge and the view can never disagree. A provider's plan has several
-/// windows and each is read repeatedly, so only the newest reading per
-/// provider-and-window counts: an older warning that has since been superseded
-/// by a comfortable reading of the same window is not news, and a Claude
-/// window says nothing about a Codex one.
-///
-/// A window whose reset has passed is dropped: it has turned over, so whatever
-/// it said about being full is about a pool that no longer exists.
-pub(crate) fn alert(app: &App, now_ms: u64) -> Option<Line<'static>> {
+/// The latest provider percentages for the footer. Codex reports both its
+/// concrete windows; Claude reports `five_hour` and deliberately withholds the
+/// percentage when clear, which is displayed as `-`. Generic `plan` refusals
+/// are omitted because they have no percentage.
+pub(crate) fn alert(app: &App) -> Option<Line<'static>> {
     let mut newest: Vec<&QuotaEvent> = Vec::new();
     for reading in app.quota.iter() {
         match newest
@@ -133,48 +128,70 @@ pub(crate) fn alert(app: &App, now_ms: u64) -> Option<Line<'static>> {
             None => newest.push(reading),
         }
     }
-    let mut pressing: Vec<&QuotaEvent> = newest
-        .into_iter()
-        .filter(|reading| reading.status != QuotaStatus::Allowed)
-        .filter(|reading| reading.resets_at_ms.is_none_or(|resets| resets > now_ms))
+    let limits: Vec<&QuotaEvent> = newest
+        .iter()
+        .copied()
+        .filter(|reading| {
+            reading.provider == Provider::Codex
+                && matches!(reading.window.as_str(), "5h" | "7d")
+                && reading.utilization.is_some()
+        })
         .collect();
-    // Worst first, and among equals the fuller window: the badge has room for
-    // one window, so it has to be the one the operator would act on.
-    pressing.sort_by(|left, right| {
-        severity(right.status).cmp(&severity(left.status)).then(
-            right
-                .utilization
-                .unwrap_or(0.0)
-                .total_cmp(&left.utilization.unwrap_or(0.0)),
-        )
-    });
-    let worst = pressing.first()?;
-    let color = status_color(worst.status);
-    let mut spans = vec![Span::styled(
-        format!(
-            " ⚠ {} {} {} ",
-            worst.provider.as_str(),
-            worst.window,
-            worst.utilization_label()
-        ),
-        Style::default().fg(color).add_modifier(Modifier::BOLD),
-    )];
-    // Only the worst window is spelled out; the rest are counted, so a second
-    // provider filling up is still visible without crowding the footer.
-    if pressing.len() > 1 {
+    let claude = newest
+        .iter()
+        .copied()
+        .find(|reading| reading.provider == Provider::Claude && reading.window == "five_hour");
+    if limits.is_empty() && claude.is_none() {
+        return None;
+    }
+    let mut spans = Vec::new();
+    if !limits.is_empty() {
         spans.push(Span::styled(
-            format!("+{} ", pressing.len() - 1),
-            Style::default().fg(color),
+            " codex: ",
+            Style::default().fg(palette::MUTED_TEXT),
+        ));
+    }
+    let mut wrote_percentage = false;
+    for window in ["5h", "7d"] {
+        if let Some(reading) = limits.iter().find(|reading| reading.window == window) {
+            let separator = wrote_percentage.then_some("/").unwrap_or_default();
+            spans.push(Span::styled(
+                format!("{separator}{}", reading.utilization_label()),
+                Style::default()
+                    .fg(footer_color(reading.utilization.expect("filtered above")))
+                    .add_modifier(Modifier::BOLD),
+            ));
+            wrote_percentage = true;
+        }
+    }
+    if let Some(reading) = claude {
+        spans.push(Span::styled(
+            " claude: ",
+            Style::default().fg(palette::MUTED_TEXT),
+        ));
+        let (label, color) = match reading.utilization {
+            Some(utilization) => (reading.utilization_label(), footer_color(utilization)),
+            // Claude only omits this figure on an `allowed` event; that is a
+            // fresh confirmation that it is not close to warning, not an
+            // unknown amount to carry over from a previous event.
+            None if reading.status == QuotaStatus::Allowed => ("-".into(), palette::MUTED_TEXT),
+            None => ("?".into(), status_color(reading.status)),
+        };
+        spans.push(Span::styled(
+            label,
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
         ));
     }
     Some(Line::from(spans))
 }
 
-fn severity(status: QuotaStatus) -> u8 {
-    match status {
-        QuotaStatus::Allowed => 0,
-        QuotaStatus::Warning => 1,
-        QuotaStatus::Exhausted => 2,
+fn footer_color(utilization: f64) -> Color {
+    if utilization > FOOTER_ERROR_THRESHOLD {
+        palette::ERROR
+    } else if utilization > FOOTER_WARNING_THRESHOLD {
+        palette::WARNING
+    } else {
+        palette::MUTED_TEXT
     }
 }
 
@@ -372,65 +389,68 @@ mod tests {
         assert!(app.log.newest().unwrap().message.contains("exhausted"));
     }
 
-    /// The badge is the whole point of the footer slot: an operator who never
-    /// presses `Q` still has to learn that a plan is about to refuse them.
+    /// The footer carries the latest two concrete Codex limits, including a
+    /// comfortable one: it is a live readout rather than a warning badge.
     #[test]
-    fn a_pressing_window_shows_as_a_warning_badge_in_the_footer() {
+    fn the_footer_shows_both_latest_codex_windows() {
         let mut app = app();
-        assert!(!rendered(&app).contains('⚠'), "nothing to warn about yet");
+        let mut primary = reading("5h", QuotaStatus::Allowed, Some(0.12));
+        primary.provider = Provider::Codex;
+        let mut weekly = reading("7d", QuotaStatus::Allowed, Some(0.81));
+        weekly.provider = Provider::Codex;
+        app.quota.replace(vec![primary, weekly]);
 
-        app.quota.replace(vec![
-            reading("7d", QuotaStatus::Allowed, Some(0.1)),
-            reading("five_hour", QuotaStatus::Warning, Some(0.91)),
-        ]);
-        let screen = rendered(&app);
-        assert!(screen.contains("⚠ claude five_hour 91%"), "{screen}");
+        let footer = alert(&app).unwrap();
+        assert_eq!(footer.to_string(), " codex: 12%/81%");
     }
 
-    /// A window read again and found comfortable is not news; the badge has to
-    /// follow the newest reading of each window rather than the worst one ever
-    /// seen.
+    /// Claude omits the percentage in an allowed `five_hour` event. That is
+    /// an explicit clear, so it replaces an earlier warning with `-`.
     #[test]
-    fn a_superseded_warning_stops_showing() {
+    fn a_clear_claude_event_shows_a_dash_in_the_footer() {
         let mut app = app();
-        let mut later = reading("five_hour", QuotaStatus::Allowed, Some(0.02));
-        later.at_ms = 2_000;
-        app.quota.replace(vec![
-            reading("five_hour", QuotaStatus::Warning, Some(0.91)),
-            later,
-        ]);
+        let mut warning = reading("five_hour", QuotaStatus::Warning, Some(0.91));
+        warning.at_ms = 1_000;
+        let mut clear = reading("five_hour", QuotaStatus::Allowed, None);
+        clear.at_ms = 2_000;
+        app.quota.replace(vec![warning, clear]);
 
-        assert!(alert(&app, 0).is_none());
+        assert_eq!(alert(&app).unwrap().to_string(), " claude: -");
     }
 
-    /// Two providers can be under pressure at once, and only one fits: the
-    /// worse one is named and the other counted.
+    /// Codex does not name the window when it refuses a turn, so a later
+    /// successful concrete-window update has to clear that catch-all `plan`
+    /// refusal too.
     #[test]
-    fn the_worst_window_is_named_and_the_rest_counted() {
+    fn a_later_codex_window_update_clears_a_stale_plan_refusal() {
         let mut app = app();
-        let mut codex = reading("weekly", QuotaStatus::Exhausted, None);
-        codex.provider = Provider::Codex;
-        app.quota.replace(vec![
-            reading("five_hour", QuotaStatus::Warning, Some(0.91)),
-            codex,
-        ]);
+        let mut refused = reading("plan", QuotaStatus::Exhausted, None);
+        refused.provider = Provider::Codex;
+        let mut primary = reading("5h", QuotaStatus::Allowed, Some(0.12));
+        primary.provider = Provider::Codex;
+        primary.at_ms = 2_000;
+        let mut weekly = reading("7d", QuotaStatus::Allowed, Some(0.81));
+        weekly.provider = Provider::Codex;
+        weekly.at_ms = 2_000;
+        app.quota.replace(vec![refused, primary, weekly]);
 
-        let badge = alert(&app, 0).unwrap();
-        assert!(badge.to_string().contains("⚠ codex weekly"), "{badge}");
-        assert!(badge.to_string().contains("+1"), "{badge}");
+        assert_eq!(alert(&app).unwrap().to_string(), " codex: 12%/81%");
     }
 
-    /// A full window that has since reset describes a pool that no longer
-    /// exists, so it must not keep the badge lit.
+    /// Yellow starts strictly above 75%, and red strictly above 90%, using the
+    /// actual fraction rather than its rounded display label.
     #[test]
-    fn a_window_whose_reset_has_passed_no_longer_warns() {
+    fn footer_colours_each_window_from_its_percentage() {
         let mut app = app();
-        let mut exhausted = reading("five_hour", QuotaStatus::Exhausted, Some(1.0));
-        exhausted.resets_at_ms = Some(10_000);
-        app.quota.replace(vec![exhausted]);
+        let mut primary = reading("5h", QuotaStatus::Allowed, Some(0.76));
+        primary.provider = Provider::Codex;
+        let mut weekly = reading("7d", QuotaStatus::Warning, Some(0.91));
+        weekly.provider = Provider::Codex;
+        app.quota.replace(vec![primary, weekly]);
 
-        assert!(alert(&app, 9_000).is_some(), "still inside the window");
-        assert!(alert(&app, 11_000).is_none(), "the window turned over");
+        let footer = alert(&app).unwrap();
+        assert_eq!(footer.spans[1].style.fg, Some(palette::WARNING));
+        assert_eq!(footer.spans[2].style.fg, Some(palette::ERROR));
     }
 
     /// Times are shown on the operator's own clock, so the minute a moment
