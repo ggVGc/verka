@@ -79,7 +79,7 @@ interaction (the durable Session remains).
 
 | Key | View or action |
 | --- | --- |
-| `r`, `l`, `t`, `d` | raw provider records, client/server log, transcript, Workspace/interaction details; press again for events |
+| `r`, `l`, `t`, `d` | raw wire records, client/server log, transcript, Workspace/interaction details; press again for events |
 | `Q` | quota readings observed by the server |
 | `f` | files associated with the selected event (or the whole session) |
 | `F` | open a file the selected event cites (`path:line` included) |
@@ -93,7 +93,9 @@ In the event list: `j`/`k` moves by line, `J`/`K` (or arrows) moves by event,
 `g`/`G` jumps first/last, `Space`/`Enter`/`o` folds the selected event, `O`
 expands only it, `z R` expands all, `z M` collapses all, and `m` hides/shows
 minor events. `PgUp`/`PgDn` scrolls a preview. Raw, log, quota, and transcript
-use `j`/`k` plus `g`/`G` to navigate.
+use `j`/`k` plus `g`/`G` to navigate. In the raw view, `v` switches between
+Styra's captured app-server wire traffic and the provider's native persisted
+session JSONL (when the provider still has it).
 
 `F` — in the event list, transcript, or full-screen preview — lists every file
 the selected event names that exists on this host, including citations of the

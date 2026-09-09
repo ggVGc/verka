@@ -216,6 +216,15 @@ pub struct StoredSession {
     pub raw: Vec<RawLine>,
 }
 
+/// A provider's own persisted session file, kept distinct from Styra's wire
+/// journal. The text is verbatim JSONL, including records that never appeared
+/// on the app-server wire.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ProviderRaw {
+    pub provider: Provider,
+    pub text: String,
+}
+
 /// One JSON request sent as a single line over the Unix socket.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(
@@ -360,6 +369,10 @@ pub enum Request {
         #[serde(default = "yes")]
         raw: bool,
     },
+    /// Read the provider-native, resumable session JSONL for this Session.
+    ProviderRaw {
+        id: String,
+    },
     Shell {
         id: String,
     },
@@ -420,6 +433,7 @@ pub enum Response {
     Interactions(Vec<InteractionSummary>),
     StoredSessions(Vec<SessionSummary>),
     StoredSession(StoredSession),
+    ProviderRaw(ProviderRaw),
     Shell(ShellInfo),
     Answer(Answer),
     QuotaLog(Vec<QuotaEvent>),
@@ -481,6 +495,15 @@ mod tests {
             serde_json::from_str::<Request>(r#"{"api_version":"v3","operation":"health"}"#)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn provider_raw_request_names_the_durable_session() {
+        let request = Request::ProviderRaw { id: "s-1".into() };
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["operation"], "provider_raw");
+        assert_eq!(json["data"]["id"], "s-1");
+        assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
     }
 
     #[test]

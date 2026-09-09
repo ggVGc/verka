@@ -431,6 +431,14 @@ impl Client {
         self.stored_session_filtered(id, true)
     }
 
+    /// Read the provider's native persisted JSONL for a durable Session.
+    pub fn provider_raw(&self, id: &str) -> Result<crate::protocol::ProviderRaw> {
+        match self.request(Request::ProviderRaw { id: id.to_owned() })? {
+            Response::ProviderRaw(value) => Ok(value),
+            other => unexpected("provider_raw", other),
+        }
+    }
+
     /// A stored session's decoded events only. The server then reads the
     /// journal once instead of twice and ships half the payload.
     pub fn stored_session_events(&self, id: &str) -> Result<StoredSession> {

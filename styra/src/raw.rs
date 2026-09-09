@@ -13,6 +13,57 @@ use styra_server::RawLine;
 
 use crate::app::Scroll;
 
+/// The provider's persisted JSONL session file. It is deliberately separate
+/// from [`RawView`]: its records did not travel over Styra's stdin/stdout.
+pub struct ProviderRawView {
+    lines: Vec<String>,
+    selected: usize,
+    pub preview: Scroll,
+}
+
+impl ProviderRawView {
+    pub fn new(text: String) -> Self {
+        Self {
+            lines: text.lines().map(str::to_owned).collect(),
+            selected: 0,
+            preview: Scroll::default(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.lines.is_empty()
+    }
+    pub fn iter(&self) -> impl Iterator<Item = &String> {
+        self.lines.iter()
+    }
+    pub fn selected_index(&self) -> usize {
+        self.selected
+    }
+    pub fn selected(&self) -> Option<&str> {
+        self.lines.get(self.selected).map(String::as_str)
+    }
+    pub fn select_next(&mut self) {
+        if self.selected + 1 < self.lines.len() {
+            self.selected += 1;
+            self.preview.reset();
+        }
+    }
+    pub fn select_prev(&mut self) {
+        if self.selected > 0 {
+            self.selected -= 1;
+            self.preview.reset();
+        }
+    }
+    pub fn select_first(&mut self) {
+        self.selected = 0;
+        self.preview.reset();
+    }
+    pub fn select_last(&mut self) {
+        self.selected = self.lines.len().saturating_sub(1);
+        self.preview.reset();
+    }
+}
+
 /// The wire lines, in occurrence order, and which one is selected.
 pub struct RawView {
     lines: Vec<RawLine>,
@@ -151,6 +202,16 @@ mod tests {
             direction: Direction::FromAgent,
             text: text.into(),
         }
+    }
+
+    #[test]
+    fn provider_raw_is_a_separately_navigable_jsonl_document() {
+        let mut raw = ProviderRawView::new("{\"type\":\"first\"}\n{\"type\":\"second\"}\n".into());
+        assert_eq!(raw.selected(), Some(r#"{"type":"first"}"#));
+        raw.select_next();
+        assert_eq!(raw.selected(), Some(r#"{"type":"second"}"#));
+        raw.select_last();
+        assert_eq!(raw.selected_index(), 1);
     }
 
     #[test]

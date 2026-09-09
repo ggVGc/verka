@@ -100,8 +100,8 @@ pub use protocol::{
     Answer, AnswerValue, AttributedMount, BaseCapability, BaseEntry, Contract, Direction,
     DrivaOptions, FileLocation, InteractionActivity, InteractionEnd, InteractionSummary,
     InteractionUpdate, LaunchMount, LaunchPolicy, LoadedInteraction, LogEntry, LogLevel,
-    MountOrigin, QueuedMessage, QuotaEvent, QuotaStatus, RawLine, SessionOrigin, SessionSummary,
-    TemplateSummary, WorkspaceSummary,
+    MountOrigin, ProviderRaw, QueuedMessage, QuotaEvent, QuotaStatus, RawLine, SessionOrigin,
+    SessionSummary, TemplateSummary, WorkspaceSummary,
 };
 pub use spawn::ensure_server;
 

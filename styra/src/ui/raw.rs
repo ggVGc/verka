@@ -14,6 +14,9 @@ use ratatui::Frame;
 use styra_server::Direction as WireDirection;
 
 pub(crate) fn render_raw(frame: &mut Frame, app: &App, area: Rect) {
+    if app.provider_raw_open {
+        return render_provider_raw(frame, app, area);
+    }
     let area = if app.raw.is_empty() {
         area
     } else {
@@ -25,7 +28,10 @@ pub(crate) fn render_raw(frame: &mut Frame, app: &App, area: Rect) {
         chunks[0]
     };
 
-    let block = view_block(app, Some("raw"));
+    let block = view_block(app, Some("raw")).title_bottom(Line::from(Span::styled(
+        " Styra wire · v: provider native ",
+        Style::default().fg(palette::MUTED_TEXT),
+    )));
 
     if app.raw.is_empty() {
         render_placeholder(frame, block, area, "  no wire traffic yet");
@@ -48,6 +54,67 @@ pub(crate) fn render_raw(frame: &mut Frame, app: &App, area: Rect) {
     let mut state = ListState::default();
     state.select(Some(app.raw.selected_index()));
     frame.render_stateful_widget(list, area, &mut state);
+}
+
+/// Render the provider's own persisted JSONL. These records are not wire
+/// traffic, so they intentionally carry no direction marker.
+fn render_provider_raw(frame: &mut Frame, app: &App, area: Rect) {
+    let Some(raw) = app.provider_raw.as_ref() else {
+        return;
+    };
+    let area = if raw.is_empty() {
+        area
+    } else {
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+            .split(area);
+        render_provider_raw_preview(frame, raw, chunks[1]);
+        chunks[0]
+    };
+    let block = view_block(app, Some("raw · provider")).title_bottom(Line::from(Span::styled(
+        " provider native · v: Styra wire ",
+        Style::default().fg(palette::MUTED_TEXT),
+    )));
+    if raw.is_empty() {
+        render_placeholder(frame, block, area, "  provider session contains no records");
+        return;
+    }
+    let items: Vec<ListItem> = raw
+        .iter()
+        .enumerate()
+        .map(|(idx, text)| ListItem::new(provider_raw_line(text, idx == raw.selected_index())))
+        .collect();
+    let list = List::new(items)
+        .block(block)
+        .highlight_style(Style::default().bg(palette::SELECTION_BACKGROUND));
+    let mut state = ListState::default();
+    state.select(Some(raw.selected_index()));
+    frame.render_stateful_widget(list, area, &mut state);
+}
+
+fn render_provider_raw_preview(frame: &mut Frame, raw: &crate::raw::ProviderRawView, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(palette::INACTIVE))
+        .title(Span::styled(
+            " provider entry ",
+            Style::default().fg(palette::MUTED_TEXT),
+        ));
+    let lines = preview_text_lines(raw.selected());
+    let limit = preview_scroll_limit(
+        &lines,
+        area.width.saturating_sub(2),
+        area.height.saturating_sub(2),
+    );
+    raw.preview.note_limit(limit);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(block)
+            .wrap(Wrap { trim: false })
+            .scroll((raw.preview.clamped(), 0)),
+        area,
+    );
 }
 
 /// The raw view's side panel: the selected wire line, pretty-printed and
@@ -77,16 +144,19 @@ fn render_raw_preview(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn raw_preview_lines(app: &App) -> Vec<Line<'static>> {
-    let Some(line) = app.raw.selected() else {
+    preview_text_lines(app.raw.selected().map(|line| line.text.as_str()))
+}
+
+fn preview_text_lines(text: Option<&str>) -> Vec<Line<'static>> {
+    let Some(text) = text else {
         return vec![Line::from(Span::styled(
             "  no wire traffic yet",
             Style::default().fg(palette::MUTED_TEXT),
         ))];
     };
-    match serde_json::from_str::<serde_json::Value>(&line.text) {
+    match serde_json::from_str::<serde_json::Value>(text) {
         Ok(value) => json_lines(&value),
-        Err(_) => line
-            .text
+        Err(_) => text
             .lines()
             .map(|text| {
                 Line::from(Span::styled(
@@ -96,6 +166,32 @@ fn raw_preview_lines(app: &App) -> Vec<Line<'static>> {
             })
             .collect(),
     }
+}
+
+fn provider_raw_line(text: &str, selected: bool) -> Line<'static> {
+    let color = if selected {
+        palette::WARNING
+    } else {
+        palette::TEXT
+    };
+    let spans = serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .and_then(|value| entry_tag(&value).map(|tag| (tag, entry_detail(&value))))
+        .map(|(tag, detail)| {
+            vec![
+                Span::styled(
+                    pad_tag(&tag),
+                    Style::default().fg(if selected {
+                        palette::WARNING
+                    } else {
+                        palette::ADDITIONAL_INFO
+                    }),
+                ),
+                Span::styled(detail, Style::default().fg(color)),
+            ]
+        })
+        .unwrap_or_else(|| vec![Span::styled(text.to_owned(), Style::default().fg(color))]);
+    Line::from(spans)
 }
 
 fn raw_line(line: &styra_server::RawLine, selected: bool) -> Line<'static> {
@@ -157,10 +253,12 @@ fn entry_tag(value: &serde_json::Value) -> Option<String> {
         return Some(method.to_owned());
     }
     if let Some(wire_type) = value.get("type").and_then(serde_json::Value::as_str) {
-        return Some(match value.get("subtype").and_then(serde_json::Value::as_str) {
-            Some(subtype) => format!("{wire_type}:{subtype}"),
-            None => wire_type.to_owned(),
-        });
+        return Some(
+            match value.get("subtype").and_then(serde_json::Value::as_str) {
+                Some(subtype) => format!("{wire_type}:{subtype}"),
+                None => wire_type.to_owned(),
+            },
+        );
     }
     if value.get("result").is_some() {
         return Some("result".into());
@@ -336,6 +434,21 @@ mod tests {
     }
 
     #[test]
+    fn provider_raw_view_is_labeled_and_has_no_wire_direction_marker() {
+        let mut app = testing::app("s-1");
+        app.provider_raw = Some(crate::raw::ProviderRawView::new(
+            r#"{"type":"session_meta","payload":{"id":"t-1"}}"#.into(),
+        ));
+        app.provider_raw_open = true;
+        app.toggle_raw();
+        let screen = rendered(&app);
+        assert!(screen.contains("provider entry"), "{screen}");
+        assert!(screen.contains("provider native · v: Styra wire"), "{screen}");
+        assert!(screen.contains("session_meta"), "{screen}");
+        assert!(!screen.contains("« session_meta"), "{screen}");
+    }
+
+    #[test]
     fn long_raw_lines_are_truncated_in_the_list_but_shown_in_full_in_the_preview() {
         use styra_server::{Direction, RawLine};
         let mut app = testing::app("s1");
@@ -455,4 +568,3 @@ mod tests {
             .any(|span| span.style.fg == Some(palette::WARNING)));
     }
 }
-

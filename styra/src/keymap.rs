@@ -161,6 +161,10 @@ pub(crate) const REFERENCE: &[ReferenceRow] = &[
         action: "scroll raw-line preview",
     },
     ReferenceRow::Binding {
+        keys: "v (raw)",
+        action: "switch Styra wire capture / provider-native session JSONL",
+    },
+    ReferenceRow::Binding {
         keys: "y",
         action: "copy selected line to clipboard (raw view)",
     },

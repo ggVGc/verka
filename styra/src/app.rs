@@ -35,7 +35,7 @@ use crate::notices::Notices;
 use crate::outbox::Outbox;
 use crate::picker::TemplatePicker;
 use crate::preview::{self, Preview};
-use crate::raw::RawView;
+use crate::raw::{ProviderRawView, RawView};
 use crate::references::{self, References};
 use crate::tail::Tail;
 use crate::timeline::{Entry, Step, Timeline};
@@ -237,6 +237,10 @@ pub struct App {
     pub launch: Launch,
     /// The verbatim wire interaction and the place in it; see [`RawView`].
     pub raw: RawView,
+    /// The provider's own persisted session JSONL, loaded on demand from the
+    /// raw view. `true` selects it instead of Styra's wire capture.
+    pub provider_raw: Option<ProviderRawView>,
+    pub provider_raw_open: bool,
     /// Diagnostic log entries, in occurrence order; see [`Tail`].
     pub log: Tail<LogEntry>,
     /// Plan-quota readings, oldest first. Filled by asking the server, which
@@ -386,6 +390,8 @@ impl App {
             session_name: None,
             launch: Launch::default(),
             raw: RawView::default(),
+            provider_raw: None,
+            provider_raw_open: false,
             log: Tail::default(),
             quota: Tail::default(),
             transcript: Scroll::default(),
@@ -888,6 +894,10 @@ impl App {
                 }
                 Some(text)
             }
+            View::Raw if self.provider_raw_open => self
+                .provider_raw
+                .as_ref()
+                .and_then(|raw| raw.selected().map(str::to_owned)),
             View::Raw => self.raw.selected().map(|line| line.text.clone()),
             View::Files => self
                 .selected_file_path()

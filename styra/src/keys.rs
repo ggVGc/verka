@@ -155,6 +155,25 @@ pub fn handle_list_key(
             _ => {}
         },
         View::Raw => match key.code {
+            KeyCode::Char('v') => toggle_provider_raw(app, client),
+            KeyCode::PageDown if app.provider_raw_open => {
+                app.provider_raw.as_mut().unwrap().preview.page_down()
+            }
+            KeyCode::PageUp if app.provider_raw_open => {
+                app.provider_raw.as_mut().unwrap().preview.page_up()
+            }
+            KeyCode::Char('j') | KeyCode::Down if app.provider_raw_open => {
+                app.provider_raw.as_mut().unwrap().select_next()
+            }
+            KeyCode::Char('k') | KeyCode::Up if app.provider_raw_open => {
+                app.provider_raw.as_mut().unwrap().select_prev()
+            }
+            KeyCode::Char('g') if app.provider_raw_open => {
+                app.provider_raw.as_mut().unwrap().select_first()
+            }
+            KeyCode::Char('G') if app.provider_raw_open => {
+                app.provider_raw.as_mut().unwrap().select_last()
+            }
             KeyCode::PageDown => app.raw.preview.page_down(),
             KeyCode::PageUp => app.raw.preview.page_up(),
             KeyCode::Char('j') | KeyCode::Down => app.raw.select_next(),
@@ -294,6 +313,23 @@ pub fn handle_list_key(
             KeyCode::Char('y') => copy_selection(app),
             _ => {}
         },
+    }
+}
+
+/// Switch the raw panel between Styra's wire capture and the provider's
+/// native persisted JSONL. Read freshly when opening it: a live Codex thread
+/// can append records after the previous visit.
+fn toggle_provider_raw(app: &mut App, client: &Client) {
+    if app.provider_raw_open {
+        app.provider_raw_open = false;
+        return;
+    }
+    match client.provider_raw(&app.session_id) {
+        Ok(raw) => {
+            app.provider_raw = Some(crate::raw::ProviderRawView::new(raw.text));
+            app.provider_raw_open = true;
+        }
+        Err(error) => app.show_action_message(format!("could not read provider raw: {error:#}")),
     }
 }
 

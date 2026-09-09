@@ -1570,6 +1570,19 @@ impl ServerState {
                     raw,
                 }))
             }
+            Request::ProviderRaw { id } => {
+                let summary = self.stored_summary(&id)?;
+                let provider_session_id = journal::read_provider_session_id(&summary.path)?
+                    .with_context(|| format!("session {id:?} has no stored provider session id"))?;
+                let path =
+                    find_native_session_file(summary.selection.provider, &provider_session_id)?;
+                let text = std::fs::read_to_string(&path)
+                    .with_context(|| format!("reading {}", path.display()))?;
+                Ok(Response::ProviderRaw(crate::protocol::ProviderRaw {
+                    provider: summary.selection.provider,
+                    text,
+                }))
+            }
             Request::Shell { id } => Ok(Response::Shell(self.shell(&id)?)),
             Request::TurnAnswer { id, contract } => {
                 Ok(Response::Answer(self.turn_answer(&id, contract)?))
