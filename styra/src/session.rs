@@ -621,7 +621,15 @@ pub fn apply_update(app: &mut App, update: InteractionUpdate) {
             }
         }
         InteractionUpdate::Log(entry) => app.push_log(entry),
-        InteractionUpdate::Quota(reading) => app.note_quota(reading),
+        InteractionUpdate::Quota(reading) => {
+            app.note_quota(reading);
+            // The rejection is usually the last thing to arrive before the
+            // agent process exits, but nothing guarantees that order — it can
+            // land on a session this client has already seen end. Either way
+            // round leaves the same session stopped behind the same window, so
+            // either way round has to be able to start the wait.
+            app.arm_retry(crate::retry::now_ms());
+        }
         InteractionUpdate::WorkingDirectoryChanged(directory) => {
             app.workspace.change_directory(directory);
         }
