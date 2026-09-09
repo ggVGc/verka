@@ -287,6 +287,23 @@ impl Timeline {
         self.entries.get(self.selected)
     }
 
+    /// The operator's own most recent turn, which is the one a session stopped
+    /// by a rate limit has to be sent again (see [`crate::retry`]).
+    ///
+    /// Read from the list rather than from the message box's history, because
+    /// the list is rebuilt from the server whenever a session is attached or
+    /// replayed: a client that has just opened a session someone else's client
+    /// stopped still knows what that session was last asked.
+    pub fn last_operator_message(&self) -> Option<&str> {
+        self.entries
+            .iter()
+            .rev()
+            .find_map(|entry| match &entry.event {
+                AgentEvent::UserMessage { text } => Some(text.as_str()),
+                _ => None,
+            })
+    }
+
     /// The newest entry standing for a shell command, which is what the
     /// preview panel follows in [`crate::app::PreviewTarget::Command`].
     pub fn newest_command(&self) -> Option<&Entry> {

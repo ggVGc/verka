@@ -38,6 +38,7 @@ use crate::picker::TemplatePicker;
 use crate::preview::{self, Preview};
 use crate::raw::{ProviderRawView, RawView};
 use crate::references::{self, References};
+use crate::retry::{self, Pending, Retry};
 use crate::tail::Tail;
 use crate::timeline::{Entry, Step, Timeline};
 use crate::workspace::Location;
@@ -248,6 +249,9 @@ pub struct App {
     /// holds the log — quota belongs to the account, so this is every
     /// interaction's readings, not just this session's.
     pub quota: Tail<QuotaEvent>,
+    /// Whether a session stopped by a rate limit is picked up again once the
+    /// window resets, and the turn waiting to be sent; see [`Retry`].
+    pub retry: Retry,
     /// How far down the rendered transcript is scrolled; 0 shows its start.
     /// Unlike the raw/log views, the transcript reads as a document from the
     /// beginning rather than anchoring to the tail.
@@ -397,6 +401,7 @@ impl App {
             provider_raw_open: false,
             log: Tail::default(),
             quota: Tail::default(),
+            retry: Retry::default(),
             transcript: Scroll::default(),
             files: FilesView::default(),
             answer: AnswerView::default(),
@@ -597,6 +602,97 @@ impl App {
         // The view is otherwise filled wholesale by asking the server; an
         // announced reading is appended so it shows without a round trip.
         self.quota.push(reading);
+    }
+
+    /// Replace the quota view with the server's whole log.
+    ///
+    /// A refreshed log can be the first this client hears of the window that
+    /// stopped this session — the server announces each threshold once across
+    /// every interaction it serves — so it is also a chance to notice that
+    /// there is something to wait out.
+    pub fn show_quota_log(&mut self, readings: Vec<QuotaEvent>, now_ms: u64) {
+        self.quota.replace(readings);
+        self.arm_retry(now_ms);
+    }
+
+    /// Turn waiting out a rate limit on or off for this session, and say which
+    /// it now is.
+    ///
+    /// Turning it on also looks at the session as it stands, because that is
+    /// when an operator reaches for this: the limit has already stopped the
+    /// agent and they are deciding what to do about it, not setting a policy
+    /// for a session that is still running.
+    pub fn toggle_retry_after_reset(&mut self, now_ms: u64) {
+        if !self.retry.toggle() {
+            return self.show_action_message("rate-limit retry off");
+        }
+        self.show_action_message("rate-limit retry on");
+        self.arm_retry(now_ms);
+    }
+
+    /// Set this session's last turn waiting for the window that stopped it, if
+    /// that is what it is stopped behind.
+    ///
+    /// Deliberately quiet about the ordinary cases — a session that is still
+    /// running, one that ended for its own reasons, a limit that has already
+    /// reset — since this is consulted on every end and every refreshed log,
+    /// and none of those is news. What it does say is that a turn is now
+    /// waiting, and how long for: an unattended send minutes or hours from now
+    /// must not be something the operator has to deduce.
+    pub fn arm_retry(&mut self, now_ms: u64) {
+        if !self.retry.enabled() || self.retry.pending().is_some() {
+            return;
+        }
+        // Only a session that has stopped has a turn to send again. A running
+        // one may well be past a warning threshold without having been
+        // rejected, and is not waiting for anything.
+        if self.activity.status.is_active() {
+            return;
+        }
+        let Some((window, at_ms)) =
+            retry::limit_in_force(self.quota.iter(), self.selection.provider, now_ms).and_then(
+                |limit| retry::due_at_ms(limit).map(|at_ms| (limit.window.clone(), at_ms)),
+            )
+        else {
+            return;
+        };
+        let Some(message) = self.timeline.last_operator_message().map(str::to_owned) else {
+            // Worth saying: the window is what stopped this session, so an
+            // operator who asked for a retry is owed the reason there is none.
+            return self.push_log(LogEntry::warn(format!(
+                "the {window} window is exhausted, but this session has no turn of yours to send again"
+            )));
+        };
+        let waiting = retry::wait_label(at_ms, now_ms);
+        self.retry.arm(Pending {
+            at_ms,
+            window: window.clone(),
+            message,
+        });
+        let announcement =
+            format!("{window} exhausted — sending your last turn again in {waiting}");
+        self.push_log(LogEntry::info(announcement.clone()));
+        self.show_action_message(announcement);
+    }
+
+    /// Take the waiting turn once its window has reset; see [`Retry`]. The
+    /// event loop sends it, since resuming the Session is the server's to do.
+    ///
+    /// A session that is running again before then has already been picked up
+    /// — by the operator, or by another client — and sending the waiting turn
+    /// on top of that would put a second, unasked question to the agent. The
+    /// wait is dropped rather than held, and said to be, so that nothing
+    /// arriving later is a surprise.
+    pub fn take_due_retry(&mut self, now_ms: u64) -> Option<Pending> {
+        if self.activity.status.is_active() {
+            if self.retry.cancel() {
+                self.show_action_message(
+                    "this session is running again — dropped the rate-limit retry",
+                );
+            }
+            return None;
+        }
+        self.retry.take_due(now_ms)
     }
 
     /// Toggle the raw wire view on, or back to the event list. Entering it
@@ -2625,6 +2721,210 @@ mod tests {
         assert_eq!(
             app.copy_text().as_deref(),
             Some(r#"{"type":"turn.started"}"#)
+        );
+    }
+
+    // --- Waiting out a rate limit -------------------------------------------
+    //
+    // The clock is passed in throughout, so these describe what happens
+    // between one minute and another rather than what happens today.
+
+    const RESETS_AT_MS: u64 = 100_000;
+    const STOPPED_AT_MS: u64 = 50_000;
+    /// The reset plus the grace the retry deliberately leaves after it.
+    const DUE_AT_MS: u64 = RESETS_AT_MS + 180_000;
+
+    /// A session that has been asked something and then rejected by its plan's
+    /// five-hour window, with the window's own reading in the quota log.
+    fn stopped_by_the_plan(status: QuotaStatus, resets_at_ms: Option<u64>) -> App {
+        let mut app = app();
+        app.push_event(AgentEvent::UserMessage {
+            text: "finish the migration".into(),
+        });
+        app.quota.push(QuotaEvent {
+            at_ms: 40_000,
+            session_id: "session-1".into(),
+            provider: app.selection.provider,
+            window: "five_hour".into(),
+            status,
+            utilization: None,
+            resets_at_ms,
+            detail: None,
+        });
+        app
+    }
+
+    #[test]
+    fn a_session_stopped_by_an_exhausted_window_waits_for_it_to_reset() {
+        let mut app = stopped_by_the_plan(QuotaStatus::Exhausted, Some(RESETS_AT_MS));
+        app.toggle_retry_after_reset(STOPPED_AT_MS);
+
+        app.activity.status = Status::Ended {
+            exit_code: Some(1),
+            error: None,
+        };
+        app.arm_retry(STOPPED_AT_MS);
+
+        let waiting = app.retry.pending().expect("the window is still in force");
+        assert_eq!(waiting.at_ms, DUE_AT_MS);
+        assert_eq!(waiting.window, "five_hour");
+        assert_eq!(waiting.message, "finish the migration");
+        // Said where the operator is looking, and on the record: an unattended
+        // send hours from now must not have to be deduced.
+        assert!(app
+            .notices
+            .iter()
+            .any(|notice| notice.text.contains("sending your last turn again in 4m")));
+        assert!(app
+            .log
+            .iter()
+            .any(|entry| entry.message.contains("five_hour exhausted")));
+    }
+
+    /// Nothing is sent on the operator's behalf unless they asked for it.
+    #[test]
+    fn an_ended_session_is_left_alone_unless_the_operator_asked() {
+        let mut app = stopped_by_the_plan(QuotaStatus::Exhausted, Some(RESETS_AT_MS));
+
+        app.activity.status = Status::Ended {
+            exit_code: Some(1),
+            error: None,
+        };
+        app.arm_retry(STOPPED_AT_MS);
+
+        assert!(app.retry.pending().is_none());
+        assert!(app.notices.is_empty());
+    }
+
+    /// The usual order of events: the limit stops the session, and *then* the
+    /// operator decides to wait it out. Asking for it has to look at the
+    /// session as it stands rather than only at the next end.
+    #[test]
+    fn asking_for_a_retry_after_the_session_has_already_stopped_still_waits() {
+        let mut app = stopped_by_the_plan(QuotaStatus::Exhausted, Some(RESETS_AT_MS));
+        app.activity.status = Status::Ended {
+            exit_code: Some(1),
+            error: None,
+        };
+
+        app.toggle_retry_after_reset(STOPPED_AT_MS);
+
+        assert_eq!(
+            app.retry.pending().map(|waiting| waiting.at_ms),
+            Some(DUE_AT_MS)
+        );
+    }
+
+    /// Turning it off is not a way of saying "later": the turn that was
+    /// waiting is not sent at all.
+    #[test]
+    fn changing_their_mind_drops_the_waiting_turn() {
+        let mut app = stopped_by_the_plan(QuotaStatus::Exhausted, Some(RESETS_AT_MS));
+        app.activity.status = Status::Ended {
+            exit_code: Some(1),
+            error: None,
+        };
+        app.toggle_retry_after_reset(STOPPED_AT_MS);
+
+        app.toggle_retry_after_reset(STOPPED_AT_MS);
+
+        assert!(!app.retry.enabled());
+        assert!(app.retry.pending().is_none());
+        assert!(app.take_due_retry(DUE_AT_MS).is_none());
+    }
+
+    /// A session that ended for its own reasons is not waiting for anything,
+    /// and neither is one whose window has since turned over.
+    #[test]
+    fn a_session_not_stopped_by_a_live_limit_is_not_waited_out() {
+        for (status, resets_at_ms, now_ms) in [
+            (QuotaStatus::Warning, Some(RESETS_AT_MS), STOPPED_AT_MS),
+            (QuotaStatus::Exhausted, None, STOPPED_AT_MS),
+            // The same rejection, read after its window turned over.
+            (
+                QuotaStatus::Exhausted,
+                Some(RESETS_AT_MS),
+                RESETS_AT_MS + 1_000,
+            ),
+        ] {
+            let mut app = stopped_by_the_plan(status, resets_at_ms);
+            app.retry.toggle();
+            app.activity.status = Status::Ended {
+                exit_code: Some(0),
+                error: None,
+            };
+
+            app.arm_retry(now_ms);
+
+            assert!(
+                app.retry.pending().is_none(),
+                "{status:?} resetting at {resets_at_ms:?}, read at {now_ms}"
+            );
+        }
+    }
+
+    /// The turn is only due once the window has reset, and only ever sent
+    /// once.
+    #[test]
+    fn the_waiting_turn_comes_due_after_the_reset_and_is_taken_once() {
+        let mut app = stopped_by_the_plan(QuotaStatus::Exhausted, Some(RESETS_AT_MS));
+        app.activity.status = Status::Ended {
+            exit_code: Some(1),
+            error: None,
+        };
+        app.toggle_retry_after_reset(STOPPED_AT_MS);
+
+        assert!(app.take_due_retry(RESETS_AT_MS).is_none(), "in the grace");
+        let due = app.take_due_retry(DUE_AT_MS).expect("due");
+        assert_eq!(due.message, "finish the migration");
+        assert!(app.take_due_retry(DUE_AT_MS).is_none());
+        // The setting outlives the wait: a session that runs into the next
+        // window is waited out again without being asked twice.
+        assert!(app.retry.enabled());
+    }
+
+    /// A session somebody picked up in the meantime has had its turn. Sending
+    /// the waiting one on top would put a second question to the agent.
+    #[test]
+    fn a_session_running_again_before_the_reset_drops_the_wait() {
+        let mut app = stopped_by_the_plan(QuotaStatus::Exhausted, Some(RESETS_AT_MS));
+        app.activity.status = Status::Ended {
+            exit_code: Some(1),
+            error: None,
+        };
+        app.toggle_retry_after_reset(STOPPED_AT_MS);
+
+        app.activity.status = Status::Running;
+
+        assert!(app.take_due_retry(DUE_AT_MS).is_none());
+        assert!(app.retry.pending().is_none());
+        assert!(app
+            .notices
+            .iter()
+            .any(|notice| notice.text.contains("running again")));
+    }
+
+    /// The reading that explains a stopped session need not have been
+    /// announced to it — the server announces each threshold once across every
+    /// interaction — so a refreshed log is another chance to notice it.
+    #[test]
+    fn a_refreshed_quota_log_can_be_what_starts_the_wait() {
+        let mut app = stopped_by_the_plan(QuotaStatus::Exhausted, Some(RESETS_AT_MS));
+        let readings: Vec<QuotaEvent> = app.quota.iter().cloned().collect();
+        app.quota.replace(Vec::new());
+        app.retry.toggle();
+        app.activity.status = Status::Ended {
+            exit_code: Some(1),
+            error: None,
+        };
+        app.arm_retry(STOPPED_AT_MS);
+        assert!(app.retry.pending().is_none(), "nothing yet explains it");
+
+        app.show_quota_log(readings, STOPPED_AT_MS);
+
+        assert_eq!(
+            app.retry.pending().map(|waiting| waiting.at_ms),
+            Some(DUE_AT_MS)
         );
     }
 }
