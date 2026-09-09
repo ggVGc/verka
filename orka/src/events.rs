@@ -195,9 +195,11 @@ pub fn event_blocks(event: &AgentEvent) -> Vec<WorkLogBlock> {
         // a finished run's log.
         // An Orka attempt runs on the model its recorded request names and
         // has no operator to switch it mid-run, so a model change has nothing
-        // to say in the work log.
+        // to say in the work log; likewise a branch marker, which only an
+        // interactive host writes.
         AgentEvent::Unknown { .. }
         | AgentEvent::ModelChanged { .. }
+        | AgentEvent::Branched { .. }
         | AgentEvent::UserMessage { .. }
         | AgentEvent::TaskProgress { .. }
         | AgentEvent::BackgroundTasks { .. } => return Vec::new(),

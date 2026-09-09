@@ -156,7 +156,7 @@ Operations:
 | `list_templates` | Workspace id | `templates` |
 | `resume_session` | Session id and this launch's own policy | `session_resumed` |
 | `convert_session_provider` | Session id | `session_converted` (a new sibling Session, resumable under Styra's other interactive provider; sugar over `branch_session` with no cutoff and the other provider) |
-| `branch_session` | Session id, optional history cutoff (`at_ms`), history choice (`through_selected` or `selected_only`), optional destination provider | `session_branched` (a new sibling Session seeded with the chosen source history) |
+| `branch_session` | Session id, optional history cutoff (`at_ms`), history choice (`through_selected` or `selected_only`), optional destination provider | `session_branched` (a new sibling Session seeded with the chosen source history; both Sessions gain a `branch` marker event linking to the other) |
 | `rename_session` | Session id and optional name | `session_renamed` |
 | `change_workspace_launch` | Workspace id and one standing launch-policy edit | `workspace_launch_updated` |
 | `list_sessions` | Workspace id | `stored_sessions` |

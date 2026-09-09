@@ -14,7 +14,7 @@
 //! - the UI thread writes operator messages to the stdin-write end.
 
 use crate::agent::{MountSpec, Profile, Selection};
-use crate::event::{decode_line, AgentEvent};
+use crate::event::{decode_line, AgentEvent, BranchDirection};
 use crate::journal::Journal;
 use crate::protocol::{
     AttributedMount, BaseCapability, BaseEntry, Direction, DrivaOptions, InteractionEnd,
@@ -459,6 +459,24 @@ impl Interaction {
             .send(InteractionUpdate::Event(AgentEvent::ModelChanged {
                 model,
                 effort,
+            }));
+        Ok(())
+    }
+
+    /// Record, and echo to the UI, that this interaction's history was
+    /// continued in `session`. Nothing is sent to the agent: a branch copies
+    /// the transcript on the host, so the running conversation is unchanged
+    /// and only the log gains the boundary.
+    pub fn record_branch(&self, session: &str, name: Option<&str>) -> Result<()> {
+        if let Ok(mut journal) = self.journal.lock() {
+            journal.record_branch(BranchDirection::To, session, name)?;
+        }
+        let _ = self
+            .updates
+            .send(InteractionUpdate::Event(AgentEvent::Branched {
+                direction: BranchDirection::To,
+                session: session.to_owned(),
+                name: name.map(str::to_owned),
             }));
         Ok(())
     }

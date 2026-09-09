@@ -1053,6 +1053,22 @@ mod tests {
         assert!(!screen.contains("answer block"), "{screen}");
     }
 
+    /// The marker names the Session on the other side of the branch, so the
+    /// row itself says where `b` would go.
+    #[test]
+    fn a_branch_marker_names_the_session_it_links_to() {
+        let mut app = testing::app("s1");
+        app.push_event(AgentEvent::Branched {
+            direction: styra_server::event::BranchDirection::From,
+            session: "styra-source".into(),
+            name: Some("review".into()),
+        });
+
+        let screen = rendered(&app);
+        assert!(screen.contains("branch"), "{screen}");
+        assert!(screen.contains("branched from styra-source"), "{screen}");
+    }
+
     #[test]
     fn a_running_session_shows_a_progress_tail_and_an_elapsed_title() {
         let mut app = testing::app("s1");

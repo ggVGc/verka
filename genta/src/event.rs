@@ -49,6 +49,18 @@ pub struct FileChange {
     pub diff: Option<String>,
 }
 
+/// Which side of a branch an [`AgentEvent::Branched`] marker sits on. Each
+/// marker names the other session, so the direction says which way the link
+/// points rather than which session it belongs to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BranchDirection {
+    /// This session was branched from the named one.
+    From,
+    /// The named session was branched from this one.
+    To,
+}
+
 /// The stable, provider-independent event vocabulary.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -177,6 +189,20 @@ pub enum AgentEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         effort: Option<String>,
     },
+    /// A branch boundary between two sessions. No provider reports this — the
+    /// host writes one marker into each side when it branches a session: the
+    /// source records where its history was continued, the branch records
+    /// where its history came from. It names the *other* session, so a client
+    /// can follow the marker and open it.
+    Branched {
+        direction: BranchDirection,
+        /// The other session's host id.
+        session: String,
+        /// The other session's name, when it has one, so the line reads as
+        /// something an operator recognizes rather than as a bare id.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+    },
     /// A task the agent started alongside its own work: a backgrounded shell
     /// command or a subagent. Claude keys these by a task id that its later
     /// progress and completion lines repeat, so a client shows one row per
@@ -265,7 +291,17 @@ impl AgentEvent {
                 | AgentEvent::AgentMessage { .. }
                 | AgentEvent::Error { .. }
                 | AgentEvent::ModelChanged { .. }
+                | AgentEvent::Branched { .. }
         )
+    }
+
+    /// The session an [`AgentEvent::Branched`] marker links to, so a client
+    /// can offer to follow it without matching on the variant itself.
+    pub fn branch_target(&self) -> Option<&str> {
+        match self {
+            AgentEvent::Branched { session, .. } => Some(session),
+            _ => None,
+        }
     }
 
     /// Whether this event starts or finishes a Claude Code background shell
@@ -347,6 +383,7 @@ impl AgentEvent {
             AgentEvent::Thinking { .. } => "thinking",
             AgentEvent::Error { .. } => "error",
             AgentEvent::ModelChanged { .. } => "model",
+            AgentEvent::Branched { .. } => "branch",
             AgentEvent::TaskStarted { .. }
             | AgentEvent::TaskProgress { .. }
             | AgentEvent::TaskCompleted { .. } => "task",
@@ -445,6 +482,15 @@ impl AgentEvent {
                 (None, Some(effort)) => format!("effort → {effort} (same model)"),
                 // Not emitted; a selection that changed nothing is not an event.
                 (None, None) => "selection unchanged".into(),
+            },
+            // The id, not the name: a branch inherits its source's name, so
+            // the name alone would not say which of the two the line points
+            // at. The name is in the detail, where it is unambiguous.
+            AgentEvent::Branched {
+                direction, session, ..
+            } => match direction {
+                BranchDirection::From => format!("branched from {session}"),
+                BranchDirection::To => format!("branched to {session}"),
             },
             AgentEvent::TaskStarted {
                 description, agent, ..
@@ -608,6 +654,23 @@ impl AgentEvent {
                     Some(effort) => lines.push(format!("reasoning effort: {effort}")),
                     None => lines.push("reasoning effort: unchanged".into()),
                 }
+                vec![DetailBlock::Text(lines.join("\n"))]
+            }
+            AgentEvent::Branched {
+                direction,
+                session,
+                name,
+            } => {
+                // Name the id even when there is a name to show: following the
+                // link opens that session, and the id is what identifies it.
+                let mut lines = vec![match direction {
+                    BranchDirection::From => "branched from this session:".to_string(),
+                    BranchDirection::To => "branched into this session:".to_string(),
+                }];
+                if let Some(name) = name {
+                    lines.push(format!("name: {name}"));
+                }
+                lines.push(format!("session: {session}"));
                 vec![DetailBlock::Text(lines.join("\n"))]
             }
             AgentEvent::TaskStarted {

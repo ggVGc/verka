@@ -1164,6 +1164,14 @@ impl ServerState {
             &selection,
             summary.name.clone(),
         )?;
+        // The marker goes in before the copied history: it is the branch's
+        // first line, so reading the new Session from the top starts with
+        // where its conversation came from.
+        journal.record_branch(
+            crate::event::BranchDirection::From,
+            id,
+            summary.name.as_deref(),
+        )?;
         let source_protocol = journal::read_session_meta(&summary.path)?.protocol;
         journal.copy_branch_from(&summary.path, source_protocol, at_ms, history)?;
         let directory = journal
@@ -1180,8 +1188,42 @@ impl ServerState {
                 history,
             },
         )?;
+        self.record_source_branch(id, &summary.path, &new_id, summary.name.as_deref())?;
 
         self.stored_summary(&new_id)
+    }
+
+    /// Mark, in the source Session, that its history was continued in
+    /// `branch_id`. A live source records through its interaction, so an
+    /// attached client sees the marker arrive in its event stream; a source
+    /// that is only stored gets the record appended to its journal, where its
+    /// next replay picks it up. The source keeps running either way — a
+    /// branch takes a copy and leaves the conversation it came from intact.
+    fn record_source_branch(
+        &self,
+        id: &str,
+        source_path: &Path,
+        branch_id: &str,
+        branch_name: Option<&str>,
+    ) -> Result<()> {
+        if let Ok(interaction) = self.interaction(id) {
+            return interaction
+                .interaction
+                .record_branch(branch_id, branch_name);
+        }
+        let directory = if source_path.is_dir() {
+            source_path.to_path_buf()
+        } else {
+            source_path
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_default()
+        };
+        Journal::open(&directory)?.record_branch(
+            crate::event::BranchDirection::To,
+            branch_id,
+            branch_name,
+        )
     }
 
     fn interaction(&self, id: &str) -> Result<Arc<ManagedInteraction>> {
@@ -2026,6 +2068,54 @@ mod tests {
             crate::workspace::set_worktrees_enabled(&store, &workspace.id, true).unwrap();
         assert!(state.workspace_worktrees(&workspace).unwrap().is_some());
         assert!(worktrees_path.is_dir());
+
+        std::fs::remove_dir_all(store).ok();
+        std::fs::remove_dir_all(host).ok();
+    }
+
+    /// A source with no live interaction still learns where its history was
+    /// continued: the marker is appended to its stored journal, so its next
+    /// replay shows the link.
+    #[test]
+    fn a_stored_source_records_the_branch_taken_from_it() {
+        let store = temp_path("source-branch-marker-store");
+        let host = temp_path("source-branch-marker-host");
+        std::fs::remove_dir_all(&store).ok();
+        std::fs::remove_dir_all(&host).ok();
+        std::fs::create_dir_all(&host).unwrap();
+        let state = ServerState::new(store.clone(), store.with_extension("sock"));
+        let workspace = crate::workspace::create(&store, &host, None).unwrap();
+        let selection = Selection::new(crate::agent::Provider::Codex);
+        let profile = crate::agent::resolve_profile(&selection, &workspace_layout(&host)).unwrap();
+        let (mut journal, source_id) = Journal::create_in_workspace(
+            &store,
+            &workspace.id,
+            &profile,
+            &selection,
+            Some("review".into()),
+        )
+        .unwrap();
+        journal.record_user_message("original question").unwrap();
+        let source_path = journal.path().parent().unwrap().to_path_buf();
+        drop(journal);
+
+        state
+            .record_source_branch(&source_id, &source_path, "styra-branch", Some("review"))
+            .unwrap();
+
+        assert_eq!(
+            journal::replay(&source_path, profile.protocol).unwrap(),
+            vec![
+                crate::event::AgentEvent::UserMessage {
+                    text: "original question".into()
+                },
+                crate::event::AgentEvent::Branched {
+                    direction: crate::event::BranchDirection::To,
+                    session: "styra-branch".into(),
+                    name: Some("review".into()),
+                },
+            ]
+        );
 
         std::fs::remove_dir_all(store).ok();
         std::fs::remove_dir_all(host).ok();

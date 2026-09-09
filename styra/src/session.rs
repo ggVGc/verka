@@ -429,29 +429,39 @@ pub fn open_branch_prompt(app: &mut App) {
     app.branch_prompt = Some(crate::branch::BranchPrompt::new(at_ms));
 }
 
+/// Follow the branch marker under the cursor, opening the Session on the
+/// other side of it. Both sides carry one — the source names the branch, the
+/// branch names the source — so this walks a branch in either direction.
+pub fn follow_branch(app: &mut App) {
+    let Some(session_id) = app
+        .timeline
+        .entries
+        .get(app.timeline.selected)
+        .and_then(|entry| entry.event.branch_target())
+        .map(str::to_owned)
+    else {
+        return app.show_action_message("the selected entry is not a branch marker");
+    };
+    if session_id == app.session_id {
+        return app.show_action_message("that branch marker points at this Session");
+    }
+    app.ask(crate::app::Request::OpenSession(session_id));
+}
+
 /// Branch the current Session with the choice confirmed in the main view.
-/// The result is opened immediately so the operator sees the new sibling.
+/// The result is opened immediately so the operator sees the new sibling; the
+/// source Interaction keeps running and stays in the live list, since a branch
+/// takes a copy rather than moving the conversation. The server marks both
+/// sides, so each Session shows where the other one is — see
+/// [`follow_branch`].
 pub fn branch_session(
     app: &mut App,
     client: &Client,
-    live: &mut Attachment,
     at_ms: u64,
     history: styra_server::BranchHistory,
 ) {
     match client.branch_session(&app.session_id, Some(at_ms), history, None) {
         Ok(branched) => {
-            // A branch is the handoff point to a new interaction. Remove the
-            // source from the live list before opening its sibling, while its
-            // durable Session remains available as the branch's recorded
-            // origin and for later viewing.
-            if matches!(live, Attachment::Attached { .. }) {
-                match client.close_interaction(&app.session_id) {
-                    Ok(()) => *live = Attachment::Detached,
-                    Err(error) => app.push_log(LogEntry::error(format!(
-                        "branched, but could not close the source interaction: {error:#}"
-                    ))),
-                }
-            }
             app.push_log(LogEntry::info(format!(
                 "branched to session {}",
                 branched.name.as_deref().unwrap_or(&branched.id)
@@ -582,6 +592,43 @@ mod tests {
 
         open_branch_prompt(&mut app);
         assert_eq!(app.branch_prompt.as_ref().unwrap().at_ms(), 42);
+    }
+
+    #[test]
+    fn a_branch_marker_is_followed_to_the_session_it_names() {
+        let mut app = App::new(Selection::new(Provider::Codex), "s-1");
+        apply_update(
+            &mut app,
+            InteractionUpdate::Event(styra_server::event::AgentEvent::Branched {
+                direction: styra_server::event::BranchDirection::To,
+                session: "s-2".into(),
+                name: None,
+            }),
+        );
+        app.select_last();
+
+        follow_branch(&mut app);
+        assert_eq!(
+            app.requests.front(),
+            Some(&crate::app::Request::OpenSession("s-2".into()))
+        );
+    }
+
+    /// Any other entry has nowhere to jump to, so following says so rather
+    /// than replacing the screen with an unrelated Session.
+    #[test]
+    fn following_a_plain_entry_opens_nothing() {
+        let mut app = App::new(Selection::new(Provider::Codex), "s-1");
+        apply_update(
+            &mut app,
+            InteractionUpdate::Event(styra_server::event::AgentEvent::UserMessage {
+                text: "question".into(),
+            }),
+        );
+        app.select_last();
+
+        follow_branch(&mut app);
+        assert!(app.requests.is_empty());
     }
 
     #[test]

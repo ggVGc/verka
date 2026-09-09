@@ -64,7 +64,8 @@ live interactions.
 | `Up`/`Down`, `Ctrl+W` | message history; delete previous word |
 | `s` / `S` | interrupt the active turn / stop its interaction |
 | `n` / `N` | new session / stop then start a new session |
-| `B` | branch from history through, or only, the selected entry; closes the current interaction and opens the branch |
+| `B` | branch from history through, or only, the selected entry; opens the branch and leaves the source running |
+| `b` | follow the selected `branch` marker to the Session it names |
 | `!` | open this live session's sandbox shell in the configured terminal |
 | `a` / `A` / `V` | live interactions / sessions in this Workspace / Workspaces |
 | `W` | enable or disable linked-worktree creation for future launches |

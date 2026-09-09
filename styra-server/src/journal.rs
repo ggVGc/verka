@@ -15,7 +15,7 @@
 //! store — without re-deriving its launch selection.
 
 use crate::agent::{Profile, Selection, SessionMeta};
-use crate::event::{decode_line, AgentEvent, Protocol};
+use crate::event::{decode_line, AgentEvent, BranchDirection, Protocol};
 use crate::protocol::{Contract, Direction, QueuedMessage, RawLine, SessionOrigin, SessionSummary};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -70,6 +70,18 @@ enum Record {
         model: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         effort: Option<String>,
+    },
+    /// A branch boundary, written into both sides when a Session is branched:
+    /// the source gets a record naming the branch, the branch gets one naming
+    /// the source. Like [`Record::ModelChange`] no provider puts this on the
+    /// wire, and it belongs beside the messages — it is where a conversation
+    /// was continued somewhere else.
+    Branch {
+        at_ms: u64,
+        direction: BranchDirection,
+        session: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
     },
 }
 
@@ -173,7 +185,8 @@ impl Journal {
             let at_ms = match &record {
                 Record::Agent { at_ms, .. }
                 | Record::User { at_ms, .. }
-                | Record::ModelChange { at_ms, .. } => *at_ms,
+                | Record::ModelChange { at_ms, .. }
+                | Record::Branch { at_ms, .. } => *at_ms,
             };
             if through_ms.is_some_and(|cutoff| at_ms > cutoff) {
                 break;
@@ -188,15 +201,24 @@ impl Journal {
                     raw,
                     protocol: protocol.or(Some(source_protocol)),
                 },
-                other @ (Record::User { .. } | Record::ModelChange { .. }) => other,
+                other @ (Record::User { .. }
+                | Record::ModelChange { .. }
+                | Record::Branch { .. }) => other,
             };
+            // A marker is a boundary, not an entry the operator could have
+            // selected, so branching only the selected entry never resolves
+            // to one.
+            let selectable = !matches!(record, Record::Branch { .. });
             match history {
                 crate::protocol::BranchHistory::ThroughSelected => self.write(&record)?,
                 // A selected event's UI wire timestamp is exact for agent
                 // records and just after its host-side User record. Retaining
                 // the last record at or before the fixed branch point handles
                 // both without guessing a time tolerance.
-                crate::protocol::BranchHistory::SelectedOnly => selected_record = Some(record),
+                crate::protocol::BranchHistory::SelectedOnly if selectable => {
+                    selected_record = Some(record)
+                }
+                crate::protocol::BranchHistory::SelectedOnly => {}
             }
         }
         if let Some(record) = selected_record {
@@ -221,6 +243,21 @@ impl Journal {
             at_ms: now_ms(),
             model: model.map(str::to_owned),
             effort: effort.map(str::to_owned),
+        })
+    }
+
+    /// Record a branch boundary linking this Session to `session`.
+    pub fn record_branch(
+        &mut self,
+        direction: BranchDirection,
+        session: &str,
+        name: Option<&str>,
+    ) -> Result<()> {
+        self.write(&Record::Branch {
+            at_ms: now_ms(),
+            direction,
+            session: session.to_owned(),
+            name: name.map(str::to_owned),
         })
     }
 
@@ -564,6 +601,16 @@ pub fn replay(path: &Path, protocol: Protocol) -> Result<Vec<AgentEvent>> {
                 ..
             }) => events.push(decode_line(record_protocol.unwrap_or(protocol), &raw)),
             Ok(Record::User { text, .. }) => events.push(AgentEvent::UserMessage { text }),
+            Ok(Record::Branch {
+                direction,
+                session,
+                name,
+                ..
+            }) => events.push(AgentEvent::Branched {
+                direction,
+                session,
+                name,
+            }),
             Ok(Record::ModelChange { model, effort, .. }) => {
                 events.push(AgentEvent::ModelChanged { model, effort })
             }
@@ -607,7 +654,7 @@ pub fn replay_raw(path: &Path) -> Result<Vec<RawLine>> {
             // The raw view is the wire; a model change is a host-side record
             // with no line of its own, and the control request it produces is
             // journaled separately when the provider takes one.
-            Ok(Record::ModelChange { .. }) => {}
+            Ok(Record::ModelChange { .. }) | Ok(Record::Branch { .. }) => {}
             Err(_) => {}
         }
     }
@@ -845,6 +892,78 @@ mod tests {
 
         assert_eq!(
             replay(&destination, Protocol::CodexAppServer).unwrap(),
+            vec![AgentEvent::UserMessage {
+                text: "selected".into()
+            }]
+        );
+
+        std::fs::remove_dir_all(source).ok();
+        std::fs::remove_dir_all(destination).ok();
+    }
+
+    #[test]
+    fn a_branch_marker_replays_as_a_link_to_the_other_session() {
+        let directory = temp_dir("branch-marker");
+        {
+            let mut journal = Journal::create(&directory).unwrap();
+            journal
+                .record_branch(BranchDirection::From, "styra-source", Some("review"))
+                .unwrap();
+            journal.record_user_message("carry on here").unwrap();
+        }
+
+        assert_eq!(
+            replay(&directory, Protocol::ClaudeJsonl).unwrap(),
+            vec![
+                AgentEvent::Branched {
+                    direction: BranchDirection::From,
+                    session: "styra-source".into(),
+                    name: Some("review".into()),
+                },
+                AgentEvent::UserMessage {
+                    text: "carry on here".into()
+                },
+            ]
+        );
+        // A marker is not a wire line, so it stays out of the raw view; only
+        // the operator's message is there.
+        let raw = replay_raw(&directory).unwrap();
+        assert_eq!(raw.len(), 1);
+        assert_eq!(raw[0].text, "carry on here");
+
+        std::fs::remove_dir_all(directory).ok();
+    }
+
+    /// Branching only the selected entry must seed the new Session with a real
+    /// entry: a marker is a boundary the operator cannot have selected, so one
+    /// sitting at the cutoff is skipped in favour of the message before it.
+    #[test]
+    fn a_selected_only_branch_never_resolves_to_a_branch_marker() {
+        let source = temp_dir("branch-marker-source");
+        let destination = temp_dir("branch-marker-destination");
+        std::fs::write(
+            source.join(JOURNAL_FILE),
+            concat!(
+                "{\"source\":\"user\",\"at_ms\":10,\"text\":\"selected\"}\n",
+                "{\"source\":\"branch\",\"at_ms\":20,\"direction\":\"to\",\"session\":\"styra-other\"}\n",
+                "{\"source\":\"user\",\"at_ms\":30,\"text\":\"later\"}\n"
+            ),
+        )
+        .unwrap();
+        {
+            let mut journal = Journal::create(&destination).unwrap();
+            journal
+                .copy_branch_from(
+                    &source,
+                    Protocol::ClaudeJsonl,
+                    Some(21),
+                    crate::protocol::BranchHistory::SelectedOnly,
+                )
+                .unwrap();
+        }
+
+        assert_eq!(
+            replay(&destination, Protocol::ClaudeJsonl).unwrap(),
             vec![AgentEvent::UserMessage {
                 text: "selected".into()
             }]

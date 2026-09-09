@@ -753,6 +753,18 @@ its provider, the cutoff, and whether the branch kept the prefix or only the
 selected entry), which is not a live link — it is a historical fact, fixed at
 branch time.
 
+Both sides are marked. `branch_session` writes an `AgentEvent::Branched`
+journal record into each: the branch's is its first line and names the source
+(`branched from …`), the source's is appended at branch time and names the
+branch (`branched to …`). A marker names the *other* Session's id, so it is a
+link the operator can follow in either direction (`b` below). A live source
+records its marker through its running interaction, so an attached client sees
+it arrive in the event stream rather than only on the next replay; a source
+that is merely stored gets the record appended to its journal. Markers are
+copied like any other history when a branch is itself branched, but they are
+never what `selected_only` resolves to — a boundary is not an entry the
+operator could have selected.
+
 The branch's Styra journal is seeded with the same chosen history as its native
 provider transcript, so opening the new Session shows its starting context
 immediately rather than an empty preview. Copied agent records retain the wire
@@ -771,13 +783,15 @@ Two client-facing shortcuts:
 - `B` in the event list opens a choice and branches the current Session under
   the *same* provider, seeded either with history through the selected entry or
   with only that entry. It opens the branch immediately after confirmation,
-  closing and removing the source Interaction from the live list first. The
-  source Session remains as durable stored history. The cutoff is resolved by
-  timestamp — Styra's own journal and a
+  the same as `x`, while the source Interaction keeps running and stays in the
+  live list — a branch takes a copy, so there is nothing to stop. The cutoff is resolved by timestamp — Styra's own journal and a
   provider's native transcript are decoded differently and do not otherwise
   line up — so a `RawLine`'s `at_ms` (via the selected entry's `raw_index`)
   is compared against each native message's own timestamp. An entry without a
   stable wire timestamp cannot be branched.
+- `b` on a branch marker in the event list opens the Session that marker
+  names, which is how an operator walks between a source and its branches. On
+  any other entry it says so and does nothing.
 
 ### Current Interactions
 
