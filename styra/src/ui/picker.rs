@@ -370,9 +370,8 @@ fn render_sessions_preview(
     frame.render_widget(List::new(items).block(block), area);
 }
 
-/// A Session as the preview shows it: one line, since this pane stands beside
-/// the Workspace list rather than replacing it, and the full two-line form is
-/// what the Session picker itself draws once the Workspace is open.
+/// A Session as the preview shows it: one line, matching the compact tree in
+/// the full Session picker.
 fn preview_session_item(session: &SessionSummary, live: bool) -> ListItem<'static> {
     let display_name = session
         .name
@@ -505,77 +504,44 @@ fn session_item(
 ) -> ListItem<'static> {
     let provider = session.selection.provider.as_str();
     let display_name = session.name.as_deref().unwrap_or(&session.id);
-    let mut lines = vec![
-        Line::from(vec![
-            Span::styled(
-                tree_marker(depth, selected),
-                Style::default().fg(if selected {
-                    palette::SELECTION_MARKER
-                } else {
-                    palette::TEXT
-                }),
-            ),
-            Span::styled(
-                display_name.to_owned(),
-                Style::default()
-                    .fg(palette::TEXT)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled(
-                format!("{}{} ", "   ".repeat(depth), provider),
-                Style::default().fg(palette::ACCENT),
-            ),
-            Span::styled(
-                match order {
-                    SessionOrder::LastActivity if !session.last_event_age.is_empty() => {
-                        session.last_event_age.clone()
-                    }
-                    _ => session.age.clone(),
-                },
-                Style::default().fg(palette::MUTED_TEXT),
-            ),
-            Span::styled(
-                session
-                    .name
-                    .as_ref()
-                    .map(|_| format!(" · {}", short_id(&session.id)))
-                    .unwrap_or_default(),
-                Style::default().fg(palette::ADDITIONAL_INFO),
-            ),
-        ]),
-    ];
-    if let Some(origin) = &session.origin {
-        let kind = if origin.provider == session.selection.provider {
-            "branched"
-        } else {
-            "converted"
-        };
-        lines.push(Line::from(Span::styled(
-            format!(
-                "{}⤷ {kind} from {} ({})",
-                "   ".repeat(depth.saturating_add(1)),
-                short_id(&origin.session_id),
-                origin.provider.as_str()
-            ),
-            Style::default().fg(palette::ADDITIONAL_INFO),
-        )));
-        let history = match (origin.history, origin.at_ms) {
-            (styra_server::BranchHistory::SelectedOnly, _) => Some("selected entry only"),
-            (styra_server::BranchHistory::ThroughSelected, Some(_)) => {
-                Some("through selected entry")
-            }
-            (styra_server::BranchHistory::ThroughSelected, None) => None,
-        };
-        if let Some(history) = history {
-            lines.push(Line::from(Span::styled(
-                format!("{}  {history}", "   ".repeat(depth.saturating_add(1))),
-                Style::default().fg(palette::ADDITIONAL_INFO),
-            )));
+    let age = match order {
+        SessionOrder::LastActivity if !session.last_event_age.is_empty() => {
+            session.last_event_age.clone()
         }
-    }
-    ListItem::new(lines)
+        _ => session.age.clone(),
+    };
+    ListItem::new(Line::from(vec![
+        Span::styled(
+            tree_marker(depth, selected),
+            Style::default().fg(if selected {
+                palette::SELECTION_MARKER
+            } else {
+                palette::TEXT
+            }),
+        ),
+        Span::styled(
+            display_name.to_owned(),
+            Style::default()
+                .fg(palette::TEXT)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(" · {provider}"),
+            Style::default().fg(palette::ACCENT),
+        ),
+        Span::styled(
+            format!(" · {age}"),
+            Style::default().fg(palette::MUTED_TEXT),
+        ),
+        Span::styled(
+            session
+                .name
+                .as_ref()
+                .map(|_| format!(" · {}", short_id(&session.id)))
+                .unwrap_or_default(),
+            Style::default().fg(palette::ADDITIONAL_INFO),
+        ),
+    ]))
 }
 
 fn tree_marker(depth: usize, selected: bool) -> String {
@@ -666,7 +632,7 @@ mod tests {
     }
 
     #[test]
-    fn a_branched_session_shows_where_it_came_from() {
+    fn a_branched_session_stays_on_one_compact_row() {
         let mut session = picker_summary("s-2", "claude", "2m ago");
         session.origin = Some(styra_server::SessionOrigin {
             session_id: "s-1".into(),
@@ -675,24 +641,8 @@ mod tests {
             history: styra_server::BranchHistory::ThroughSelected,
         });
         let screen = rendered_picker(&[session], 0);
-        assert!(screen.contains("converted from"), "{screen}");
-        assert!(screen.contains("s-1"), "{screen}");
-        assert!(screen.contains("codex"), "{screen}");
-
-        let mut checkpoint = picker_summary("s-3", "codex", "2m ago");
-        checkpoint.origin = Some(styra_server::SessionOrigin {
-            session_id: "s-1".into(),
-            provider: styra_server::agent::Provider::Codex,
-            at_ms: Some(1000),
-            history: styra_server::BranchHistory::ThroughSelected,
-        });
-        let screen = rendered_picker(std::slice::from_ref(&checkpoint), 0);
-        assert!(screen.contains("branched from"), "{screen}");
-        assert!(screen.contains("through selected entry"), "{screen}");
-
-        checkpoint.origin.as_mut().unwrap().history = styra_server::BranchHistory::SelectedOnly;
-        let screen = rendered_picker(&[checkpoint], 0);
-        assert!(screen.contains("selected entry only"), "{screen}");
+        assert!(screen.contains("claude"), "{screen}");
+        assert!(!screen.contains("converted from"), "{screen}");
     }
 
     #[test]
