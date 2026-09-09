@@ -117,6 +117,29 @@ fn update_finishes_background(update: &InteractionUpdate) -> bool {
 }
 
 impl ManagedInteraction {
+    /// Adopt the concrete model an agent resolved at startup. This is the
+    /// interaction's selection, not display-only metadata: summaries and a
+    /// later attachment must open on the same model the live process uses.
+    fn note_reported_selection(&self, model: &str, effort: Option<&str>) {
+        let mut selection = self
+            .selection
+            .lock()
+            .expect("interaction selection lock poisoned");
+        let previous = selection.clone();
+        selection.model = model.to_owned();
+        if let Some(effort) = effort
+            .and_then(|effort| crate::agent::Effort::parse(effort).ok())
+            .filter(|effort| selection.provider.efforts().contains(effort))
+        {
+            selection.effort = effort;
+        }
+        if *selection != previous {
+            // Failure to update the durable mirror must not hide the live
+            // interaction's resolved selection from a connected client.
+            let _ = journal::store_session_selection(&self.session_path, &selection);
+        }
+    }
+
     fn summary(&self) -> InteractionSummary {
         InteractionSummary {
             id: self.interaction.session_id().to_owned(),
@@ -531,6 +554,7 @@ impl ServerState {
                 .unwrap_or(&self.inner.store_root)
                 .to_path_buf(),
         });
+        let reported_selection = Arc::downgrade(&managed);
         let quota = Arc::clone(&self.inner.quota);
         let quota_session = id.clone();
         let quota_provider = selection.provider;
@@ -544,6 +568,15 @@ impl ServerState {
                 let mut background_polls = HashSet::new();
                 while let Ok(update) = receiver.recv() {
                     match &update {
+                        InteractionUpdate::Event(crate::event::AgentEvent::ThreadStarted {
+                            model: Some(model),
+                            effort,
+                            ..
+                        }) => {
+                            if let Some(managed) = reported_selection.upgrade() {
+                                managed.note_reported_selection(model, effort.as_deref());
+                            }
+                        }
                         InteractionUpdate::Event(event)
                             if event.background_tasks_running().is_some() =>
                         {
@@ -894,6 +927,7 @@ impl ServerState {
             queue: Mutex::new(queued.into_iter().collect()),
             session_path: summary.path.clone(),
         });
+        let reported_selection = Arc::downgrade(&managed);
         let id = request.id.clone();
         let quota = Arc::clone(&self.inner.quota);
         let quota_session = id.clone();
@@ -908,6 +942,15 @@ impl ServerState {
                 let mut background_polls = HashSet::new();
                 while let Ok(update) = receiver.recv() {
                     match &update {
+                        InteractionUpdate::Event(crate::event::AgentEvent::ThreadStarted {
+                            model: Some(model),
+                            effort,
+                            ..
+                        }) => {
+                            if let Some(managed) = reported_selection.upgrade() {
+                                managed.note_reported_selection(model, effort.as_deref());
+                            }
+                        }
                         InteractionUpdate::Event(event)
                             if event.background_tasks_running().is_some() =>
                         {

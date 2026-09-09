@@ -9,6 +9,7 @@
 use crate::activity::Status;
 use crate::app::App;
 use crate::timeline::{Entry, Step};
+use styra_server::agent::Effort;
 use styra_server::contract;
 use styra_server::event::{AgentEvent, TokenUsage};
 use styra_server::Contract;
@@ -127,20 +128,23 @@ pub fn push_event(app: &mut App, event: AgentEvent) {
         AgentEvent::UsageUpdated { usage } => {
             app.activity.latest_usage = Some(usage.clone());
         }
-        // The agent naming its own model settles what is running, so it
-        // replaces the launch request in the status line. An effort the
-        // agent does not report leaves whatever was already known standing
-        // (Claude Code names a model but never an effort, so the launch's
-        // own `--effort` remains the only word on it).
-        AgentEvent::ThreadStarted {
-            model: Some(model),
-            effort,
-            ..
-        } => {
-            let known = effort
-                .clone()
-                .or_else(|| app.reported_model.take().and_then(|(_, effort)| effort));
-            app.reported_model = Some((model.clone(), known));
+        // The agent naming its own model settles the interaction's selection.
+        // Keep it in the one selection that also opens the launcher, rather
+        // than maintaining a second, status-line-only version of the model.
+        AgentEvent::ThreadStarted { model, effort, .. }
+        | AgentEvent::ModelChanged { model, effort } => {
+            if let Some(model) = model {
+                app.selection.model = model.clone();
+                app.model_reported = matches!(event, AgentEvent::ThreadStarted { .. });
+            }
+            if let Some(effort) = effort
+                .as_deref()
+                .and_then(|effort| Effort::parse(effort).ok())
+                .filter(|effort| app.selection.provider.efforts().contains(effort))
+            {
+                app.selection.effort = effort;
+                app.effort_reported = matches!(event, AgentEvent::ThreadStarted { .. });
+            }
         }
         AgentEvent::UserMessage { .. }
         | AgentEvent::TaskStarted { .. }

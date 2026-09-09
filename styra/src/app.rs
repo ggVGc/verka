@@ -88,21 +88,15 @@ const RECENT_MODELS: usize = 16;
 
 /// The agent, model, and reasoning effort a session is on, as the status line
 /// names them.
-///
-/// `model` and `effort` are what the agent *reported* once it started, falling
-/// back to what the launch asked for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LaunchLabel {
     pub agent: String,
     pub model: Option<String>,
     pub effort: Option<String>,
-    /// Whether `model` came from the agent itself rather than from the launch
-    /// request, so the display can distinguish what *is* running from what was
-    /// asked for.
+    /// Whether the agent confirmed the model, rather than it only being the
+    /// launch request.
     pub model_reported: bool,
-    /// The same for `effort`. It can differ from `model_reported`: Claude Code
-    /// names the model it resolved but never an effort, so a Claude session's
-    /// effort is only ever what the launch asked for.
+    /// Whether the agent confirmed the reasoning effort.
     pub effort_reported: bool,
 }
 
@@ -193,6 +187,9 @@ pub struct App {
     /// while nothing is running. The terminal client only persists it as the
     /// standing default when the operator explicitly asks.
     pub selection: Selection,
+    /// Confirmation flags for the title; model and effort live in `selection`.
+    pub model_reported: bool,
+    pub effort_reported: bool,
     /// The open launch picker, while the operator is choosing.
     pub launcher: Option<Launcher>,
     /// The Driva template chooser, including its server-loading state. Unlike
@@ -208,11 +205,6 @@ pub struct App {
     /// written back as the picker is used, so the ordering of the model
     /// column outlives the client.
     pub recent_models: Vec<String>,
-    /// The model and reasoning effort the agent itself reported when it started
-    /// the session, which is what is actually running — a launch pins a model,
-    /// but only the agent can confirm what it resolved to. `None` until the
-    /// agent's session-start line arrives (and for agents that report neither).
-    pub reported_model: Option<(String, Option<String>)>,
     /// Which Workspace this screen is showing and where it is; see
     /// [`Location`].
     pub workspace: Location,
@@ -360,11 +352,12 @@ impl App {
             notices: Notices::default(),
             preview: Preview::default(),
             selection,
+            model_reported: false,
+            effort_reported: false,
             launcher: None,
             template_picker: None,
             workspace_launch_pending: 0,
             recent_models: Vec::new(),
-            reported_model: None,
             workspace: Location::default(),
             session_id: session_id.into(),
             session_name: None,
@@ -488,7 +481,6 @@ impl App {
                 let live = self.activity.status != Status::Pending && selection != self.selection;
                 self.note_recent_model(&selection.model);
                 self.set_selection(selection);
-                self.reported_model = None;
                 if live {
                     self.ask(Request::ApplySelection);
                 }
@@ -513,32 +505,22 @@ impl App {
     /// What the status line names: the agent, and the model and reasoning effort
     /// in use.
     ///
-    /// The agent's own report wins where it made one, since that is what is
-    /// actually running; otherwise the requested selection answers for it.
+    /// `selection` is updated when the agent reports the model it resolved, so
+    /// this is also the exact selection a reopened launcher starts from.
     pub fn launch_label(&self) -> LaunchLabel {
-        let agent = self.selection.provider.as_str().to_owned();
-        let requested_model = Some(self.selection.model.clone());
-        let requested_effort = Some(self.selection.effort.as_str().to_owned());
-        match &self.reported_model {
-            Some((model, effort)) => LaunchLabel {
-                agent,
-                model: Some(model.clone()),
-                effort_reported: effort.is_some(),
-                effort: effort.clone().or(requested_effort),
-                model_reported: true,
-            },
-            None => LaunchLabel {
-                agent,
-                model: requested_model,
-                effort: requested_effort,
-                model_reported: false,
-                effort_reported: false,
-            },
+        LaunchLabel {
+            agent: self.selection.provider.as_str().to_owned(),
+            model: Some(self.selection.model.clone()),
+            effort: Some(self.selection.effort.as_str().to_owned()),
+            model_reported: self.model_reported,
+            effort_reported: self.effort_reported,
         }
     }
 
     /// Record the launch choice so the status line names what an `Enter` would start.
     pub fn set_selection(&mut self, selection: Selection) {
+        self.model_reported &= self.selection.model == selection.model;
+        self.effort_reported &= self.selection.effort == selection.effort;
         self.selection = selection;
     }
 
@@ -1844,11 +1826,6 @@ mod tests {
         assert_eq!(label.agent, "claude");
         assert_eq!(label.model.as_deref(), Some("opus"));
         assert_eq!(label.effort.as_deref(), Some("max"));
-        assert!(
-            !label.model_reported,
-            "nothing has been reported by the agent yet"
-        );
-        assert!(!label.effort_reported);
 
         // Short launch syntax is normalized to the provider's declared defaults.
         let app = App::new(
@@ -1867,10 +1844,10 @@ mod tests {
         );
     }
 
-    /// The agent's own report is what is actually running, so it replaces the
-    /// launch request.
+    /// The agent's own report becomes the interaction selection, so reopening
+    /// the launcher starts on the model actually in use.
     #[test]
-    fn a_reported_model_and_effort_replace_the_requested_ones() {
+    fn a_reported_model_and_effort_replace_the_interaction_selection() {
         let mut app = App::new(
             styra_server::agent::Selection::parse("codex").unwrap(),
             "s-1",
@@ -1883,8 +1860,8 @@ mod tests {
         let label = app.launch_label();
         assert_eq!(label.model.as_deref(), Some("gpt-5.6-sol"));
         assert_eq!(label.effort.as_deref(), Some("high"));
-        assert!(label.model_reported);
-        assert!(label.effort_reported);
+        assert_eq!(app.selection.model, "gpt-5.6-sol");
+        assert_eq!(app.selection.effort, styra_server::agent::Effort::High);
 
         // A launch that asked for something else is overruled by the fact.
         let mut app = App::new(
@@ -1916,11 +1893,7 @@ mod tests {
         });
         let label = app.launch_label();
         assert_eq!(label.model.as_deref(), Some("claude-opus-4-8"));
-        assert!(label.model_reported);
-        // The effort is the launch's own word, and is not claimed as the
-        // agent's.
         assert_eq!(label.effort.as_deref(), Some("max"));
-        assert!(!label.effort_reported);
 
         // A thread reported with neither leaves the display as it was.
         let mut app = App::new(
@@ -1934,7 +1907,55 @@ mod tests {
         });
         let label = app.launch_label();
         assert_eq!(label.model.as_deref(), Some("gpt-5.6-sol"));
-        assert!(!label.model_reported);
+    }
+
+    #[test]
+    fn the_launcher_opens_on_the_model_reported_by_the_interaction() {
+        let mut app = App::new(
+            styra_server::agent::Selection::parse("claude:claude-sonnet-5/high").unwrap(),
+            "s-1",
+        );
+        app.activity.status = Status::Idle;
+        app.push_event(AgentEvent::ThreadStarted {
+            thread_id: "s-1".into(),
+            model: Some("claude-opus-4-8".into()),
+            effort: None,
+        });
+
+        app.open_launcher();
+        assert_eq!(
+            app.launcher
+                .expect("idle interactions are configurable")
+                .selection()
+                .model,
+            "claude-opus-4-8"
+        );
+    }
+
+    #[test]
+    fn replayed_model_changes_override_startup_before_opening_the_picker() {
+        let mut app = App::new(Selection::new(Provider::Codex), "s-1");
+        app.push_event(AgentEvent::ThreadStarted {
+            thread_id: "s-1".into(),
+            model: Some("gpt-5.6-sol".into()),
+            effort: Some("high".into()),
+        });
+        app.push_event(AgentEvent::ModelChanged {
+            model: Some("gpt-5.6-luna".into()),
+            effort: None,
+        });
+        app.push_event(AgentEvent::ModelChanged {
+            model: None,
+            effort: Some("low".into()),
+        });
+        app.activity.status = Status::Idle;
+        app.open_launcher();
+        assert_eq!(
+            app.launcher.as_ref().unwrap().selection(),
+            Selection::parse("codex:gpt-5.6-luna/low").unwrap()
+        );
+        app.confirm_launcher();
+        assert!(app.requests.is_empty());
     }
 
     #[test]
