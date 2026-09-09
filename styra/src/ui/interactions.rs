@@ -47,7 +47,7 @@ pub(crate) fn render(frame: &mut Frame, app: &App, area: Rect) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(palette::ACCENT))
         .title(format!(
-            " {scope} · live interactions · j/k load · {jump}Enter close · S stop · D delete stopped · w scope · a close "
+            " {scope} · live interactions · j/k move · g/G ends · {jump}Enter close · S stop · D delete stopped · w scope · a close "
         ));
     // The cursor and the interaction on screen part company while a move is
     // settling or its load is running: the cursor is where the operator is,
