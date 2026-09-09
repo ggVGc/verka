@@ -356,6 +356,7 @@ mod tests {
 
     fn interaction(id: &str, accepting: bool, activity: InteractionActivity) -> InteractionSummary {
         InteractionSummary {
+            auto_retry: false,
             id: id.into(),
             name: None,
             workspace_id: "workspace".into(),

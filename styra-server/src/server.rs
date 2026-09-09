@@ -108,6 +108,15 @@ struct ManagedInteraction {
     /// `session_path` on every mutation so the queue survives the operator
     /// closing the Styra UI (or the daemon restarting) before it drains.
     queue: Mutex<std::collections::VecDeque<QueuedMessage>>,
+    /// Whether a plan window refusing this interaction's work should be waited
+    /// out and the work asked again; mirrored into `session_path`, since the
+    /// retry resumes the Session as a new interaction and the setting has to
+    /// survive that. See [`ServerState::retry_after_reset`].
+    auto_retry: Arc<AtomicBool>,
+    /// The window that refused this interaction's work, once one has — the
+    /// reason it stopped, as opposed to a figure about how full it was. What
+    /// makes this interaction one a reset should come back to.
+    refused_by: Arc<Mutex<Option<crate::protocol::QuotaEvent>>>,
     /// The session's durable directory: its journal, metadata and queue.
     session_path: PathBuf,
 }
@@ -158,8 +167,51 @@ impl ManagedInteraction {
                 .lock()
                 .expect("interaction activity lock poisoned"),
             last_message: self.last_message(),
+            auto_retry: self.auto_retry.load(Ordering::Acquire),
             events: self.events.load(Ordering::Acquire),
         }
+    }
+
+    /// Answer "keep at it after a rate limit" for this interaction's Session,
+    /// and record it where a resumed interaction will read it back.
+    ///
+    /// Setting it while the interaction is already stopped behind a window is
+    /// the ordinary case rather than an edge: the operator finds out that a
+    /// limit stopped their work by seeing it stopped.
+    fn set_auto_retry(&self, enabled: bool) -> Result<()> {
+        journal::store_session_auto_retry(&self.session_path, enabled)?;
+        self.auto_retry.store(enabled, Ordering::Release);
+        Ok(())
+    }
+
+    /// Record which window refused this interaction's work.
+    fn note_refused(&self, reading: crate::protocol::QuotaEvent) {
+        *self
+            .refused_by
+            .lock()
+            .expect("interaction refusal lock poisoned") = Some(reading);
+    }
+
+    /// The window that refused this interaction's work, if this interaction is
+    /// one a reset should come back to: it has to have been refused, to have
+    /// stopped, and to have been told to keep at it.
+    ///
+    /// All three are asked here rather than at the call site, because they are
+    /// one question — "is this interaction waiting for a window" — and it is
+    /// asked of every interaction on every reset.
+    fn awaiting_window(&self) -> Option<crate::protocol::QuotaEvent> {
+        if !self.auto_retry.load(Ordering::Acquire) {
+            return None;
+        }
+        // A refused interaction that is somehow still taking messages has not
+        // been stopped by the refusal, so there is nothing to resume.
+        if self.accepting_messages.load(Ordering::Acquire) {
+            return None;
+        }
+        self.refused_by
+            .lock()
+            .expect("interaction refusal lock poisoned")
+            .clone()
     }
 
     /// The last thing the agent said, as one clipped line. Scanned from the
@@ -549,12 +601,15 @@ impl ServerState {
             driva: driva.clone(),
             shell,
             queue: Mutex::new(std::collections::VecDeque::new()),
+            auto_retry: Arc::new(AtomicBool::new(false)),
+            refused_by: Arc::new(Mutex::new(None)),
             session_path: journal_path
                 .parent()
                 .unwrap_or(&self.inner.store_root)
                 .to_path_buf(),
         });
         let reported_selection = Arc::downgrade(&managed);
+        let refused = Arc::downgrade(&managed);
         let quota = Arc::clone(&self.inner.quota);
         let quota_session = id.clone();
         let quota_provider = selection.provider;
@@ -641,16 +696,23 @@ impl ServerState {
                     // decoder keeps a token-count event's counts and drops the
                     // limits beside them, and Claude's rate-limit event decodes
                     // to its wire type alone.
-                    let announcements = match &update {
+                    let observed = match &update {
                         InteractionUpdate::Raw(line)
                             if line.direction == crate::protocol::Direction::FromAgent =>
                         {
-                            quota
-                                .observe(&quota_session, quota_provider, line.at_ms, &line.text)
-                                .announce
+                            quota.observe(&quota_session, quota_provider, line.at_ms, &line.text)
                         }
-                        _ => Vec::new(),
+                        _ => crate::quota::Observed::default(),
                     };
+                    // Which window refused the work is the interaction's own
+                    // business, unlike the figures: it is why this one is about
+                    // to stop, and what a later reset comes back to.
+                    if let Some(refusal) = observed.rejected {
+                        if let Some(managed) = refused.upgrade() {
+                            managed.note_refused(refusal);
+                        }
+                    }
+                    let announcements = observed.announce;
                     if matches!(update, InteractionUpdate::Ended(_)) {
                         accepting_messages.store(false, Ordering::Release);
                     }
@@ -914,6 +976,7 @@ impl ServerState {
         // on a previous attachment (one stopped before the interaction went
         // idle enough to send them), so reload them rather than starting empty.
         let queued = journal::read_queued_messages(&summary.path)?;
+        let auto_retry = journal::read_session_auto_retry(&summary.path)?;
         let managed = Arc::new(ManagedInteraction {
             interaction,
             updates: Arc::clone(&updates),
@@ -927,9 +990,15 @@ impl ServerState {
             driva: driva.clone(),
             shell,
             queue: Mutex::new(queued.into_iter().collect()),
+            // Read back rather than defaulted: the retry that may have caused
+            // this resume is the operator's standing answer to a rate limit,
+            // and a Session that keeps hitting the window has to keep it.
+            auto_retry: Arc::new(AtomicBool::new(auto_retry)),
+            refused_by: Arc::new(Mutex::new(None)),
             session_path: summary.path.clone(),
         });
         let reported_selection = Arc::downgrade(&managed);
+        let refused = Arc::downgrade(&managed);
         let id = request.id.clone();
         let quota = Arc::clone(&self.inner.quota);
         let quota_session = id.clone();
@@ -1017,16 +1086,23 @@ impl ServerState {
                     // decoder keeps a token-count event's counts and drops the
                     // limits beside them, and Claude's rate-limit event decodes
                     // to its wire type alone.
-                    let announcements = match &update {
+                    let observed = match &update {
                         InteractionUpdate::Raw(line)
                             if line.direction == crate::protocol::Direction::FromAgent =>
                         {
-                            quota
-                                .observe(&quota_session, quota_provider, line.at_ms, &line.text)
-                                .announce
+                            quota.observe(&quota_session, quota_provider, line.at_ms, &line.text)
                         }
-                        _ => Vec::new(),
+                        _ => crate::quota::Observed::default(),
                     };
+                    // Which window refused the work is the interaction's own
+                    // business, unlike the figures: it is why this one is about
+                    // to stop, and what a later reset comes back to.
+                    if let Some(refusal) = observed.rejected {
+                        if let Some(managed) = refused.upgrade() {
+                            managed.note_refused(refusal);
+                        }
+                    }
+                    let announcements = observed.announce;
                     if matches!(update, InteractionUpdate::Ended(_)) {
                         accepting_messages.store(false, Ordering::Release);
                     }
@@ -1522,6 +1598,10 @@ impl ServerState {
             }
             Request::SetInteractionWorkingDirectory { id, directory } => {
                 self.interaction(&id)?.set_working_directory(directory)?;
+                Ok(Response::Accepted)
+            }
+            Request::SetInteractionAutoRetry { id, enabled } => {
+                self.interaction(&id)?.set_auto_retry(enabled)?;
                 Ok(Response::Accepted)
             }
             Request::QueueMessage { id, message } => Ok(Response::QueuedMessages(

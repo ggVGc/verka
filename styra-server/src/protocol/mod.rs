@@ -320,6 +320,18 @@ pub enum Request {
         id: String,
         directory: PathBuf,
     },
+    /// Keep at it after a rate limit, or stop doing so: when a plan window
+    /// refuses this interaction's work, resume the Session and ask it again
+    /// once the window turns over.
+    ///
+    /// The setting belongs to the interaction the operator is looking at —
+    /// they are answering for this conversation, not for the account — and is
+    /// stored with its Session, since the retry itself replaces the
+    /// interaction it applied to.
+    SetInteractionAutoRetry {
+        id: String,
+        enabled: bool,
+    },
     /// Persist an operator message in the session's durable input queue
     /// without sending it yet, so it survives the client disconnecting before
     /// the interaction is idle enough to accept it.

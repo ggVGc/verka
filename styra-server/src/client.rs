@@ -259,6 +259,19 @@ impl Client {
         }
     }
 
+    /// Keep at it after a rate limit, or stop doing so: whether a plan window
+    /// refusing this interaction's work should be waited out and the work
+    /// asked again once the window turns over.
+    pub fn set_interaction_auto_retry(&self, id: &str, enabled: bool) -> Result<()> {
+        match self.request(Request::SetInteractionAutoRetry {
+            id: id.to_owned(),
+            enabled,
+        })? {
+            Response::Accepted => Ok(()),
+            other => unexpected("accepted", other),
+        }
+    }
+
     /// Switch a live interaction onto another model straight away, rather than
     /// leaving it for the next message to carry. The server records it with the
     /// session, so reopening the session keeps the switch.

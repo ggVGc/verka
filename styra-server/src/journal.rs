@@ -39,6 +39,17 @@ struct StoredSessionMeta {
     /// left. `None` for a session whose turns were all untyped.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     contract: Option<Contract>,
+    /// Whether an interaction of this Session that a plan window refuses
+    /// should be resumed and asked again once the window turns over; see
+    /// [`crate::quota`].
+    ///
+    /// Stored with the Session rather than held on the interaction alone
+    /// because that is the one thing a retry destroys: it stops the refused
+    /// interaction and resumes the Session as a new one, and the operator's
+    /// standing "keep at it" has to outlive that or it would apply exactly
+    /// once.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    auto_retry: bool,
     #[serde(flatten)]
     agent: SessionMeta,
 }
@@ -311,6 +322,7 @@ fn write_session_meta(
         provider_session_id: None,
         origin: None,
         contract: None,
+        auto_retry: false,
         agent: meta.clone(),
     };
     let json = serde_json::to_string_pretty(&stored).context("serializing session metadata")?;
@@ -494,6 +506,28 @@ pub fn store_session_contract(path: &Path, contract: Contract) -> Result<()> {
         return Ok(());
     }
     stored.contract = Some(contract);
+    write_stored_session_meta(&directory, &stored)
+}
+
+/// Whether a refused interaction of this Session should be asked again once
+/// the plan window that refused it turns over.
+pub fn read_session_auto_retry(path: &Path) -> Result<bool> {
+    Ok(read_stored_session_meta(path)?.auto_retry)
+}
+
+/// Record the operator's answer to "keep at it after a rate limit". Kept with
+/// the Session so it survives the resume a retry itself performs.
+pub fn store_session_auto_retry(path: &Path, auto_retry: bool) -> Result<()> {
+    let directory = if path.is_dir() {
+        path.to_path_buf()
+    } else {
+        path.parent().map(Path::to_path_buf).unwrap_or_default()
+    };
+    let mut stored = read_stored_session_meta(&directory)?;
+    if stored.auto_retry == auto_retry {
+        return Ok(());
+    }
+    stored.auto_retry = auto_retry;
     write_stored_session_meta(&directory, &stored)
 }
 
@@ -1133,6 +1167,40 @@ mod tests {
             Some(Contract::Json)
         );
         // Recording a contract must not disturb the rest of the metadata.
+        assert_eq!(read_session_workspace_id(directory).unwrap(), workspace.id);
+        assert_eq!(
+            read_session_meta(directory).unwrap().protocol,
+            Protocol::CodexJsonl
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::remove_dir_all(&host).ok();
+    }
+
+    /// The retry a rate limit triggers resumes the Session as a new
+    /// interaction, so the operator's standing "keep at it" has to be stored
+    /// with the Session — held on the interaction alone it would apply once
+    /// and then be gone, which is the opposite of what it says.
+    #[test]
+    fn keeping_at_it_after_a_rate_limit_is_stored_with_the_session() {
+        let root = temp_dir("auto-retry-store");
+        let host = temp_dir("auto-retry-host");
+        let workspace = crate::workspace::create(&root, &host, Some("work".into())).unwrap();
+        let profile = test_profile("codex", Protocol::CodexJsonl);
+        let selection = crate::agent::Selection::new(crate::agent::Provider::Codex);
+        let (journal, _) =
+            Journal::create_in_workspace(&root, &workspace.id, &profile, &selection, None).unwrap();
+        let directory = journal.path().parent().unwrap();
+
+        // Nothing is done on the operator's behalf until they ask.
+        assert!(!read_session_auto_retry(directory).unwrap());
+        store_session_auto_retry(directory, true).unwrap();
+        assert!(read_session_auto_retry(directory).unwrap());
+        store_session_auto_retry(directory, false).unwrap();
+        assert!(!read_session_auto_retry(directory).unwrap());
+
+        // And recording it disturbs nothing else about the Session.
+        store_session_auto_retry(directory, true).unwrap();
         assert_eq!(read_session_workspace_id(directory).unwrap(), workspace.id);
         assert_eq!(
             read_session_meta(directory).unwrap().protocol,

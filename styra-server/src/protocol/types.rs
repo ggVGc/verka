@@ -565,6 +565,11 @@ pub struct InteractionSummary {
     /// talking about. `None` before the agent has said anything.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_message: Option<String>,
+    /// Whether a plan window refusing this interaction's work should be waited
+    /// out: the Session resumed and asked again once the window turns over.
+    /// See [`crate::protocol::Request::SetInteractionAutoRetry`].
+    #[serde(default)]
+    pub auto_retry: bool,
     /// How many events have arrived from this interaction's agent. A listing
     /// client steps its running indicator with this rather than with the
     /// clock, so the motion means "this interaction produced something"

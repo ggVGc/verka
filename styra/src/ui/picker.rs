@@ -853,6 +853,7 @@ mod tests {
 
     fn interaction_summary(id: &str, selection: &str, accepting: bool) -> InteractionSummary {
         InteractionSummary {
+            auto_retry: false,
             id: id.into(),
             name: None,
             workspace_id: "w-1".into(),

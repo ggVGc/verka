@@ -215,6 +215,7 @@ mod tests {
 
     fn interaction(id: &str, name: &str) -> InteractionSummary {
         InteractionSummary {
+            auto_retry: false,
             id: id.into(),
             name: Some(name.into()),
             workspace_id: "payments".into(),
