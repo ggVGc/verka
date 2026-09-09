@@ -533,14 +533,6 @@ fn session_item(
             format!(" · {age}"),
             Style::default().fg(palette::MUTED_TEXT),
         ),
-        Span::styled(
-            session
-                .name
-                .as_ref()
-                .map(|_| format!(" · {}", short_id(&session.id)))
-                .unwrap_or_default(),
-            Style::default().fg(palette::ADDITIONAL_INFO),
-        ),
     ]))
 }
 
@@ -663,12 +655,16 @@ mod tests {
     }
 
     #[test]
-    fn picker_prefers_a_session_name_but_retains_a_short_identity() {
+    fn picker_prefers_a_session_name_without_repeating_its_identity() {
         let mut session = picker_summary("0000000123456-42-7", "codex", "2m ago");
         session.name = Some("Fix session picker".into());
         let screen = rendered_picker(&[session], 0);
         assert!(screen.contains("Fix session picker"), "{screen}");
-        assert!(screen.contains("123456-42-7"), "{screen}");
+        let list_pane = screen_lines(&screen, 80)
+            .into_iter()
+            .map(|line| line.chars().take(80 * 42 / 100).collect::<String>())
+            .collect::<String>();
+        assert!(!list_pane.contains("123456-42-7"), "{screen}");
     }
 
     #[test]
