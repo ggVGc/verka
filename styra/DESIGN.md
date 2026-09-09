@@ -617,6 +617,59 @@ object with a balance and a `hasCredits` flag — which a reading does not yet
 carry; the flag's consequence is read (a spent account's
 `rateLimitReachedType`) but the balance itself is not shown.
 
+### Waiting out a rate limit
+
+A refused window does not merely fill a view: it ends the agent process, and
+leaves the Session stopped with the operator's last turn unanswered, however
+many hours the wait is. `R` in the quota view is the operator's standing answer
+to that for one conversation — **keep at it**: when a window refuses this
+Interaction's work, wait the window out and ask it the same turn again.
+
+The waiting is the **server's**, not a client's. A client is not running in
+four hours' time, and two clients watching one Session would each have their
+own opinion about whether it should come back; the server owns the process the
+limit stopped and is the only thing still there when the window turns over. So
+`R` sends `SetInteractionAutoRetry` and displays what came back, rather than
+holding a local opinion.
+
+Nothing new watches the clock. Every rejection already passes through the quota
+log — read off the verbatim line before the decoder drops it — and every
+rejection reports the minute its window turns over, so the log is the one place
+that can say a window is usable again. `QuotaLog::observe` therefore reports the
+rejection a line carried as a fact of its own (which window refused the work,
+as opposed to how full it is), and `QuotaLog::resets` hands back the windows
+whose moment has come. Each is handed back **once**: the server polls it every
+fifteen seconds, and whatever a rejection held back must not be released twice.
+
+The moment is the reported reset **plus three minutes**, because the provider is
+the one rounding it and a request landing exactly on the minute is the one most
+likely to be refused for being early — an unattended retry that is refused
+costs the whole wait again. But it is *now* if the provider says a watched
+window is allowing work again, which outranks any reset it predicted earlier. A
+rejection naming no reset is recorded and then left alone: a guessed reset would
+call a window usable while it is still refusing.
+
+A reset picks up every Interaction that window is holding — refused by it,
+stopped by it, and told to keep at it, one question asked of each — and asks it
+the turn it was refused in the middle of, **verbatim**, framing included, so a
+turn that asked its reply for a shape asks for it again. Both halves of a window
+identify it: the providers are separate subscriptions and each reports several
+windows, so a Codex hour turning over releases nothing a Claude week is holding.
+
+The setting is stored in `session.json` rather than held on the Interaction
+alone, because the retry destroys the thing it is set on: it resumes the Session
+as a *new* Interaction, so an answer held only in memory would apply exactly
+once — the opposite of what "keep at it" says. A Session that runs into the next
+window is therefore waited out again without being asked twice. The resume uses
+the Interaction's own half of the launch policy, so the Session comes back in
+the sandbox the operator granted this conversation rather than the Workspace's
+standing policy alone.
+
+Everything the server does here it says in the Interaction's own update stream —
+the wait starting, the window coming back, a resume or a send that failed —
+because that is where the operator will read it: in a session that stopped while
+they were away.
+
 ### The transcript view
 
 `t` toggles a **transcript view**: the current session's decoded events laid
@@ -665,7 +718,7 @@ current focus is shown in the status line and by which region draws the cursor.
 | `r`             | Toggle the raw wire view, focused on the selected entry's wire line (in the raw view, `j`/`k`/`g`/`G` select, `PgUp`/`PgDn` scroll the entry panel) |
 | `l`             | Toggle the diagnostic log view (same scrolling as the raw view) |
 | `t`             | Toggle the rendered transcript view (`j`/`k`/`g`/`G` scroll from the start) |
-| `Q`             | Toggle the plan-quota view, refreshing it from the server (`j`/`k` scroll) |
+| `Q`             | Toggle the plan-quota view, refreshing it from the server (`j`/`k` scroll; `R` there sets the rate-limit retry) |
 | `i`             | Enter input focus                                           |
 | `L`             | Choose launch settings, or the model for the next idle agent turn (and Codex effort) |
 | `s`             | Stop the Interaction (keeps the Session and journal)        |

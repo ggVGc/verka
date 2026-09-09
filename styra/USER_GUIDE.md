@@ -84,7 +84,7 @@ on it as soon as it arrives.
 | Key | View or action |
 | --- | --- |
 | `r`, `l`, `t`, `d` | raw wire records, client/server log, transcript, Workspace/interaction details; press again for events |
-| `Q` | quota readings observed by the server |
+| `Q` | quota readings observed by the server (`R` there: keep at it after a rate limit) |
 | `f` | files associated with the selected event (or the whole session) |
 | `F` | open a file the selected event cites (`path:line` included) |
 | `X` | typed answer from the last turn |
@@ -113,6 +113,30 @@ focused-event/all-session files, `p` previews, `y` copies its path, and `J`/`K`
 changes the source event. In Typed answer: `T`, `L`, `F`, `J` re-read the last
 answer as text, lines, files, JSON; `R` uses the turn's original requested
 shape; `e` opens a selected file; `y` copies.
+
+## Wait out a rate limit
+
+When a plan window runs dry the provider refuses the turn and the agent process
+ends, leaving the session stopped with your last message unanswered. Press `Q`
+for the quota view and `R` there to have the session keep at it: once that
+window turns over, the server resumes the session and asks it the same turn
+again. The bottom border of that view says which way `R` is set, and the
+readings above it say which window is full and when it resets.
+
+The waiting is the server's, so it holds while Styra is closed and applies to
+whichever client next opens the session. `R` is answered for one session, is
+remembered with it, and stays on afterwards — a session that runs into the next
+window is waited out again without being asked twice. Press `R` again to stop.
+
+The turn goes out exactly as it did the first time, framing and all, so a turn
+that asked its reply for a shape asks for it again, and the session comes back
+in the same sandbox it was launched in. Three minutes are left after the
+reported reset, since a request landing on the minute itself tends to be
+refused for being early. A refusal that names no reset is left alone: there is
+no minute to come back at, and Styra does not guess one. Whatever happens is
+written to the session's log — the wait starting, the window coming back, and a
+resume that failed — so a session you left stopped explains itself when you
+return to it.
 
 ## Give the agent a file
 
