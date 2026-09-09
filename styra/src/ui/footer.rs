@@ -36,16 +36,30 @@ pub(crate) fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
         .as_deref()
         .map(UnicodeWidthStr::width)
         .unwrap_or_default()
+        .min(area.width.saturating_sub(worktrees_width) as usize)
+        as u16;
+    // Waiting out a rate limit is the session's standing answer, kept by the
+    // server and acted on long after the quota view that armed it was closed.
+    // The operator who needs to know it is armed is watching the interaction
+    // rather than the readings, so it rides the footer: the one line every
+    // view keeps. Only the non-default "on" takes footer space — every session
+    // starts off, and the quota view's own title spells out both.
+    let retry_notice = app.auto_retry.then_some(" R rate-limit retry: on ");
+    let retry_width = retry_notice
+        .map(UnicodeWidthStr::width)
+        .unwrap_or_default()
         .min(area.width.saturating_sub(worktrees_width) as usize) as u16;
     let directory_width = working_directory.width().min(
         area.width
             .saturating_sub(worktrees_width)
-            .saturating_sub(idle_notice_width) as usize,
+            .saturating_sub(idle_notice_width)
+            .saturating_sub(retry_width) as usize,
     ) as u16;
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
             Constraint::Min(0),
+            Constraint::Length(retry_width),
             Constraint::Length(idle_notice_width),
             Constraint::Length(worktrees_width),
             Constraint::Length(directory_width),
@@ -71,6 +85,16 @@ pub(crate) fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     )))
     .right_aligned();
     frame.render_widget(keybinds, chunks[0]);
+    if let Some(retry_notice) = retry_notice {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                retry_notice,
+                Style::default().fg(palette::SUCCESS),
+            )))
+            .right_aligned(),
+            chunks[1],
+        );
+    }
     if let Some(idle_notice) = idle_notice {
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
@@ -78,11 +102,11 @@ pub(crate) fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
                 Style::default().fg(palette::SUCCESS),
             )))
             .right_aligned(),
-            chunks[1],
+            chunks[2],
         );
     }
-    frame.render_widget(worktrees, chunks[2]);
-    frame.render_widget(directory, chunks[3]);
+    frame.render_widget(worktrees, chunks[3]);
+    frame.render_widget(directory, chunks[4]);
 }
 
 pub(crate) fn tag_color(tag: &str) -> Color {
@@ -128,6 +152,22 @@ mod tests {
         assert!(screen.contains("/tmp/styra/workspace"));
         assert!(screen.contains("W worktrees: OFF"));
         assert!(!screen.contains("j/k next/prev"));
+    }
+
+    /// An armed rate-limit retry has to be visible from the interaction the
+    /// operator is watching: it was armed once, in a view they have since
+    /// left, and what it changes happens hours later.
+    #[test]
+    fn footer_reports_an_armed_rate_limit_retry() {
+        let mut app = testing::app("s1");
+        assert!(
+            !rendered(&app).contains("rate-limit retry"),
+            "off is the default and takes no footer space"
+        );
+
+        app.auto_retry = true;
+
+        assert!(rendered(&app).contains("R rate-limit retry: on"));
     }
 
     #[test]
