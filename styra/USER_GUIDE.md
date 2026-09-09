@@ -84,7 +84,7 @@ on it as soon as it arrives.
 | Key | View or action |
 | --- | --- |
 | `r`, `l`, `t`, `d` | raw wire records, client/server log, transcript, Workspace/interaction details; press again for events |
-| `Q` | quota readings observed by the server |
+| `Q` | quota readings observed by the server (`R` there: retry after a rate limit) |
 | `f` | files associated with the selected event (or the whole session) |
 | `F` | open a file the selected event cites (`path:line` included) |
 | `X` | typed answer from the last turn |
@@ -113,6 +113,24 @@ focused-event/all-session files, `p` previews, `y` copies its path, and `J`/`K`
 changes the source event. In Typed answer: `T`, `L`, `F`, `J` re-read the last
 answer as text, lines, files, JSON; `R` uses the turn's original requested
 shape; `e` opens a selected file; `y` copies.
+
+## Wait out a rate limit
+
+When a plan window runs dry the provider rejects the turn and the agent
+process ends, which leaves the session stopped with your last message
+unanswered. Press `Q` for the quota view and `R` there to have Styra come back
+to it for you: it takes your last turn, waits for the window that rejected it,
+and sends it again three minutes past the reset the provider reported. The
+bottom border of that view says whether `R` is on, and — once a turn is
+waiting — which window it is waiting for and the minute it goes.
+
+`R` is a per-client setting and stays on afterwards, so a session that runs
+into the next window is waited out again without being asked twice. Pressing
+`R` again drops the waiting turn as well as turning the setting off, and so
+does the session starting again in the meantime — by you or by another client
+— since its turn has been taken and sending the waiting one on top would put a
+second question to the agent. A rejection that names no reset time is left
+alone: there is no minute to come back at, and Styra does not guess one.
 
 ## Give the agent a file
 

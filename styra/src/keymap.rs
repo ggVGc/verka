@@ -157,6 +157,10 @@ pub(crate) const REFERENCE: &[ReferenceRow] = &[
         action: "move or scroll",
     },
     ReferenceRow::Binding {
+        keys: "R (quota)",
+        action: "after a rate limit, send the stopped turn again once it resets",
+    },
+    ReferenceRow::Binding {
         keys: "g/G",
         action: "first/top or last/bottom",
     },
