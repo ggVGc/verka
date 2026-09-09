@@ -33,7 +33,7 @@ pub enum WorkspaceChoice {
 
 /// The session picker loop: j/k or arrows to move, Enter to choose a
 /// session, `s` to switch between ordering by last activity and by creation,
-/// and `a` to reveal history older than a week. Esc or q backs out. When
+/// and `a` to toggle history older than a week. Esc or q backs out. When
 /// `current_id` is in the list, it opens selected even if another root or
 /// branch sorts above it.
 pub fn run_session_picker(
@@ -151,9 +151,9 @@ pub fn run_session_picker(
                     .and_then(|id| sessions.iter().position(|session| session.id == id))
                     .unwrap_or(0);
             }
-            KeyCode::Char('a') if !showing_all => {
+            KeyCode::Char('a') => {
                 let cursor_id = sessions.get(selected).map(|session| session.id.clone());
-                showing_all = true;
+                showing_all = !showing_all;
                 sessions = picker_sessions(&all_sessions, showing_all, now_ms, order);
                 selected = cursor_id
                     .and_then(|id| sessions.iter().position(|session| session.id == id))
@@ -595,7 +595,7 @@ mod tests {
     }
 
     #[test]
-    fn session_picker_hides_history_older_than_a_week_until_all_is_shown() {
+    fn session_picker_history_filter_can_be_toggled() {
         let now_ms = 10 * crate::session::RECENT_SESSION_WINDOW_MS;
         let mut fresh = session("fresh");
         fresh.last_event_at_ms = Some(now_ms - crate::session::RECENT_SESSION_WINDOW_MS);
@@ -614,6 +614,8 @@ mod tests {
         );
         let all = picker_sessions(&sessions, true, now_ms, SessionOrder::LastActivity);
         assert_eq!(all.len(), 3);
+        let recent_again = picker_sessions(&sessions, false, now_ms, SessionOrder::LastActivity);
+        assert_eq!(recent_again, recent);
     }
 
     #[test]

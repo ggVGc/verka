@@ -42,7 +42,7 @@ pub fn render_picker(
         .borders(Borders::ALL)
         .border_style(Style::default().fg(palette::ACCENT))
         .title(format!(
-            " styra · choose a session · Enter open · r rename · x convert provider · s sort: {} · a all · q cancel ",
+            " styra · choose a session · Enter open · r rename · x convert provider · s sort: {} · a history · q cancel ",
             order.label(),
         ));
 
