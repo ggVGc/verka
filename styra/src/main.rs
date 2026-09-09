@@ -214,7 +214,7 @@ fn main() -> Result<()> {
                 return Ok(());
             }
             let mut term = terminal::setup()?;
-            match picker::run_session_picker(&mut term, &client, &mut sessions) {
+            match picker::run_session_picker(&mut term, &client, &mut sessions, None) {
                 Ok(Some(id)) => {
                     terminal = Some(term);
                     Some(PathBuf::from(id))
@@ -497,7 +497,7 @@ fn browse_shells(client: &Client) -> Result<()> {
     }
 
     let mut terminal = terminal::setup()?;
-    let choice = picker::run_session_picker(&mut terminal, client, &mut sessions);
+    let choice = picker::run_session_picker(&mut terminal, client, &mut sessions, None);
     terminal::restore(&mut terminal)?;
     match choice? {
         Some(session) => attach_shell(client, &session),

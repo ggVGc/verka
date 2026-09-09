@@ -720,7 +720,8 @@ pub fn run(
                         open_interactions: false,
                     });
                 }
-                if let Some(id) = picker::run_session_picker(terminal, client, &mut sessions)? {
+                if let Some(id) = picker::run_session_picker(terminal, client, &mut sessions, None)?
+                {
                     return Ok(RunOutcome::OpenWorkspace {
                         workspace: Box::new(workspace),
                         session_id: Some(id),
@@ -749,7 +750,12 @@ pub fn run(
                     app.push_log(LogEntry::warn("no sessions found in the current Workspace"));
                     continue;
                 }
-                if let Some(id) = picker::run_session_picker(terminal, client, &mut sessions)? {
+                if let Some(id) = picker::run_session_picker(
+                    terminal,
+                    client,
+                    &mut sessions,
+                    Some(&app.session_id),
+                )? {
                     return Ok(RunOutcome::OpenSession(id));
                 }
             }

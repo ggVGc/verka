@@ -33,15 +33,17 @@ pub enum WorkspaceChoice {
 
 /// The session picker loop: j/k or arrows to move, Enter to choose a
 /// session, `s` to switch between ordering by last activity and by creation,
-/// Esc or q to back out.
+/// Esc or q to back out. When `current_id` is in the list, it opens selected
+/// even if another root or branch sorts above it.
 pub fn run_session_picker(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     client: &Client,
     sessions: &mut [styra_server::SessionSummary],
+    current_id: Option<&str>,
 ) -> Result<Option<String>> {
     let mut order = SessionOrder::LastActivity;
     sort_sessions_tree(sessions, order);
-    let mut selected = 0usize;
+    let mut selected = initial_session_selection(sessions, current_id);
     let mut preview_id = String::new();
     let mut preview_cursor = 0u64;
     let mut preview_updates = Vec::new();
@@ -178,6 +180,15 @@ pub fn run_session_picker(
             _ => {}
         }
     }
+}
+
+fn initial_session_selection(
+    sessions: &[styra_server::SessionSummary],
+    current_id: Option<&str>,
+) -> usize {
+    current_id
+        .and_then(|id| sessions.iter().position(|session| session.id == id))
+        .unwrap_or(0)
 }
 
 /// Show a dismissable notice over the session picker and block until any key
@@ -431,7 +442,22 @@ fn has_live_interaction(workspace: &WorkspaceSummary, interactions: &[Interactio
 mod tests {
     use super::*;
     use std::path::PathBuf;
-    use styra_server::{agent::Selection, DrivaOptions, InteractionActivity};
+    use styra_server::{agent::Selection, DrivaOptions, InteractionActivity, SessionSummary};
+
+    fn session(id: &str) -> SessionSummary {
+        SessionSummary {
+            id: id.into(),
+            name: None,
+            workspace_id: "workspace".into(),
+            path: PathBuf::from(id),
+            selection: Selection::parse("codex").unwrap(),
+            age: String::new(),
+            created_at_ms: None,
+            last_event_at_ms: None,
+            last_event_age: String::new(),
+            origin: None,
+        }
+    }
 
     fn interaction(id: &str, accepting: bool, activity: InteractionActivity) -> InteractionSummary {
         InteractionSummary {
@@ -518,6 +544,13 @@ mod tests {
                 chosen: vec!["rust".into(), "browser".into()],
             }
         );
+    }
+
+    #[test]
+    fn session_picker_opens_on_the_current_interaction_when_it_is_listed() {
+        let sessions = vec![session("first"), session("current"), session("last")];
+        assert_eq!(initial_session_selection(&sessions, Some("current")), 1);
+        assert_eq!(initial_session_selection(&sessions, Some("gone")), 0);
     }
 
     #[test]
