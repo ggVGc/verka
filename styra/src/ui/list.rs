@@ -4,8 +4,8 @@
 use super::code::{code_block_lines, is_error_diagnostic};
 use super::markdown::{markdown_block_lines_with_links, structural_indent};
 use super::{
-    conversation_only_title, format_duration, message_text_color, palette, render_placeholder,
-    render_preview, tag_color, view_block, DETAIL_INDENT, MAX_DETAIL_LINES,
+    conversation_only_title, format_duration, format_tokens, message_text_color, palette,
+    render_placeholder, render_preview, tag_color, view_block, DETAIL_INDENT, MAX_DETAIL_LINES,
 };
 use crate::activity::{Progress, Status};
 use crate::app::{App, LinkDisplay, View};
@@ -37,7 +37,9 @@ pub(crate) fn render_list(frame: &mut Frame, app: &App, area: Rect) {
         .map(|u| {
             format!(
                 " in {} · out {} · cached {} ",
-                u.input_tokens, u.output_tokens, u.cached_input_tokens
+                format_tokens(u.input_tokens),
+                format_tokens(u.output_tokens),
+                format_tokens(u.cached_input_tokens)
             )
         })
         .unwrap_or_default();

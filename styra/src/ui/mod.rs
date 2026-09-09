@@ -92,6 +92,31 @@ pub(crate) fn format_duration(duration: Duration) -> String {
     }
 }
 
+/// A token count in the compact form the usage line uses: `812`, `9.4k`,
+/// `126k`, `1.3M`. Exact counts past a thousand tell the operator nothing they
+/// act on, and the short form keeps the three-slot usage line narrow.
+pub(crate) fn format_tokens(tokens: u64) -> String {
+    if tokens < 1_000 {
+        format!("{tokens}")
+    } else if tokens < 1_000_000 {
+        format_scaled(tokens, 1_000, 'k')
+    } else {
+        format_scaled(tokens, 1_000_000, 'M')
+    }
+}
+
+/// One decimal below ten units, none above: `9.4k` still distinguishes counts
+/// an operator watches grow, while `126k` would only add noise.
+fn format_scaled(tokens: u64, unit: u64, suffix: char) -> String {
+    let whole = tokens / unit;
+    if whole < 10 {
+        let tenths = (tokens % unit) * 10 / unit;
+        format!("{whole}.{tenths}{suffix}")
+    } else {
+        format!("{whole}{suffix}")
+    }
+}
+
 /// Color coding for the status dot, so running vs. idle for input reads at
 /// a glance instead of requiring the operator to read the label text.
 fn status_color(status: &Status) -> Color {
@@ -385,6 +410,20 @@ mod tests {
     use super::testing::{self, rendered};
     use super::*;
     use styra_server::event::{AgentEvent, TokenUsage};
+
+    #[test]
+    fn token_counts_read_as_k_and_m_past_a_thousand() {
+        assert_eq!(format_tokens(0), "0");
+        assert_eq!(format_tokens(812), "812");
+        assert_eq!(format_tokens(999), "999");
+        assert_eq!(format_tokens(1_000), "1.0k");
+        assert_eq!(format_tokens(9_450), "9.4k");
+        assert_eq!(format_tokens(10_000), "10k");
+        assert_eq!(format_tokens(126_400), "126k");
+        assert_eq!(format_tokens(999_999), "999k");
+        assert_eq!(format_tokens(1_350_000), "1.3M");
+        assert_eq!(format_tokens(12_000_000), "12M");
+    }
 
     #[test]
     fn header_shows_selection_and_status() {
