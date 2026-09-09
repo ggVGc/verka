@@ -13,6 +13,10 @@ use styra_server::{
     Client, Contract, InteractionUpdate, LogEntry, SessionSummary, WorkspaceSummary,
 };
 
+/// How long a Session remains in the picker's default recent-conversation
+/// view. Older history is still available with its explicit "show all" key.
+pub const RECENT_SESSION_WINDOW_MS: u64 = 7 * 24 * 60 * 60 * 1_000;
+
 /// Whether this client is attached to a server interaction, plus the only
 /// client-side state that attachment needs: its update cursor.
 ///
@@ -103,6 +107,14 @@ impl SessionOrder {
 /// journal yet has seen no events, so its creation is its last activity.
 fn last_activity_at_ms(session: &SessionSummary) -> Option<u64> {
     session.last_event_at_ms.or(session.created_at_ms)
+}
+
+/// Whether a Session belongs in the picker's default recent-conversation
+/// view. Sessions without a timestamp predate this metadata, so keep them
+/// visible rather than making an old record unreachable.
+pub fn is_recent_session(session: &SessionSummary, now_ms: u64) -> bool {
+    last_activity_at_ms(session)
+        .is_none_or(|activity| activity >= now_ms.saturating_sub(RECENT_SESSION_WINDOW_MS))
 }
 
 /// Order Sessions newest first under `order`, ties broken by creation so the

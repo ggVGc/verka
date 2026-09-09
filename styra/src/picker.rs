@@ -3,12 +3,12 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use std::io::Stdout;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use styra_server::{Client, InteractionSummary, InteractionUpdate, LogEntry, WorkspaceSummary};
 
 use crate::launch::LaunchScope;
-use crate::session::{sort_sessions_tree, SessionOrder};
+use crate::session::{is_recent_session, sort_sessions_tree, SessionOrder};
 use crate::ui;
 
 /// How long the cursor must rest on a Session or Workspace before its preview
@@ -33,8 +33,9 @@ pub enum WorkspaceChoice {
 
 /// The session picker loop: j/k or arrows to move, Enter to choose a
 /// session, `s` to switch between ordering by last activity and by creation,
-/// Esc or q to back out. When `current_id` is in the list, it opens selected
-/// even if another root or branch sorts above it.
+/// and `a` to reveal history older than a week. Esc or q backs out. When
+/// `current_id` is in the list, it opens selected even if another root or
+/// branch sorts above it.
 pub fn run_session_picker(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     client: &Client,
@@ -42,8 +43,11 @@ pub fn run_session_picker(
     current_id: Option<&str>,
 ) -> Result<Option<String>> {
     let mut order = SessionOrder::LastActivity;
-    sort_sessions_tree(sessions, order);
-    let mut selected = initial_session_selection(sessions, current_id);
+    let mut all_sessions = sessions.to_vec();
+    let now_ms = unix_now_ms();
+    let mut showing_all = false;
+    let mut sessions = picker_sessions(&all_sessions, showing_all, now_ms, order);
+    let mut selected = initial_session_selection(&sessions, current_id);
     let mut preview_id = String::new();
     let mut preview_cursor = 0u64;
     let mut preview_updates = Vec::new();
@@ -119,7 +123,7 @@ pub fn run_session_picker(
         } else {
             ui::Preview::Ready(&preview_updates)
         };
-        terminal.draw(|frame| ui::render_picker(frame, sessions, selected, order, preview))?;
+        terminal.draw(|frame| ui::render_picker(frame, &sessions, selected, order, preview))?;
 
         if !event::poll(Duration::from_millis(100))? {
             continue;
@@ -142,10 +146,18 @@ pub fn run_session_picker(
             KeyCode::Char('s') => {
                 let cursor_id = sessions.get(selected).map(|session| session.id.clone());
                 order = order.toggled();
-                sort_sessions_tree(sessions, order);
+                sort_sessions_tree(&mut sessions, order);
                 selected = cursor_id
                     .and_then(|id| sessions.iter().position(|session| session.id == id))
                     .unwrap_or(0);
+            }
+            KeyCode::Char('a') if !showing_all => {
+                let cursor_id = sessions.get(selected).map(|session| session.id.clone());
+                showing_all = true;
+                sessions = picker_sessions(&all_sessions, showing_all, now_ms, order);
+                selected = cursor_id
+                    .and_then(|id| sessions.iter().position(|session| session.id == id))
+                    .unwrap_or_else(|| initial_session_selection(&sessions, current_id));
             }
             KeyCode::Enter if !sessions.is_empty() => {
                 return Ok(Some(sessions[selected].id.clone()));
@@ -153,15 +165,22 @@ pub fn run_session_picker(
             KeyCode::Char('r') if !sessions.is_empty() => {
                 if let Some(name) = read_session_name(
                     terminal,
-                    sessions,
+                    &sessions,
                     selected,
                     order,
                     sessions[selected].name.as_deref().unwrap_or(""),
                 )? {
-                    sessions[selected] = client.rename_session(
+                    let renamed = client.rename_session(
                         &sessions[selected].id,
                         (!name.trim().is_empty()).then_some(name.as_str()),
                     )?;
+                    sessions[selected] = renamed.clone();
+                    if let Some(index) = all_sessions
+                        .iter()
+                        .position(|session| session.id == renamed.id)
+                    {
+                        all_sessions[index] = renamed;
+                    }
                 }
             }
             KeyCode::Char('x') if !sessions.is_empty() => {
@@ -169,7 +188,7 @@ pub fn run_session_picker(
                     Ok(converted) => return Ok(Some(converted.id)),
                     Err(error) => show_message(
                         terminal,
-                        sessions,
+                        &sessions,
                         selected,
                         order,
                         "could not convert session",
@@ -180,6 +199,28 @@ pub fn run_session_picker(
             _ => {}
         }
     }
+}
+
+fn picker_sessions(
+    sessions: &[styra_server::SessionSummary],
+    showing_all: bool,
+    now_ms: u64,
+    order: SessionOrder,
+) -> Vec<styra_server::SessionSummary> {
+    let mut displayed = sessions
+        .iter()
+        .filter(|session| showing_all || is_recent_session(session, now_ms))
+        .cloned()
+        .collect::<Vec<_>>();
+    sort_sessions_tree(&mut displayed, order);
+    displayed
+}
+
+fn unix_now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis().try_into().unwrap_or(u64::MAX))
+        .unwrap_or(0)
 }
 
 fn initial_session_selection(
@@ -551,6 +592,28 @@ mod tests {
         let sessions = vec![session("first"), session("current"), session("last")];
         assert_eq!(initial_session_selection(&sessions, Some("current")), 1);
         assert_eq!(initial_session_selection(&sessions, Some("gone")), 0);
+    }
+
+    #[test]
+    fn session_picker_hides_history_older_than_a_week_until_all_is_shown() {
+        let now_ms = 10 * crate::session::RECENT_SESSION_WINDOW_MS;
+        let mut fresh = session("fresh");
+        fresh.last_event_at_ms = Some(now_ms - crate::session::RECENT_SESSION_WINDOW_MS);
+        let mut old = session("old");
+        old.last_event_at_ms = Some(now_ms - crate::session::RECENT_SESSION_WINDOW_MS - 1);
+        let unknown_age = session("unknown-age");
+        let sessions = vec![old, unknown_age, fresh];
+
+        let recent = picker_sessions(&sessions, false, now_ms, SessionOrder::LastActivity);
+        assert_eq!(
+            recent
+                .iter()
+                .map(|session| session.id.as_str())
+                .collect::<Vec<_>>(),
+            ["fresh", "unknown-age"]
+        );
+        let all = picker_sessions(&sessions, true, now_ms, SessionOrder::LastActivity);
+        assert_eq!(all.len(), 3);
     }
 
     #[test]
