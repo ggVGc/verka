@@ -7,6 +7,7 @@
 //! `tui-markdown` has no single-line-only mode.
 
 use super::palette;
+use crate::app::LinkDisplay;
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -20,10 +21,21 @@ static MARKDOWN_CODE_THEME: LazyLock<CodeTheme> = LazyLock::new(|| {
 
 /// Renders a detail block's full markdown buffer as styled lines, each
 /// prefixed with `indent`.
+#[cfg(test)]
 pub(crate) fn markdown_block_lines(
     text: &str,
     base_style: Style,
     indent: &str,
+) -> Vec<Line<'static>> {
+    markdown_block_lines_with_links(text, base_style, indent, LinkDisplay::Compact)
+}
+
+/// As [`markdown_block_lines`], with the operator's link-display choice.
+pub(crate) fn markdown_block_lines_with_links(
+    text: &str,
+    base_style: Style,
+    indent: &str,
+    links: LinkDisplay,
 ) -> Vec<Line<'static>> {
     let normalized = force_hard_line_breaks(text);
     let options = tui_markdown::Options::new(StyraStyleSheet)
@@ -38,7 +50,8 @@ pub(crate) fn markdown_block_lines(
             // that base style has to be carried over explicitly.
             let line_style = line.style;
             let mut spans = vec![Span::styled(indent.to_owned(), base_style)];
-            spans.extend(line.spans.into_iter().enumerate().map(|(i, span)| {
+            let rendered_spans = collapse_links(line.spans, links);
+            spans.extend(rendered_spans.into_iter().enumerate().map(|(i, span)| {
                 let mut content = span.content.into_owned();
                 // tui-markdown has no hook to customize the unordered-list
                 // marker, so the "- " it hardcodes is swapped for a bullet
@@ -53,6 +66,54 @@ pub(crate) fn markdown_block_lines(
             Line::from(spans).style(line_style)
         })
         .collect()
+}
+
+/// Drops the destination `tui-markdown` appends to every link, leaving the
+/// title — unless the operator asked to see them ([`LinkDisplay::Full`]).
+///
+/// `tui-markdown` renders a link as `label (destination)`, and agents cite
+/// their work as links: a reply reads `app.rs:120 (/home/me/src/app.rs:120)`,
+/// saying the same thing twice and at twice the width. What a citation points
+/// at is not lost with the destination — the references modal (`F`) still opens
+/// it; see [`crate::references`].
+///
+/// A link that wrote no label keeps its destination, since collapsing it would
+/// leave nothing on screen at all.
+fn collapse_links<'a>(spans: Vec<Span<'a>>, links: LinkDisplay) -> Vec<Span<'a>> {
+    if links == LinkDisplay::Full {
+        return spans;
+    }
+    // `tui-markdown` emits a link's destination as the three spans " (", the
+    // destination under the link style, and ")", directly after the label —
+    // which carries that same style, plus whatever emphasis it was written
+    // with. Nothing else in a rendered line is styled as a link, so the shape
+    // identifies a destination rather than parenthesised prose.
+    let mut appended = vec![false; spans.len()];
+    for index in 1..spans.len().saturating_sub(2) {
+        if spans[index].content == " ("
+            && spans[index + 2].content == ")"
+            && spans[index + 1].style == StyraStyleSheet.link()
+            && is_link_label(&spans[index - 1])
+        {
+            appended[index] = true;
+            appended[index + 1] = true;
+            appended[index + 2] = true;
+        }
+    }
+    spans
+        .into_iter()
+        .zip(appended)
+        .filter_map(|(span, appended)| (!appended).then_some(span))
+        .collect()
+}
+
+/// Whether `span` could be the label of the link whose destination follows it.
+///
+/// Underlining is what the link style contributes that survives any emphasis,
+/// heading, or inline code the label was written inside — so a `(destination)`
+/// preceded by ordinary text belongs to a link that wrote no label.
+fn is_link_label(span: &Span<'_>) -> bool {
+    span.style.add_modifier.contains(Modifier::UNDERLINED)
 }
 
 /// The column a rendered Markdown line's continuation rows should be indented
@@ -335,6 +396,37 @@ mod tests {
         assert_eq!(rendered_line(&lines[0]), "  Title");
         assert_eq!(lines[0].style.bg, Some(palette::ACCENT));
         assert!(lines[0].style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn block_lines_show_only_the_title_of_a_file_citation() {
+        let base = Style::default();
+        let lines = markdown_block_lines(
+            "see [app.rs:120](/home/me/src/app.rs:120) and \
+             [src/app.rs:7](file:///home/me/src/app.rs) too",
+            base,
+            "",
+        );
+
+        assert_eq!(
+            rendered_line(&lines[0]),
+            "see app.rs:120 and src/app.rs:7 too"
+        );
+    }
+
+    #[test]
+    fn block_lines_compact_every_link_and_can_show_destinations() {
+        let base = Style::default();
+        let compact = markdown_block_lines("[the docs](https://example.com)", base, "");
+        assert_eq!(rendered_line(&compact[0]), "the docs");
+
+        let full = markdown_block_lines_with_links(
+            "[the docs](https://example.com)",
+            base,
+            "",
+            LinkDisplay::Full,
+        );
+        assert_eq!(rendered_line(&full[0]), "the docs (https://example.com)");
     }
 
     #[test]

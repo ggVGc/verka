@@ -2,13 +2,13 @@
 //! expanded, plus the empty-list start screen and the trailing status tail.
 
 use super::code::{code_block_lines, is_error_diagnostic};
-use super::markdown::{markdown_block_lines, structural_indent};
+use super::markdown::{markdown_block_lines_with_links, structural_indent};
 use super::{
     conversation_only_title, format_duration, message_text_color, palette, render_placeholder,
     render_preview, tag_color, view_block, DETAIL_INDENT, MAX_DETAIL_LINES,
 };
 use crate::activity::{Progress, Status};
-use crate::app::{App, View};
+use crate::app::{App, LinkDisplay, View};
 use crate::timeline::Entry;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -109,6 +109,7 @@ pub(crate) fn render_list(frame: &mut Frame, app: &App, area: Rect) {
                 viewport_height,
                 app.selection.provider.protocol(),
                 *idx == app.timeline.selected,
+                app.link_display,
             )
         })
         .collect();
@@ -184,6 +185,7 @@ fn clip_boundary_entry(
             max_rows,
             app.selection.provider.protocol(),
             entry_index == app.timeline.selected,
+            app.link_display,
         );
         return;
     }
@@ -352,6 +354,7 @@ fn entry_item(
     viewport_height: usize,
     protocol: Protocol,
     selected: bool,
+    links: LinkDisplay,
 ) -> ListItem<'static> {
     entry_item_with_max_rows(
         entry,
@@ -360,6 +363,7 @@ fn entry_item(
         viewport_height.saturating_sub(1).max(1),
         protocol,
         selected,
+        links,
     )
 }
 
@@ -370,6 +374,7 @@ fn entry_item_with_max_rows(
     max_rows: usize,
     protocol: Protocol,
     selected: bool,
+    links: LinkDisplay,
 ) -> ListItem<'static> {
     let is_conversation = matches!(
         entry.event,
@@ -389,7 +394,7 @@ fn entry_item_with_max_rows(
         return ListItem::new(vec![with_selection_backdrop(row, selected)]);
     }
     let mut lines = vec![summary];
-    let mut detail = detail_lines(&entry.event, protocol, None);
+    let mut detail = detail_lines_with_links(&entry.event, protocol, None, links);
     if !detail.is_empty() {
         detail.remove(0);
     }
@@ -879,10 +884,21 @@ fn file_action_summary(event: &AgentEvent) -> Option<String> {
 /// The pretty, provider-aware expandable body of an entry. `cap` bounds how
 /// many lines are shown inline in the list so one noisy command cannot bury
 /// the rest of the session. The preview panel owns the optional raw view.
+#[cfg(test)]
 pub(crate) fn detail_lines(
     event: &AgentEvent,
     protocol: Protocol,
     cap: Option<usize>,
+) -> Vec<Line<'static>> {
+    detail_lines_with_links(event, protocol, cap, LinkDisplay::Compact)
+}
+
+/// As [`detail_lines`], with the operator's link-display choice.
+pub(crate) fn detail_lines_with_links(
+    event: &AgentEvent,
+    protocol: Protocol,
+    cap: Option<usize>,
+    links: LinkDisplay,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let text_color = message_text_color(event.tag());
@@ -891,7 +907,12 @@ pub(crate) fn detail_lines(
         match block {
             DetailBlock::Text(text) => {
                 let base_style = Style::default().fg(text_color);
-                lines.extend(markdown_block_lines(&text, base_style, DETAIL_INDENT));
+                lines.extend(markdown_block_lines_with_links(
+                    &text,
+                    base_style,
+                    DETAIL_INDENT,
+                    links,
+                ));
             }
             DetailBlock::Code { text, language } => {
                 lines.extend(code_block_lines(
@@ -1497,7 +1518,8 @@ mod tests {
                 78,
                 18,
                 protocol,
-                false
+                false,
+                LinkDisplay::Compact,
             )
             .height()
                 <= 18
@@ -1560,7 +1582,15 @@ mod tests {
             raw_index: None,
             contract: None,
         };
-        let item = entry_item_with_max_rows(&entry, true, 78, 1, Protocol::CodexAppServer, false);
+        let item = entry_item_with_max_rows(
+            &entry,
+            true,
+            78,
+            1,
+            Protocol::CodexAppServer,
+            false,
+            LinkDisplay::Compact,
+        );
 
         assert_eq!(item.height(), 1);
         let mut terminal = Terminal::new(TestBackend::new(80, 1)).unwrap();
@@ -1624,7 +1654,8 @@ mod tests {
                 40,
                 18,
                 protocol,
-                false
+                false,
+                LinkDisplay::Compact,
             )
             .height(),
             1,
@@ -1685,7 +1716,16 @@ mod tests {
         let protocol = app.selection.provider.protocol();
         for entry in &app.timeline.entries {
             assert_eq!(
-                entry_item(entry, entry.expanded, 200, 18, protocol, false).height(),
+                entry_item(
+                    entry,
+                    entry.expanded,
+                    200,
+                    18,
+                    protocol,
+                    false,
+                    LinkDisplay::Compact,
+                )
+                .height(),
                 1,
                 "a 130-column message fits on one row of a 200-column pane"
             );
@@ -1702,7 +1742,15 @@ mod tests {
 
         let protocol = app.selection.provider.protocol();
         let entry = &app.timeline.entries[0];
-        let item = entry_item(entry, entry.expanded, 40, 18, protocol, false);
+        let item = entry_item(
+            entry,
+            entry.expanded,
+            40,
+            18,
+            protocol,
+            false,
+            LinkDisplay::Compact,
+        );
         // Nothing is cut off: a 200-column bullet needs several 40-column rows.
         assert!(item.height() > 5, "{}", item.height());
 

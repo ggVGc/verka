@@ -50,6 +50,25 @@ pub enum Focus {
     Input,
 }
 
+/// Whether pretty Markdown shows a link's destination beside its title.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LinkDisplay {
+    /// Keep replies compact: show the label alone.
+    #[default]
+    Compact,
+    /// Include the destination after the label.
+    Full,
+}
+
+impl LinkDisplay {
+    pub fn toggle(&mut self) {
+        *self = match self {
+            Self::Compact => Self::Full,
+            Self::Full => Self::Compact,
+        };
+    }
+}
+
 /// What the main region shows: the decoded event list, the raw wire stream,
 /// the diagnostic log, the rendered transcript, server details and Driva policy,
 /// or the selected entry's full-screen preview.
@@ -182,6 +201,8 @@ pub struct App {
     pub notices: Notices,
     /// The panel showing one entry in full, and how; see [`Preview`].
     pub preview: Preview,
+    /// Whether pretty Markdown includes link destinations beside their labels.
+    pub link_display: LinkDisplay,
     /// What the next session launches with: agent, model, reasoning effort.
     /// This is the choice for the current workspace, edited through [`Launcher`]
     /// while nothing is running. The terminal client only persists it as the
@@ -330,6 +351,7 @@ pub struct OperatorState {
     /// The preview panel's own display choices; see
     /// [`Preview::choices`](crate::preview::Preview::choices).
     preview: preview::Choices,
+    link_display: LinkDisplay,
     recent_models: Vec<String>,
     /// The message being written and the shape its reply was to come back in.
     /// A draft is the operator's work, so it survives a screen it outlives.
@@ -351,6 +373,7 @@ impl App {
             activity: Activity::default(),
             notices: Notices::default(),
             preview: Preview::default(),
+            link_display: LinkDisplay::default(),
             selection,
             model_reported: false,
             effort_reported: false,
@@ -399,6 +422,7 @@ impl App {
             interactions: std::mem::take(&mut self.interactions),
             conversation_only: self.timeline.conversation_only,
             preview: self.preview.choices(),
+            link_display: self.link_display,
             recent_models: std::mem::take(&mut self.recent_models),
             composer: std::mem::take(&mut self.composer),
             contract: self.outbox.take_contract(),
@@ -415,6 +439,7 @@ impl App {
         self.interactions = state.interactions;
         self.timeline.conversation_only = state.conversation_only;
         self.preview.adopt(state.preview);
+        self.link_display = state.link_display;
         self.recent_models = state.recent_models;
         self.composer = state.composer;
         self.outbox.set_contract(state.contract);
@@ -441,6 +466,12 @@ impl App {
         self.activity.status == Status::Pending
             || (self.activity.status == Status::Idle
                 && matches!(self.selection.provider, Provider::Codex | Provider::Claude))
+    }
+
+    /// Switch between compact link labels and labels with their destinations.
+    pub fn toggle_link_display(&mut self) {
+        self.link_display.toggle();
+        self.preview.scroll.reset();
     }
 
     /// Open the launch picker on the current selection, if anything can still
@@ -998,6 +1029,7 @@ mod tests {
         app.set_input("half a thought".into());
         app.outbox.set_contract(Some(Contract::Lines));
         app.preview.show();
+        app.toggle_link_display();
         app.files.set_scope(true);
         app.recent_models = vec!["gpt-5.6-sol".into()];
 
@@ -1007,6 +1039,7 @@ mod tests {
         assert_eq!(next.composer.text, "half a thought");
         assert_eq!(next.outbox.contract(), Some(Contract::Lines));
         assert!(next.preview.open);
+        assert_eq!(next.link_display, LinkDisplay::Full);
         assert!(next.files.shows_all());
         assert_eq!(next.recent_models, vec!["gpt-5.6-sol".to_owned()]);
     }

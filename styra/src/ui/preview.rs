@@ -158,6 +158,7 @@ pub(crate) fn preview_lines(app: &App) -> Vec<Line<'static>> {
             message_text_color(entry.event.tag()),
             app.preview.mode(),
             suspicious_shell,
+            app.link_display,
         ));
         for block in blocks {
             lines.push(Line::from(""));
@@ -166,6 +167,7 @@ pub(crate) fn preview_lines(app: &App) -> Vec<Line<'static>> {
                 message_text_color(entry.event.tag()),
                 app.preview.mode(),
                 suspicious_shell,
+                app.link_display,
             ));
         }
     }
@@ -177,6 +179,7 @@ fn presented_block_lines(
     text_color: Color,
     mode: PresentationMode,
     suspicious_shell: bool,
+    links: crate::app::LinkDisplay,
 ) -> Vec<Line<'static>> {
     // Prose blocks carry the agent's markdown, so the pretty preview styles it
     // the same way the expanded list entry does. Raw mode stays raw by
@@ -184,7 +187,12 @@ fn presented_block_lines(
     if mode == PresentationMode::Pretty {
         if let DetailBlock::Text(text) = &block {
             let base_style = Style::default().fg(text_color);
-            return super::markdown::markdown_block_lines(text, base_style, DETAIL_INDENT);
+            return super::markdown::markdown_block_lines_with_links(
+                text,
+                base_style,
+                DETAIL_INDENT,
+                links,
+            );
         }
     }
     let (text, language) = match block {

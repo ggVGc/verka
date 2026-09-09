@@ -133,6 +133,7 @@ pub fn handle_list_key(
     match app.view {
         View::Events => match key.code {
             KeyCode::Char('F') => app.open_references(),
+            KeyCode::Char('u') => app.toggle_link_display(),
             KeyCode::Char('c') => app.toggle_conversation_only(),
             KeyCode::Char('v') if app.preview.open => app.preview.toggle_mode(),
             KeyCode::Char('C') if app.preview.open => app.preview.toggle_target(),
@@ -279,6 +280,7 @@ pub fn handle_list_key(
         // at a time and the shifted pair changes entry.
         View::Preview => match key.code {
             KeyCode::Char('F') => app.open_references(),
+            KeyCode::Char('u') => app.toggle_link_display(),
             KeyCode::Char('v') => app.preview.toggle_mode(),
             KeyCode::Char('C') => app.preview.toggle_target(),
             KeyCode::PageDown => app.preview.scroll.page_down(),
