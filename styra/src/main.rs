@@ -12,6 +12,7 @@ use std::process::Command;
 mod activity;
 mod answer;
 mod app;
+mod branch;
 mod cli;
 mod clipboard;
 mod composer;

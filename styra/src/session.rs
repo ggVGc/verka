@@ -408,23 +408,36 @@ pub fn pause_interaction(app: &mut App, client: &Client, live: &mut Attachment) 
     }
 }
 
-/// Branch the current Session into a new sibling, seeded with its history up
-/// to the selected entry (or the whole history, while the list is following
-/// the newest entry or the selection has no known wire line). The result is
-/// opened immediately, so the operator sees what they branched rather than
-/// having to find it again in the picker.
-pub fn branch_session(app: &mut App, client: &Client) {
-    let at_ms = (!app.timeline.follow)
-        .then(|| {
-            app.timeline
-                .entries
-                .get(app.timeline.selected)
-                .and_then(|entry| entry.raw_index)
-        })
-        .flatten()
+/// Open the branching choice for the selected event. A branch point must map
+/// back to a persisted wire line; without that stable timestamp the server
+/// could not make either history choice precise.
+pub fn open_branch_prompt(app: &mut App) {
+    if app.session_id.is_empty() {
+        return app.show_action_message("there is no interaction to branch yet");
+    }
+    let at_ms = app
+        .timeline
+        .entries
+        .get(app.timeline.selected)
+        .and_then(|entry| entry.raw_index)
         .and_then(|index| app.raw.get(index))
-        .map(|line| line.at_ms);
-    match client.branch_session(&app.session_id, at_ms, None) {
+        .map(|line| line.at_ms)
+        .filter(|at_ms| *at_ms != 0);
+    let Some(at_ms) = at_ms else {
+        return app.show_action_message("the selected entry has no branchable history point");
+    };
+    app.branch_prompt = Some(crate::branch::BranchPrompt::new(at_ms));
+}
+
+/// Branch the current Session with the choice confirmed in the main view.
+/// The result is opened immediately so the operator sees the new sibling.
+pub fn branch_session(
+    app: &mut App,
+    client: &Client,
+    at_ms: u64,
+    history: styra_server::BranchHistory,
+) {
+    match client.branch_session(&app.session_id, Some(at_ms), history, None) {
         Ok(branched) => {
             app.push_log(LogEntry::info(format!(
                 "branched to session {}",
@@ -451,7 +464,23 @@ pub fn interrupt_interaction(app: &mut App, client: &Client, live: &Attachment) 
 pub fn apply_update(app: &mut App, update: InteractionUpdate) {
     match update {
         InteractionUpdate::Event(event) => app.push_event(event),
-        InteractionUpdate::Raw(line) => app.raw.push(line),
+        InteractionUpdate::Raw(line) => {
+            let user_wire = line.direction == styra_server::Direction::ToAgent;
+            app.raw.push(line);
+            // Live interactions announce the operator's decoded event before
+            // the provider adapter announces its outgoing wire line. Join the
+            // pair once that line arrives, matching stored-journal replay.
+            if user_wire {
+                if let Some(entry) = app.timeline.entries.last_mut() {
+                    if matches!(
+                        entry.event,
+                        styra_server::event::AgentEvent::UserMessage { .. }
+                    ) {
+                        entry.raw_index = app.raw.last_index();
+                    }
+                }
+            }
+        }
         InteractionUpdate::Log(entry) => app.push_log(entry),
         InteractionUpdate::Quota(reading) => app.note_quota(reading),
         InteractionUpdate::WorkingDirectoryChanged(directory) => {
@@ -470,6 +499,7 @@ fn mark_stopped(app: &mut App, live: &mut Attachment) {
 mod tests {
     use super::*;
     use styra_server::agent::{Provider, Selection};
+    use styra_server::{Direction, RawLine};
 
     fn workspace(id: &str, host_path: &str) -> WorkspaceSummary {
         WorkspaceSummary {
@@ -517,6 +547,28 @@ mod tests {
         sort_sessions(&mut sessions, SessionOrder::Created);
         let ids: Vec<&str> = sessions.iter().map(|s| s.id.as_str()).collect();
         assert_eq!(ids, ["new-and-quiet", "never-ran", "old-but-active"]);
+    }
+
+    #[test]
+    fn an_outgoing_wire_line_becomes_the_live_user_entrys_branch_point() {
+        let mut app = App::new(Selection::new(Provider::Codex), "s-1");
+        apply_update(
+            &mut app,
+            InteractionUpdate::Event(styra_server::event::AgentEvent::UserMessage {
+                text: "question".into(),
+            }),
+        );
+        apply_update(
+            &mut app,
+            InteractionUpdate::Raw(RawLine {
+                direction: Direction::ToAgent,
+                text: "question".into(),
+                at_ms: 42,
+            }),
+        );
+
+        open_branch_prompt(&mut app);
+        assert_eq!(app.branch_prompt.as_ref().unwrap().at_ms(), 42);
     }
 
     #[test]

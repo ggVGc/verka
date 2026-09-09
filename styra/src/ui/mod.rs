@@ -6,6 +6,7 @@
 //! Rendering is a pure function of `App`; all state lives in [`crate::app`].
 
 mod answer;
+mod branch;
 mod driva;
 mod files;
 mod footer;
@@ -314,6 +315,9 @@ pub fn render(frame: &mut Frame, app: &App) {
         if let Some(references) = &app.references {
             references::render(frame, references, frame.area());
         }
+        if let Some(prompt) = &app.branch_prompt {
+            branch::render(frame, prompt, frame.area());
+        }
         return;
     }
 
@@ -371,6 +375,9 @@ pub fn render(frame: &mut Frame, app: &App) {
     // Last, because it is the innermost modal: it is opened from the message
     // box and floats over it, and it holds the terminal cursor while it does.
     render_insert(frame, app.insert.as_ref().map(Prompt::state), frame.area());
+    if let Some(prompt) = &app.branch_prompt {
+        branch::render(frame, prompt, frame.area());
+    }
 }
 
 #[cfg(test)]

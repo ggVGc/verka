@@ -23,6 +23,7 @@ use styra_server::{InteractionEnd, LogEntry, QuotaEvent, QuotaStatus};
 
 use crate::activity::{Activity, Status};
 use crate::answer::AnswerView;
+use crate::branch::BranchPrompt;
 use crate::composer::Composer;
 use crate::files::{self, FilesView};
 use crate::help::Help;
@@ -262,6 +263,8 @@ pub struct App {
     /// rather than inside any one view: it is opened over whichever view the
     /// reply was being read in.
     pub references: Option<References>,
+    /// The modal choice of how the selected entry seeds a new Session.
+    pub branch_prompt: Option<BranchPrompt>,
     /// The open "insert a path" prompt, while the operator is using it; see
     /// [`crate::insert`]. Held here rather than in [`Composer`] because its
     /// second question is about the sandbox, not about the message.
@@ -398,6 +401,7 @@ impl App {
             files: FilesView::default(),
             answer: AnswerView::default(),
             references: None,
+            branch_prompt: None,
             insert: None,
             requests: VecDeque::new(),
         }

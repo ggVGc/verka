@@ -557,6 +557,19 @@ fn session_item(
             ),
             Style::default().fg(palette::ADDITIONAL_INFO),
         )));
+        let history = match (origin.history, origin.at_ms) {
+            (styra_server::BranchHistory::SelectedOnly, _) => Some("selected entry only"),
+            (styra_server::BranchHistory::ThroughSelected, Some(_)) => {
+                Some("through selected entry")
+            }
+            (styra_server::BranchHistory::ThroughSelected, None) => None,
+        };
+        if let Some(history) = history {
+            lines.push(Line::from(Span::styled(
+                format!("    {history}"),
+                Style::default().fg(palette::ADDITIONAL_INFO),
+            )));
+        }
     }
     ListItem::new(lines)
 }
@@ -646,6 +659,7 @@ mod tests {
             session_id: "s-1".into(),
             provider: styra_server::agent::Provider::Codex,
             at_ms: None,
+            history: styra_server::BranchHistory::ThroughSelected,
         });
         let screen = rendered_picker(&[session], 0);
         assert!(screen.contains("converted from"), "{screen}");
@@ -657,9 +671,15 @@ mod tests {
             session_id: "s-1".into(),
             provider: styra_server::agent::Provider::Codex,
             at_ms: Some(1000),
+            history: styra_server::BranchHistory::ThroughSelected,
         });
-        let screen = rendered_picker(&[checkpoint], 0);
+        let screen = rendered_picker(std::slice::from_ref(&checkpoint), 0);
         assert!(screen.contains("branched from"), "{screen}");
+        assert!(screen.contains("through selected entry"), "{screen}");
+
+        checkpoint.origin.as_mut().unwrap().history = styra_server::BranchHistory::SelectedOnly;
+        let screen = rendered_picker(&[checkpoint], 0);
+        assert!(screen.contains("selected entry only"), "{screen}");
     }
 
     #[test]

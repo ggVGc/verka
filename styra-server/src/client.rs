@@ -113,19 +113,20 @@ impl Client {
         }
     }
 
-    /// Branch a stored Session into a new sibling Session, seeded with its
-    /// history up to `at_ms` (the whole history when `None`), optionally
-    /// under a different provider (the same one when `None`). The source
-    /// Session is untouched.
+    /// Branch a stored Session into a new sibling Session, using `history` to
+    /// keep the source through `at_ms` or only the selected entry, optionally
+    /// under a different provider. The source Session is untouched.
     pub fn branch_session(
         &self,
         id: &str,
         at_ms: Option<u64>,
+        history: crate::protocol::BranchHistory,
         provider: Option<crate::agent::Provider>,
     ) -> Result<SessionSummary> {
         match self.request(Request::BranchSession {
             id: id.to_owned(),
             at_ms,
+            history,
             provider,
         })? {
             Response::SessionBranched(value) => Ok(value),

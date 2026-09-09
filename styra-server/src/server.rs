@@ -1075,14 +1075,19 @@ impl ServerState {
     fn convert_session_provider(&self, id: &str) -> Result<SessionSummary> {
         let summary = self.stored_summary(id)?;
         let to_provider = other_interactive_provider(summary.selection.provider)?;
-        self.branch_session(id, None, Some(to_provider))
-            .with_context(|| {
-                format!(
-                    "converting session {id:?} from {} to {}",
-                    summary.selection.provider.as_str(),
-                    to_provider.as_str()
-                )
-            })
+        self.branch_session(
+            id,
+            None,
+            crate::protocol::BranchHistory::ThroughSelected,
+            Some(to_provider),
+        )
+        .with_context(|| {
+            format!(
+                "converting session {id:?} from {} to {}",
+                summary.selection.provider.as_str(),
+                to_provider.as_str()
+            )
+        })
     }
 
     /// Branch a stored Session into a new sibling Session in the same
@@ -1102,6 +1107,7 @@ impl ServerState {
         &self,
         id: &str,
         at_ms: Option<u64>,
+        history: crate::protocol::BranchHistory,
         provider: Option<crate::agent::Provider>,
     ) -> Result<SessionSummary> {
         let summary = self.stored_summary(id)?;
@@ -1124,22 +1130,15 @@ impl ServerState {
         let owning_workspace =
             crate::workspace::get(&self.inner.store_root, &summary.workspace_id)?;
         let cwd = owning_workspace.host_path;
-        let keep_messages = at_ms
-            .map(|cutoff| messages_up_to(&source, native_session_format(from_provider), cutoff))
-            .transpose()?;
-
         let new_native_id = uuid::Uuid::new_v4().to_string();
-        let options = genta::session::ConversionOptions {
-            id: Some(new_native_id.clone()),
-            cwd: Some(cwd.to_string_lossy().into_owned()),
-            keep_messages,
-            ..Default::default()
-        };
-        let branched = genta::session::convert(
+        let branched = branch_native_session(
             &source,
             native_session_format(from_provider),
             native_session_format(to_provider),
-            &options,
+            &new_native_id,
+            &cwd,
+            at_ms,
+            history,
         )?;
 
         let destination = native_session_destination(to_provider, &new_native_id, &cwd)?;
@@ -1166,7 +1165,7 @@ impl ServerState {
             summary.name.clone(),
         )?;
         let source_protocol = journal::read_session_meta(&summary.path)?.protocol;
-        journal.copy_prefix_from(&summary.path, source_protocol, at_ms)?;
+        journal.copy_branch_from(&summary.path, source_protocol, at_ms, history)?;
         let directory = journal
             .path()
             .parent()
@@ -1178,6 +1177,7 @@ impl ServerState {
                 session_id: id.to_owned(),
                 provider: from_provider,
                 at_ms,
+                history,
             },
         )?;
 
@@ -1421,9 +1421,10 @@ impl ServerState {
             Request::BranchSession {
                 id,
                 at_ms,
+                history,
                 provider,
             } => Ok(Response::SessionBranched(
-                self.branch_session(&id, at_ms, provider)?,
+                self.branch_session(&id, at_ms, history, provider)?,
             )),
             Request::RenameSession(request) => {
                 let summary = self.stored_summary(&request.id)?;
@@ -1740,6 +1741,44 @@ fn messages_up_to(
                 .is_none_or(|at_ms| at_ms <= cutoff)
         })
         .count())
+}
+
+/// Build the provider-native half of a branch from the same timestamp and
+/// history choice used for its Styra journal.
+fn branch_native_session(
+    source: &str,
+    from: genta::session::SessionFormat,
+    to: genta::session::SessionFormat,
+    new_id: &str,
+    cwd: &Path,
+    at_ms: Option<u64>,
+    history: crate::protocol::BranchHistory,
+) -> Result<String> {
+    if history == crate::protocol::BranchHistory::SelectedOnly && at_ms.is_none() {
+        anyhow::bail!("branching only the selected entry requires its timestamp");
+    }
+    let keep_messages = at_ms
+        .map(|cutoff| messages_up_to(source, from, cutoff))
+        .transpose()?;
+    let mut portable = genta::session::parse(source, from)?;
+    match (history, keep_messages) {
+        (crate::protocol::BranchHistory::ThroughSelected, Some(keep)) => {
+            portable.messages.truncate(keep);
+        }
+        (crate::protocol::BranchHistory::SelectedOnly, Some(keep)) => {
+            let selected = keep
+                .checked_sub(1)
+                .and_then(|index| portable.messages.get(index))
+                .cloned()
+                .context("the selected entry does not correspond to a provider message")?;
+            portable.messages = vec![selected];
+        }
+        (crate::protocol::BranchHistory::ThroughSelected, None) => {}
+        (crate::protocol::BranchHistory::SelectedOnly, None) => unreachable!("validated above"),
+    }
+    portable.id = new_id.to_owned();
+    portable.cwd = cwd.to_string_lossy().into_owned();
+    Ok(genta::session::serialize(&portable, to))
 }
 
 /// Parse a provider's RFC 3339 message timestamp (e.g.
@@ -2570,6 +2609,36 @@ mod tests {
             messages_up_to(claude, genta::session::SessionFormat::Claude, u64::MAX).unwrap(),
             3
         );
+    }
+
+    #[test]
+    fn a_selected_only_native_branch_contains_just_the_selected_message() {
+        let claude = concat!(
+            r#"{"type":"user","uuid":"u1","parentUuid":null,"isSidechain":false,"cwd":"/repo","sessionId":"id","timestamp":"2026-08-21T10:00:00.000Z","message":{"role":"user","content":"first"}}"#,
+            "\n",
+            r#"{"type":"assistant","uuid":"a1","parentUuid":"u1","isSidechain":false,"cwd":"/repo","sessionId":"id","timestamp":"2026-08-21T10:00:01.000Z","message":{"role":"assistant","content":[{"type":"text","text":"selected"}]}}"#,
+            "\n",
+            r#"{"type":"user","uuid":"u2","parentUuid":"a1","isSidechain":false,"cwd":"/repo","sessionId":"id","timestamp":"2026-08-21T10:00:02.000Z","message":{"role":"user","content":"later"}}"#,
+            "\n",
+        );
+        let cutoff = parse_rfc3339_ms("2026-08-21T10:00:01.000Z").unwrap();
+        let branched = branch_native_session(
+            claude,
+            genta::session::SessionFormat::Claude,
+            genta::session::SessionFormat::Codex,
+            "new-id",
+            Path::new("/new/repo"),
+            Some(cutoff),
+            crate::protocol::BranchHistory::SelectedOnly,
+        )
+        .unwrap();
+        let parsed =
+            genta::session::parse(&branched, genta::session::SessionFormat::Codex).unwrap();
+
+        assert_eq!(parsed.id, "new-id");
+        assert_eq!(parsed.cwd, "/new/repo");
+        assert_eq!(parsed.messages.len(), 1);
+        assert_eq!(parsed.messages[0].text, "selected");
     }
 
     /// The standing policy is stored with the Workspace, not with the client

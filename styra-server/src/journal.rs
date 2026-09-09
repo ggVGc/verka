@@ -148,11 +148,12 @@ impl Journal {
     /// branch can replay its old lines and later append lines in its new
     /// protocol. Existing per-record overrides are retained when branching a
     /// Session that was itself converted before.
-    pub(crate) fn copy_prefix_from(
+    pub(crate) fn copy_branch_from(
         &mut self,
         source: &Path,
         source_protocol: Protocol,
         through_ms: Option<u64>,
+        history: crate::protocol::BranchHistory,
     ) -> Result<()> {
         let file_path = if source.is_dir() {
             source.join(JOURNAL_FILE)
@@ -161,6 +162,7 @@ impl Journal {
         };
         let file = File::open(&file_path)
             .with_context(|| format!("opening source journal {}", file_path.display()))?;
+        let mut selected_record = None;
         for line in BufReader::new(file).lines() {
             let line = line.context("reading source journal line")?;
             if line.trim().is_empty() {
@@ -188,6 +190,16 @@ impl Journal {
                 },
                 other @ (Record::User { .. } | Record::ModelChange { .. }) => other,
             };
+            match history {
+                crate::protocol::BranchHistory::ThroughSelected => self.write(&record)?,
+                // A selected event's UI wire timestamp is exact for agent
+                // records and just after its host-side User record. Retaining
+                // the last record at or before the fixed branch point handles
+                // both without guessing a time tolerance.
+                crate::protocol::BranchHistory::SelectedOnly => selected_record = Some(record),
+            }
+        }
+        if let Some(record) = selected_record {
             self.write(&record)?;
         }
         Ok(())
@@ -732,7 +744,12 @@ mod tests {
         {
             let mut journal = Journal::create(&destination).unwrap();
             journal
-                .copy_prefix_from(&source, Protocol::ClaudeJsonl, None)
+                .copy_branch_from(
+                    &source,
+                    Protocol::ClaudeJsonl,
+                    None,
+                    crate::protocol::BranchHistory::ThroughSelected,
+                )
                 .unwrap();
             journal
                 .record_agent_line(
@@ -776,7 +793,12 @@ mod tests {
         {
             let mut journal = Journal::create(&destination).unwrap();
             journal
-                .copy_prefix_from(&source, Protocol::ClaudeJsonl, Some(2))
+                .copy_branch_from(
+                    &source,
+                    Protocol::ClaudeJsonl,
+                    Some(2),
+                    crate::protocol::BranchHistory::ThroughSelected,
+                )
                 .unwrap();
         }
 
@@ -790,6 +812,42 @@ mod tests {
                     text: "second".into()
                 },
             ]
+        );
+
+        std::fs::remove_dir_all(source).ok();
+        std::fs::remove_dir_all(destination).ok();
+    }
+
+    #[test]
+    fn a_selected_only_branch_copies_just_the_last_record_at_its_cutoff() {
+        let source = temp_dir("branch-selected-source");
+        let destination = temp_dir("branch-selected-destination");
+        std::fs::write(
+            source.join(JOURNAL_FILE),
+            concat!(
+                "{\"source\":\"user\",\"at_ms\":10,\"text\":\"first\"}\n",
+                "{\"source\":\"user\",\"at_ms\":20,\"text\":\"selected\"}\n",
+                "{\"source\":\"user\",\"at_ms\":30,\"text\":\"later\"}\n"
+            ),
+        )
+        .unwrap();
+        {
+            let mut journal = Journal::create(&destination).unwrap();
+            journal
+                .copy_branch_from(
+                    &source,
+                    Protocol::ClaudeJsonl,
+                    Some(21),
+                    crate::protocol::BranchHistory::SelectedOnly,
+                )
+                .unwrap();
+        }
+
+        assert_eq!(
+            replay(&destination, Protocol::CodexAppServer).unwrap(),
+            vec![AgentEvent::UserMessage {
+                text: "selected".into()
+            }]
         );
 
         std::fs::remove_dir_all(source).ok();

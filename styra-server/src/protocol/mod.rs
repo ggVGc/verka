@@ -14,8 +14,8 @@ mod types;
 
 pub use transport::{read_message, read_message_limited, write_message, MAX_REQUEST_BYTES};
 pub use types::{
-    Answer, AnswerValue, AttributedMount, BaseCapability, BaseEntry, Contract, Direction,
-    DrivaOptions, FileLocation, InteractionActivity, InteractionEnd, InteractionSummary,
+    Answer, AnswerValue, AttributedMount, BaseCapability, BaseEntry, BranchHistory, Contract,
+    Direction, DrivaOptions, FileLocation, InteractionActivity, InteractionEnd, InteractionSummary,
     InteractionUpdate, LaunchMount, LaunchPolicy, LogEntry, LogLevel, MountOrigin, QueuedMessage,
     QuotaEvent, QuotaStatus, RawLine, SessionOrigin, SessionSummary, TemplateSummary,
     WorkspaceSummary,
@@ -281,14 +281,17 @@ pub enum Request {
         id: String,
     },
     /// Branch a stored Session's native provider transcript into a new
-    /// sibling Session in the same Workspace, seeded with its history up to
-    /// `at_ms` (the whole history when absent), optionally under a different
-    /// provider. The source Session, its native transcript, and its Styra
+    /// sibling Session in the same Workspace. `history` chooses a prefix
+    /// through `at_ms` or only the entry at that point; an absent cutoff keeps
+    /// the whole history and is valid only for the prefix choice. The provider
+    /// may also change. The source Session, native transcript, and Styra
     /// journal are left untouched.
     BranchSession {
         id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         at_ms: Option<u64>,
+        #[serde(default)]
+        history: BranchHistory,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         provider: Option<Provider>,
     },
@@ -717,11 +720,13 @@ mod tests {
         let request = Request::BranchSession {
             id: "styra-1".into(),
             at_ms: Some(42),
+            history: BranchHistory::SelectedOnly,
             provider: Some(crate::agent::Provider::Claude),
         };
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(json["operation"], "branch_session");
         assert_eq!(json["data"]["at_ms"], 42);
+        assert_eq!(json["data"]["history"], "selected_only");
         assert_eq!(json["data"]["provider"], "claude");
         assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
 
@@ -735,9 +740,29 @@ mod tests {
             Request::BranchSession {
                 id: "styra-1".into(),
                 at_ms: None,
+                history: BranchHistory::ThroughSelected,
                 provider: None,
             }
         );
+
+        let origin = SessionOrigin {
+            session_id: "styra-1".into(),
+            provider: crate::agent::Provider::Codex,
+            at_ms: Some(42),
+            history: BranchHistory::ThroughSelected,
+        };
+        let json = serde_json::to_value(&origin).unwrap();
+        assert_eq!(json["history"], "through_selected");
+
+        // Origins stored before branching offered a history choice remain
+        // readable as the prefix behavior they represented.
+        let legacy: SessionOrigin = serde_json::from_value(serde_json::json!({
+            "session_id": "styra-1",
+            "provider": "codex",
+            "at_ms": 42
+        }))
+        .unwrap();
+        assert_eq!(legacy.history, BranchHistory::ThroughSelected);
     }
 
     #[test]

@@ -590,6 +590,22 @@ pub struct SessionOrigin {
     /// kept the whole history — what a plain provider conversion is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub at_ms: Option<u64>,
+    /// Which part of the source history was copied. Older metadata predates
+    /// this choice and always represented a prefix, so absence decodes as
+    /// [`BranchHistory::ThroughSelected`].
+    #[serde(default)]
+    pub history: BranchHistory,
+}
+
+/// The source history used to seed a branch.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BranchHistory {
+    /// Copy the source from its beginning through the selected entry.
+    #[default]
+    ThroughSelected,
+    /// Copy only the selected entry.
+    SelectedOnly,
 }
 
 /// A stored session, enough to display and select it from a list — see

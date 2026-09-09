@@ -474,6 +474,13 @@ pub fn run(
             continue;
         }
 
+        // The branching choice is modal and can replace the current Session
+        // on confirmation, so it owns the key before every underlying view.
+        if app.branch_prompt.is_some() {
+            keys::handle_branch_prompt_key(app, client, key);
+            continue;
+        }
+
         // The list of files a reply cites is modal: while it is open nothing
         // underneath it can be acted on, `?` included.
         if app.references.is_some() {
