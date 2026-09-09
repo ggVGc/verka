@@ -25,13 +25,28 @@ pub(crate) fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
         }
     );
     let worktrees_width = worktrees.width().min(area.width as usize) as u16;
-    let directory_width = working_directory
-        .width()
+    let idle_count = app.interactions.idle_notification_count();
+    let idle_notice = (idle_count > 0).then(|| {
+        format!(
+            " a {idle_count} interaction{} idle ",
+            if idle_count == 1 { "" } else { "s" }
+        )
+    });
+    let idle_notice_width = idle_notice
+        .as_deref()
+        .map(UnicodeWidthStr::width)
+        .unwrap_or_default()
         .min(area.width.saturating_sub(worktrees_width) as usize) as u16;
+    let directory_width = working_directory.width().min(
+        area.width
+            .saturating_sub(worktrees_width)
+            .saturating_sub(idle_notice_width) as usize,
+    ) as u16;
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
             Constraint::Min(0),
+            Constraint::Length(idle_notice_width),
             Constraint::Length(worktrees_width),
             Constraint::Length(directory_width),
         ])
@@ -56,8 +71,18 @@ pub(crate) fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     )))
     .right_aligned();
     frame.render_widget(keybinds, chunks[0]);
-    frame.render_widget(worktrees, chunks[1]);
-    frame.render_widget(directory, chunks[2]);
+    if let Some(idle_notice) = idle_notice {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                idle_notice,
+                Style::default().fg(palette::SUCCESS),
+            )))
+            .right_aligned(),
+            chunks[1],
+        );
+    }
+    frame.render_widget(worktrees, chunks[2]);
+    frame.render_widget(directory, chunks[3]);
 }
 
 pub(crate) fn tag_color(tag: &str) -> Color {
