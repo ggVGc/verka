@@ -598,16 +598,6 @@ pub fn run(
                         .cursor_previous_workspace(&session_id, app.workspace.id.as_deref());
                     continue;
                 }
-                KeyCode::Char('g') => {
-                    app.interactions
-                        .cursor_first(&session_id, app.workspace.id.as_deref());
-                    continue;
-                }
-                KeyCode::Char('G') => {
-                    app.interactions
-                        .cursor_last(&session_id, app.workspace.id.as_deref());
-                    continue;
-                }
                 KeyCode::Char('j') | KeyCode::Down => {
                     app.interactions
                         .cursor_next(&session_id, app.workspace.id.as_deref());

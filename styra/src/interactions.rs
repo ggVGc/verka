@@ -152,22 +152,6 @@ impl LiveInteractions {
         }
     }
 
-    /// Move to the first interaction in the navigator's current display
-    /// scope, using the same deferred load as ordinary cursor movement.
-    pub fn cursor_first(&mut self, current: &str, workspace_id: Option<&str>) {
-        if let Some(index) = self.display_indices(workspace_id).first() {
-            self.move_cursor_to(self.items[*index].id.clone(), current);
-        }
-    }
-
-    /// Move to the final interaction in the navigator's current display
-    /// scope, using the same deferred load as ordinary cursor movement.
-    pub fn cursor_last(&mut self, current: &str, workspace_id: Option<&str>) {
-        if let Some(index) = self.display_indices(workspace_id).last() {
-            self.move_cursor_to(self.items[*index].id.clone(), current);
-        }
-    }
-
     /// The ctrl-j/ctrl-k group skips move the cursor exactly as j/k do, so
     /// crossing several Workspaces costs the one load the cursor comes to rest
     /// on rather than one per group passed through.
@@ -591,30 +575,6 @@ mod tests {
                 .id,
             "other-pending"
         );
-    }
-
-    #[test]
-    fn first_and_last_cursor_moves_follow_the_visible_display_order() {
-        let mut other = interaction("other", true, InteractionActivity::Running);
-        other.workspace_id = "other-workspace".into();
-        let mut live = LiveInteractions::default();
-        live.open(
-            vec![
-                interaction("first", true, InteractionActivity::Pending),
-                other,
-                interaction("last-here", true, InteractionActivity::Running),
-            ],
-            vec![],
-        );
-
-        live.cursor_first("last-here", Some("workspace"));
-        assert_eq!(live.cursor("last-here"), "first");
-        live.cursor_last("last-here", Some("workspace"));
-        assert_eq!(live.cursor("last-here"), "other");
-
-        live.toggle_workspace_scope();
-        live.cursor_last("first", Some("workspace"));
-        assert_eq!(live.cursor("first"), "last-here");
     }
 
     #[test]
