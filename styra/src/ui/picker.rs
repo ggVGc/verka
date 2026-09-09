@@ -541,7 +541,10 @@ fn tree_marker(depth: usize, selected: bool) -> String {
     if depth == 0 {
         cursor.to_owned()
     } else {
-        format!("{}└─ {cursor}", "   ".repeat(depth - 1))
+        // A child starts beneath its parent's content, not at the same left
+        // edge as the root marker. Each further branch carries that indent
+        // forward, so the hierarchy reads as a tree instead of a gutter.
+        format!("{}└─ {cursor}", "  ".repeat(depth))
     }
 }
 
@@ -651,7 +654,11 @@ mod tests {
         crate::session::sort_sessions_tree(&mut sessions, SessionOrder::LastActivity);
 
         let screen = rendered_picker(&sessions, 0);
-        assert!(screen.contains("└─"), "{screen}");
+        let branch_row = screen_lines(&screen, 80)
+            .into_iter()
+            .find(|line| line.contains("branch · codex"))
+            .expect("branched session row");
+        assert!(branch_row.starts_with("│  └─"), "{screen}");
     }
 
     #[test]
