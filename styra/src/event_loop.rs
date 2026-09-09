@@ -478,6 +478,11 @@ pub fn run(
         // on confirmation, so it owns the key before every underlying view.
         if app.branch_prompt.is_some() {
             keys::handle_branch_prompt_key(app, client, key);
+            // Confirming has already branched; open the result on this key
+            // rather than leaving the switch queued behind the next one.
+            if let Some(Request::OpenSession(id)) = app.take_open_session_request() {
+                return Ok(RunOutcome::OpenSession(id));
+            }
             continue;
         }
 

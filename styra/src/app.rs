@@ -996,6 +996,16 @@ impl App {
             .flatten()
     }
 
+    /// Take the next effect only when it is "open this Session". The branch
+    /// chooser uses this to switch on the key that confirmed the branch,
+    /// rather than leaving the new Session queued behind the operator's next
+    /// keypress, and without consuming an unrelated request ahead of it.
+    pub fn take_open_session_request(&mut self) -> Option<Request> {
+        matches!(self.requests.front(), Some(Request::OpenSession(_)))
+            .then(|| self.requests.pop_front())
+            .flatten()
+    }
+
     /// Take the next effect only when it is a Workspace launch edit. Modal
     /// launch controls use this to dispatch their own follow-up immediately
     /// without consuming an unrelated request that was already ahead of it.
@@ -2036,6 +2046,23 @@ mod tests {
         assert_eq!(app.take_request(), Some(Request::Templates));
         assert_eq!(app.take_request(), Some(Request::Quit));
         assert_eq!(app.take_request(), None);
+    }
+
+    /// The branch chooser dispatches its own switch on the confirming key, so
+    /// it takes an "open this Session" request — and only that, never one that
+    /// was already waiting ahead of it.
+    #[test]
+    fn only_an_open_session_request_is_taken_by_the_branch_chooser() {
+        let mut app = app();
+        app.ask(Request::Quit);
+        app.ask(Request::OpenSession("s-2".into()));
+
+        assert_eq!(app.take_open_session_request(), None);
+        assert_eq!(app.take_request(), Some(Request::Quit));
+        assert_eq!(
+            app.take_open_session_request(),
+            Some(Request::OpenSession("s-2".into()))
+        );
     }
 
     #[test]

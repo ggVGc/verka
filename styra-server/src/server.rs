@@ -1131,14 +1131,25 @@ impl ServerState {
             crate::workspace::get(&self.inner.store_root, &summary.workspace_id)?;
         let cwd = owning_workspace.host_path;
         let new_native_id = uuid::Uuid::new_v4().to_string();
+        // What the branch point lands on, when it lands on an operator
+        // message: the provider stamps its copy of that message after the
+        // host sent it, so the text is what identifies it across the two
+        // clocks.
+        let selected_operator_message = at_ms
+            .map(|cutoff| journal::operator_message_at(&summary.path, cutoff))
+            .transpose()?
+            .flatten();
         let branched = branch_native_session(
             &source,
             native_session_format(from_provider),
             native_session_format(to_provider),
             &new_native_id,
             &cwd,
-            at_ms,
-            history,
+            BranchPoint {
+                at_ms,
+                history,
+                selected_operator_message: selected_operator_message.as_deref(),
+            },
         )?;
 
         let destination = native_session_destination(to_provider, &new_native_id, &cwd)?;
@@ -1770,9 +1781,10 @@ fn messages_up_to(
     source: &str,
     format: genta::session::SessionFormat,
     cutoff: u64,
+    selected_operator_message: Option<&str>,
 ) -> Result<usize> {
     let session = genta::session::parse(source, format)?;
-    Ok(session
+    let kept = session
         .messages
         .iter()
         .take_while(|message| {
@@ -1782,25 +1794,53 @@ fn messages_up_to(
                 .and_then(parse_rfc3339_ms)
                 .is_none_or(|at_ms| at_ms <= cutoff)
         })
-        .count())
+        .count();
+    // The cutoff is a host timestamp; the provider stamps its copy of an
+    // operator message only once it has read it, which puts that message just
+    // *past* a cutoff resolved from it. Take the next message too when it is
+    // the very message the operator selected, so branching through their own
+    // turn does not silently branch through the one before it.
+    let selected_next = selected_operator_message.is_some_and(|selected| {
+        session.messages.get(kept).is_some_and(|message| {
+            message.role == genta::session::Role::User && message.text.trim() == selected.trim()
+        })
+    });
+    Ok(kept + usize::from(selected_next))
 }
 
-/// Build the provider-native half of a branch from the same timestamp and
-/// history choice used for its Styra journal.
+/// Where in a source's history a branch is taken, and how much of it the
+/// branch keeps: the whole point of the operation, in one argument.
+#[derive(Clone, Copy, Debug)]
+struct BranchPoint<'a> {
+    /// The host timestamp the operator selected. `None` branches at the end
+    /// of the history.
+    at_ms: Option<u64>,
+    history: crate::protocol::BranchHistory,
+    /// The operator message the cutoff lands on, when it lands on one; see
+    /// [`crate::journal::operator_message_at`].
+    selected_operator_message: Option<&'a str>,
+}
+
+/// Build the provider-native half of a branch from the same branch point used
+/// for its Styra journal.
 fn branch_native_session(
     source: &str,
     from: genta::session::SessionFormat,
     to: genta::session::SessionFormat,
     new_id: &str,
     cwd: &Path,
-    at_ms: Option<u64>,
-    history: crate::protocol::BranchHistory,
+    point: BranchPoint<'_>,
 ) -> Result<String> {
+    let BranchPoint {
+        at_ms,
+        history,
+        selected_operator_message,
+    } = point;
     if history == crate::protocol::BranchHistory::SelectedOnly && at_ms.is_none() {
         anyhow::bail!("branching only the selected entry requires its timestamp");
     }
     let keep_messages = at_ms
-        .map(|cutoff| messages_up_to(source, from, cutoff))
+        .map(|cutoff| messages_up_to(source, from, cutoff, selected_operator_message))
         .transpose()?;
     let mut portable = genta::session::parse(source, from)?;
     match (history, keep_messages) {
@@ -2688,17 +2728,103 @@ mod tests {
         );
         let cutoff = parse_rfc3339_ms("2026-08-21T10:00:01.000Z").unwrap();
         assert_eq!(
-            messages_up_to(claude, genta::session::SessionFormat::Claude, cutoff).unwrap(),
+            messages_up_to(claude, genta::session::SessionFormat::Claude, cutoff, None).unwrap(),
             2
         );
         assert_eq!(
-            messages_up_to(claude, genta::session::SessionFormat::Claude, 0).unwrap(),
+            messages_up_to(claude, genta::session::SessionFormat::Claude, 0, None).unwrap(),
             0
         );
         assert_eq!(
-            messages_up_to(claude, genta::session::SessionFormat::Claude, u64::MAX).unwrap(),
+            messages_up_to(
+                claude,
+                genta::session::SessionFormat::Claude,
+                u64::MAX,
+                None
+            )
+            .unwrap(),
             3
         );
+    }
+
+    /// The host writes an operator message to the agent before the provider
+    /// stamps its own copy, so a cutoff resolved from that message lands just
+    /// before it in the native transcript. Naming the selected text keeps it:
+    /// branching through one's own turn must not branch through the previous
+    /// one.
+    #[test]
+    fn a_cutoff_on_an_operator_message_keeps_the_message_it_names() {
+        let claude = concat!(
+            r#"{"type":"user","uuid":"u1","parentUuid":null,"isSidechain":false,"cwd":"/repo","sessionId":"id","timestamp":"2026-08-21T10:00:00.000Z","message":{"role":"user","content":"first"}}"#,
+            "\n",
+            r#"{"type":"assistant","uuid":"a1","parentUuid":"u1","isSidechain":false,"cwd":"/repo","sessionId":"id","timestamp":"2026-08-21T10:00:01.000Z","message":{"role":"assistant","content":[{"type":"text","text":"answer"}]}}"#,
+            "\n",
+            r#"{"type":"user","uuid":"u2","parentUuid":"a1","isSidechain":false,"cwd":"/repo","sessionId":"id","timestamp":"2026-08-21T10:00:02.500Z","message":{"role":"user","content":"try again"}}"#,
+            "\n",
+        );
+        // The host sent "try again" half a second before Claude stamped it.
+        let cutoff = parse_rfc3339_ms("2026-08-21T10:00:02.000Z").unwrap();
+
+        assert_eq!(
+            messages_up_to(claude, genta::session::SessionFormat::Claude, cutoff, None).unwrap(),
+            2
+        );
+        assert_eq!(
+            messages_up_to(
+                claude,
+                genta::session::SessionFormat::Claude,
+                cutoff,
+                Some("try again")
+            )
+            .unwrap(),
+            3
+        );
+        // A different message at the cutoff is not the one named, so nothing
+        // beyond the timestamps is taken.
+        assert_eq!(
+            messages_up_to(
+                claude,
+                genta::session::SessionFormat::Claude,
+                cutoff,
+                Some("something else")
+            )
+            .unwrap(),
+            2
+        );
+    }
+
+    /// The same skew decides which single message `selected_only` takes: named
+    /// or not, it must be the operator's own turn rather than the reply before
+    /// it.
+    #[test]
+    fn a_selected_only_branch_on_an_operator_message_takes_that_message() {
+        let claude = concat!(
+            r#"{"type":"user","uuid":"u1","parentUuid":null,"isSidechain":false,"cwd":"/repo","sessionId":"id","timestamp":"2026-08-21T10:00:00.000Z","message":{"role":"user","content":"first"}}"#,
+            "\n",
+            r#"{"type":"assistant","uuid":"a1","parentUuid":"u1","isSidechain":false,"cwd":"/repo","sessionId":"id","timestamp":"2026-08-21T10:00:01.000Z","message":{"role":"assistant","content":[{"type":"text","text":"answer"}]}}"#,
+            "\n",
+            r#"{"type":"user","uuid":"u2","parentUuid":"a1","isSidechain":false,"cwd":"/repo","sessionId":"id","timestamp":"2026-08-21T10:00:02.500Z","message":{"role":"user","content":"try again"}}"#,
+            "\n",
+        );
+        let cutoff = parse_rfc3339_ms("2026-08-21T10:00:02.000Z").unwrap();
+        let branched = branch_native_session(
+            claude,
+            genta::session::SessionFormat::Claude,
+            genta::session::SessionFormat::Claude,
+            "new-id",
+            Path::new("/repo"),
+            BranchPoint {
+                at_ms: Some(cutoff),
+                history: crate::protocol::BranchHistory::SelectedOnly,
+                selected_operator_message: Some("try again"),
+            },
+        )
+        .unwrap();
+        let parsed =
+            genta::session::parse(&branched, genta::session::SessionFormat::Claude).unwrap();
+
+        assert_eq!(parsed.messages.len(), 1);
+        assert_eq!(parsed.messages[0].text, "try again");
     }
 
     #[test]
@@ -2718,8 +2844,11 @@ mod tests {
             genta::session::SessionFormat::Codex,
             "new-id",
             Path::new("/new/repo"),
-            Some(cutoff),
-            crate::protocol::BranchHistory::SelectedOnly,
+            BranchPoint {
+                at_ms: Some(cutoff),
+                history: crate::protocol::BranchHistory::SelectedOnly,
+                selected_operator_message: None,
+            },
         )
         .unwrap();
         let parsed =

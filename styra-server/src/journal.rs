@@ -624,6 +624,47 @@ pub fn replay(path: &Path, protocol: Protocol) -> Result<Vec<AgentEvent>> {
 
 /// Reconstruct the raw interaction from a stored journal: each agent record is
 /// its verbatim line, each operator record the message text that was sent.
+/// The operator message the branch point `cutoff` lands on, if it lands on
+/// one: the last journal record at or before it, when that record is the
+/// operator's own message.
+///
+/// A branch point is a host timestamp, and the host writes an operator message
+/// to the agent *before* the provider stamps its own copy of it into its
+/// native transcript. Comparing timestamps alone therefore puts the selected
+/// message just past the cutoff and drops it from the branch. Its text is what
+/// identifies it across the two clocks — see
+/// [`crate::server::branch_native_session`].
+pub fn operator_message_at(path: &Path, cutoff: u64) -> Result<Option<String>> {
+    let file_path = if path.is_dir() {
+        path.join(JOURNAL_FILE)
+    } else {
+        path.to_path_buf()
+    };
+    let file = File::open(&file_path)
+        .with_context(|| format!("opening journal {}", file_path.display()))?;
+    let mut selected = None;
+    for line in BufReader::new(file).lines() {
+        let line = line.context("reading journal line")?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Ok(record) = serde_json::from_str::<Record>(&line) else {
+            continue;
+        };
+        match record {
+            Record::User { at_ms, text } if at_ms <= cutoff => selected = Some(text),
+            Record::Agent { at_ms, .. } | Record::ModelChange { at_ms, .. } if at_ms <= cutoff => {
+                selected = None
+            }
+            // A marker is not an entry the operator could have selected, so it
+            // does not displace the message before it.
+            Record::Branch { .. } => {}
+            _ => break,
+        }
+    }
+    Ok(selected)
+}
+
 pub fn replay_raw(path: &Path) -> Result<Vec<RawLine>> {
     let file_path = if path.is_dir() {
         path.join(JOURNAL_FILE)
@@ -899,6 +940,42 @@ mod tests {
 
         std::fs::remove_dir_all(source).ok();
         std::fs::remove_dir_all(destination).ok();
+    }
+
+    /// A branch point resolves to an operator message only when their message
+    /// is what the cutoff lands on; landing on an agent line resolves to
+    /// nothing, since the provider's own copy of that line needs no help being
+    /// found by timestamp.
+    #[test]
+    fn a_branch_point_names_the_operator_message_it_lands_on() {
+        let directory = temp_dir("branch-point-operator-message");
+        std::fs::write(
+            directory.join(JOURNAL_FILE),
+            concat!(
+                "{\"source\":\"user\",\"at_ms\":10,\"text\":\"first\"}\n",
+                "{\"source\":\"agent\",\"at_ms\":20,\"raw\":\"{}\"}\n",
+                "{\"source\":\"user\",\"at_ms\":30,\"text\":\"try again\"}\n",
+                "{\"source\":\"branch\",\"at_ms\":31,\"direction\":\"to\",\"session\":\"styra-other\"}\n",
+                "{\"source\":\"agent\",\"at_ms\":40,\"raw\":\"{}\"}\n"
+            ),
+        )
+        .unwrap();
+
+        assert_eq!(
+            operator_message_at(&directory, 10).unwrap().as_deref(),
+            Some("first")
+        );
+        assert_eq!(operator_message_at(&directory, 20).unwrap(), None);
+        // Past the operator's message and its branch marker, but before the
+        // reply: still their message.
+        assert_eq!(
+            operator_message_at(&directory, 35).unwrap().as_deref(),
+            Some("try again")
+        );
+        assert_eq!(operator_message_at(&directory, 40).unwrap(), None);
+        assert_eq!(operator_message_at(&directory, 5).unwrap(), None);
+
+        std::fs::remove_dir_all(directory).ok();
     }
 
     #[test]

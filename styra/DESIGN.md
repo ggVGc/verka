@@ -788,7 +788,14 @@ Two client-facing shortcuts:
   provider's native transcript are decoded differently and do not otherwise
   line up — so a `RawLine`'s `at_ms` (via the selected entry's `raw_index`)
   is compared against each native message's own timestamp. An entry without a
-  stable wire timestamp cannot be branched.
+  stable wire timestamp cannot be branched. The two clocks do not agree on the
+  operator's own turns: the host sends a message before the provider stamps
+  its copy of it, which would put the selected message just past a cutoff
+  resolved from it. So when the cutoff lands on an operator message, the
+  server names that message's text and keeps the native message matching it —
+  branching through one's own turn must not branch through the previous one.
+  Confirming the chooser opens the branch on that key rather than leaving the
+  switch behind the operator's next keypress.
 - `b` on a branch marker in the event list opens the Session that marker
   names, which is how an operator walks between a source and its branches. On
   any other entry it says so and does nothing.
