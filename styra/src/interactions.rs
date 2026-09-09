@@ -104,6 +104,76 @@ impl LiveInteractions {
             .cloned()
     }
 
+    /// The first entry of the Workspace group after the current one, for the
+    /// ctrl-j jump. Only meaningful in All scope, where the display is grouped
+    /// under Workspace headings; in Workspace scope there is a single group and
+    /// no jump to make.
+    pub fn next_workspace(
+        &self,
+        current: &str,
+        workspace_id: Option<&str>,
+    ) -> Option<InteractionSummary> {
+        let leaders = self.workspace_leaders(workspace_id);
+        let group = self.group_of(current, workspace_id)?;
+        leaders
+            .get(group + 1)
+            .and_then(|index| self.items.get(*index))
+            .cloned()
+    }
+
+    /// The counterpart to [`Self::next_workspace`]. From the middle of a group
+    /// it lands on that group's own first entry, so ctrl-k always walks up to a
+    /// heading before leaving it; from a group's first entry it moves to the
+    /// group above.
+    pub fn previous_workspace(
+        &self,
+        current: &str,
+        workspace_id: Option<&str>,
+    ) -> Option<InteractionSummary> {
+        let leaders = self.workspace_leaders(workspace_id);
+        let group = self.group_of(current, workspace_id)?;
+        let leader = self.items.get(*leaders.get(group)?)?;
+        if leader.id != current {
+            return Some(leader.clone());
+        }
+        leaders
+            .get(group.checked_sub(1)?)
+            .and_then(|index| self.items.get(*index))
+            .cloned()
+    }
+
+    /// The first visible entry of each Workspace group, in display order.
+    /// Empty in Workspace scope: the entries are not grouped there.
+    fn workspace_leaders(&self, workspace_id: Option<&str>) -> Vec<usize> {
+        if self.only_current_workspace {
+            return Vec::new();
+        }
+
+        let mut leaders: Vec<usize> = Vec::new();
+        for index in self.display_indices(workspace_id) {
+            let workspace_id = &self.items[index].workspace_id;
+            if leaders
+                .last()
+                .is_none_or(|leader| self.items[*leader].workspace_id != *workspace_id)
+            {
+                leaders.push(index);
+            }
+        }
+        leaders
+    }
+
+    /// Which Workspace group `current` sits in, counted over
+    /// [`Self::workspace_leaders`].
+    fn group_of(&self, current: &str, workspace_id: Option<&str>) -> Option<usize> {
+        let current = self
+            .items
+            .iter()
+            .find(|interaction| interaction.id == current)?;
+        self.workspace_leaders(workspace_id)
+            .iter()
+            .position(|leader| self.items[*leader].workspace_id == current.workspace_id)
+    }
+
     pub fn toggle_workspace_scope(&mut self) {
         self.only_current_workspace = !self.only_current_workspace;
     }
@@ -323,6 +393,82 @@ mod tests {
                 .id,
             "other-pending"
         );
+    }
+
+    #[test]
+    fn workspace_jumps_walk_the_first_entry_of_each_group() {
+        let mut other_pending = interaction("other-pending", true, InteractionActivity::Pending);
+        other_pending.workspace_id = "other-workspace".into();
+        let mut other_running = interaction("other-running", true, InteractionActivity::Running);
+        other_running.workspace_id = "other-workspace".into();
+        let mut third = interaction("third", true, InteractionActivity::Running);
+        third.workspace_id = "third-workspace".into();
+        let mut live = LiveInteractions::default();
+        live.open(
+            vec![
+                interaction("pending", true, InteractionActivity::Pending),
+                other_pending,
+                interaction("running", true, InteractionActivity::Running),
+                other_running,
+                third,
+            ],
+            vec![],
+        );
+        let workspace = Some("workspace");
+
+        // Display order: pending, running | other-pending, other-running | third
+        assert_eq!(
+            live.next_workspace("pending", workspace).unwrap().id,
+            "other-pending"
+        );
+        assert_eq!(
+            live.next_workspace("running", workspace).unwrap().id,
+            "other-pending"
+        );
+        assert_eq!(
+            live.next_workspace("other-running", workspace).unwrap().id,
+            "third"
+        );
+        assert!(live.next_workspace("third", workspace).is_none());
+
+        // From the middle of a group, ctrl-k stops at that group's own first
+        // entry before leaving it.
+        assert_eq!(
+            live.previous_workspace("other-running", workspace)
+                .unwrap()
+                .id,
+            "other-pending"
+        );
+        assert_eq!(
+            live.previous_workspace("other-pending", workspace)
+                .unwrap()
+                .id,
+            "pending"
+        );
+        assert_eq!(
+            live.previous_workspace("running", workspace).unwrap().id,
+            "pending"
+        );
+        assert!(live.previous_workspace("pending", workspace).is_none());
+    }
+
+    #[test]
+    fn workspace_jumps_do_nothing_in_workspace_scope() {
+        let mut other = interaction("other", true, InteractionActivity::Pending);
+        other.workspace_id = "other-workspace".into();
+        let mut live = LiveInteractions::default();
+        live.open(
+            vec![
+                interaction("current", true, InteractionActivity::Pending),
+                other,
+                interaction("next", true, InteractionActivity::Running),
+            ],
+            vec![],
+        );
+        live.toggle_workspace_scope();
+
+        assert!(live.next_workspace("current", Some("workspace")).is_none());
+        assert!(live.previous_workspace("next", Some("workspace")).is_none());
     }
 
     #[test]

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use std::io::Stdout;
@@ -542,6 +542,27 @@ pub fn run(
             match key.code {
                 KeyCode::Char('a') | KeyCode::Esc | KeyCode::Enter => {
                     app.interactions.open = false;
+                    continue;
+                }
+                // In All scope the entries are grouped under Workspace
+                // headings, and ctrl-j/ctrl-k skip whole groups: one press per
+                // Workspace rather than one per interaction.
+                KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    if let Some(interaction) = app
+                        .interactions
+                        .next_workspace(&app.session_id, app.workspace.id.as_deref())
+                    {
+                        make_interaction_current(app, live, client, standing_launch, interaction);
+                    }
+                    continue;
+                }
+                KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    if let Some(interaction) = app
+                        .interactions
+                        .previous_workspace(&app.session_id, app.workspace.id.as_deref())
+                    {
+                        make_interaction_current(app, live, client, standing_launch, interaction);
+                    }
                     continue;
                 }
                 KeyCode::Char('j') | KeyCode::Down => {

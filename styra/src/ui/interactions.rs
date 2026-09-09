@@ -36,11 +36,18 @@ pub(crate) fn render(frame: &mut Frame, app: &App, area: Rect) {
     } else {
         "All"
     };
+    // The Workspace jump only exists where there are Workspace groups to jump
+    // between, so it is only advertised in All scope.
+    let jump = if app.interactions.only_current_workspace {
+        ""
+    } else {
+        "ctrl-j/k workspace · "
+    };
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(palette::ACCENT))
         .title(format!(
-            " {scope} · live interactions · j/k load · Enter close · S stop · D delete stopped · w scope · a close "
+            " {scope} · live interactions · j/k load · {jump}Enter close · S stop · D delete stopped · w scope · a close "
         ));
     let items = rows
         .iter()

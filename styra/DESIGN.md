@@ -632,6 +632,7 @@ current focus is shown in the status line and by which region draws the cursor.
 | `F`             | Seed an explicit new Session from this Session's transcript |
 | `a`             | Open live Interactions above the event list                  |
 | `D`             | In the Interaction navigator, delete the selected stopped Interaction |
+| `ctrl-j` / `ctrl-k` | In the Interaction navigator's All-Workspaces mode, jump to the first Interaction of the next / previous Workspace |
 | `A`             | Browse Sessions in the current Workspace with a preview     |
 | `S`             | Stop the Interaction and return to a blank Session screen   |
 | `V`             | Choose a Workspace, then browse its Sessions                |
@@ -782,7 +783,14 @@ retained within each group. Each row shows the latest received agent message
 on a subordinate line, updated along with those live summaries. All-Workspaces
 mode always groups the rows beneath
 Workspace headings; current-Workspace mode omits the one redundant heading.
-`w` switches between those scopes. `a` or `Esc` closes the navigator. `D` removes a highlighted
+`w` switches between those scopes. In All-Workspaces mode `ctrl-j`/`ctrl-k`
+move by Workspace instead of by row, landing on the first Interaction under the
+next or previous heading — with a long list of Workspaces that is one press per
+Workspace rather than one per Interaction. `ctrl-k` from the middle of a group
+stops at that group's own first Interaction before leaving it, so the jump is
+symmetric with what `ctrl-j` skipped. In current-Workspace mode there is a
+single group and the keys do nothing.
+`a` or `Esc` closes the navigator. `D` removes a highlighted
 stopped Interaction from the server. The next available Interaction becomes
 current without closing the navigator; deleting the last one closes it and
 returns Styra to its blank default state.

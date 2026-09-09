@@ -65,6 +65,10 @@ pub(crate) const REFERENCE: &[ReferenceRow] = &[
         action: "current Workspace / all Workspaces",
     },
     ReferenceRow::Binding {
+        keys: "ctrl-j / ctrl-k (interactions)",
+        action: "first interaction of the next / previous Workspace, in All",
+    },
+    ReferenceRow::Binding {
         keys: "r / l / t / d",
         action: "raw / log / transcript / details; press again for events",
     },
