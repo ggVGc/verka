@@ -434,11 +434,24 @@ pub fn open_branch_prompt(app: &mut App) {
 pub fn branch_session(
     app: &mut App,
     client: &Client,
+    live: &mut Attachment,
     at_ms: u64,
     history: styra_server::BranchHistory,
 ) {
     match client.branch_session(&app.session_id, Some(at_ms), history, None) {
         Ok(branched) => {
+            // A branch is the handoff point to a new interaction. Remove the
+            // source from the live list before opening its sibling, while its
+            // durable Session remains available as the branch's recorded
+            // origin and for later viewing.
+            if matches!(live, Attachment::Attached { .. }) {
+                match client.close_interaction(&app.session_id) {
+                    Ok(()) => *live = Attachment::Detached,
+                    Err(error) => app.push_log(LogEntry::error(format!(
+                        "branched, but could not close the source interaction: {error:#}"
+                    ))),
+                }
+            }
             app.push_log(LogEntry::info(format!(
                 "branched to session {}",
                 branched.name.as_deref().unwrap_or(&branched.id)

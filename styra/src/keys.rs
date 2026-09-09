@@ -75,7 +75,12 @@ pub fn handle_mount_prompt_key(app: &mut App, key: KeyEvent) {
 
 /// Keys for the two-way branch choice. Confirming closes the modal before the
 /// server call, so success can replace the screen and failure returns to it.
-pub fn handle_branch_prompt_key(app: &mut App, client: &Client, key: KeyEvent) {
+pub fn handle_branch_prompt_key(
+    app: &mut App,
+    client: &Client,
+    live: &mut Attachment,
+    key: KeyEvent,
+) {
     let Some(prompt) = app.branch_prompt.as_mut() else {
         return;
     };
@@ -86,7 +91,7 @@ pub fn handle_branch_prompt_key(app: &mut App, client: &Client, key: KeyEvent) {
             let at_ms = prompt.at_ms();
             let history = prompt.selected();
             app.branch_prompt = None;
-            session::branch_session(app, client, at_ms, history);
+            session::branch_session(app, client, live, at_ms, history);
         }
         KeyCode::Esc | KeyCode::Char('q') => app.branch_prompt = None,
         _ => {}

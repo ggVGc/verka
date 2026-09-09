@@ -477,7 +477,7 @@ pub fn run(
         // The branching choice is modal and can replace the current Session
         // on confirmation, so it owns the key before every underlying view.
         if app.branch_prompt.is_some() {
-            keys::handle_branch_prompt_key(app, client, key);
+            keys::handle_branch_prompt_key(app, client, live, key);
             continue;
         }
 

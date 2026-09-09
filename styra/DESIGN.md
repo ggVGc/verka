@@ -771,7 +771,9 @@ Two client-facing shortcuts:
 - `B` in the event list opens a choice and branches the current Session under
   the *same* provider, seeded either with history through the selected entry or
   with only that entry. It opens the branch immediately after confirmation,
-  the same as `x`. The cutoff is resolved by timestamp — Styra's own journal and a
+  closing and removing the source Interaction from the live list first. The
+  source Session remains as durable stored history. The cutoff is resolved by
+  timestamp — Styra's own journal and a
   provider's native transcript are decoded differently and do not otherwise
   line up — so a `RawLine`'s `at_ms` (via the selected entry's `raw_index`)
   is compared against each native message's own timestamp. An entry without a
