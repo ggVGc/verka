@@ -707,6 +707,14 @@ client lands on the main Interaction view with the live Interactions list open.
 The green dot the row carried is what `Enter` then acts on, and the rest of that
 Workspace's live work is on screen rather than a second picker away.
 
+Entering a Workspace at startup works the same way, whether it was picked from
+that list or found by the current directory: an ordinary `styra` in a directory
+whose Workspace has live work opens on that work with the navigator up, rather
+than on the blank pending screen. A trailing prompt overrides this — that is
+input the operator has already given, so it starts an Interaction of its own —
+and so does any explicit CLI target (`--workspace`, `--view`, a subcommand),
+which keeps its direct behavior.
+
 Otherwise choosing a Workspace opens its Session picker; choosing a Session
 attaches to its Interaction when live, otherwise it replays the stored
 journal read-only. Neither step stops the Interaction the

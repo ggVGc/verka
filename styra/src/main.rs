@@ -234,10 +234,8 @@ fn main() -> Result<()> {
     // An ordinary interactive launch enters the Workspace associated with the
     // current directory when one exists. Otherwise it starts with the durable
     // Workspace list. Explicit CLI targets retain their direct behavior.
-    let mut active_workspace = if cli.workspace.is_none()
-        && cli.view.is_none()
-        && cli.command.is_none()
-    {
+    let ordinary_launch = cli.workspace.is_none() && cli.view.is_none() && cli.command.is_none();
+    let mut active_workspace = if ordinary_launch {
         let current_directory = session::resolve_workspace(None)?;
         let mut workspaces = client.list_workspaces()?;
         if let Some(workspace) = session::find_workspace_for_host(&workspaces, &current_directory) {
@@ -285,6 +283,20 @@ fn main() -> Result<()> {
         session::workspace_for_host(&client, &host_path)?
     };
 
+    // Opening a Workspace that already holds live work lands on that work with
+    // the Interactions navigator open, exactly as `V` does mid-session —
+    // whether the Workspace came from the current directory or from the
+    // startup picker. A trailing prompt overrides it below: that is input the
+    // operator has already given, so it starts an Interaction of its own rather
+    // than joining one in flight.
+    let startup_interaction = if ordinary_launch {
+        client.list_interactions().ok().and_then(|interactions| {
+            interactions::first_live_in_workspace(&interactions, &active_workspace.id)
+        })
+    } else {
+        None
+    };
+
     // Build the application and, unless viewing or awaiting the operator's
     // first message, a live session up front so a setup failure is reported
     // plainly before the terminal is taken over.
@@ -323,11 +335,27 @@ fn main() -> Result<()> {
                 };
             }
             // No seed: nothing has been said to an agent yet, so nothing is
-            // launched yet either. Existing interactions are reached from the
-            // main screen with `a`; there is no separate startup picker.
+            // launched yet either — unless the Workspace already holds live
+            // work, which this client joins instead of opening blank. Attaching
+            // is best-effort: a Workspace whose live Interaction cannot be
+            // reached still opens, on the blank screen, with the reason logged.
             None => {
                 app = pending_app(selection, launch.clone(), &active_workspace);
                 live = Attachment::Detached;
+                if let Some(interaction) = startup_interaction {
+                    match session::open_session(&client, &interaction.id) {
+                        Ok((mut next, next_live)) => {
+                            next.launch.interaction = launch.clone();
+                            app = next;
+                            live = next_live;
+                            event_loop::open_interaction_navigator(&mut app, &client);
+                        }
+                        Err(error) => app.push_log(LogEntry::error(format!(
+                            "could not open live interaction {}: {error:#}",
+                            interaction.id
+                        ))),
+                    }
+                }
             }
         }
     }
