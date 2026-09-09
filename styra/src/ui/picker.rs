@@ -531,7 +531,7 @@ fn session_item(
         ),
         Span::styled(
             format!(" · {age}"),
-            Style::default().fg(palette::MUTED_TEXT),
+            Style::default().fg(palette::ADDITIONAL_INFO),
         ),
     ]))
 }
