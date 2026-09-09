@@ -6,7 +6,7 @@ use crate::journal::{self, Journal};
 use crate::protocol::WorkspaceSummary;
 use crate::protocol::{
     Answer, Contract, DrivaOptions, InteractionActivity, InteractionSummary, InteractionUpdate,
-    LaunchMount, LaunchPolicy, QueuedMessage, SendMessage, SessionOrigin, SessionSummary,
+    LaunchMount, LaunchPolicy, LogEntry, QueuedMessage, SendMessage, SessionOrigin, SessionSummary,
     TemplateSummary,
 };
 use crate::protocol::{
@@ -117,8 +117,41 @@ struct ManagedInteraction {
     /// reason it stopped, as opposed to a figure about how full it was. What
     /// makes this interaction one a reset should come back to.
     refused_by: Arc<Mutex<Option<crate::protocol::QuotaEvent>>>,
+    /// This interaction's own half of the launch policy, as the client asked
+    /// for it. Kept so a retry can resume the Session under the policy the
+    /// operator actually granted — the mounts and templates they added for
+    /// this conversation — rather than the Workspace's standing policy alone.
+    launch: LaunchPolicy,
     /// The session's durable directory: its journal, metadata and queue.
     session_path: PathBuf,
+}
+
+/// How often the quota log is asked whether a plan window has come back. A
+/// wait for one is minutes to hours long, so this is a cheap poll rather than
+/// a scheduled wake-up; see [`ServerState::sweep_quota_resets`].
+const RESET_SWEEP: Duration = Duration::from_secs(15);
+
+/// One interaction a plan window is holding, and what asking it again takes.
+struct HeldBack {
+    /// The Session to resume, which is also the interaction's id.
+    id: String,
+    /// The turn it was refused in the middle of, verbatim as it went out.
+    turn: String,
+    /// The interaction's own half of the launch policy, so the Session comes
+    /// back in the sandbox the operator granted it rather than a plainer one.
+    launch: LaunchPolicy,
+}
+
+/// Whether a window coming back is the one that refused this work.
+///
+/// Both halves matter: the providers are separate subscriptions, and each
+/// reports several windows of its own, so a Codex hour turning over releases
+/// nothing a Claude week is holding.
+fn reset_releases(
+    refused_by: &crate::protocol::QuotaEvent,
+    reset: &crate::quota::WindowReset,
+) -> bool {
+    refused_by.provider == reset.provider && refused_by.window == reset.window
 }
 
 fn update_finishes_background(update: &InteractionUpdate) -> bool {
@@ -184,12 +217,53 @@ impl ManagedInteraction {
         Ok(())
     }
 
-    /// Record which window refused this interaction's work.
+    /// Record which window refused this interaction's work, and — when the
+    /// operator has asked to keep at it — say in the interaction's own stream
+    /// that the wait has started, so being stopped by a limit does not read as
+    /// being stopped for good.
     fn note_refused(&self, reading: crate::protocol::QuotaEvent) {
+        if self.auto_retry.load(Ordering::Acquire) {
+            self.push_update(InteractionUpdate::Log(LogEntry::warn(format!(
+                "{} — waiting for it to reset, then asking again",
+                reading.describe()
+            ))));
+        }
         *self
             .refused_by
             .lock()
             .expect("interaction refusal lock poisoned") = Some(reading);
+    }
+
+    /// Add one update to this interaction's history, as the collector thread
+    /// does — for the things the server itself has to say into a stream the
+    /// agent is no longer producing.
+    fn push_update(&self, update: InteractionUpdate) {
+        let mut history = self
+            .updates
+            .lock()
+            .expect("interaction update lock poisoned");
+        let sequence = history.len() as u64 + 1;
+        history.push(SequencedUpdate { sequence, update });
+    }
+
+    /// The last thing the operator asked, verbatim as it went out — framing
+    /// and all, for a turn that asked its reply for a shape, so asking again
+    /// asks the same question rather than an untyped version of it.
+    ///
+    /// Read from the interaction's history, which for a resumed interaction is
+    /// seeded with the stored journal, so this answers for the conversation
+    /// rather than for what this process happened to see.
+    fn last_operator_turn(&self) -> Option<String> {
+        let updates = self.updates.lock().expect("interaction updates poisoned");
+        updates
+            .iter()
+            .rev()
+            .find_map(|sequenced| match &sequenced.update {
+                InteractionUpdate::Event(crate::event::AgentEvent::UserMessage { text }) => {
+                    Some(text.clone())
+                }
+                _ => None,
+            })
     }
 
     /// The window that refused this interaction's work, if this interaction is
@@ -455,7 +529,7 @@ impl ServerState {
                 .unwrap_or_else(|| store_root.clone()),
         }
         .join("sandboxes");
-        Self {
+        let state = Self {
             inner: Arc::new(ServerInner {
                 quota: Arc::new(crate::quota::QuotaLog::open(&store_root)),
                 store_root,
@@ -466,7 +540,12 @@ impl ServerState {
                 workspace_metadata: Mutex::new(()),
                 shutdown: AtomicBool::new(false),
             }),
-        }
+        };
+        // A plan window coming back is the server's business even while no
+        // client is connected: the interaction it refused is the server's, and
+        // it is the one that has to be picked up again.
+        state.watch_quota_resets();
+        state
     }
 
     pub fn store_root(&self) -> &Path {
@@ -603,6 +682,7 @@ impl ServerState {
             queue: Mutex::new(std::collections::VecDeque::new()),
             auto_retry: Arc::new(AtomicBool::new(false)),
             refused_by: Arc::new(Mutex::new(None)),
+            launch: request.launch.clone(),
             session_path: journal_path
                 .parent()
                 .unwrap_or(&self.inner.store_root)
@@ -995,6 +1075,7 @@ impl ServerState {
             // and a Session that keeps hitting the window has to keep it.
             auto_retry: Arc::new(AtomicBool::new(auto_retry)),
             refused_by: Arc::new(Mutex::new(None)),
+            launch: request.launch.clone(),
             session_path: summary.path.clone(),
         });
         let reported_selection = Arc::downgrade(&managed);
@@ -1325,6 +1406,135 @@ impl ServerState {
             .get(id)
             .cloned()
             .with_context(|| format!("no live interaction for session {id:?}"))
+    }
+
+    /// Give the quota log's clock a turn: pick up whatever the windows that
+    /// have just come back were holding.
+    ///
+    /// Polled rather than scheduled. A wait for a plan window is minutes to
+    /// hours long, so being a few seconds late costs nothing, and the check is
+    /// a flag read while no window is being waited for at all — which is
+    /// almost always.
+    fn sweep_quota_resets(&self) {
+        if !self.inner.quota.is_awaiting_reset() {
+            return;
+        }
+        for reset in self.inner.quota.resets(journal::now_ms()) {
+            self.retry_after_reset(&reset);
+        }
+    }
+
+    /// Ask again everything `reset`'s window refused.
+    ///
+    /// The candidates are collected before any of them is resumed, because
+    /// resuming takes the same lock that listing them does — and takes as long
+    /// as launching a sandbox, which is not a lock to hold across.
+    fn retry_after_reset(&self, reset: &crate::quota::WindowReset) {
+        for held in self.held_back_by(reset) {
+            let HeldBack { id, turn, launch } = held;
+            if let Err(error) = self.resume_session(ResumeSession {
+                id: id.clone(),
+                launch,
+            }) {
+                // The refused interaction is still the one in the map, so its
+                // own stream is where an operator will look for the reason
+                // their session did not come back after all.
+                self.say(
+                    &id,
+                    LogEntry::error(format!(
+                        "the {} window has reset, but this Session could not be resumed: {error:#}",
+                        reset.window
+                    )),
+                );
+                continue;
+            }
+            self.say(
+                &id,
+                LogEntry::info(format!(
+                    "the {} window has reset — asking again",
+                    reset.window
+                )),
+            );
+            let sent = self
+                .interaction(&id)
+                .and_then(|interaction| interaction.send_message(SendMessage::new(&turn)));
+            if let Err(error) = sent {
+                self.say(
+                    &id,
+                    LogEntry::error(format!("could not ask again after the reset: {error:#}")),
+                );
+            }
+        }
+    }
+
+    /// The interactions `reset`'s window is holding: ones it refused, that it
+    /// stopped, and that were told to keep at it — with the turn each was
+    /// refused in the middle of, and the policy it was launched under.
+    fn held_back_by(&self, reset: &crate::quota::WindowReset) -> Vec<HeldBack> {
+        let interactions = self
+            .inner
+            .interactions
+            .lock()
+            .expect("server interaction lock poisoned");
+        let mut held = Vec::new();
+        for managed in interactions.values() {
+            let Some(refusal) = managed.awaiting_window() else {
+                continue;
+            };
+            if !reset_releases(&refusal, reset) {
+                continue;
+            }
+            let id = managed.interaction.session_id().to_owned();
+            let Some(turn) = managed.last_operator_turn() else {
+                // Nothing was asked, so there is nothing to ask again. Said in
+                // the interaction's own stream, since the operator asked for a
+                // retry and is owed the reason there was none.
+                managed.push_update(InteractionUpdate::Log(LogEntry::warn(format!(
+                    "the {} window has reset, but this Session has no turn to ask again",
+                    reset.window
+                ))));
+                continue;
+            };
+            held.push(HeldBack {
+                id,
+                turn,
+                launch: managed.launch.clone(),
+            });
+        }
+        held
+    }
+
+    /// Say something in one interaction's own update stream, if it still has
+    /// one. Used for what the server says on an interaction's behalf while no
+    /// agent of its own is producing anything.
+    fn say(&self, id: &str, entry: LogEntry) {
+        if let Ok(interaction) = self.interaction(id) {
+            interaction.push_update(InteractionUpdate::Log(entry));
+        }
+    }
+
+    /// Watch for plan windows coming back, for as long as this server exists.
+    ///
+    /// The thread holds a weak reference: it must not keep an in-process
+    /// server alive after its client has gone, and must not outlive one by
+    /// more than a tick.
+    fn watch_quota_resets(&self) {
+        let inner = Arc::downgrade(&self.inner);
+        let watching = std::thread::Builder::new()
+            .name("styra-quota-resets".into())
+            .spawn(move || loop {
+                std::thread::sleep(RESET_SWEEP);
+                let Some(inner) = inner.upgrade() else {
+                    return;
+                };
+                Self { inner }.sweep_quota_resets();
+            });
+        if let Err(error) = watching {
+            // Worth starting without: every other thing the server does still
+            // works, and a rate limit then waits for the operator as it did
+            // before there was anything to wait for them.
+            eprintln!("styra-server: not watching for plan-window resets: {error}");
+        }
     }
 
     /// Where a session's broker lives and how it is mounted, named but not yet
@@ -2379,6 +2589,45 @@ mod tests {
 
         std::fs::remove_dir_all(store).ok();
         std::fs::remove_dir_all(host).ok();
+    }
+
+    /// Which interactions a reset releases: the providers are separate
+    /// subscriptions and each reports several windows, so waking the wrong
+    /// sessions would send held-back work into a limit that is still refusing
+    /// it.
+    #[test]
+    fn a_reset_releases_only_the_work_its_own_window_refused() {
+        let refusal = |provider, window: &str| crate::protocol::QuotaEvent {
+            at_ms: 1_000,
+            session_id: "s-1".into(),
+            provider,
+            window: window.into(),
+            status: crate::protocol::QuotaStatus::Exhausted,
+            utilization: None,
+            resets_at_ms: Some(2_000),
+            detail: None,
+        };
+        let reset = crate::quota::WindowReset {
+            provider: crate::agent::Provider::Claude,
+            window: "five_hour".into(),
+            at_ms: 2_000,
+        };
+
+        assert!(reset_releases(
+            &refusal(crate::agent::Provider::Claude, "five_hour"),
+            &reset
+        ));
+        // The same account's other window is still full.
+        assert!(!reset_releases(
+            &refusal(crate::agent::Provider::Claude, "seven_day"),
+            &reset
+        ));
+        // And the other subscription's window of the same name is not this
+        // one at all.
+        assert!(!reset_releases(
+            &refusal(crate::agent::Provider::Codex, "five_hour"),
+            &reset
+        ));
     }
 
     #[test]
