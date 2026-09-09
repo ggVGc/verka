@@ -50,6 +50,16 @@
 //! it fills is news, so evidence of room forgets what was said about it. How an
 //! announcement is *shown* is the client's business; this decides only that it
 //! is worth showing.
+//!
+//! The other half of a rejection is when it stops being one. A refused window
+//! reports the minute it turns over, and this is the one place that hears every
+//! such reading, so this is where a window coming back is noticed: a rejection
+//! puts the window on a watch list ([`QuotaLog::observe`] again, through
+//! [`Observed::rejected`]), and [`QuotaLog::resets`] hands back the windows
+//! whose moment has come, once each. What anyone does with that — Styra resumes
+//! the interactions the window stopped — is the caller's; deciding *that a
+//! window is usable again* is this module's, because the readings it is decided
+//! from all arrive here anyway.
 
 use crate::agent::Provider;
 use crate::protocol::{QuotaEvent, QuotaStatus};
@@ -104,6 +114,47 @@ const RETENTION_MS: u64 = 14 * 24 * 60 * 60 * 1_000;
 /// inside one: the account's quota is not any workspace's business.
 const QUOTA_FILE: &str = "quota.jsonl";
 
+/// How long past a window's reported reset it is called usable again.
+///
+/// The providers report the minute a window turns over, and the request that
+/// lands exactly on it is the one most likely to be refused for being early:
+/// the figure is theirs to round, and whoever is waiting on this reset is not
+/// watching. A few minutes late costs nothing; a few seconds early costs the
+/// whole wait again.
+const RESET_GRACE_MS: u64 = 3 * 60 * 1_000;
+
+/// A provider window that has come back: it refused work, and the moment it
+/// said it would turn over has passed.
+///
+/// Handed out once per rejection (see [`QuotaLog::resets`]), so acting on one
+/// is safe to do without asking whether it has already been acted on.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WindowReset {
+    pub provider: Provider,
+    /// The window as the provider names it, matching [`QuotaEvent::window`].
+    pub window: String,
+    /// When it was called usable again, which is the reset the provider
+    /// reported plus [`RESET_GRACE_MS`] — or the moment the provider itself
+    /// said the window was allowing work again, whichever came first.
+    pub at_ms: u64,
+}
+
+/// What one observed line told the log.
+#[derive(Debug, Default, PartialEq)]
+pub struct Observed {
+    /// The readings worth putting in front of the operator now; see
+    /// [`QuotaLog::observe`].
+    pub announce: Vec<QuotaEvent>,
+    /// The window that refused the work, when this line was a rejection.
+    ///
+    /// Kept apart from `announce` because it is a different kind of fact: the
+    /// others are figures about how full a window is, and this is the reason
+    /// an interaction has just stopped. It is reported on every rejection, not
+    /// only the first, since it is the caller's business whose work was
+    /// refused rather than whether the news is new.
+    pub rejected: Option<QuotaEvent>,
+}
+
 /// A server-wide, bounded, store-backed log of the quota readings seen on any
 /// interaction's wire, and the notification state needed to avoid repeating
 /// itself.
@@ -120,6 +171,12 @@ pub struct QuotaLog {
     /// because the providers name their windows independently, and one
     /// account's Claude limit says nothing about its Codex one.
     reported: Mutex<HashMap<(Provider, String), (QuotaStatus, u8)>>,
+    /// For each window that has refused work, the moment it is expected to
+    /// take it again: the reset it reported plus [`RESET_GRACE_MS`], brought
+    /// forward if the provider itself says the window is allowing work again.
+    /// Drained by [`QuotaLog::resets`], so an entry here is a reset nobody has
+    /// been told about yet.
+    awaiting_reset: Mutex<HashMap<(Provider, String), u64>>,
 }
 
 impl QuotaLog {
@@ -154,33 +211,109 @@ impl QuotaLog {
             // went to interactions that no longer exist, so a window still
             // sitting at 95% is worth saying once more to this run's operator.
             reported: Mutex::default(),
+            // Nor this, for the same reason at its strongest: the work a
+            // previous run's rejection stopped died with that run, so there is
+            // nothing left for its reset to come back to.
+            awaiting_reset: Mutex::default(),
         }
     }
 
     /// Read any quota figures out of one verbatim agent line, record them all,
-    /// and return those the operator should be told about now.
+    /// and say what the caller has to act on: the readings the operator should
+    /// be told about now, and the rejection the line carried, if any.
     ///
     /// A line carrying no quota figures — nearly all of them — costs one
     /// substring scan and nothing else.
-    pub fn observe(
-        &self,
-        session_id: &str,
-        provider: Provider,
-        at_ms: u64,
-        raw: &str,
-    ) -> Vec<QuotaEvent> {
+    pub fn observe(&self, session_id: &str, provider: Provider, at_ms: u64, raw: &str) -> Observed {
         let readings = parse(session_id, provider, at_ms, raw);
         if readings.is_empty() {
-            return Vec::new();
+            return Observed::default();
         }
-        let mut announce = Vec::new();
+        let mut observed = Observed::default();
         for reading in readings {
             if self.worth_reporting(&reading) {
-                announce.push(reading.clone());
+                observed.announce.push(reading.clone());
+            }
+            self.note_availability(&reading);
+            if reading.status == QuotaStatus::Exhausted {
+                observed.rejected = Some(reading.clone());
             }
             self.record(reading);
         }
-        announce
+        observed
+    }
+
+    /// Keep the watch list current with one reading: a rejection puts its
+    /// window on it, and a window reporting that it is allowing work again
+    /// takes its own reset off the clock.
+    ///
+    /// A rejection that names no reset is not watched. The whole of this is
+    /// "tell me when it comes back", and without the minute it comes back
+    /// there is nothing to tell — a guessed reset would announce a window as
+    /// usable while it is still refusing, which is worse than not announcing
+    /// it at all. The providers do report one with a rejection.
+    fn note_availability(&self, reading: &QuotaEvent) {
+        let mut awaiting = self
+            .awaiting_reset
+            .lock()
+            .expect("quota reset lock poisoned");
+        let key = (reading.provider, reading.window.clone());
+        match reading.status {
+            QuotaStatus::Exhausted => {
+                let Some(resets_at_ms) = reading.resets_at_ms else {
+                    return;
+                };
+                // A second rejection of the same window replaces the first
+                // rather than queueing another reset: it is one window, and
+                // what matters is the latest word on when it turns over.
+                awaiting.insert(key, resets_at_ms + RESET_GRACE_MS);
+            }
+            // The provider saying a watched window is allowed again outranks
+            // the reset it predicted earlier: whatever the clock says, work is
+            // going through, so the wait is over now.
+            QuotaStatus::Allowed | QuotaStatus::Warning => {
+                if let Some(due) = awaiting.get_mut(&key) {
+                    *due = (*due).min(reading.at_ms);
+                }
+            }
+        }
+    }
+
+    /// The watched windows that have come back by `now_ms`, oldest reset
+    /// first, taken off the watch list as they are handed over.
+    ///
+    /// Draining is the point: this is called on a timer, and a reset announced
+    /// twice would send the same held-back work twice. What a caller does with
+    /// one is its own business — see [`WindowReset`].
+    pub fn resets(&self, now_ms: u64) -> Vec<WindowReset> {
+        let mut awaiting = self
+            .awaiting_reset
+            .lock()
+            .expect("quota reset lock poisoned");
+        let mut due: Vec<WindowReset> = awaiting
+            .iter()
+            .filter(|(_, at_ms)| **at_ms <= now_ms)
+            .map(|((provider, window), at_ms)| WindowReset {
+                provider: *provider,
+                window: window.clone(),
+                at_ms: *at_ms,
+            })
+            .collect();
+        for reset in &due {
+            awaiting.remove(&(reset.provider, reset.window.clone()));
+        }
+        due.sort_by(|a, b| a.at_ms.cmp(&b.at_ms).then_with(|| a.window.cmp(&b.window)));
+        due
+    }
+
+    /// Whether any window is being waited on, so a caller polling
+    /// [`Self::resets`] can say whether there is anything to wait for.
+    pub fn is_awaiting_reset(&self) -> bool {
+        !self
+            .awaiting_reset
+            .lock()
+            .expect("quota reset lock poisoned")
+            .is_empty()
     }
 
     /// Whether this reading says something the operator has not already been
@@ -936,15 +1069,19 @@ mod tests {
     #[test]
     fn a_repeated_warning_is_announced_once_but_still_logged_each_time() {
         let log = QuotaLog::new();
-        let first = log.observe("s-1", Provider::Claude, 1, CLAUDE_WARNING);
+        let first = log
+            .observe("s-1", Provider::Claude, 1, CLAUDE_WARNING)
+            .announce;
         assert_eq!(first.len(), 1);
         assert_eq!(first[0].status, QuotaStatus::Warning);
         assert!(first[0].describe().contains("91%"));
         assert!(log
             .observe("s-1", Provider::Claude, 2, CLAUDE_WARNING)
+            .announce
             .is_empty());
         assert!(log
             .observe("s-1", Provider::Claude, 3, CLAUDE_WARNING)
+            .announce
             .is_empty());
         assert_eq!(log.entries().len(), 3);
     }
@@ -962,18 +1099,23 @@ mod tests {
         let log = QuotaLog::new();
         assert_eq!(
             log.observe("s-1", Provider::Claude, 1, &reading(0.91))
+                .announce
                 .len(),
             1
         );
         // Still the same decile: already said.
         assert!(log
             .observe("s-1", Provider::Claude, 2, &reading(0.95))
+            .announce
             .is_empty());
         assert!(log
             .observe("s-1", Provider::Claude, 3, &reading(0.99))
+            .announce
             .is_empty());
         // A full window is a different status, so it is announced again.
-        let exhausted = log.observe("s-1", Provider::Claude, 4, CLAUDE_REJECTED);
+        let exhausted = log
+            .observe("s-1", Provider::Claude, 4, CLAUDE_REJECTED)
+            .announce;
         assert_eq!(exhausted.len(), 1);
         assert_eq!(exhausted[0].status, QuotaStatus::Exhausted);
     }
@@ -983,15 +1125,17 @@ mod tests {
     #[test]
     fn a_refusal_is_announced_once_while_the_plan_stays_spent() {
         let log = QuotaLog::new();
-        let announced = log.observe("s-1", Provider::Codex, 1, CODEX_REFUSAL);
+        let announced = log.observe("s-1", Provider::Codex, 1, CODEX_REFUSAL).announce;
         assert_eq!(announced.len(), 1);
         assert!(announced[0].describe().contains("Sep 9th"));
         // The `error` notification says the same thing a millisecond later.
         assert!(log
             .observe("s-1", Provider::Codex, 2, CODEX_REFUSAL_ERROR)
+            .announce
             .is_empty());
         assert!(log
             .observe("s-1", Provider::Codex, 3, CODEX_REFUSAL)
+            .announce
             .is_empty());
         // Still logged each time, so the view shows every refusal.
         assert_eq!(log.entries().len(), 3);
@@ -1003,20 +1147,27 @@ mod tests {
     fn a_plan_that_refills_and_is_spent_again_is_announced_again() {
         let log = QuotaLog::new();
         assert_eq!(
-            log.observe("s-1", Provider::Codex, 1, CODEX_REFUSAL).len(),
+            log.observe("s-1", Provider::Codex, 1, CODEX_REFUSAL)
+                .announce
+                .len(),
             1
         );
         // The window turned over: Codex is running turns and reporting room.
         assert!(log
             .observe("s-1", Provider::Codex, 2, CODEX_USAGE)
+            .announce
             .is_empty());
         assert_eq!(
-            log.observe("s-1", Provider::Codex, 3, CODEX_REFUSAL).len(),
+            log.observe("s-1", Provider::Codex, 3, CODEX_REFUSAL)
+                .announce
+                .len(),
             1
         );
         // The other provider's plan was never the one that was spent.
         assert_eq!(
-            log.observe("s-2", Provider::Claude, 4, CODEX_REFUSAL).len(),
+            log.observe("s-2", Provider::Claude, 4, CODEX_REFUSAL)
+                .announce
+                .len(),
             1
         );
     }
@@ -1033,16 +1184,21 @@ mod tests {
             )
         };
         assert_eq!(
-            log.observe("s-1", Provider::Claude, 1, &claude(0.91)).len(),
+            log.observe("s-1", Provider::Claude, 1, &claude(0.91))
+                .announce
+                .len(),
             1
         );
         // A plain `allowed` reading is Claude saying it has nothing to warn
         // about, which is the window having reset.
         assert!(log
             .observe("s-1", Provider::Claude, 2, CLAUDE_ALLOWED)
+            .announce
             .is_empty());
         assert_eq!(
-            log.observe("s-1", Provider::Claude, 3, &claude(0.91)).len(),
+            log.observe("s-1", Provider::Claude, 3, &claude(0.91))
+                .announce
+                .len(),
             1
         );
     }
@@ -1059,21 +1215,28 @@ mod tests {
             )
         };
         assert_eq!(
-            log.observe("s-1", Provider::Codex, 1, &codex(91.0)).len(),
+            log.observe("s-1", Provider::Codex, 1, &codex(91.0))
+                .announce
+                .len(),
             1
         );
         assert!(log
             .observe("s-1", Provider::Codex, 2, &codex(88.0))
+            .announce
             .is_empty());
         assert!(log
             .observe("s-1", Provider::Codex, 3, &codex(92.0))
+            .announce
             .is_empty());
         // Genuinely empty, then filling again: that is a new window.
         assert!(log
             .observe("s-1", Provider::Codex, 4, &codex(2.0))
+            .announce
             .is_empty());
         assert_eq!(
-            log.observe("s-1", Provider::Codex, 5, &codex(93.0)).len(),
+            log.observe("s-1", Provider::Codex, 5, &codex(93.0))
+                .announce
+                .len(),
             1
         );
     }
@@ -1086,7 +1249,7 @@ mod tests {
         let line = r#"{"params":{"rate_limits":{
             "primary":{"used_percent":95.0,"window_minutes":60},
             "secondary":{"used_percent":92.0,"window_minutes":10080}}}}"#;
-        let announced = log.observe("s-1", Provider::Codex, 1, line);
+        let announced = log.observe("s-1", Provider::Codex, 1, line).announce;
         assert_eq!(announced.len(), 2);
         assert_eq!(announced[0].window, "1h");
         assert_eq!(announced[1].window, "7d");
@@ -1111,13 +1274,22 @@ mod tests {
         let log = QuotaLog::new();
         let line = r#"{"rate_limit_info":{"status":"allowed_warning",
             "rateLimitType":"5h","utilization":0.91}}"#;
-        assert_eq!(log.observe("s-1", Provider::Claude, 1, line).len(), 1);
-        let codex = log.observe("s-2", Provider::Codex, 2, line);
+        assert_eq!(
+            log.observe("s-1", Provider::Claude, 1, line).announce.len(),
+            1
+        );
+        let codex = log.observe("s-2", Provider::Codex, 2, line).announce;
         assert_eq!(codex.len(), 1);
         assert_eq!(codex[0].provider, Provider::Codex);
         // Each provider has now been reported, so neither repeats.
-        assert!(log.observe("s-1", Provider::Claude, 3, line).is_empty());
-        assert!(log.observe("s-2", Provider::Codex, 4, line).is_empty());
+        assert!(log
+            .observe("s-1", Provider::Claude, 3, line)
+            .announce
+            .is_empty());
+        assert!(log
+            .observe("s-2", Provider::Codex, 4, line)
+            .announce
+            .is_empty());
     }
 
     /// The point of keeping the log in the store: an operator who restarts the
@@ -1215,6 +1387,163 @@ mod tests {
         // What went instead is the oldest of the window that has plenty more.
         assert_eq!(entries[1].at_ms, 3);
         assert_eq!(entries[entries.len() - 1].at_ms, CAPACITY as u64 + 1);
+    }
+
+    // --- Windows coming back -------------------------------------------------
+
+    /// The Claude rejection above resets at this second, so a reset is due
+    /// three minutes past it.
+    const REJECTED_RESET_MS: u64 = 1_788_290_400_000;
+    const REJECTED_DUE_MS: u64 = REJECTED_RESET_MS + RESET_GRACE_MS;
+
+    /// A rejection is a different kind of fact from a usage figure: it says an
+    /// interaction has just been stopped, and by which window.
+    #[test]
+    fn a_rejection_is_reported_as_the_reason_work_stopped() {
+        let log = QuotaLog::new();
+
+        let observed = log.observe("s-1", Provider::Claude, 1, CLAUDE_REJECTED);
+
+        let rejected = observed.rejected.expect("the line refused the work");
+        assert_eq!(rejected.window, "five_hour");
+        assert_eq!(rejected.resets_at_ms, Some(REJECTED_RESET_MS));
+        // A window merely filling up has stopped nothing.
+        assert!(log
+            .observe("s-1", Provider::Claude, 2, CLAUDE_WARNING)
+            .rejected
+            .is_none());
+    }
+
+    /// The point of the watch list: the window that refused work is handed
+    /// back once it has turned over — a few minutes past the reported minute,
+    /// since the provider is the one rounding it.
+    #[test]
+    fn a_refused_window_comes_back_a_few_minutes_after_its_reset() {
+        let log = QuotaLog::new();
+        log.observe("s-1", Provider::Claude, 1, CLAUDE_REJECTED);
+        assert!(log.is_awaiting_reset());
+
+        assert!(
+            log.resets(REJECTED_RESET_MS).is_empty(),
+            "the reported minute alone is too early to send work at"
+        );
+        let due = log.resets(REJECTED_DUE_MS);
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].provider, Provider::Claude);
+        assert_eq!(due[0].window, "five_hour");
+        assert_eq!(due[0].at_ms, REJECTED_DUE_MS);
+        assert!(!log.is_awaiting_reset());
+    }
+
+    /// Drained rather than read: this is polled on a timer, and a reset handed
+    /// out twice would send the work it held back twice.
+    #[test]
+    fn a_reset_is_handed_out_once() {
+        let log = QuotaLog::new();
+        log.observe("s-1", Provider::Claude, 1, CLAUDE_REJECTED);
+
+        assert_eq!(log.resets(REJECTED_DUE_MS).len(), 1);
+        assert!(log.resets(REJECTED_DUE_MS).is_empty());
+        assert!(log.resets(REJECTED_DUE_MS + RETENTION_MS).is_empty());
+    }
+
+    /// A window rejecting turn after turn is still one window with one reset,
+    /// and the latest word on when it turns over is the one to wait for.
+    #[test]
+    fn repeated_rejections_of_one_window_wait_for_one_reset() {
+        let log = QuotaLog::new();
+        log.observe("s-1", Provider::Claude, 1, CLAUDE_REJECTED);
+        let later = CLAUDE_REJECTED.replace("1788290400", "1788290700");
+
+        log.observe("s-2", Provider::Claude, 2, &later);
+
+        assert!(
+            log.resets(REJECTED_DUE_MS).is_empty(),
+            "the later reset is the one being waited for"
+        );
+        let due = log.resets(REJECTED_DUE_MS + 300_000);
+        assert_eq!(due.len(), 1);
+    }
+
+    /// The provider saying a watched window is allowed again outranks the
+    /// reset it predicted earlier: work is going through, so whatever is being
+    /// held back need not wait for a clock.
+    #[test]
+    fn a_window_reporting_itself_allowed_again_comes_back_at_once() {
+        let log = QuotaLog::new();
+        log.observe("s-1", Provider::Claude, 1, CLAUDE_REJECTED);
+
+        log.observe("s-1", Provider::Claude, 5_000, CLAUDE_ALLOWED);
+
+        let due = log.resets(5_000);
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].at_ms, 5_000);
+    }
+
+    /// An unwatched window reporting itself allowed is the ordinary case and
+    /// starts nothing: there was nothing waiting for it.
+    #[test]
+    fn an_allowed_window_nobody_is_waiting_for_announces_nothing() {
+        let log = QuotaLog::new();
+
+        log.observe("s-1", Provider::Claude, 1, CLAUDE_ALLOWED);
+
+        assert!(!log.is_awaiting_reset());
+        assert!(log.resets(u64::MAX).is_empty());
+    }
+
+    /// Without a reported reset there is no minute to come back at, and a
+    /// guessed one would call a window usable while it is still refusing.
+    #[test]
+    fn a_rejection_naming_no_reset_is_not_waited_for() {
+        let log = QuotaLog::new();
+        let no_reset = r#"{"rate_limit_info":{"status":"rejected","rateLimitType":"five_hour"}}"#;
+
+        let observed = log.observe("s-1", Provider::Claude, 1, no_reset);
+
+        assert!(observed.rejected.is_some(), "the work was still refused");
+        assert!(!log.is_awaiting_reset());
+        assert!(log.resets(u64::MAX).is_empty());
+    }
+
+    /// Two accounts, two subscriptions: each window comes back on its own, and
+    /// the reset says whose plan it is so the wrong sessions are not woken.
+    #[test]
+    fn each_provider_window_comes_back_on_its_own() {
+        let log = QuotaLog::new();
+        let codex = r#"{"params":{"rate_limits":{
+            "primary":{"used_percent":100.0,"window_minutes":60,"resets_at":1788280000},
+            "secondary":{"used_percent":100.0,"window_minutes":10080,"resets_at":1788380000}}}}"#;
+        log.observe("s-1", Provider::Claude, 1, CLAUDE_REJECTED);
+        log.observe("s-2", Provider::Codex, 2, codex);
+
+        let first = log.resets(1_788_280_000_000 + RESET_GRACE_MS);
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].provider, Provider::Codex);
+        assert_eq!(first[0].window, "1h");
+        // The other two are still refusing, each until its own minute.
+        let rest = log.resets(1_788_380_000_000 + RESET_GRACE_MS);
+        assert_eq!(rest.len(), 2);
+        assert_eq!(rest[0].provider, Provider::Claude);
+        assert_eq!(rest[1].window, "7d");
+    }
+
+    /// A rejection this run never saw belongs to work that died with the run
+    /// that did: there is nothing left for its reset to come back to.
+    #[test]
+    fn a_stored_rejection_is_not_waited_for_by_the_next_run() {
+        let store = temp_dir("reopened-rejection");
+        {
+            let log = QuotaLog::open(&store);
+            log.observe("s-1", Provider::Claude, 1, CLAUDE_REJECTED);
+            assert!(log.is_awaiting_reset());
+        }
+
+        let reopened = QuotaLog::open(&store);
+
+        assert!(!reopened.is_awaiting_reset());
+        assert!(reopened.resets(u64::MAX).is_empty());
+        std::fs::remove_dir_all(&store).ok();
     }
 
     #[test]

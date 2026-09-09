@@ -645,7 +645,9 @@ impl ServerState {
                         InteractionUpdate::Raw(line)
                             if line.direction == crate::protocol::Direction::FromAgent =>
                         {
-                            quota.observe(&quota_session, quota_provider, line.at_ms, &line.text)
+                            quota
+                                .observe(&quota_session, quota_provider, line.at_ms, &line.text)
+                                .announce
                         }
                         _ => Vec::new(),
                     };
@@ -1019,7 +1021,9 @@ impl ServerState {
                         InteractionUpdate::Raw(line)
                             if line.direction == crate::protocol::Direction::FromAgent =>
                         {
-                            quota.observe(&quota_session, quota_provider, line.at_ms, &line.text)
+                            quota
+                                .observe(&quota_session, quota_provider, line.at_ms, &line.text)
+                                .announce
                         }
                         _ => Vec::new(),
                     };
