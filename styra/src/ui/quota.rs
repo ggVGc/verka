@@ -20,7 +20,7 @@ use ratatui::Frame;
 use styra_server::{QuotaEvent, QuotaStatus};
 
 pub(crate) fn render_quota(frame: &mut Frame, app: &App, area: Rect) {
-    let block = view_block(app, Some("quota"));
+    let block = view_block(app, Some("quota")).title_bottom(retry_title(app));
 
     if app.quota.is_empty() {
         render_placeholder(
@@ -38,6 +38,34 @@ pub(crate) fn render_quota(frame: &mut Frame, app: &App, area: Rect) {
     let start = max_start.saturating_sub(app.quota.scroll_back() as usize) as u16;
     let paragraph = Paragraph::new(lines).block(block).scroll((start, 0));
     frame.render_widget(paragraph, area);
+}
+
+/// The bottom border's note on waiting out a rate limit: whether `R` has been
+/// pressed, and — once a turn is waiting — which window it is waiting for and
+/// the minute it will be sent.
+///
+/// It rides this view's border rather than the shared chrome because this is
+/// where the setting is toggled and where the rejection that stopped a session
+/// is on the record. An operator who has just been cut off comes here to see
+/// the limit; the answer to "and will it pick itself back up" belongs in the
+/// same glance.
+fn retry_title(app: &App) -> Line<'static> {
+    let (text, color) = match (app.retry.enabled(), app.retry.pending()) {
+        (false, _) => (" R rate-limit retry: off ".to_owned(), palette::INACTIVE),
+        (true, None) => (" R rate-limit retry: on ".to_owned(), palette::SUCCESS),
+        (true, Some(waiting)) => (
+            format!(
+                " R rate-limit retry: {} at {} ",
+                waiting.window,
+                clock(waiting.at_ms)
+            ),
+            palette::WARNING,
+        ),
+    };
+    Line::from(Span::styled(
+        text,
+        Style::default().fg(color).add_modifier(Modifier::BOLD),
+    ))
 }
 
 /// One reading: when it was seen, how full it is, whose plan and which window,
@@ -228,6 +256,40 @@ mod tests {
         let screen = rendered(&app);
         assert!(screen.contains("?"));
         assert!(!screen.contains("0%"));
+    }
+
+    /// The setting is toggled in this view, so this view has to say which way
+    /// it is set — including before any reading has arrived to toggle it over.
+    #[test]
+    fn the_quota_view_says_whether_a_stopped_session_would_be_retried() {
+        let mut app = app();
+        app.toggle_view(View::Quota);
+        assert!(rendered(&app).contains("R rate-limit retry: off"));
+
+        app.retry.toggle();
+
+        assert!(rendered(&app).contains("R rate-limit retry: on"));
+    }
+
+    /// A turn that will be sent in an hour's time is the kind of thing an
+    /// operator must be able to see rather than remember: the window being
+    /// waited for and the minute it goes.
+    #[test]
+    fn a_waiting_turn_names_its_window_and_when_it_goes() {
+        let mut app = app();
+        app.retry.toggle();
+        app.retry.arm(crate::retry::Pending {
+            at_ms: 1_788_290_400_000,
+            window: "five_hour".into(),
+            message: "carry on".into(),
+        });
+        app.toggle_view(View::Quota);
+
+        let screen = rendered(&app);
+        assert!(screen.contains(&format!(
+            "R rate-limit retry: five_hour at {}",
+            clock(1_788_290_400_000)
+        )));
     }
 
     #[test]
