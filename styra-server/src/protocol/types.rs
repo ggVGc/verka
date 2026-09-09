@@ -560,6 +560,10 @@ pub struct InteractionSummary {
     /// Whether the live interaction is working or waiting for user input.
     #[serde(default)]
     pub activity: InteractionActivity,
+    /// True when this interaction has reached idle since a client last loaded
+    /// it into focus. Listing it is deliberately not an acknowledgement.
+    #[serde(default)]
+    pub idle_unseen: bool,
     /// The most recent message the agent sent, flattened to a single line and
     /// clipped, so a list of interactions says what each one is actually
     /// talking about. `None` before the agent has said anything.

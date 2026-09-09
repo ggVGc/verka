@@ -552,6 +552,7 @@ mod tests {
             },
             accepting,
             activity,
+            idle_unseen: false,
             last_message: None,
             events: 0,
         }

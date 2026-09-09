@@ -89,6 +89,10 @@ struct ManagedInteraction {
     updates: Arc<Mutex<Vec<SequencedUpdate>>>,
     accepting_messages: Arc<AtomicBool>,
     activity: Arc<Mutex<InteractionActivity>>,
+    /// Set whenever the interaction reaches its input-waiting state. Only a
+    /// `LoadInteraction` clears it: a summary is a notification, not proof
+    /// that an operator has actually looked at this interaction.
+    idle_unseen: Arc<AtomicBool>,
     /// How many agent events this interaction has produced. Counted as they
     /// arrive rather than derived from `updates` on each listing, so a summary
     /// costs a load instead of a scan of the whole history.
@@ -183,6 +187,10 @@ impl ManagedInteraction {
     }
 
     fn summary(&self) -> InteractionSummary {
+        let activity = *self
+            .activity
+            .lock()
+            .expect("interaction activity lock poisoned");
         InteractionSummary {
             id: self.interaction.session_id().to_owned(),
             name: self
@@ -195,14 +203,17 @@ impl ManagedInteraction {
             workspace: self.workspace.clone(),
             driva: self.driva.clone(),
             accepting: self.accepting_messages.load(Ordering::Acquire),
-            activity: *self
-                .activity
-                .lock()
-                .expect("interaction activity lock poisoned"),
+            idle_unseen: activity == InteractionActivity::Pending
+                && self.idle_unseen.load(Ordering::Acquire),
+            activity,
             last_message: self.last_message(),
             auto_retry: self.auto_retry.load(Ordering::Acquire),
             events: self.events.load(Ordering::Acquire),
         }
+    }
+
+    fn mark_idle_seen(&self) {
+        self.idle_unseen.store(false, Ordering::Release);
     }
 
     /// Answer "keep at it after a rate limit" for this interaction's Session,
@@ -665,6 +676,7 @@ impl ServerState {
         let updates = Arc::new(Mutex::new(Vec::new()));
         let accepting_messages = Arc::new(AtomicBool::new(true));
         let activity = Arc::new(Mutex::new(InteractionActivity::Pending));
+        let idle_unseen = Arc::new(AtomicBool::new(true));
         let events = Arc::new(AtomicUsize::new(0));
         let background_work = Arc::new(AtomicBool::new(false));
         let managed = Arc::new(ManagedInteraction {
@@ -672,6 +684,7 @@ impl ServerState {
             updates: Arc::clone(&updates),
             accepting_messages: Arc::clone(&accepting_messages),
             activity: Arc::clone(&activity),
+            idle_unseen: Arc::clone(&idle_unseen),
             events: Arc::clone(&events),
             workspace_id: request.workspace_id.clone(),
             name: Mutex::new(name.clone()),
@@ -691,6 +704,7 @@ impl ServerState {
         let reported_selection = Arc::downgrade(&managed);
         let refused = Arc::downgrade(&managed);
         let quota = Arc::clone(&self.inner.quota);
+        let idle_unseen = Arc::clone(&idle_unseen);
         let quota_session = id.clone();
         let quota_provider = selection.provider;
         std::thread::Builder::new()
@@ -725,6 +739,7 @@ impl ServerState {
                                     activity.lock().expect("interaction activity lock poisoned");
                                 if *activity == InteractionActivity::Background {
                                     *activity = InteractionActivity::Pending;
+                                    idle_unseen.store(true, Ordering::Release);
                                 }
                             }
                         }
@@ -753,12 +768,15 @@ impl ServerState {
                         InteractionUpdate::Event(crate::event::AgentEvent::TurnCompleted {
                             ..
                         }) => {
-                            *activity.lock().expect("interaction activity lock poisoned") =
-                                if background_work.load(Ordering::Acquire) {
-                                    InteractionActivity::Background
-                                } else {
-                                    InteractionActivity::Pending
-                                };
+                            let next = if background_work.load(Ordering::Acquire) {
+                                InteractionActivity::Background
+                            } else {
+                                InteractionActivity::Pending
+                            };
+                            *activity.lock().expect("interaction activity lock poisoned") = next;
+                            if next == InteractionActivity::Pending {
+                                idle_unseen.store(true, Ordering::Release);
+                            }
                         }
                         InteractionUpdate::Event(crate::event::AgentEvent::ToolCompleted {
                             id,
@@ -768,6 +786,7 @@ impl ServerState {
                                 background_work.store(false, Ordering::Release);
                                 *activity.lock().expect("interaction activity lock poisoned") =
                                     InteractionActivity::Pending;
+                                idle_unseen.store(true, Ordering::Release);
                             }
                         }
                         _ => {}
@@ -1050,6 +1069,7 @@ impl ServerState {
         let updates = Arc::new(Mutex::new(seeded_updates));
         let accepting_messages = Arc::new(AtomicBool::new(true));
         let activity = Arc::new(Mutex::new(InteractionActivity::Pending));
+        let idle_unseen = Arc::new(AtomicBool::new(true));
         let events = Arc::new(AtomicUsize::new(replayed_events));
         let background_work = Arc::new(AtomicBool::new(false));
         // A resumed Session may carry over messages that were durably queued
@@ -1062,6 +1082,7 @@ impl ServerState {
             updates: Arc::clone(&updates),
             accepting_messages: Arc::clone(&accepting_messages),
             activity: Arc::clone(&activity),
+            idle_unseen: Arc::clone(&idle_unseen),
             events: Arc::clone(&events),
             workspace_id: summary.workspace_id.clone(),
             name: Mutex::new(summary.name.clone()),
@@ -1082,6 +1103,7 @@ impl ServerState {
         let refused = Arc::downgrade(&managed);
         let id = request.id.clone();
         let quota = Arc::clone(&self.inner.quota);
+        let idle_unseen = Arc::clone(&idle_unseen);
         let quota_session = id.clone();
         let quota_provider = selection.provider;
         std::thread::Builder::new()
@@ -1116,6 +1138,7 @@ impl ServerState {
                                     activity.lock().expect("interaction activity lock poisoned");
                                 if *activity == InteractionActivity::Background {
                                     *activity = InteractionActivity::Pending;
+                                    idle_unseen.store(true, Ordering::Release);
                                 }
                             }
                         }
@@ -1144,12 +1167,15 @@ impl ServerState {
                         InteractionUpdate::Event(crate::event::AgentEvent::TurnCompleted {
                             ..
                         }) => {
-                            *activity.lock().expect("interaction activity lock poisoned") =
-                                if background_work.load(Ordering::Acquire) {
-                                    InteractionActivity::Background
-                                } else {
-                                    InteractionActivity::Pending
-                                };
+                            let next = if background_work.load(Ordering::Acquire) {
+                                InteractionActivity::Background
+                            } else {
+                                InteractionActivity::Pending
+                            };
+                            *activity.lock().expect("interaction activity lock poisoned") = next;
+                            if next == InteractionActivity::Pending {
+                                idle_unseen.store(true, Ordering::Release);
+                            }
                         }
                         InteractionUpdate::Event(crate::event::AgentEvent::ToolCompleted {
                             id,
@@ -1159,6 +1185,7 @@ impl ServerState {
                                 background_work.store(false, Ordering::Release);
                                 *activity.lock().expect("interaction activity lock poisoned") =
                                     InteractionActivity::Pending;
+                                idle_unseen.store(true, Ordering::Release);
                             }
                         }
                         _ => {}
@@ -1847,6 +1874,10 @@ impl ServerState {
             }
             Request::LoadInteraction { id } => {
                 let interaction = self.interaction(&id)?;
+                // Loading is the point at which an operator can actually see
+                // the interaction. Listing it must leave an idle notification
+                // intact, but the focused screen acknowledges it.
+                interaction.mark_idle_seen();
                 let summary = interaction.summary();
                 let all = interaction
                     .updates

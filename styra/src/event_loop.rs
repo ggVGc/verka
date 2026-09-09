@@ -418,7 +418,10 @@ pub fn run(
             *live = Attachment::Detached;
         }
 
-        if app.interactions.open && interactions_refreshed.elapsed() >= INTERACTIONS_REFRESH {
+        // Keep this snapshot fresh even with the navigator closed: it is what
+        // lets the footer report a different interaction becoming idle while
+        // the operator is reading or working in this one.
+        if interactions_refreshed.elapsed() >= INTERACTIONS_REFRESH {
             interactions_refreshed = Instant::now();
             if let Ok(interactions) = client.list_interactions() {
                 app.interactions.refresh(interactions);
@@ -616,7 +619,7 @@ pub fn run(
             load_cursored_interaction(app, live, client, standing_launch);
             match key.code {
                 KeyCode::Char('a') | KeyCode::Esc | KeyCode::Enter => {
-                    app.interactions.open = false;
+                    app.interactions.close();
                     continue;
                 }
                 KeyCode::Char('w') => {
@@ -644,14 +647,14 @@ pub fn run(
                         .interactions
                         .remove_and_select_next(&interaction.id, workspace_id.as_deref())
                     else {
-                        app.interactions.open = false;
+                        app.interactions.close();
                         return Ok(RunOutcome::Reset);
                     };
                     make_interaction_current(app, live, client, standing_launch, next);
                     continue;
                 }
                 code if interaction_navigator_passthrough(&code) => {}
-                _ => app.interactions.open = false,
+                _ => app.interactions.close(),
             }
         }
 

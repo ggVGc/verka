@@ -44,6 +44,8 @@ impl LiveInteractions {
         self.open = true;
     }
 
+    /// Incorporate a periodic server snapshot. Idle acknowledgement belongs to
+    /// the server: listing a row cannot accidentally count as seeing it.
     pub fn refresh(&mut self, mut items: Vec<InteractionSummary>) {
         sort_interactions(&mut items);
         self.items = items;
@@ -56,6 +58,19 @@ impl LiveInteractions {
         {
             self.rest();
         }
+    }
+
+    /// Number of idle interactions that have not actually been focused since
+    /// becoming idle. The server owns this acknowledgement state.
+    pub fn idle_notification_count(&self) -> usize {
+        self.items
+            .iter()
+            .filter(|interaction| is_idle(interaction) && interaction.idle_unseen)
+            .count()
+    }
+
+    pub fn close(&mut self) {
+        self.open = false;
     }
 
     pub fn current(&self, current: &str) -> Option<&InteractionSummary> {
@@ -348,6 +363,12 @@ fn sort_interactions(interactions: &mut [InteractionSummary]) {
     });
 }
 
+/// `Pending` is the server summary's name for a live interaction waiting for
+/// input (the TUI calls that state `Idle`).
+fn is_idle(interaction: &InteractionSummary) -> bool {
+    interaction.accepting && interaction.activity == styra_server::InteractionActivity::Pending
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -372,6 +393,7 @@ mod tests {
             },
             accepting,
             activity,
+            idle_unseen: false,
             last_message: None,
             events: 0,
         }
@@ -424,6 +446,18 @@ mod tests {
             live.current("two").unwrap().last_message.as_deref(),
             Some("new response")
         );
+    }
+
+    #[test]
+    fn refresh_keeps_the_servers_unseen_idle_notification() {
+        let mut live = LiveInteractions::default();
+        let mut other = interaction("other", true, InteractionActivity::Pending);
+        other.idle_unseen = true;
+        live.refresh(vec![other]);
+
+        assert_eq!(live.idle_notification_count(), 1);
+        live.close();
+        assert_eq!(live.idle_notification_count(), 1);
     }
 
     /// Loading an Interaction replaces the whole screen, so a cursor crossing

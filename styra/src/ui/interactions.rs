@@ -180,6 +180,17 @@ fn item(
             Style::default().fg(palette::INACTIVE),
         ));
     }
+    if interaction.accepting
+        && interaction.activity == styra_server::InteractionActivity::Pending
+        && interaction.idle_unseen
+    {
+        main.push(Span::styled(
+            " · NEWLY IDLE",
+            Style::default()
+                .fg(palette::SUCCESS)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
     let mut lines = vec![Line::from(main)];
     if let Some(text) = &interaction.last_message {
         let body = format!("    « {text}");
@@ -231,6 +242,7 @@ mod tests {
             },
             accepting: true,
             activity: InteractionActivity::Pending,
+            idle_unseen: false,
             last_message: None,
             events: 0,
         }
@@ -284,6 +296,17 @@ mod tests {
             "{screen}"
         );
         assert!(!screen.contains("> working"), "{screen}");
+    }
+
+    #[test]
+    fn navigator_marks_an_idle_interaction_that_has_not_been_focused() {
+        let mut app = testing::app("s-1");
+        let mut unseen = interaction("s-2", "finished elsewhere");
+        unseen.idle_unseen = true;
+        app.interactions
+            .open(vec![interaction("s-1", "current"), unseen], vec![]);
+
+        assert!(testing::rendered(&app).contains("NEWLY IDLE"));
     }
 
     #[test]
