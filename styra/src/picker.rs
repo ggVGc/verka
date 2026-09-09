@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use styra_server::{Client, InteractionSummary, InteractionUpdate, LogEntry, WorkspaceSummary};
 
 use crate::launch::LaunchScope;
-use crate::session::{sort_sessions, SessionOrder};
+use crate::session::{sort_sessions_tree, SessionOrder};
 use crate::ui;
 
 /// How long the cursor must rest on a Session or Workspace before its preview
@@ -40,7 +40,7 @@ pub fn run_session_picker(
     sessions: &mut [styra_server::SessionSummary],
 ) -> Result<Option<String>> {
     let mut order = SessionOrder::LastActivity;
-    sort_sessions(sessions, order);
+    sort_sessions_tree(sessions, order);
     let mut selected = 0usize;
     let mut preview_id = String::new();
     let mut preview_cursor = 0u64;
@@ -140,7 +140,7 @@ pub fn run_session_picker(
             KeyCode::Char('s') => {
                 let cursor_id = sessions.get(selected).map(|session| session.id.clone());
                 order = order.toggled();
-                sort_sessions(sessions, order);
+                sort_sessions_tree(sessions, order);
                 selected = cursor_id
                     .and_then(|id| sessions.iter().position(|session| session.id == id))
                     .unwrap_or(0);

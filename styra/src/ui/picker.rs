@@ -9,7 +9,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
-use crate::session::SessionOrder;
+use crate::session::{session_tree_depths, SessionOrder};
 use styra_server::{InteractionSummary, InteractionUpdate, SessionSummary, WorkspaceSummary};
 
 /// Whether the picker has the selected session's conversation yet. Loading is
@@ -53,10 +53,12 @@ pub fn render_picker(
     }
 
     let selected = selected.min(sessions.len() - 1);
+    let depths = session_tree_depths(sessions);
     let items: Vec<ListItem> = sessions
         .iter()
+        .zip(depths)
         .enumerate()
-        .map(|(index, session)| session_item(session, index == selected, order))
+        .map(|(index, (session, depth))| session_item(session, depth, index == selected, order))
         .collect();
     let list = List::new(items).block(block).highlight_style(
         Style::default()
@@ -497,6 +499,7 @@ pub fn render_template_picker_loading(frame: &mut Frame) {
 
 fn session_item(
     session: &SessionSummary,
+    depth: usize,
     selected: bool,
     order: SessionOrder,
 ) -> ListItem<'static> {
@@ -505,7 +508,7 @@ fn session_item(
     let mut lines = vec![
         Line::from(vec![
             Span::styled(
-                if selected { "• " } else { "  " },
+                tree_marker(depth, selected),
                 Style::default().fg(if selected {
                     palette::SELECTION_MARKER
                 } else {
@@ -521,7 +524,7 @@ fn session_item(
         ]),
         Line::from(vec![
             Span::styled(
-                format!("{provider:<14} "),
+                format!("{}{} ", "   ".repeat(depth), provider),
                 Style::default().fg(palette::ACCENT),
             ),
             Span::styled(
@@ -551,7 +554,8 @@ fn session_item(
         };
         lines.push(Line::from(Span::styled(
             format!(
-                "  ⤷ {kind} from {} ({})",
+                "{}⤷ {kind} from {} ({})",
+                "   ".repeat(depth.saturating_add(1)),
                 short_id(&origin.session_id),
                 origin.provider.as_str()
             ),
@@ -566,12 +570,21 @@ fn session_item(
         };
         if let Some(history) = history {
             lines.push(Line::from(Span::styled(
-                format!("    {history}"),
+                format!("{}  {history}", "   ".repeat(depth.saturating_add(1))),
                 Style::default().fg(palette::ADDITIONAL_INFO),
             )));
         }
     }
     ListItem::new(lines)
+}
+
+fn tree_marker(depth: usize, selected: bool) -> String {
+    let cursor = if selected { "• " } else { "  " };
+    if depth == 0 {
+        cursor.to_owned()
+    } else {
+        format!("{}└─ {cursor}", "   ".repeat(depth - 1))
+    }
 }
 
 pub(crate) fn short_id(id: &str) -> &str {
@@ -680,6 +693,23 @@ mod tests {
         checkpoint.origin.as_mut().unwrap().history = styra_server::BranchHistory::SelectedOnly;
         let screen = rendered_picker(&[checkpoint], 0);
         assert!(screen.contains("selected entry only"), "{screen}");
+    }
+
+    #[test]
+    fn session_picker_indents_branched_sessions_as_a_tree() {
+        let root = picker_summary("root", "codex", "3m ago");
+        let mut branch = picker_summary("branch", "codex", "2m ago");
+        branch.origin = Some(styra_server::SessionOrigin {
+            session_id: "root".into(),
+            provider: styra_server::agent::Provider::Codex,
+            at_ms: Some(1000),
+            history: styra_server::BranchHistory::ThroughSelected,
+        });
+        let mut sessions = vec![branch, root];
+        crate::session::sort_sessions_tree(&mut sessions, SessionOrder::LastActivity);
+
+        let screen = rendered_picker(&sessions, 0);
+        assert!(screen.contains("└─"), "{screen}");
     }
 
     #[test]

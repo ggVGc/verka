@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::activity::Status;
@@ -115,12 +116,115 @@ pub fn sort_sessions(sessions: &mut [SessionSummary], order: SessionOrder) {
     });
 }
 
+/// Sort Sessions as the picker presents them: independent conversations first
+/// in the requested order, then every branch directly below its source.
+/// Siblings use that same requested order, rather than inheriting their
+/// parent's position in the flat list.
+///
+/// A Session whose source is not in this list is a root. That keeps a partial
+/// Workspace listing useful, and also makes older or manually removed source
+/// Sessions harmless. Corrupt cyclic origin metadata is likewise retained as
+/// a root-level section instead of making either Session disappear.
+pub fn sort_sessions_tree(sessions: &mut [SessionSummary], order: SessionOrder) {
+    sort_sessions(sessions, order);
+    let ordered = session_tree_indices(sessions)
+        .into_iter()
+        .map(|index| sessions[index].clone())
+        .collect::<Vec<_>>();
+    sessions.clone_from_slice(&ordered);
+}
+
+/// The nesting level for a list already ordered by [`sort_sessions_tree`].
+/// Kept alongside the ordering logic so the picker cannot render a different
+/// hierarchy from the one its cursor navigates.
+pub fn session_tree_depths(sessions: &[SessionSummary]) -> Vec<usize> {
+    let positions = session_positions(sessions);
+    sessions
+        .iter()
+        .enumerate()
+        .map(|(index, session)| {
+            let mut depth = 0;
+            let mut parent = session
+                .origin
+                .as_ref()
+                .and_then(|origin| positions.get(origin.session_id.as_str()).copied());
+            let mut seen = vec![index];
+            while let Some(parent_index) = parent {
+                if seen.contains(&parent_index) {
+                    // A malformed loop is rendered at the root, matching
+                    // `session_tree_indices`'s fallback treatment.
+                    return 0;
+                }
+                seen.push(parent_index);
+                depth += 1;
+                parent = sessions[parent_index]
+                    .origin
+                    .as_ref()
+                    .and_then(|origin| positions.get(origin.session_id.as_str()).copied());
+            }
+            depth
+        })
+        .collect()
+}
+
+fn session_tree_indices(sessions: &[SessionSummary]) -> Vec<usize> {
+    let positions = session_positions(sessions);
+    let mut children = vec![Vec::new(); sessions.len()];
+    let mut roots = Vec::new();
+    for (index, session) in sessions.iter().enumerate() {
+        match session
+            .origin
+            .as_ref()
+            .and_then(|origin| positions.get(origin.session_id.as_str()).copied())
+            .filter(|parent| *parent != index)
+        {
+            Some(parent) => children[parent].push(index),
+            None => roots.push(index),
+        }
+    }
+
+    let mut ordered = Vec::with_capacity(sessions.len());
+    let mut visited = vec![false; sessions.len()];
+    for root in roots {
+        append_session_tree(root, &children, &mut visited, &mut ordered);
+    }
+    // A cycle has no root. Preserve all of its entries, in the existing sort
+    // order, then walk its descendants exactly once.
+    for index in 0..sessions.len() {
+        append_session_tree(index, &children, &mut visited, &mut ordered);
+    }
+    ordered
+}
+
+fn session_positions(sessions: &[SessionSummary]) -> HashMap<&str, usize> {
+    sessions
+        .iter()
+        .enumerate()
+        .map(|(index, session)| (session.id.as_str(), index))
+        .collect()
+}
+
+fn append_session_tree(
+    index: usize,
+    children: &[Vec<usize>],
+    visited: &mut [bool],
+    ordered: &mut Vec<usize>,
+) {
+    if std::mem::replace(&mut visited[index], true) {
+        return;
+    }
+    ordered.push(index);
+    for &child in &children[index] {
+        append_session_tree(child, children, visited, ordered);
+    }
+}
+
 pub fn all_sessions(client: &Client) -> Result<Vec<SessionSummary>> {
     let mut sessions = Vec::new();
     for workspace in client.list_workspaces()? {
         sessions.extend(client.list_sessions(&workspace.id)?);
     }
-    sort_sessions(&mut sessions, SessionOrder::LastActivity);
+    sort_sessions_tree(&mut sessions, SessionOrder::LastActivity);
     Ok(sessions)
 }
 
@@ -570,6 +674,78 @@ mod tests {
         sort_sessions(&mut sessions, SessionOrder::Created);
         let ids: Vec<&str> = sessions.iter().map(|s| s.id.as_str()).collect();
         assert_eq!(ids, ["new-and-quiet", "never-ran", "old-but-active"]);
+    }
+
+    #[test]
+    fn session_picker_tree_sorts_roots_and_each_branch_level_independently() {
+        let newest_root = summary("newest-root", 400, Some(400));
+        let older_root = summary("older-root", 100, Some(100));
+        let mut older_child = summary("older-child", 200, Some(200));
+        older_child.origin = Some(styra_server::SessionOrigin {
+            session_id: "older-root".into(),
+            provider: Provider::Codex,
+            at_ms: Some(1),
+            history: styra_server::BranchHistory::ThroughSelected,
+        });
+        let mut newer_child = summary("newer-child", 150, Some(900));
+        newer_child.origin = Some(styra_server::SessionOrigin {
+            session_id: "older-root".into(),
+            provider: Provider::Codex,
+            at_ms: Some(2),
+            history: styra_server::BranchHistory::ThroughSelected,
+        });
+        let mut grandchild = summary("grandchild", 500, Some(800));
+        grandchild.origin = Some(styra_server::SessionOrigin {
+            session_id: "older-child".into(),
+            provider: Provider::Codex,
+            at_ms: Some(3),
+            history: styra_server::BranchHistory::ThroughSelected,
+        });
+
+        let mut sessions = vec![
+            older_child,
+            newest_root.clone(),
+            grandchild,
+            older_root.clone(),
+            newer_child,
+        ];
+        sort_sessions_tree(&mut sessions, SessionOrder::LastActivity);
+
+        let ids = sessions
+            .iter()
+            .map(|session| session.id.as_str())
+            .collect::<Vec<_>>();
+        // Roots retain the normal last-activity ordering. Within older-root,
+        // the newer child comes first; its sibling's own child follows it.
+        assert_eq!(
+            ids,
+            [
+                "newest-root",
+                "older-root",
+                "newer-child",
+                "older-child",
+                "grandchild"
+            ]
+        );
+        assert_eq!(session_tree_depths(&sessions), [0, 0, 1, 1, 2]);
+
+        // Changing sort order reorders the siblings too, while leaving the
+        // branch beneath its parent rather than returning to a flat list.
+        sort_sessions_tree(&mut sessions, SessionOrder::Created);
+        let ids = sessions
+            .iter()
+            .map(|session| session.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ids,
+            [
+                "newest-root",
+                "older-root",
+                "older-child",
+                "grandchild",
+                "newer-child"
+            ]
+        );
     }
 
     #[test]
