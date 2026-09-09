@@ -443,7 +443,10 @@ mod tests {
         app.toggle_raw();
         let screen = rendered(&app);
         assert!(screen.contains("provider entry"), "{screen}");
-        assert!(screen.contains("provider native · v: Styra wire"), "{screen}");
+        assert!(
+            screen.contains("provider native · v: Styra wire"),
+            "{screen}"
+        );
         assert!(screen.contains("session_meta"), "{screen}");
         assert!(!screen.contains("« session_meta"), "{screen}");
     }

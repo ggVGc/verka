@@ -108,6 +108,76 @@ fn quota_line(reading: &QuotaEvent) -> Line<'static> {
     Line::from(spans)
 }
 
+/// The footer's warning badge: the provider whose plan is closest to refusing
+/// work, named with how full that window is, or `None` while every window the
+/// server has spoken about is still comfortable.
+///
+/// It reads the same log the view does rather than a second piece of state,
+/// so the badge and the view can never disagree. A provider's plan has several
+/// windows and each is read repeatedly, so only the newest reading per
+/// provider-and-window counts: an older warning that has since been superseded
+/// by a comfortable reading of the same window is not news, and a Claude
+/// window says nothing about a Codex one.
+///
+/// A window whose reset has passed is dropped: it has turned over, so whatever
+/// it said about being full is about a pool that no longer exists.
+pub(crate) fn alert(app: &App, now_ms: u64) -> Option<Line<'static>> {
+    let mut newest: Vec<&QuotaEvent> = Vec::new();
+    for reading in app.quota.iter() {
+        match newest
+            .iter_mut()
+            .find(|kept| kept.provider == reading.provider && kept.window == reading.window)
+        {
+            Some(kept) if kept.at_ms <= reading.at_ms => *kept = reading,
+            Some(_) => {}
+            None => newest.push(reading),
+        }
+    }
+    let mut pressing: Vec<&QuotaEvent> = newest
+        .into_iter()
+        .filter(|reading| reading.status != QuotaStatus::Allowed)
+        .filter(|reading| reading.resets_at_ms.is_none_or(|resets| resets > now_ms))
+        .collect();
+    // Worst first, and among equals the fuller window: the badge has room for
+    // one window, so it has to be the one the operator would act on.
+    pressing.sort_by(|left, right| {
+        severity(right.status).cmp(&severity(left.status)).then(
+            right
+                .utilization
+                .unwrap_or(0.0)
+                .total_cmp(&left.utilization.unwrap_or(0.0)),
+        )
+    });
+    let worst = pressing.first()?;
+    let color = status_color(worst.status);
+    let mut spans = vec![Span::styled(
+        format!(
+            " ⚠ {} {} {} ",
+            worst.provider.as_str(),
+            worst.window,
+            worst.utilization_label()
+        ),
+        Style::default().fg(color).add_modifier(Modifier::BOLD),
+    )];
+    // Only the worst window is spelled out; the rest are counted, so a second
+    // provider filling up is still visible without crowding the footer.
+    if pressing.len() > 1 {
+        spans.push(Span::styled(
+            format!("+{} ", pressing.len() - 1),
+            Style::default().fg(color),
+        ));
+    }
+    Some(Line::from(spans))
+}
+
+fn severity(status: QuotaStatus) -> u8 {
+    match status {
+        QuotaStatus::Allowed => 0,
+        QuotaStatus::Warning => 1,
+        QuotaStatus::Exhausted => 2,
+    }
+}
+
 pub(crate) fn status_color(status: QuotaStatus) -> Color {
     match status {
         QuotaStatus::Allowed => palette::MUTED_TEXT,
@@ -300,6 +370,67 @@ mod tests {
             styra_server::LogLevel::Error
         );
         assert!(app.log.newest().unwrap().message.contains("exhausted"));
+    }
+
+    /// The badge is the whole point of the footer slot: an operator who never
+    /// presses `Q` still has to learn that a plan is about to refuse them.
+    #[test]
+    fn a_pressing_window_shows_as_a_warning_badge_in_the_footer() {
+        let mut app = app();
+        assert!(!rendered(&app).contains('⚠'), "nothing to warn about yet");
+
+        app.quota.replace(vec![
+            reading("7d", QuotaStatus::Allowed, Some(0.1)),
+            reading("five_hour", QuotaStatus::Warning, Some(0.91)),
+        ]);
+        let screen = rendered(&app);
+        assert!(screen.contains("⚠ claude five_hour 91%"), "{screen}");
+    }
+
+    /// A window read again and found comfortable is not news; the badge has to
+    /// follow the newest reading of each window rather than the worst one ever
+    /// seen.
+    #[test]
+    fn a_superseded_warning_stops_showing() {
+        let mut app = app();
+        let mut later = reading("five_hour", QuotaStatus::Allowed, Some(0.02));
+        later.at_ms = 2_000;
+        app.quota.replace(vec![
+            reading("five_hour", QuotaStatus::Warning, Some(0.91)),
+            later,
+        ]);
+
+        assert!(alert(&app, 0).is_none());
+    }
+
+    /// Two providers can be under pressure at once, and only one fits: the
+    /// worse one is named and the other counted.
+    #[test]
+    fn the_worst_window_is_named_and_the_rest_counted() {
+        let mut app = app();
+        let mut codex = reading("weekly", QuotaStatus::Exhausted, None);
+        codex.provider = Provider::Codex;
+        app.quota.replace(vec![
+            reading("five_hour", QuotaStatus::Warning, Some(0.91)),
+            codex,
+        ]);
+
+        let badge = alert(&app, 0).unwrap();
+        assert!(badge.to_string().contains("⚠ codex weekly"), "{badge}");
+        assert!(badge.to_string().contains("+1"), "{badge}");
+    }
+
+    /// A full window that has since reset describes a pool that no longer
+    /// exists, so it must not keep the badge lit.
+    #[test]
+    fn a_window_whose_reset_has_passed_no_longer_warns() {
+        let mut app = app();
+        let mut exhausted = reading("five_hour", QuotaStatus::Exhausted, Some(1.0));
+        exhausted.resets_at_ms = Some(10_000);
+        app.quota.replace(vec![exhausted]);
+
+        assert!(alert(&app, 9_000).is_some(), "still inside the window");
+        assert!(alert(&app, 11_000).is_none(), "the window turned over");
     }
 
     /// Times are shown on the operator's own clock, so the minute a moment

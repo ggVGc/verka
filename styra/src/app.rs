@@ -377,6 +377,11 @@ pub struct OperatorState {
     composer: Composer,
     contract: Option<Contract>,
     file_show_all: bool,
+    /// The plan-quota readings. Unlike the diagnostic log these are not the
+    /// Interaction's: they measure the account, so the same readings are true
+    /// of whichever screen this client switches to, and re-fetching them on
+    /// every switch would only blank the footer's warning until it landed.
+    quota: Tail<QuotaEvent>,
 }
 
 impl App {
@@ -450,6 +455,7 @@ impl App {
             composer: std::mem::take(&mut self.composer),
             contract: self.outbox.take_contract(),
             file_show_all: self.files.shows_all(),
+            quota: std::mem::take(&mut self.quota),
         }
     }
 
@@ -467,6 +473,7 @@ impl App {
         self.composer = state.composer;
         self.outbox.set_contract(state.contract);
         self.files.set_scope(state.file_show_all);
+        self.quota = state.quota;
     }
 
     /// Point this screen at `workspace`: which one it is, what to call it,

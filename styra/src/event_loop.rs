@@ -354,6 +354,26 @@ pub fn open_interaction_navigator(app: &mut App, client: &Client) {
     app.interactions.open(interactions, workspaces);
 }
 
+/// Fill the quota view from the server's log, which is where the readings live:
+/// the server reads the figures off every interaction's wire, so one client
+/// asking gets every session's readings rather than only this one's.
+///
+/// Called both when `Q` asks for the log and once at startup, so the footer's
+/// warning is right from the first frame. A provider that is already nearly out
+/// says so hours before it next volunteers a reading, and an operator who never
+/// presses `Q` would otherwise not be told at all.
+///
+/// Best-effort: a server that cannot answer leaves the readings as they were
+/// and logs why, rather than failing the startup that asked.
+pub fn refresh_quota(app: &mut App, client: &Client) {
+    match client.quota_log() {
+        Ok(readings) => app.quota.replace(readings),
+        Err(error) => app.push_log(LogEntry::error(format!(
+            "could not read the quota log: {error:#}"
+        ))),
+    }
+}
+
 /// Return the running interaction an in-client transition explicitly stops.
 pub fn stops_current_interaction(outcome: &RunOutcome, live: &Attachment) -> bool {
     match (outcome, live) {
@@ -836,15 +856,7 @@ pub fn run(
                 };
                 app.answer.set(answer.map_err(|error| format!("{error:#}")));
             }
-            // The quota log is the server's: it reads the figures off every
-            // interaction's wire, so one client asking gets every session's
-            // readings rather than only this one's.
-            Some(Request::Quota) => match client.quota_log() {
-                Ok(readings) => app.quota.replace(readings),
-                Err(error) => app.push_log(LogEntry::error(format!(
-                    "could not read the quota log: {error:#}"
-                ))),
-            },
+            Some(Request::Quota) => refresh_quota(app, client),
             // The setting is the server's to keep — it is stored with the
             // Session and acted on long after this client has gone — so what
             // is shown is what the server accepted, not what was pressed.

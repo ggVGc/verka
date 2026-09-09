@@ -8,7 +8,17 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
+use std::time::{SystemTime, UNIX_EPOCH};
 use unicode_width::UnicodeWidthStr;
+
+/// Now, in milliseconds since the epoch — the clock a quota window's reset is
+/// read against, so a window that has already turned over stops warning.
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|since| since.as_millis() as u64)
+        .unwrap_or(0)
+}
 
 pub(crate) fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     let working_directory = app
@@ -38,27 +48,43 @@ pub(crate) fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
         .unwrap_or_default()
         .min(area.width.saturating_sub(worktrees_width) as usize)
         as u16;
+    // The quota warning rides the footer because what it says is true of the
+    // account rather than of the view: a plan window filling up is worth
+    // knowing in the event list, the raw view, or anywhere else, and the footer
+    // is the one line every view keeps. `Q` opens the readings behind it.
+    let quota_alert = super::quota::alert(app, now_ms());
+    let quota_width = quota_alert
+        .as_ref()
+        .map(Line::width)
+        .unwrap_or_default()
+        .min(area.width.saturating_sub(worktrees_width) as usize) as u16;
     // Waiting out a rate limit is the session's standing answer, kept by the
-    // server and acted on long after the quota view that armed it was closed.
-    // The operator who needs to know it is armed is watching the interaction
-    // rather than the readings, so it rides the footer: the one line every
-    // view keeps. Only the non-default "on" takes footer space — every session
-    // starts off, and the quota view's own title spells out both.
+    // server and acted on long after the quota view was closed. It belongs
+    // next to the quota warning for the same reason that warning is here: the
+    // operator who needs to know it is armed is watching the interaction, not
+    // the readings. Only the non-default "on" takes footer space — every
+    // session starts off, and the quota view's own title spells out both.
     let retry_notice = app.auto_retry.then_some(" R rate-limit retry: on ");
     let retry_width = retry_notice
         .map(UnicodeWidthStr::width)
         .unwrap_or_default()
-        .min(area.width.saturating_sub(worktrees_width) as usize) as u16;
+        .min(
+            area.width
+                .saturating_sub(worktrees_width)
+                .saturating_sub(quota_width) as usize,
+        ) as u16;
     let directory_width = working_directory.width().min(
         area.width
             .saturating_sub(worktrees_width)
             .saturating_sub(idle_notice_width)
-            .saturating_sub(retry_width) as usize,
+            .saturating_sub(retry_width)
+            .saturating_sub(quota_width) as usize,
     ) as u16;
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
             Constraint::Min(0),
+            Constraint::Length(quota_width),
             Constraint::Length(retry_width),
             Constraint::Length(idle_notice_width),
             Constraint::Length(worktrees_width),
@@ -85,6 +111,9 @@ pub(crate) fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     )))
     .right_aligned();
     frame.render_widget(keybinds, chunks[0]);
+    if let Some(quota_alert) = quota_alert {
+        frame.render_widget(Paragraph::new(quota_alert).right_aligned(), chunks[1]);
+    }
     if let Some(retry_notice) = retry_notice {
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
@@ -92,7 +121,7 @@ pub(crate) fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
                 Style::default().fg(palette::SUCCESS),
             )))
             .right_aligned(),
-            chunks[1],
+            chunks[2],
         );
     }
     if let Some(idle_notice) = idle_notice {
@@ -102,11 +131,11 @@ pub(crate) fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
                 Style::default().fg(palette::SUCCESS),
             )))
             .right_aligned(),
-            chunks[2],
+            chunks[3],
         );
     }
-    frame.render_widget(worktrees, chunks[3]);
-    frame.render_widget(directory, chunks[4]);
+    frame.render_widget(worktrees, chunks[4]);
+    frame.render_widget(directory, chunks[5]);
 }
 
 pub(crate) fn tag_color(tag: &str) -> Color {
@@ -142,6 +171,32 @@ mod tests {
 
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
+    use std::path::PathBuf;
+    use styra_server::{DrivaOptions, InteractionActivity, InteractionSummary};
+
+    fn interaction(id: &str, activity: InteractionActivity) -> InteractionSummary {
+        InteractionSummary {
+            auto_retry: false,
+            id: id.into(),
+            name: None,
+            workspace_id: "workspace".into(),
+            selection: styra_server::agent::Selection::parse("codex").unwrap(),
+            workspace: PathBuf::from("/workspace"),
+            driva: DrivaOptions {
+                isolation_backend: "none".into(),
+                command: vec![],
+                working_directory: PathBuf::from("/workspace"),
+                network: false,
+                base: vec![],
+                mounts: vec![],
+            },
+            accepting: true,
+            activity,
+            idle_unseen: false,
+            last_message: None,
+            events: 0,
+        }
+    }
 
     #[test]
     fn footer_shows_keybinds_and_working_directory() {
@@ -154,9 +209,17 @@ mod tests {
         assert!(!screen.contains("j/k next/prev"));
     }
 
+    #[test]
+    fn footer_makes_enabled_worktree_creation_visible() {
+        let mut app = testing::app("s1");
+        app.workspace.worktrees_enabled = true;
+
+        assert!(rendered(&app).contains("W worktrees: ON"));
+    }
+
     /// An armed rate-limit retry has to be visible from the interaction the
-    /// operator is watching: it was armed once, in a view they have since
-    /// left, and what it changes happens hours later.
+    /// operator is watching: it was set once, in a view they have since left,
+    /// and it changes what happens hours later.
     #[test]
     fn footer_reports_an_armed_rate_limit_retry() {
         let mut app = testing::app("s1");
@@ -171,11 +234,24 @@ mod tests {
     }
 
     #[test]
-    fn footer_makes_enabled_worktree_creation_visible() {
-        let mut app = testing::app("s1");
-        app.workspace.worktrees_enabled = true;
+    fn footer_reports_interactions_that_became_idle_while_unseen() {
+        let mut app = testing::app("current");
+        app.interactions.open(
+            vec![
+                interaction("current", InteractionActivity::Running),
+                interaction("other", InteractionActivity::Running),
+            ],
+            vec![],
+        );
+        app.interactions.close();
+        let mut other = interaction("other", InteractionActivity::Pending);
+        other.idle_unseen = true;
+        app.interactions.refresh(vec![
+            interaction("current", InteractionActivity::Running),
+            other,
+        ]);
 
-        assert!(rendered(&app).contains("W worktrees: ON"));
+        assert!(rendered(&app).contains("a 1 interaction idle"));
     }
 
     #[test]

@@ -361,6 +361,11 @@ fn main() -> Result<()> {
         }
     }
     refresh_workspace_context(&mut app, &client, &active_workspace);
+    // The footer's quota warning is about the account, not about this screen,
+    // so it has to be right from the first frame rather than from whenever a
+    // provider next volunteers a reading. Carried across session switches by
+    // `App::adopt`, so this is asked once per client.
+    event_loop::refresh_quota(&mut app, &client);
 
     let mut terminal = match terminal {
         Some(terminal) => terminal,
