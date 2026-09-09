@@ -45,6 +45,11 @@ pub struct Launcher {
     /// the operator can leave it selected; the picker cannot type one, only
     /// carry one it was opened on.
     pub carried_model: Option<String>,
+    /// Whether the agent column is out of reach. A live session's agent cannot
+    /// be changed without converting it, so once one has been launched the
+    /// picker never gives the column the keys — it only shows which agent the
+    /// session is already running.
+    pub provider_locked: bool,
     /// Models the operator has confirmed before, most recent first. They are
     /// listed ahead of the rest of the catalog, so the handful of models
     /// actually in use sit at the top of the column instead of wherever the
@@ -58,7 +63,14 @@ impl Launcher {
     /// there is always a row to open on. A model the provider's catalog does not
     /// list is carried as its own final row rather than dropped, so confirming
     /// the picker cannot silently change an existing selection.
-    pub fn from_selection(selection: &Selection, recent_models: &[String]) -> Self {
+    /// `provider_locked` says the session has already been launched: the agent
+    /// column is then shown but never focused, so no key can move the cursor
+    /// onto a choice the session could not adopt anyway.
+    pub fn from_selection(
+        selection: &Selection,
+        recent_models: &[String],
+        provider_locked: bool,
+    ) -> Self {
         let provider = row_of(&PROVIDERS, &selection.provider);
         let models = selection.provider.models();
         // A model the catalog does not list is carried as an extra row rather
@@ -67,11 +79,16 @@ impl Launcher {
             .then(|| selection.model.clone());
         let effort = row_of(selection.provider.efforts(), &selection.effort);
         let mut launcher = Self {
-            column: LaunchColumn::Provider,
+            column: if provider_locked {
+                LaunchColumn::Model
+            } else {
+                LaunchColumn::Provider
+            },
             provider,
             model: 0,
             effort,
             carried_model,
+            provider_locked,
             recent_models: recent_models.to_vec(),
         };
         // Only now that the rows are ordered can the opening model be found:
@@ -183,6 +200,9 @@ impl Launcher {
         self.column = match self.column {
             LaunchColumn::Provider => LaunchColumn::Model,
             LaunchColumn::Model => LaunchColumn::Effort,
+            // A locked agent column is skipped rather than landed on and
+            // stepped off, so the cycle stays model → effort → model.
+            LaunchColumn::Effort if self.provider_locked => LaunchColumn::Model,
             LaunchColumn::Effort => LaunchColumn::Provider,
         };
     }
@@ -190,6 +210,7 @@ impl Launcher {
     pub fn prev_column(&mut self) {
         self.column = match self.column {
             LaunchColumn::Provider => LaunchColumn::Effort,
+            LaunchColumn::Model if self.provider_locked => LaunchColumn::Effort,
             LaunchColumn::Model => LaunchColumn::Provider,
             LaunchColumn::Effort => LaunchColumn::Model,
         };
@@ -207,7 +228,7 @@ mod tests {
     #[test]
     fn the_picker_always_pins_a_model_and_an_effort() {
         for provider in PROVIDERS {
-            let mut launcher = Launcher::from_selection(&Selection::new(provider), &[]);
+            let mut launcher = Launcher::from_selection(&Selection::new(provider), &[], false);
             // A selection always pins both, and the picker opens on the rows
             // naming them.
             let opened = launcher.selection();
@@ -244,7 +265,7 @@ mod tests {
             "gpt-5.6-sol".to_owned(), // another agent's model: never a row here
             catalog[1].to_owned(),
         ];
-        let launcher = Launcher::from_selection(&Selection::new(Provider::Claude), &recent);
+        let launcher = Launcher::from_selection(&Selection::new(Provider::Claude), &recent, false);
 
         let rows = launcher.models();
         assert_eq!(rows[0], catalog[catalog.len() - 1]);
@@ -269,6 +290,7 @@ mod tests {
         let mut launcher = Launcher::from_selection(
             &Selection::parse("claude:claude-opus-4-1-20250805").unwrap(),
             &[],
+            false,
         );
         assert!(launcher.carried_model.is_some());
 
@@ -284,12 +306,41 @@ mod tests {
         assert_eq!(launcher.model_rows(), launcher.provider().models().len());
     }
 
+    /// A launched session's agent cannot be changed without converting the
+    /// session, so the picker never gives that column the keys: it opens on the
+    /// model column and no amount of column stepping, in either direction,
+    /// reaches the agent one.
+    #[test]
+    fn a_launched_session_cannot_move_the_cursor_onto_the_agent_column() {
+        let mut launcher = Launcher::from_selection(&Selection::new(Provider::Claude), &[], true);
+        assert_eq!(launcher.column, LaunchColumn::Model);
+
+        for _ in 0..6 {
+            launcher.next_column();
+            assert_ne!(launcher.column, LaunchColumn::Provider);
+        }
+        for _ in 0..6 {
+            launcher.prev_column();
+            assert_ne!(launcher.column, LaunchColumn::Provider);
+        }
+        // Both of the remaining columns are still reachable.
+        launcher.next_column();
+        assert_eq!(launcher.column, LaunchColumn::Effort);
+        launcher.next_column();
+        assert_eq!(launcher.column, LaunchColumn::Model);
+        // And the agent the session is running is the one it stays on.
+        assert_eq!(launcher.selection().provider, Provider::Claude);
+    }
+
     /// The two agents' model catalogs and effort ladders are unrelated, so a
     /// choice made for one must not carry an index across to the other.
     #[test]
     fn changing_provider_falls_back_to_the_new_agents_defaults() {
-        let mut launcher =
-            Launcher::from_selection(&Selection::parse("claude:claude-opus-5/max").unwrap(), &[]);
+        let mut launcher = Launcher::from_selection(
+            &Selection::parse("claude:claude-opus-5/max").unwrap(),
+            &[],
+            false,
+        );
         assert_eq!(launcher.selection().name(), "claude:claude-opus-5/max");
 
         launcher.prev(); // in the provider column, back towards codex

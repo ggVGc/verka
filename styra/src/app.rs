@@ -501,9 +501,12 @@ impl App {
     /// be chosen.
     pub fn open_launcher(&mut self) {
         if self.can_configure_launch() {
+            // Past Pending the agent is fixed for the life of the session, so
+            // the picker shows it without ever letting the cursor onto it.
             self.launcher = Some(Launcher::from_selection(
                 &self.selection,
                 &self.recent_models,
+                self.activity.status != Status::Pending,
             ));
         }
     }
