@@ -8,7 +8,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use styra_server::{Client, InteractionSummary, InteractionUpdate, LogEntry, WorkspaceSummary};
 
 use crate::launch::LaunchScope;
-use crate::session::{is_recent_session, sort_sessions_tree, SessionOrder};
+use crate::session::{is_recent_session, session_tree_depths, sort_sessions_tree, SessionOrder};
 use crate::ui;
 
 /// How long the cursor must rest on a Session or Workspace before its preview
@@ -142,6 +142,12 @@ pub fn run_session_picker(
             KeyCode::Char('k') | KeyCode::Up => selected = selected.saturating_sub(1),
             KeyCode::Char('g') => selected = 0,
             KeyCode::Char('G') => selected = sessions.len().saturating_sub(1),
+            KeyCode::Char('J') => {
+                selected = next_top_level_session(&sessions, selected).unwrap_or(selected)
+            }
+            KeyCode::Char('K') => {
+                selected = previous_top_level_session(&sessions, selected).unwrap_or(selected)
+            }
             // Re-ordering keeps the cursor on the Session it was on: the
             // operator is changing how the list is arranged, not which
             // conversation they were looking at.
@@ -223,6 +229,32 @@ fn unix_now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis().try_into().unwrap_or(u64::MAX))
         .unwrap_or(0)
+}
+
+/// The next root conversation below `selected`, skipping every branch nested
+/// beneath the current root. This is the session tree's coarse navigation;
+/// j/k remain the way to walk individual branches.
+fn next_top_level_session(
+    sessions: &[styra_server::SessionSummary],
+    selected: usize,
+) -> Option<usize> {
+    session_tree_depths(sessions)
+        .into_iter()
+        .enumerate()
+        .find_map(|(index, depth)| (index > selected && depth == 0).then_some(index))
+}
+
+/// The root conversation above `selected`. From inside a branch this lands on
+/// its root first, then a subsequent K moves to the preceding root.
+fn previous_top_level_session(
+    sessions: &[styra_server::SessionSummary],
+    selected: usize,
+) -> Option<usize> {
+    session_tree_depths(sessions)
+        .into_iter()
+        .enumerate()
+        .rev()
+        .find_map(|(index, depth)| (index < selected && depth == 0).then_some(index))
 }
 
 fn initial_session_selection(
@@ -618,6 +650,25 @@ mod tests {
         assert_eq!(all.len(), 3);
         let recent_again = picker_sessions(&sessions, false, now_ms, SessionOrder::LastActivity);
         assert_eq!(recent_again, recent);
+    }
+
+    #[test]
+    fn capital_j_and_k_jump_between_root_conversations() {
+        let root = session("root");
+        let mut branch = session("branch");
+        branch.origin = Some(styra_server::SessionOrigin {
+            session_id: "root".into(),
+            provider: styra_server::agent::Provider::Codex,
+            at_ms: Some(1),
+            history: styra_server::BranchHistory::ThroughSelected,
+        });
+        let other_root = session("other-root");
+        let sessions = vec![root, branch, other_root];
+
+        assert_eq!(next_top_level_session(&sessions, 0), Some(2));
+        assert_eq!(next_top_level_session(&sessions, 1), Some(2));
+        assert_eq!(previous_top_level_session(&sessions, 1), Some(0));
+        assert_eq!(previous_top_level_session(&sessions, 2), Some(0));
     }
 
     #[test]
