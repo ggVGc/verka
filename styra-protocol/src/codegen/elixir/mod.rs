@@ -745,6 +745,55 @@ mod tests {
         );
     }
 
+    /// The hand-written half of `styra-elixir` — the client, and the example
+    /// built on it — is the library's documentation as much as its README is,
+    /// and one that no longer compiles documents nothing.
+    ///
+    /// The example is parsed rather than compiled, because compiling a script
+    /// is running it, and running it wants a server.
+    #[test]
+    fn the_elixir_client_compiles_and_the_example_parses() {
+        let (Some(elixir), Some(elixirc)) = (interpreter("elixir"), interpreter("elixirc")) else {
+            eprintln!("no elixir on PATH; skipping the client");
+            return;
+        };
+        let root = styra_elixir();
+        let directory =
+            std::env::temp_dir().join(format!("styra-elixir-client-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let compiled = elixir_command(&elixirc)
+            .arg("--warnings-as-errors")
+            .arg("-o")
+            .arg(&directory)
+            .arg(root.join("lib/styra/protocol.ex"))
+            .arg(root.join("lib/styra/client.ex"))
+            .output()
+            .expect("the compiler must run");
+        let _ = std::fs::remove_dir_all(&directory);
+        assert!(
+            compiled.status.success(),
+            "styra-elixir does not compile cleanly:\n{}{}",
+            String::from_utf8_lossy(&compiled.stdout),
+            String::from_utf8_lossy(&compiled.stderr)
+        );
+
+        let example = root.join("examples/styra_ask.exs");
+        let parsed = elixir_command(&elixir)
+            .arg("-e")
+            .arg(format!(
+                "Code.string_to_quoted!(File.read!({:?}))",
+                example.to_string_lossy()
+            ))
+            .output()
+            .expect("the interpreter must run");
+        assert!(
+            parsed.status.success(),
+            "{} does not parse:\n{}",
+            example.display(),
+            String::from_utf8_lossy(&parsed.stderr)
+        );
+    }
+
     /// The check script builds a request the Rust side then reads back, so the
     /// two halves are held to the same protocol rather than to each other's
     /// descriptions of it.

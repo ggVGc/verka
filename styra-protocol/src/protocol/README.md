@@ -114,10 +114,18 @@ the Genta and Driva vocabularies they embed) into a model of the wire surface,
 and a backend per language writes it out — the operations, the field names, the
 enum spellings, and a validator driven by them.
 
-Lua is the one language generated today, into `styra-lua/styra/protocol.lua`;
-see `../../../styra-lua/README.md`. Reading the protocol and writing a module
-are separate halves, so another language is a backend rather than a second
-generator.
+Two languages are generated today:
+
+| | | |
+|---|---|---|
+| Lua | `styra-lua/styra/protocol.lua` | `../../../styra-lua/README.md` |
+| Elixir | `styra-elixir/lib/styra/protocol.ex` | `../../../styra-elixir/README.md` |
+
+Reading the protocol and writing a module are separate halves, so a third
+language is a backend rather than a second generator. What a backend decides is
+its own language's business — how an identifier is spelled, whether an absent
+value and a null are the same thing, whether a refusal is raised or returned —
+and the two that exist disagree about all three.
 
 Nothing about the protocol is duplicated by hand there, and a test fails if the
 checked-in file stops matching the definitions. A change made here that the

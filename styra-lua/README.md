@@ -102,4 +102,5 @@ either: it is only the commands, which is what an example should be left as
 once the two halves above exist.
 
 See `../styra-protocol/src/protocol/README.md` for what the operations mean and
-how the transport behaves.
+how the transport behaves, and `../styra-elixir/` for the same three pieces in
+Elixir.
