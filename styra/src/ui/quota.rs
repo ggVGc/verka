@@ -19,6 +19,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 use styra_protocol::agent::Provider;
 use styra_protocol::{QuotaEvent, QuotaStatus};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const FOOTER_WARNING_THRESHOLD: f64 = 0.75;
 const FOOTER_ERROR_THRESHOLD: f64 = 0.90;
@@ -169,13 +170,22 @@ pub(crate) fn alert(app: &App) -> Option<Line<'static>> {
             " claude: ",
             Style::default().fg(palette::MUTED_TEXT),
         ));
-        let (label, color) = match reading.utilization {
-            Some(utilization) => (reading.utilization_label(), footer_color(utilization)),
+        let (label, color) = match (reading.status, reading.utilization, reading.resets_at_ms) {
+            // Claude does not give a percentage when it refuses a turn, but
+            // does give the moment the window becomes usable again. That is
+            // more useful in the persistent footer than an unknown marker.
+            (QuotaStatus::Exhausted, _, Some(resets_at_ms)) if resets_at_ms <= now_ms() => {
+                ("-".into(), palette::MUTED_TEXT)
+            }
+            (QuotaStatus::Exhausted, _, Some(resets_at_ms)) => {
+                (format!("resets {}", clock(resets_at_ms)), palette::ERROR)
+            }
+            (_, Some(utilization), _) => (reading.utilization_label(), footer_color(utilization)),
             // Claude only omits this figure on an `allowed` event; that is a
             // fresh confirmation that it is not close to warning, not an
             // unknown amount to carry over from a previous event.
-            None if reading.status == QuotaStatus::Allowed => ("-".into(), palette::MUTED_TEXT),
-            None => ("?".into(), status_color(reading.status)),
+            (QuotaStatus::Allowed, None, _) => ("-".into(), palette::MUTED_TEXT),
+            (status, None, _) => ("?".into(), status_color(status)),
         };
         spans.push(Span::styled(
             label,
@@ -216,6 +226,16 @@ fn status_label(status: QuotaStatus) -> &'static str {
 /// clock on the wall, so they are rendered in the zone that clock is in.
 fn clock(at_ms: u64) -> String {
     minute_of_day(at_ms, local_offset_seconds(at_ms))
+}
+
+/// The current wall-clock instant in the same epoch milliseconds carried by a
+/// quota reset. The interaction loop redraws at least every 100ms, so a
+/// footer waiting for a reset clears without a new provider event or keypress.
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis().try_into().unwrap_or(u64::MAX))
+        .unwrap_or_default()
 }
 
 /// The minute `at_ms` falls on, `offset_seconds` east of UTC.
@@ -414,6 +434,31 @@ mod tests {
         let mut clear = reading("five_hour", QuotaStatus::Allowed, None);
         clear.at_ms = 2_000;
         app.quota.replace(vec![warning, clear]);
+
+        assert_eq!(alert(&app).unwrap().to_string(), " claude: -");
+    }
+
+    #[test]
+    fn an_exhausted_claude_window_shows_its_reset_time_in_the_footer() {
+        let mut app = app();
+        let mut exhausted = reading("five_hour", QuotaStatus::Exhausted, None);
+        exhausted.resets_at_ms = Some(4_102_444_800_000);
+        app.quota.replace(vec![exhausted]);
+
+        let footer = alert(&app).unwrap();
+        assert_eq!(
+            footer.to_string(),
+            format!(" claude: resets {}", clock(4_102_444_800_000))
+        );
+        assert_eq!(footer.spans[1].style.fg, Some(palette::ERROR));
+    }
+
+    #[test]
+    fn an_exhausted_claude_window_clears_from_the_footer_after_its_reset() {
+        let mut app = app();
+        let mut exhausted = reading("five_hour", QuotaStatus::Exhausted, None);
+        exhausted.resets_at_ms = Some(0);
+        app.quota.replace(vec![exhausted]);
 
         assert_eq!(alert(&app).unwrap().to_string(), " claude: -");
     }
