@@ -230,6 +230,30 @@ mod tests {
         );
     }
 
+    /// The example client is the library's documentation as much as its
+    /// README is, and one that no longer loads documents nothing.
+    #[test]
+    fn the_example_client_loads() {
+        let Some(lua) = interpreter() else {
+            eprintln!("no lua interpreter on PATH; skipping the example");
+            return;
+        };
+        let lua_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("lua");
+        for example in ["examples/styra-ask.lua", "examples/json.lua"] {
+            let output = Command::new(&lua)
+                .arg("-e")
+                .arg(format!("assert(loadfile({:?}))", example))
+                .current_dir(&lua_root)
+                .output()
+                .expect("the interpreter must run");
+            assert!(
+                output.status.success(),
+                "{example} does not load:\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+
     /// The Lua check script builds a request the Rust side then reads back, so
     /// the two halves are held to the same protocol rather than to each other's
     /// descriptions of it.

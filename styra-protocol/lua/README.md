@@ -55,5 +55,26 @@ local answer, err = protocol.expect(json.decode(reply), protocol.Response.ANSWER
   from one set to `nil`, so pass `protocol.null` explicitly; point it at your
   encoder's own sentinel with `protocol.use_null` first.
 
+## An example
+
+`examples/styra-ask.lua` is a small working client — health, Workspaces, live
+interactions, and a typed question put to a session:
+
+```sh
+lua examples/styra-ask.lua health
+lua examples/styra-ask.lua interactions
+lua examples/styra-ask.lua ask styra-1 'which files handle auth?'
+```
+
+`ask` is the interesting one: it sends the question under the `lines` contract,
+polls `updates` until the turn completes, and asks `turn_answer` for the parsed
+result — the three requests the protocol's own shape calls for, since a
+connection carries one request and a turn takes minutes.
+
+Nothing in it restates the wire format; what it does add is the two things the
+protocol leaves to its callers, a JSON codec and a socket. It uses lua-cjson or
+dkjson when either is installed and the toy `examples/json.lua` otherwise, and
+reaches the socket through LuaSocket or `socat`.
+
 See `../src/protocol/README.md` for what the operations mean and how the
 transport behaves.
