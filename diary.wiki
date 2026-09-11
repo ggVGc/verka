@@ -1,3 +1,10 @@
+2026-09-11
+
+I think styra-server should morph into an "LLM workflow runtime".
+First: API For interaction with it
+Then "workflow runner", which executes a DSL combining harness actions with LLM interaction.
+Something similar to LangGraph, I guess.
+
 2026-08-27
 A unit of work is not a git commit, or a branc/PR.
 It is a development session, now often driven by interaction with a coding agent, and the output changes of that session.
