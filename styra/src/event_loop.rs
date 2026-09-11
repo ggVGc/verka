@@ -611,6 +611,19 @@ pub fn run(
                 // Workspace rather than one per interaction. They move the
                 // cursor like j/k, so a skip across several groups costs no
                 // more loads than a step across one row.
+                // The jump to the next unseen-idle interaction moves the cursor
+                // like the other skips do, so the row it lands on is the one
+                // load it pays for — and the operator sees where it went.
+                KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    if app
+                        .interactions
+                        .cursor_to_next_idle(&session_id, app.workspace.id.as_deref())
+                        .is_none()
+                    {
+                        app.show_action_message("no interaction has gone idle unseen");
+                    }
+                    continue;
+                }
                 KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     app.interactions
                         .cursor_next_workspace(&session_id, app.workspace.id.as_deref());
@@ -793,6 +806,25 @@ pub fn run(
                 app.focus = Focus::List;
                 app.interactions.open(interactions, workspaces);
                 interactions_refreshed = Instant::now();
+            }
+            // Asked with the navigator closed, so the interaction is loaded
+            // outright rather than through the cursor's settle, and the live
+            // list opens around it: the operator asked to be taken to work
+            // waiting elsewhere, and wants to see what else is waiting.
+            Some(Request::NextIdleInteraction) => {
+                // The footer's snapshot is up to a refresh old, and the
+                // interaction it points at is one this client is not watching,
+                // so ask before jumping rather than acting on a stale row.
+                if let Ok(interactions) = client.list_interactions() {
+                    app.interactions.refresh(interactions);
+                    interactions_refreshed = Instant::now();
+                }
+                let Some(next) = app.interactions.next_idle_unseen(&app.session_id) else {
+                    app.show_action_message("no interaction has gone idle unseen");
+                    continue;
+                };
+                make_interaction_current(app, live, client, standing_launch, next);
+                open_interaction_navigator(app, client);
             }
             Some(Request::Reset) => return Ok(RunOutcome::Reset),
             Some(Request::NewSession) => return Ok(RunOutcome::NewSession),

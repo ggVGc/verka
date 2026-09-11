@@ -99,21 +99,52 @@ impl LiveInteractions {
         if self.only_current_workspace {
             return visible;
         }
+        grouped_by_workspace(&self.items, visible)
+    }
 
-        let mut ordered = Vec::with_capacity(visible.len());
-        for leader in &visible {
-            if ordered.contains(leader) {
-                continue;
-            }
-            let workspace_id = &self.items[*leader].workspace_id;
-            ordered.extend(
-                visible
-                    .iter()
-                    .copied()
-                    .filter(|index| self.items[*index].workspace_id == *workspace_id),
-            );
+    /// The next Interaction that went idle unseen, from `from` onward in
+    /// display order, wrapping past the end of the list: repeated presses walk
+    /// every one of them and come back rather than stopping at the last.
+    ///
+    /// Deliberately not filtered by the navigator's Workspace scope. The
+    /// notification count is of every unseen one on the server, so every one it
+    /// counts has to be reachable from it.
+    pub fn next_idle_unseen(&self, from: &str) -> Option<InteractionSummary> {
+        let order = grouped_by_workspace(&self.items, (0..self.items.len()).collect());
+        let start = order
+            .iter()
+            .position(|index| self.items[*index].id == from)
+            .map(|position| position + 1)
+            .unwrap_or_default();
+        order
+            .iter()
+            .cycle()
+            .skip(start)
+            .take(order.len())
+            .map(|index| &self.items[*index])
+            .find(|interaction| {
+                interaction.id != from && is_idle(interaction) && interaction.idle_unseen
+            })
+            .cloned()
+    }
+
+    /// Move the cursor onto the next Interaction that went idle unseen, as a
+    /// j/k move does — so the jump loads only where it comes to rest.
+    ///
+    /// Landing on another Workspace's Interaction reveals All scope: a
+    /// notification must not be unreachable because of the filter the navigator
+    /// happens to be showing. `None` when nothing is waiting.
+    pub fn cursor_to_next_idle(
+        &mut self,
+        current: &str,
+        workspace_id: Option<&str>,
+    ) -> Option<InteractionSummary> {
+        let next = self.next_idle_unseen(current)?;
+        if self.only_current_workspace && Some(next.workspace_id.as_str()) != workspace_id {
+            self.only_current_workspace = false;
         }
-        ordered
+        self.move_cursor_to(next.id.clone(), current);
+        Some(next)
     }
 
     /// The entry the cursor rests on. That is the Interaction on screen except
@@ -349,6 +380,27 @@ pub fn first_live_in_workspace(
     live.into_iter().next()
 }
 
+/// `visible` re-ordered so each Workspace's entries are contiguous, in the
+/// order the Workspaces themselves first appear: what [`crate::ui::interactions`]
+/// draws under its Workspace headings, and so what walking the list has to
+/// follow rather than the activity-sorted item order.
+fn grouped_by_workspace(interactions: &[InteractionSummary], visible: Vec<usize>) -> Vec<usize> {
+    let mut ordered = Vec::with_capacity(visible.len());
+    for leader in &visible {
+        if ordered.contains(leader) {
+            continue;
+        }
+        let workspace_id = &interactions[*leader].workspace_id;
+        ordered.extend(
+            visible
+                .iter()
+                .copied()
+                .filter(|index| interactions[*index].workspace_id == *workspace_id),
+        );
+    }
+    ordered
+}
+
 fn sort_interactions(interactions: &mut [InteractionSummary]) {
     interactions.sort_by_key(|interaction| {
         if !interaction.accepting {
@@ -458,6 +510,84 @@ mod tests {
         assert_eq!(live.idle_notification_count(), 1);
         live.close();
         assert_eq!(live.idle_notification_count(), 1);
+    }
+
+    /// The jump exists to answer the footer's count, so it walks the unseen
+    /// ones in display order and wraps: pressing it repeatedly visits each one
+    /// rather than stopping at the last of them.
+    #[test]
+    fn the_idle_jump_walks_every_unseen_interaction_and_wraps() {
+        let mut unseen = interaction("unseen", true, InteractionActivity::Pending);
+        unseen.idle_unseen = true;
+        let mut later = interaction("later", true, InteractionActivity::Pending);
+        later.idle_unseen = true;
+        let mut live = LiveInteractions::default();
+        live.open(
+            vec![
+                interaction("current", true, InteractionActivity::Running),
+                unseen,
+                interaction("busy", true, InteractionActivity::Running),
+                later,
+            ],
+            vec![],
+        );
+
+        assert_eq!(live.next_idle_unseen("current").unwrap().id, "unseen");
+        assert_eq!(live.next_idle_unseen("unseen").unwrap().id, "later");
+        assert_eq!(live.next_idle_unseen("later").unwrap().id, "unseen");
+    }
+
+    /// An idle Interaction a client has already been shown is not what the
+    /// jump is for, and neither is one that stopped rather than went idle.
+    #[test]
+    fn the_idle_jump_has_nowhere_to_go_without_an_unseen_interaction() {
+        let mut stopped = interaction("stopped", false, InteractionActivity::Pending);
+        stopped.idle_unseen = true;
+        let mut live = LiveInteractions::default();
+        live.open(
+            vec![
+                interaction("current", true, InteractionActivity::Running),
+                interaction("seen", true, InteractionActivity::Pending),
+                stopped,
+            ],
+            vec![],
+        );
+
+        assert!(live.next_idle_unseen("current").is_none());
+    }
+
+    /// The count the jump answers is of every unseen Interaction on the
+    /// server, so the Workspace filter cannot be allowed to hide one of them:
+    /// the jump reveals All rather than refusing to move.
+    #[test]
+    fn the_idle_jump_reveals_all_workspaces_to_reach_an_unseen_interaction() {
+        let mut elsewhere = interaction("elsewhere", true, InteractionActivity::Pending);
+        elsewhere.workspace_id = "other-workspace".into();
+        elsewhere.idle_unseen = true;
+        let mut live = LiveInteractions::default();
+        live.open(
+            vec![
+                interaction("current", true, InteractionActivity::Running),
+                elsewhere,
+            ],
+            vec![],
+        );
+        live.toggle_workspace_scope();
+
+        let next = live
+            .cursor_to_next_idle("current", Some("workspace"))
+            .unwrap();
+
+        assert_eq!(next.id, "elsewhere");
+        assert!(!live.only_current_workspace);
+        // Moved like a j/k step, so the interaction is loaded once the cursor
+        // has come to rest rather than from inside the key handler.
+        assert_eq!(live.cursor("current"), "elsewhere");
+        assert_eq!(
+            live.pending("current")
+                .map(|interaction| interaction.id.as_str()),
+            Some("elsewhere")
+        );
     }
 
     /// Loading an Interaction replaces the whole screen, so a cursor crossing

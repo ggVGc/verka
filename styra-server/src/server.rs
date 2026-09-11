@@ -84,15 +84,85 @@ impl Drop for ServerInner {
     }
 }
 
+/// How recently a client must have asked for an interaction's updates for it
+/// to still count as being on someone's screen. A client rendering an
+/// interaction polls several times a second, so this only has to outlast a
+/// frame it spent redrawing or blocked on another request.
+const WATCHED_FOR: Duration = Duration::from_secs(3);
+
+/// The "newly idle" notification for one interaction: whether the interaction
+/// reaching its input-waiting state is still unacknowledged news.
+///
+/// It is news only to an operator who is not looking at the interaction. A
+/// client streaming its updates draws the turn finishing as it happens, so
+/// raising a notification for it would tell them to go where they already are —
+/// and the count in their footer would never fall back to nothing. So the two
+/// halves are kept together: what a client is watching decides what going idle
+/// records.
+///
+/// Only a `LoadInteraction` clears an already-raised notification. A summary is
+/// a notification, not proof that an operator has actually looked at this
+/// interaction.
+#[derive(Default)]
+struct IdleNotice {
+    unseen: AtomicBool,
+    /// When a client last asked for this interaction's updates, which is what
+    /// a client showing it does continuously.
+    watched: Mutex<Option<Instant>>,
+}
+
+impl IdleNotice {
+    fn new(unseen: bool) -> Self {
+        Self {
+            unseen: AtomicBool::new(unseen),
+            watched: Mutex::new(None),
+        }
+    }
+
+    /// The interaction has reached its input-waiting state.
+    fn became_idle(&self) {
+        if self.watched() {
+            return;
+        }
+        self.unseen.store(true, Ordering::Release);
+    }
+
+    fn unseen(&self) -> bool {
+        self.unseen.load(Ordering::Acquire)
+    }
+
+    fn mark_seen(&self) {
+        self.unseen.store(false, Ordering::Release);
+    }
+
+    /// Record that a client is streaming this interaction's updates, which is
+    /// what a client showing it does continuously. Being on a client's screen
+    /// is what seeing an interaction means, so this also acknowledges a
+    /// notification raised before that client arrived.
+    fn note_watched(&self) {
+        *self
+            .watched
+            .lock()
+            .expect("interaction watch lock poisoned") = Some(Instant::now());
+        self.mark_seen();
+    }
+
+    fn watched(&self) -> bool {
+        self.watched
+            .lock()
+            .expect("interaction watch lock poisoned")
+            .is_some_and(|at| at.elapsed() < WATCHED_FOR)
+    }
+}
+
 struct ManagedInteraction {
     interaction: Interaction,
     updates: Arc<Mutex<Vec<SequencedUpdate>>>,
     accepting_messages: Arc<AtomicBool>,
     activity: Arc<Mutex<InteractionActivity>>,
-    /// Set whenever the interaction reaches its input-waiting state. Only a
-    /// `LoadInteraction` clears it: a summary is a notification, not proof
-    /// that an operator has actually looked at this interaction.
-    idle_unseen: Arc<AtomicBool>,
+    /// Whether this interaction going idle is still news, and what makes it
+    /// news at all: see [`IdleNotice`].
+    idle: Arc<IdleNotice>,
     /// How many agent events this interaction has produced. Counted as they
     /// arrive rather than derived from `updates` on each listing, so a summary
     /// costs a load instead of a scan of the whole history.
@@ -203,8 +273,7 @@ impl ManagedInteraction {
             workspace: self.workspace.clone(),
             driva: self.driva.clone(),
             accepting: self.accepting_messages.load(Ordering::Acquire),
-            idle_unseen: activity == InteractionActivity::Pending
-                && self.idle_unseen.load(Ordering::Acquire),
+            idle_unseen: activity == InteractionActivity::Pending && self.idle.unseen(),
             activity,
             last_message: self.last_message(),
             auto_retry: self.auto_retry.load(Ordering::Acquire),
@@ -213,7 +282,7 @@ impl ManagedInteraction {
     }
 
     fn mark_idle_seen(&self) {
-        self.idle_unseen.store(false, Ordering::Release);
+        self.idle.mark_seen();
     }
 
     /// Answer "keep at it after a rate limit" for this interaction's Session,
@@ -676,7 +745,7 @@ impl ServerState {
         let updates = Arc::new(Mutex::new(Vec::new()));
         let accepting_messages = Arc::new(AtomicBool::new(true));
         let activity = Arc::new(Mutex::new(InteractionActivity::Pending));
-        let idle_unseen = Arc::new(AtomicBool::new(true));
+        let idle = Arc::new(IdleNotice::new(true));
         let events = Arc::new(AtomicUsize::new(0));
         let background_work = Arc::new(AtomicBool::new(false));
         let managed = Arc::new(ManagedInteraction {
@@ -684,7 +753,7 @@ impl ServerState {
             updates: Arc::clone(&updates),
             accepting_messages: Arc::clone(&accepting_messages),
             activity: Arc::clone(&activity),
-            idle_unseen: Arc::clone(&idle_unseen),
+            idle: Arc::clone(&idle),
             events: Arc::clone(&events),
             workspace_id: request.workspace_id.clone(),
             name: Mutex::new(name.clone()),
@@ -704,7 +773,7 @@ impl ServerState {
         let reported_selection = Arc::downgrade(&managed);
         let refused = Arc::downgrade(&managed);
         let quota = Arc::clone(&self.inner.quota);
-        let idle_unseen = Arc::clone(&idle_unseen);
+        let idle = Arc::clone(&idle);
         let quota_session = id.clone();
         let quota_provider = selection.provider;
         std::thread::Builder::new()
@@ -739,7 +808,7 @@ impl ServerState {
                                     activity.lock().expect("interaction activity lock poisoned");
                                 if *activity == InteractionActivity::Background {
                                     *activity = InteractionActivity::Pending;
-                                    idle_unseen.store(true, Ordering::Release);
+                                    idle.became_idle();
                                 }
                             }
                         }
@@ -775,7 +844,7 @@ impl ServerState {
                             };
                             *activity.lock().expect("interaction activity lock poisoned") = next;
                             if next == InteractionActivity::Pending {
-                                idle_unseen.store(true, Ordering::Release);
+                                idle.became_idle();
                             }
                         }
                         InteractionUpdate::Event(crate::event::AgentEvent::ToolCompleted {
@@ -786,7 +855,7 @@ impl ServerState {
                                 background_work.store(false, Ordering::Release);
                                 *activity.lock().expect("interaction activity lock poisoned") =
                                     InteractionActivity::Pending;
-                                idle_unseen.store(true, Ordering::Release);
+                                idle.became_idle();
                             }
                         }
                         _ => {}
@@ -1069,7 +1138,7 @@ impl ServerState {
         let updates = Arc::new(Mutex::new(seeded_updates));
         let accepting_messages = Arc::new(AtomicBool::new(true));
         let activity = Arc::new(Mutex::new(InteractionActivity::Pending));
-        let idle_unseen = Arc::new(AtomicBool::new(true));
+        let idle = Arc::new(IdleNotice::new(true));
         let events = Arc::new(AtomicUsize::new(replayed_events));
         let background_work = Arc::new(AtomicBool::new(false));
         // A resumed Session may carry over messages that were durably queued
@@ -1082,7 +1151,7 @@ impl ServerState {
             updates: Arc::clone(&updates),
             accepting_messages: Arc::clone(&accepting_messages),
             activity: Arc::clone(&activity),
-            idle_unseen: Arc::clone(&idle_unseen),
+            idle: Arc::clone(&idle),
             events: Arc::clone(&events),
             workspace_id: summary.workspace_id.clone(),
             name: Mutex::new(summary.name.clone()),
@@ -1103,7 +1172,7 @@ impl ServerState {
         let refused = Arc::downgrade(&managed);
         let id = request.id.clone();
         let quota = Arc::clone(&self.inner.quota);
-        let idle_unseen = Arc::clone(&idle_unseen);
+        let idle = Arc::clone(&idle);
         let quota_session = id.clone();
         let quota_provider = selection.provider;
         std::thread::Builder::new()
@@ -1138,7 +1207,7 @@ impl ServerState {
                                     activity.lock().expect("interaction activity lock poisoned");
                                 if *activity == InteractionActivity::Background {
                                     *activity = InteractionActivity::Pending;
-                                    idle_unseen.store(true, Ordering::Release);
+                                    idle.became_idle();
                                 }
                             }
                         }
@@ -1174,7 +1243,7 @@ impl ServerState {
                             };
                             *activity.lock().expect("interaction activity lock poisoned") = next;
                             if next == InteractionActivity::Pending {
-                                idle_unseen.store(true, Ordering::Release);
+                                idle.became_idle();
                             }
                         }
                         InteractionUpdate::Event(crate::event::AgentEvent::ToolCompleted {
@@ -1185,7 +1254,7 @@ impl ServerState {
                                 background_work.store(false, Ordering::Release);
                                 *activity.lock().expect("interaction activity lock poisoned") =
                                     InteractionActivity::Pending;
-                                idle_unseen.store(true, Ordering::Release);
+                                idle.became_idle();
                             }
                         }
                         _ => {}
@@ -1897,6 +1966,11 @@ impl ServerState {
             }
             Request::Updates { id, after, raw } => {
                 let interaction = self.interaction(&id)?;
+                // Asking for an interaction's stream is a client drawing it, so
+                // this is where the server learns which interactions are in
+                // front of an operator — and going idle in front of one is not
+                // news to report.
+                interaction.idle.note_watched();
                 let all = interaction
                     .updates
                     .lock()
@@ -2406,6 +2480,38 @@ mod tests {
 
     fn temp_path(tag: &str) -> PathBuf {
         std::env::temp_dir().join(format!("styra-server-{tag}-{}.sock", std::process::id(),))
+    }
+
+    /// The notification exists to send an operator somewhere they are not. An
+    /// interaction that finishes its turn on a client's screen was watched
+    /// finishing it, so there is nothing to send anyone to.
+    #[test]
+    fn going_idle_on_a_clients_screen_is_not_a_notification() {
+        let idle = IdleNotice::new(false);
+
+        idle.note_watched();
+        idle.became_idle();
+        assert!(!idle.unseen());
+
+        // The same interaction, once no client is drawing it any more: this is
+        // the case the notification is for.
+        *idle.watched.lock().unwrap() = Some(Instant::now() - WATCHED_FOR);
+        idle.became_idle();
+        assert!(idle.unseen());
+    }
+
+    /// A client arriving at an interaction that went idle unwatched is the
+    /// operator answering the notification, whether it arrived through a load
+    /// or by the interaction becoming the client's current screen.
+    #[test]
+    fn a_watching_client_acknowledges_a_notification_raised_before_it() {
+        let idle = IdleNotice::new(false);
+        idle.became_idle();
+        assert!(idle.unseen());
+
+        idle.note_watched();
+
+        assert!(!idle.unseen());
     }
 
     #[test]

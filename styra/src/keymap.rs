@@ -61,6 +61,10 @@ pub(crate) const REFERENCE: &[ReferenceRow] = &[
         action: "live interactions/sessions/Workspaces",
     },
     ReferenceRow::Binding {
+        keys: "ctrl-a",
+        action: "go to the next interaction that went idle unseen",
+    },
+    ReferenceRow::Binding {
         keys: "W",
         action: "toggle worktree creation for future launches",
     },

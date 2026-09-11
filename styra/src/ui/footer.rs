@@ -26,9 +26,12 @@ pub(crate) fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     );
     let worktrees_width = worktrees.width().min(area.width as usize) as u16;
     let idle_count = app.interactions.idle_notification_count();
+    // Named with the key that goes straight to one of them, rather than with
+    // `a`: the count is the reason to leave this interaction, so the shortcut
+    // beside it should be the one that does that in a single press.
     let idle_notice = (idle_count > 0).then(|| {
         format!(
-            " a {idle_count} interaction{} idle ",
+            " ^a {idle_count} interaction{} idle ",
             if idle_count == 1 { "" } else { "s" }
         )
     });
@@ -239,7 +242,7 @@ mod tests {
             other,
         ]);
 
-        assert!(rendered(&app).contains("a 1 interaction idle"));
+        assert!(rendered(&app).contains("^a 1 interaction idle"));
     }
 
     #[test]

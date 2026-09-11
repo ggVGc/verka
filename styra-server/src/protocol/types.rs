@@ -560,8 +560,10 @@ pub struct InteractionSummary {
     /// Whether the live interaction is working or waiting for user input.
     #[serde(default)]
     pub activity: InteractionActivity,
-    /// True when this interaction has reached idle since a client last loaded
-    /// it into focus. Listing it is deliberately not an acknowledgement.
+    /// True when this interaction reached idle away from every client's screen
+    /// and no client has focused it since. Going idle while a client is
+    /// streaming this interaction's updates is not news to report, and merely
+    /// listing it is deliberately not an acknowledgement.
     #[serde(default)]
     pub idle_unseen: bool,
     /// The most recent message the agent sent, flattened to a single line and

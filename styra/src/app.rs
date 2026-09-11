@@ -300,6 +300,10 @@ pub enum Request {
     OpenSession(String),
     /// Open the server's live interactions above the main event timeline.
     Interactions,
+    /// Make the next interaction that went idle unseen current, and show the
+    /// live list around it. The footer counts those interactions; this is how
+    /// the operator gets to one without walking the navigator to find it.
+    NextIdleInteraction,
     /// Stop the current interaction and return to the blank start screen.
     Reset,
     /// Return to the blank start screen without stopping the current interaction.

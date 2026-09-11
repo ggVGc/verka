@@ -138,6 +138,11 @@ pub fn handle_list_key(
         KeyCode::Char('X') => return app.toggle_answer(),
         KeyCode::Char('P') => return app.toggle_view(View::Preview),
         KeyCode::Char('L') => return app.open_launcher(),
+        // Beside `a` because it is the same list: `a` opens it to be walked,
+        // ctrl-a skips the walk and goes to what the footer is counting.
+        KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            return app.ask(Request::NextIdleInteraction)
+        }
         KeyCode::Char('a') if app.view != View::Files => return app.ask(Request::Interactions),
         KeyCode::Char('V') => return app.ask(Request::Workspace),
         KeyCode::Char('W') => {
@@ -667,6 +672,36 @@ mod tests {
             app.take_request(),
             Some(Request::SetWorktreesEnabled(false))
         );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// The two halves of the same list: `a` opens it, and ctrl-a asks to be
+    /// taken to the interaction the footer is counting without walking it.
+    #[test]
+    fn control_a_asks_for_the_next_unseen_idle_interaction() {
+        let root = tree("idle-jump");
+        let mut app = app(&root);
+        app.enter_list();
+        let client = Client::new(root.join("missing.sock"));
+        let mut live = Attachment::Detached;
+        let mut pending_fold = false;
+        let mut press = |app: &mut App, modifiers| {
+            handle_list_key(
+                app,
+                &client,
+                &mut live,
+                KeyEvent::new(KeyCode::Char('a'), modifiers),
+                &mut pending_fold,
+                &root.join("preferences.toml"),
+            );
+        };
+
+        press(&mut app, KeyModifiers::CONTROL);
+        assert_eq!(app.take_request(), Some(Request::NextIdleInteraction));
+
+        press(&mut app, KeyModifiers::NONE);
+        assert_eq!(app.take_request(), Some(Request::Interactions));
 
         let _ = std::fs::remove_dir_all(root);
     }

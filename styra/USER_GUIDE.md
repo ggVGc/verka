@@ -68,6 +68,7 @@ live interactions.
 | `b` | follow the selected `branch` marker to the Session it names |
 | `!` | open this live session's sandbox shell in the configured terminal |
 | `a` / `A` / `V` | live interactions / sessions in this Workspace / Workspaces |
+| `Ctrl+A` | go to the next interaction that went idle unseen |
 | `W` | enable or disable linked-worktree creation for future launches |
 | `L` | choose provider, model, and effort |
 
@@ -77,9 +78,16 @@ current/all-Workspace scope, `j`/`k` selects, and `D` deletes a stopped
 interaction (the durable Session remains). The interaction under the cursor is
 loaded once the cursor rests on it, so the list can be crossed without waiting
 for every row on the way; the row being loaded says so, and any other key acts
-on it as soon as it arrives. An idle interaction that has not been loaded
-since it became idle is marked `NEWLY IDLE`; the footer counts those rows until
-they are focused.
+on it as soon as it arrives. An interaction that went idle away from every
+client's screen, and has not been focused since, is marked `NEWLY IDLE`; the
+footer counts those rows until they are focused. Finishing a turn while a client
+is showing it is not one of them — you watched it happen.
+
+`Ctrl+A` goes straight to the next such interaction, wherever it is: with the
+list open it moves the cursor there (revealing all Workspaces if it lives in
+another one), and with the list closed it makes that interaction current and
+opens the list around it. Pressing it repeatedly walks every waiting
+interaction and wraps back to the first.
 
 ## Read the session
 
