@@ -230,6 +230,9 @@ pub struct App {
     /// Which Workspace this screen is showing and where it is; see
     /// [`Location`].
     pub workspace: Location,
+    /// The Git checkout path being entered for the current Workspace from the
+    /// details view. An empty value deliberately clears the association.
+    pub git_repository_prompt: Option<String>,
     pub session_id: String,
     /// Optional operator-facing name of the current durable Session.
     pub session_name: Option<String>,
@@ -410,6 +413,7 @@ impl App {
             workspace_launch_pending: 0,
             recent_models: Vec::new(),
             workspace: Location::default(),
+            git_repository_prompt: None,
             session_id: session_id.into(),
             session_name: None,
             launch: Launch::default(),

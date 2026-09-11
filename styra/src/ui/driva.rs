@@ -50,6 +50,7 @@ pub(crate) fn render_driva(frame: &mut Frame, app: &App, area: Rect) {
         frame.render_widget(block, area);
         render_summary(frame, app, options, inner);
         render_prompt(frame, app, area);
+        render_git_repository_prompt(frame, app, area);
         return;
     }
 
@@ -84,6 +85,7 @@ pub(crate) fn render_driva(frame: &mut Frame, app: &App, area: Rect) {
     );
     frame.render_widget(Paragraph::new(hints), hint_area);
     render_prompt(frame, app, area);
+    render_git_repository_prompt(frame, app, area);
 }
 
 /// Take `wanted` rows off the bottom of `area`, leaving at least `floor` there,
@@ -796,6 +798,36 @@ fn render_prompt(frame: &mut Frame, app: &App, area: Rect) {
             format!(" for {} ", app.launch.scope.phrase()),
             Style::default().fg(palette::ACCENT),
         )));
+    frame.render_widget(Clear, prompt);
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(" ", Style::default()),
+            Span::styled(text.clone(), Style::default().fg(palette::TEXT)),
+            Span::styled("▏", Style::default().fg(palette::WARNING)),
+        ]))
+        .block(block),
+        prompt,
+    );
+}
+
+/// The durable Workspace Git checkout, which is intentionally not an extra
+/// mount and therefore has its own prompt.
+fn render_git_repository_prompt(frame: &mut Frame, app: &App, area: Rect) {
+    let Some(text) = &app.git_repository_prompt else {
+        return;
+    };
+    let width = area.width.saturating_sub(4).min(72);
+    let height = 3u16.min(area.height);
+    let prompt = Rect {
+        x: area.x + area.width.saturating_sub(width) / 2,
+        y: area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(palette::ACCENT))
+        .title(" Git checkout · path in repository · Enter save · empty clears · Esc cancel ");
     frame.render_widget(Clear, prompt);
     frame.render_widget(
         Paragraph::new(Line::from(vec![

@@ -199,8 +199,8 @@ pub(crate) const REFERENCE: &[ReferenceRow] = &[
         action: "choose Driva templates",
     },
     ReferenceRow::Binding {
-        keys: "m / g / x",
-        action: "add a mount / the git history here (rw) / remove the selected one",
+        keys: "m / G / x",
+        action: "add a mount / set this Workspace's Git checkout / remove selected mount",
     },
     ReferenceRow::Binding {
         keys: "I",

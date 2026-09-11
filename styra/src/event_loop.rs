@@ -572,6 +572,12 @@ pub fn run(
             keys::handle_insert_key(app, key);
             continue;
         }
+        // The Git checkout is Workspace metadata. Its prompt is modal so a
+        // path such as `git@host:group/project` is input rather than keys.
+        if app.git_repository_prompt.is_some() {
+            keys::handle_git_repository_prompt_key(app, client, key);
+            continue;
+        }
         // So is the Driva view's mount prompt: what is typed into it is part
         // of a path, including the characters that are shortcuts elsewhere.
         if app.launch.prompt.is_some() {

@@ -73,6 +73,47 @@ pub fn handle_mount_prompt_key(app: &mut App, key: KeyEvent) {
     }
 }
 
+/// Keys for the Workspace Git-checkout prompt. This is durable Workspace
+/// metadata, rather than an individual sandbox grant.
+pub fn handle_git_repository_prompt_key(app: &mut App, client: &Client, key: KeyEvent) {
+    match key.code {
+        KeyCode::Esc => app.git_repository_prompt = None,
+        KeyCode::Enter => {
+            let Some(path) = app.git_repository_prompt.take() else {
+                return;
+            };
+            let Some(workspace_id) = app.workspace.id.as_deref() else {
+                return app.show_action_message("no Workspace is selected");
+            };
+            let repository = (!path.trim().is_empty()).then(|| Path::new(path.trim()));
+            match client.set_workspace_git_repository(workspace_id, repository) {
+                Ok(workspace) => {
+                    app.show_workspace(&workspace);
+                    app.show_action_message(if repository.is_some() {
+                        "Git checkout associated for future launches"
+                    } else {
+                        "Git checkout association cleared"
+                    });
+                }
+                Err(error) => {
+                    app.show_action_message(format!("could not set Git checkout: {error:#}"))
+                }
+            }
+        }
+        KeyCode::Backspace => {
+            if let Some(text) = app.git_repository_prompt.as_mut() {
+                text.pop();
+            }
+        }
+        KeyCode::Char(ch) if !ch.is_control() => {
+            if let Some(text) = app.git_repository_prompt.as_mut() {
+                text.push(ch);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Keys for the two-way branch choice. Confirming closes the modal before the
 /// server call, so success can replace the screen and failure returns to it.
 pub fn handle_branch_prompt_key(app: &mut App, client: &Client, key: KeyEvent) {
@@ -245,6 +286,17 @@ pub fn handle_list_key(
         // focused, so there is one set of them to learn rather than one per
         // layer — and the view says which layer that is.
         View::Driva => match key.code {
+            // Git checkout association is Workspace metadata, so it does not
+            // depend on which policy pane happens to be focused.
+            KeyCode::Char('G') => {
+                app.git_repository_prompt = Some(
+                    app.workspace
+                        .git_repository
+                        .as_ref()
+                        .map(|path| path.display().to_string())
+                        .unwrap_or_default(),
+                )
+            }
             KeyCode::Tab | KeyCode::BackTab => launch::toggle_scope(app),
             KeyCode::Char('w') => launch::cycle_network(app),
             // `R` for read-only: the workspace mount's access. Lowercase `r`
@@ -673,6 +725,33 @@ mod tests {
             Some(Request::SetWorktreesEnabled(false))
         );
 
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn uppercase_g_in_details_opens_the_git_checkout_prompt_prefilled() {
+        let root = tree("git-checkout-prompt");
+        let mut app = app(&root);
+        app.enter_list();
+        app.workspace.git_repository = Some(root.join("repository"));
+        app.toggle_view(View::Driva);
+        let client = Client::new(root.join("missing.sock"));
+        let mut live = Attachment::Detached;
+        let mut pending_fold = false;
+
+        handle_list_key(
+            &mut app,
+            &client,
+            &mut live,
+            KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT),
+            &mut pending_fold,
+            &root.join("preferences.toml"),
+        );
+
+        assert_eq!(
+            app.git_repository_prompt.as_deref(),
+            Some(root.join("repository").to_string_lossy().as_ref())
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 

@@ -171,6 +171,7 @@ switches focused layer; `j`/`k` selects a mount.
 | `I` | make this interaction add to, or ignore, Workspace policy |
 | `U` | promote this interaction's additions into Workspace policy |
 | `D` | save this interaction's additions as new-client defaults |
+| `G` | set the Workspace Git checkout; submit an empty path to clear it |
 
 Workspace edits take effect for future launches everywhere in that Workspace.
 Interaction edits apply only to its next launch/resume unless promoted. Existing
@@ -185,10 +186,10 @@ These are related but independent Workspace features:
 | **Git checkout association** | When the TUI creates a Workspace, it finds the nearest enclosing checkout and records its canonical root automatically. | The checkout is mounted read-only at its host path; its Git metadata/common directory is writable, so Git can operate on that checkout. |
 | **Linked worktrees** | Press `W` to opt the current Workspace in. | A writable worktree parent at `/tmp/styra/worktrees`, writable shared Git metadata, and (for Codex) `create_worktree`. |
 
-The automatic association is visible in Workspace metadata but has no TUI edit
-screen yet. A non-TUI client can explicitly replace or clear it through the
-local socket API; `git_repository` may name the checkout or any directory in
-it, and Styra stores its root:
+The automatic association is visible in Workspace metadata. Press `d`, then
+`G`, to replace it; enter any path inside the checkout and Styra stores its
+root. Submit an empty path to clear it. A non-TUI client can also update it
+through the local socket API:
 
 ```sh
 printf '%s\n' \
