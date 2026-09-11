@@ -1896,6 +1896,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "styra-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "serde_json",
+ "styra-protocol",
+]
+
+[[package]]
 name = "styra-protocol"
 version = "0.1.0"
 dependencies = [
