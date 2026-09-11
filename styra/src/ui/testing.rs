@@ -21,10 +21,10 @@ use ratatui::buffer::Buffer;
 use ratatui::Terminal;
 
 use crate::app::App;
-use styra_server::agent::Selection;
+use styra_protocol::agent::Selection;
 
 /// The model and effort every rendering test launches with, named explicitly
-/// so no test inherits [`styra_server::agent::Provider`]'s defaults. Any
+/// so no test inherits [`styra_protocol::agent::Provider`]'s defaults. Any
 /// concrete profile would do; these are constants of the tests, not of the
 /// product.
 pub(crate) const MODEL: &str = "gpt-5.6-sol";

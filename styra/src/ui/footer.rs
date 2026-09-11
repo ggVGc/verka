@@ -163,7 +163,7 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
     use std::path::PathBuf;
-    use styra_server::{DrivaOptions, InteractionActivity, InteractionSummary};
+    use styra_protocol::{DrivaOptions, InteractionActivity, InteractionSummary};
 
     fn interaction(id: &str, activity: InteractionActivity) -> InteractionSummary {
         InteractionSummary {
@@ -171,7 +171,7 @@ mod tests {
             id: id.into(),
             name: None,
             workspace_id: "workspace".into(),
-            selection: styra_server::agent::Selection::parse("codex").unwrap(),
+            selection: styra_protocol::agent::Selection::parse("codex").unwrap(),
             workspace: PathBuf::from("/workspace"),
             driva: DrivaOptions {
                 isolation_backend: "none".into(),

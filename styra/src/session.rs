@@ -5,12 +5,13 @@ use std::path::{Path, PathBuf};
 use crate::activity::Status;
 use crate::app::{App, LaunchPolicy};
 use crate::launch;
-use styra_server::agent::Selection;
-use styra_server::protocol::{
+use styra_protocol::agent::Selection;
+use styra_protocol::protocol::{
     CreateSession, CreateWorkspace, PlanSession, ResumeSession, SendMessage, SessionInfo,
 };
-use styra_server::{
-    Client, Contract, InteractionUpdate, LogEntry, SessionSummary, WorkspaceSummary,
+use styra_server::Client;
+use styra_protocol::{
+    Contract, InteractionUpdate, LogEntry, SessionSummary, WorkspaceSummary,
 };
 
 /// How long a Session remains in the picker's default recent-conversation
@@ -247,7 +248,7 @@ pub fn all_sessions(client: &Client) -> Result<Vec<SessionSummary>> {
 /// list so a contract added there is offered here without a second edit. The
 /// cycle ends back at an untyped turn, so the operator can always get out of
 /// one without leaving the message box.
-pub const CONTRACTS: [Contract; 4] = styra_server::contract::CONTRACTS;
+pub const CONTRACTS: [Contract; 4] = styra_protocol::contract::CONTRACTS;
 
 /// The next return contract after `current`, wrapping back to an untyped turn.
 /// Shared by both message boxes, so `Ctrl-T` walks the same cycle in each.
@@ -420,12 +421,12 @@ pub fn open_stored(client: &Client, session_id: &str) -> Result<(App, Attachment
         // Skip carried-but-viewless traffic (e.g. app-server control lines),
         // matching what a live session shows; it stays available in the raw
         // view above.
-        if !matches!(event, styra_server::event::AgentEvent::Unknown { .. }) {
+        if !matches!(event, styra_protocol::event::AgentEvent::Unknown { .. }) {
             app.push_event(event);
         }
     }
     // A replayed session has no live agent to end; mark it stopped.
-    app.on_ended(styra_server::InteractionEnd {
+    app.on_ended(styra_protocol::InteractionEnd {
         exit_code: None,
         error: None,
     });
@@ -578,7 +579,7 @@ pub fn branch_session(
     app: &mut App,
     client: &Client,
     at_ms: u64,
-    history: styra_server::BranchHistory,
+    history: styra_protocol::BranchHistory,
 ) {
     match client.branch_session(&app.session_id, Some(at_ms), history, None) {
         Ok(branched) => {
@@ -608,7 +609,7 @@ pub fn apply_update(app: &mut App, update: InteractionUpdate) {
     match update {
         InteractionUpdate::Event(event) => app.push_event(event),
         InteractionUpdate::Raw(line) => {
-            let user_wire = line.direction == styra_server::Direction::ToAgent;
+            let user_wire = line.direction == styra_protocol::Direction::ToAgent;
             app.raw.push(line);
             // Live interactions announce the operator's decoded event before
             // the provider adapter announces its outgoing wire line. Join the
@@ -617,7 +618,7 @@ pub fn apply_update(app: &mut App, update: InteractionUpdate) {
                 if let Some(entry) = app.timeline.entries.last_mut() {
                     if matches!(
                         entry.event,
-                        styra_server::event::AgentEvent::UserMessage { .. }
+                        styra_protocol::event::AgentEvent::UserMessage { .. }
                     ) {
                         entry.raw_index = app.raw.last_index();
                     }
@@ -641,8 +642,8 @@ fn mark_stopped(app: &mut App, live: &mut Attachment) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use styra_server::agent::{Provider, Selection};
-    use styra_server::{Direction, RawLine};
+    use styra_protocol::agent::{Provider, Selection};
+    use styra_protocol::{Direction, RawLine};
 
     fn workspace(id: &str, host_path: &str) -> WorkspaceSummary {
         WorkspaceSummary {
@@ -697,25 +698,25 @@ mod tests {
         let newest_root = summary("newest-root", 400, Some(400));
         let older_root = summary("older-root", 100, Some(100));
         let mut older_child = summary("older-child", 200, Some(200));
-        older_child.origin = Some(styra_server::SessionOrigin {
+        older_child.origin = Some(styra_protocol::SessionOrigin {
             session_id: "older-root".into(),
             provider: Provider::Codex,
             at_ms: Some(1),
-            history: styra_server::BranchHistory::ThroughSelected,
+            history: styra_protocol::BranchHistory::ThroughSelected,
         });
         let mut newer_child = summary("newer-child", 150, Some(900));
-        newer_child.origin = Some(styra_server::SessionOrigin {
+        newer_child.origin = Some(styra_protocol::SessionOrigin {
             session_id: "older-root".into(),
             provider: Provider::Codex,
             at_ms: Some(2),
-            history: styra_server::BranchHistory::ThroughSelected,
+            history: styra_protocol::BranchHistory::ThroughSelected,
         });
         let mut grandchild = summary("grandchild", 500, Some(800));
-        grandchild.origin = Some(styra_server::SessionOrigin {
+        grandchild.origin = Some(styra_protocol::SessionOrigin {
             session_id: "older-child".into(),
             provider: Provider::Codex,
             at_ms: Some(3),
-            history: styra_server::BranchHistory::ThroughSelected,
+            history: styra_protocol::BranchHistory::ThroughSelected,
         });
 
         let mut sessions = vec![
@@ -769,7 +770,7 @@ mod tests {
         let mut app = App::new(Selection::new(Provider::Codex), "s-1");
         apply_update(
             &mut app,
-            InteractionUpdate::Event(styra_server::event::AgentEvent::UserMessage {
+            InteractionUpdate::Event(styra_protocol::event::AgentEvent::UserMessage {
                 text: "question".into(),
             }),
         );
@@ -791,8 +792,8 @@ mod tests {
         let mut app = App::new(Selection::new(Provider::Codex), "s-1");
         apply_update(
             &mut app,
-            InteractionUpdate::Event(styra_server::event::AgentEvent::Branched {
-                direction: styra_server::event::BranchDirection::To,
+            InteractionUpdate::Event(styra_protocol::event::AgentEvent::Branched {
+                direction: styra_protocol::event::BranchDirection::To,
                 session: "s-2".into(),
                 name: None,
             }),
@@ -813,7 +814,7 @@ mod tests {
         let mut app = App::new(Selection::new(Provider::Codex), "s-1");
         apply_update(
             &mut app,
-            InteractionUpdate::Event(styra_server::event::AgentEvent::UserMessage {
+            InteractionUpdate::Event(styra_protocol::event::AgentEvent::UserMessage {
                 text: "question".into(),
             }),
         );

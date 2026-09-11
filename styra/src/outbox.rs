@@ -11,7 +11,7 @@
 //! The buffer the message is written in is [`Composer`](crate::composer),
 //! which does not depend on there being a session at all.
 
-use styra_server::{Contract, QueuedMessage};
+use styra_protocol::{Contract, QueuedMessage};
 
 /// The pending contract and a read-only projection of the server-owned queue.
 #[derive(Default)]

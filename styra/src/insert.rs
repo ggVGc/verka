@@ -24,7 +24,7 @@ use crossterm::event::KeyEvent;
 use std::path::{Path, PathBuf};
 
 use crate::mount;
-use styra_server::{DrivaOptions, LaunchMount, Mount};
+use styra_protocol::{DrivaOptions, LaunchMount, Mount};
 
 /// Which of the prompt's two questions is being answered.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -287,7 +287,7 @@ pub fn complete(base: Option<&Path>, text: &str) -> Option<String> {
 mod tests {
     use super::*;
     use crossterm::event::{KeyEvent, KeyModifiers};
-    use styra_server::{AttributedMount, MountAccess, MountOrigin};
+    use styra_protocol::{AttributedMount, MountAccess, MountOrigin};
 
     /// A scratch tree to complete and resolve against, named per test so the
     /// cases stay independent of each other.

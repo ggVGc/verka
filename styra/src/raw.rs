@@ -9,7 +9,7 @@
 //!
 //! [`crate::ui::raw`] renders it.
 
-use styra_server::RawLine;
+use styra_protocol::RawLine;
 
 use crate::app::Scroll;
 
@@ -194,7 +194,7 @@ impl RawView {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use styra_server::Direction;
+    use styra_protocol::Direction;
 
     fn line(text: &str) -> RawLine {
         RawLine {

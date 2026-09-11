@@ -14,7 +14,7 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Frame;
-use styra_server::event::{AgentEvent, DetailBlock, PresentationMode};
+use styra_protocol::event::{AgentEvent, DetailBlock, PresentationMode};
 
 pub(crate) fn render_preview(frame: &mut Frame, app: &App, area: Rect) {
     let title = match (app.preview.mode(), app.preview.target()) {
@@ -217,7 +217,7 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
     use ratatui::Terminal;
-    use styra_server::event::AgentEvent;
+    use styra_protocol::event::AgentEvent;
 
     fn find_column(buffer: &Buffer, needle: &str) -> (u16, u16) {
         let needle_chars: Vec<char> = needle.chars().collect();
@@ -500,7 +500,7 @@ mod tests {
     #[test]
     fn claude_bash_toggles_between_highlighted_command_and_raw_json() {
         let mut app = App::new(
-            styra_server::agent::Selection::parse("claude").unwrap(),
+            styra_protocol::agent::Selection::parse("claude").unwrap(),
             "s1",
         );
         app.push_event(AgentEvent::ToolStarted {

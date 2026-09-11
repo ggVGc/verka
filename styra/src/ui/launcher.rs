@@ -9,7 +9,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
 use ratatui::Frame;
-use styra_server::agent::PROVIDERS;
+use styra_protocol::agent::PROVIDERS;
 
 pub(crate) fn render_launcher(frame: &mut Frame, launcher: &Launcher, area: Rect) {
     let provider = launcher.provider();
@@ -148,13 +148,13 @@ mod tests {
     use super::super::testing::rendered;
     use crate::app::App;
 
-    use styra_server::agent::Provider;
+    use styra_protocol::agent::Provider;
 
     /// An open launcher over a pending session. The log entry is here because
     /// the launcher draws over a session view that has one.
     fn launching() -> App {
         let mut app = testing::pending_app();
-        app.push_log(styra_server::LogEntry::info("journal: /tmp/styra/s-1"));
+        app.push_log(styra_protocol::LogEntry::info("journal: /tmp/styra/s-1"));
         app.open_launcher();
         app
     }
@@ -228,7 +228,7 @@ mod tests {
     #[test]
     fn the_launcher_shows_a_carried_model_alongside_the_catalog() {
         let mut app = App::pending(
-            styra_server::agent::Selection::parse("claude:claude-opus-4-1-20250805").unwrap(),
+            styra_protocol::agent::Selection::parse("claude:claude-opus-4-1-20250805").unwrap(),
         );
         app.open_launcher();
 
@@ -246,7 +246,7 @@ mod tests {
     /// composed selection names the exact model rather than a moving alias.
     #[test]
     fn the_claude_column_offers_full_model_ids() {
-        let mut app = App::pending(styra_server::agent::Selection::parse("claude").unwrap());
+        let mut app = App::pending(styra_protocol::agent::Selection::parse("claude").unwrap());
         app.open_launcher();
         let screen = rendered(&app);
         for model in Provider::Claude.models() {

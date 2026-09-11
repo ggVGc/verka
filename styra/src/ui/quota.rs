@@ -3,7 +3,7 @@
 //!
 //! The readings come from the server, which reads them off every interaction's
 //! wire and keeps a trimmed log of them in its store (see
-//! `styra_server::quota`), so this view has something to show from the moment
+//! `styra_protocol::quota`), so this view has something to show from the moment
 //! a session is attached rather than only once a provider volunteers a figure.
 //! They are account-wide *per provider* rather than per-session, so this view
 //! shows every interaction's readings and names the provider, the session, and
@@ -17,8 +17,8 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
-use styra_server::agent::Provider;
-use styra_server::{QuotaEvent, QuotaStatus};
+use styra_protocol::agent::Provider;
+use styra_protocol::{QuotaEvent, QuotaStatus};
 
 const FOOTER_WARNING_THRESHOLD: f64 = 0.75;
 const FOOTER_ERROR_THRESHOLD: f64 = 0.90;
@@ -255,7 +255,7 @@ mod tests {
     use crate::app::View;
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
-    use styra_server::protocol::Provider;
+    use styra_protocol::protocol::Provider;
 
     fn rendered(app: &App) -> String {
         let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
@@ -374,7 +374,7 @@ mod tests {
         assert_eq!(app.log.iter().count(), 1);
         assert_eq!(
             app.log.newest().unwrap().level,
-            styra_server::LogLevel::Warn
+            styra_protocol::LogLevel::Warn
         );
     }
 
@@ -384,7 +384,7 @@ mod tests {
         app.note_quota(reading("five_hour", QuotaStatus::Exhausted, None));
         assert_eq!(
             app.log.newest().unwrap().level,
-            styra_server::LogLevel::Error
+            styra_protocol::LogLevel::Error
         );
         assert!(app.log.newest().unwrap().message.contains("exhausted"));
     }

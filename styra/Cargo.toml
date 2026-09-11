@@ -20,4 +20,5 @@ libc.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 styra-server.workspace = true
+styra-protocol.workspace = true
 unicode-width.workspace = true

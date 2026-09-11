@@ -155,7 +155,7 @@ impl References {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use styra_server::agent::SandboxLayout;
+    use styra_protocol::agent::SandboxLayout;
 
     /// A host directory holding `src/monitor.c`, standing in for a Workspace.
     fn tree(name: &str) -> PathBuf {

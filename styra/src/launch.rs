@@ -23,8 +23,8 @@
 use crate::activity::Status;
 use crate::app::{App, Request};
 use crate::mount;
-use styra_server::agent::Selection;
-use styra_server::{DrivaOptions, LaunchMount, LaunchPolicy, WorkspaceLaunchChange};
+use styra_protocol::agent::Selection;
+use styra_protocol::{DrivaOptions, LaunchMount, LaunchPolicy, WorkspaceLaunchChange};
 
 /// Which of the two policy layers the Driva view's keys are editing.
 ///

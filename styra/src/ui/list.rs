@@ -16,7 +16,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 use std::time::Duration;
-use styra_server::event::{AgentEvent, DetailBlock, PresentationMode, Protocol};
+use styra_protocol::event::{AgentEvent, DetailBlock, PresentationMode, Protocol};
 
 pub(crate) fn render_list(frame: &mut Frame, app: &App, area: Rect) {
     let area = if app.preview.open && app.view == View::Events {
@@ -973,7 +973,7 @@ mod tests {
 
         assert_eq!(list_offset_with_scrolloff(0, Some(2), &heights, 17), 1);
     }
-    use styra_server::event::TokenUsage;
+    use styra_protocol::event::TokenUsage;
 
     fn progress(in_status: Duration, since_event: Option<Duration>) -> Progress {
         Progress {
@@ -1043,9 +1043,9 @@ mod tests {
     fn a_typed_turn_shows_its_shape_rather_than_its_framing() {
         let mut app = testing::app("s1");
         app.push_event(AgentEvent::UserMessage {
-            text: styra_server::contract::frame(
+            text: styra_protocol::contract::frame(
                 "which files handle auth?",
-                styra_server::Contract::Files,
+                styra_protocol::Contract::Files,
             ),
         });
 
@@ -1061,7 +1061,7 @@ mod tests {
     fn a_branch_marker_names_the_session_it_links_to() {
         let mut app = testing::app("s1");
         app.push_event(AgentEvent::Branched {
-            direction: styra_server::event::BranchDirection::From,
+            direction: styra_protocol::event::BranchDirection::From,
             session: "styra-source".into(),
             name: Some("review".into()),
         });
@@ -1845,7 +1845,7 @@ mod tests {
     /// moment the choice is still open.
     #[test]
     fn the_start_screen_names_the_launch_and_how_to_change_it() {
-        let selection = styra_server::agent::Selection::parse("claude:opus/max").unwrap();
+        let selection = styra_protocol::agent::Selection::parse("claude:opus/max").unwrap();
         let app = App::pending(selection);
         let screen = rendered(&app);
         assert!(screen.contains("claude:opus/max"), "{screen}");
@@ -1855,7 +1855,7 @@ mod tests {
         // A launched session shows the plain waiting message instead: its agent
         // and model are settled, so there is nothing to offer choosing.
         let app = App::new(
-            styra_server::agent::Selection::parse("claude:opus/max").unwrap(),
+            styra_protocol::agent::Selection::parse("claude:opus/max").unwrap(),
             "s-1",
         );
         let screen = rendered(&app);

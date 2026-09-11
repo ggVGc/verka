@@ -10,7 +10,7 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragra
 use ratatui::Frame;
 
 use crate::session::{session_tree_depths, SessionOrder};
-use styra_server::{InteractionSummary, InteractionUpdate, SessionSummary, WorkspaceSummary};
+use styra_protocol::{InteractionSummary, InteractionUpdate, SessionSummary, WorkspaceSummary};
 
 /// Whether the picker has the selected session's conversation yet. Loading is
 /// a round-trip to the server, so "nothing to show" and "nothing yet" are
@@ -92,7 +92,7 @@ fn render_session_preview(
 fn render_session_log_preview(
     frame: &mut Frame,
     id: Option<&str>,
-    protocol: Option<styra_server::event::Protocol>,
+    protocol: Option<styra_protocol::event::Protocol>,
     preview: Preview<'_>,
     area: Rect,
 ) {
@@ -116,8 +116,8 @@ fn render_session_log_preview(
         .rev()
         .filter_map(|update| match update {
             InteractionUpdate::Event(
-                event @ (styra_server::event::AgentEvent::UserMessage { .. }
-                | styra_server::event::AgentEvent::AgentMessage { .. }),
+                event @ (styra_protocol::event::AgentEvent::UserMessage { .. }
+                | styra_protocol::event::AgentEvent::AgentMessage { .. }),
             ) => Some(event),
             _ => None,
         })
@@ -133,7 +133,7 @@ fn render_session_log_preview(
         .map(|event| {
             let tag = event.tag();
             let marker = match event {
-                styra_server::event::AgentEvent::UserMessage { .. } => "»",
+                styra_protocol::event::AgentEvent::UserMessage { .. } => "»",
                 _ => "«",
             };
             Line::from(vec![
@@ -148,7 +148,7 @@ fn render_session_log_preview(
                         .map(|protocol| {
                             protocol.presented_summary(
                                 event,
-                                styra_server::event::PresentationMode::Pretty,
+                                styra_protocol::event::PresentationMode::Pretty,
                             )
                         })
                         .unwrap_or_else(|| event.summary()),
@@ -405,7 +405,7 @@ fn preview_session_item(session: &SessionSummary, live: bool) -> ListItem<'stati
 /// changes the resulting policy.
 pub fn render_template_picker(
     frame: &mut Frame,
-    templates: &[styra_server::TemplateSummary],
+    templates: &[styra_protocol::TemplateSummary],
     chosen: &[String],
     cursor: usize,
 ) {
@@ -558,7 +558,7 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
     use std::path::PathBuf;
-    use styra_server::event::AgentEvent;
+    use styra_protocol::event::AgentEvent;
 
     fn picker_summary(id: &str, selection: &str, age: &str) -> SessionSummary {
         SessionSummary {
@@ -566,7 +566,7 @@ mod tests {
             name: None,
             workspace_id: "w-1".into(),
             path: std::path::PathBuf::from(id),
-            selection: styra_server::agent::Selection::parse(selection).unwrap(),
+            selection: styra_protocol::agent::Selection::parse(selection).unwrap(),
             age: age.into(),
             created_at_ms: None,
             last_event_at_ms: None,
@@ -629,11 +629,11 @@ mod tests {
     #[test]
     fn a_branched_session_stays_on_one_compact_row() {
         let mut session = picker_summary("s-2", "claude", "2m ago");
-        session.origin = Some(styra_server::SessionOrigin {
+        session.origin = Some(styra_protocol::SessionOrigin {
             session_id: "s-1".into(),
-            provider: styra_server::agent::Provider::Codex,
+            provider: styra_protocol::agent::Provider::Codex,
             at_ms: None,
-            history: styra_server::BranchHistory::ThroughSelected,
+            history: styra_protocol::BranchHistory::ThroughSelected,
         });
         let screen = rendered_picker(&[session], 0);
         assert!(screen.contains("claude"), "{screen}");
@@ -644,11 +644,11 @@ mod tests {
     fn session_picker_indents_branched_sessions_as_a_tree() {
         let root = picker_summary("root", "codex", "3m ago");
         let mut branch = picker_summary("branch", "codex", "2m ago");
-        branch.origin = Some(styra_server::SessionOrigin {
+        branch.origin = Some(styra_protocol::SessionOrigin {
             session_id: "root".into(),
-            provider: styra_server::agent::Provider::Codex,
+            provider: styra_protocol::agent::Provider::Codex,
             at_ms: Some(1000),
-            history: styra_server::BranchHistory::ThroughSelected,
+            history: styra_protocol::BranchHistory::ThroughSelected,
         });
         let mut sessions = vec![branch, root];
         crate::session::sort_sessions_tree(&mut sessions, SessionOrder::LastActivity);
@@ -857,9 +857,9 @@ mod tests {
             id: id.into(),
             name: None,
             workspace_id: "w-1".into(),
-            selection: styra_server::agent::Selection::parse(selection).unwrap(),
+            selection: styra_protocol::agent::Selection::parse(selection).unwrap(),
             workspace: std::path::PathBuf::from("/home/op/project"),
-            driva: styra_server::DrivaOptions {
+            driva: styra_protocol::DrivaOptions {
                 isolation_backend: "bwrap".into(),
                 command: vec![selection.into()],
                 working_directory: std::path::PathBuf::from("/tmp/styra/workspace"),
@@ -868,7 +868,7 @@ mod tests {
                 mounts: Vec::new(),
             },
             accepting,
-            activity: styra_server::InteractionActivity::Pending,
+            activity: styra_protocol::InteractionActivity::Pending,
             idle_unseen: false,
             last_message: None,
             events: 0,

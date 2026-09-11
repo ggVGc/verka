@@ -28,7 +28,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
-use styra_server::{AttributedMount, DrivaOptions, Mount, MountAccess, MountOrigin};
+use styra_protocol::{AttributedMount, DrivaOptions, Mount, MountAccess, MountOrigin};
 
 /// Rows the effective-policy summary keeps for itself before either settings
 /// pane is given any height. Enough for the banner and the fields that say what
@@ -409,7 +409,7 @@ fn interaction_lines(app: &App) -> Vec<Line<'static>> {
     if let Some(message) = app.timeline.entries.iter().rev().find_map(|entry| {
         matches!(
             entry.event,
-            styra_server::event::AgentEvent::AgentMessage { .. }
+            styra_protocol::event::AgentEvent::AgentMessage { .. }
         )
         .then(|| entry.event.summary())
     }) {
@@ -916,8 +916,8 @@ mod tests {
 
     #[test]
     fn details_view_shows_workspace_even_without_a_launch_policy() {
-        use styra_server::DrivaOptions;
-        use styra_server::{Mount, MountAccess};
+        use styra_protocol::DrivaOptions;
+        use styra_protocol::{Mount, MountAccess};
 
         let mut app = testing::app("s1");
         app.toggle_view(View::Driva);
@@ -955,7 +955,7 @@ mod tests {
     #[test]
     fn details_include_the_complete_server_workspace_snapshot() {
         let mut app = testing::pending_app();
-        let workspace = styra_server::WorkspaceSummary {
+        let workspace = styra_protocol::WorkspaceSummary {
             id: "w-42".into(),
             name: Some("payments".into()),
             host_path: "/work/payments".into(),
@@ -966,11 +966,11 @@ mod tests {
             age: "2h ago".into(),
             created_at_ms: 100,
             last_accessed_at_ms: 200,
-            launch: styra_server::LaunchPolicy {
+            launch: styra_protocol::LaunchPolicy {
                 network: Some(true),
                 writable_workspace: None,
                 templates: vec!["rust".into()],
-                mounts: vec![styra_server::LaunchMount::default()],
+                mounts: vec![styra_protocol::LaunchMount::default()],
                 ignore_workspace: false,
             },
         };
@@ -1007,10 +1007,10 @@ mod tests {
         app.workspace.id = Some("w-42".into());
         app.workspace.enter("/work/payments/api".into());
         app.outbox.replace_queued(vec![
-            styra_server::QueuedMessage::new("one"),
-            styra_server::QueuedMessage::new("two"),
+            styra_protocol::QueuedMessage::new("one"),
+            styra_protocol::QueuedMessage::new("two"),
         ]);
-        app.push_event(styra_server::event::AgentEvent::AgentMessage {
+        app.push_event(styra_protocol::event::AgentEvent::AgentMessage {
             text: "Implemented the change".into(),
         });
 
@@ -1086,7 +1086,7 @@ mod tests {
     /// named too — it crosses the boundary as surely as a path does.
     #[test]
     fn the_private_root_reads_as_the_capabilities_it_is_built_from() {
-        use styra_server::{BaseCapability, BaseEntry, DrivaOptions};
+        use styra_protocol::{BaseCapability, BaseEntry, DrivaOptions};
 
         let options = DrivaOptions {
             isolation_backend: "bwrap".into(),
@@ -1137,9 +1137,9 @@ mod tests {
 
     #[test]
     fn driva_view_marks_the_policy_a_not_yet_started_interaction_would_launch_under() {
-        use styra_server::DrivaOptions;
+        use styra_protocol::DrivaOptions;
 
-        let selection = styra_server::agent::Selection::parse("codex").unwrap();
+        let selection = styra_protocol::agent::Selection::parse("codex").unwrap();
         let mut app = App::new(selection.clone(), "s1");
         app.toggle_view(View::Driva);
         app.launch.plan(
@@ -1161,9 +1161,9 @@ mod tests {
     }
 
     fn editable_app() -> App {
-        use styra_server::DrivaOptions;
+        use styra_protocol::DrivaOptions;
 
-        let selection = styra_server::agent::Selection::parse("codex").unwrap();
+        let selection = styra_protocol::agent::Selection::parse("codex").unwrap();
         let mut app = App::pending(selection.clone());
         app.toggle_view(View::Driva);
         app.launch.plan(
@@ -1248,11 +1248,11 @@ mod tests {
     #[test]
     fn each_layer_is_shown_and_edited_in_its_own_pane() {
         let mut app = editable_app();
-        app.launch.set_workspace(styra_server::LaunchPolicy {
+        app.launch.set_workspace(styra_protocol::LaunchPolicy {
             network: Some(true),
             writable_workspace: None,
             templates: vec!["rust".into()],
-            mounts: vec![styra_server::LaunchMount {
+            mounts: vec![styra_protocol::LaunchMount {
                 source: PathBuf::from("/srv/corpus"),
                 destination: Some(PathBuf::from("/mnt/corpus")),
                 writable: false,
@@ -1304,7 +1304,7 @@ mod tests {
         let screen = tall(&app);
         assert!(screen.contains("off — not stated"), "{screen}");
 
-        app.launch.sync_workspace(styra_server::LaunchPolicy {
+        app.launch.sync_workspace(styra_protocol::LaunchPolicy {
             network: Some(true),
             ..Default::default()
         });
@@ -1321,9 +1321,9 @@ mod tests {
     #[test]
     fn ignore_workspace_is_a_row_of_this_interactions_pane_and_strikes_the_other_out() {
         let mut app = editable_app();
-        app.launch.set_workspace(styra_server::LaunchPolicy {
+        app.launch.set_workspace(styra_protocol::LaunchPolicy {
             templates: vec!["rust".into()],
-            ..styra_server::LaunchPolicy::default()
+            ..styra_protocol::LaunchPolicy::default()
         });
         let screen = tall(&app);
         assert!(screen.contains("the Workspace policy above"), "{screen}");
@@ -1359,11 +1359,11 @@ mod tests {
         crate::launch::toggle_scope(&mut app);
         let screen = tall(&app);
         assert!(screen.contains("read-write — not stated"), "{screen}");
-        app.launch.sync_workspace(styra_server::LaunchPolicy {
+        app.launch.sync_workspace(styra_protocol::LaunchPolicy {
             writable_workspace: Some(false),
             ..Default::default()
         });
-        app.launch.interaction = styra_server::LaunchPolicy::default();
+        app.launch.interaction = styra_protocol::LaunchPolicy::default();
         let screen = tall(&app);
         assert!(
             screen.contains("not stated — inherits read-only"),
@@ -1375,12 +1375,12 @@ mod tests {
     /// layer it came from, or `w` reads as a key with no effect.
     #[test]
     fn network_names_the_workspace_policy_when_that_is_where_the_answer_comes_from() {
-        use styra_server::DrivaOptions;
+        use styra_protocol::DrivaOptions;
 
         let mut app = editable_app();
-        app.launch.set_workspace(styra_server::LaunchPolicy {
+        app.launch.set_workspace(styra_protocol::LaunchPolicy {
             network: Some(true),
-            ..styra_server::LaunchPolicy::default()
+            ..styra_protocol::LaunchPolicy::default()
         });
         app.launch.plan(
             app.selection.clone(),
@@ -1424,7 +1424,7 @@ mod tests {
     /// that "on" comes from, otherwise `w` looks like a key that does nothing.
     #[test]
     fn network_names_the_profile_when_it_permits_what_the_operator_did_not() {
-        use styra_server::DrivaOptions;
+        use styra_protocol::DrivaOptions;
 
         let mut app = editable_app();
         // The server's answer for a profile that permits networking on its own.
@@ -1455,7 +1455,7 @@ mod tests {
     /// their keys are drawn over it.
     #[test]
     fn a_live_launch_policy_offers_no_editing() {
-        use styra_server::DrivaOptions;
+        use styra_protocol::DrivaOptions;
 
         let mut app = testing::app("s1");
         app.toggle_view(View::Driva);
@@ -1477,7 +1477,7 @@ mod tests {
     #[test]
     fn a_stopped_interactions_launch_policy_can_be_edited_again() {
         use crate::activity::Status;
-        use styra_server::DrivaOptions;
+        use styra_protocol::DrivaOptions;
 
         let mut app = testing::app("s1");
         app.toggle_view(View::Driva);

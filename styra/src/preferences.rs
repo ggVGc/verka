@@ -12,7 +12,7 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use styra_server::agent::{validate_selection, Provider, Selection};
+use styra_protocol::agent::{validate_selection, Provider, Selection};
 
 use crate::app::LaunchPolicy;
 
@@ -190,7 +190,7 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use styra_server::agent::Effort;
+    use styra_protocol::agent::Effort;
 
     fn temp_path(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("styra-preferences-{}-{name}", std::process::id()))
@@ -236,7 +236,7 @@ mod tests {
                 network: Some(true),
                 writable_workspace: None,
                 templates: vec!["rust".into()],
-                mounts: vec![styra_server::LaunchMount {
+                mounts: vec![styra_protocol::LaunchMount {
                     source: PathBuf::from("/srv/data"),
                     destination: None,
                     writable: false,

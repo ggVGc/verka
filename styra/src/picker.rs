@@ -5,7 +5,8 @@ use ratatui::Terminal;
 use std::io::Stdout;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use styra_server::{Client, InteractionSummary, InteractionUpdate, LogEntry, WorkspaceSummary};
+use styra_server::Client;
+use styra_protocol::{InteractionSummary, InteractionUpdate, LogEntry, WorkspaceSummary};
 
 use crate::launch::LaunchScope;
 use crate::session::{is_recent_session, session_tree_depths, sort_sessions_tree, SessionOrder};
@@ -39,7 +40,7 @@ pub enum WorkspaceChoice {
 pub fn run_session_picker(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     client: &Client,
-    sessions: &mut [styra_server::SessionSummary],
+    sessions: &mut [styra_protocol::SessionSummary],
     current_id: Option<&str>,
 ) -> Result<Option<String>> {
     let mut order = SessionOrder::LastActivity;
@@ -84,7 +85,7 @@ pub fn run_session_picker(
                                     .filter(|event| {
                                         !matches!(
                                             event,
-                                            styra_server::event::AgentEvent::Unknown { .. }
+                                            styra_protocol::event::AgentEvent::Unknown { .. }
                                         )
                                     })
                                     .map(InteractionUpdate::Event),
@@ -210,11 +211,11 @@ pub fn run_session_picker(
 }
 
 fn picker_sessions(
-    sessions: &[styra_server::SessionSummary],
+    sessions: &[styra_protocol::SessionSummary],
     showing_all: bool,
     now_ms: u64,
     order: SessionOrder,
-) -> Vec<styra_server::SessionSummary> {
+) -> Vec<styra_protocol::SessionSummary> {
     let mut displayed = sessions
         .iter()
         .filter(|session| showing_all || is_recent_session(session, now_ms))
@@ -235,7 +236,7 @@ fn unix_now_ms() -> u64 {
 /// beneath the current root. This is the session tree's coarse navigation;
 /// j/k remain the way to walk individual branches.
 fn next_top_level_session(
-    sessions: &[styra_server::SessionSummary],
+    sessions: &[styra_protocol::SessionSummary],
     selected: usize,
 ) -> Option<usize> {
     session_tree_depths(sessions)
@@ -247,7 +248,7 @@ fn next_top_level_session(
 /// The root conversation above `selected`. From inside a branch this lands on
 /// its root first, then a subsequent K moves to the preceding root.
 fn previous_top_level_session(
-    sessions: &[styra_server::SessionSummary],
+    sessions: &[styra_protocol::SessionSummary],
     selected: usize,
 ) -> Option<usize> {
     session_tree_depths(sessions)
@@ -258,7 +259,7 @@ fn previous_top_level_session(
 }
 
 fn initial_session_selection(
-    sessions: &[styra_server::SessionSummary],
+    sessions: &[styra_protocol::SessionSummary],
     current_id: Option<&str>,
 ) -> usize {
     current_id
@@ -271,7 +272,7 @@ fn initial_session_selection(
 /// conversion) is seen rather than lost.
 fn show_message(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
-    sessions: &[styra_server::SessionSummary],
+    sessions: &[styra_protocol::SessionSummary],
     selected: usize,
     order: SessionOrder,
     title: &str,
@@ -292,7 +293,7 @@ fn show_message(
 
 fn read_session_name(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
-    sessions: &[styra_server::SessionSummary],
+    sessions: &[styra_protocol::SessionSummary],
     selected: usize,
     order: SessionOrder,
     initial: &str,
@@ -344,7 +345,7 @@ pub fn run_workspace_picker(
     // picker's conversation preview: a blocking round-trip, so holding `j`
     // must not queue one load per row it passes over.
     let mut preview_id = String::new();
-    let mut preview_sessions: Vec<styra_server::SessionSummary> = Vec::new();
+    let mut preview_sessions: Vec<styra_protocol::SessionSummary> = Vec::new();
     let mut settle_from: Option<Instant> = None;
     loop {
         if let Some(workspace) = workspaces.get(selected) {
@@ -409,7 +410,7 @@ pub struct TemplatePicker {
     pub request_id: u64,
     pub workspace_id: String,
     pub scope: LaunchScope,
-    pub templates: Option<Vec<styra_server::TemplateSummary>>,
+    pub templates: Option<Vec<styra_protocol::TemplateSummary>>,
     initial: Vec<String>,
     pub chosen: Vec<String>,
     pub cursor: usize,
@@ -433,7 +434,7 @@ impl TemplatePicker {
         }
     }
 
-    pub fn loaded(&mut self, templates: Vec<styra_server::TemplateSummary>) {
+    pub fn loaded(&mut self, templates: Vec<styra_protocol::TemplateSummary>) {
         self.chosen
             .retain(|name| templates.iter().any(|template| &template.name == name));
         self.initial.clone_from(&self.chosen);
@@ -517,7 +518,7 @@ fn has_live_interaction(workspace: &WorkspaceSummary, interactions: &[Interactio
 mod tests {
     use super::*;
     use std::path::PathBuf;
-    use styra_server::{agent::Selection, DrivaOptions, InteractionActivity, SessionSummary};
+    use styra_protocol::{agent::Selection, DrivaOptions, InteractionActivity, SessionSummary};
 
     fn session(id: &str) -> SessionSummary {
         SessionSummary {
@@ -586,8 +587,8 @@ mod tests {
         }
     }
 
-    fn template(name: &str) -> styra_server::TemplateSummary {
-        styra_server::TemplateSummary {
+    fn template(name: &str) -> styra_protocol::TemplateSummary {
+        styra_protocol::TemplateSummary {
             name: name.into(),
             description: String::new(),
         }
@@ -658,11 +659,11 @@ mod tests {
     fn capital_j_and_k_jump_between_root_conversations() {
         let root = session("root");
         let mut branch = session("branch");
-        branch.origin = Some(styra_server::SessionOrigin {
+        branch.origin = Some(styra_protocol::SessionOrigin {
             session_id: "root".into(),
-            provider: styra_server::agent::Provider::Codex,
+            provider: styra_protocol::agent::Provider::Codex,
             at_ms: Some(1),
-            history: styra_server::BranchHistory::ThroughSelected,
+            history: styra_protocol::BranchHistory::ThroughSelected,
         });
         let other_root = session("other-root");
         let sessions = vec![root, branch, other_root];

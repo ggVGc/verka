@@ -16,7 +16,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
-use styra_server::{Answer, AnswerValue, FileLocation};
+use styra_protocol::{Answer, AnswerValue, FileLocation};
 
 pub(crate) fn render_answer(frame: &mut Frame, app: &App, area: Rect) {
     let block = view_block(app, Some(&title(app)));
@@ -164,8 +164,8 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
     use std::path::PathBuf;
-    use styra_server::agent::{Provider, Selection};
-    use styra_server::Contract;
+    use styra_protocol::agent::{Provider, Selection};
+    use styra_protocol::Contract;
 
     fn app_showing(answer: Answer) -> App {
         let mut app = App::new(Selection::new(Provider::Codex), "s-1");

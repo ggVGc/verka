@@ -1,7 +1,9 @@
 //! Styra's Unix-socket server and server-owned interaction manager.
 
 use crate::agent::{MountSpec, SandboxLayout, Selection};
-use crate::interaction::{Interaction, InteractionSpec, ResolvedTemplate, SandboxBroker};
+use crate::interaction::{
+    capture_driva_options, Interaction, InteractionSpec, ResolvedTemplate, SandboxBroker,
+};
 use crate::journal::{self, Journal};
 use crate::protocol::WorkspaceSummary;
 use crate::protocol::{
@@ -12,8 +14,8 @@ use crate::protocol::{
 use crate::protocol::{
     CreateSession, CreateWorkspace, Health, LoadedInteraction, Request, Response, ResumeSession,
     SequencedUpdate, SessionInfo, ShellInfo, StoredSession, Updates, WireResponse,
-    MAX_REQUEST_BYTES,
 };
+use crate::transport::MAX_REQUEST_BYTES;
 use anyhow::{Context, Result};
 use std::collections::{HashMap, HashSet};
 use std::io::BufReader;
@@ -712,7 +714,7 @@ impl ServerState {
             template,
             broker: Some(self.prepare_broker(&id, tmux)?),
         };
-        let driva = DrivaOptions::capture(&spec, "bwrap")?;
+        let driva = capture_driva_options(&spec, "bwrap")?;
         let prepared_broker = spec.broker.as_ref().expect("broker was prepared");
         let shell = ShellInfo {
             tmux: prepared_broker.tmux.clone(),
@@ -1007,7 +1009,7 @@ impl ServerState {
             template,
             broker: Some(self.describe_broker(PENDING_SESSION_ID, tmux)),
         };
-        let options = DrivaOptions::capture(&spec, "bwrap")?;
+        let options = capture_driva_options(&spec, "bwrap")?;
         // Planning is also where a policy gets checked: an operator editing
         // mounts before launch learns that two of them collide now, from the
         // view they are editing, rather than from a failed launch later.
@@ -1109,7 +1111,7 @@ impl ServerState {
             template,
             broker: Some(self.prepare_broker(&request.id, tmux)?),
         };
-        let driva = DrivaOptions::capture(&spec, "bwrap")?;
+        let driva = capture_driva_options(&spec, "bwrap")?;
         let prepared_broker = spec.broker.as_ref().expect("broker was prepared");
         let shell = ShellInfo {
             tmux: prepared_broker.tmux.clone(),
@@ -2454,7 +2456,7 @@ pub fn serve(listener: UnixListener, state: ServerState) -> Result<()> {
 }
 
 fn serve_connection(mut stream: UnixStream, state: &ServerState) -> Result<()> {
-    let wire = match crate::protocol::read_message_limited(
+    let wire = match crate::transport::read_message_limited(
         &mut BufReader::new(&stream),
         MAX_REQUEST_BYTES,
     )
@@ -2465,7 +2467,7 @@ fn serve_connection(mut stream: UnixStream, state: &ServerState) -> Result<()> {
             error: format!("{error:#}"),
         },
     };
-    crate::protocol::write_message(&mut stream, &wire).context("writing the Styra response")?;
+    crate::transport::write_message(&mut stream, &wire).context("writing the Styra response")?;
     // The ack is on its way to the client; only now is it safe to exit.
     state.shutdown_if_requested();
     Ok(())
@@ -2474,9 +2476,9 @@ fn serve_connection(mut stream: UnixStream, state: &ServerState) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::client::Client;
     use crate::protocol::{AttributedMount, MountOrigin};
     use driva::{Mount, MountAccess};
+    use crate::client::Client;
 
     fn temp_path(tag: &str) -> PathBuf {
         std::env::temp_dir().join(format!("styra-server-{tag}-{}.sock", std::process::id(),))
@@ -2799,7 +2801,7 @@ mod tests {
 
         let lock_path = root.join("test.lock");
         let lock = std::fs::File::create(lock_path).unwrap();
-        let client = Client::in_process(ServerState::in_process(store.clone(), lock));
+        let client = crate::daemon::in_process_client(ServerState::in_process(store.clone(), lock));
         assert!(client.socket_path().is_none());
         assert_eq!(client.health().unwrap().service, "styra");
 

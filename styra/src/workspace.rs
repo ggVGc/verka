@@ -14,7 +14,7 @@
 
 use std::path::{Path, PathBuf};
 
-use styra_server::WorkspaceSummary;
+use styra_protocol::WorkspaceSummary;
 
 /// The Workspace the screen is showing: how it is identified, and where it is.
 #[derive(Default)]

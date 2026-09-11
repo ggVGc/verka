@@ -5,7 +5,7 @@
 //! picker as `launcher`, [`crate::keys::handle_launcher_key`] drives it, and
 //! [`crate::ui::launcher`] draws it.
 
-use styra_server::agent::{Provider, Selection, PROVIDERS};
+use styra_protocol::agent::{Provider, Selection, PROVIDERS};
 
 /// Which of the launch picker's three columns has the keys.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -220,7 +220,7 @@ impl Launcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use styra_server::agent::Effort;
+    use styra_protocol::agent::Effort;
 
     /// With no row standing for "whatever the agent is configured for", every
     /// row of every column is a concrete choice — so whatever the picker is

@@ -8,7 +8,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
 use ratatui::Frame;
-use styra_server::InteractionSummary;
+use styra_protocol::InteractionSummary;
 
 pub(crate) fn height(app: &App, available: u16) -> u16 {
     let rows = rows(app);
@@ -181,7 +181,7 @@ fn item(
         ));
     }
     if interaction.accepting
-        && interaction.activity == styra_server::InteractionActivity::Pending
+        && interaction.activity == styra_protocol::InteractionActivity::Pending
         && interaction.idle_unseen
     {
         main.push(Span::styled(
@@ -221,8 +221,8 @@ mod tests {
     use super::*;
     use crate::ui::testing;
     use std::path::PathBuf;
-    use styra_server::event::AgentEvent;
-    use styra_server::{DrivaOptions, InteractionActivity};
+    use styra_protocol::event::AgentEvent;
+    use styra_protocol::{DrivaOptions, InteractionActivity};
 
     fn interaction(id: &str, name: &str) -> InteractionSummary {
         InteractionSummary {
@@ -230,7 +230,7 @@ mod tests {
             id: id.into(),
             name: Some(name.into()),
             workspace_id: "payments".into(),
-            selection: styra_server::agent::Selection::parse("codex").unwrap(),
+            selection: styra_protocol::agent::Selection::parse("codex").unwrap(),
             workspace: PathBuf::from("/workspace"),
             driva: DrivaOptions {
                 isolation_backend: "none".into(),

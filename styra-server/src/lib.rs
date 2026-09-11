@@ -92,8 +92,11 @@ pub mod git;
 pub mod paths;
 pub mod protocol;
 pub mod spawn;
+// The JSONL framing both peers carry protocol values over. It belongs to the
+// transport, not to the vocabulary, so it lives here rather than in
+// `styra-protocol`.
+pub mod transport;
 
-pub use client::Client;
 pub use daemon::{in_process, run, serve_if_requested, ServerConfig};
 pub use protocol::WorkspaceLaunchChange;
 pub use protocol::{
@@ -103,6 +106,7 @@ pub use protocol::{
     MountOrigin, ProviderRaw, QueuedMessage, QuotaEvent, QuotaStatus, RawLine, SessionOrigin,
     SessionSummary, TemplateSummary, WorkspaceSummary,
 };
+pub use client::{Client, InProcessServer};
 pub use spawn::ensure_server;
 
 // --- The session runner ---

@@ -19,8 +19,9 @@ use crate::picker;
 use crate::preferences;
 use crate::session::{self, Attachment};
 use crate::ui;
-use styra_server::{
-    Client, InteractionSummary, LogEntry, TemplateSummary, WorkspaceLaunchChange, WorkspaceSummary,
+use styra_server::Client;
+use styra_protocol::{
+    InteractionSummary, LogEntry, TemplateSummary, WorkspaceLaunchChange, WorkspaceSummary,
 };
 
 /// What the interactive loop returned control to `main` for.
@@ -426,7 +427,7 @@ pub fn run(
                 }
                 Err(error) => {
                     app.push_log(LogEntry::error(format!("update poll failed: {error:#}")));
-                    app.on_ended(styra_server::InteractionEnd {
+                    app.on_ended(styra_protocol::InteractionEnd {
                         exit_code: None,
                         error: Some(error.to_string()),
                     });
@@ -962,8 +963,9 @@ mod tests {
     #[test]
     fn workspace_acknowledgement_updates_the_snapshot_and_clears_pending() {
         let (effects, results) = effects_for_test();
-        let mut app =
-            App::pending(styra_server::agent::Selection::parse("codex:gpt-5.6-sol/high").unwrap());
+        let mut app = App::pending(
+            styra_protocol::agent::Selection::parse("codex:gpt-5.6-sol/high").unwrap(),
+        );
         app.workspace_launch_pending = 1;
         let policy = LaunchPolicy {
             templates: vec!["rust".into()],
@@ -990,8 +992,9 @@ mod tests {
     #[test]
     fn workspace_edit_failure_is_visible_without_opening_the_log() {
         let (effects, results) = effects_for_test();
-        let mut app =
-            App::pending(styra_server::agent::Selection::parse("codex:gpt-5.6-sol/high").unwrap());
+        let mut app = App::pending(
+            styra_protocol::agent::Selection::parse("codex:gpt-5.6-sol/high").unwrap(),
+        );
         app.workspace_launch_pending = 1;
         results
             .send(LaunchEffectResult::WorkspaceChanged {

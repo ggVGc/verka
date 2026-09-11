@@ -12,7 +12,7 @@
 //! operator can re-read it under another shape. [`crate::ui::answer`] renders
 //! it.
 
-use styra_server::{Answer, AnswerValue, FileLocation};
+use styra_protocol::{Answer, AnswerValue, FileLocation};
 
 /// The fetched answer and where the operator is in it.
 #[derive(Default)]
@@ -124,7 +124,7 @@ mod tests {
 
     fn answer(value: Option<AnswerValue>) -> Answer {
         Answer {
-            contract: styra_server::Contract::Lines,
+            contract: styra_protocol::Contract::Lines,
             value,
             error: None,
             source: "the reply as it came".into(),

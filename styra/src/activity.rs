@@ -11,7 +11,7 @@
 
 use std::time::{Duration, Instant};
 
-use styra_server::event::TokenUsage;
+use styra_protocol::event::TokenUsage;
 
 /// The session's lifecycle as the operator sees it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -78,12 +78,12 @@ impl Status {
     }
 }
 
-impl From<styra_server::InteractionActivity> for Status {
-    fn from(activity: styra_server::InteractionActivity) -> Self {
+impl From<styra_protocol::InteractionActivity> for Status {
+    fn from(activity: styra_protocol::InteractionActivity) -> Self {
         match activity {
-            styra_server::InteractionActivity::Pending => Self::Idle,
-            styra_server::InteractionActivity::Running => Self::Running,
-            styra_server::InteractionActivity::Background => Self::Background,
+            styra_protocol::InteractionActivity::Pending => Self::Idle,
+            styra_protocol::InteractionActivity::Running => Self::Running,
+            styra_protocol::InteractionActivity::Background => Self::Background,
         }
     }
 }

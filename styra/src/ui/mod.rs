@@ -409,7 +409,7 @@ pub fn render(frame: &mut Frame, app: &App) {
 mod tests {
     use super::testing::{self, rendered};
     use super::*;
-    use styra_server::event::{AgentEvent, TokenUsage};
+    use styra_protocol::event::{AgentEvent, TokenUsage};
 
     #[test]
     fn token_counts_read_as_k_and_m_past_a_thousand() {

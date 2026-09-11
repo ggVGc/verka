@@ -12,8 +12,8 @@
 //! joins the two.
 
 use std::cell::Cell;
-use styra_server::event::{AgentEvent, DetailBlock};
-use styra_server::Contract;
+use styra_protocol::event::{AgentEvent, DetailBlock};
+use styra_protocol::Contract;
 
 /// One event in the list, with its fold state.
 #[derive(Clone, Debug, PartialEq)]

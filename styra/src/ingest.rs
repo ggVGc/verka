@@ -9,11 +9,11 @@
 use crate::activity::Status;
 use crate::app::App;
 use crate::timeline::{Entry, Step};
-use styra_server::agent::Effort;
-use styra_server::contract;
-use styra_server::event::{AgentEvent, TokenUsage};
-use styra_server::Contract;
-use styra_server::InteractionEnd;
+use styra_protocol::agent::Effort;
+use styra_protocol::contract;
+use styra_protocol::event::{AgentEvent, TokenUsage};
+use styra_protocol::Contract;
+use styra_protocol::InteractionEnd;
 
 /// Append a decoded event, advancing status and, while following, selection.
 pub fn push_event(app: &mut App, event: AgentEvent) {

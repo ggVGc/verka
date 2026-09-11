@@ -1,11 +1,6 @@
 //! Blocking client for Styra's JSON protocol.
 //!
-//! Every call goes through one [`Client::request`], so the same client serves
-//! two transports: the ordinary one, a JSON exchange over a Unix domain socket
-//! with the daemon; and the standalone one, a direct call into a
-//! [`ServerState`] this very process owns. Standalone trades the daemon's
-//! survival across client exits for needing no socket, no spawn and no
-//! serialization — the server *is* the client.
+//! Every call is a JSON exchange over a Unix domain socket with the daemon.
 
 use crate::protocol::{
     Answer, Contract, CreateSession, CreateWorkspace, DrivaOptions, Health, LaunchPolicy,
@@ -18,22 +13,23 @@ use anyhow::{bail, Context, Result};
 use std::io::BufReader;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+
+/// Server-side adapter for a client that shares its process with the server.
+pub trait InProcessServer: Send + Sync {
+    fn handle(&self, request: Request) -> Result<Response>;
+    fn shutdown(&self) -> Result<()>;
+}
 
 #[derive(Clone)]
 pub struct Client {
     transport: Transport,
 }
 
-/// How a [`Client`] reaches the server.
 #[derive(Clone)]
 enum Transport {
-    /// A daemon listening on this socket, reached with one connection per
-    /// request.
     Socket(PathBuf),
-    /// A server owned by this process, called directly. Every cloned client
-    /// shares the slot so shutdown can take the server away from all of them.
-    InProcess(Arc<RwLock<Option<crate::server::ServerState>>>),
+    InProcess(Arc<dyn InProcessServer>),
 }
 
 impl Client {
@@ -43,17 +39,14 @@ impl Client {
         }
     }
 
-    /// A client onto a server running in this process. Nothing is serialized
-    /// and no socket exists, so the server's live interactions end when this
-    /// process does. See [`crate::daemon::in_process`].
-    pub(crate) fn in_process(state: crate::server::ServerState) -> Self {
+    /// Build a client attached directly to an in-process server.
+    pub fn in_process(server: Arc<dyn InProcessServer>) -> Self {
         Self {
-            transport: Transport::InProcess(Arc::new(RwLock::new(Some(state)))),
+            transport: Transport::InProcess(server),
         }
     }
 
-    /// The socket this client speaks over, or `None` when the server runs in
-    /// this process.
+    /// The socket this client speaks over, if any.
     pub fn socket_path(&self) -> Option<&Path> {
         match &self.transport {
             Transport::Socket(socket) => Some(socket),
@@ -476,54 +469,31 @@ impl Client {
         }
     }
 
-    /// Ask the server to shut down. A daemon acknowledges before exiting. An
-    /// in-process server is removed from every clone of this client and dropped
-    /// here, which gracefully ends its interactions and releases its store
-    /// lock before this method returns.
+    /// Ask the server to shut down.
     pub fn shutdown(&self) -> Result<()> {
         match &self.transport {
             Transport::Socket(_) => match self.request(Request::Shutdown)? {
                 Response::Accepted => Ok(()),
                 other => unexpected("accepted", other),
             },
-            Transport::InProcess(server) => {
-                let state = {
-                    let mut slot = server
-                        .write()
-                        .map_err(|_| anyhow::anyhow!("in-process Styra server lock poisoned"))?;
-                    slot.take()
-                        .context("the in-process Styra server is already shut down")?
-                };
-                drop(state);
-                Ok(())
-            }
+            Transport::InProcess(server) => server.shutdown(),
         }
     }
 
     fn request(&self, request: Request) -> Result<Response> {
         match &self.transport {
             Transport::Socket(socket) => Self::request_over_socket(socket, request),
-            // The in-process server's error is the caller's error already, so
-            // it travels whole rather than being flattened into a wire string.
-            Transport::InProcess(server) => {
-                let slot = server
-                    .read()
-                    .map_err(|_| anyhow::anyhow!("in-process Styra server lock poisoned"))?;
-                let state = slot
-                    .as_ref()
-                    .context("the in-process Styra server is shut down")?;
-                state.handle(request)
-            }
+            Transport::InProcess(server) => server.handle(request),
         }
     }
 
     fn request_over_socket(socket: &Path, request: Request) -> Result<Response> {
         let mut stream = UnixStream::connect(socket)
             .with_context(|| format!("connecting to Styra socket {}", socket.display()))?;
-        crate::protocol::write_message(&mut stream, &request)
+        crate::transport::write_message(&mut stream, &request)
             .context("writing the Styra request")?;
 
-        let response = crate::protocol::read_message(&mut BufReader::new(stream))
+        let response = crate::transport::read_message(&mut BufReader::new(stream))
             .context("reading the Styra response")?;
         match response {
             WireResponse::Ok { response } => Ok(response),

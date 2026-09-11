@@ -11,7 +11,7 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::Frame;
-use styra_server::Direction as WireDirection;
+use styra_protocol::Direction as WireDirection;
 
 pub(crate) fn render_raw(frame: &mut Frame, app: &App, area: Rect) {
     if app.provider_raw_open {
@@ -194,7 +194,7 @@ fn provider_raw_line(text: &str, selected: bool) -> Line<'static> {
     Line::from(spans)
 }
 
-fn raw_line(line: &styra_server::RawLine, selected: bool) -> Line<'static> {
+fn raw_line(line: &styra_protocol::RawLine, selected: bool) -> Line<'static> {
     let (marker, marker_color) = match line.direction {
         WireDirection::ToAgent => ("» ", palette::ACCENT),
         WireDirection::FromAgent => ("« ", palette::SUCCESS),
@@ -407,7 +407,7 @@ mod tests {
 
     #[test]
     fn raw_view_shows_wire_lines_with_direction_markers() {
-        use styra_server::{Direction, RawLine};
+        use styra_protocol::{Direction, RawLine};
         let mut app = testing::app("s1");
         app.raw.push(RawLine {
             at_ms: 0,
@@ -453,7 +453,7 @@ mod tests {
 
     #[test]
     fn long_raw_lines_are_truncated_in_the_list_but_shown_in_full_in_the_preview() {
-        use styra_server::{Direction, RawLine};
+        use styra_protocol::{Direction, RawLine};
         let mut app = testing::app("s1");
         app.raw.push(RawLine {
             at_ms: 0,
@@ -477,7 +477,7 @@ mod tests {
 
     #[test]
     fn raw_rows_lead_with_the_entrys_protocol_name_and_drop_the_envelope() {
-        use styra_server::{Direction, RawLine};
+        use styra_protocol::{Direction, RawLine};
         let codex = RawLine {
             at_ms: 0,
             direction: Direction::FromAgent,
@@ -499,7 +499,7 @@ mod tests {
 
     #[test]
     fn an_untagged_raw_line_still_shows_its_own_text() {
-        use styra_server::{Direction, RawLine};
+        use styra_protocol::{Direction, RawLine};
         let line = RawLine {
             at_ms: 0,
             direction: Direction::FromAgent,
@@ -511,7 +511,7 @@ mod tests {
 
     #[test]
     fn raw_preview_pretty_prints_and_highlights_the_selected_line() {
-        use styra_server::{Direction, RawLine};
+        use styra_protocol::{Direction, RawLine};
         let mut app = testing::app("s1");
         app.raw.push(RawLine {
             at_ms: 0,
@@ -528,7 +528,7 @@ mod tests {
 
     #[test]
     fn raw_view_navigates_and_previews_the_selected_line() {
-        use styra_server::{Direction, RawLine};
+        use styra_protocol::{Direction, RawLine};
         let mut app = testing::app("s1");
         app.raw.push(RawLine {
             at_ms: 0,
@@ -551,7 +551,7 @@ mod tests {
 
     #[test]
     fn the_selected_raw_lines_text_is_yellow() {
-        use styra_server::{Direction, RawLine};
+        use styra_protocol::{Direction, RawLine};
         let line = RawLine {
             at_ms: 0,
             direction: Direction::FromAgent,

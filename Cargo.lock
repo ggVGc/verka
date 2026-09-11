@@ -1889,9 +1889,21 @@ dependencies = [
  "ratatui",
  "serde",
  "serde_json",
+ "styra-protocol",
  "styra-server",
  "tui-markdown",
  "unicode-width",
+]
+
+[[package]]
+name = "styra-protocol"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "driva",
+ "genta",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1905,6 +1917,7 @@ dependencies = [
  "libc",
  "serde",
  "serde_json",
+ "styra-protocol",
  "time",
  "uuid",
 ]

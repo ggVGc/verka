@@ -133,20 +133,21 @@ impl ResolvedTemplate {
 /// running it. This fills the [`DrivaOptions`] the server reports for a live
 /// interaction, taken from the same [`ExecutionRequest`] Driva executes, so it can
 /// never drift from what is actually running.
-impl DrivaOptions {
-    /// Fails only if the host's own system runtime cannot be inspected, which
-    /// is the same thing that would stop the launch itself.
-    pub fn capture(spec: &InteractionSpec, isolation_backend: impl Into<String>) -> Result<Self> {
-        let request = build_request(spec);
-        Ok(Self {
-            isolation_backend: isolation_backend.into(),
-            command: spec.profile.command.clone(),
-            working_directory: request.working_directory,
-            network: request.network,
-            mounts: attributed_mounts(spec),
-            base: captured_base(&spec.base)?,
-        })
-    }
+/// Fails only if the host's own system runtime cannot be inspected, which is
+/// the same thing that would stop the launch itself.
+pub fn capture_driva_options(
+    spec: &InteractionSpec,
+    isolation_backend: impl Into<String>,
+) -> Result<DrivaOptions> {
+    let request = build_request(spec);
+    Ok(DrivaOptions {
+        isolation_backend: isolation_backend.into(),
+        command: spec.profile.command.clone(),
+        working_directory: request.working_directory,
+        network: request.network,
+        mounts: attributed_mounts(spec),
+        base: captured_base(&spec.base)?,
+    })
 }
 
 /// A running agent interaction. Dropping it closes the agent's stdin, which ends most
@@ -1051,7 +1052,7 @@ mod tests {
         .unwrap();
         spec.profile.mounts.clear();
 
-        let command = DrivaOptions::capture(&spec, "bwrap").unwrap().command;
+        let command = capture_driva_options(&spec, "bwrap").unwrap().command;
         assert_eq!(spec.profile.name, "codex:gpt-5.6-terra/xhigh");
         assert!(
             command.contains(&r#"model="gpt-5.6-terra""#.to_string()),
@@ -1083,7 +1084,7 @@ mod tests {
             socket: PathBuf::from("/tmp/styra/control/tmux.sock"),
         });
 
-        let displayed = DrivaOptions::capture(&spec, "bwrap").unwrap();
+        let displayed = capture_driva_options(&spec, "bwrap").unwrap();
         let request = build_request(&spec);
         assert_eq!(displayed.command, agent_command);
         assert_eq!(
@@ -1293,7 +1294,7 @@ mod tests {
             },
         ];
 
-        let options = DrivaOptions::capture(&spec, "bwrap").unwrap();
+        let options = capture_driva_options(&spec, "bwrap").unwrap();
         assert!(options.mounts.iter().any(|mount| matches!(
             mount,
             AttributedMount {
@@ -1324,7 +1325,7 @@ mod tests {
             writable: false,
         }];
 
-        let options = DrivaOptions::capture(&spec, "bwrap").unwrap();
+        let options = capture_driva_options(&spec, "bwrap").unwrap();
         let at_workspace: Vec<_> = options
             .mounts
             .iter()
@@ -1360,7 +1361,7 @@ mod tests {
             writable: true,
         }];
 
-        let options = DrivaOptions::capture(&spec, "bwrap").unwrap();
+        let options = capture_driva_options(&spec, "bwrap").unwrap();
         assert_eq!(
             options
                 .mounts
@@ -1384,7 +1385,7 @@ mod tests {
             writable: false,
         }];
 
-        let options = DrivaOptions::capture(&spec, "bwrap").unwrap();
+        let options = capture_driva_options(&spec, "bwrap").unwrap();
         assert_eq!(
             options
                 .mounts
@@ -1400,7 +1401,7 @@ mod tests {
         let dir = PathBuf::from("/tmp/styra/workspace");
         let spec = workspace_spec(&dir);
         let command = spec.profile.command.clone();
-        let options = DrivaOptions::capture(&spec, "bwrap").unwrap();
+        let options = capture_driva_options(&spec, "bwrap").unwrap();
 
         assert_eq!(options.isolation_backend, "bwrap");
         assert_eq!(options.command, command);
@@ -1429,7 +1430,7 @@ mod tests {
             writable: false,
         }];
 
-        let options = DrivaOptions::capture(&spec, "bwrap").unwrap();
+        let options = capture_driva_options(&spec, "bwrap").unwrap();
 
         assert!(options.mounts.iter().any(|attributed| matches!(
             attributed,
@@ -1451,7 +1452,7 @@ mod tests {
     #[test]
     fn the_captured_policy_states_the_base_it_runs_on() {
         let dir = PathBuf::from("/tmp/styra/workspace");
-        let options = DrivaOptions::capture(&workspace_spec(&dir), "bwrap").unwrap();
+        let options = capture_driva_options(&workspace_spec(&dir), "bwrap").unwrap();
 
         let names: Vec<&str> = options
             .base
@@ -1480,11 +1481,11 @@ mod tests {
         spec.base
             .include
             .retain(|name| *name == driva::Capability::Core);
-        let before = DrivaOptions::capture(&spec, "bwrap").unwrap();
+        let before = capture_driva_options(&spec, "bwrap").unwrap();
         assert_eq!(before.base.len(), 1);
 
         spec.base.include(driva::Capability::Timezone);
-        let after = DrivaOptions::capture(&spec, "bwrap").unwrap();
+        let after = capture_driva_options(&spec, "bwrap").unwrap();
         assert_eq!(
             after
                 .base

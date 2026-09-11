@@ -6,7 +6,7 @@
 
 use std::time::{Duration, Instant};
 
-use styra_server::{InteractionSummary, WorkspaceSummary};
+use styra_protocol::{InteractionSummary, WorkspaceSummary};
 
 /// How long the cursor must rest on an entry before that Interaction is
 /// loaded, matching the Session and Workspace pickers' settle: short enough to
@@ -407,9 +407,9 @@ fn sort_interactions(interactions: &mut [InteractionSummary]) {
             2
         } else {
             match interaction.activity {
-                styra_server::InteractionActivity::Pending => 0,
-                styra_server::InteractionActivity::Running
-                | styra_server::InteractionActivity::Background => 1,
+                styra_protocol::InteractionActivity::Pending => 0,
+                styra_protocol::InteractionActivity::Running
+                | styra_protocol::InteractionActivity::Background => 1,
             }
         }
     });
@@ -418,14 +418,14 @@ fn sort_interactions(interactions: &mut [InteractionSummary]) {
 /// `Pending` is the server summary's name for a live interaction waiting for
 /// input (the TUI calls that state `Idle`).
 fn is_idle(interaction: &InteractionSummary) -> bool {
-    interaction.accepting && interaction.activity == styra_server::InteractionActivity::Pending
+    interaction.accepting && interaction.activity == styra_protocol::InteractionActivity::Pending
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::PathBuf;
-    use styra_server::{DrivaOptions, InteractionActivity};
+    use styra_protocol::{DrivaOptions, InteractionActivity};
 
     fn interaction(id: &str, accepting: bool, activity: InteractionActivity) -> InteractionSummary {
         InteractionSummary {
@@ -433,7 +433,7 @@ mod tests {
             id: id.into(),
             name: None,
             workspace_id: "workspace".into(),
-            selection: styra_server::agent::Selection::parse("codex").unwrap(),
+            selection: styra_protocol::agent::Selection::parse("codex").unwrap(),
             workspace: PathBuf::from("/workspace"),
             driva: DrivaOptions {
                 isolation_backend: "none".into(),

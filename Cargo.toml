@@ -10,6 +10,7 @@ members = [
     "orka-tui",
     "orka-web",
     "styra",
+    "styra-protocol",
     "styra-server",
 ]
 
@@ -44,3 +45,4 @@ linka-tui = { path = "linka-tui" }
 orka = { path = "orka" }
 nota = { path = "nota" }
 styra-server = { path = "styra-server" }
+styra-protocol = { path = "styra-protocol" }

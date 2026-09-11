@@ -16,10 +16,10 @@
 use std::cell::Cell;
 use std::collections::VecDeque;
 use std::path::PathBuf;
-use styra_server::agent::{Provider, Selection};
-use styra_server::event::{AgentEvent, DetailBlock};
-use styra_server::Contract;
-use styra_server::{InteractionEnd, LogEntry, QuotaEvent, QuotaStatus};
+use styra_protocol::agent::{Provider, Selection};
+use styra_protocol::event::{AgentEvent, DetailBlock};
+use styra_protocol::Contract;
+use styra_protocol::{InteractionEnd, LogEntry, QuotaEvent, QuotaStatus};
 
 use crate::activity::{Activity, Status};
 use crate::answer::AnswerView;
@@ -91,7 +91,7 @@ pub enum View {
 /// What a launch is asked for beyond the agent selection: the sandbox policy
 /// inputs the server resolves into a concrete Driva request.
 ///
-/// Defined on the wire rather than here ([`styra_server::LaunchPolicy`]),
+/// Defined on the wire rather than here ([`styra_protocol::LaunchPolicy`]),
 /// because both layers of it are the server's to resolve: the Workspace's
 /// standing policy and this interaction's own are merged there, once, for every
 /// launch path. The client holds the two apart (in [`Launch`]) only so the driva
@@ -100,7 +100,7 @@ pub enum View {
 /// Re-exported because the modules that persist and send a policy
 /// ([`crate::preferences`], [`crate::session`]) want the type without wanting
 /// the state machine around it.
-pub use styra_server::LaunchPolicy;
+pub use styra_protocol::LaunchPolicy;
 
 /// How many recently selected models the picker remembers to order its model
 /// column by.
@@ -329,7 +329,7 @@ pub enum Request {
     /// The UI never applies this optimistically; it adopts the policy returned
     /// by the server after the edit is durably stored.
     ChangeWorkspaceLaunch {
-        change: styra_server::WorkspaceLaunchChange,
+        change: styra_protocol::WorkspaceLaunchChange,
         clear_interaction: bool,
     },
     /// Persist the linked-worktree preference for this Workspace.
@@ -366,7 +366,7 @@ pub enum Request {
 /// Deliberately not carried, because they are the Interaction's and rebuilding
 /// them is the point: the timeline, status, usage, answer, wire history — and
 /// the diagnostic log, which is partly fed from the server
-/// ([`styra_server::InteractionUpdate::Log`]), so carrying it across a re-attach
+/// ([`styra_protocol::InteractionUpdate::Log`]), so carrying it across a re-attach
 /// would show the same entries twice.
 #[derive(Default)]
 pub struct OperatorState {
@@ -492,7 +492,7 @@ impl App {
     /// agent is *working* is deliberately not included: a live interaction may
     /// have been told to work somewhere other than the Workspace root, and
     /// this is also called to refresh a screen already showing it.
-    pub fn show_workspace(&mut self, workspace: &styra_server::WorkspaceSummary) {
+    pub fn show_workspace(&mut self, workspace: &styra_protocol::WorkspaceSummary) {
         self.workspace.show(workspace);
         self.launch.set_workspace(workspace.launch.clone());
     }
@@ -981,7 +981,7 @@ impl App {
             .filter(|(idx, entry)| keep(self, *idx, entry))
             .map(|(_, entry)| entry.event.clone())
             .collect::<Vec<_>>();
-        styra_server::render::render_events(&events, false, self.timeline.show_minor)
+        styra_protocol::render::render_events(&events, false, self.timeline.show_minor)
     }
 
     // --- Focus ---------------------------------------------------------------
@@ -1054,10 +1054,10 @@ impl App {
 mod tests {
     use super::*;
     use crate::launcher::LaunchColumn;
-    use styra_server::agent::Effort;
-    use styra_server::event::TokenUsage;
-    use styra_server::RawLine;
-    use styra_server::{Answer, AnswerValue, FileLocation};
+    use styra_protocol::agent::Effort;
+    use styra_protocol::event::TokenUsage;
+    use styra_protocol::RawLine;
+    use styra_protocol::{Answer, AnswerValue, FileLocation};
 
     /// A session app with every default these tests would otherwise inherit
     /// pinned explicitly: the profile names its model and effort instead of
@@ -1067,7 +1067,7 @@ mod tests {
     /// about something the test had no opinion on.
     fn app() -> App {
         let mut app = App::new(
-            styra_server::agent::Selection::parse("codex:gpt-5.6-sol/high").unwrap(),
+            styra_protocol::agent::Selection::parse("codex:gpt-5.6-sol/high").unwrap(),
             "session-1",
         );
         app.timeline.conversation_only = false;
@@ -1107,7 +1107,7 @@ mod tests {
         let mut app = app();
         app.push_log(LogEntry::info("something happened"));
         app.raw.push(RawLine {
-            direction: styra_server::Direction::FromAgent,
+            direction: styra_protocol::Direction::FromAgent,
             text: "{}".into(),
             at_ms: 0,
         });
@@ -1392,7 +1392,7 @@ mod tests {
     fn a_framed_operator_message_is_shown_as_it_was_written() {
         let mut app = app();
         app.push_event(AgentEvent::UserMessage {
-            text: styra_server::contract::frame("which files handle auth?", Contract::Files),
+            text: styra_protocol::contract::frame("which files handle auth?", Contract::Files),
         });
         let entry = app.timeline.entries.last().expect("the message was pushed");
         assert_eq!(
@@ -1893,7 +1893,7 @@ mod tests {
     #[test]
     fn a_session_keeps_its_recorded_selection() {
         let app = App::new(
-            styra_server::agent::Selection::parse("claude:opus/xhigh").unwrap(),
+            styra_protocol::agent::Selection::parse("claude:opus/xhigh").unwrap(),
             "session-1",
         );
         assert_eq!(
@@ -1907,7 +1907,7 @@ mod tests {
     #[test]
     fn the_launch_label_falls_back_to_the_requested_selection() {
         let app = App::new(
-            styra_server::agent::Selection::parse("claude:opus/max").unwrap(),
+            styra_protocol::agent::Selection::parse("claude:opus/max").unwrap(),
             "s-1",
         );
         let label = app.launch_label();
@@ -1917,7 +1917,7 @@ mod tests {
 
         // Short launch syntax is normalized to the provider's declared defaults.
         let app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
+            styra_protocol::agent::Selection::parse("codex").unwrap(),
             "s-2",
         );
         let label = app.launch_label();
@@ -1937,7 +1937,7 @@ mod tests {
     #[test]
     fn a_reported_model_and_effort_replace_the_interaction_selection() {
         let mut app = App::new(
-            styra_server::agent::Selection::parse("codex").unwrap(),
+            styra_protocol::agent::Selection::parse("codex").unwrap(),
             "s-1",
         );
         app.push_event(AgentEvent::ThreadStarted {
@@ -1949,11 +1949,11 @@ mod tests {
         assert_eq!(label.model.as_deref(), Some("gpt-5.6-sol"));
         assert_eq!(label.effort.as_deref(), Some("high"));
         assert_eq!(app.selection.model, "gpt-5.6-sol");
-        assert_eq!(app.selection.effort, styra_server::agent::Effort::High);
+        assert_eq!(app.selection.effort, styra_protocol::agent::Effort::High);
 
         // A launch that asked for something else is overruled by the fact.
         let mut app = App::new(
-            styra_server::agent::Selection::parse("codex:gpt-5.6-luna/low").unwrap(),
+            styra_protocol::agent::Selection::parse("codex:gpt-5.6-luna/low").unwrap(),
             "s-2",
         );
         app.push_event(AgentEvent::ThreadStarted {
@@ -1971,7 +1971,7 @@ mod tests {
     #[test]
     fn an_unreported_effort_keeps_the_one_the_session_was_launched_with() {
         let mut app = App::new(
-            styra_server::agent::Selection::parse("claude:opus/max").unwrap(),
+            styra_protocol::agent::Selection::parse("claude:opus/max").unwrap(),
             "s-1",
         );
         app.push_event(AgentEvent::ThreadStarted {
@@ -1985,7 +1985,7 @@ mod tests {
 
         // A thread reported with neither leaves the display as it was.
         let mut app = App::new(
-            styra_server::agent::Selection::parse("codex:gpt-5.6-sol/high").unwrap(),
+            styra_protocol::agent::Selection::parse("codex:gpt-5.6-sol/high").unwrap(),
             "s-2",
         );
         app.push_event(AgentEvent::ThreadStarted {
@@ -2000,7 +2000,7 @@ mod tests {
     #[test]
     fn the_launcher_opens_on_the_model_reported_by_the_interaction() {
         let mut app = App::new(
-            styra_server::agent::Selection::parse("claude:claude-sonnet-5/high").unwrap(),
+            styra_protocol::agent::Selection::parse("claude:claude-sonnet-5/high").unwrap(),
             "s-1",
         );
         app.activity.status = Status::Idle;
@@ -2098,7 +2098,7 @@ mod tests {
 
     #[test]
     fn entering_raw_view_focuses_the_selected_entrys_wire_line() {
-        use styra_server::Direction;
+        use styra_protocol::Direction;
         let mut app = app();
         for i in 0..3 {
             app.raw.push(RawLine {
@@ -2127,7 +2127,7 @@ mod tests {
 
     #[test]
     fn log_view_toggles_independently_and_scrolls() {
-        use styra_server::LogEntry;
+        use styra_protocol::LogEntry;
         let mut app = app();
         app.toggle_raw();
         assert_eq!(app.view, View::Raw);
@@ -2645,7 +2645,7 @@ mod tests {
 
     #[test]
     fn copy_text_in_the_raw_view_is_the_selected_wire_line() {
-        use styra_server::Direction;
+        use styra_protocol::Direction;
         let mut app = app();
         app.raw.push(RawLine {
             at_ms: 0,

@@ -1,0 +1,12 @@
+[package]
+name = "styra-protocol"
+version.workspace = true
+edition.workspace = true
+description = "Serializable types for the styra-server JSON protocol"
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+driva.workspace = true
+genta.workspace = true

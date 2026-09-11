@@ -15,8 +15,8 @@
 use pulldown_cmark::{Event, Options, Parser, Tag};
 use std::path::{Path, PathBuf};
 
-use styra_server::agent::SandboxLayout;
-use styra_server::event::{AgentEvent, DetailBlock};
+use styra_protocol::agent::SandboxLayout;
+use styra_protocol::event::{AgentEvent, DetailBlock};
 
 use crate::timeline::Entry;
 

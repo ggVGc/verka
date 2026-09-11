@@ -7,7 +7,8 @@ use crate::insert;
 use crate::launch;
 use crate::preferences;
 use crate::session::{self, Attachment};
-use styra_server::{Client, Contract, LogEntry};
+use styra_server::Client;
+use styra_protocol::{Contract, LogEntry};
 
 /// Keys for the launch picker: `j`/`k` within a column, `Tab`/`h`/`l` between
 /// them, `Enter` to apply the choice to this workspace, `D` to also save it as
@@ -647,14 +648,14 @@ pub fn handle_input_key(
 mod tests {
     use super::*;
     use std::path::PathBuf;
-    use styra_server::{
+    use styra_protocol::{
         AttributedMount, DrivaOptions, LaunchMount, Mount, MountAccess, MountOrigin,
     };
 
     /// A session whose sandbox binds `root` at `/workspace` and nothing else,
     /// with nothing launched — so the launch policy is still open to editing.
     fn app(root: &Path) -> App {
-        let mut app = App::pending(styra_server::agent::Selection::parse("codex").unwrap());
+        let mut app = App::pending(styra_protocol::agent::Selection::parse("codex").unwrap());
         app.workspace.enter(root.to_path_buf());
         app.launch.record(DrivaOptions {
             isolation_backend: "bwrap".into(),
@@ -792,7 +793,7 @@ mod tests {
         let root = tree("references");
         let mut app = app(&root);
         app.enter_list();
-        app.push_event(styra_server::event::AgentEvent::AgentMessage {
+        app.push_event(styra_protocol::event::AgentEvent::AgentMessage {
             text: format!(
                 "Fixed it in notes.txt:12 ({}/notes.txt:12).",
                 root.display()
@@ -833,7 +834,7 @@ mod tests {
         let root = tree("references-none");
         let mut app = app(&root);
         app.enter_list();
-        app.push_event(styra_server::event::AgentEvent::AgentMessage {
+        app.push_event(styra_protocol::event::AgentEvent::AgentMessage {
             text: "Nothing needed changing. e.g. absent.txt:3".into(),
         });
         app.select_last();

@@ -53,7 +53,7 @@ mod tests {
 
     use crate::app::View;
 
-    use styra_server::event::AgentEvent;
+    use styra_protocol::event::AgentEvent;
 
     #[test]
     fn transcript_view_renders_the_current_session() {

@@ -12,7 +12,7 @@
 //! the timeline, and only [`App`](crate::app::App) has both.
 //! [`crate::ui::preview`] renders it.
 
-use styra_server::event::PresentationMode;
+use styra_protocol::event::PresentationMode;
 
 use crate::app::Scroll;
 

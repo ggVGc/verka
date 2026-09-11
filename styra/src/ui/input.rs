@@ -49,7 +49,7 @@ pub(crate) fn render_input(frame: &mut Frame, app: &App) {
 fn queued_lines(app: &App) -> Vec<String> {
     app.outbox
         .queued()
-        .map(|message: &styra_server::QueuedMessage| {
+        .map(|message: &styra_protocol::QueuedMessage| {
             let prefix = match message.contract {
                 Some(contract) => format!("queued ({}): ", contract.as_str()),
                 None => "queued: ".to_owned(),
@@ -122,7 +122,7 @@ mod tests {
     fn queued_messages_use_the_additional_information_color() {
         let mut app = testing::app("s1");
         app.outbox
-            .replace_queued(vec![styra_server::QueuedMessage::new("send this later")]);
+            .replace_queued(vec![styra_protocol::QueuedMessage::new("send this later")]);
 
         let display = modal_input::display(&modal(&app), 40);
         let queued = display.lines[0]

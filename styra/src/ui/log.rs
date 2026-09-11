@@ -7,7 +7,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
-use styra_server::LogLevel;
+use styra_protocol::LogLevel;
 
 pub(crate) fn render_log(frame: &mut Frame, app: &App, area: Rect) {
     let block = view_block(app, Some("log"));
@@ -25,7 +25,7 @@ pub(crate) fn render_log(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(paragraph, area);
 }
 
-pub(crate) fn log_line(entry: &styra_server::LogEntry) -> Line<'static> {
+pub(crate) fn log_line(entry: &styra_protocol::LogEntry) -> Line<'static> {
     let (label, color) = match entry.level {
         LogLevel::Info => ("info ", palette::MUTED_TEXT),
         LogLevel::Warn => ("warn ", palette::WARNING),
@@ -49,7 +49,7 @@ mod tests {
 
     #[test]
     fn log_view_shows_entries_with_levels() {
-        use styra_server::LogEntry;
+        use styra_protocol::LogEntry;
         let mut app = testing::app("s1");
         app.push_log(LogEntry::info("launching codex"));
         app.push_log(LogEntry::error("could not run the agent: bwrap missing"));

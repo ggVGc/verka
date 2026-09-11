@@ -4,7 +4,6 @@
 //! with the [`SERVE_ENV`] sentinel to spawn its own detached daemon rather than
 //! shelling out to a separate `styra-server` binary (see [`crate::spawn`]).
 
-use crate::client::Client;
 use crate::server::{serve, ServerState};
 use anyhow::{bail, Context, Result};
 use std::fs::{File, OpenOptions};
@@ -13,6 +12,9 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::io::AsRawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock};
+use crate::client::{Client, InProcessServer};
+use styra_protocol::{Request, Response};
 
 /// Sentinel env var: when set, a host binary runs as the Styra server instead
 /// of its normal entry point, reading the rest of its configuration from the
@@ -96,7 +98,37 @@ pub fn in_process() -> Result<Client> {
     let store = crate::paths::default_standalone_store()?;
     ensure_private_directory(&store)?;
     let lock = lock_standalone_store(&store)?;
-    Ok(Client::in_process(ServerState::in_process(store, lock)))
+    Ok(in_process_client(ServerState::in_process(store, lock)))
+}
+
+pub(crate) fn in_process_client(state: ServerState) -> Client {
+    Client::in_process(Arc::new(InProcessState(RwLock::new(Some(state)))))
+}
+
+struct InProcessState(RwLock<Option<ServerState>>);
+
+impl InProcessServer for InProcessState {
+    fn handle(&self, request: Request) -> Result<Response> {
+        let state = self
+            .0
+            .read()
+            .map_err(|_| anyhow::anyhow!("in-process Styra server lock poisoned"))?;
+        state
+            .as_ref()
+            .context("the in-process Styra server is shut down")?
+            .handle(request)
+    }
+
+    fn shutdown(&self) -> Result<()> {
+        let state = self
+            .0
+            .write()
+            .map_err(|_| anyhow::anyhow!("in-process Styra server lock poisoned"))?
+            .take()
+            .context("the in-process Styra server is already shut down")?;
+        drop(state);
+        Ok(())
+    }
 }
 
 const STANDALONE_LOCK_FILE: &str = "standalone.lock";

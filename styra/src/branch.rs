@@ -1,6 +1,6 @@
 //! The main-view choice of how a selected entry seeds a new Session.
 
-use styra_server::BranchHistory;
+use styra_protocol::BranchHistory;
 
 /// The open branch chooser. The timestamp fixes the source entry at the
 /// moment the chooser opens, so later redraws cannot move the branch point.

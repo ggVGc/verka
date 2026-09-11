@@ -10,7 +10,7 @@
 
 use crate::agent::Selection;
 use crate::event::AgentEvent;
-use driva::Mount;
+use crate::Mount;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 

@@ -200,7 +200,7 @@ fn render_empty_content(frame: &mut Frame, area: Rect) {
 mod tests {
     use super::super::testing;
     use super::*;
-    use styra_server::event::AgentEvent;
+    use styra_protocol::event::AgentEvent;
 
     #[test]
     fn files_view_renders_tree_and_selected_content() {

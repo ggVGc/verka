@@ -13,7 +13,6 @@
 //! (rather than a bare `fork`) hands the daemon a clean single-threaded address
 //! space, and locating the binary is trivial — it is `current_exe()`.
 
-use crate::client::Client;
 use crate::daemon;
 use anyhow::{bail, Context, Result};
 use std::fs::OpenOptions;
@@ -21,6 +20,7 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
+use crate::client::Client;
 
 /// How long to wait for a freshly spawned server to start answering before
 /// giving up.

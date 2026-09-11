@@ -1,6 +1,6 @@
 //! Host mounts an operator asks a launch for: how one is written and how one
 //! is read back. Where the git history of a checkout actually lives is
-//! [`styra_server::git`]'s question, not this module's.
+//! [`styra_protocol::git`]'s question, not this module's.
 //!
 //! Nothing here touches [`crate::app::App`] — these are the pure parts of the
 //! launch policy, kept apart from the state machine in [`crate::launch`] so
@@ -8,7 +8,7 @@
 //! body of code.
 
 use std::path::{Path, PathBuf};
-use styra_server::{LaunchMount, Mount, MountAccess};
+use styra_protocol::{LaunchMount, Mount, MountAccess};
 
 /// How an extra mount reads in the view and in the prompt that adds one.
 pub fn label(mount: &LaunchMount) -> String {

@@ -47,7 +47,8 @@ use cli::{Cli, CliCommand};
 use config::Defaults;
 use event_loop::RunOutcome;
 use session::Attachment;
-use styra_server::{Client, LogEntry, WorkspaceSummary};
+use styra_server::Client;
+use styra_protocol::{LogEntry, WorkspaceSummary};
 
 /// Point the app at the Workspace it is now showing: its display name, and the
 /// standing launch policy every interaction started there is layered onto.
@@ -109,7 +110,7 @@ fn workspace_for_new_session(
 }
 
 fn pending_app(
-    selection: styra_server::agent::Selection,
+    selection: styra_protocol::agent::Selection,
     launch: LaunchPolicy,
     workspace: &WorkspaceSummary,
 ) -> App {
@@ -140,7 +141,7 @@ fn pending_app(
 fn standing_launch(
     preferences_path: &Path,
     cli: &Cli,
-) -> Result<(styra_server::agent::Selection, LaunchPolicy)> {
+) -> Result<(styra_protocol::agent::Selection, LaunchPolicy)> {
     let defaults = preferences::load_or_default(preferences_path)?;
     let mut launch = defaults.launch;
     if cli.network {
@@ -159,7 +160,7 @@ fn main() -> Result<()> {
     // The connect-or-spawn path spawns the daemon by re-exec'ing *this* binary
     // with the serve sentinel in its environment; honour it before parsing the
     // client CLI so the re-exec'd copy becomes the server instead of a second
-    // TUI. See `styra_server::spawn`.
+    // TUI. See `styra_protocol::spawn`.
     if let Some(result) = styra_server::serve_if_requested() {
         return result;
     }
@@ -540,7 +541,7 @@ fn stop_daemon(socket: &Path) -> Result<()> {
 mod cli_tests {
     use super::*;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-    use styra_server::agent::{Provider, Selection};
+    use styra_protocol::agent::{Provider, Selection};
 
     fn workspace(id: &str, host_path: &str) -> WorkspaceSummary {
         WorkspaceSummary {
@@ -640,13 +641,13 @@ mod cli_tests {
     fn a_new_session_starts_from_the_policy_of_the_workspace_it_lands_in() {
         let selection = Selection::parse("codex:gpt-5.6-sol/high").unwrap();
         let mut landed_in = workspace("second", "/work/second");
-        landed_in.launch = styra_server::LaunchPolicy {
+        landed_in.launch = styra_protocol::LaunchPolicy {
             templates: vec!["rust".into()],
-            ..styra_server::LaunchPolicy::default()
+            ..styra_protocol::LaunchPolicy::default()
         };
-        let carried = styra_server::LaunchPolicy {
+        let carried = styra_protocol::LaunchPolicy {
             templates: vec!["browser".into()],
-            ..styra_server::LaunchPolicy::default()
+            ..styra_protocol::LaunchPolicy::default()
         };
 
         let pending = pending_app(selection, carried.clone(), &landed_in);
