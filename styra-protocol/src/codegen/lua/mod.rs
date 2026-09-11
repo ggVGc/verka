@@ -7,17 +7,43 @@
 //! the Rust doc comment above it, because a client author reading
 //! `M.request.branch_session` should find the same explanation the protocol
 //! author wrote, not a note telling them to go and read the Rust.
+//!
+//! Everything here is Lua's own business — `--` comments, `M.` tables, which
+//! words a field cannot be named after, `nil` meaning both absent and null.
+//! What the protocol *is* was settled before this module was called; see the
+//! parent module for the split.
 
 use super::model::{shouted, Body, Field, Model, Payload, Shape, Struct, Tagging, WireType};
+use super::Language;
 use anyhow::{bail, Result};
 use std::fmt::Write;
 
 /// Lua support the generated tables are useless without.
 const RUNTIME: &str = include_str!("runtime.lua");
 
+/// The Lua client library.
+pub struct Lua;
+
+impl Language for Lua {
+    fn name(&self) -> &'static str {
+        "lua"
+    }
+
+    fn generated_path(&self) -> &'static str {
+        "../styra-lua/styra/protocol.lua"
+    }
+
+    fn generated(&self) -> &'static str {
+        include_str!("../../../../styra-lua/styra/protocol.lua")
+    }
+
+    fn render(&self, model: &Model) -> Result<String> {
+        library(model)
+    }
+}
+
 /// Render the whole library.
-pub fn library(model: &Model) -> Result<String> {
-    check_assumptions(model)?;
+fn library(model: &Model) -> Result<String> {
     let mut out = String::new();
     header(&mut out);
     writeln!(out, "local M = {{}}\n")?;
@@ -31,55 +57,6 @@ pub fn library(model: &Model) -> Result<String> {
     Ok(out)
 }
 
-/// What the hand-written half of the library takes for granted.
-///
-/// [`RUNTIME`] spells `ok`, `error`, `operation` and `data` by hand, because a
-/// helper that unwraps a response reads better than a helper parameterised
-/// over how responses are tagged. That is only safe while the protocol really
-/// is tagged that way, so the generator refuses to emit a library whose
-/// envelope has moved out from under it.
-fn check_assumptions(model: &Model) -> Result<()> {
-    let Some(request) = model.get("Request") else {
-        bail!("the model has no Request type to build requests from");
-    };
-    match &request.body {
-        Body::Enum(enumeration) => match &enumeration.tagging {
-            Tagging::Adjacent { tag, content } if tag == "operation" && content == "data" => {}
-            other => bail!(
-                "Request is tagged {other:?}; the generated library builds \
-                 {{operation, data}} and would be wrong"
-            ),
-        },
-        Body::Struct(_) => bail!("Request is no longer an enum of operations"),
-    }
-    let Some(wire) = model.get("WireResponse") else {
-        bail!("the model has no WireResponse envelope");
-    };
-    let Body::Enum(envelope) = &wire.body else {
-        bail!("WireResponse is no longer an enum");
-    };
-    if envelope.tagging
-        != (Tagging::Internal {
-            tag: "status".into(),
-        })
-    {
-        bail!(
-            "WireResponse is tagged {:?}; the generated unwrap reads a `status` \
-             field and would be wrong",
-            envelope.tagging
-        );
-    }
-    let spellings: Vec<&str> = envelope
-        .variants
-        .iter()
-        .map(|variant| variant.name.as_str())
-        .collect();
-    if spellings != ["ok", "error"] {
-        bail!("WireResponse spells its outcomes {spellings:?}, not [\"ok\", \"error\"]");
-    }
-    Ok(())
-}
-
 fn header(out: &mut String) {
     out.push_str(
         "-- The Styra client/server wire vocabulary, as a Lua module.\n\
@@ -89,7 +66,7 @@ fn header(out: &mut String) {
          -- defines the protocol, so this file cannot describe a protocol the server\n\
          -- does not speak. Do not edit it by hand.\n\
          --\n\
-         --   cargo run -p styra-protocol --bin styra-protocol-lua\n\
+         --   cargo run -p styra-protocol --bin styra-codegen -- lua\n\
          --\n\
          -- It carries no transport and no JSON codec, exactly as the Rust crate does\n\
          -- not: a request is a plain Lua table for your own encoder to serialise and\n\
@@ -382,17 +359,234 @@ fn field_docs(out: &mut String, structure: &Struct, separate: bool) {
 }
 
 /// Rust doc comments, carried through as Lua ones.
-///
-/// Rustdoc's intra-doc links are unwrapped to the plain name they point at: a
-/// Lua reader cannot follow `[`Contract`]` anywhere, and the brackets only get
-/// in the way of the sentence.
 fn docs(out: &mut String, docs: &[String], indent: &str) {
     for line in docs {
-        let line = line.replace("[`", "`").replace("`]", "`");
+        let line = super::prose(line);
         if line.is_empty() {
             out.push_str(&format!("{indent}---\n"));
         } else {
             out.push_str(&format!("{indent}--- {line}\n"));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen;
+    use crate::protocol::{Contract, Request};
+    use std::process::Command;
+
+    /// Where the Lua half of the repository lives, found from this crate
+    /// rather than from the working directory the test was started in.
+    fn styra_lua() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../styra-lua")
+    }
+
+    fn generated() -> String {
+        codegen::generate(&Lua).expect("the protocol's own definitions must generate a library")
+    }
+
+    /// The point of the whole module: the checked-in Lua is what the current
+    /// definitions produce. When this fails, the protocol changed and the
+    /// library has not caught up — regenerate it, do not edit it.
+    #[test]
+    fn the_checked_in_library_is_what_the_definitions_generate() {
+        assert_eq!(
+            generated(),
+            Lua.generated(),
+            "{} is stale; regenerate it with \
+             `cargo run -p styra-protocol --bin styra-codegen -- lua`",
+            Lua.generated_path()
+        );
+    }
+
+    /// Every operation is reachable by name, so no client has to fall back to
+    /// hand-writing a request table.
+    #[test]
+    fn every_operation_has_a_constructor() {
+        let library = generated();
+        let model = codegen::model().unwrap();
+        let Body::Enum(request) = &model.get("Request").unwrap().body else {
+            panic!("Request is an enum of operations");
+        };
+        assert!(
+            request.variants.len() > 30,
+            "the operation list looks short"
+        );
+        for variant in &request.variants {
+            assert!(
+                library.contains(&format!("function M.request.{}(", variant.name)),
+                "{} has no constructor",
+                variant.name
+            );
+        }
+    }
+
+    /// The spellings are the generator's own case conversion, so they are
+    /// checked against what serde actually writes rather than against
+    /// themselves.
+    #[test]
+    fn enum_spellings_match_what_serde_writes() {
+        let library = generated();
+        for contract in crate::contract::CONTRACTS {
+            let spelling = serde_json::to_value(contract).unwrap();
+            assert!(
+                library.contains(&format!(
+                    "  {} = {:?},",
+                    contract.as_str().to_uppercase(),
+                    spelling.as_str().unwrap()
+                )),
+                "{contract:?} is not spelled as serde spells it"
+            );
+        }
+        for provider in crate::agent::Provider::ALL {
+            let spelling = serde_json::to_value(provider).unwrap();
+            assert_eq!(spelling.as_str().unwrap(), provider.as_str());
+            assert!(
+                library.contains(&format!("{:?},", provider.as_str())),
+                "{provider:?} is missing from the generated spellings"
+            );
+        }
+        // An operation the server matches on, spelled exactly as the request
+        // the Rust client sends spells it.
+        let request = serde_json::to_value(Request::QuotaLog).unwrap();
+        assert_eq!(request["operation"], "quota_log");
+        assert!(library.contains("function M.request.quota_log()"));
+    }
+
+    /// A doc comment is the only explanation a Lua client author gets, so the
+    /// ones the protocol author wrote have to survive the trip.
+    #[test]
+    fn rust_doc_comments_reach_the_lua() {
+        let library = generated();
+        assert!(library.contains("--- Ask the server to remove its socket and exit."));
+        assert!(library.contains("--- Fields of `data`:"));
+    }
+
+    /// The generated Lua is Lua. Skipped where no interpreter is installed,
+    /// since that is the machine's business and not the protocol's.
+    #[test]
+    fn the_generated_library_runs_against_a_real_interpreter() {
+        let Some(lua) = interpreter() else {
+            eprintln!("no lua interpreter on PATH; skipping the behavioural test");
+            return;
+        };
+        let directory = std::env::temp_dir().join(format!("styra-lua-{}", std::process::id()));
+        let module = directory.join("styra");
+        std::fs::create_dir_all(&module).unwrap();
+        std::fs::write(module.join("protocol.lua"), generated()).unwrap();
+        let script = directory.join("check.lua");
+        std::fs::write(&script, include_str!("check.lua")).unwrap();
+
+        let output = Command::new(&lua)
+            .arg(&script)
+            .current_dir(&directory)
+            .output()
+            .expect("the interpreter must run");
+        let _ = std::fs::remove_dir_all(&directory);
+        assert!(
+            output.status.success(),
+            "{lua} rejected the generated library:\n{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    /// The hand-written half of `styra-lua` — the client helpers and the
+    /// example built on them — is the library's documentation as much as its
+    /// README is, and one that no longer loads documents nothing.
+    #[test]
+    fn the_lua_client_and_example_load() {
+        let Some(lua) = interpreter() else {
+            eprintln!("no lua interpreter on PATH; skipping the example");
+            return;
+        };
+        let root = styra_lua();
+        for file in [
+            "styra/client.lua",
+            "styra/json.lua",
+            "examples/styra-ask.lua",
+        ] {
+            let output = Command::new(&lua)
+                .arg("-e")
+                .arg(format!("assert(loadfile({file:?}))"))
+                .current_dir(&root)
+                .output()
+                .expect("the interpreter must run");
+            assert!(
+                output.status.success(),
+                "{file} does not load:\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+
+    /// The Lua check script builds a request the Rust side then reads back, so
+    /// the two halves are held to the same protocol rather than to each other's
+    /// descriptions of it.
+    #[test]
+    fn a_request_built_in_lua_decodes_as_the_rust_request() {
+        let Some(lua) = interpreter() else {
+            eprintln!("no lua interpreter on PATH; skipping the round trip");
+            return;
+        };
+        let directory = std::env::temp_dir().join(format!("styra-lua-rt-{}", std::process::id()));
+        let module = directory.join("styra");
+        std::fs::create_dir_all(&module).unwrap();
+        std::fs::write(module.join("protocol.lua"), generated()).unwrap();
+        // Encoding by hand keeps the test free of a Lua JSON library, which is
+        // not something every machine running these tests will have.
+        let script = directory.join("emit.lua");
+        std::fs::write(
+            &script,
+            r#"
+local protocol = require("styra.protocol")
+local request = protocol.request.send_message({
+  id = "styra-1",
+  message = { text = "which files handle auth?", contract = protocol.Contract.FILES },
+})
+print(string.format(
+  '{"operation":%q,"data":{"id":%q,"message":{"text":%q,"contract":%q}}}',
+  request.operation,
+  request.data.id,
+  request.data.message.text,
+  request.data.message.contract
+))
+"#,
+        )
+        .unwrap();
+        let output = Command::new(&lua)
+            .arg(&script)
+            .current_dir(&directory)
+            .output()
+            .expect("the interpreter must run");
+        let _ = std::fs::remove_dir_all(&directory);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let line = String::from_utf8(output.stdout).unwrap();
+        let request: Request = serde_json::from_str(line.trim()).expect("valid Styra request");
+        let Request::SendMessage { id, message } = request else {
+            panic!("the Lua client built the wrong operation");
+        };
+        assert_eq!(id, "styra-1");
+        assert_eq!(message.text, "which files handle auth?");
+        assert_eq!(message.contract, Some(Contract::Files));
+    }
+
+    fn interpreter() -> Option<String> {
+        ["lua", "lua5.4", "lua5.3", "lua5.1", "luajit"]
+            .into_iter()
+            .find(|name| {
+                Command::new(name)
+                    .arg("-v")
+                    .output()
+                    .map(|output| output.status.success())
+                    .unwrap_or(false)
+            })
+            .map(ToOwned::to_owned)
     }
 }

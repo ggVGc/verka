@@ -7,9 +7,11 @@
 //! without inheriting a transport it did not choose.
 //!
 //! A client that cannot be written in Rust gets the same vocabulary generated
-//! for it: [`lua`] reads these type definitions and writes a Lua module with
-//! every operation, field, and enum spelling in it, so the bindings are read
-//! out of the protocol rather than transcribed beside it.
+//! for it: [`codegen`] reads these type definitions and writes a module in
+//! another language with every operation, field, and enum spelling in it, so
+//! the bindings are read out of the protocol rather than transcribed beside
+//! it. Lua is the language it generates today; the reading and the writing are
+//! separated so a second one is a backend rather than a rewrite.
 
 pub mod agent {
     pub use genta::agent::*;
@@ -42,9 +44,9 @@ pub mod agent {
 pub use driva::{Mount, MountAccess};
 pub use genta::{event, render};
 
+#[cfg(feature = "codegen")]
+pub mod codegen;
 pub mod contract;
-#[cfg(feature = "lua")]
-pub mod lua;
 pub mod protocol;
 
 pub use protocol::*;

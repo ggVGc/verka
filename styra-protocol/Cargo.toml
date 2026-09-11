@@ -5,16 +5,17 @@ edition.workspace = true
 description = "Serializable types for the styra-server JSON protocol"
 
 [features]
-# Generating the Lua client library (see `src/lua`). On by default so the
-# generated file is tested with the definitions it is generated from; a client
-# that only wants the types can turn it off and drop the `syn` dependency.
-default = ["lua"]
-lua = ["dep:syn"]
+# Generating client libraries for other languages (see `src/codegen`). On by
+# default so the generated files are tested with the definitions they are
+# generated from; a client that only wants the types can turn it off and drop
+# the `syn` dependency.
+default = ["codegen"]
+codegen = ["dep:syn"]
 
 [[bin]]
-name = "styra-protocol-lua"
-path = "src/bin/styra-protocol-lua.rs"
-required-features = ["lua"]
+name = "styra-codegen"
+path = "src/bin/styra-codegen.rs"
+required-features = ["codegen"]
 
 [dependencies]
 anyhow.workspace = true

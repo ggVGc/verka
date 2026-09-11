@@ -108,11 +108,16 @@ untyped messages.
 
 ## Clients in other languages
 
-The Serde definitions are also the source the Lua client library is generated
-from: `styra-protocol`'s `lua` module parses this directory's type definitions
-(and the Genta and Driva vocabularies they embed) and writes
-`lua/styra/protocol.lua` — the operations, the field names, the enum spellings,
-and a validator driven by them. See `../../lua/README.md`.
+The Serde definitions are also the source client libraries in other languages
+are generated from: `../codegen` parses this directory's type definitions (and
+the Genta and Driva vocabularies they embed) into a model of the wire surface,
+and a backend per language writes it out — the operations, the field names, the
+enum spellings, and a validator driven by them.
+
+Lua is the one language generated today, into `styra-lua/styra/protocol.lua`;
+see `../../../styra-lua/README.md`. Reading the protocol and writing a module
+are separate halves, so another language is a backend rather than a second
+generator.
 
 Nothing about the protocol is duplicated by hand there, and a test fails if the
 checked-in file stops matching the definitions. A change made here that the

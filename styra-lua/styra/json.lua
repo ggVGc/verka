@@ -2,7 +2,7 @@
 -- library installed.
 --
 -- Not part of the protocol and not what a real client should use: prefer
--- lua-cjson or dkjson, which `styra-ask.lua` picks up when either is present.
+-- lua-cjson or dkjson, which `styra.client` picks up when either is present.
 -- This is here so the example is runnable as it stands rather than after a
 -- detour through a package manager.
 --
