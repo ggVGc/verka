@@ -106,6 +106,19 @@ return `{"text":…,"contract":…}` objects rather than bare strings. A queue f
 written before contracts existed is an array of strings and still loads, as
 untyped messages.
 
+## Clients in other languages
+
+The Serde definitions are also the source the Lua client library is generated
+from: `styra-protocol`'s `lua` module parses this directory's type definitions
+(and the Genta and Driva vocabularies they embed) and writes
+`lua/styra/protocol.lua` — the operations, the field names, the enum spellings,
+and a validator driven by them. See `../../lua/README.md`.
+
+Nothing about the protocol is duplicated by hand there, and a test fails if the
+checked-in file stops matching the definitions. A change made here that the
+generator cannot describe is therefore a failing build rather than a client
+that quietly drifted out of step.
+
 ## Compatibility
 
 The Serde definitions in this directory are the structural wire contract.

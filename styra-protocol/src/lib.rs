@@ -5,6 +5,11 @@
 //! travel. Carrying them — the JSONL framing, the socket, the connection — is
 //! each peer's own business, so a client can be written against this crate
 //! without inheriting a transport it did not choose.
+//!
+//! A client that cannot be written in Rust gets the same vocabulary generated
+//! for it: [`lua`] reads these type definitions and writes a Lua module with
+//! every operation, field, and enum spelling in it, so the bindings are read
+//! out of the protocol rather than transcribed beside it.
 
 pub mod agent {
     pub use genta::agent::*;
@@ -38,6 +43,8 @@ pub use driva::{Mount, MountAccess};
 pub use genta::{event, render};
 
 pub mod contract;
+#[cfg(feature = "lua")]
+pub mod lua;
 pub mod protocol;
 
 pub use protocol::*;
