@@ -157,12 +157,6 @@ end
 
 # Entry point ---------------------------------------------------------------
 
-{socket, arguments} =
-  case System.argv() do
-    ["--socket", path | rest] -> {path, rest}
-    arguments -> {nil, arguments}
-  end
-
 usage = """
 usage: styra_ask.exs [--socket PATH] <command> [arguments]
 
@@ -170,19 +164,40 @@ usage: styra_ask.exs [--socket PATH] <command> [arguments]
   workspaces                    list Workspaces
   interactions                  list live interactions
   ask <session> <question...>   ask one question and print the typed answer
+
+A question beginning with a dash has to come after `--`.
 """
 
-options = if socket, do: [socket: socket], else: []
-
+# OptionParser rather than a match on argv, which is stdlib and shorter and
+# also right: --socket is read wherever it is written rather than only as the
+# first argument, an unknown flag is refused by name instead of being taken for
+# a command, and `--` still ends the options so a question may start with a
+# dash.
 result =
-  with {:ok, styra} <- Client.new(options) do
-    case arguments do
-      ["health"] -> StyraAsk.health(styra)
-      ["workspaces"] -> StyraAsk.workspaces(styra)
-      ["interactions"] -> StyraAsk.interactions(styra)
-      ["ask" | rest] -> StyraAsk.ask(styra, rest)
-      _ -> {:usage, usage}
-    end
+  case OptionParser.parse(System.argv(), strict: [socket: :string]) do
+    {_flags, _arguments, [{flag, _value} | _]} ->
+      {:usage, "#{flag} is not an option this takes.\n\n" <> usage}
+
+    {flags, arguments, []} ->
+      # The command is settled before the client is, so a call with no
+      # arguments at all is answered with the usage rather than with a
+      # complaint about a socket nobody asked for yet.
+      command =
+        case arguments do
+          ["health"] -> &StyraAsk.health/1
+          ["workspaces"] -> &StyraAsk.workspaces/1
+          ["interactions"] -> &StyraAsk.interactions/1
+          ["ask" | rest] -> &StyraAsk.ask(&1, rest)
+          _ -> nil
+        end
+
+      if command do
+        with {:ok, styra} <- Client.new(Keyword.take(flags, [:socket])) do
+          command.(styra)
+        end
+      else
+        {:usage, usage}
+      end
   end
 
 case result do

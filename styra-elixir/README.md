@@ -9,8 +9,10 @@ the plumbing under it, and a working example.
 | `lib/styra/client.ex` | Hand-written. The JSON codec and the Unix socket the protocol leaves to its callers. |
 | `examples/styra_ask.exs` | A small client built on both. |
 
-No dependencies: Elixir has carried a `JSON` module since 1.18, and OTP speaks
-Unix sockets natively.
+No runtime dependencies: Elixir has carried a `JSON` module since 1.18, and OTP
+speaks Unix sockets natively, so `lib/styra` can be vendored into another
+project without dragging anything along. The only dependency at all is
+`ex_doc`, dev-only, for `mix docs`.
 
 ## The generated half
 
@@ -54,6 +56,14 @@ Requests come out with string keys, which is what an encoder wants. The data
 you pass in may use atom keys, which is what writing Elixir by hand wants. A
 nullable-but-required field needs no sentinel, unlike the Lua library: a key
 set to `nil` is present, and a key left out is not.
+
+Every `@doc` in the generated module is the doc comment the protocol author
+wrote in Rust, field tables and all, so `mix docs` renders the protocol's own
+explanation of each of its forty-odd operations:
+
+```sh
+mix deps.get && mix docs     # doc/index.html
+```
 
 ## The hand-written half
 
