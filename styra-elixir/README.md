@@ -1,31 +1,33 @@
 # Styra in Elixir
 
-Everything needed to talk to `styra-server` from Elixir: the wire vocabulary,
-the plumbing under it, and a working example.
+What it takes to talk to `styra-server` from Elixir, which is less than it
+looks: the wire vocabulary is depended on rather than written, so what is
+actually here is a socket, a codec, and an example.
 
 | | |
 |---|---|
-| `lib/styra/protocol.ex` | **Generated.** The wire vocabulary — every operation, field name, and enum spelling. |
-| `lib/styra/client.ex` | Hand-written. The JSON codec and the Unix socket the protocol leaves to its callers. |
-| `examples/styra_ask.exs` | A small client built on both. |
+| `lib/styra/client.ex` | The JSON codec and the Unix socket the protocol leaves to its callers. |
+| `examples/styra_ask.exs` | A small client built on both halves. |
+| `{:styra_protocol, path: "../styra-protocol/elixir"}` | **The vocabulary**, generated, living where it is generated from. |
 
-No runtime dependencies: Elixir has carried a `JSON` module since 1.18, and OTP
-speaks Unix sockets natively, so `lib/styra` can be vendored into another
-project without dragging anything along. The only dependency at all is
-`ex_doc`, dev-only, for `mix docs`.
+No dependency needs installing for the client itself: Elixir has carried a
+`JSON` module since 1.18, and OTP speaks Unix sockets natively. `ex_doc` is
+dev-only, for `mix docs`.
 
-## The generated half
+## The vocabulary, which is not here
 
-`Styra.Protocol` carries the same vocabulary `styra-protocol` defines in Rust,
-read out of the Serde type definitions themselves by that crate's generator
-(`styra-protocol/src/codegen`). It is checked in so an Elixir project can
-vendor it without a Rust toolchain, and a test in the crate fails the moment it
-stops matching the definitions. Do not edit it by hand — regenerate it:
+`Styra.Protocol` is generated from the Serde type definitions in Rust, and it
+lives beside them — in `../styra-protocol/elixir`, as a package this one
+depends on. That is the whole point of generating it: a copy checked in here
+would be a second home for the protocol, and a second home is where drift
+starts. Regenerate it with
 
 ```sh
-cargo run -p styra-protocol --bin styra-codegen -- elixir        # rewrite this copy
-cargo run -p styra-protocol --bin styra-codegen -- elixir PATH   # write it elsewhere
+cargo run -p styra-protocol --bin styra-codegen -- elixir
 ```
+
+and a test in the crate fails the moment the checked-in package stops matching
+the definitions. See `../styra-protocol/elixir/README.md`.
 
 It owns no transport and no JSON codec, exactly as the Rust crate owns neither.
 A request is a plain map; carrying it is somebody's business, and the next
@@ -58,12 +60,9 @@ nullable-but-required field needs no sentinel, unlike the Lua library: a key
 set to `nil` is present, and a key left out is not.
 
 Every `@doc` in the generated module is the doc comment the protocol author
-wrote in Rust, field tables and all, so `mix docs` renders the protocol's own
-explanation of each of its forty-odd operations:
-
-```sh
-mix deps.get && mix docs     # doc/index.html
-```
+wrote in Rust, field tables and all. `mix docs` in `../styra-protocol/elixir`
+renders the protocol's own explanation of each of its forty-odd operations;
+`mix docs` here renders this client, since each package documents what it owns.
 
 ## The hand-written half
 

@@ -119,7 +119,12 @@ Two languages are generated today:
 | | | |
 |---|---|---|
 | Lua | `styra-lua/styra/protocol.lua` | `../../../styra-lua/README.md` |
-| Elixir | `styra-elixir/lib/styra/protocol.ex` | `../../../styra-elixir/README.md` |
+| Elixir | `styra-protocol/elixir/lib/styra/protocol.ex` | `../../elixir/README.md` |
+
+The Elixir one is a package in this crate's own directory rather than in
+`styra-elixir`, so the protocol has exactly one home; `styra-elixir` depends on
+it and adds a socket and a codec. The Lua one is still checked in beside its
+client, because Lua has no dependency to declare.
 
 Reading the protocol and writing a module are separate halves, so a third
 language is a backend rather than a second generator. What a backend decides is

@@ -41,12 +41,14 @@ impl Language for Elixir {
         "elixir"
     }
 
+    /// Inside this crate, not in `styra-elixir`, so the protocol has one home.
+    /// `styra-elixir` depends on the package here rather than carrying a copy.
     fn generated_path(&self) -> &'static str {
-        "../styra-elixir/lib/styra/protocol.ex"
+        "elixir/lib/styra/protocol.ex"
     }
 
     fn generated(&self) -> &'static str {
-        include_str!("../../../../styra-elixir/lib/styra/protocol.ex")
+        include_str!("../../../elixir/lib/styra/protocol.ex")
     }
 
     fn render(&self, model: &Model) -> Result<String> {
@@ -749,6 +751,10 @@ mod tests {
     /// built on it — is the library's documentation as much as its README is,
     /// and one that no longer compiles documents nothing.
     ///
+    /// It is compiled against the generated module in *this* crate, which is
+    /// the only copy: what `styra-elixir` has is a path dependency on the
+    /// package here.
+    ///
     /// The example is parsed rather than compiled, because compiling a script
     /// is running it, and running it wants a server.
     #[test]
@@ -765,7 +771,7 @@ mod tests {
             .arg("--warnings-as-errors")
             .arg("-o")
             .arg(&directory)
-            .arg(root.join("lib/styra/protocol.ex"))
+            .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join(Elixir.generated_path()))
             .arg(root.join("lib/styra/client.ex"))
             .output()
             .expect("the compiler must run");

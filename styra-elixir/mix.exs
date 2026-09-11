@@ -1,12 +1,6 @@
 defmodule Styra.MixProject do
   use Mix.Project
 
-  # No runtime dependencies, deliberately. The protocol library is generated
-  # and needs nothing; the client needs a JSON codec and a Unix socket, and
-  # Elixir has carried `JSON` since 1.18 while OTP has spoken Unix sockets for
-  # far longer. A project that would rather use Jason can add it and pass
-  # `json: Jason`. Vendoring `lib/styra` into another project therefore drags
-  # nothing along with it.
   def project do
     [
       app: :styra,
@@ -19,28 +13,30 @@ defmodule Styra.MixProject do
     ]
   end
 
-  # `ex_doc` is the exception, and only for `mix docs`: it is dev-only and not
-  # loaded at runtime, so the library above stays dependency-free.
+  # The protocol is depended on, not copied. It lives beside the Rust
+  # definitions it is generated from, which is the only place it can live
+  # without there being two of it — and two of it is exactly the drift the
+  # generator exists to prevent.
   #
-  # It earns its place here because of what the generator goes to the trouble
-  # of carrying. Every `@doc` in `protocol.ex` is the doc comment the protocol
-  # author wrote in Rust, field tables and all, and without this it is only
-  # ever read by whoever opens the generated file. With it, the protocol
-  # documents itself in the browser, in the language the reader is working in.
+  # What is left here is the two things the protocol deliberately does not
+  # have, and neither needs a dependency either: Elixir has carried `JSON`
+  # since 1.18 and OTP has spoken Unix sockets for far longer. A project that
+  # would rather use Jason can add it and pass `json: Jason`.
+  #
+  # `ex_doc` is dev-only and not loaded at runtime, so what a release ships is
+  # still only this client and the protocol under it.
   defp deps do
-    [{:ex_doc, "~> 0.34", only: :dev, runtime: false}]
+    [
+      {:styra_protocol, path: "../styra-protocol/elixir"},
+      {:ex_doc, "~> 0.34", only: :dev, runtime: false}
+    ]
   end
 
   defp docs do
     [
       main: "readme",
       extras: ["README.md"],
-      # The vocabulary first, the plumbing second, which is the order they are
-      # read in.
-      groups_for_modules: [
-        Protocol: [~r/^Styra\.Protocol/],
-        Client: [Styra.Client]
-      ]
+      groups_for_modules: [Client: [Styra.Client]]
     ]
   end
 
