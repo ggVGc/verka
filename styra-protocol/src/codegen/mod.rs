@@ -23,6 +23,7 @@
 //! required, how each enum is tagged. A [`Language`] then renders that model
 //! however its own readers expect. Lua is the first; [`LANGUAGES`] is the list.
 
+pub mod elixir;
 pub mod lua;
 mod model;
 
@@ -95,7 +96,7 @@ pub trait Language {
 }
 
 /// Every language a client library can be generated for.
-pub const LANGUAGES: &[&dyn Language] = &[&lua::Lua];
+pub const LANGUAGES: &[&dyn Language] = &[&lua::Lua, &elixir::Elixir];
 
 /// Look a language up by the name it is asked for on the command line.
 pub fn language(name: &str) -> Result<&'static dyn Language> {
