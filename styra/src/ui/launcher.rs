@@ -64,8 +64,8 @@ pub(crate) fn render_launcher(frame: &mut Frame, launcher: &Launcher, area: Rect
     render_launcher_column(
         frame,
         columns[0],
-        // A launched session's agent is fixed, and the column says so rather
-        // than looking like a choice the cursor merely failed to reach.
+        // A live session's agent is fixed, and the column says so rather than
+        // looking like a choice the cursor merely failed to reach.
         if launcher.provider_locked {
             " agent · fixed "
         } else {

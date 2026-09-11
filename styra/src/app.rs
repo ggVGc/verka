@@ -337,6 +337,13 @@ pub enum Request {
     /// Tell the server the live interaction has been switched onto
     /// [`App::selection`], so the change lands now and outlives this client.
     ApplySelection,
+    /// Move this Session's history onto another agent, and open the result.
+    ///
+    /// A stopped Session's transcript is written in its agent's own native
+    /// format, so choosing a different agent for it is a conversion rather
+    /// than a setting: the server copies the history into the new agent's
+    /// format as a sibling Session, which is the one the operator continues in.
+    ConvertProvider(Provider),
     /// Fetch the server's plan-quota log, which is server-wide and lives only
     /// in the daemon's memory, so there is nothing to read locally.
     Quota,
@@ -497,13 +504,29 @@ impl App {
         self.launch.set_workspace(workspace.launch.clone());
     }
 
-    /// Whether the picker is reachable. Before launch all providers are
-    /// configurable; idle Codex and Claude threads also accept a model change
-    /// before their next turn (Codex additionally accepts an effort change).
+    /// Whether the picker is reachable.
+    ///
+    /// Whenever no agent process is running — before launch, and again once one
+    /// has stopped or ended — the whole launch is a choice about the *next*
+    /// one, exactly as the sandbox policy is (see [`crate::launch::editable`]).
+    /// Both reopen together: a stopped session's next message resumes it, and
+    /// that resume launches under whatever is chosen here.
+    ///
+    /// While a process is live only its model can move: idle Codex and Claude
+    /// threads accept a model change before their next turn (Codex additionally
+    /// accepts an effort change).
     pub fn can_configure_launch(&self) -> bool {
-        self.activity.status == Status::Pending
+        self.can_edit_launch()
             || (self.activity.status == Status::Idle
                 && matches!(self.selection.provider, Provider::Codex | Provider::Claude))
+    }
+
+    /// Whether an agent process is up. This is what holds the session's agent
+    /// fixed: the process *is* the agent, and it is the one thing a running
+    /// interaction cannot be talked out of — moving the session onto another
+    /// agent means ending this one and converting its transcript.
+    fn agent_is_live(&self) -> bool {
+        !self.can_edit_launch()
     }
 
     /// Switch between compact link labels and labels with their destinations.
@@ -516,12 +539,12 @@ impl App {
     /// be chosen.
     pub fn open_launcher(&mut self) {
         if self.can_configure_launch() {
-            // Past Pending the agent is fixed for the life of the session, so
-            // the picker shows it without ever letting the cursor onto it.
+            // While a process is live the agent is fixed, so the picker shows
+            // it without ever letting the cursor onto it.
             self.launcher = Some(Launcher::from_selection(
                 &self.selection,
                 &self.recent_models,
-                self.activity.status != Status::Pending,
+                self.agent_is_live(),
             ));
         }
     }
@@ -532,31 +555,48 @@ impl App {
     /// the agent. On a live session the change is asked of the server right
     /// away ([`Request::ApplySelection`]) rather than riding on the next
     /// message, so the model the status line names is the model that is loaded.
+    /// On a stopped one nothing is sent either: there is no process to tell, and
+    /// the resume the next message triggers carries the selection.
     pub fn confirm_launcher(&mut self) {
-        if let Some(launcher) = self.launcher.take() {
-            let selection = launcher.selection();
-            if self.activity.status != Status::Pending
-                && selection.provider != self.selection.provider
-            {
-                self.show_action_message("changing agent requires a new session");
-            } else {
-                let mut selection = selection;
-                if self.activity.status != Status::Pending
-                    && selection.provider == Provider::Claude
-                    && selection.effort != self.selection.effort
-                {
-                    selection.effort = self.selection.effort;
-                    self.show_action_message(
-                        "Claude Code can change model between turns; effort remains session-wide",
-                    );
-                }
-                let live = self.activity.status != Status::Pending && selection != self.selection;
-                self.note_recent_model(&selection.model);
-                self.set_selection(selection);
-                if live {
-                    self.ask(Request::ApplySelection);
-                }
+        let Some(launcher) = self.launcher.take() else {
+            return;
+        };
+        let mut selection = launcher.selection();
+        let live = self.agent_is_live();
+        if selection.provider != self.selection.provider {
+            // The picker never gives a live session's agent column the keys, so
+            // this is not a choice it can offer — but it stays the answer for
+            // any other way of asking.
+            if live {
+                return self.show_action_message("changing agent requires a new session");
             }
+            // A stopped Session's history is in its old agent's native format,
+            // so moving it takes a conversion; a Session that was never
+            // launched has no history and is simply set to the new agent.
+            if !self.session_id.is_empty() {
+                // The model is remembered even though the conversion lands on
+                // the new agent's declared default: the converted Session
+                // opens stopped, so its picker is right there — and it lists
+                // the model just asked for first.
+                self.note_recent_model(&selection.model);
+                self.ask(Request::ConvertProvider(selection.provider));
+                return;
+            }
+        }
+        if live
+            && selection.provider == Provider::Claude
+            && selection.effort != self.selection.effort
+        {
+            selection.effort = self.selection.effort;
+            self.show_action_message(
+                "Claude Code can change model between turns; effort remains session-wide",
+            );
+        }
+        let apply = live && selection != self.selection;
+        self.note_recent_model(&selection.model);
+        self.set_selection(selection);
+        if apply {
+            self.ask(Request::ApplySelection);
         }
     }
 
@@ -1054,7 +1094,7 @@ impl App {
 mod tests {
     use super::*;
     use crate::launcher::LaunchColumn;
-    use styra_protocol::agent::Effort;
+    use styra_protocol::agent::{Effort, PROVIDERS};
     use styra_protocol::event::TokenUsage;
     use styra_protocol::RawLine;
     use styra_protocol::{Answer, AnswerValue, FileLocation};
@@ -1812,6 +1852,109 @@ mod tests {
         assert!(app.launcher.is_none());
     }
 
+    /// And once that process is gone the picker is a property of the next one
+    /// again — the agent column included. The next message resumes the
+    /// Session, and the resume launches under whatever is chosen here, so
+    /// leaving the column out of reach would be freezing a choice nothing is
+    /// holding. The launch policy reopens on exactly the same rule; see
+    /// [`crate::launch::editable`].
+    #[test]
+    fn a_stopped_interaction_can_be_configured_again() {
+        for status in [
+            Status::Stopped,
+            Status::Ended {
+                exit_code: Some(0),
+                error: None,
+            },
+        ] {
+            let mut app = app();
+            app.activity.status = status.clone();
+            assert!(app.can_configure_launch(), "{status:?}");
+            app.open_launcher();
+            let launcher = app.launcher.as_ref().expect("the picker is reachable");
+            assert!(!launcher.provider_locked, "{status:?}");
+            assert_eq!(launcher.column, LaunchColumn::Provider, "{status:?}");
+        }
+    }
+
+    /// A model chosen while nothing is running is not asked of the server:
+    /// there is no process to tell. It rides the resume the next message
+    /// triggers instead (see [`crate::session::resume_and_send`]).
+    #[test]
+    fn a_stopped_interactions_model_change_waits_for_the_resume() {
+        let mut app = app();
+        app.activity.status = Status::Stopped;
+        app.open_launcher();
+        let launcher = app.launcher.as_mut().unwrap();
+        launcher.next_column();
+        launcher.next();
+        let chosen = launcher.selection();
+        app.confirm_launcher();
+
+        assert_eq!(app.selection, chosen);
+        assert_eq!(app.take_request(), None);
+    }
+
+    /// A stopped Session's history is written in its agent's own native
+    /// format, so choosing another agent for it is a conversion — and the
+    /// whole conversation comes along rather than the operator having to start
+    /// over to change agent.
+    #[test]
+    fn choosing_another_agent_for_a_stopped_session_converts_it() {
+        let mut app = app();
+        app.activity.status = Status::Stopped;
+        assert_eq!(app.selection.provider, Provider::Codex);
+        app.open_launcher();
+        let launcher = app.launcher.as_mut().unwrap();
+        while launcher.provider() != Provider::Claude {
+            launcher.next();
+        }
+        app.confirm_launcher();
+
+        assert_eq!(
+            app.take_request(),
+            Some(Request::ConvertProvider(Provider::Claude))
+        );
+        // The conversion is the server's answer to give: this screen keeps
+        // showing the Session it is still on until the converted one opens.
+        assert_eq!(app.selection.provider, Provider::Codex);
+    }
+
+    /// Nothing has been launched, so there is no history to convert and no
+    /// sibling Session to make — the agent is simply set.
+    #[test]
+    fn choosing_another_agent_before_launch_only_records_it() {
+        let mut app = App::pending(Selection::new(Provider::Codex));
+        app.open_launcher();
+        let launcher = app.launcher.as_mut().unwrap();
+        while launcher.provider() != Provider::Claude {
+            launcher.next();
+        }
+        app.confirm_launcher();
+
+        assert_eq!(app.selection.provider, Provider::Claude);
+        assert_eq!(app.take_request(), None);
+    }
+
+    /// A live process *is* the agent, so that column stays out of reach while
+    /// one is running — and the refusal stands for any other way of asking.
+    #[test]
+    fn a_live_interaction_still_cannot_change_agent() {
+        let mut app = app();
+        app.activity.status = Status::Idle;
+        app.open_launcher();
+        let launcher = app.launcher.as_mut().unwrap();
+        assert!(launcher.provider_locked);
+        launcher.provider = PROVIDERS
+            .iter()
+            .position(|provider| *provider == Provider::Claude)
+            .unwrap();
+        app.confirm_launcher();
+
+        assert_eq!(app.selection.provider, Provider::Codex);
+        assert_eq!(app.take_request(), None);
+    }
+
     #[test]
     fn an_idle_codex_thread_can_change_its_next_turn_model() {
         let mut app = App::new(Selection::new(Provider::Codex), "session-1");
@@ -2044,6 +2187,63 @@ mod tests {
         );
         app.confirm_launcher();
         assert!(app.requests.is_empty());
+    }
+
+    /// A converted Session replays the history of the agent it came from, that
+    /// agent's own model reports included. They say nothing about the agent
+    /// this Session now runs, so they must not settle its selection: a Session
+    /// converted to Claude Code that adopted a codex model would name a
+    /// selection — `claude:gpt-5.6-terra` — that no launch could reproduce,
+    /// and would offer the picker a row out of the other agent's catalog.
+    #[test]
+    fn a_converted_session_keeps_its_own_agents_model() {
+        let converted = Selection::parse("claude:claude-opus-5/high").unwrap();
+        let mut app = App::new(converted.clone(), "s-1");
+        // The copied codex history, as `open_stored` replays it.
+        app.push_event(AgentEvent::ThreadStarted {
+            thread_id: "t".into(),
+            model: Some("gpt-5.6-terra".into()),
+            effort: Some("medium".into()),
+        });
+        app.push_event(AgentEvent::ModelChanged {
+            model: Some("gpt-5.6-luna".into()),
+            effort: Some("low".into()),
+        });
+        assert_eq!(app.selection, converted);
+
+        app.activity.status = Status::Idle;
+        app.open_launcher();
+        let launcher = app.launcher.as_ref().unwrap();
+        assert_eq!(launcher.provider(), Provider::Claude);
+        assert_eq!(launcher.carried_model, None);
+        assert_eq!(
+            launcher.models(),
+            Provider::Claude
+                .models()
+                .iter()
+                .map(|model| (*model).to_owned())
+                .collect::<Vec<_>>(),
+            "only the agent the Session runs offers rows"
+        );
+    }
+
+    /// The same reports from the agent the Session actually runs still settle
+    /// it — the guard is about foreign history, not about replay.
+    #[test]
+    fn a_replayed_report_from_the_sessions_own_agent_still_settles_it() {
+        let mut app = App::new(
+            Selection::parse("claude:claude-opus-5/high").unwrap(),
+            "s-1",
+        );
+        app.push_event(AgentEvent::ThreadStarted {
+            thread_id: "t".into(),
+            model: Some("claude-sonnet-5".into()),
+            effort: Some("max".into()),
+        });
+        assert_eq!(
+            app.selection,
+            Selection::parse("claude:claude-sonnet-5/max").unwrap()
+        );
     }
 
     #[test]

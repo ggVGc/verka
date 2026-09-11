@@ -455,6 +455,11 @@ pub fn session_id_from_target(target: &Path) -> Result<String> {
 /// Resume `app.session_id` through its provider's native mechanism, then
 /// deliver `message` to the freshly revived agent, under `contract` when the
 /// operator asked this turn for a shape.
+///
+/// The resume names the selection on screen. Nothing was running while the
+/// operator had the launch picker open, so a model or effort they chose there
+/// is a choice about *this* revival, and the agent comes back up on it rather
+/// than on whatever the stopped turn happened to run.
 pub fn resume_and_send(
     app: &mut App,
     client: &Client,
@@ -469,11 +474,15 @@ pub fn resume_and_send(
     match client.resume_session(&ResumeSession {
         id: app.session_id.clone(),
         launch: app.launch.interaction.clone(),
+        selection: Some(app.selection.clone()),
     }) {
         Ok(info) => {
             app.session_name = info.name.clone();
             app.workspace.enter(info.workspace);
             app.launch.record(info.driva);
+            // What the server actually revived it on, which is the answer to
+            // the selection just asked for rather than a restatement of it.
+            app.set_selection(info.selection);
             app.push_log(LogEntry::info("resumed with provider-native context"));
             app.outbox.replace_queued(info.queued.clone());
             let session_id = info.id;

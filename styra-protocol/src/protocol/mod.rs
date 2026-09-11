@@ -114,6 +114,17 @@ pub struct ResumeSession {
     pub id: String,
     #[serde(default)]
     pub launch: LaunchPolicy,
+    /// The model and reasoning effort to revive the session on. `None` keeps
+    /// the selection the Session is stored with, which is what an unattended
+    /// resume (a rate-limit retry) wants; a client sends its own so an
+    /// operator who changed the model while nothing was running gets the
+    /// model they chose rather than the one the stopped turn ran on.
+    ///
+    /// The agent itself is not a choice here — the resume hands the provider
+    /// its own native transcript, so a selection naming a different one is
+    /// refused rather than quietly resumed under the stored agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection: Option<Selection>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -603,12 +614,35 @@ mod tests {
                 templates: vec!["rust".into()],
                 ..LaunchPolicy::default()
             },
+            selection: None,
         });
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(json["operation"], "resume_session");
         assert_eq!(json["data"]["id"], "styra-1");
         assert_eq!(json["data"]["launch"]["templates"][0], "rust");
+        assert!(
+            json["data"].get("selection").is_none(),
+            "a resume that keeps the stored selection names none"
+        );
         assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
+    }
+
+    /// A resume may name the model and effort to revive on, so an operator's
+    /// choice made while nothing was running reaches the launch.
+    #[test]
+    fn a_resume_may_name_the_selection_to_revive_on() {
+        let request: Request = serde_json::from_str(
+            r#"{"operation":"resume_session","data":{"id":"styra-1",
+                 "selection":{"provider":"codex","model":"gpt-5.6-luna","effort":"low"}}}"#,
+        )
+        .unwrap();
+        let Request::ResumeSession(resume) = request else {
+            panic!("expected a resume request");
+        };
+        assert_eq!(
+            resume.selection,
+            Some(Selection::parse("codex:gpt-5.6-luna/low").unwrap())
+        );
     }
 
     /// A launch that names no policy of its own is the ordinary case — it runs

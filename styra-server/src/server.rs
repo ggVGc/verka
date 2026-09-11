@@ -1043,6 +1043,27 @@ impl ServerState {
         }
 
         let summary = self.stored_summary(&request.id)?;
+        // A resume revives the session on the selection the caller names, so a
+        // model or effort chosen while nothing was running is what comes back
+        // up. The agent is not open to the same choice: this hands the provider
+        // its own native transcript, and no other provider can read it — that
+        // is what converting a Session is for.
+        let stored_selection = summary.selection;
+        let selection = match request.selection {
+            Some(selection) if selection.provider != stored_selection.provider => {
+                anyhow::bail!(
+                    "session {:?} holds a {} transcript and cannot be resumed as {}; convert the session instead",
+                    request.id,
+                    stored_selection.provider.as_str(),
+                    selection.provider.as_str()
+                )
+            }
+            Some(selection) => {
+                crate::agent::validate_selection(&selection)?;
+                selection
+            }
+            None => stored_selection.clone(),
+        };
         let provider_session_id = journal::read_provider_session_id(&summary.path)?
             .with_context(|| {
                 format!(
@@ -1050,7 +1071,7 @@ impl ServerState {
                     request.id
                 )
             })?;
-        ensure_native_session_exists(summary.selection.provider, &provider_session_id)?;
+        ensure_native_session_exists(stored_selection.provider, &provider_session_id)?;
         let owning_workspace =
             crate::workspace::get(&self.inner.store_root, &summary.workspace_id)?;
         let repository_mounts = owning_workspace
@@ -1070,7 +1091,6 @@ impl ServerState {
             .unwrap_or_default();
         let workspace = owning_workspace.host_path;
         let layout = workspace_layout(&workspace);
-        let selection = summary.selection;
         let launch = LaunchPolicy::merge(&owning_workspace.launch, &request.launch);
         let mut profile = crate::agent::resolve_profile(&selection, &layout)?;
         profile.resume(selection.provider, &provider_session_id)?;
@@ -1089,7 +1109,23 @@ impl ServerState {
         // after this explicit boundary.
         let seeded_updates = replayed_session_updates(&summary.path, profile.protocol)?;
         let updates_after = seeded_updates.len() as u64;
-        let journal = Journal::open(&summary.path)?;
+        let mut journal = Journal::open(&summary.path)?;
+        // A resume onto a different model or effort is recorded the same way a
+        // live switch is (see `Interaction::set_selection`): the Session's
+        // stored selection is the one it was created with, so the journal's own
+        // model-change records are what later say what it last ran on. The
+        // comparison is against what the history says the last run used, not
+        // against that stored selection — otherwise a resume that changed
+        // nothing would still announce a change, once per revival. Written
+        // after the stream was seeded, so the initiating client — which asked
+        // for this selection and already shows it — is not told again.
+        let previous = replayed_selection(&seeded_updates, &stored_selection);
+        if selection != previous {
+            journal.record_model_change(
+                (selection.model != previous.model).then_some(selection.model.as_str()),
+                (selection.effort != previous.effort).then_some(selection.effort.as_str()),
+            )?;
+        }
         let journal_path = journal.path().to_path_buf();
         let diagnostics = summary.path.join("diagnostics.log");
         let spec = InteractionSpec {
@@ -1533,6 +1569,10 @@ impl ServerState {
             if let Err(error) = self.resume_session(ResumeSession {
                 id: id.clone(),
                 launch,
+                // An unattended retry revives the Session exactly as it was
+                // held back: there is no operator here to have chosen
+                // otherwise.
+                selection: None,
             }) {
                 // The refused interaction is still the one in the map, so its
                 // own stream is where an operator will look for the reason
@@ -2071,6 +2111,48 @@ fn replayed_session_updates(
         push_sequenced(&mut updates, InteractionUpdate::Raw(line));
     }
     Ok(updates)
+}
+
+/// What a Session's replayed history says it last ran on.
+///
+/// `stored` is the selection the Session was *created* with and never moves, so
+/// the model and effort actually in use at the end of the history are whatever
+/// the agent reported at each thread start and whatever later switches were
+/// recorded. Folding those in order is the only way to say what a resume onto a
+/// named selection would be changing.
+///
+/// A converted Session replays the agent it came from, model reports included,
+/// so a report naming a model only another agent declares is skipped whole —
+/// the same rule the client applies when it replays the identical history.
+fn replayed_selection(updates: &[SequencedUpdate], stored: &Selection) -> Selection {
+    let mut selection = stored.clone();
+    for sequenced in updates {
+        let (model, effort) = match &sequenced.update {
+            InteractionUpdate::Event(crate::event::AgentEvent::ThreadStarted {
+                model,
+                effort,
+                ..
+            })
+            | InteractionUpdate::Event(crate::event::AgentEvent::ModelChanged { model, effort }) => {
+                (model, effort)
+            }
+            _ => continue,
+        };
+        if let Some(model) = model {
+            if !stored.provider.could_run(model) {
+                continue;
+            }
+            selection.model = model.clone();
+        }
+        if let Some(effort) = effort
+            .as_deref()
+            .and_then(|effort| crate::agent::Effort::parse(effort).ok())
+            .filter(|effort| stored.provider.efforts().contains(effort))
+        {
+            selection.effort = effort;
+        }
+    }
+    selection
 }
 
 fn push_sequenced(updates: &mut Vec<SequencedUpdate>, update: InteractionUpdate) {
@@ -3075,9 +3157,40 @@ mod tests {
             .resume_session(ResumeSession {
                 id: "0000000000001-1-1".into(),
                 launch: LaunchPolicy::default(),
+                selection: None,
             })
             .unwrap_err();
         assert!(error.to_string().contains("can be viewed but not resumed"));
+
+        // A resume may name the model and effort to revive on, but not another
+        // agent: the stored transcript is the agent's own, so it is refused
+        // before anything is launched rather than resumed under the stored
+        // agent as though the choice had been honoured.
+        let error = state
+            .resume_session(ResumeSession {
+                id: "0000000000001-1-1".into(),
+                launch: LaunchPolicy::default(),
+                selection: Some(Selection::parse("claude:claude-opus-5/high").unwrap()),
+            })
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("cannot be resumed as claude"),
+            "{error:#}"
+        );
+        assert!(error.to_string().contains("convert"), "{error:#}");
+        // The same resume naming this agent's own catalog gets as far as the
+        // native transcript this legacy journal does not have.
+        let error = state
+            .resume_session(ResumeSession {
+                id: "0000000000001-1-1".into(),
+                launch: LaunchPolicy::default(),
+                selection: Some(Selection::parse("codex:gpt-5.6-luna/low").unwrap()),
+            })
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("can be viewed but not resumed"),
+            "{error:#}"
+        );
 
         // Conversion needs the provider's native transcript just as resume
         // does. A legacy Styra-only journal must fail without making a
@@ -3173,6 +3286,55 @@ mod tests {
             Path::new("/x")
         )
         .is_err());
+    }
+
+    /// What a resume is *changing* is measured against the end of the
+    /// Session's history, not against the selection it was created with — and
+    /// the history of a converted Session includes the old agent's own model
+    /// reports, which say nothing about this one.
+    #[test]
+    fn the_replayed_selection_is_the_end_of_the_history_and_ignores_a_foreign_agents_reports() {
+        let stored = Selection::parse("claude:claude-opus-5/high").unwrap();
+        let events = |events: Vec<crate::event::AgentEvent>| {
+            events
+                .into_iter()
+                .enumerate()
+                .map(|(index, event)| SequencedUpdate {
+                    sequence: index as u64 + 1,
+                    update: InteractionUpdate::Event(event),
+                })
+                .collect::<Vec<_>>()
+        };
+
+        // Nothing reported: the Session is still on what it was created with.
+        assert_eq!(replayed_selection(&[], &stored), stored);
+
+        // Its own agent's reports carry, last one winning.
+        let own = events(vec![
+            crate::event::AgentEvent::ThreadStarted {
+                thread_id: "t".into(),
+                model: Some("claude-sonnet-5".into()),
+                effort: Some("max".into()),
+            },
+            crate::event::AgentEvent::ModelChanged {
+                model: Some("claude-opus-4-8".into()),
+                effort: None,
+            },
+        ]);
+        assert_eq!(
+            replayed_selection(&own, &stored),
+            Selection::parse("claude:claude-opus-4-8/max").unwrap()
+        );
+
+        // The copied history of a conversion does not: its model is a model
+        // this agent cannot be running, and its effort describes that same
+        // foreign thread.
+        let converted = events(vec![crate::event::AgentEvent::ThreadStarted {
+            thread_id: "t".into(),
+            model: Some("gpt-5.6-terra".into()),
+            effort: Some("medium".into()),
+        }]);
+        assert_eq!(replayed_selection(&converted, &stored), stored);
     }
 
     #[test]

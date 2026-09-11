@@ -48,6 +48,13 @@ the default; `Enter` only uses it now. Codex and Claude Code are available when
 their executables are on the server's `PATH`.
 
 During an idle live session, `L` changes the model selection for the next turn.
+The agent itself is fixed while a process is up — that column reads `agent ·
+fixed`. Once the interaction is stopped or has ended, the whole picker reopens:
+the next message resumes the Session and the resume launches under whatever is
+chosen, the agent included. Choosing a different agent for a stopped Session
+converts its history into that agent's format as a sibling Session, and the
+view follows the sibling — the conversation comes along, and both Sessions keep
+a marker naming the other.
 `Ctrl+T` asks the message's reply to have a shape: text, lines, files, or JSON.
 `/cd DIR` changes the working directory of an idle Codex interaction; relative
 paths are from the Workspace root and absolute paths must remain inside it.

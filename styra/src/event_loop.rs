@@ -848,6 +848,32 @@ pub fn run(
                     ))),
                 }
             }
+            // Moving a stopped Session onto another agent. The server copies
+            // the whole history into the new agent's native format as a
+            // sibling Session, and that sibling — not this one — is where the
+            // conversation carries on, so the view follows it. Both sides keep
+            // a branch marker, so the Session it came from stays reachable.
+            Some(Request::ConvertProvider(provider)) => {
+                match client.branch_session(
+                    &app.session_id,
+                    None,
+                    styra_protocol::BranchHistory::ThroughSelected,
+                    Some(provider),
+                ) {
+                    Ok(converted) => {
+                        app.push_log(LogEntry::info(format!(
+                            "converted this Session's history to {}; continuing in Session {}",
+                            provider.as_str(),
+                            converted.name.as_deref().unwrap_or(&converted.id)
+                        )));
+                        return Ok(RunOutcome::OpenSession(converted.id));
+                    }
+                    Err(error) => app.push_log(LogEntry::error(format!(
+                        "could not convert this Session to {}: {error:#}",
+                        provider.as_str()
+                    ))),
+                }
+            }
             Some(Request::Templates) => {
                 // Which templates the picker starts from is the layer being
                 // edited. For the Workspace's own that is exactly its list. For

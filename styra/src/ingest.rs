@@ -133,17 +133,29 @@ pub fn push_event(app: &mut App, event: AgentEvent) {
         // than maintaining a second, status-line-only version of the model.
         AgentEvent::ThreadStarted { model, effort, .. }
         | AgentEvent::ModelChanged { model, effort } => {
-            if let Some(model) = model {
-                app.selection.model = model.clone();
-                app.model_reported = matches!(event, AgentEvent::ThreadStarted { .. });
-            }
-            if let Some(effort) = effort
+            // A converted Session replays the agent it was converted from —
+            // that agent's own model reports included (see
+            // `Journal::copy_branch_from`). A report naming a model only the
+            // other agent declares therefore describes a thread this session
+            // is not running, and is ignored whole: adopting its model would
+            // leave the Session claiming a selection no launch could
+            // reproduce, and its effort describes that same foreign thread.
+            let foreign = model
                 .as_deref()
-                .and_then(|effort| Effort::parse(effort).ok())
-                .filter(|effort| app.selection.provider.efforts().contains(effort))
-            {
-                app.selection.effort = effort;
-                app.effort_reported = matches!(event, AgentEvent::ThreadStarted { .. });
+                .is_some_and(|model| !app.selection.provider.could_run(model));
+            if !foreign {
+                if let Some(model) = model {
+                    app.selection.model = model.clone();
+                    app.model_reported = matches!(event, AgentEvent::ThreadStarted { .. });
+                }
+                if let Some(effort) = effort
+                    .as_deref()
+                    .and_then(|effort| Effort::parse(effort).ok())
+                    .filter(|effort| app.selection.provider.efforts().contains(effort))
+                {
+                    app.selection.effort = effort;
+                    app.effort_reported = matches!(event, AgentEvent::ThreadStarted { .. });
+                }
             }
         }
         AgentEvent::UserMessage { .. }

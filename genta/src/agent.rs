@@ -146,6 +146,21 @@ impl Provider {
         }
     }
 
+    /// Whether this agent could be the one running `model`.
+    ///
+    /// A catalog is not a closed set — every agent accepts any model id it
+    /// knows — so this only rules out ids another agent *declares*. That is
+    /// enough for the case it exists for: a session converted from one agent
+    /// to the other replays the history it came from, the old agent's own
+    /// model reports included, and those name models this one cannot be
+    /// running. An unlisted id is nobody's in particular and so is allowed.
+    pub fn could_run(&self, model: &str) -> bool {
+        self.models().contains(&model)
+            || !Provider::ALL
+                .iter()
+                .any(|provider| provider.models().contains(&model))
+    }
+
     /// The reasoning-effort levels this provider accepts, lowest first. The two
     /// agents' ladders differ at the ends: codex has a `minimal` rung, Claude
     /// Code a `max` one.

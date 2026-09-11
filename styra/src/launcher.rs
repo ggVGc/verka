@@ -45,10 +45,11 @@ pub struct Launcher {
     /// the operator can leave it selected; the picker cannot type one, only
     /// carry one it was opened on.
     pub carried_model: Option<String>,
-    /// Whether the agent column is out of reach. A live session's agent cannot
-    /// be changed without converting it, so once one has been launched the
-    /// picker never gives the column the keys — it only shows which agent the
-    /// session is already running.
+    /// Whether the agent column is out of reach. A live session's agent is the
+    /// process itself and cannot be changed without converting the session, so
+    /// while one is up the picker never gives the column the keys — it only
+    /// shows which agent the session is running. Once nothing is running the
+    /// column is a choice again: see [`crate::app::App::can_configure_launch`].
     pub provider_locked: bool,
     /// Models the operator has confirmed before, most recent first. They are
     /// listed ahead of the rest of the catalog, so the handful of models
@@ -63,9 +64,9 @@ impl Launcher {
     /// there is always a row to open on. A model the provider's catalog does not
     /// list is carried as its own final row rather than dropped, so confirming
     /// the picker cannot silently change an existing selection.
-    /// `provider_locked` says the session has already been launched: the agent
-    /// column is then shown but never focused, so no key can move the cursor
-    /// onto a choice the session could not adopt anyway.
+    /// `provider_locked` says an agent process is up: the agent column is then
+    /// shown but never focused, so no key can move the cursor onto a choice
+    /// the session could not adopt anyway.
     pub fn from_selection(
         selection: &Selection,
         recent_models: &[String],
@@ -306,12 +307,12 @@ mod tests {
         assert_eq!(launcher.model_rows(), launcher.provider().models().len());
     }
 
-    /// A launched session's agent cannot be changed without converting the
+    /// A live session's agent cannot be changed without converting the
     /// session, so the picker never gives that column the keys: it opens on the
     /// model column and no amount of column stepping, in either direction,
     /// reaches the agent one.
     #[test]
-    fn a_launched_session_cannot_move_the_cursor_onto_the_agent_column() {
+    fn a_live_session_cannot_move_the_cursor_onto_the_agent_column() {
         let mut launcher = Launcher::from_selection(&Selection::new(Provider::Claude), &[], true);
         assert_eq!(launcher.column, LaunchColumn::Model);
 
