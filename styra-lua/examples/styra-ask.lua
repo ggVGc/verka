@@ -19,10 +19,15 @@
 -- PATH; the default is $XDG_RUNTIME_DIR/styra/styra.sock, the same one
 -- `styractl` uses.
 
+-- Lua has no dependency to declare, so the dependency is a search path: the
+-- client and its neighbours here, and the generated protocol where it is
+-- generated, in `styra-protocol/lua`. Both are found relative to this script
+-- so it runs from anywhere without being installed; a real project would set
+-- LUA_PATH once instead, and the README says how.
+local here = arg[0]:match("^(.*)/[^/]+$") or "."
 package.path = table.concat({
-  -- The library and its neighbours, found relative to this script so it runs
-  -- from anywhere without being installed.
-  ((arg[0]:match("^(.*)/[^/]+$") or ".") .. "/../?.lua"),
+  here .. "/../?.lua",
+  here .. "/../../styra-protocol/lua/?.lua",
   package.path,
 }, ";")
 

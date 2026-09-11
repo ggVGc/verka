@@ -1,32 +1,42 @@
 # Styra in Lua
 
-Everything needed to talk to `styra-server` from a Lua script: the wire
-vocabulary, the plumbing under it, and a working example.
+What it takes to talk to `styra-server` from a Lua script, which is less than
+it looks: the wire vocabulary is `require`d from where it is generated, so what
+is actually here is a socket, a codec, and an example.
 
 | | |
 |---|---|
-| `styra/protocol.lua` | **Generated.** The wire vocabulary — every operation, field name, and enum spelling. |
-| `styra/client.lua` | Hand-written. The JSON codec and the Unix socket the protocol leaves to its callers. |
-| `styra/json.lua` | Hand-written. A toy codec, so a script runs before anything is installed. |
-| `examples/styra-ask.lua` | A small client built on both. |
+| `styra/client.lua` | The JSON codec and the Unix socket the protocol leaves to its callers. |
+| `styra/json.lua` | A toy codec, so a script runs before anything is installed. |
+| `examples/styra-ask.lua` | A small client built on both halves. |
+| `../styra-protocol/lua/styra/protocol.lua` | **The vocabulary**, generated, living where it is generated from. |
 
-## The generated half
+## The vocabulary, which is not here
 
-`styra/protocol.lua` carries the same vocabulary `styra-protocol` defines in
-Rust, read out of the Serde type definitions themselves by that crate's
-generator (`styra-protocol/src/codegen`). It is checked in so a Lua project can
-vendor or `require` it without a Rust toolchain, and a test in the crate fails
-the moment it stops matching the definitions. Do not edit it by hand —
-regenerate it:
+`styra.protocol` is generated from the Serde type definitions in Rust, and it
+lives beside them — in `../styra-protocol/lua`. That is the whole point of
+generating it: a copy checked in here would be a second home for the protocol,
+and a second home is where drift starts. Regenerate it with
 
 ```sh
-cargo run -p styra-protocol --bin styra-codegen -- lua          # rewrite this copy
-cargo run -p styra-protocol --bin styra-codegen -- lua PATH     # write it elsewhere
+cargo run -p styra-protocol --bin styra-codegen -- lua        # rewrite it
+cargo run -p styra-protocol --bin styra-codegen -- lua PATH   # write it elsewhere
 ```
 
-It owns no transport and no JSON codec, exactly as the Rust crate owns neither.
-A request is a plain table; carrying it is somebody's business, and the next
-section is this repository's answer to whose.
+and a test in the crate fails the moment the checked-in file stops matching the
+definitions. See `../styra-protocol/lua/README.md`.
+
+Lua has no manifest to declare a dependency in, so the two directories are
+joined by a search path. The example sets it itself, relative to where it is
+run from; a project of your own would set it once:
+
+```sh
+export LUA_PATH="/path/to/styra-protocol/lua/?.lua;/path/to/styra-lua/?.lua;;"
+```
+
+The protocol owns no transport and no JSON codec, exactly as the Rust crate
+owns neither. A request is a plain table; carrying it is somebody's business,
+and the next section is this repository's answer to whose.
 
 - `protocol.request.<operation>(data)` builds a request, raising if the data
   would be refused: a missing field, a misspelled one, a value of the wrong

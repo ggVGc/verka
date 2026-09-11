@@ -29,12 +29,16 @@ impl Language for Lua {
         "lua"
     }
 
+    /// Inside this crate, not in `styra-lua`, so the protocol has one home.
+    /// Lua has no dependency to declare, so what `styra-lua` points at it with
+    /// is a search path rather than a manifest entry — but it points, and does
+    /// not copy.
     fn generated_path(&self) -> &'static str {
-        "../styra-lua/styra/protocol.lua"
+        "lua/styra/protocol.lua"
     }
 
     fn generated(&self) -> &'static str {
-        include_str!("../../../../styra-lua/styra/protocol.lua")
+        include_str!("../../../lua/styra/protocol.lua")
     }
 
     fn render(&self, model: &Model) -> Result<String> {
@@ -520,6 +524,37 @@ mod tests {
                 String::from_utf8_lossy(&output.stderr)
             );
         }
+    }
+
+    /// The generated library is not in `styra-lua`; it is in this crate, and
+    /// what reaches it is a search path. `loadfile` above only parses, so it
+    /// would not notice a path that no longer resolves — this runs the example
+    /// for real.
+    ///
+    /// With no arguments it prints its usage and exits 2, which it can only do
+    /// after requiring both halves. A broken path is a Lua error and some
+    /// other status entirely.
+    #[test]
+    fn the_example_finds_the_protocol_where_it_now_lives() {
+        let Some(lua) = interpreter() else {
+            eprintln!("no lua interpreter on PATH; skipping the search path");
+            return;
+        };
+        let output = Command::new(&lua)
+            .arg("examples/styra-ask.lua")
+            .current_dir(styra_lua())
+            .output()
+            .expect("the interpreter must run");
+        let complaint = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "the example did not reach its own usage:\n{complaint}"
+        );
+        assert!(
+            complaint.contains("usage: styra-ask.lua"),
+            "expected the usage, got:\n{complaint}"
+        );
     }
 
     /// The Lua check script builds a request the Rust side then reads back, so
