@@ -28,8 +28,8 @@ pub struct WorkspaceSummary {
     /// Canonical root of the Git checkout associated with this Workspace.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub git_repository: Option<PathBuf>,
-    /// Whether launches in this Workspace expose Styra's linked-worktree
-    /// creation tool. Off by default; worktrees are an opt-in capability.
+    /// Whether launches in this Workspace get a linked worktree of their own
+    /// to work in. Off by default; worktrees are an opt-in capability.
     #[serde(default)]
     pub worktrees_enabled: bool,
     /// Directory holding `workspace.json` and this Workspace's Sessions.

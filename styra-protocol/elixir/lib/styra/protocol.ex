@@ -1723,8 +1723,8 @@ defmodule Styra.Protocol do
     def set_workspace_git_repository!(data), do: Styra.Protocol.build!("set_workspace_git_repository", data)
 
     @doc ~S"""
-    Opt in or out of exposing linked-worktree creation to launches in this
-    Workspace.
+    Opt launches in this Workspace in or out of running in a linked
+    worktree of their own rather than in the Workspace directory itself.
 
     Fields of `data`:
 

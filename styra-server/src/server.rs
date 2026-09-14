@@ -26,10 +26,10 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// Stands in for the session id in a planned launch: the directory it names is
-/// only created once the session exists.
+/// Stands in for the session id in a planned launch: the directories it names
+/// — the broker's control directory, the interaction's worktree — are only
+/// created once the session exists.
 const PENDING_SESSION_ID: &str = "<pending>";
-const SANDBOX_WORKTREES_DIR: &str = "/tmp/styra/worktrees";
 
 #[derive(Clone)]
 pub struct ServerState {
@@ -566,6 +566,10 @@ impl ManagedInteraction {
 
 impl ServerState {
     /// Prepare linked worktrees for a Git-backed Workspace.
+    ///
+    /// `None` means launches here work in the Workspace directory itself,
+    /// either because the operator has not opted in or because the directory is
+    /// not inside a Git working tree and so has nothing to branch from.
     fn workspace_worktrees(
         &self,
         workspace: &WorkspaceSummary,
@@ -579,7 +583,6 @@ impl ServerState {
         crate::worktree::Worktrees::prepare(
             repository,
             crate::workspace::worktrees_dir(&self.inner.store_root, &workspace.id),
-            PathBuf::from(SANDBOX_WORKTREES_DIR),
         )
         .map(Some)
     }
@@ -656,16 +659,9 @@ impl ServerState {
             .transpose()?
             .unwrap_or_default();
         let worktrees = self.workspace_worktrees(&owning_workspace)?;
-        let automatic_mounts = worktrees
-            .as_ref()
-            .map(crate::worktree::Worktrees::mounts)
-            .unwrap_or_default();
-        let dynamic_tools = worktrees
-            .as_ref()
-            .map(|worktrees| vec![worktrees.tool()])
-            .unwrap_or_default();
+        let automatic_mounts = worktree_mounts(worktrees.as_ref());
         let workspace = owning_workspace.host_path;
-        let layout = workspace_layout(&workspace);
+        let layout = launch_layout(worktrees.as_ref(), &workspace);
         let selection = request.selection;
         let name = journal::normalize_session_name(request.name.as_deref())?
             .or_else(|| journal::name_from_message(request.message.as_deref()));
@@ -695,12 +691,19 @@ impl ServerState {
             .parent()
             .unwrap_or(&self.inner.store_root)
             .join("diagnostics.log");
+        // The directory this interaction will actually work in, ready before
+        // the agent is: its own checkout when the Workspace makes worktrees,
+        // the Workspace directory itself otherwise.
+        let checkout = match &worktrees {
+            Some(worktrees) => worktrees.checkout(&id)?,
+            None => workspace.clone(),
+        };
         let spec = InteractionSpec {
             profile,
             resume_provider_session_id: None,
             working_directory: layout.workspace.clone(),
             workspace: MountSpec {
-                source: workspace.clone(),
+                source: checkout.clone(),
                 destination: layout.workspace.clone(),
                 writable: launch.grants_writable_workspace(),
             },
@@ -710,7 +713,6 @@ impl ServerState {
             base: base.clone(),
             temporary_mounts: Vec::new(),
             extra_mounts,
-            dynamic_tools,
             template,
             broker: Some(self.prepare_broker(&id, tmux)?),
         };
@@ -760,7 +762,7 @@ impl ServerState {
             workspace_id: request.workspace_id.clone(),
             name: Mutex::new(name.clone()),
             selection: Mutex::new(selection.clone()),
-            workspace: workspace.clone(),
+            workspace: checkout.clone(),
             driva: driva.clone(),
             shell,
             queue: Mutex::new(std::collections::VecDeque::new()),
@@ -946,7 +948,7 @@ impl ServerState {
             name,
             workspace_id: request.workspace_id,
             selection,
-            workspace,
+            workspace: checkout,
             journal_path,
             driva,
             updates_after: 0,
@@ -959,8 +961,9 @@ impl ServerState {
     /// It resolves the profile, template overlay and mounts the same way the
     /// real launch does, so what the operator is shown before their first
     /// message is what they will get. The one thing it cannot name is the
-    /// session id, so the broker control mount carries a placeholder for the
-    /// directory the launch will make.
+    /// session id, so the mounts a launch derives from it — the broker's
+    /// control directory, and the worktree a Workspace that makes them would
+    /// check out — carry a placeholder for the directory the launch will make.
     fn plan_session(&self, request: crate::protocol::PlanSession) -> Result<DrivaOptions> {
         let owning_workspace =
             crate::workspace::get(&self.inner.store_root, &request.workspace_id)?;
@@ -971,16 +974,13 @@ impl ServerState {
             .transpose()?
             .unwrap_or_default();
         let worktrees = self.workspace_worktrees(&owning_workspace)?;
-        let automatic_mounts = worktrees
-            .as_ref()
-            .map(crate::worktree::Worktrees::mounts)
-            .unwrap_or_default();
-        let dynamic_tools = worktrees
-            .as_ref()
-            .map(|worktrees| vec![worktrees.tool()])
-            .unwrap_or_default();
+        let automatic_mounts = worktree_mounts(worktrees.as_ref());
         let workspace = owning_workspace.host_path;
-        let layout = workspace_layout(&workspace);
+        let layout = launch_layout(worktrees.as_ref(), &workspace);
+        let checkout = match &worktrees {
+            Some(worktrees) => worktrees.path(PENDING_SESSION_ID),
+            None => workspace.clone(),
+        };
         let launch = LaunchPolicy::merge(&owning_workspace.launch, &request.launch);
         let mut profile = crate::agent::resolve_profile(&request.selection, &layout)?;
         profile.network = profile.network || launch.grants_network();
@@ -995,7 +995,7 @@ impl ServerState {
             resume_provider_session_id: None,
             working_directory: layout.workspace.clone(),
             workspace: MountSpec {
-                source: workspace,
+                source: checkout,
                 destination: layout.workspace.clone(),
                 writable: launch.grants_writable_workspace(),
             },
@@ -1005,7 +1005,6 @@ impl ServerState {
             base: base.clone(),
             temporary_mounts: Vec::new(),
             extra_mounts,
-            dynamic_tools,
             template,
             broker: Some(self.describe_broker(PENDING_SESSION_ID, tmux)),
         };
@@ -1081,16 +1080,17 @@ impl ServerState {
             .transpose()?
             .unwrap_or_default();
         let worktrees = self.workspace_worktrees(&owning_workspace)?;
-        let automatic_mounts = worktrees
-            .as_ref()
-            .map(crate::worktree::Worktrees::mounts)
-            .unwrap_or_default();
-        let dynamic_tools = worktrees
-            .as_ref()
-            .map(|worktrees| vec![worktrees.tool()])
-            .unwrap_or_default();
+        let automatic_mounts = worktree_mounts(worktrees.as_ref());
         let workspace = owning_workspace.host_path;
-        let layout = workspace_layout(&workspace);
+        let layout = launch_layout(worktrees.as_ref(), &workspace);
+        // The Session's own checkout, from the id it has always had. It is
+        // still there with its branch and its uncommitted work unless the
+        // Workspace was opted in after this Session last ran, in which case
+        // this is where it starts having one.
+        let checkout = match &worktrees {
+            Some(worktrees) => worktrees.checkout(&request.id)?,
+            None => workspace.clone(),
+        };
         let launch = LaunchPolicy::merge(&owning_workspace.launch, &request.launch);
         let mut profile = crate::agent::resolve_profile(&selection, &layout)?;
         profile.resume(selection.provider, &provider_session_id)?;
@@ -1133,7 +1133,7 @@ impl ServerState {
             resume_provider_session_id: Some(provider_session_id),
             working_directory: layout.workspace.clone(),
             workspace: MountSpec {
-                source: workspace.clone(),
+                source: checkout.clone(),
                 destination: layout.workspace.clone(),
                 writable: launch.grants_writable_workspace(),
             },
@@ -1143,7 +1143,6 @@ impl ServerState {
             base: base.clone(),
             temporary_mounts: Vec::new(),
             extra_mounts,
-            dynamic_tools,
             template,
             broker: Some(self.prepare_broker(&request.id, tmux)?),
         };
@@ -1194,7 +1193,7 @@ impl ServerState {
             workspace_id: summary.workspace_id.clone(),
             name: Mutex::new(summary.name.clone()),
             selection: Mutex::new(selection.clone()),
-            workspace: workspace.clone(),
+            workspace: checkout.clone(),
             driva: driva.clone(),
             shell,
             queue: Mutex::new(queued.into_iter().collect()),
@@ -1355,7 +1354,7 @@ impl ServerState {
             name: summary.name,
             workspace_id: summary.workspace_id,
             selection,
-            workspace,
+            workspace: checkout,
             journal_path,
             driva,
             updates_after,
@@ -2423,6 +2422,26 @@ fn workspace_layout(workspace: &Path) -> SandboxLayout {
     SandboxLayout::same_path(workspace)
 }
 
+/// Where the directory an interaction works in lands inside its sandbox.
+///
+/// A Workspace keeps its host path, which is what makes absolute-path tooling
+/// and provider session state stable for that project. A worktree cannot: it
+/// lives under the store, at a path that names one interaction and means
+/// nothing to the agent working there, so it takes the fixed layout instead.
+fn launch_layout(worktrees: Option<&crate::worktree::Worktrees>, workspace: &Path) -> SandboxLayout {
+    match worktrees {
+        Some(_) => SandboxLayout::default(),
+        None => workspace_layout(workspace),
+    }
+}
+
+/// What a checked-out worktree needs beside itself to be a working repository.
+fn worktree_mounts(worktrees: Option<&crate::worktree::Worktrees>) -> Vec<MountSpec> {
+    worktrees
+        .map(|worktrees| vec![worktrees.metadata_mount()])
+        .unwrap_or_default()
+}
+
 /// The Driva configuration a launch in this Workspace resolves against: the
 /// Workspace's own `driva.toml` when it has one, otherwise Driva's built-ins.
 fn workspace_driva_config(workspace: &Path) -> Result<driva::Config> {
@@ -2716,8 +2735,6 @@ mod tests {
         let workspace =
             crate::workspace::create_with_repository(&store, &worktree, None, Some(&worktree))
                 .unwrap();
-        let workspace =
-            crate::workspace::set_worktrees_enabled(&store, &workspace.id, true).unwrap();
 
         let plan = state
             .plan_session(crate::protocol::PlanSession {
@@ -2742,6 +2759,69 @@ mod tests {
                 },
             }]
         ));
+
+        std::fs::remove_dir_all(store).ok();
+        std::fs::remove_dir_all(host).ok();
+    }
+
+    /// With worktrees enabled the interaction does not get the operator's
+    /// checkout at all: its sandbox workspace is a checkout of its own, and the
+    /// only other thing Styra adds is the Git metadata that makes that checkout
+    /// a repository.
+    #[test]
+    fn an_enabled_workspace_launches_in_its_own_checkout() {
+        let store = temp_path("worktree-launch-store");
+        let host = temp_path("worktree-launch-host");
+        std::fs::remove_dir_all(&store).ok();
+        std::fs::remove_dir_all(&host).ok();
+        std::fs::create_dir_all(&host).unwrap();
+        crate::git::fixture::init(&host);
+        crate::git::fixture::commit_empty(&host, "root");
+
+        let state = ServerState::new(store.clone(), store.with_extension("sock"));
+        let workspace = crate::workspace::create(&store, &host, None).unwrap();
+        let workspace =
+            crate::workspace::set_worktrees_enabled(&store, &workspace.id, true).unwrap();
+
+        let plan = state
+            .plan_session(crate::protocol::PlanSession {
+                workspace_id: workspace.id.clone(),
+                selection: crate::agent::Selection::new(crate::agent::Provider::Codex),
+                launch: LaunchPolicy::default(),
+            })
+            .unwrap();
+
+        let sandbox = SandboxLayout::default().workspace;
+        assert_eq!(plan.working_directory, sandbox);
+        let at_workspace: Vec<_> = plan
+            .mounts
+            .iter()
+            .filter(|attributed| attributed.mount.destination() == sandbox)
+            .collect();
+        assert!(matches!(
+            at_workspace.as_slice(),
+            [AttributedMount {
+                origin: MountOrigin::Workspace,
+                mount: Mount::Bind {
+                    source,
+                    access: MountAccess::ReadWrite,
+                    ..
+                },
+            }] if *source == crate::workspace::worktrees_dir(&store, &workspace.id)
+                .join(PENDING_SESSION_ID)
+        ));
+        let canonical = host.canonicalize().unwrap();
+        assert!(plan.mounts.iter().any(|attributed| matches!(
+            &attributed.mount,
+            Mount::Bind { source, destination, access: MountAccess::ReadWrite }
+                if *source == canonical.join(".git") && destination == source
+        )));
+        // The directory the operator works in is left alone, which is the
+        // whole point of checking out somewhere else.
+        assert!(!plan.mounts.iter().any(|attributed| matches!(
+            &attributed.mount,
+            Mount::Bind { source, access: MountAccess::ReadWrite, .. } if *source == canonical
+        )));
 
         std::fs::remove_dir_all(store).ok();
         std::fs::remove_dir_all(host).ok();

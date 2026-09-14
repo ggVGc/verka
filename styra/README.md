@@ -79,24 +79,27 @@ The durable layout is:
 ```text
 workspaces/<WORKSPACE-ID>/
   workspace.json
-  worktrees/                  # linked Git checkouts, when explicitly enabled
+  worktrees/<SESSION-ID>/     # one linked checkout per interaction, when enabled
   sessions/<SESSION-ID>/
     session.json
     journal.jsonl
     diagnostics.log
 ```
 
-Linked-worktree creation is off by default. Press `W` in the interface to opt a
+Linked worktrees are off by default. Press `W` in the interface to opt a
 Workspace in; the footer always shows `worktrees: ON` or `worktrees: OFF`. When
 enabled and the Workspace's host directory is inside a Git working tree, Styra
-discovers that repository on the host and keeps linked checkouts below the
-Workspace's `worktrees/` directory. Driva mounts that directory at
-`/tmp/styra/worktrees`, together with the repository's shared Git metadata, so
-new checkouts become visible without restarting the interaction. Codex sessions
-receive a `create_worktree` tool taking a branch `name`; Styra handles the call
-on the host with `git worktree add -b` and returns the new sandbox path. A
-Workspace outside Git receives neither these mounts nor the tool. Turning the
-setting off affects future launches and does not delete existing worktrees.
+discovers that repository on the host and, before each interaction starts,
+creates a branch `styra/<SESSION-ID>` checked out at
+`worktrees/<SESSION-ID>`. That checkout is the interaction's workspace: Driva
+mounts it read-write at `/tmp/styra/workspace` and mounts the repository's
+shared Git metadata at its host path, which is what makes the checkout a
+working repository. Nothing else is writable — the directory the operator works
+in is not mounted, so two interactions never share a branch, an index, or an
+uncommitted file, and neither shares one with the operator. Resuming an
+interaction returns to its own checkout, uncommitted work included. A Workspace
+outside Git receives none of this. Turning the setting off affects future
+launches and does not delete existing worktrees.
 
 `workspace.json` also holds the Workspace's standing launch policy: the Driva
 templates, extra mounts, network permission, and workspace mount access every
@@ -110,11 +113,12 @@ An individual interaction adds its own on top. The details view (`d`) shows
 the Workspace and current interaction metadata alongside the effective
 sandbox. Before launch it also shows the two policy layers as panes and edits
 either one: `Tab` moves the keys between them, and the
-focused pane is the one `w`, `R`, `T`, `m` and `x` change. The Workspace
+focused pane is the one `w`, `R`, `T`, `m` and `x` change. The workspace
 directory itself is mounted read-write unless a layer says otherwise, which is
 what `R` says: it is the one mount `m` and `x` cannot reach, since the server
-assembles it from the Workspace's host path rather than from a policy row. A
-read-only workspace still leaves a Git checkout's `.git` metadata writable, so
+assembles it from the Workspace's host path — or, with worktrees on, from the
+interaction's own checkout — rather than from a policy row. A read-only
+workspace still leaves a Git checkout's `.git` metadata writable, so
 an agent confined this way can read history without editing the tree. Edits to
 the Workspace
 pane are stored with the Workspace as they are made, so every client launching

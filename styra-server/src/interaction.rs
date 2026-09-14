@@ -25,7 +25,6 @@ use driva::{
     ExecutionControl, ExecutionIo, ExecutionRequest, Isolation, Mount, MountAccess,
     WritableMountMode,
 };
-use genta::appserver::DynamicTool;
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fs::File;
@@ -54,14 +53,14 @@ pub struct InteractionSpec {
     pub workspace: MountSpec,
     /// Read-only checkout and writable Git metadata belonging to the Workspace.
     pub repository_mounts: Vec<MountSpec>,
-    /// Workspace-managed linked worktrees and their shared Git metadata.
+    /// Mounts a Workspace capability adds without being asked, rather than
+    /// because an operator named them: the Git metadata behind a linked
+    /// worktree, today.
     pub automatic_mounts: Vec<MountSpec>,
     /// The host executables this launch runs — the agent, and the `tmux` the
     /// session shell needs — for those the sandbox's private root does not
     /// already carry (see [`crate::tooling`]). Read-only.
     pub tooling_mounts: Vec<MountSpec>,
-    /// Host-executed functions exposed by supporting providers.
-    pub dynamic_tools: Vec<DynamicTool>,
     /// Empty writable filesystems discarded after the run (e.g. `/root`).
     pub temporary_mounts: Vec<PathBuf>,
     /// Host directories the operator asked for by hand, already canonicalized
@@ -213,8 +212,7 @@ impl Interaction {
                 let client = match &spec.resume_provider_session_id {
                     Some(thread_id) => crate::appserver::AppServer::resume(cwd, thread_id.clone()),
                     None => crate::appserver::AppServer::new(cwd),
-                }
-                .with_dynamic_tools(spec.dynamic_tools.clone());
+                };
                 Some(Arc::new(client))
             }
             crate::event::Protocol::CodexJsonl | crate::event::Protocol::ClaudeJsonl => None,
@@ -988,7 +986,6 @@ mod tests {
             automatic_mounts: Vec::new(),
             tooling_mounts: Vec::new(),
             base: driva::BaseConfig::default(),
-            dynamic_tools: Vec::new(),
             temporary_mounts: Vec::new(),
             extra_mounts: Vec::new(),
             template: None,

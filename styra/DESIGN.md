@@ -194,14 +194,15 @@ legible as the grants layered on it.
 A Styra Workspace is a durable canonical host directory, so its writable mount
 and working directory keep that same path inside the sandbox. This preserves
 absolute-path tooling and makes provider session state stable for that project.
-Hosts that mount ephemeral worktrees instead select an explicit fixed sandbox
-layout, such as Orka's `/tmp/orka/workspace`.
+An interaction given a linked worktree is the exception, and takes the fixed
+`/tmp/styra/workspace` layout instead: the checkout it works in lives under the
+store at a path that names one Session, which is Styra's business and not
+something an agent should read a project's identity from.
 
-Linked-worktree creation is a separate, durable Workspace capability and is
-off by default. The client exposes an always-visible `worktrees: ON/OFF` state
-and an explicit `W` toggle. Only enabled Workspaces prepare the host-side
-worktree directory, mounts, and `create_worktree` tool for future launches;
-disabling it leaves any worktrees already created untouched.
+Linked worktrees are a separate, durable Workspace capability and are off by
+default. The client exposes an always-visible `worktrees: ON/OFF` state and an
+explicit `W` toggle. Only enabled Workspaces check an interaction out for
+itself; disabling it leaves any worktrees already created untouched.
 
 ## The agent profile
 
@@ -393,7 +394,7 @@ The durable layout makes ownership explicit:
 ```text
 workspaces/<workspace-id>/
   workspace.json
-  worktrees/                  # linked Git checkouts, when Git-backed
+  worktrees/<session-id>/     # one interaction's linked checkout, when enabled
   sessions/<session-id>/
     session.json
     journal.jsonl
@@ -408,20 +409,27 @@ refer to the same checkout.
 
 If the host directory is nested anywhere inside a Git working tree, the server
 discovers the checkout and its common metadata before launch. Each such
-Workspace owns a durable `worktrees/` parent in its state directory. Driva binds
-that parent read-write at `/tmp/styra/worktrees` and binds the common Git
-directory read-write at the absolute path recorded in linked-worktree `.git`
-files. The parent is mounted once, while empty or populated, so a checkout
-created during a turn appears inside the fixed sandbox immediately.
+Workspace owns a durable `worktrees/` parent in its state directory holding one
+checkout per interaction. Before the agent starts, Styra runs `git worktree add
+-b styra/<session-id>` from the discovered repository on the host, and Driva
+binds the result read-write as the interaction's workspace. The only other
+thing it binds is the common Git directory, read-write at the absolute path the
+checkout's `.git` file names — a linked checkout carries no history of its own,
+so without it Git cannot read the very tree it is looking at. Non-Git
+Workspaces receive neither.
 
-Codex app-server threads advertise one host-executed dynamic function,
-`create_worktree(name)`. An `item/tool/call` is handled synchronously by Styra's
-reader thread: Styra validates the branch name, runs `git worktree add -b` from
-the discovered repository on the host, and replies with the new path below
-`/tmp/styra/worktrees`. Worktree directory components encode branch separators,
-so names such as `feature/ui` remain one safe child of the Workspace-owned
-parent. Non-Git Workspaces advertise no tool and receive no automatic Git
-mounts.
+The branch is named for the Session because that is the one identifier both
+halves already share, and it makes the worktree durable in the same sense the
+Session is: a resume asks for the same name and finds the same checkout, with
+the uncommitted work a replayed transcript could never restore. Creating it
+before launch rather than offering the agent a tool is what removes the
+question of whether the agent used it: an interaction in an enabled Workspace
+is in its own checkout whether or not it knows what a worktree is, and the
+operator's own tree is never mounted writable for it to wander into.
+
+Styra does not merge, delete, or prune these checkouts. What an interaction
+committed outlives it on a branch, which is the point; reclaiming the space is
+an operator's decision, taken with Git.
 
 Alongside `journal.jsonl`, one `session.json` is written at session creation:
 the owning Workspace plus genta's `SessionMeta` (the structured selection and
@@ -1118,7 +1126,7 @@ styra-server/            # the server application + its client interface library
     journal.rs           # raw event/input capture and replay
     workspace.rs         # Workspace metadata and hierarchy
     git.rs               # host-side enclosing-repository discovery
-    worktree.rs          # Workspace worktree storage, mounts, and agent tool
+    worktree.rs          # the linked checkout an interaction works in
 
 styra/                   # the terminal client application
   Cargo.toml             # [[bin]] styra; depends on styra-server (path)

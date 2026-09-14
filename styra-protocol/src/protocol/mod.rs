@@ -256,8 +256,8 @@ pub enum Request {
         workspace_id: String,
         git_repository: Option<PathBuf>,
     },
-    /// Opt in or out of exposing linked-worktree creation to launches in this
-    /// Workspace.
+    /// Opt launches in this Workspace in or out of running in a linked
+    /// worktree of their own rather than in the Workspace directory itself.
     SetWorkspaceWorktreesEnabled {
         workspace_id: String,
         enabled: bool,

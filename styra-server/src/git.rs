@@ -140,16 +140,6 @@ fn push_mount(mounts: &mut Vec<MountSpec>, path: PathBuf, writable: bool) {
     });
 }
 
-/// Whether Git would accept `name` as a branch name, asked of `repository` so
-/// that the answer is the one that repository's configuration would give.
-pub fn branch_name_is_valid(repository: &Path, name: &str) -> Result<bool> {
-    let checked = Invocation::new(repository, "validate the branch name")
-        .args(["check-ref-format", "--branch"])
-        .arg(name)
-        .optional_output()?;
-    Ok(checked.as_deref() == Some(name))
-}
-
 /// Create `branch` as a new branch, checked out in a linked worktree at
 /// `path`.
 pub fn create_worktree(repository: &Path, branch: &str, path: &Path) -> Result<()> {
