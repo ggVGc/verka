@@ -560,6 +560,13 @@ pub struct InteractionSummary {
     /// Whether the live interaction is working or waiting for user input.
     #[serde(default)]
     pub activity: InteractionActivity,
+    /// When the interaction entered [`Self::activity`], in epoch milliseconds
+    /// on the server's clock. The server owns this because the work started
+    /// when it started: a client that attaches mid-turn has to be able to say
+    /// how long the *agent* has been at it, not how long it has been watching.
+    /// `0` from a server too old to report it.
+    #[serde(default)]
+    pub activity_since_ms: u64,
     /// True when this interaction reached idle away from every client's screen
     /// and no client has focused it since. Going idle while a client is
     /// streaming this interaction's updates is not news to report, and merely

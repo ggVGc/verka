@@ -613,6 +613,7 @@ M.types.InteractionSummary = {
     { name = "driva", required = true, type = { kind = "ref", name = "DrivaOptions" } },
     { name = "accepting", required = true, type = { kind = "boolean" } },
     { name = "activity", required = false, type = { kind = "ref", name = "InteractionActivity" } },
+    { name = "activity_since_ms", required = false, type = { kind = "number", integer = true } },
     { name = "idle_unseen", required = false, type = { kind = "boolean" } },
     { name = "last_message", required = false, type = { kind = "optional", inner = { kind = "string" } } },
     { name = "auto_retry", required = false, type = { kind = "boolean" } },

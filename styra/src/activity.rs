@@ -9,9 +9,19 @@
 //! were private [`App`](crate::app::App) fields reached through `pub(crate)`
 //! back doors from [`crate::ingest`]; here they are this type's own.
 
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use styra_protocol::event::TokenUsage;
+
+/// The wall clock in the epoch milliseconds the server dates an interaction's
+/// activity in. Only the difference between the two readings is used, so the
+/// two clocks need to agree about how long a minute is, not about the hour.
+fn unix_now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|since| since.as_millis().try_into().unwrap_or(u64::MAX))
+        .unwrap_or_default()
+}
 
 /// The session's lifecycle as the operator sees it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -157,6 +167,37 @@ impl Activity {
         }
     }
 
+    /// Adopt the server's account of what a live interaction is doing and
+    /// since when, as a client attaching to one does.
+    ///
+    /// Attaching is not an event in the interaction's life. Left to
+    /// [`Self::note_progress`], the status would be dated from this client's
+    /// first sight of it, and a turn that had been running for ten minutes
+    /// would read as having just started — the figure would measure the
+    /// watching rather than the work.
+    ///
+    /// `since_ms` is a moment on the server's wall clock; it becomes an age
+    /// against that same clock read now, and the local monotonic clock is
+    /// wound back by it.
+    pub fn adopt_server_status(&mut self, status: Status, since_ms: u64) {
+        self.adopt_server_status_at(status, since_ms, unix_now_ms());
+    }
+
+    fn adopt_server_status_at(&mut self, status: Status, since_ms: u64, now_ms: u64) {
+        self.background_work = status == Status::Background;
+        self.noted = status.clone();
+        self.status = status;
+        // A server too old to report the moment sends `0`, and clocks that
+        // disagree can put it in the future. Both come out as no age at all,
+        // which dates the status now — what this client would have assumed
+        // anyway.
+        let age = match since_ms {
+            0 => Duration::ZERO,
+            reported => Duration::from_millis(now_ms.saturating_sub(reported)),
+        };
+        self.since = Instant::now().checked_sub(age).unwrap_or_else(Instant::now);
+    }
+
     pub fn progress(&self) -> Progress {
         Progress {
             in_status: self.since.elapsed(),
@@ -269,6 +310,52 @@ mod tests {
         activity.note_background_finished();
 
         assert_eq!(activity.status, Status::Idle);
+    }
+
+    /// Attaching to an interaction that has been working for a while shows how
+    /// long *it* has been working, not how long this client has been looking.
+    #[test]
+    fn an_adopted_status_is_dated_from_the_servers_moment_not_the_attachment() {
+        let mut activity = Activity::default();
+
+        activity.adopt_server_status_at(Status::Running, 1_000_000, 1_600_000);
+
+        assert_eq!(activity.status, Status::Running);
+        assert!(
+            activity.progress().in_status >= Duration::from_secs(600),
+            "the turn started ten minutes before this client saw it"
+        );
+        // Adopting is the whole transition, so the next frame must not read as
+        // a fresh one and reset the clock it just set.
+        activity.note_progress();
+        assert!(activity.progress().in_status >= Duration::from_secs(600));
+    }
+
+    /// A server too old to date the activity sends `0`, and clocks that
+    /// disagree can date it in the future. Neither may be turned into an age.
+    #[test]
+    fn an_unreported_or_future_moment_dates_the_status_now() {
+        for since_ms in [0, 2_000_000] {
+            let mut activity = Activity::default();
+            activity.adopt_server_status_at(Status::Running, since_ms, 1_000_000);
+            assert!(activity.progress().in_status < Duration::from_secs(1));
+        }
+    }
+
+    /// Adopting Background brings the flag it stands for with it: otherwise
+    /// the turn that follows would fall back to plain Idle and lose the
+    /// interaction's background work.
+    #[test]
+    fn adopting_background_carries_the_background_work_it_reports() {
+        let mut activity = Activity::default();
+
+        activity.adopt_server_status_at(Status::Background, 0, 0);
+
+        assert_eq!(activity.idle_or_background(), Status::Background);
+
+        activity.adopt_server_status_at(Status::Idle, 0, 0);
+
+        assert_eq!(activity.idle_or_background(), Status::Idle);
     }
 
     #[test]

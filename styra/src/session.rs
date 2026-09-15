@@ -393,7 +393,14 @@ pub fn attach_live_interaction(client: &Client, interaction_id: &str) -> Result<
     } else {
         Attachment::Detached
     };
-    if !accepting && app.activity.status.is_active() {
+    if accepting {
+        // The server is the authority on what a live interaction is doing and
+        // since when. The replayed journal ends where this one began, but its
+        // clock would start here, dating a turn already an hour old from the
+        // moment this client looked at it.
+        app.activity
+            .adopt_server_status(interaction.activity.into(), interaction.activity_since_ms);
+    } else if app.activity.status.is_active() {
         // Stopped interactions remain in the server's interaction list until
         // another interaction replaces them. Treat that stale record like a
         // stored journal, otherwise input can be queued against a process that

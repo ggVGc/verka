@@ -242,6 +242,7 @@ mod tests {
             },
             accepting: true,
             activity: InteractionActivity::Pending,
+            activity_since_ms: 0,
             idle_unseen: false,
             last_message: None,
             events: 0,

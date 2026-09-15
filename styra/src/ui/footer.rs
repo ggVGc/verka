@@ -183,6 +183,7 @@ mod tests {
             },
             accepting: true,
             activity,
+            activity_since_ms: 0,
             idle_unseen: false,
             last_message: None,
             events: 0,

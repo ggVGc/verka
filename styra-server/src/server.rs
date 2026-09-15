@@ -157,11 +157,73 @@ impl IdleNotice {
     }
 }
 
+/// What an interaction is doing, and the moment it started doing it. The two
+/// are held together because the second is only ever read as the first's
+/// clock, and a transition that set one without the other would leave a turn
+/// dated by the one before it.
+///
+/// The moment is the server's own, in epoch milliseconds, because the work
+/// began when the server saw it begin: a client attaching mid-turn has to
+/// report how long the agent has been at it, and its first sight of the turn
+/// is no answer to that.
+#[derive(Default)]
+struct CurrentActivity {
+    state: Mutex<(InteractionActivity, u64)>,
+}
+
+impl CurrentActivity {
+    fn new() -> Self {
+        Self {
+            state: Mutex::new((InteractionActivity::Pending, journal::now_ms())),
+        }
+    }
+
+    fn get(&self) -> (InteractionActivity, u64) {
+        *self
+            .state
+            .lock()
+            .expect("interaction activity lock poisoned")
+    }
+
+    fn activity(&self) -> InteractionActivity {
+        self.get().0
+    }
+
+    /// Move to `next`. The clock restarts only on a real change, so a turn
+    /// that reasserts what it is already doing keeps the moment it started.
+    fn set(&self, next: InteractionActivity) {
+        let mut state = self
+            .state
+            .lock()
+            .expect("interaction activity lock poisoned");
+        if state.0 != next {
+            *state = (next, journal::now_ms());
+        }
+    }
+
+    /// Move to `next` only if the interaction is still doing `when`, so the
+    /// answer to a stale question cannot displace a newer state — a background
+    /// set reported empty says nothing about a turn that has since started.
+    fn replace_if(&self, when: InteractionActivity, next: InteractionActivity) -> bool {
+        let mut state = self
+            .state
+            .lock()
+            .expect("interaction activity lock poisoned");
+        if state.0 != when {
+            return false;
+        }
+        if state.0 != next {
+            *state = (next, journal::now_ms());
+        }
+        true
+    }
+}
+
 struct ManagedInteraction {
     interaction: Interaction,
     updates: Arc<Mutex<Vec<SequencedUpdate>>>,
     accepting_messages: Arc<AtomicBool>,
-    activity: Arc<Mutex<InteractionActivity>>,
+    activity: Arc<CurrentActivity>,
     /// Whether this interaction going idle is still news, and what makes it
     /// news at all: see [`IdleNotice`].
     idle: Arc<IdleNotice>,
@@ -259,10 +321,7 @@ impl ManagedInteraction {
     }
 
     fn summary(&self) -> InteractionSummary {
-        let activity = *self
-            .activity
-            .lock()
-            .expect("interaction activity lock poisoned");
+        let (activity, activity_since_ms) = self.activity.get();
         InteractionSummary {
             id: self.interaction.session_id().to_owned(),
             name: self
@@ -277,6 +336,7 @@ impl ManagedInteraction {
             accepting: self.accepting_messages.load(Ordering::Acquire),
             idle_unseen: activity == InteractionActivity::Pending && self.idle.unseen(),
             activity,
+            activity_since_ms,
             last_message: self.last_message(),
             auto_retry: self.auto_retry.load(Ordering::Acquire),
             events: self.events.load(Ordering::Acquire),
@@ -437,12 +497,7 @@ impl ManagedInteraction {
     }
 
     fn set_working_directory(&self, requested: PathBuf) -> Result<()> {
-        if *self
-            .activity
-            .lock()
-            .expect("interaction activity lock poisoned")
-            != InteractionActivity::Pending
-        {
+        if self.activity.activity() != InteractionActivity::Pending {
             anyhow::bail!(
                 "wait for the current turn to finish before changing its working directory"
             );
@@ -492,7 +547,12 @@ impl ManagedInteraction {
             None => message.text,
         };
         self.interaction
-            .send_with_selection(&text, Some(&self.selection()))
+            .send_with_selection(&text, Some(&self.selection()))?;
+        // The server accepts the turn before the provider echoes its
+        // UserMessage event. Date it here so a client that attaches in that
+        // interval still sees when this work actually started.
+        self.activity.set(InteractionActivity::Running);
+        Ok(())
     }
 
     fn stop(&self) {
@@ -748,7 +808,7 @@ impl ServerState {
             };
         let updates = Arc::new(Mutex::new(Vec::new()));
         let accepting_messages = Arc::new(AtomicBool::new(true));
-        let activity = Arc::new(Mutex::new(InteractionActivity::Pending));
+        let activity = Arc::new(CurrentActivity::new());
         let idle = Arc::new(IdleNotice::new(true));
         let events = Arc::new(AtomicUsize::new(0));
         let background_work = Arc::new(AtomicBool::new(false));
@@ -807,19 +867,18 @@ impl ServerState {
                                 .expect("guard checked the running count is present");
                             background_count_known = true;
                             background_work.store(running > 0, Ordering::Release);
-                            if running == 0 {
-                                let mut activity =
-                                    activity.lock().expect("interaction activity lock poisoned");
-                                if *activity == InteractionActivity::Background {
-                                    *activity = InteractionActivity::Pending;
-                                    idle.became_idle();
-                                }
+                            if running == 0
+                                && activity.replace_if(
+                                    InteractionActivity::Background,
+                                    InteractionActivity::Pending,
+                                )
+                            {
+                                idle.became_idle();
                             }
                         }
                         InteractionUpdate::Event(event) if event.starts_background_task() => {
                             background_work.store(true, Ordering::Release);
-                            *activity.lock().expect("interaction activity lock poisoned") =
-                                InteractionActivity::Running;
+                            activity.set(InteractionActivity::Running);
                         }
                         InteractionUpdate::Event(crate::event::AgentEvent::ToolStarted {
                             id,
@@ -835,8 +894,7 @@ impl ServerState {
                         InteractionUpdate::Event(crate::event::AgentEvent::UserMessage {
                             ..
                         }) => {
-                            *activity.lock().expect("interaction activity lock poisoned") =
-                                InteractionActivity::Running;
+                            activity.set(InteractionActivity::Running);
                         }
                         InteractionUpdate::Event(crate::event::AgentEvent::TurnCompleted {
                             ..
@@ -846,7 +904,7 @@ impl ServerState {
                             } else {
                                 InteractionActivity::Pending
                             };
-                            *activity.lock().expect("interaction activity lock poisoned") = next;
+                            activity.set(next);
                             if next == InteractionActivity::Pending {
                                 idle.became_idle();
                             }
@@ -857,8 +915,7 @@ impl ServerState {
                         }) if background_polls.remove(id) => {
                             if !background_count_known && update_finishes_background(&update) {
                                 background_work.store(false, Ordering::Release);
-                                *activity.lock().expect("interaction activity lock poisoned") =
-                                    InteractionActivity::Pending;
+                                activity.set(InteractionActivity::Pending);
                                 idle.became_idle();
                             }
                         }
@@ -1174,7 +1231,7 @@ impl ServerState {
             .count();
         let updates = Arc::new(Mutex::new(seeded_updates));
         let accepting_messages = Arc::new(AtomicBool::new(true));
-        let activity = Arc::new(Mutex::new(InteractionActivity::Pending));
+        let activity = Arc::new(CurrentActivity::new());
         let idle = Arc::new(IdleNotice::new(true));
         let events = Arc::new(AtomicUsize::new(replayed_events));
         let background_work = Arc::new(AtomicBool::new(false));
@@ -1239,19 +1296,18 @@ impl ServerState {
                                 .expect("guard checked the running count is present");
                             background_count_known = true;
                             background_work.store(running > 0, Ordering::Release);
-                            if running == 0 {
-                                let mut activity =
-                                    activity.lock().expect("interaction activity lock poisoned");
-                                if *activity == InteractionActivity::Background {
-                                    *activity = InteractionActivity::Pending;
-                                    idle.became_idle();
-                                }
+                            if running == 0
+                                && activity.replace_if(
+                                    InteractionActivity::Background,
+                                    InteractionActivity::Pending,
+                                )
+                            {
+                                idle.became_idle();
                             }
                         }
                         InteractionUpdate::Event(event) if event.starts_background_task() => {
                             background_work.store(true, Ordering::Release);
-                            *activity.lock().expect("interaction activity lock poisoned") =
-                                InteractionActivity::Running;
+                            activity.set(InteractionActivity::Running);
                         }
                         InteractionUpdate::Event(crate::event::AgentEvent::ToolStarted {
                             id,
@@ -1267,8 +1323,7 @@ impl ServerState {
                         InteractionUpdate::Event(crate::event::AgentEvent::UserMessage {
                             ..
                         }) => {
-                            *activity.lock().expect("interaction activity lock poisoned") =
-                                InteractionActivity::Running;
+                            activity.set(InteractionActivity::Running);
                         }
                         InteractionUpdate::Event(crate::event::AgentEvent::TurnCompleted {
                             ..
@@ -1278,7 +1333,7 @@ impl ServerState {
                             } else {
                                 InteractionActivity::Pending
                             };
-                            *activity.lock().expect("interaction activity lock poisoned") = next;
+                            activity.set(next);
                             if next == InteractionActivity::Pending {
                                 idle.became_idle();
                             }
@@ -1289,8 +1344,7 @@ impl ServerState {
                         }) if background_polls.remove(id) => {
                             if !background_count_known && update_finishes_background(&update) {
                                 background_work.store(false, Ordering::Release);
-                                *activity.lock().expect("interaction activity lock poisoned") =
-                                    InteractionActivity::Pending;
+                                activity.set(InteractionActivity::Pending);
                                 idle.became_idle();
                             }
                         }
@@ -2583,6 +2637,49 @@ mod tests {
 
     fn temp_path(tag: &str) -> PathBuf {
         std::env::temp_dir().join(format!("styra-server-{tag}-{}.sock", std::process::id(),))
+    }
+
+    /// A turn is dated once, when it starts. Restating what the interaction is
+    /// already doing — a second operator message inside one running turn —
+    /// must not restart the clock, or the figure a client shows would fall
+    /// back to zero without the work having begun again.
+    #[test]
+    fn the_activity_clock_restarts_only_when_the_activity_actually_changes() {
+        let activity = CurrentActivity::new();
+        activity.set(InteractionActivity::Running);
+        let (_, started) = activity.get();
+
+        std::thread::sleep(Duration::from_millis(2));
+        activity.set(InteractionActivity::Running);
+        assert_eq!(activity.get(), (InteractionActivity::Running, started));
+
+        std::thread::sleep(Duration::from_millis(2));
+        activity.set(InteractionActivity::Pending);
+        let (current, went_idle) = activity.get();
+        assert_eq!(current, InteractionActivity::Pending);
+        assert!(went_idle > started, "a real change dates itself");
+    }
+
+    /// A background set reported empty answers for the state it was asked
+    /// about. A turn that has started since owns the interaction, and the late
+    /// answer must not put it back to waiting for input.
+    #[test]
+    fn an_empty_background_set_does_not_displace_a_turn_that_has_since_started() {
+        let activity = CurrentActivity::new();
+        activity.set(InteractionActivity::Running);
+
+        assert!(!activity.replace_if(
+            InteractionActivity::Background,
+            InteractionActivity::Pending
+        ));
+        assert_eq!(activity.activity(), InteractionActivity::Running);
+
+        activity.set(InteractionActivity::Background);
+        assert!(activity.replace_if(
+            InteractionActivity::Background,
+            InteractionActivity::Pending
+        ));
+        assert_eq!(activity.activity(), InteractionActivity::Pending);
     }
 
     /// The notification exists to send an operator somewhere they are not. An
