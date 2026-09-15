@@ -142,13 +142,46 @@ fn render_summary(frame: &mut Frame, app: &App, options: Option<&DrivaOptions>, 
         sandbox_area.y += height;
         sandbox_area.height = sandbox_area.height.saturating_sub(height);
     }
-    frame.render_widget(
-        Paragraph::new(sandbox_lines(app, options)).wrap(Wrap { trim: false }),
-        sandbox_area,
-    );
+    // When the policy is editable, the two settings panes reserve the bottom
+    // of the view.  A recorded private root can be much longer than the room
+    // above them, particularly after an interaction stops and its Workspace
+    // and interaction settings return.  Keep the fixed sandbox facts above
+    // it, then let the capability list use the available width as well.
+    let private_root = options.filter(|options| !options.base.is_empty());
+    if app.can_edit_launch() && sandbox_area.width >= 72 && private_root.is_some() {
+        let prefix = Paragraph::new(sandbox_prefix_lines(app, options)).wrap(Wrap { trim: false });
+        let prefix_height = prefix
+            .line_count(sandbox_area.width.max(1))
+            .min(usize::from(sandbox_area.height)) as u16;
+        let prefix_area = Rect {
+            height: prefix_height,
+            ..sandbox_area
+        };
+        frame.render_widget(prefix, prefix_area);
+        let root_area = Rect {
+            y: sandbox_area.y + prefix_height,
+            height: sandbox_area.height.saturating_sub(prefix_height),
+            ..sandbox_area
+        };
+        render_private_root(frame, private_root.expect("checked above"), root_area);
+    } else {
+        frame.render_widget(
+            Paragraph::new(sandbox_lines(app, options)).wrap(Wrap { trim: false }),
+            sandbox_area,
+        );
+    }
 }
 
 fn sandbox_lines(app: &App, options: Option<&DrivaOptions>) -> Vec<Line<'static>> {
+    let mut lines = sandbox_prefix_lines(app, options);
+    if let Some(options) = options {
+        lines.extend(private_root_lines(options));
+    }
+    lines
+}
+
+/// The sandbox facts that precede the private-root capability listing.
+fn sandbox_prefix_lines(app: &App, options: Option<&DrivaOptions>) -> Vec<Line<'static>> {
     let mut lines = vec![Line::from(""), section_line("sandbox")];
 
     let Some(options) = options else {
@@ -195,8 +228,72 @@ fn sandbox_lines(app: &App, options: Option<&DrivaOptions>) -> Vec<Line<'static>
         )),
     ]);
     lines.extend(grouped_mount_lines(&options.mounts));
-    lines.extend(private_root_lines(options));
     lines
+}
+
+/// Paint the private-root listing.  Its heading remains full width, while an
+/// editable view may put capability groups in two columns if one column would
+/// run below the settings panes.
+fn render_private_root(frame: &mut Frame, options: &DrivaOptions, area: Rect) {
+    if area.height == 0 {
+        return;
+    }
+    let lines = private_root_lines(options);
+    let heading = Paragraph::new(lines[..2].to_vec()).wrap(Wrap { trim: false });
+    let heading_height = heading
+        .line_count(area.width.max(1))
+        .min(usize::from(area.height)) as u16;
+    frame.render_widget(
+        heading,
+        Rect {
+            height: heading_height,
+            ..area
+        },
+    );
+    let content_area = Rect {
+        y: area.y + heading_height,
+        height: area.height.saturating_sub(heading_height),
+        ..area
+    };
+    if content_area.height == 0 {
+        return;
+    }
+
+    let groups = private_root_groups(options);
+    let one_column = Paragraph::new(groups.concat()).wrap(Wrap { trim: false });
+    if one_column.line_count(content_area.width.max(1)) <= usize::from(content_area.height) {
+        frame.render_widget(one_column, content_area);
+        return;
+    }
+
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(content_area);
+    let left_width = columns[0].width.max(1);
+    let total_height: usize = groups
+        .iter()
+        .map(|group| Paragraph::new(group.clone()).line_count(left_width))
+        .sum();
+    let target = total_height.div_ceil(2);
+    let mut split = 0;
+    let mut used = 0;
+    for group in &groups {
+        let height = Paragraph::new(group.clone()).line_count(left_width);
+        if split > 0 && used + height > target {
+            break;
+        }
+        used += height;
+        split += 1;
+    }
+    frame.render_widget(
+        Paragraph::new(groups[..split].concat()).wrap(Wrap { trim: false }),
+        columns[0],
+    );
+    frame.render_widget(
+        Paragraph::new(groups[split..].concat()).wrap(Wrap { trim: false }),
+        columns[1],
+    );
 }
 
 /// What the sandbox holds before any mount: the base its private root is
@@ -224,46 +321,57 @@ fn private_root_lines(options: &DrivaOptions) -> Vec<Line<'static>> {
                 .add_modifier(Modifier::BOLD),
         )),
     ];
-    for capability in &options.base {
-        lines.push(Line::from(Span::styled(
-            format!("  {} — {}", capability.name, capability.description),
-            Style::default().fg(palette::ADDITIONAL_INFO),
-        )));
-        for entry in &capability.entries {
-            lines.push(Line::from(vec![
-                Span::styled(
-                    "    ro  ",
-                    Style::default()
-                        .fg(palette::MUTED_TEXT)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    match &entry.source {
-                        Some(source) => {
-                            format!("{} → {}", entry.path.display(), source.display())
-                        }
-                        None => entry.path.display().to_string(),
-                    },
-                    Style::default().fg(palette::TEXT),
-                ),
-            ]));
-        }
-        if !capability.environment.is_empty() {
-            lines.push(Line::from(vec![
-                Span::styled(
-                    "    env ",
-                    Style::default()
-                        .fg(palette::MUTED_TEXT)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    capability.environment.join(" "),
-                    Style::default().fg(palette::TEXT),
-                ),
-            ]));
-        }
-    }
+    lines.extend(private_root_groups(options).into_iter().flatten());
     lines
+}
+
+/// A capability is indivisible when the private root flows into a second
+/// column: its name, paths, and forwarded environment remain together.
+fn private_root_groups(options: &DrivaOptions) -> Vec<Vec<Line<'static>>> {
+    options
+        .base
+        .iter()
+        .map(|capability| {
+            let mut group = vec![Line::from(Span::styled(
+                format!("  {} — {}", capability.name, capability.description),
+                Style::default().fg(palette::ADDITIONAL_INFO),
+            ))];
+            for entry in &capability.entries {
+                group.push(Line::from(vec![
+                    Span::styled(
+                        "    ro  ",
+                        Style::default()
+                            .fg(palette::MUTED_TEXT)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        match &entry.source {
+                            Some(source) => {
+                                format!("{} → {}", entry.path.display(), source.display())
+                            }
+                            None => entry.path.display().to_string(),
+                        },
+                        Style::default().fg(palette::TEXT),
+                    ),
+                ]));
+            }
+            if !capability.environment.is_empty() {
+                group.push(Line::from(vec![
+                    Span::styled(
+                        "    env ",
+                        Style::default()
+                            .fg(palette::MUTED_TEXT)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        capability.environment.join(" "),
+                        Style::default().fg(palette::TEXT),
+                    ),
+                ]));
+            }
+            group
+        })
+        .collect()
 }
 
 /// The complete durable Workspace snapshot retained by the client. These are
@@ -1493,6 +1601,39 @@ mod tests {
         assert!(app.can_edit_launch());
         let screen = tall(&app);
         assert!(screen.contains("m mount"), "{screen}");
+    }
+
+    #[test]
+    fn editable_details_wrap_the_private_root_into_a_second_column() {
+        use crate::activity::Status;
+        use styra_protocol::{BaseCapability, DrivaOptions};
+
+        let mut app = testing::app("s1");
+        app.toggle_view(View::Driva);
+        app.launch.record(DrivaOptions {
+            isolation_backend: "bwrap".into(),
+            command: vec!["codex".into()],
+            working_directory: PathBuf::from("/tmp/styra/workspace"),
+            network: false,
+            mounts: Vec::new(),
+            base: (1..=12)
+                .map(|number| BaseCapability {
+                    name: format!("capability-{number}"),
+                    description: "needed by the private root".into(),
+                    entries: Vec::new(),
+                    environment: Vec::new(),
+                })
+                .collect(),
+        });
+        app.activity.status = Status::Stopped;
+
+        let screen = testing::screen_sized(&app, 100, 50);
+        assert!(screen.all().contains("capability-12"), "{}", screen.all());
+        let (x, _) = screen.find("capability-12");
+        assert!(
+            x >= 50,
+            "last capability remained in the first column at {x}"
+        );
     }
 
     #[test]
