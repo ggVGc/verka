@@ -1,3 +1,7 @@
+- Simple "goal oriented":
+  - Use the structured response to run a prompt, until the agent responds with "yes"
+  - Example: "Is X done? Answer with yes/no". If not, run a static user-defined prompt, like, "Continue with work on X".
+  - This should be implemented using the more generic "workflow" when that exists
 - "Visual" DSL for defining jobs/workflows:
   - Some simple node-based thing where user can compose sequences of harness actions and LLM calls
   - LLM units should use some protocol to be able to report success or failure
