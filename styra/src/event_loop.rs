@@ -19,10 +19,10 @@ use crate::picker;
 use crate::preferences;
 use crate::session::{self, Attachment};
 use crate::ui;
-use styra_server::Client;
 use styra_protocol::{
     InteractionSummary, LogEntry, TemplateSummary, WorkspaceLaunchChange, WorkspaceSummary,
 };
+use styra_server::Client;
 
 /// What the interactive loop returned control to `main` for.
 pub enum RunOutcome {
@@ -239,6 +239,29 @@ fn submit_workspace_launch(
         change,
         clear_interaction,
     });
+}
+
+/// Store a completed tag edit and immediately refresh the row the navigator
+/// renders. A new tag is a completed edit in its own right: requiring a
+/// second Enter after the text field made it look as though adding failed.
+fn save_tags(app: &mut App, client: &Client, id: String, tags: Vec<String>) {
+    app.tag_picker = None;
+    match client.set_session_tags(&id, tags) {
+        Ok(summary) => {
+            if let Some(item) = app
+                .interactions
+                .items
+                .iter_mut()
+                .find(|item| item.id == summary.id)
+            {
+                item.tags = summary.tags;
+            }
+            app.show_action_message("interaction tags saved");
+        }
+        Err(error) => {
+            app.show_action_message(format!("could not save interaction tags: {error:#}"))
+        }
+    }
 }
 
 pub struct RunContext<'a> {
@@ -603,14 +626,23 @@ pub fn run(
         // Tags are edited as one modal operation, so typing a new tag cannot
         // trigger the navigator or any global shortcut underneath it.
         if let Some(picker) = app.tag_picker.as_mut() {
-            if let Some(value) = picker.new_tag.as_mut() {
+            if picker.new_tag.is_some() {
                 match key.code {
                     KeyCode::Esc => picker.new_tag = None,
-                    KeyCode::Enter => picker.add_new(),
-                    KeyCode::Backspace => {
-                        value.pop();
+                    KeyCode::Enter => {
+                        picker.add_new();
+                        let tags = picker.selected.clone();
+                        let id = app.session_id.clone();
+                        save_tags(app, client, id, tags);
                     }
-                    KeyCode::Char(ch) if !ch.is_control() => value.push(ch),
+                    KeyCode::Backspace => {
+                        picker.new_tag.as_mut().expect("new tag is present").pop();
+                    }
+                    KeyCode::Char(ch) if !ch.is_control() => picker
+                        .new_tag
+                        .as_mut()
+                        .expect("new tag is present")
+                        .push(ch),
                     _ => {}
                 }
                 continue;
@@ -624,23 +656,7 @@ pub fn run(
                 KeyCode::Enter => {
                     let tags = picker.selected.clone();
                     let id = app.session_id.clone();
-                    app.tag_picker = None;
-                    match client.set_session_tags(&id, tags) {
-                        Ok(summary) => {
-                            if let Some(item) = app
-                                .interactions
-                                .items
-                                .iter_mut()
-                                .find(|item| item.id == summary.id)
-                            {
-                                item.tags = summary.tags;
-                            }
-                            app.show_action_message("interaction tags saved");
-                        }
-                        Err(error) => app.show_action_message(format!(
-                            "could not save interaction tags: {error:#}"
-                        )),
-                    }
+                    save_tags(app, client, id, tags);
                 }
                 _ => {}
             }

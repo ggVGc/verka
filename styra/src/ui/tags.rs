@@ -41,7 +41,7 @@ pub(crate) fn render(frame: &mut Frame, picker: &TagPicker) {
     let input = picker
         .new_tag
         .as_ref()
-        .map(|value| format!("new tag: {value}"))
+        .map(|value| format!("new tag: {value} · Enter add & save"))
         .unwrap_or_else(|| "n adds a new tag".into());
     let list_area = Rect::new(
         inside.x,
