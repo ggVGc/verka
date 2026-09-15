@@ -7,8 +7,8 @@ use crate::insert;
 use crate::launch;
 use crate::preferences;
 use crate::session::{self, Attachment};
-use styra_server::Client;
 use styra_protocol::{Contract, LogEntry};
+use styra_server::Client;
 
 /// Keys for the launch picker: `j`/`k` within a column, `Tab`/`h`/`l` between
 /// them, `Enter` to apply the choice to this workspace, `D` to also save it as
@@ -202,6 +202,7 @@ pub fn handle_list_key(
     }
     match app.view {
         View::Events => match key.code {
+            KeyCode::Char('T') => edit_current_interaction_tags(app, client),
             KeyCode::Char('F') => app.open_references(),
             KeyCode::Char('u') => app.toggle_link_display(),
             KeyCode::Char('b') => session::follow_branch(app),
@@ -416,6 +417,37 @@ pub fn handle_list_key(
             _ => {}
         },
     }
+}
+
+/// Open the tag editor for the Interaction currently on screen. The
+/// interaction snapshot is refreshed here because the log is useful even
+/// before the live-interactions navigator has ever been opened.
+fn edit_current_interaction_tags(app: &mut App, client: &Client) {
+    let session_id = app.session_id.clone();
+    let interactions = match client.list_interactions() {
+        Ok(interactions) => interactions,
+        Err(error) => {
+            app.show_action_message(format!("could not list interactions: {error:#}"));
+            return;
+        }
+    };
+    let Some(selected_tags) = interactions
+        .iter()
+        .find(|item| item.id == session_id)
+        .map(|item| item.tags.clone())
+    else {
+        app.show_action_message("current interaction is no longer available");
+        return;
+    };
+    let tags = match client.list_tags() {
+        Ok(tags) => tags,
+        Err(error) => {
+            app.show_action_message(format!("could not list tags: {error:#}"));
+            return;
+        }
+    };
+    app.interactions.refresh(interactions);
+    app.tag_picker = Some(crate::tag_picker::TagPicker::new(tags, selected_tags));
 }
 
 /// Switch the raw panel between Styra's wire capture and the provider's

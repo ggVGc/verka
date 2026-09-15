@@ -234,7 +234,7 @@ pub struct App {
     /// The Git checkout path being entered for the current Workspace from the
     /// details view. An empty value deliberately clears the association.
     pub git_repository_prompt: Option<String>,
-    /// The tag editor opened from the live-interactions navigator.
+    /// The tag editor opened from the main view or live-interactions navigator.
     pub tag_picker: Option<TagPicker>,
     pub session_id: String,
     /// Optional operator-facing name of the current durable Session.

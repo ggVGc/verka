@@ -82,7 +82,8 @@ live interactions.
 | `L` | choose provider, model, and effort |
 
 Sending a message to a stopped or viewed Session automatically attempts native
-provider resume. `a` opens the live-interaction list; there, `w` switches
+provider resume. In the main interaction view, `T` edits the current
+interaction's tags. `a` opens the live-interaction list; there, `w` switches
 current/all-Workspace scope, `j`/`k` selects, `T` edits the selected
 interaction's tags, and `D` deletes a stopped
 interaction (the durable Session remains). The interaction under the cursor is
