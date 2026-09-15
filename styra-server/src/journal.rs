@@ -787,7 +787,18 @@ pub fn replay_raw(path: &Path) -> Result<Vec<RawLine>> {
             // with no line of its own, and the control request it produces is
             // journaled separately when the provider takes one.
             Ok(Record::ModelChange { .. }) | Ok(Record::Branch { .. }) => {}
-            Err(_) => {}
+            // A record too damaged to parse still holds whatever was written
+            // to the journal, and [`replay`] surfaces it as a `Malformed`
+            // event, so it keeps a line here too: the raw view is where an
+            // operator would go to see what the event could not decode, and
+            // dropping it would leave the two replays describing different
+            // journals. It has no timestamp to recover, and a zero `at_ms` is
+            // what marks a line as no branch point.
+            Err(_) => raw.push(RawLine {
+                direction: Direction::FromAgent,
+                text: line,
+                at_ms: 0,
+            }),
         }
     }
     Ok(raw)

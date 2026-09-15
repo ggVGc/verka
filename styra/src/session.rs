@@ -428,18 +428,29 @@ pub fn open_stored(client: &Client, session_id: &str) -> Result<(App, Attachment
 /// Push a stored Session's two decodings of its journal — the events it
 /// shows and the wire lines behind them — into `app`.
 ///
-/// `events` and `raw` are decoded from the same journal (see
-/// `journal::replay`/`replay_raw`), so they are pushed in lockstep — raw line
-/// first, as a live session receives it — to give each kept entry a
-/// `raw_index` that actually points at its own wire line instead of leaving it
-/// unset.
+/// Both are decoded from the same journal (see `journal::replay`/`replay_raw`),
+/// so they are pushed in lockstep — raw line first, as a live session receives
+/// it — to give each kept entry a `raw_index` that actually points at its own
+/// wire line instead of leaving it unset.
+///
+/// They are not the same length, though: the journal also holds records the
+/// host wrote itself, which have an event but never crossed the wire (see
+/// [`is_wire_backed`]). Each one consumes no line, so everything after it stays
+/// on its own — pairing the lists by position instead would slide every later
+/// entry onto the line before it and drop as many events off the end as there
+/// were host-side records.
 fn replay_into(
     app: &mut App,
     events: Vec<styra_protocol::event::AgentEvent>,
     raw: Vec<styra_protocol::RawLine>,
 ) {
-    for (event, line) in events.into_iter().zip(raw) {
-        app.raw.push(line);
+    let mut lines = raw.into_iter();
+    for event in events {
+        if is_wire_backed(&event) {
+            if let Some(line) = lines.next() {
+                app.raw.push(line);
+            }
+        }
         // Skip carried-but-viewless traffic (e.g. app-server control lines),
         // matching what a live session shows; it stays available in the raw
         // view above.
@@ -447,6 +458,21 @@ fn replay_into(
             app.push_event(event);
         }
     }
+}
+
+/// Whether a replayed event stands for a line that crossed the wire, and so
+/// consumes one when a stored journal is replayed.
+///
+/// A branch marker and a model change are the two records the host writes in
+/// its own right — no provider puts either on the wire — and `journal::replay`
+/// is the only place that produces their events, so recognising them by variant
+/// cannot mistake a decoded agent line for one.
+fn is_wire_backed(event: &styra_protocol::event::AgentEvent) -> bool {
+    !matches!(
+        event,
+        styra_protocol::event::AgentEvent::Branched { .. }
+            | styra_protocol::event::AgentEvent::ModelChanged { .. }
+    )
 }
 
 pub fn open_session(client: &Client, session_id: &str) -> Result<(App, Attachment)> {
@@ -882,6 +908,49 @@ mod tests {
         // And each entry's branch point is its own wire line, not the one
         // before it: branching the replayed Session again has to cut where the
         // operator is looking.
+        app.select_last();
+        open_branch_prompt(&mut app);
+        assert_eq!(app.branch_prompt.as_ref().unwrap().at_ms(), 20);
+    }
+
+    /// The same for a model change, the other record the host writes in its
+    /// own right: it sits mid-history, so a replay that let it eat a wire line
+    /// would mispair only the turns after it — the quieter half of the same
+    /// defect.
+    #[test]
+    fn a_replayed_model_change_does_not_shift_the_turns_after_it() {
+        use styra_protocol::event::AgentEvent;
+
+        let mut app = App::new(Selection::new(Provider::Codex), "s-1");
+        replay_into(
+            &mut app,
+            vec![
+                AgentEvent::UserMessage {
+                    text: "first".into(),
+                },
+                AgentEvent::ModelChanged {
+                    model: Some("gpt-5.6-luna".into()),
+                    effort: None,
+                },
+                AgentEvent::UserMessage {
+                    text: "second".into(),
+                },
+            ],
+            vec![
+                RawLine {
+                    direction: Direction::ToAgent,
+                    text: "first".into(),
+                    at_ms: 10,
+                },
+                RawLine {
+                    direction: Direction::ToAgent,
+                    text: "second".into(),
+                    at_ms: 20,
+                },
+            ],
+        );
+
+        assert_eq!(app.timeline.entries.len(), 3);
         app.select_last();
         open_branch_prompt(&mut app);
         assert_eq!(app.branch_prompt.as_ref().unwrap().at_ms(), 20);
