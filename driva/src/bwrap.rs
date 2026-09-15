@@ -1,9 +1,11 @@
 use crate::base::{Base, BaseConfig, RuntimeEntry};
 use crate::{
-    effective_policy, ExecutionControl, ExecutionEvidence, ExecutionIo, ExecutionOutcome,
-    ExecutionRequest, Isolation, Mount, MountAccess, ProcessExit, WritableMountMode, DEFAULT_PATH,
+    effective_policy, EnvironmentEntry, EnvironmentOrigin, ExecutionControl, ExecutionEvidence,
+    ExecutionIo, ExecutionOutcome, ExecutionRequest, FloorEntry, FloorKind, Isolation, Mount,
+    MountAccess, ProcessExit, WritableMountMode, DEFAULT_PATH,
 };
 use anyhow::{bail, Context, Result};
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, SystemTime};
@@ -112,13 +114,11 @@ impl BwrapIsolation {
         };
 
         let mut command = Command::new(&self.executable);
-        append_isolation_options(&mut command, request, base.as_ref());
-        self.append_filesystem(
+        append_isolation_options(&mut command, request, &environment(request, base.as_ref()));
+        append_floor(
             &mut command,
-            request,
-            rootfs.as_deref(),
+            &floor(rootfs.as_deref(), request, &temporary_mounts),
             base.as_ref(),
-            &temporary_mounts,
         );
         append_mounts(&mut command, mounts);
         command
@@ -127,6 +127,42 @@ impl BwrapIsolation {
             .arg("--")
             .args(&request.command);
         Ok(command)
+    }
+
+    /// What this backend will put in the sandbox on its own, for a request,
+    /// beyond the mounts the request names and the base it is built from.
+    ///
+    /// Reported rather than only built so a caller can state the whole of what
+    /// a sandbox holds: the tmpfs root, the `/tmp` every execution gets, and a
+    /// created working directory are all writable, and all of them are absent
+    /// from the mount list. [`Self::command`] renders its invocation from this
+    /// same list, so the two cannot disagree.
+    pub fn floor(&self, request: &ExecutionRequest) -> Result<Vec<FloorEntry>> {
+        let rootfs = self.resolve_rootfs()?;
+        let plan = BwrapMountPlan::new(request);
+        let temporary_mounts = collect_temporary_mounts(&plan)?;
+        Ok(floor(rootfs.as_deref(), request, &temporary_mounts))
+    }
+
+    /// Every environment variable a request will run with, in the order they
+    /// are set, each carrying the layer that set it.
+    ///
+    /// The sandbox starts with an empty environment, so this is the whole of
+    /// it and not a difference against the host's. Reported from the same list
+    /// [`Self::command`] sets the variables from.
+    pub fn environment(&self, request: &ExecutionRequest) -> Result<Vec<EnvironmentEntry>> {
+        let base = match self.resolve_rootfs()? {
+            Some(_) => None,
+            None => Some(crate::base::resolve_base(&self.base)?),
+        };
+        Ok(environment(request, base.as_ref())
+            .into_iter()
+            .map(|(name, value, origin)| EnvironmentEntry {
+                name: name.to_string_lossy().into_owned(),
+                value: value.to_string_lossy().into_owned(),
+                origin,
+            })
+            .collect())
     }
 
     fn resolve_rootfs(&self) -> Result<Option<PathBuf>> {
@@ -180,38 +216,6 @@ impl BwrapIsolation {
             )?;
         }
         Ok(())
-    }
-
-    fn append_filesystem(
-        &self,
-        command: &mut Command,
-        request: &ExecutionRequest,
-        rootfs: Option<&Path>,
-        base: Option<&Base>,
-        temporary_mounts: &[PathBuf],
-    ) {
-        match (rootfs, base) {
-            (Some(rootfs), _) => {
-                command.arg("--ro-bind").arg(rootfs).arg("/");
-            }
-            (None, Some(base)) => append_base(command, base),
-            (None, None) => unreachable!("private root without a resolved base"),
-        }
-        command
-            .arg("--proc")
-            .arg("/proc")
-            .arg("--dev")
-            .arg("/dev")
-            .arg("--tmpfs")
-            .arg("/tmp");
-        for destination in temporary_mounts {
-            if destination != Path::new("/tmp") {
-                command.arg("--tmpfs").arg(destination);
-            }
-        }
-        if rootfs.is_none() {
-            command.arg("--dir").arg(&request.working_directory);
-        }
     }
 
     fn require_rootfs_directory(&self, rootfs: &Path, path: &Path, label: &str) -> Result<()> {
@@ -278,10 +282,150 @@ fn collect_temporary_mounts(mounts: &BwrapMountPlan) -> Result<Vec<PathBuf>> {
     Ok(temporary_mounts)
 }
 
+/// Everything the backend puts in the sandbox that no mount asked for, in the
+/// order Bubblewrap is told to lay it down.
+///
+/// The root comes first because everything else is laid inside it; the working
+/// directory comes last because a mount may land on it. A private root's base
+/// entries are not here — they are reported on their own terms (see
+/// [`crate::base`]) and appended by [`append_floor`] directly after the root
+/// they sit in.
+fn floor(
+    rootfs: Option<&Path>,
+    request: &ExecutionRequest,
+    temporary_mounts: &[PathBuf],
+) -> Vec<FloorEntry> {
+    let mut entries = vec![match rootfs {
+        Some(rootfs) => FloorEntry {
+            kind: FloorKind::RootFs,
+            path: PathBuf::from("/"),
+            source: Some(rootfs.to_path_buf()),
+        },
+        None => FloorEntry {
+            kind: FloorKind::Tmpfs,
+            path: PathBuf::from("/"),
+            source: None,
+        },
+    }];
+    entries.extend([
+        FloorEntry {
+            kind: FloorKind::Proc,
+            path: PathBuf::from("/proc"),
+            source: None,
+        },
+        FloorEntry {
+            kind: FloorKind::Devices,
+            path: PathBuf::from("/dev"),
+            source: None,
+        },
+        // Every execution gets scratch space here, asked for or not: programs
+        // assume it exists, and a sandbox without it fails in ways that have
+        // nothing to do with its policy.
+        FloorEntry {
+            kind: FloorKind::Tmpfs,
+            path: PathBuf::from("/tmp"),
+            source: None,
+        },
+    ]);
+    entries.extend(
+        temporary_mounts
+            .iter()
+            .filter(|destination| *destination != Path::new("/tmp"))
+            .map(|destination| FloorEntry {
+                kind: FloorKind::Tmpfs,
+                path: destination.clone(),
+                source: None,
+            }),
+    );
+    // A prepared rootfs cannot have directories created below it, so there the
+    // working directory is one the rootfs already carries.
+    if rootfs.is_none() {
+        entries.push(FloorEntry {
+            kind: FloorKind::Directory,
+            path: request.working_directory.clone(),
+            source: None,
+        });
+    }
+    entries
+}
+
+fn append_floor(command: &mut Command, floor: &[FloorEntry], base: Option<&Base>) {
+    for entry in floor {
+        match entry.kind {
+            FloorKind::Tmpfs => {
+                command.arg("--tmpfs").arg(&entry.path);
+            }
+            FloorKind::RootFs => {
+                command
+                    .arg("--ro-bind")
+                    .arg(entry.source.as_ref().expect("a rootfs entry has a source"))
+                    .arg(&entry.path);
+            }
+            FloorKind::Proc => {
+                command.arg("--proc").arg(&entry.path);
+            }
+            FloorKind::Devices => {
+                command.arg("--dev").arg(&entry.path);
+            }
+            FloorKind::Directory => {
+                command.arg("--dir").arg(&entry.path);
+            }
+        }
+        // The base is the private root's contents, so it is laid down as soon
+        // as that root exists and before anything is mounted over it.
+        if entry.path == Path::new("/") {
+            if let Some(base) = base {
+                append_base(command, base);
+            }
+        }
+    }
+}
+
+/// Every variable the sandbox will hold, in the order they are set.
+///
+/// The environment is cleared first, so this is the whole of it: the backend's
+/// own `PATH`, then the host variables the base forwards, then the request's
+/// own. Later layers win, and a name set twice appears once — as the layer
+/// whose value the command will actually see.
+///
+/// Values stay as `OsString` here because that is how they are handed to
+/// Bubblewrap; [`BwrapIsolation::environment`] is where they become the
+/// reportable [`EnvironmentEntry`].
+fn environment(
+    request: &ExecutionRequest,
+    base: Option<&Base>,
+) -> Vec<(OsString, OsString, EnvironmentOrigin)> {
+    let mut entries = Vec::new();
+    if !request.environment.contains_key(OsStr::new("PATH")) {
+        entries.push((
+            OsString::from("PATH"),
+            OsString::from(DEFAULT_PATH),
+            EnvironmentOrigin::Backend,
+        ));
+    }
+    // The base is the floor for the environment the way its entries are the
+    // floor for the filesystem: a request value takes precedence.
+    if let Some(base) = base {
+        entries.extend(
+            base.environment()
+                .into_iter()
+                .filter(|(name, _)| !request.environment.contains_key(name))
+                .map(|(name, value)| (name, value, EnvironmentOrigin::Base)),
+        );
+    }
+    entries.extend(
+        request
+            .environment
+            .iter()
+            .map(|(name, value)| (name.clone(), value.clone(), EnvironmentOrigin::Request)),
+    );
+    entries
+}
+
 fn append_isolation_options(
     command: &mut Command,
     request: &ExecutionRequest,
-    base: Option<&Base>,
+    environment: &[(OsString, OsString, EnvironmentOrigin)],
 ) {
     command.arg("--unshare-all");
     if request.new_session {
@@ -291,22 +435,9 @@ fn append_isolation_options(
     if request.network {
         command.arg("--share-net");
     }
-    command
-        .arg("--clearenv")
-        .arg("--setenv")
-        .arg("PATH")
-        .arg(DEFAULT_PATH);
-    // The base is the floor for the environment the way its entries are the
-    // floor for the filesystem: a request value takes precedence.
-    if let Some(base) = base {
-        for (key, value) in base.environment() {
-            if !request.environment.contains_key(&key) {
-                command.arg("--setenv").arg(key).arg(value);
-            }
-        }
-    }
-    for (key, value) in &request.environment {
-        command.arg("--setenv").arg(key).arg(value);
+    command.arg("--clearenv");
+    for (name, value, _) in environment {
+        command.arg("--setenv").arg(name).arg(value);
     }
 }
 
@@ -351,13 +482,13 @@ fn append_mounts(command: &mut Command, mounts: &BwrapMountPlan) {
     }
 }
 
-/// Lay the resolved base down on a tmpfs root that starts empty.
+/// Lay the resolved base down inside the root the floor has just created,
+/// which for a private root is an empty tmpfs.
 ///
 /// This is the single translation point from a declared base to Bubblewrap's
 /// primitives, so what [`crate::base::resolve_base`] reports and what the
 /// sandbox holds are the same list.
 fn append_base(command: &mut Command, base: &Base) {
-    command.arg("--tmpfs").arg("/");
     for entry in base.entries() {
         match entry {
             RuntimeEntry::ReadOnly { source, path } => {

@@ -41,7 +41,7 @@ pub mod agent {
     }
 }
 
-pub use driva::{Mount, MountAccess};
+pub use driva::{EnvironmentOrigin, FloorEntry, FloorKind, Mount, MountAccess, WritableMountMode};
 pub use genta::{event, render};
 
 #[cfg(feature = "codegen")]

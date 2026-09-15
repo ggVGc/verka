@@ -218,6 +218,10 @@ pub(crate) const REFERENCE: &[ReferenceRow] = &[
         keys: "U / D / W",
         action: "move this interaction's up / save for new clients / store the Workspace's",
     },
+    ReferenceRow::Binding {
+        keys: "PgDn/PgUp",
+        action: "scroll the sandbox account: mounts, floor, environment, private root",
+    },
     ReferenceRow::Blank,
     ReferenceRow::Section("Files"),
     ReferenceRow::Binding {

@@ -1,5 +1,6 @@
 use driva::{
-    BaseConfig, BwrapIsolation, Config, ExecutionRequest, Mount, MountAccess, WritableMountMode,
+    BaseConfig, BwrapIsolation, Config, EnvironmentOrigin, ExecutionRequest, FloorKind, Mount,
+    MountAccess, WritableMountMode,
 };
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -564,9 +565,9 @@ fn shell_dry_run_works_without_configuration() {
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("backend: bwrap"));
-    assert!(stdout.contains("\"--tmpfs\" \"/\""));
-    assert!(stdout.contains("\"--setenv\" \"HOME\" \"/tmp\""));
-    assert!(!stdout.contains("\"--ro-bind\" \"/\" \"/\""));
+    assert!(stdout.contains("--tmpfs /"));
+    assert!(stdout.contains("--setenv HOME /tmp"));
+    assert!(!stdout.contains("--ro-bind / /"));
 }
 
 #[test]
@@ -615,5 +616,154 @@ fn overlay_of_a_file_binds_a_private_copy_instead_of_stacking_overlayfs() {
     assert!(
         !bound[1].starts_with(source.to_str().unwrap()),
         "the sandbox must not write through to the host source"
+    );
+}
+
+/// What the backend lays down without being asked is reportable, and it is the
+/// same list the invocation is built from: a caller that states a sandbox's
+/// contents from the mounts alone would leave out a writable root, a writable
+/// `/tmp`, and a created working directory.
+#[test]
+fn the_reported_floor_is_what_the_invocation_lays_down() {
+    let backend = BwrapIsolation {
+        executable: "bwrap".into(),
+        rootfs: None,
+        base: BaseConfig::default(),
+    };
+    let request = ExecutionRequest {
+        command: vec!["true".into()],
+        working_directory: "/work".into(),
+        mounts: vec![Mount::Temporary {
+            destination: "/root".into(),
+        }],
+        writable_mounts: WritableMountMode::Direct,
+        environment: BTreeMap::new(),
+        network: false,
+        interactive: false,
+        new_session: true,
+    };
+
+    let floor = backend.floor(&request).unwrap();
+    assert_eq!(
+        floor
+            .iter()
+            .map(|entry| (entry.kind, entry.path.display().to_string()))
+            .collect::<Vec<_>>(),
+        [
+            (FloorKind::Tmpfs, "/".to_owned()),
+            (FloorKind::Proc, "/proc".to_owned()),
+            (FloorKind::Devices, "/dev".to_owned()),
+            (FloorKind::Tmpfs, "/tmp".to_owned()),
+            (FloorKind::Tmpfs, "/root".to_owned()),
+            (FloorKind::Directory, "/work".to_owned()),
+        ]
+    );
+    // The writable parts are named as such: writes there never reach the host,
+    // but a program in the sandbox can still make a home for itself in them.
+    assert!(floor
+        .iter()
+        .filter(|entry| entry.path == Path::new("/tmp"))
+        .all(|entry| entry.kind.writable()));
+
+    let args: Vec<String> = backend
+        .command(&request)
+        .unwrap()
+        .get_args()
+        .map(|value| value.to_string_lossy().into_owned())
+        .collect();
+    for entry in &floor {
+        let flag = match entry.kind {
+            FloorKind::Tmpfs => "--tmpfs",
+            FloorKind::Proc => "--proc",
+            FloorKind::Devices => "--dev",
+            FloorKind::Directory => "--dir",
+            FloorKind::RootFs => "--ro-bind",
+        };
+        assert!(
+            args.windows(2)
+                .any(|window| window[0] == flag && window[1] == entry.path.display().to_string()),
+            "{flag} {} is reported but not laid down: {args:?}",
+            entry.path.display()
+        );
+    }
+}
+
+/// A prepared rootfs is the one floor entry that exposes host content, and it
+/// brings its own working directory rather than having one created.
+#[test]
+fn a_prepared_rootfs_is_reported_as_the_floor_it_is() {
+    let rootfs = TestRootfs::new();
+    let backend = BwrapIsolation {
+        executable: "bwrap".into(),
+        rootfs: Some(rootfs.0.clone()),
+        base: BaseConfig::default(),
+    };
+    let request = ExecutionRequest {
+        command: vec!["true".into()],
+        working_directory: "/work".into(),
+        mounts: Vec::new(),
+        writable_mounts: WritableMountMode::Direct,
+        environment: BTreeMap::new(),
+        network: false,
+        interactive: false,
+        new_session: true,
+    };
+
+    let floor = backend.floor(&request).unwrap();
+    assert_eq!(floor[0].kind, FloorKind::RootFs);
+    assert_eq!(floor[0].source.as_deref(), Some(rootfs.0.as_path()));
+    assert!(!floor[0].kind.writable());
+    assert!(!floor.iter().any(|entry| entry.kind == FloorKind::Directory));
+}
+
+/// The environment is reported whole, because the sandbox's own starts empty:
+/// the backend's search path, then what the request states, each saying which
+/// it is. A request that states `PATH` itself leaves no backend default behind
+/// to read as a second answer.
+#[test]
+fn the_reported_environment_is_the_whole_of_it() {
+    let backend = BwrapIsolation {
+        executable: "bwrap".into(),
+        rootfs: None,
+        base: BaseConfig::empty(),
+    };
+    let mut request = ExecutionRequest {
+        command: vec!["true".into()],
+        working_directory: "/work".into(),
+        mounts: Vec::new(),
+        writable_mounts: WritableMountMode::Direct,
+        environment: BTreeMap::from([(OsString::from("HOME"), OsString::from("/tmp/agent-home"))]),
+        network: false,
+        interactive: false,
+        new_session: true,
+    };
+
+    let environment = backend.environment(&request).unwrap();
+    assert_eq!(
+        environment
+            .iter()
+            .map(|entry| (entry.name.as_str(), entry.value.as_str(), entry.origin))
+            .collect::<Vec<_>>(),
+        [
+            (
+                "PATH",
+                "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                EnvironmentOrigin::Backend
+            ),
+            ("HOME", "/tmp/agent-home", EnvironmentOrigin::Request),
+        ]
+    );
+
+    request
+        .environment
+        .insert(OsString::from("PATH"), OsString::from("/opt/bin"));
+    let environment = backend.environment(&request).unwrap();
+    assert_eq!(
+        environment
+            .iter()
+            .filter(|entry| entry.name == "PATH")
+            .map(|entry| (entry.value.as_str(), entry.origin))
+            .collect::<Vec<_>>(),
+        [("/opt/bin", EnvironmentOrigin::Request)]
     );
 }

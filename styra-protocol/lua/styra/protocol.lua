@@ -547,6 +547,11 @@ M.types.DrivaOptions = {
     { name = "network", required = true, type = { kind = "boolean" } },
     { name = "mounts", required = true, type = { kind = "list", item = { kind = "ref", name = "AttributedMount" } } },
     { name = "base", required = false, type = { kind = "list", item = { kind = "ref", name = "BaseCapability" } } },
+    { name = "floor", required = false, type = { kind = "list", item = { kind = "ref", name = "FloorEntry" } } },
+    { name = "environment", required = false, type = { kind = "list", item = { kind = "ref", name = "AttributedVariable" } } },
+    { name = "interactive", required = false, type = { kind = "boolean" } },
+    { name = "new_session", required = false, type = { kind = "boolean" } },
+    { name = "writable_mounts", required = false, type = { kind = "ref", name = "WritableMountMode" } },
   },
 }
 
@@ -762,6 +767,49 @@ M.types.BaseCapability = {
     { name = "description", required = true, type = { kind = "string" } },
     { name = "entries", required = true, type = { kind = "list", item = { kind = "ref", name = "BaseEntry" } } },
     { name = "environment", required = false, type = { kind = "list", item = { kind = "string" } } },
+  },
+}
+
+--- One part of the sandbox filesystem the backend lays down itself, for every
+--- execution, whether or not any mount asked for it.
+---
+--- A mount is a grant an operator or a profile made; a floor entry is what the
+--- backend needs there regardless — the root the mounts are laid on, the
+--- `/proc` a process reads about itself through, the scratch space every
+--- program assumes at `/tmp`. Nothing here exposes host content except the
+--- prepared rootfs an execution was configured with, but several of these are
+--- *writable*, and a caller that only reported the mounts would be saying the
+--- sandbox holds less than it does.
+---
+--- Backends report these so a caller can state them (see
+--- `BwrapIsolation::floor`); the same list is what the backend renders its
+--- own invocation from, so what is shown and what is built cannot drift.
+M.types.FloorEntry = {
+  kind = "struct",
+  fields = {
+    { name = "kind", required = true, type = { kind = "ref", name = "FloorKind" } },
+    { name = "path", required = true, type = { kind = "string", path = true } },
+    { name = "source", required = false, type = { kind = "optional", inner = { kind = "string", path = true } } },
+  },
+}
+
+--- One environment variable the agent will run with, and where it came from.
+M.types.AttributedVariable = {
+  kind = "struct",
+  fields = {
+    { name = "origin", required = true, type = { kind = "ref", name = "VariableOrigin" } },
+    { name = "name", required = true, type = { kind = "string" } },
+    { name = "value", required = true, type = { kind = "string" } },
+  },
+}
+
+M.types.WritableMountMode = {
+  kind = "enum",
+  tagging = { style = "external" },
+  plain = true,
+  variants = {
+    { name = "direct", payload = { kind = "unit" } },
+    { name = "overlay", payload = { kind = "unit" } },
   },
 }
 
@@ -1068,6 +1116,39 @@ M.types.BaseEntry = {
   },
 }
 
+--- What one `FloorEntry` is.
+M.types.FloorKind = {
+  kind = "enum",
+  tagging = { style = "external" },
+  plain = true,
+  variants = {
+    { name = "tmpfs", payload = { kind = "unit" } },
+    { name = "root-fs", payload = { kind = "unit" } },
+    { name = "proc", payload = { kind = "unit" } },
+    { name = "devices", payload = { kind = "unit" } },
+    { name = "directory", payload = { kind = "unit" } },
+  },
+}
+
+--- Which layer set one environment variable.
+---
+--- The same question the mount list answers, for the other half of what
+--- crosses into the sandbox: a variable an operator does not recognize is
+--- either the sandbox's own doing, a capability forwarding it from the host,
+--- or something the profile, a template or the shell broker asked for.
+M.types.VariableOrigin = {
+  kind = "enum",
+  tagging = { style = "external" },
+  plain = true,
+  variants = {
+    { name = "sandbox", payload = { kind = "unit" } },
+    { name = "base", payload = { kind = "unit" } },
+    { name = "profile", payload = { kind = "unit" } },
+    { name = "template", payload = { kind = "unit" } },
+    { name = "broker", payload = { kind = "unit" } },
+  },
+}
+
 --- An update delivered from the interaction's threads to the UI.
 M.types.InteractionUpdate = {
   kind = "enum",
@@ -1307,6 +1388,13 @@ M.Effort = {
   MAX = "max",
 }
 
+M.enums.WritableMountMode = { "direct", "overlay" }
+--- Wire spellings of `WritableMountMode`.
+M.WritableMountMode = {
+  DIRECT = "direct",
+  OVERLAY = "overlay",
+}
+
 M.enums.InteractionActivity = { "pending", "running", "background" }
 --- Wire spellings of `InteractionActivity`.
 M.InteractionActivity = {
@@ -1379,6 +1467,26 @@ M.Mount = {
   BIND = "bind",
   TEMPORARY = "temporary",
   OVERLAY = "overlay",
+}
+
+M.enums.FloorKind = { "tmpfs", "root-fs", "proc", "devices", "directory" }
+--- Wire spellings of `FloorKind`.
+M.FloorKind = {
+  TMPFS = "tmpfs",
+  ROOT_FS = "root-fs",
+  PROC = "proc",
+  DEVICES = "devices",
+  DIRECTORY = "directory",
+}
+
+M.enums.VariableOrigin = { "sandbox", "base", "profile", "template", "broker" }
+--- Wire spellings of `VariableOrigin`.
+M.VariableOrigin = {
+  SANDBOX = "sandbox",
+  BASE = "base",
+  PROFILE = "profile",
+  TEMPLATE = "template",
+  BROKER = "broker",
 }
 
 M.enums.InteractionUpdate = { "event", "raw", "log", "quota", "working_directory_changed", "ended" }

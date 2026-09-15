@@ -130,8 +130,13 @@ Workspace makes.
 
 Sessions run on Driva's private root: the base system read-only and nothing
 else — no host root, no home. The details view lists it under the mounts,
-grouped by the capability that asked for each part, so the two together are the
-whole of what a session can reach. The Workspace's `driva.toml` chooses those
+grouped by the capability that asked for each part. Under those it lists the
+two things a mount list cannot say: the *sandbox floor* the backend lays down
+on its own — the tmpfs root, `/proc`, `/dev`, the `/tmp` every run gets (which
+is where the agent's `HOME` lives), the created working directory — and the
+whole environment the agent runs with, each variable under the layer that set
+it. Between them the four sections are everything the sandbox holds; `PgDn` and
+`PgUp` scroll them when the terminal is too short. The Workspace's `driva.toml` chooses those
 capabilities and says what they mean on this host (`driva doctor` reports
 whether each works); a selected template adds the ones its command requires.
 The agent binary and `tmux` are mounts like everything else, shown as `host

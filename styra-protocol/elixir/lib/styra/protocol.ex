@@ -556,7 +556,12 @@ defmodule Styra.Protocol do
         %{name: "working_directory", required: true, type: %{kind: :string, path: true}},
         %{name: "network", required: true, type: %{kind: :boolean}},
         %{name: "mounts", required: true, type: %{kind: :list, item: %{kind: :ref, name: "AttributedMount"}}},
-        %{name: "base", required: false, type: %{kind: :list, item: %{kind: :ref, name: "BaseCapability"}}}
+        %{name: "base", required: false, type: %{kind: :list, item: %{kind: :ref, name: "BaseCapability"}}},
+        %{name: "floor", required: false, type: %{kind: :list, item: %{kind: :ref, name: "FloorEntry"}}},
+        %{name: "environment", required: false, type: %{kind: :list, item: %{kind: :ref, name: "AttributedVariable"}}},
+        %{name: "interactive", required: false, type: %{kind: :boolean}},
+        %{name: "new_session", required: false, type: %{kind: :boolean}},
+        %{name: "writable_mounts", required: false, type: %{kind: :ref, name: "WritableMountMode"}}
       ]
     },
 
@@ -772,6 +777,49 @@ defmodule Styra.Protocol do
         %{name: "description", required: true, type: %{kind: :string}},
         %{name: "entries", required: true, type: %{kind: :list, item: %{kind: :ref, name: "BaseEntry"}}},
         %{name: "environment", required: false, type: %{kind: :list, item: %{kind: :string}}}
+      ]
+    },
+
+    # One part of the sandbox filesystem the backend lays down itself, for every
+    # execution, whether or not any mount asked for it.
+    #
+    # A mount is a grant an operator or a profile made; a floor entry is what the
+    # backend needs there regardless — the root the mounts are laid on, the
+    # `/proc` a process reads about itself through, the scratch space every
+    # program assumes at `/tmp`. Nothing here exposes host content except the
+    # prepared rootfs an execution was configured with, but several of these are
+    # *writable*, and a caller that only reported the mounts would be saying the
+    # sandbox holds less than it does.
+    #
+    # Backends report these so a caller can state them (see
+    # `BwrapIsolation::floor`); the same list is what the backend renders its
+    # own invocation from, so what is shown and what is built cannot drift.
+    "FloorEntry" => %{
+      kind: :struct,
+      fields: [
+        %{name: "kind", required: true, type: %{kind: :ref, name: "FloorKind"}},
+        %{name: "path", required: true, type: %{kind: :string, path: true}},
+        %{name: "source", required: false, type: %{kind: :optional, inner: %{kind: :string, path: true}}}
+      ]
+    },
+
+    # One environment variable the agent will run with, and where it came from.
+    "AttributedVariable" => %{
+      kind: :struct,
+      fields: [
+        %{name: "origin", required: true, type: %{kind: :ref, name: "VariableOrigin"}},
+        %{name: "name", required: true, type: %{kind: :string}},
+        %{name: "value", required: true, type: %{kind: :string}}
+      ]
+    },
+
+    "WritableMountMode" => %{
+      kind: :enum,
+      tagging: %{style: :external},
+      plain: true,
+      variants: [
+        %{name: "direct", payload: %{kind: :unit}},
+        %{name: "overlay", payload: %{kind: :unit}}
       ]
     },
 
@@ -1075,6 +1123,39 @@ defmodule Styra.Protocol do
       fields: [
         %{name: "path", required: true, type: %{kind: :string, path: true}},
         %{name: "source", required: false, type: %{kind: :optional, inner: %{kind: :string, path: true}}}
+      ]
+    },
+
+    # What one `FloorEntry` is.
+    "FloorKind" => %{
+      kind: :enum,
+      tagging: %{style: :external},
+      plain: true,
+      variants: [
+        %{name: "tmpfs", payload: %{kind: :unit}},
+        %{name: "root-fs", payload: %{kind: :unit}},
+        %{name: "proc", payload: %{kind: :unit}},
+        %{name: "devices", payload: %{kind: :unit}},
+        %{name: "directory", payload: %{kind: :unit}}
+      ]
+    },
+
+    # Which layer set one environment variable.
+    #
+    # The same question the mount list answers, for the other half of what
+    # crosses into the sandbox: a variable an operator does not recognize is
+    # either the sandbox's own doing, a capability forwarding it from the host,
+    # or something the profile, a template or the shell broker asked for.
+    "VariableOrigin" => %{
+      kind: :enum,
+      tagging: %{style: :external},
+      plain: true,
+      variants: [
+        %{name: "sandbox", payload: %{kind: :unit}},
+        %{name: "base", payload: %{kind: :unit}},
+        %{name: "profile", payload: %{kind: :unit}},
+        %{name: "template", payload: %{kind: :unit}},
+        %{name: "broker", payload: %{kind: :unit}}
       ]
     },
 
@@ -2590,6 +2671,43 @@ defmodule Styra.Protocol.Effort do
   def max, do: "max"
 end
 
+defmodule Styra.Protocol.WritableMountMode do
+  @moduledoc ~S"""
+  Wire spellings of `WritableMountMode`.
+  """
+
+  @spellings [
+    {:direct, "direct"},
+    {:overlay, "overlay"}
+  ]
+
+  @doc "Every spelling as `{atom, wire}`, in declaration order."
+  def spellings, do: @spellings
+
+  @doc "Every wire spelling, in declaration order."
+  def values, do: Enum.map(@spellings, &elem(&1, 1))
+
+  @doc "The wire spelling of an atom, or nil."
+  def spelling(atom) do
+    case List.keyfind(@spellings, atom, 0) do
+      {_atom, wire} -> wire
+      nil -> nil
+    end
+  end
+
+  @doc "The atom for a wire spelling: `{:ok, atom}` or `:error`."
+  def parse(wire) do
+    case List.keyfind(@spellings, wire, 1) do
+      {atom, _wire} -> {:ok, atom}
+      nil -> :error
+    end
+  end
+
+  def direct, do: "direct"
+
+  def overlay, do: "overlay"
+end
+
 defmodule Styra.Protocol.InteractionActivity do
   @moduledoc ~S"""
   Wire spellings of `InteractionActivity`.
@@ -3063,6 +3181,139 @@ defmodule Styra.Protocol.Mount do
   copy of the file and removes it after execution.
   """
   def overlay, do: "overlay"
+end
+
+defmodule Styra.Protocol.FloorKind do
+  @moduledoc ~S"""
+  Wire spellings of `FloorKind`.
+
+  What one `FloorEntry` is.
+  """
+
+  @spellings [
+    {:tmpfs, "tmpfs"},
+    {:"root-fs", "root-fs"},
+    {:proc, "proc"},
+    {:devices, "devices"},
+    {:directory, "directory"}
+  ]
+
+  @doc "Every spelling as `{atom, wire}`, in declaration order."
+  def spellings, do: @spellings
+
+  @doc "Every wire spelling, in declaration order."
+  def values, do: Enum.map(@spellings, &elem(&1, 1))
+
+  @doc "The wire spelling of an atom, or nil."
+  def spelling(atom) do
+    case List.keyfind(@spellings, atom, 0) do
+      {_atom, wire} -> wire
+      nil -> nil
+    end
+  end
+
+  @doc "The atom for a wire spelling: `{:ok, atom}` or `:error`."
+  def parse(wire) do
+    case List.keyfind(@spellings, wire, 1) do
+      {atom, _wire} -> {:ok, atom}
+      nil -> :error
+    end
+  end
+
+  @doc ~S"""
+  An empty in-memory filesystem: writable, private to this execution, and
+  discarded when it exits. Nothing written here reaches the host.
+  """
+  def tmpfs, do: "tmpfs"
+
+  @doc ~S"""
+  A `/proc` for this execution's own PID namespace.
+  """
+  def proc, do: "proc"
+
+  @doc ~S"""
+  The minimal device set the backend provides — a private `/dev` with
+  `null`, `zero`, `random` and the execution's own terminal, not the
+  host's devices.
+  """
+  def devices, do: "devices"
+
+  @doc ~S"""
+  A directory created so the execution has somewhere to start. Empty
+  unless a mount lands on it.
+  """
+  def directory, do: "directory"
+end
+
+defmodule Styra.Protocol.VariableOrigin do
+  @moduledoc ~S"""
+  Wire spellings of `VariableOrigin`.
+
+  Which layer set one environment variable.
+
+  The same question the mount list answers, for the other half of what
+  crosses into the sandbox: a variable an operator does not recognize is
+  either the sandbox's own doing, a capability forwarding it from the host,
+  or something the profile, a template or the shell broker asked for.
+  """
+
+  @spellings [
+    {:sandbox, "sandbox"},
+    {:base, "base"},
+    {:profile, "profile"},
+    {:template, "template"},
+    {:broker, "broker"}
+  ]
+
+  @doc "Every spelling as `{atom, wire}`, in declaration order."
+  def spellings, do: @spellings
+
+  @doc "Every wire spelling, in declaration order."
+  def values, do: Enum.map(@spellings, &elem(&1, 1))
+
+  @doc "The wire spelling of an atom, or nil."
+  def spelling(atom) do
+    case List.keyfind(@spellings, atom, 0) do
+      {_atom, wire} -> wire
+      nil -> nil
+    end
+  end
+
+  @doc "The atom for a wire spelling: `{:ok, atom}` or `:error`."
+  def parse(wire) do
+    case List.keyfind(@spellings, wire, 1) do
+      {atom, _wire} -> {:ok, atom}
+      nil -> :error
+    end
+  end
+
+  @doc ~S"""
+  Set by Driva itself because the sandbox would otherwise have no value
+  for it — the executable search path.
+  """
+  def sandbox, do: "sandbox"
+
+  @doc ~S"""
+  Forwarded from the host by a base capability that needs it (a proxy, a
+  certificate bundle). The capability that asks for it is named in
+  `DrivaOptions::base`.
+  """
+  def base, do: "base"
+
+  @doc ~S"""
+  Granted by the agent profile.
+  """
+  def profile, do: "profile"
+
+  @doc ~S"""
+  Granted by one of the selected Driva templates.
+  """
+  def template, do: "template"
+
+  @doc ~S"""
+  Set for the sandbox broker that runs the session's tmux shell.
+  """
+  def broker, do: "broker"
 end
 
 defmodule Styra.Protocol.InteractionUpdate do

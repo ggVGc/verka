@@ -366,6 +366,7 @@ mod tests {
                     access: MountAccess::ReadWrite,
                 },
             }],
+            ..Default::default()
         }
     }
 

@@ -181,6 +181,7 @@ mod tests {
                 network: false,
                 base: vec![],
                 mounts: vec![],
+                ..Default::default()
             },
             accepting: true,
             activity,

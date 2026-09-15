@@ -10,7 +10,7 @@
 
 use crate::agent::Selection;
 use crate::event::AgentEvent;
-use crate::Mount;
+use crate::{FloorEntry, Mount, WritableMountMode};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -242,7 +242,7 @@ pub struct InteractionEnd {
 /// enforced around it. Captured once at spawn time from the same
 /// `ExecutionRequest` Driva itself executes (see [`DrivaOptions::capture`] in
 /// [`crate::interaction`]), so it can never drift from what is actually running.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DrivaOptions {
     pub isolation_backend: String,
     pub command: Vec<String>,
@@ -259,6 +259,32 @@ pub struct DrivaOptions {
     /// field shows the mounts alone, as it always did.
     #[serde(default)]
     pub base: Vec<BaseCapability>,
+    /// What the isolation backend puts in the sandbox on its own: the root the
+    /// mounts are laid on, `/proc`, `/dev`, the `/tmp` every execution gets,
+    /// and the created working directory.
+    ///
+    /// Several of these are writable, and none of them is a mount, so a view
+    /// built from the mount list alone understates what the agent can write —
+    /// an agent whose `HOME` is a directory under `/tmp` has a whole writable
+    /// home that no row anywhere else accounts for.
+    #[serde(default)]
+    pub floor: Vec<FloorEntry>,
+    /// Every environment variable the agent will run with, each carrying the
+    /// layer that set it. The sandbox's environment is cleared first, so this
+    /// is the whole of it rather than a difference against the host's.
+    #[serde(default)]
+    pub environment: Vec<AttributedVariable>,
+    /// Whether the agent gets a terminal of its own.
+    #[serde(default)]
+    pub interactive: bool,
+    /// Whether the sandboxed process is detached from the launching terminal's
+    /// session, which is what stops it injecting input into that terminal.
+    #[serde(default)]
+    pub new_session: bool,
+    /// Whether writable binds write through to the host or into a discarded
+    /// overlay.
+    #[serde(default)]
+    pub writable_mounts: WritableMountMode,
 }
 
 impl DrivaOptions {
@@ -349,6 +375,51 @@ impl MountOrigin {
 pub struct AttributedMount {
     pub origin: MountOrigin,
     pub mount: Mount,
+}
+
+/// Which layer set one environment variable.
+///
+/// The same question the mount list answers, for the other half of what
+/// crosses into the sandbox: a variable an operator does not recognize is
+/// either the sandbox's own doing, a capability forwarding it from the host,
+/// or something the profile, a template or the shell broker asked for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VariableOrigin {
+    /// Set by Driva itself because the sandbox would otherwise have no value
+    /// for it — the executable search path.
+    Sandbox,
+    /// Forwarded from the host by a base capability that needs it (a proxy, a
+    /// certificate bundle). The capability that asks for it is named in
+    /// [`DrivaOptions::base`].
+    Base,
+    /// Granted by the agent profile.
+    Profile,
+    /// Granted by one of the selected Driva templates.
+    Template,
+    /// Set for the sandbox broker that runs the session's tmux shell.
+    Broker,
+}
+
+impl VariableOrigin {
+    /// How the origin reads as a heading over the variables it contributed.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Sandbox => "sandbox default",
+            Self::Base => "forwarded from the host",
+            Self::Profile => "agent profile",
+            Self::Template => "templates",
+            Self::Broker => "broker control",
+        }
+    }
+}
+
+/// One environment variable the agent will run with, and where it came from.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttributedVariable {
+    pub origin: VariableOrigin,
+    pub name: String,
+    pub value: String,
 }
 
 /// One extra host directory the operator asked to be bound into the sandbox,

@@ -75,7 +75,11 @@ fn path_directories_are_read_only_and_prepended() {
         first.display(),
         second.display()
     )));
-    assert!(stdout.contains(&format!("\"--ro-bind\" {:?} {:?}", first, first)));
+    assert!(stdout.contains(&format!(
+        "--ro-bind {} {}",
+        first.display(),
+        first.display()
+    )));
 }
 
 #[test]

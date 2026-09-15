@@ -109,6 +109,11 @@ pub struct Launch {
     /// worth telling apart on screen: one is what the agent runs under, the
     /// other is what it would run under.
     pub planned: bool,
+    /// How far the sandbox account is scrolled. The policy is now longer than
+    /// a terminal — mounts, the backend's own floor, the whole environment,
+    /// and the private root — and everything in it is worth being able to
+    /// reach, so the part that does not fit is scrolled to rather than lost.
+    pub scroll: crate::app::Scroll,
     /// The (selection, effective policy) `driva` was planned for, recorded even
     /// when the plan could not be fetched. Anything that changes the policy
     /// makes this differ from the current one and the plan is re-asked for; a
@@ -169,6 +174,9 @@ impl Launch {
         self.driva = Some(options);
         self.planned = false;
         self.plan_key = None;
+        // A different sandbox is a different account of one, so it is read
+        // from the top rather than from wherever the last one was left.
+        self.scroll.reset();
     }
 
     /// Record the policy a new interaction under `selection` and this effective
@@ -707,6 +715,7 @@ mod tests {
             network: false,
             base: Vec::new(),
             mounts: Vec::new(),
+            ..Default::default()
         }
     }
 
@@ -1086,6 +1095,7 @@ mod tests {
                 network: false,
                 base: Vec::new(),
                 mounts: Vec::new(),
+                ..Default::default()
             }),
         );
         assert!(!wants_plan(&app));

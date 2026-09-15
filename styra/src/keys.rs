@@ -355,6 +355,12 @@ pub fn handle_list_key(
             KeyCode::Char('U') => launch::promote_to_workspace(app),
             KeyCode::Char('j') | KeyCode::Down => launch::select_next_mount(app),
             KeyCode::Char('k') | KeyCode::Up => launch::select_prev_mount(app),
+            // The sandbox account above the panes is longer than a terminal —
+            // mounts, the backend's floor, the environment, the private root —
+            // and all of it is meant to be readable, so what does not fit is
+            // paged rather than lost. `j`/`k` are the mount cursor's.
+            KeyCode::PageDown => app.launch.scroll.page_down(),
+            KeyCode::PageUp => app.launch.scroll.page_up(),
             _ => {}
         },
         // Re-reading is on the capitals so `j` and `k` stay navigation, as
@@ -720,6 +726,7 @@ mod tests {
                     access: MountAccess::ReadWrite,
                 },
             }],
+            ..Default::default()
         });
         app.enter_input();
         app

@@ -779,7 +779,12 @@ impl ServerState {
             template,
             broker: Some(self.prepare_broker(&id, tmux)?),
         };
-        let driva = capture_driva_options(&spec, "bwrap")?;
+        let backend = driva::BwrapIsolation {
+            executable: "bwrap".into(),
+            rootfs: None,
+            base,
+        };
+        let driva = capture_driva_options(&spec, &backend)?;
         let prepared_broker = spec.broker.as_ref().expect("broker was prepared");
         let shell = ShellInfo {
             tmux: prepared_broker.tmux.clone(),
@@ -794,11 +799,7 @@ impl ServerState {
             }
             return Err(error);
         }
-        let backend = Box::new(driva::BwrapIsolation {
-            executable: "bwrap".into(),
-            rootfs: None,
-            base,
-        });
+        let backend = Box::new(backend);
         let (interaction, receiver) =
             match Interaction::spawn(spec, backend, journal, id.clone(), diagnostics) {
                 Ok(spawned) => spawned,
@@ -1068,7 +1069,14 @@ impl ServerState {
             template,
             broker: Some(self.describe_broker(PENDING_SESSION_ID, tmux)),
         };
-        let options = capture_driva_options(&spec, "bwrap")?;
+        let options = capture_driva_options(
+            &spec,
+            &driva::BwrapIsolation {
+                executable: "bwrap".into(),
+                rootfs: None,
+                base,
+            },
+        )?;
         // Planning is also where a policy gets checked: an operator editing
         // mounts before launch learns that two of them collide now, from the
         // view they are editing, rather than from a failed launch later.
@@ -1206,7 +1214,12 @@ impl ServerState {
             template,
             broker: Some(self.prepare_broker(&request.id, tmux)?),
         };
-        let driva = capture_driva_options(&spec, "bwrap")?;
+        let backend = driva::BwrapIsolation {
+            executable: "bwrap".into(),
+            rootfs: None,
+            base,
+        };
+        let driva = capture_driva_options(&spec, &backend)?;
         let prepared_broker = spec.broker.as_ref().expect("broker was prepared");
         let shell = ShellInfo {
             tmux: prepared_broker.tmux.clone(),
@@ -1218,11 +1231,7 @@ impl ServerState {
             }
             return Err(error);
         }
-        let backend = Box::new(driva::BwrapIsolation {
-            executable: "bwrap".into(),
-            rootfs: None,
-            base,
-        });
+        let backend = Box::new(backend);
         let (interaction, receiver) =
             Interaction::spawn(spec, backend, journal, request.id.clone(), diagnostics)?;
         // The replayed conversation counts: a resumed interaction carries on
@@ -3204,6 +3213,7 @@ mod tests {
                     },
                 },
             ],
+            ..Default::default()
         };
         let error = ensure_distinct_destinations(&options).unwrap_err();
         assert!(

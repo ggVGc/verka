@@ -884,6 +884,7 @@ mod tests {
                 network: false,
                 base: Vec::new(),
                 mounts: Vec::new(),
+                ..Default::default()
             },
             accepting,
             activity: styra_protocol::InteractionActivity::Pending,

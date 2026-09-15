@@ -107,6 +107,96 @@ pub enum MountAccess {
     ReadWrite,
 }
 
+/// One part of the sandbox filesystem the backend lays down itself, for every
+/// execution, whether or not any mount asked for it.
+///
+/// A mount is a grant an operator or a profile made; a floor entry is what the
+/// backend needs there regardless — the root the mounts are laid on, the
+/// `/proc` a process reads about itself through, the scratch space every
+/// program assumes at `/tmp`. Nothing here exposes host content except the
+/// prepared rootfs an execution was configured with, but several of these are
+/// *writable*, and a caller that only reported the mounts would be saying the
+/// sandbox holds less than it does.
+///
+/// Backends report these so a caller can state them (see
+/// [`BwrapIsolation::floor`]); the same list is what the backend renders its
+/// own invocation from, so what is shown and what is built cannot drift.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub struct FloorEntry {
+    pub kind: FloorKind,
+    /// Where it lands inside the sandbox.
+    pub path: PathBuf,
+    /// The host path it is taken from, for the one kind that takes any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<PathBuf>,
+}
+
+/// What one [`FloorEntry`] is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FloorKind {
+    /// An empty in-memory filesystem: writable, private to this execution, and
+    /// discarded when it exits. Nothing written here reaches the host.
+    Tmpfs,
+    /// A prepared root filesystem bound read-only as `/`.
+    RootFs,
+    /// A `/proc` for this execution's own PID namespace.
+    Proc,
+    /// The minimal device set the backend provides — a private `/dev` with
+    /// `null`, `zero`, `random` and the execution's own terminal, not the
+    /// host's devices.
+    Devices,
+    /// A directory created so the execution has somewhere to start. Empty
+    /// unless a mount lands on it.
+    Directory,
+}
+
+impl FloorKind {
+    /// What this kind is, in one line an operator can read.
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::Tmpfs => "empty, writable, in memory, discarded when the run ends",
+            Self::RootFs => "the prepared root filesystem, read-only",
+            Self::Proc => "this sandbox's own process table",
+            Self::Devices => "a private /dev, not the host's devices",
+            Self::Directory => "created so the run has a working directory",
+        }
+    }
+
+    /// Whether a program in the sandbox can write here. Writes to a floor
+    /// entry never reach the host, but they do reach other programs in the
+    /// same sandbox, which is why it is worth saying.
+    pub fn writable(self) -> bool {
+        matches!(self, Self::Tmpfs | Self::Devices | Self::Directory)
+    }
+}
+
+/// One environment variable an execution will hold, and where it comes from.
+///
+/// Backends start the process with an empty environment, so the reported list
+/// is the whole of it — a caller that shows these is not showing a diff
+/// against the host's environment but everything the command will see.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub struct EnvironmentEntry {
+    pub name: String,
+    pub value: String,
+    pub origin: EnvironmentOrigin,
+}
+
+/// Which layer set an [`EnvironmentEntry`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum EnvironmentOrigin {
+    /// The backend's own default, set because the sandbox would otherwise have
+    /// none: the executable search path.
+    Backend,
+    /// Forwarded from the host by a base capability that needs it (see
+    /// [`base`]).
+    Base,
+    /// Stated by the request.
+    Request,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct EffectivePolicy {
     pub working_directory: PathBuf,

@@ -166,10 +166,28 @@ system* read-only (`driva::base` — the named capabilities a program needs to
 run at all, resolve users and certificates, resolve host names, and tell the
 time) and nothing else. No host root is passed through, so the operator's home
 is not in the sandbox at all, and the mount list is the whole of what a session
-can reach. Anything the agent needs from outside that base is a mount someone
-asked for and can see:
+can reach *of the host*. Anything the agent needs from outside that base is a
+mount someone asked for and can see:
 the workspace, the Git metadata, the profile's own state directory, a template,
 or the operator's own grant.
+
+What the mount list is *not* is the whole of what a session can write. The
+isolation backend lays down a floor of its own under every mount — the tmpfs
+root the base is bound into, `/proc`, a private `/dev`, the `/tmp` every
+execution gets, and the working directory it creates — and most of that floor
+is writable, in memory, and discarded when the run ends. It matters because the
+agent profiles pin `HOME` to a directory under `/tmp` (`genta::agent`), so an
+agent has a complete writable home that no mount row accounts for. The backend
+reports that floor (`driva::BwrapIsolation::floor`) from the same list it
+builds its invocation from, and the details view shows it under the mounts,
+naming the entry the agent's `HOME` actually sits on.
+
+The environment is reported the same way and for the same reason. A sandbox's
+environment is cleared before anything is set in it, so what the view lists is
+the whole of it rather than a difference against the operator's shell, and each
+variable carries the layer that set it: Driva's own `PATH`, a variable a base
+capability forwards from the host, the profile's, a template's, or the shell
+broker's (`styra_server::interaction::attributed_environment`).
 
 That includes the executables. An agent installed outside the base
 (`~/.local/bin/claude`), and the `tmux` behind the session shell, are bound

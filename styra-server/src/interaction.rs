@@ -17,8 +17,8 @@ use crate::agent::{MountSpec, Profile, Selection};
 use crate::event::{decode_line, AgentEvent, BranchDirection};
 use crate::journal::Journal;
 use crate::protocol::{
-    AttributedMount, BaseCapability, BaseEntry, Direction, DrivaOptions, InteractionEnd,
-    InteractionUpdate, LogEntry, MountOrigin, RawLine,
+    AttributedMount, AttributedVariable, BaseCapability, BaseEntry, Direction, DrivaOptions,
+    InteractionEnd, InteractionUpdate, LogEntry, MountOrigin, RawLine, VariableOrigin,
 };
 use anyhow::{Context, Result};
 use driva::{
@@ -136,16 +136,39 @@ impl ResolvedTemplate {
 /// the same thing that would stop the launch itself.
 pub fn capture_driva_options(
     spec: &InteractionSpec,
-    isolation_backend: impl Into<String>,
+    backend: &driva::BwrapIsolation,
 ) -> Result<DrivaOptions> {
     let request = build_request(spec);
+    // Asked of the backend that will run this request rather than derived
+    // again here: the floor and the environment are the backend's own doing —
+    // a tmpfs root, the `/tmp` every sandbox gets, the search path a cleared
+    // environment would otherwise lack — and nothing else in Styra knows what
+    // they are.
+    let floor = backend
+        .floor(&request)
+        .context("reading the sandbox floor this launch would run on")?;
+    let environment = attributed_environment(
+        spec,
+        backend
+            .environment(&request)
+            .context("reading the environment this launch would run with")?,
+    );
     Ok(DrivaOptions {
-        isolation_backend: isolation_backend.into(),
+        isolation_backend: backend
+            .executable
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| backend.executable.display().to_string()),
         command: spec.profile.command.clone(),
         working_directory: request.working_directory,
         network: request.network,
         mounts: attributed_mounts(spec),
         base: captured_base(&spec.base)?,
+        floor,
+        environment,
+        interactive: request.interactive,
+        new_session: request.new_session,
+        writable_mounts: request.writable_mounts,
     })
 }
 
@@ -814,54 +837,115 @@ fn coalesce_repeated_binds(mounts: Vec<AttributedMount>) -> Vec<AttributedMount>
     kept
 }
 
+/// Every variable this launch states, each carrying the layer that stated it,
+/// in the order the layers apply.
+///
+/// This is the environment counterpart of [`attributed_mounts`], and it is the
+/// one place the layering happens: the request Driva executes takes the same
+/// list with the attribution dropped, so what an operator is shown cannot fall
+/// out of step with what the agent is given. A name a later layer repeats wins
+/// there, so the list is folded back to front when it becomes a map.
+fn layered_environment(spec: &InteractionSpec) -> Vec<(OsString, OsString, VariableOrigin)> {
+    let mut variables: Vec<(OsString, OsString, VariableOrigin)> = spec
+        .profile
+        .environment
+        .iter()
+        .map(|(name, value)| {
+            (
+                OsString::from(name),
+                OsString::from(value),
+                VariableOrigin::Profile,
+            )
+        })
+        .collect();
+    if let Some(template) = &spec.template {
+        variables.extend(
+            template
+                .environment
+                .iter()
+                .map(|(name, value)| (name.clone(), value.clone(), VariableOrigin::Template)),
+        );
+    }
+    if let Some(broker) = &spec.broker {
+        variables.extend(
+            [
+                (crate::broker::BROKER_ENV, OsString::from("1")),
+                (
+                    crate::broker::AGENT_COMMAND_ENV,
+                    OsString::from(
+                        serde_json::to_string(&spec.profile.command)
+                            .expect("serializing a string command cannot fail"),
+                    ),
+                ),
+                (crate::broker::TMUX_ENV, broker.tmux.clone().into()),
+                (
+                    crate::broker::TMUX_SOCKET_ENV,
+                    broker.socket.clone().into_os_string(),
+                ),
+                (
+                    crate::broker::WORKDIR_ENV,
+                    spec.working_directory.clone().into_os_string(),
+                ),
+            ]
+            .into_iter()
+            .map(|(name, value)| (OsString::from(name), value, VariableOrigin::Broker)),
+        );
+    }
+    variables
+}
+
+/// The environment Driva reports for this launch, with each variable Styra
+/// states attributed to the layer that stated it.
+///
+/// Driva knows the ones it sets itself and the ones a base capability forwards
+/// from the host; only Styra knows which of the rest is the profile's, a
+/// template's, or the shell broker's. Joining the two here keeps a single list
+/// that accounts for every variable the agent will see.
+fn attributed_environment(
+    spec: &InteractionSpec,
+    environment: Vec<driva::EnvironmentEntry>,
+) -> Vec<AttributedVariable> {
+    let stated: BTreeMap<String, VariableOrigin> = layered_environment(spec)
+        .into_iter()
+        .map(|(name, _, origin): (OsString, OsString, VariableOrigin)| {
+            (name.to_string_lossy().into_owned(), origin)
+        })
+        .collect();
+    environment
+        .into_iter()
+        .map(|entry| AttributedVariable {
+            origin: match entry.origin {
+                driva::EnvironmentOrigin::Backend => VariableOrigin::Sandbox,
+                driva::EnvironmentOrigin::Base => VariableOrigin::Base,
+                // Every request variable came from a layer above, and the map
+                // is built from the same list the request was.
+                driva::EnvironmentOrigin::Request => stated
+                    .get(&entry.name)
+                    .copied()
+                    .unwrap_or(VariableOrigin::Profile),
+            },
+            name: entry.name,
+            value: entry.value,
+        })
+        .collect()
+}
+
 fn build_request(spec: &InteractionSpec) -> ExecutionRequest {
     let mounts: Vec<Mount> = attributed_mounts(spec)
         .into_iter()
         .map(|attributed| attributed.mount)
         .collect();
-    let mut environment: BTreeMap<OsString, OsString> = spec
-        .profile
-        .environment
-        .iter()
-        .map(|(k, v)| (OsString::from(k), OsString::from(v)))
+    let environment: BTreeMap<OsString, OsString> = layered_environment(spec)
+        .into_iter()
+        .map(|(name, value, _)| (name, value))
         .collect();
     let mut network = spec.profile.network;
     if let Some(template) = &spec.template {
-        environment.extend(
-            template
-                .environment
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone())),
-        );
         network = network || template.network;
     }
-    let command = if let Some(broker) = &spec.broker {
-        environment.insert(
-            OsString::from(crate::broker::BROKER_ENV),
-            OsString::from("1"),
-        );
-        environment.insert(
-            OsString::from(crate::broker::AGENT_COMMAND_ENV),
-            OsString::from(
-                serde_json::to_string(&spec.profile.command)
-                    .expect("serializing a string command cannot fail"),
-            ),
-        );
-        environment.insert(
-            OsString::from(crate::broker::TMUX_ENV),
-            broker.tmux.clone().into_os_string(),
-        );
-        environment.insert(
-            OsString::from(crate::broker::TMUX_SOCKET_ENV),
-            broker.socket.clone().into_os_string(),
-        );
-        environment.insert(
-            OsString::from(crate::broker::WORKDIR_ENV),
-            spec.working_directory.clone().into_os_string(),
-        );
-        vec![broker.executable.clone().into_os_string()]
-    } else {
-        spec.profile.command.iter().map(OsString::from).collect()
+    let command = match &spec.broker {
+        Some(broker) => vec![broker.executable.clone().into_os_string()],
+        None => spec.profile.command.iter().map(OsString::from).collect(),
     };
     ExecutionRequest {
         command,
@@ -885,6 +969,20 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::{Duration, SystemTime};
+
+    /// The policy a spec would launch under, through the same Bubblewrap
+    /// backend the server builds for it — which is what knows the sandbox's
+    /// floor and its environment.
+    fn capture(spec: &InteractionSpec) -> Result<DrivaOptions> {
+        capture_driva_options(
+            spec,
+            &driva::BwrapIsolation {
+                executable: "bwrap".into(),
+                rootfs: None,
+                base: spec.base.clone(),
+            },
+        )
+    }
 
     /// A backend that speaks a tiny protocol: for each submission line it reads
     /// on stdin, it writes back one Claude assistant message echoing the text, then
@@ -1049,7 +1147,7 @@ mod tests {
         .unwrap();
         spec.profile.mounts.clear();
 
-        let command = capture_driva_options(&spec, "bwrap").unwrap().command;
+        let command = capture(&spec).unwrap().command;
         assert_eq!(spec.profile.name, "codex:gpt-5.6-terra/xhigh");
         assert!(
             command.contains(&r#"model="gpt-5.6-terra""#.to_string()),
@@ -1081,7 +1179,7 @@ mod tests {
             socket: PathBuf::from("/tmp/styra/control/tmux.sock"),
         });
 
-        let displayed = capture_driva_options(&spec, "bwrap").unwrap();
+        let displayed = capture(&spec).unwrap();
         let request = build_request(&spec);
         assert_eq!(displayed.command, agent_command);
         assert_eq!(
@@ -1291,7 +1389,7 @@ mod tests {
             },
         ];
 
-        let options = capture_driva_options(&spec, "bwrap").unwrap();
+        let options = capture(&spec).unwrap();
         assert!(options.mounts.iter().any(|mount| matches!(
             mount,
             AttributedMount {
@@ -1322,7 +1420,7 @@ mod tests {
             writable: false,
         }];
 
-        let options = capture_driva_options(&spec, "bwrap").unwrap();
+        let options = capture(&spec).unwrap();
         let at_workspace: Vec<_> = options
             .mounts
             .iter()
@@ -1358,7 +1456,7 @@ mod tests {
             writable: true,
         }];
 
-        let options = capture_driva_options(&spec, "bwrap").unwrap();
+        let options = capture(&spec).unwrap();
         assert_eq!(
             options
                 .mounts
@@ -1382,7 +1480,7 @@ mod tests {
             writable: false,
         }];
 
-        let options = capture_driva_options(&spec, "bwrap").unwrap();
+        let options = capture(&spec).unwrap();
         assert_eq!(
             options
                 .mounts
@@ -1398,7 +1496,7 @@ mod tests {
         let dir = PathBuf::from("/tmp/styra/workspace");
         let spec = workspace_spec(&dir);
         let command = spec.profile.command.clone();
-        let options = capture_driva_options(&spec, "bwrap").unwrap();
+        let options = capture(&spec).unwrap();
 
         assert_eq!(options.isolation_backend, "bwrap");
         assert_eq!(options.command, command);
@@ -1427,7 +1525,7 @@ mod tests {
             writable: false,
         }];
 
-        let options = capture_driva_options(&spec, "bwrap").unwrap();
+        let options = capture(&spec).unwrap();
 
         assert!(options.mounts.iter().any(|attributed| matches!(
             attributed,
@@ -1449,7 +1547,7 @@ mod tests {
     #[test]
     fn the_captured_policy_states_the_base_it_runs_on() {
         let dir = PathBuf::from("/tmp/styra/workspace");
-        let options = capture_driva_options(&workspace_spec(&dir), "bwrap").unwrap();
+        let options = capture(&workspace_spec(&dir)).unwrap();
 
         let names: Vec<&str> = options
             .base
@@ -1468,6 +1566,86 @@ mod tests {
                 .is_some_and(|home| entry.path.starts_with(home))));
     }
 
+    /// The mounts are not the whole of what the sandbox holds: the backend
+    /// lays down a floor of its own under them, and most of it is writable.
+    /// A profile that pins `HOME` under `/tmp` is the case that makes this
+    /// matter — the agent's entire home is then scratch space no mount row
+    /// anywhere accounts for.
+    #[test]
+    fn the_captured_policy_states_the_floor_the_backend_lays_down() {
+        let dir = PathBuf::from("/tmp/styra/workspace");
+        let options = capture(&workspace_spec(&dir)).unwrap();
+
+        let floor: Vec<(driva::FloorKind, String)> = options
+            .floor
+            .iter()
+            .map(|entry| (entry.kind, entry.path.display().to_string()))
+            .collect();
+        assert!(
+            floor.contains(&(driva::FloorKind::Tmpfs, "/".to_owned())),
+            "the private root is a writable tmpfs and has to be said: {floor:?}"
+        );
+        assert!(
+            floor.contains(&(driva::FloorKind::Tmpfs, "/tmp".to_owned())),
+            "every sandbox gets /tmp whether or not anything asked: {floor:?}"
+        );
+        // The agent's home lives on that floor rather than in any mount.
+        let home = options
+            .environment
+            .iter()
+            .find(|variable| variable.name == "HOME")
+            .expect("the profile pins HOME");
+        assert!(
+            home.value.starts_with("/tmp/"),
+            "unexpected sandbox home {}",
+            home.value
+        );
+        assert!(!options.mounts.iter().any(|attributed| attributed
+            .mount
+            .destination()
+            .to_string_lossy()
+            == home.value));
+    }
+
+    /// The environment is reported whole and attributed layer by layer, the way
+    /// the mounts are: the sandbox's own defaults, the profile's, and — where
+    /// one is selected — a template's over it.
+    #[test]
+    fn the_captured_policy_attributes_every_environment_variable() {
+        let dir = PathBuf::from("/tmp/styra/workspace");
+        let mut spec = workspace_spec(&dir);
+        spec.template = Some(ResolvedTemplate {
+            mounts: Vec::new(),
+            environment: BTreeMap::from([(OsString::from("TERM"), OsString::from("dumb"))]),
+            network: false,
+            capabilities: Vec::new(),
+        });
+
+        let options = capture(&spec).unwrap();
+        let variable = |name: &str| {
+            options
+                .environment
+                .iter()
+                .find(|variable| variable.name == name)
+                .unwrap_or_else(|| panic!("{name} is not reported"))
+                .clone()
+        };
+
+        assert_eq!(variable("PATH").origin, VariableOrigin::Sandbox);
+        assert_eq!(variable("HOME").origin, VariableOrigin::Profile);
+        // Set by the profile and again by the template: attributed to the layer
+        // whose value the agent will actually see.
+        assert_eq!(variable("TERM").origin, VariableOrigin::Template);
+        assert_eq!(variable("TERM").value, "dumb");
+        // And what is reported is what is enforced.
+        assert_eq!(
+            build_request(&spec)
+                .environment
+                .get(&OsString::from("TERM")),
+            Some(&OsString::from("dumb"))
+        );
+    }
+
     /// A capability a template requires reaches the base the launch runs on,
     /// so a template can state what its command needs without the Workspace
     /// having to know.
@@ -1478,11 +1656,11 @@ mod tests {
         spec.base
             .include
             .retain(|name| *name == driva::Capability::Core);
-        let before = capture_driva_options(&spec, "bwrap").unwrap();
+        let before = capture(&spec).unwrap();
         assert_eq!(before.base.len(), 1);
 
         spec.base.include(driva::Capability::Timezone);
-        let after = capture_driva_options(&spec, "bwrap").unwrap();
+        let after = capture(&spec).unwrap();
         assert_eq!(
             after
                 .base

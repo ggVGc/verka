@@ -603,6 +603,7 @@ mod tests {
                 network: false,
                 base: Vec::new(),
                 mounts: vec![],
+                ..Default::default()
             },
             accepting,
             activity,

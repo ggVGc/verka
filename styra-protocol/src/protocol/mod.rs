@@ -13,18 +13,18 @@ use std::path::PathBuf;
 mod types;
 
 pub use types::{
-    Answer, AnswerValue, AttributedMount, BaseCapability, BaseEntry, BranchHistory, Contract,
-    Direction, DrivaOptions, FileLocation, InteractionActivity, InteractionEnd, InteractionSummary,
-    InteractionUpdate, LaunchMount, LaunchPolicy, LogEntry, LogLevel, MountOrigin, QueuedMessage,
-    QuotaEvent, QuotaStatus, RawLine, SessionOrigin, SessionSummary, TemplateSummary,
-    WorkspaceSummary,
+    Answer, AnswerValue, AttributedMount, AttributedVariable, BaseCapability, BaseEntry,
+    BranchHistory, Contract, Direction, DrivaOptions, FileLocation, InteractionActivity,
+    InteractionEnd, InteractionSummary, InteractionUpdate, LaunchMount, LaunchPolicy, LogEntry,
+    LogLevel, MountOrigin, QueuedMessage, QuotaEvent, QuotaStatus, RawLine, SessionOrigin,
+    SessionSummary, TemplateSummary, VariableOrigin, WorkspaceSummary,
 };
 
 // These external vocabularies are serialized inside protocol payloads. Re-export
 // them here so the complete wire surface is discoverable from this module.
 pub use crate::agent::{Effort, Provider, Selection as AgentSelection};
 pub use crate::event::AgentEvent as ProtocolAgentEvent;
-pub use crate::{Mount, MountAccess};
+pub use crate::{EnvironmentOrigin, FloorEntry, FloorKind, Mount, MountAccess, WritableMountMode};
 
 /// `serde` default for the protocol's opt-out booleans, whose absence must
 /// mean "as before".
@@ -614,6 +614,7 @@ mod tests {
                 }],
                 environment: Vec::new(),
             }],
+            ..Default::default()
         });
         let json = serde_json::to_value(&response).unwrap();
         assert_eq!(json["type"], "session_plan");

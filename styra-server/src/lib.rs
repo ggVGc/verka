@@ -77,7 +77,7 @@ pub use genta::render;
 
 // Driva mount types are embedded in [`types::DrivaOptions`], so a client needs
 // them to render the captured policy without depending on Driva directly.
-pub use driva::{Mount, MountAccess};
+pub use driva::{EnvironmentOrigin, FloorEntry, FloorKind, Mount, MountAccess, WritableMountMode};
 
 // --- The client-facing interface ---
 // `contract` is here rather than with the session runner because both sides
@@ -97,16 +97,17 @@ pub mod spawn;
 // `styra-protocol`.
 pub mod transport;
 
+pub use client::{Client, InProcessServer};
 pub use daemon::{in_process, run, serve_if_requested, ServerConfig};
 pub use protocol::WorkspaceLaunchChange;
 pub use protocol::{
-    Answer, AnswerValue, AttributedMount, BaseCapability, BaseEntry, BranchHistory, Contract,
-    Direction, DrivaOptions, FileLocation, InteractionActivity, InteractionEnd, InteractionSummary,
-    InteractionUpdate, LaunchMount, LaunchPolicy, LoadedInteraction, LogEntry, LogLevel,
-    MountOrigin, ProviderRaw, QueuedMessage, QuotaEvent, QuotaStatus, RawLine, SessionOrigin,
-    SessionSummary, TemplateSummary, WorkspaceSummary,
+    Answer, AnswerValue, AttributedMount, AttributedVariable, BaseCapability, BaseEntry,
+    BranchHistory, Contract, Direction, DrivaOptions, FileLocation, InteractionActivity,
+    InteractionEnd, InteractionSummary, InteractionUpdate, LaunchMount, LaunchPolicy,
+    LoadedInteraction, LogEntry, LogLevel, MountOrigin, ProviderRaw, QueuedMessage, QuotaEvent,
+    QuotaStatus, RawLine, SessionOrigin, SessionSummary, TemplateSummary, VariableOrigin,
+    WorkspaceSummary,
 };
-pub use client::{Client, InProcessServer};
 pub use spawn::ensure_server;
 
 // --- The session runner ---

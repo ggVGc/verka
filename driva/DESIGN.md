@@ -197,6 +197,15 @@ when applicable. Bubblewrap adds fresh `/proc`, `/dev`, and `/tmp` mounts,
 clears the inherited host environment, and shares the host network namespace
 only when networking is granted.
 
+Those additions are the sandbox **floor**: what the backend puts there without
+being asked, under every mount. Most of it is writable — the tmpfs root, the
+`/tmp` every execution gets, a created working directory — so a caller that
+described a sandbox from its mounts alone would understate what a program in it
+can write. `BwrapIsolation::floor` and `BwrapIsolation::environment` report the
+floor and the complete environment for a request, from the same lists the
+invocation is rendered from, so a caller can state either without re-deriving
+it and without the two drifting apart.
+
 ## The base system
 
 A private root starts as an empty filesystem, so a command in it cannot run

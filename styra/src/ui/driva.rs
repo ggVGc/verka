@@ -28,7 +28,11 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
-use styra_protocol::{AttributedMount, DrivaOptions, Mount, MountAccess, MountOrigin};
+use std::path::PathBuf;
+use styra_protocol::{
+    AttributedMount, DrivaOptions, FloorKind, Mount, MountAccess, MountOrigin, VariableOrigin,
+    WritableMountMode,
+};
 
 /// Rows the effective-policy summary keeps for itself before either settings
 /// pane is given any height. Enough for the banner and the fields that say what
@@ -142,40 +146,255 @@ fn render_summary(frame: &mut Frame, app: &App, options: Option<&DrivaOptions>, 
         sandbox_area.y += height;
         sandbox_area.height = sandbox_area.height.saturating_sub(height);
     }
-    // When the policy is editable, the two settings panes reserve the bottom
-    // of the view.  A recorded private root can be much longer than the room
-    // above them, particularly after an interaction stops and its Workspace
-    // and interaction settings return.  Keep the fixed sandbox facts above
-    // it, then let the capability list use the available width as well.
-    let private_root = options.filter(|options| !options.base.is_empty());
-    if app.can_edit_launch() && sandbox_area.width >= 72 && private_root.is_some() {
-        let prefix = Paragraph::new(sandbox_prefix_lines(app, options)).wrap(Wrap { trim: false });
-        let prefix_height = prefix
-            .line_count(sandbox_area.width.max(1))
-            .min(usize::from(sandbox_area.height)) as u16;
-        let prefix_area = Rect {
-            height: prefix_height,
-            ..sandbox_area
-        };
-        frame.render_widget(prefix, prefix_area);
-        let root_area = Rect {
-            y: sandbox_area.y + prefix_height,
-            height: sandbox_area.height.saturating_sub(prefix_height),
-            ..sandbox_area
-        };
-        render_private_root(frame, private_root.expect("checked above"), root_area);
-    } else {
-        frame.render_widget(
-            Paragraph::new(sandbox_lines(app, options)).wrap(Wrap { trim: false }),
-            sandbox_area,
-        );
+    render_sandbox(frame, app, options, sandbox_area);
+}
+
+/// The sandbox account, in whichever of three shapes fits what there is room
+/// for.
+///
+/// Everything here is worth reading and none of it can be edited, so the
+/// question is only how much of it is on screen at once. It is laid out in one
+/// column when that fits; the private root flows into a second column when
+/// that is what makes it fit; and when neither does, the whole account becomes
+/// one scrolling column, because an account of what an agent can reach that
+/// quietly stops halfway is worse than no account at all.
+fn render_sandbox(frame: &mut Frame, app: &App, options: Option<&DrivaOptions>, area: Rect) {
+    if area.height == 0 {
+        return;
     }
+    let width = area.width.max(1);
+    let lines = sandbox_lines(app, options);
+    let height = |lines: &Vec<Line<'static>>| {
+        Paragraph::new(lines.clone())
+            .wrap(Wrap { trim: false })
+            .line_count(width)
+    };
+    let total = height(&lines);
+    if total <= usize::from(area.height) {
+        app.launch.scroll.note_limit(0);
+        frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
+        return;
+    }
+
+    // Two columns for the private root, which is the longest part and the one
+    // part that is a list of independent groups.
+    let private_root = options.filter(|options| !options.base.is_empty());
+    if let Some(root) = private_root.filter(|_| area.width >= 72) {
+        let prefix = sandbox_prefix_lines(app, options);
+        let prefix_height = height(&prefix);
+        let columns = private_root_column_height(root, width / 2);
+        if prefix_height + columns <= usize::from(area.height) {
+            app.launch.scroll.note_limit(0);
+            let prefix_height = prefix_height as u16;
+            frame.render_widget(
+                Paragraph::new(prefix).wrap(Wrap { trim: false }),
+                Rect {
+                    height: prefix_height,
+                    ..area
+                },
+            );
+            render_private_root(
+                frame,
+                root,
+                Rect {
+                    y: area.y + prefix_height,
+                    height: area.height - prefix_height,
+                    ..area
+                },
+            );
+            return;
+        }
+    }
+
+    // One scrolling column. What is off screen is said in the section's own
+    // heading rather than on a line of its own: a view that is cut off without
+    // admitting it reads as the whole policy, and spending a row on saying so
+    // would cut it off one line sooner.
+    let mut lines = lines;
+    let limit = total.saturating_sub(usize::from(area.height));
+    app.launch
+        .scroll
+        .note_limit(limit.min(usize::from(u16::MAX)) as u16);
+    let offset = app.launch.scroll.clamped();
+    if let Some(heading) = lines.iter_mut().find(|line| line.to_string() == "sandbox") {
+        heading.push_span(Span::styled(
+            format!(
+                "  ▾ {} more line(s) · PgDn/PgUp",
+                limit.saturating_sub(usize::from(offset))
+            ),
+            Style::default().fg(palette::ADDITIONAL_INFO),
+        ));
+    }
+    frame.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .scroll((offset, 0)),
+        area,
+    );
+}
+
+/// How tall the private-root listing is once its capability groups are dealt
+/// into two columns of `width`, which is what [`render_private_root`] does.
+fn private_root_column_height(options: &DrivaOptions, width: u16) -> usize {
+    let width = width.max(1);
+    let groups = private_root_groups(options);
+    let heights: Vec<usize> = groups
+        .iter()
+        .map(|group| Paragraph::new(group.clone()).line_count(width))
+        .collect();
+    let total: usize = heights.iter().sum();
+    let target = total.div_ceil(2);
+    let mut first = 0;
+    for height in &heights {
+        if first > 0 && first + height > target {
+            break;
+        }
+        first += height;
+    }
+    // Two rows for the heading the listing keeps above its columns.
+    2 + first.max(total - first)
 }
 
 fn sandbox_lines(app: &App, options: Option<&DrivaOptions>) -> Vec<Line<'static>> {
     let mut lines = sandbox_prefix_lines(app, options);
     if let Some(options) = options {
         lines.extend(private_root_lines(options));
+    }
+    lines
+}
+
+/// What the sandbox holds that no mount accounts for, and that no layer of the
+/// policy can take away.
+///
+/// The mount list answers "what of the host can this agent reach"; it does not
+/// answer "what can this agent write", because the backend lays down a
+/// filesystem of its own underneath every mount — a root, a `/tmp`, the
+/// working directory — and most of it is writable. An agent whose `HOME` is a
+/// directory under `/tmp` therefore has a complete, writable home that appears
+/// in no mount row anywhere, which is exactly the kind of grant this view
+/// exists to make impossible to miss.
+fn floor_lines(options: &DrivaOptions) -> Vec<Line<'static>> {
+    if options.floor.is_empty() {
+        return Vec::new();
+    }
+    // Only the innermost entry the home sits under is the one that holds it:
+    // `/` is an ancestor of everything, and saying so of `/` would be noise.
+    let home = home_directory(options);
+    let home_entry = home.as_deref().and_then(|home| {
+        options
+            .floor
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| home.starts_with(&entry.path))
+            .max_by_key(|(_, entry)| entry.path.components().count())
+            .map(|(index, _)| index)
+    });
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "sandbox floor — the backend's own, under every mount",
+            Style::default()
+                .fg(palette::ACCENT)
+                .add_modifier(Modifier::BOLD),
+        )),
+    ];
+    lines.extend(options.floor.iter().enumerate().map(|(index, entry)| {
+        let (label, colour) = match entry.kind {
+            FloorKind::Tmpfs => ("tmp ", palette::INFO),
+            FloorKind::Directory => ("dir ", palette::INFO),
+            FloorKind::RootFs => ("ro  ", palette::MUTED_TEXT),
+            FloorKind::Proc | FloorKind::Devices => ("sys ", palette::MUTED_TEXT),
+        };
+        let mut detail = match &entry.source {
+            Some(source) => format!("{} — {}", source.display(), entry.kind.description()),
+            None => entry.kind.description().to_owned(),
+        };
+        // The one part of the floor an operator is most likely to have
+        // assumed is a mount: the agent's home, when the profile pins `HOME`
+        // to a path that lands here.
+        if home_entry == Some(index) {
+            detail.push_str(match home.as_deref() {
+                Some(home) if home == entry.path => " · is the agent's HOME",
+                _ => " · holds the agent's HOME",
+            });
+        }
+        Line::from(vec![
+            Span::styled(
+                format!("    {label}"),
+                Style::default().fg(colour).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("{:<20} {detail}", entry.path.display().to_string()),
+                Style::default().fg(palette::TEXT),
+            ),
+        ])
+    }));
+    lines
+}
+
+/// Where the agent's home lands inside the sandbox, as its own environment
+/// states it. Read back from the captured policy rather than assumed, because
+/// a profile is free to pin it anywhere.
+fn home_directory(options: &DrivaOptions) -> Option<PathBuf> {
+    options
+        .environment
+        .iter()
+        .find(|variable| variable.name == "HOME")
+        .map(|variable| PathBuf::from(&variable.value))
+}
+
+/// Every environment variable the agent will run with, under the layer that
+/// set it.
+///
+/// A sandbox's environment is cleared before anything is set in it, so this is
+/// the whole of what the agent sees and not a difference against the operator's
+/// own shell. It belongs next to the mounts for the same reason the mounts are
+/// grouped: a value crosses into the sandbox as surely as a path does, and
+/// "why is that set" has the same three or four answers.
+fn environment_lines(options: &DrivaOptions) -> Vec<Line<'static>> {
+    if options.environment.is_empty() {
+        return Vec::new();
+    }
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "environment — all of it; the sandbox starts with none",
+            Style::default()
+                .fg(palette::ACCENT)
+                .add_modifier(Modifier::BOLD),
+        )),
+    ];
+    // A fixed order rather than the order Driva sets them in: the request's
+    // own variables are one alphabetical run of mixed layers, and grouping
+    // them by that run would repeat every heading.
+    for origin in [
+        VariableOrigin::Profile,
+        VariableOrigin::Template,
+        VariableOrigin::Broker,
+        VariableOrigin::Base,
+        VariableOrigin::Sandbox,
+    ] {
+        let mut variables = options
+            .environment
+            .iter()
+            .filter(|variable| variable.origin == origin)
+            .peekable();
+        if variables.peek().is_none() {
+            continue;
+        }
+        lines.push(Line::from(Span::styled(
+            format!("  {}", origin.label()),
+            Style::default().fg(palette::ADDITIONAL_INFO),
+        )));
+        lines.extend(variables.map(|variable| {
+            Line::from(vec![
+                Span::styled(
+                    format!("    {} ", variable.name),
+                    Style::default().fg(palette::MUTED_TEXT),
+                ),
+                Span::styled(variable.value.clone(), Style::default().fg(palette::TEXT)),
+            ])
+        }));
     }
     lines
 }
@@ -228,6 +447,33 @@ fn sandbox_prefix_lines(app: &App, options: Option<&DrivaOptions>) -> Vec<Line<'
         )),
     ]);
     lines.extend(grouped_mount_lines(&options.mounts));
+    // The rest of what the request states, in one line because none of it is
+    // editable and none of it is as pressing as the grants above — but each
+    // part is something an operator would otherwise have to know Driva's
+    // defaults to answer.
+    lines.push(Line::from(""));
+    lines.push(driva_field_line(
+        "run as",
+        &[
+            if options.interactive {
+                "a terminal of its own"
+            } else {
+                "no terminal — the protocol runs over pipes"
+            },
+            if options.new_session {
+                "its own session, so it cannot type into yours"
+            } else {
+                "this terminal's session"
+            },
+            match options.writable_mounts {
+                WritableMountMode::Direct => "writable mounts write through to the host",
+                WritableMountMode::Overlay => "writes go to an overlay and are discarded",
+            },
+        ]
+        .join(" · "),
+    ));
+    lines.extend(floor_lines(options));
+    lines.extend(environment_lines(options));
     lines
 }
 
@@ -1048,6 +1294,7 @@ mod tests {
                     access: MountAccess::ReadWrite,
                 },
             }],
+            ..Default::default()
         });
         let screen = tall(&app);
         assert!(screen.contains("details"));
@@ -1187,6 +1434,151 @@ mod tests {
         );
     }
 
+    /// The floor is the answer to the question the mount list cannot answer:
+    /// what can this agent write that nobody granted it? Its writable parts
+    /// are named, and the one an operator is most likely to have assumed was a
+    /// mount — the agent's home — says so where it actually lives.
+    #[test]
+    fn the_floor_names_what_the_backend_lays_down_under_every_mount() {
+        use styra_protocol::{AttributedVariable, FloorEntry};
+
+        let options = DrivaOptions {
+            floor: vec![
+                FloorEntry {
+                    kind: FloorKind::Tmpfs,
+                    path: PathBuf::from("/"),
+                    source: None,
+                },
+                FloorEntry {
+                    kind: FloorKind::Tmpfs,
+                    path: PathBuf::from("/tmp"),
+                    source: None,
+                },
+                FloorEntry {
+                    kind: FloorKind::Directory,
+                    path: PathBuf::from("/workspace"),
+                    source: None,
+                },
+            ],
+            environment: vec![AttributedVariable {
+                origin: VariableOrigin::Profile,
+                name: "HOME".into(),
+                value: "/tmp/agent-home".into(),
+            }],
+            ..Default::default()
+        };
+
+        let lines: Vec<String> = floor_lines(&options)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect();
+
+        assert_eq!(
+            lines[1],
+            "sandbox floor — the backend's own, under every mount"
+        );
+        assert!(lines[2].contains("tmp /"), "{lines:?}");
+        assert!(
+            lines[3].contains("holds the agent's HOME"),
+            "the home is on the floor, not in a mount: {lines:?}"
+        );
+        // Only the entry the home actually sits under says so.
+        assert!(
+            !lines[2].contains("HOME") && !lines[4].contains("HOME"),
+            "{lines:?}"
+        );
+        assert!(lines[4].contains("created so the run has a working directory"));
+    }
+
+    /// The environment is the other half of what crosses into the sandbox, and
+    /// it is shown whole, under the layer that set each variable — the same
+    /// question, and the same kind of answer, as the mount list's origins.
+    #[test]
+    fn the_environment_is_shown_whole_and_under_the_layer_that_set_it() {
+        use styra_protocol::AttributedVariable;
+
+        let variable = |origin, name: &str, value: &str| AttributedVariable {
+            origin,
+            name: name.into(),
+            value: value.into(),
+        };
+        let options = DrivaOptions {
+            environment: vec![
+                variable(VariableOrigin::Sandbox, "PATH", "/usr/bin"),
+                variable(VariableOrigin::Profile, "HOME", "/tmp/agent-home"),
+                variable(VariableOrigin::Base, "HTTPS_PROXY", "http://proxy:3128"),
+                variable(VariableOrigin::Broker, "STYRA_TMUX", "/usr/bin/tmux"),
+            ],
+            ..Default::default()
+        };
+
+        let lines: Vec<String> = environment_lines(&options)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect();
+
+        assert_eq!(
+            lines[1],
+            "environment — all of it; the sandbox starts with none"
+        );
+        assert_eq!(
+            lines[2..],
+            [
+                "  agent profile",
+                "    HOME /tmp/agent-home",
+                "  broker control",
+                "    STYRA_TMUX /usr/bin/tmux",
+                "  forwarded from the host",
+                "    HTTPS_PROXY http://proxy:3128",
+                "  sandbox default",
+                "    PATH /usr/bin",
+            ]
+        );
+    }
+
+    /// The account is now longer than a terminal, and every part of it is meant
+    /// to be readable. What does not fit is scrolled to, and the view says so
+    /// rather than ending silently halfway.
+    #[test]
+    fn a_sandbox_too_long_for_the_terminal_is_scrolled_rather_than_cut_off() {
+        use crate::activity::Status;
+        use styra_protocol::{AttributedVariable, BaseCapability};
+
+        let mut app = testing::app("s1");
+        app.toggle_view(View::Driva);
+        app.launch.record(DrivaOptions {
+            isolation_backend: "bwrap".into(),
+            command: vec!["codex".into()],
+            working_directory: PathBuf::from("/tmp/styra/workspace"),
+            environment: (1..=40)
+                .map(|number| AttributedVariable {
+                    origin: VariableOrigin::Profile,
+                    name: format!("VARIABLE_{number}"),
+                    value: "set by the profile".into(),
+                })
+                .collect(),
+            base: vec![BaseCapability {
+                name: "core".into(),
+                description: "Run a program at all".into(),
+                entries: Vec::new(),
+                environment: Vec::new(),
+            }],
+            ..Default::default()
+        });
+        app.activity.status = Status::Stopped;
+
+        let screen = tall(&app);
+        assert!(screen.contains("more line(s) · PgDn/PgUp"), "{screen}");
+        assert!(!screen.contains("VARIABLE_40"), "{screen}");
+
+        for _ in 0..8 {
+            app.launch.scroll.page_down();
+        }
+        let screen = tall(&app);
+        assert!(screen.contains("VARIABLE_40"), "{screen}");
+        assert!(screen.contains("private root"), "{screen}");
+    }
+
     /// The private root is shown under the mounts, grouped by the capability
     /// that asked for each part: a path there is not an arbitrary grant but
     /// the local meaning of something the sandbox needs, and a host that keeps
@@ -1222,6 +1614,7 @@ mod tests {
                     environment: vec!["HTTPS_PROXY".into()],
                 },
             ],
+            ..Default::default()
         };
 
         let lines = private_root_lines(&options)
@@ -1260,6 +1653,7 @@ mod tests {
                 network: true,
                 base: Vec::new(),
                 mounts: Vec::new(),
+                ..Default::default()
             }),
         );
         let screen = tall(&app);
@@ -1284,6 +1678,7 @@ mod tests {
                 network: false,
                 base: Vec::new(),
                 mounts: Vec::new(),
+                ..Default::default()
             }),
         );
         app
@@ -1500,6 +1895,7 @@ mod tests {
                 network: true,
                 base: Vec::new(),
                 mounts: Vec::new(),
+                ..Default::default()
             }),
         );
         let screen = tall(&app);
@@ -1518,6 +1914,7 @@ mod tests {
                 network: false,
                 base: Vec::new(),
                 mounts: Vec::new(),
+                ..Default::default()
             }),
         );
         let screen = tall(&app);
@@ -1546,6 +1943,7 @@ mod tests {
                 network: true,
                 base: Vec::new(),
                 mounts: Vec::new(),
+                ..Default::default()
             }),
         );
         let screen = tall(&app);
@@ -1574,6 +1972,7 @@ mod tests {
             network: false,
             base: Vec::new(),
             mounts: Vec::new(),
+            ..Default::default()
         });
         let screen = tall(&app);
         assert!(!screen.contains("every launch here"), "{screen}");
@@ -1596,6 +1995,7 @@ mod tests {
             network: false,
             base: Vec::new(),
             mounts: Vec::new(),
+            ..Default::default()
         });
         app.activity.status = Status::Stopped;
         assert!(app.can_edit_launch());
@@ -1624,6 +2024,7 @@ mod tests {
                     environment: Vec::new(),
                 })
                 .collect(),
+            ..Default::default()
         });
         app.activity.status = Status::Stopped;
 
