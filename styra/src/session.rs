@@ -416,12 +416,29 @@ pub fn open_stored(client: &Client, session_id: &str) -> Result<(App, Attachment
     let mut app = App::new(stored.summary.selection, stored.summary.id);
     app.session_name = stored.summary.name;
     app.workspace.id = Some(stored.summary.workspace_id);
-    // `stored.events[i]` and `stored.raw[i]` are decoded from the same journal
-    // record (see `journal::replay`/`replay_raw`), so pushing them in lockstep
-    // — raw line first, as a live session receives it — gives each kept entry
-    // a `raw_index` that actually points at its own wire line instead of
-    // leaving it unset.
-    for (event, line) in stored.events.into_iter().zip(stored.raw) {
+    replay_into(&mut app, stored.events, stored.raw);
+    // A replayed session has no live agent to end; mark it stopped.
+    app.on_ended(styra_protocol::InteractionEnd {
+        exit_code: None,
+        error: None,
+    });
+    Ok((app, Attachment::Detached))
+}
+
+/// Push a stored Session's two decodings of its journal — the events it
+/// shows and the wire lines behind them — into `app`.
+///
+/// `events` and `raw` are decoded from the same journal (see
+/// `journal::replay`/`replay_raw`), so they are pushed in lockstep — raw line
+/// first, as a live session receives it — to give each kept entry a
+/// `raw_index` that actually points at its own wire line instead of leaving it
+/// unset.
+fn replay_into(
+    app: &mut App,
+    events: Vec<styra_protocol::event::AgentEvent>,
+    raw: Vec<styra_protocol::RawLine>,
+) {
+    for (event, line) in events.into_iter().zip(raw) {
         app.raw.push(line);
         // Skip carried-but-viewless traffic (e.g. app-server control lines),
         // matching what a live session shows; it stays available in the raw
@@ -430,12 +447,6 @@ pub fn open_stored(client: &Client, session_id: &str) -> Result<(App, Attachment
             app.push_event(event);
         }
     }
-    // A replayed session has no live agent to end; mark it stopped.
-    app.on_ended(styra_protocol::InteractionEnd {
-        exit_code: None,
-        error: None,
-    });
-    Ok((app, Attachment::Detached))
 }
 
 pub fn open_session(client: &Client, session_id: &str) -> Result<(App, Attachment)> {
@@ -801,6 +812,79 @@ mod tests {
 
         open_branch_prompt(&mut app);
         assert_eq!(app.branch_prompt.as_ref().unwrap().at_ms(), 42);
+    }
+
+    /// A branched Session's journal opens with the host-side branch marker
+    /// written before its copied history. `journal::replay` turns that record
+    /// into a `Branched` event, but `journal::replay_raw` skips it — it never
+    /// crossed the wire — so the events list is one longer than the raw one.
+    /// Replaying them in lockstep must still pair each entry with its own wire
+    /// line, or the branch loses exactly the entry it was taken on: the last
+    /// one.
+    #[test]
+    fn a_branched_journal_replays_its_whole_history() {
+        use styra_protocol::event::{AgentEvent, BranchDirection};
+
+        let mut app = App::new(Selection::new(Provider::Codex), "s-2");
+        let agent_line = r#"{"method":"item/completed","params":{"item":{"type":"agentMessage","id":"m","text":"answer"}}}"#;
+        replay_into(
+            &mut app,
+            vec![
+                // Written by `Journal::record_branch`; no wire line of its own.
+                AgentEvent::Branched {
+                    direction: BranchDirection::From,
+                    session: "s-1".into(),
+                    name: None,
+                },
+                AgentEvent::UserMessage {
+                    text: "question".into(),
+                },
+                AgentEvent::AgentMessage {
+                    text: "answer".into(),
+                },
+            ],
+            vec![
+                RawLine {
+                    direction: Direction::ToAgent,
+                    text: "question".into(),
+                    at_ms: 10,
+                },
+                RawLine {
+                    direction: Direction::FromAgent,
+                    text: agent_line.into(),
+                    at_ms: 20,
+                },
+            ],
+        );
+
+        assert_eq!(
+            app.timeline
+                .entries
+                .iter()
+                .map(|entry| entry.event.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                AgentEvent::Branched {
+                    direction: BranchDirection::From,
+                    session: "s-1".into(),
+                    name: None,
+                },
+                AgentEvent::UserMessage {
+                    text: "question".into(),
+                },
+                AgentEvent::AgentMessage {
+                    text: "answer".into(),
+                },
+            ],
+            "the marker carries no wire line, so it must not consume the first one"
+        );
+
+        // And each entry's branch point is its own wire line, not the one
+        // before it: branching the replayed Session again has to cut where the
+        // operator is looking.
+        app.select_last();
+        open_branch_prompt(&mut app);
+        assert_eq!(app.branch_prompt.as_ref().unwrap().at_ms(), 20);
     }
 
     #[test]
