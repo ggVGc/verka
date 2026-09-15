@@ -36,6 +36,7 @@ mod preview;
 mod raw;
 mod references;
 mod session;
+mod tag_picker;
 mod tail;
 mod terminal;
 mod timeline;

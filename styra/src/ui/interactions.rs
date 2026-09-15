@@ -47,7 +47,7 @@ pub(crate) fn render(frame: &mut Frame, app: &App, area: Rect) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(palette::ACCENT))
         .title(format!(
-            " {scope} · live interactions · j/k move · {jump}Enter close · S stop · D delete stopped · w scope · a close "
+            " {scope} · live interactions · j/k move · {jump}T tags · Enter close · S stop · D delete stopped · w scope · a close "
         ));
     // The cursor and the interaction on screen part company while a move is
     // settling or its load is running: the cursor is where the operator is,
@@ -191,6 +191,12 @@ fn item(
                 .add_modifier(Modifier::BOLD),
         ));
     }
+    if !interaction.tags.is_empty() {
+        main.push(Span::styled(
+            format!(" · #{}", interaction.tags.join(" #")),
+            Style::default().fg(palette::WARNING),
+        ));
+    }
     let mut lines = vec![Line::from(main)];
     if let Some(text) = &interaction.last_message {
         let body = format!("    « {text}");
@@ -229,6 +235,7 @@ mod tests {
             auto_retry: false,
             id: id.into(),
             name: Some(name.into()),
+            tags: Vec::new(),
             workspace_id: "payments".into(),
             selection: styra_protocol::agent::Selection::parse("codex").unwrap(),
             workspace: PathBuf::from("/workspace"),
@@ -281,6 +288,16 @@ mod tests {
         let response_row = screen.find("« The checks are green.").unwrap() / 80;
 
         assert_eq!(response_row, interaction_row + 1, "{screen}");
+    }
+
+    #[test]
+    fn navigator_shows_an_interactions_tags() {
+        let mut app = testing::app("s-1");
+        let mut interaction = interaction("s-1", "triage");
+        interaction.tags = vec!["bug".into(), "urgent".into()];
+        app.interactions.open(vec![interaction], vec![]);
+
+        assert!(testing::rendered(&app).contains("#bug #urgent"));
     }
 
     #[test]

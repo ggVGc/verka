@@ -5,8 +5,8 @@
 use crate::protocol::{
     Answer, Contract, CreateSession, CreateWorkspace, DrivaOptions, Health, LaunchPolicy,
     LoadedInteraction, PlanSession, QueuedMessage, RenameSession, Request, Response, ResumeSession,
-    SendMessage, SessionInfo, ShellInfo, StoredSession, TemplateSummary, Updates, WireResponse,
-    WorkspaceLaunchChange,
+    SendMessage, SessionInfo, SetSessionTags, ShellInfo, StoredSession, TemplateSummary, Updates,
+    WireResponse, WorkspaceLaunchChange,
 };
 use crate::protocol::{InteractionSummary, SessionSummary, WorkspaceSummary};
 use anyhow::{bail, Context, Result};
@@ -134,6 +134,23 @@ impl Client {
         }))? {
             Response::SessionRenamed(value) => Ok(value),
             other => unexpected("session_renamed", other),
+        }
+    }
+
+    pub fn set_session_tags(&self, id: &str, tags: Vec<String>) -> Result<SessionSummary> {
+        match self.request(Request::SetSessionTags(SetSessionTags {
+            id: id.to_owned(),
+            tags,
+        }))? {
+            Response::SessionTagsUpdated(value) => Ok(value),
+            other => unexpected("session_tags_updated", other),
+        }
+    }
+
+    pub fn list_tags(&self) -> Result<Vec<String>> {
+        match self.request(Request::ListTags)? {
+            Response::Tags(value) => Ok(value),
+            other => unexpected("tags", other),
         }
     }
 

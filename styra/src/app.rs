@@ -38,6 +38,7 @@ use crate::picker::TemplatePicker;
 use crate::preview::{self, Preview};
 use crate::raw::{ProviderRawView, RawView};
 use crate::references::{self, References};
+use crate::tag_picker::TagPicker;
 use crate::tail::Tail;
 use crate::timeline::{Entry, Step, Timeline};
 use crate::workspace::Location;
@@ -233,6 +234,8 @@ pub struct App {
     /// The Git checkout path being entered for the current Workspace from the
     /// details view. An empty value deliberately clears the association.
     pub git_repository_prompt: Option<String>,
+    /// The tag editor opened from the live-interactions navigator.
+    pub tag_picker: Option<TagPicker>,
     pub session_id: String,
     /// Optional operator-facing name of the current durable Session.
     pub session_name: Option<String>,
@@ -427,6 +430,7 @@ impl App {
             recent_models: Vec::new(),
             workspace: Location::default(),
             git_repository_prompt: None,
+            tag_picker: None,
             session_id: session_id.into(),
             session_name: None,
             launch: Launch::default(),

@@ -170,6 +170,7 @@ mod tests {
             auto_retry: false,
             id: id.into(),
             name: None,
+            tags: Vec::new(),
             workspace_id: "workspace".into(),
             selection: styra_protocol::agent::Selection::parse("codex").unwrap(),
             workspace: PathBuf::from("/workspace"),

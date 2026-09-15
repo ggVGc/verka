@@ -600,6 +600,52 @@ pub fn run(
             }
             continue;
         }
+        // Tags are edited as one modal operation, so typing a new tag cannot
+        // trigger the navigator or any global shortcut underneath it.
+        if let Some(picker) = app.tag_picker.as_mut() {
+            if let Some(value) = picker.new_tag.as_mut() {
+                match key.code {
+                    KeyCode::Esc => picker.new_tag = None,
+                    KeyCode::Enter => picker.add_new(),
+                    KeyCode::Backspace => {
+                        value.pop();
+                    }
+                    KeyCode::Char(ch) if !ch.is_control() => value.push(ch),
+                    _ => {}
+                }
+                continue;
+            }
+            match key.code {
+                KeyCode::Char('j') | KeyCode::Down => picker.next(),
+                KeyCode::Char('k') | KeyCode::Up => picker.previous(),
+                KeyCode::Char(' ') => picker.toggle(),
+                KeyCode::Char('n') => picker.new_tag = Some(String::new()),
+                KeyCode::Esc | KeyCode::Char('q') => app.tag_picker = None,
+                KeyCode::Enter => {
+                    let tags = picker.selected.clone();
+                    let id = app.session_id.clone();
+                    app.tag_picker = None;
+                    match client.set_session_tags(&id, tags) {
+                        Ok(summary) => {
+                            if let Some(item) = app
+                                .interactions
+                                .items
+                                .iter_mut()
+                                .find(|item| item.id == summary.id)
+                            {
+                                item.tags = summary.tags;
+                            }
+                            app.show_action_message("interaction tags saved");
+                        }
+                        Err(error) => app.show_action_message(format!(
+                            "could not save interaction tags: {error:#}"
+                        )),
+                    }
+                }
+                _ => {}
+            }
+            continue;
+        }
         // In input focus, `?` is message text rather than a shortcut.
         if app.focus == Focus::List && key.code == KeyCode::Char(HELP.chars().next().unwrap()) {
             app.help.open();
@@ -691,6 +737,23 @@ pub fn run(
                         return Ok(RunOutcome::Reset);
                     };
                     make_interaction_current(app, live, client, standing_launch, next);
+                    continue;
+                }
+                KeyCode::Char('T') => {
+                    let Some(interaction) = app.interactions.current(&app.session_id) else {
+                        continue;
+                    };
+                    match client.list_tags() {
+                        Ok(tags) => {
+                            app.tag_picker = Some(crate::tag_picker::TagPicker::new(
+                                tags,
+                                interaction.tags.clone(),
+                            ))
+                        }
+                        Err(error) => {
+                            app.show_action_message(format!("could not list tags: {error:#}"))
+                        }
+                    }
                     continue;
                 }
                 code if interaction_navigator_passthrough(&code) => {}

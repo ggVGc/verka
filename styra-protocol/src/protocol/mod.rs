@@ -92,6 +92,14 @@ pub struct RenameSession {
     pub name: Option<String>,
 }
 
+/// Replace a Session's operator-assigned tags.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetSessionTags {
+    pub id: String,
+    pub tags: Vec<String>,
+}
+
 /// One server-owned edit to a Workspace's standing launch policy.
 ///
 /// Clients send intent instead of replacing a locally cached copy. This lets
@@ -306,6 +314,11 @@ pub enum Request {
         provider: Option<Provider>,
     },
     RenameSession(RenameSession),
+    /// Replace a Session's tags. Tags live with the durable Session, so they
+    /// remain available after its live interaction stops or resumes.
+    SetSessionTags(SetSessionTags),
+    /// All tags known to the server, alphabetically.
+    ListTags,
     /// Apply one edit to the latest stored Workspace sandbox policy. Applies to
     /// launches made after it, not to interactions already running under the
     /// old one.
@@ -448,6 +461,8 @@ pub enum Response {
     SessionConverted(SessionSummary),
     SessionBranched(SessionSummary),
     SessionRenamed(SessionSummary),
+    SessionTagsUpdated(SessionSummary),
+    Tags(Vec<String>),
     WorkspaceLaunchUpdated(LaunchPolicy),
     Accepted,
     Queued(usize),
@@ -821,6 +836,22 @@ mod tests {
         assert_eq!(json["data"]["id"], "styra-1");
         assert_eq!(json["data"]["name"], "Fix session picker");
         assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
+    }
+
+    #[test]
+    fn session_tags_have_set_and_list_operations() {
+        let request = Request::SetSessionTags(SetSessionTags {
+            id: "styra-1".into(),
+            tags: vec!["bug".into()],
+        });
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["operation"], "set_session_tags");
+        assert_eq!(json["data"]["tags"], serde_json::json!(["bug"]));
+        assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
+        assert_eq!(
+            serde_json::to_value(Request::ListTags).unwrap()["operation"],
+            "list_tags"
+        );
     }
 
     /// The contract rides on the message, not the request, so `send_message`

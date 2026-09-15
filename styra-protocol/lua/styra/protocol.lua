@@ -102,6 +102,8 @@ M.types.Request = {
       },
     } },
     { name = "rename_session", payload = { kind = "newtype", type = { kind = "ref", name = "RenameSession" } } },
+    { name = "set_session_tags", payload = { kind = "newtype", type = { kind = "ref", name = "SetSessionTags" } } },
+    { name = "list_tags", payload = { kind = "unit" } },
     { name = "change_workspace_launch", payload = {
       kind = "struct",
       deny_unknown_fields = true,
@@ -264,6 +266,8 @@ M.types.Response = {
     { name = "session_converted", payload = { kind = "newtype", type = { kind = "ref", name = "SessionSummary" } } },
     { name = "session_branched", payload = { kind = "newtype", type = { kind = "ref", name = "SessionSummary" } } },
     { name = "session_renamed", payload = { kind = "newtype", type = { kind = "ref", name = "SessionSummary" } } },
+    { name = "session_tags_updated", payload = { kind = "newtype", type = { kind = "ref", name = "SessionSummary" } } },
+    { name = "tags", payload = { kind = "newtype", type = { kind = "list", item = { kind = "string" } } } },
     { name = "workspace_launch_updated", payload = { kind = "newtype", type = { kind = "ref", name = "LaunchPolicy" } } },
     { name = "accepted", payload = { kind = "unit" } },
     { name = "queued", payload = { kind = "newtype", type = { kind = "number", integer = true } } },
@@ -377,6 +381,16 @@ M.types.RenameSession = {
   fields = {
     { name = "id", required = true, type = { kind = "string" } },
     { name = "name", required = true, type = { kind = "optional", inner = { kind = "string" } } },
+  },
+}
+
+--- Replace a Session's operator-assigned tags.
+M.types.SetSessionTags = {
+  kind = "struct",
+  deny_unknown_fields = true,
+  fields = {
+    { name = "id", required = true, type = { kind = "string" } },
+    { name = "tags", required = true, type = { kind = "list", item = { kind = "string" } } },
   },
 }
 
@@ -554,6 +568,7 @@ M.types.SessionSummary = {
   fields = {
     { name = "id", required = true, type = { kind = "string" } },
     { name = "name", required = false, type = { kind = "optional", inner = { kind = "string" } } },
+    { name = "tags", required = false, type = { kind = "list", item = { kind = "string" } } },
     { name = "workspace_id", required = true, type = { kind = "string" } },
     { name = "path", required = true, type = { kind = "string", path = true } },
     { name = "selection", required = true, type = { kind = "ref", name = "Selection" } },
@@ -607,6 +622,7 @@ M.types.InteractionSummary = {
   fields = {
     { name = "id", required = true, type = { kind = "string" } },
     { name = "name", required = false, type = { kind = "optional", inner = { kind = "string" } } },
+    { name = "tags", required = false, type = { kind = "list", item = { kind = "string" } } },
     { name = "workspace_id", required = true, type = { kind = "string" } },
     { name = "selection", required = true, type = { kind = "ref", name = "Selection" } },
     { name = "workspace", required = true, type = { kind = "string", path = true } },
@@ -1160,7 +1176,7 @@ M.types.LogLevel = {
 --- The wire spellings of every enum, in declaration order.
 M.enums = {}
 
-M.enums.Request = { "health", "create_workspace", "list_workspaces", "workspace", "set_workspace_git_repository", "set_workspace_worktrees_enabled", "workspace_launch", "create_session", "plan_session", "list_templates", "resume_session", "convert_session_provider", "branch_session", "rename_session", "change_workspace_launch", "send_message", "set_session_selection", "set_interaction_working_directory", "set_interaction_auto_retry", "queue_message", "send_queued_message", "clear_queued_messages", "interrupt_interaction", "stop_interaction", "close_interaction", "load_interaction", "updates", "list_interactions", "list_sessions", "stored_session", "provider_raw", "shell", "turn_answer", "quota_log", "shutdown" }
+M.enums.Request = { "health", "create_workspace", "list_workspaces", "workspace", "set_workspace_git_repository", "set_workspace_worktrees_enabled", "workspace_launch", "create_session", "plan_session", "list_templates", "resume_session", "convert_session_provider", "branch_session", "rename_session", "set_session_tags", "list_tags", "change_workspace_launch", "send_message", "set_session_selection", "set_interaction_working_directory", "set_interaction_auto_retry", "queue_message", "send_queued_message", "clear_queued_messages", "interrupt_interaction", "stop_interaction", "close_interaction", "load_interaction", "updates", "list_interactions", "list_sessions", "stored_session", "provider_raw", "shell", "turn_answer", "quota_log", "shutdown" }
 --- Wire spellings of `Request`.
 M.Request = {
   HEALTH = "health",
@@ -1177,6 +1193,8 @@ M.Request = {
   CONVERT_SESSION_PROVIDER = "convert_session_provider",
   BRANCH_SESSION = "branch_session",
   RENAME_SESSION = "rename_session",
+  SET_SESSION_TAGS = "set_session_tags",
+  LIST_TAGS = "list_tags",
   CHANGE_WORKSPACE_LAUNCH = "change_workspace_launch",
   SEND_MESSAGE = "send_message",
   SET_SESSION_SELECTION = "set_session_selection",
@@ -1200,7 +1218,7 @@ M.Request = {
   SHUTDOWN = "shutdown",
 }
 
-M.enums.Response = { "health", "workspace_created", "workspaces", "workspace", "workspace_git_repository_updated", "workspace_worktrees_updated", "workspace_launch", "session_created", "session_plan", "templates", "session_resumed", "session_converted", "session_branched", "session_renamed", "workspace_launch_updated", "accepted", "queued", "sent_queued_message", "queued_messages", "interaction_loaded", "updates", "interactions", "stored_sessions", "stored_session", "provider_raw", "shell", "answer", "quota_log" }
+M.enums.Response = { "health", "workspace_created", "workspaces", "workspace", "workspace_git_repository_updated", "workspace_worktrees_updated", "workspace_launch", "session_created", "session_plan", "templates", "session_resumed", "session_converted", "session_branched", "session_renamed", "session_tags_updated", "tags", "workspace_launch_updated", "accepted", "queued", "sent_queued_message", "queued_messages", "interaction_loaded", "updates", "interactions", "stored_sessions", "stored_session", "provider_raw", "shell", "answer", "quota_log" }
 --- Wire spellings of `Response`.
 M.Response = {
   HEALTH = "health",
@@ -1217,6 +1235,8 @@ M.Response = {
   SESSION_CONVERTED = "session_converted",
   SESSION_BRANCHED = "session_branched",
   SESSION_RENAMED = "session_renamed",
+  SESSION_TAGS_UPDATED = "session_tags_updated",
+  TAGS = "tags",
   WORKSPACE_LAUNCH_UPDATED = "workspace_launch_updated",
   ACCEPTED = "accepted",
   QUEUED = "queued",
@@ -1885,6 +1905,21 @@ end
 ---   name  string|null
 function M.request.rename_session(data)
   return M.build("rename_session", data)
+end
+
+--- Replace a Session's tags. Tags live with the durable Session, so they
+--- remain available after its live interaction stops or resumes.
+---
+--- Fields of `data`:
+---   id    string
+---   tags  string[]
+function M.request.set_session_tags(data)
+  return M.build("set_session_tags", data)
+end
+
+--- All tags known to the server, alphabetically.
+function M.request.list_tags()
+  return M.build("list_tags")
 end
 
 --- Apply one edit to the latest stored Workspace sandbox policy. Applies to

@@ -27,6 +27,7 @@ mod preview;
 pub(crate) mod quota;
 mod raw;
 mod references;
+mod tags;
 #[cfg(test)]
 mod testing;
 mod transcript;
@@ -437,6 +438,9 @@ pub fn render(frame: &mut Frame, app: &App) {
     render_insert(frame, app.insert.as_ref().map(Prompt::state), frame.area());
     if let Some(prompt) = &app.branch_prompt {
         branch::render(frame, prompt, frame.area());
+    }
+    if let Some(picker) = &app.tag_picker {
+        tags::render(frame, picker);
     }
 }
 

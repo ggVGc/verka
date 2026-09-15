@@ -10,9 +10,7 @@ use styra_protocol::protocol::{
     CreateSession, CreateWorkspace, PlanSession, ResumeSession, SendMessage, SessionInfo,
 };
 use styra_server::Client;
-use styra_protocol::{
-    Contract, InteractionUpdate, LogEntry, SessionSummary, WorkspaceSummary,
-};
+use styra_protocol::{Contract, InteractionUpdate, LogEntry, SessionSummary, WorkspaceSummary};
 
 /// How long a Session remains in the picker's default recent-conversation
 /// view. Older history is still available with its explicit "show all" key.
@@ -681,6 +679,7 @@ mod tests {
         SessionSummary {
             id: id.into(),
             name: None,
+            tags: Vec::new(),
             workspace_id: "w-1".into(),
             path: PathBuf::from(id),
             selection: Selection::new(Provider::Codex),

@@ -546,6 +546,9 @@ pub struct InteractionSummary {
     /// Optional operator-facing Session name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// Operator-assigned labels for finding related interactions.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
     /// The Workspace containing the Session served by this Interaction.
     pub workspace_id: String,
     /// The provider, model, and effort the interaction is running.
@@ -635,6 +638,9 @@ pub struct SessionSummary {
     /// Optional operator-facing name; the stable id remains the identity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// Operator-assigned labels retained when an interaction stops.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
     /// The owning Workspace.
     pub workspace_id: String,
     /// Its directory, ready to pass straight to `--view`.

@@ -83,7 +83,8 @@ live interactions.
 
 Sending a message to a stopped or viewed Session automatically attempts native
 provider resume. `a` opens the live-interaction list; there, `w` switches
-current/all-Workspace scope, `j`/`k` selects, and `D` deletes a stopped
+current/all-Workspace scope, `j`/`k` selects, `T` edits the selected
+interaction's tags, and `D` deletes a stopped
 interaction (the durable Session remains). The interaction under the cursor is
 loaded once the cursor rests on it, so the list can be crossed without waiting
 for every row on the way; the row being loaded says so, and any other key acts
@@ -97,6 +98,11 @@ list open it moves the cursor there (revealing all Workspaces if it lives in
 another one), and with the list closed it makes that interaction current and
 opens the list around it. Pressing it repeatedly walks every waiting
 interaction and wraps back to the first.
+
+The tag editor lists every tag already used by a Session, across Workspaces.
+Use `Space` to select or clear one, `n` to type and add a new tag, and `Enter`
+to save. Tags remain with the durable Session when its interaction stops or is
+resumed.
 
 ## Read the session
 

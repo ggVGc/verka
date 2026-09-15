@@ -524,6 +524,7 @@ mod tests {
         SessionSummary {
             id: id.into(),
             name: None,
+            tags: Vec::new(),
             workspace_id: "workspace".into(),
             path: PathBuf::from(id),
             selection: Selection::parse("codex").unwrap(),
@@ -540,6 +541,7 @@ mod tests {
             auto_retry: false,
             id: id.into(),
             name: None,
+            tags: Vec::new(),
             workspace_id: "workspace".into(),
             selection: Selection::parse("codex").unwrap(),
             workspace: PathBuf::from("/workspace"),

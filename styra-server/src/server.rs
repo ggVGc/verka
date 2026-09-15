@@ -329,6 +329,9 @@ impl ManagedInteraction {
                 .lock()
                 .expect("session name lock poisoned")
                 .clone(),
+            tags: journal::session_summary_at(&self.session_path, &self.workspace_id)
+                .map(|summary| summary.tags)
+                .unwrap_or_default(),
             workspace_id: self.workspace_id.clone(),
             selection: self.selection(),
             workspace: self.workspace.clone(),
@@ -1860,6 +1863,17 @@ impl ServerState {
         anyhow::bail!("stored session {id:?} was not found")
     }
 
+    fn list_tags(&self) -> Result<Vec<String>> {
+        let mut tags = std::collections::BTreeSet::new();
+        for workspace in crate::workspace::list(&self.inner.store_root)? {
+            for session in journal::list_workspace_sessions(&self.inner.store_root, &workspace.id)?
+            {
+                tags.extend(session.tags);
+            }
+        }
+        Ok(tags.into_iter().collect())
+    }
+
     /// Serve one request. Available to a host running the server in-process so
     /// it can call the same dispatch without a socket (see
     /// [`crate::Client::in_process`]).
@@ -1974,6 +1988,14 @@ impl ServerState {
                 }
                 Ok(Response::SessionRenamed(self.stored_summary(&request.id)?))
             }
+            Request::SetSessionTags(request) => {
+                let summary = self.stored_summary(&request.id)?;
+                journal::store_session_tags(&summary.path, &request.tags)?;
+                Ok(Response::SessionTagsUpdated(
+                    self.stored_summary(&request.id)?,
+                ))
+            }
+            Request::ListTags => Ok(Response::Tags(self.list_tags()?)),
             Request::ChangeWorkspaceLaunch {
                 workspace_id,
                 change,
@@ -2632,8 +2654,8 @@ fn serve_connection(mut stream: UnixStream, state: &ServerState) -> Result<()> {
 mod tests {
     use super::*;
     use crate::protocol::{AttributedMount, MountOrigin};
-    use driva::{Mount, MountAccess};
     use crate::client::Client;
+    use driva::{Mount, MountAccess};
 
     fn temp_path(tag: &str) -> PathBuf {
         std::env::temp_dir().join(format!("styra-server-{tag}-{}.sock", std::process::id(),))

@@ -19,6 +19,7 @@ use crate::event::{decode_line, AgentEvent, BranchDirection, Protocol};
 use crate::protocol::{Contract, Direction, QueuedMessage, RawLine, SessionOrigin, SessionSummary};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -29,6 +30,8 @@ struct StoredSessionMeta {
     workspace_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     name: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    tags: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     provider_session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -319,6 +322,7 @@ fn write_session_meta(
     let stored = StoredSessionMeta {
         workspace_id: workspace_id.to_owned(),
         name,
+        tags: Vec::new(),
         provider_session_id: None,
         origin: None,
         contract: None,
@@ -355,6 +359,7 @@ pub fn session_summary_at(path: &Path, workspace_id: &str) -> Result<SessionSumm
     Ok(SessionSummary {
         id,
         name: meta.name,
+        tags: meta.tags,
         workspace_id: workspace_id.to_owned(),
         path: path.to_path_buf(),
         selection: meta.agent.selection,
@@ -560,6 +565,38 @@ pub fn store_session_name(path: &Path, name: Option<&str>) -> Result<Option<Stri
     stored.name.clone_from(&name);
     write_stored_session_meta(&directory, &stored)?;
     Ok(name)
+}
+
+/// Replace a Session's tags and return their normalized form.
+pub fn store_session_tags(path: &Path, tags: &[String]) -> Result<Vec<String>> {
+    let directory = if path.is_dir() {
+        path.to_path_buf()
+    } else {
+        path.parent().map(Path::to_path_buf).unwrap_or_default()
+    };
+    let tags = normalize_session_tags(tags)?;
+    let mut stored = read_stored_session_meta(&directory)?;
+    stored.tags.clone_from(&tags);
+    write_stored_session_meta(&directory, &stored)?;
+    Ok(tags)
+}
+
+pub fn normalize_session_tags(tags: &[String]) -> Result<Vec<String>> {
+    let mut unique = BTreeSet::new();
+    for tag in tags {
+        let tag = tag.trim();
+        if tag.is_empty() {
+            continue;
+        }
+        if tag.chars().any(char::is_control) {
+            anyhow::bail!("tags must not contain control characters");
+        }
+        if tag.chars().count() > 40 {
+            anyhow::bail!("tags must be at most 40 characters");
+        }
+        unique.insert(tag.to_owned());
+    }
+    Ok(unique.into_iter().collect())
 }
 
 pub fn normalize_session_name(name: Option<&str>) -> Result<Option<String>> {
@@ -1280,6 +1317,7 @@ mod tests {
         let summary = |created_at_ms: Option<u64>| SessionSummary {
             id: format!("{created_at_ms:?}"),
             name: None,
+            tags: Vec::new(),
             workspace_id: "w-1".into(),
             path: PathBuf::new(),
             selection: crate::agent::Selection::new(crate::agent::Provider::Codex),
@@ -1387,6 +1425,32 @@ mod tests {
             list_workspace_sessions(&root, &workspace.id).unwrap()[0].name,
             None
         );
+        std::fs::remove_dir_all(root).ok();
+        std::fs::remove_dir_all(host).ok();
+    }
+
+    #[test]
+    fn session_tags_are_normalized_and_durable() {
+        let root = temp_dir("session-tags");
+        let host = temp_dir("session-tags-host");
+        let workspace = crate::workspace::create(&root, &host, None).unwrap();
+        let profile = test_profile("codex", Protocol::CodexJsonl);
+        let selection = crate::agent::Selection::new(crate::agent::Provider::Codex);
+        let (journal, _) =
+            Journal::create_in_workspace(&root, &workspace.id, &profile, &selection, None)
+                .unwrap();
+        let directory = journal.path().parent().unwrap();
+
+        assert_eq!(
+            store_session_tags(directory, &[" urgent ".into(), "bug".into(), "bug".into()])
+                .unwrap(),
+            ["bug", "urgent"]
+        );
+        assert_eq!(
+            list_workspace_sessions(&root, &workspace.id).unwrap()[0].tags,
+            ["bug", "urgent"]
+        );
+
         std::fs::remove_dir_all(root).ok();
         std::fs::remove_dir_all(host).ok();
     }

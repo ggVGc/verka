@@ -112,6 +112,8 @@ defmodule Styra.Protocol do
           ]
         }},
         %{name: "rename_session", payload: %{kind: :newtype, type: %{kind: :ref, name: "RenameSession"}}},
+        %{name: "set_session_tags", payload: %{kind: :newtype, type: %{kind: :ref, name: "SetSessionTags"}}},
+        %{name: "list_tags", payload: %{kind: :unit}},
         %{name: "change_workspace_launch", payload: %{
           kind: :struct,
           deny_unknown_fields: true,
@@ -274,6 +276,8 @@ defmodule Styra.Protocol do
         %{name: "session_converted", payload: %{kind: :newtype, type: %{kind: :ref, name: "SessionSummary"}}},
         %{name: "session_branched", payload: %{kind: :newtype, type: %{kind: :ref, name: "SessionSummary"}}},
         %{name: "session_renamed", payload: %{kind: :newtype, type: %{kind: :ref, name: "SessionSummary"}}},
+        %{name: "session_tags_updated", payload: %{kind: :newtype, type: %{kind: :ref, name: "SessionSummary"}}},
+        %{name: "tags", payload: %{kind: :newtype, type: %{kind: :list, item: %{kind: :string}}}},
         %{name: "workspace_launch_updated", payload: %{kind: :newtype, type: %{kind: :ref, name: "LaunchPolicy"}}},
         %{name: "accepted", payload: %{kind: :unit}},
         %{name: "queued", payload: %{kind: :newtype, type: %{kind: :number, integer: true}}},
@@ -387,6 +391,16 @@ defmodule Styra.Protocol do
       fields: [
         %{name: "id", required: true, type: %{kind: :string}},
         %{name: "name", required: true, type: %{kind: :optional, inner: %{kind: :string}}}
+      ]
+    },
+
+    # Replace a Session's operator-assigned tags.
+    "SetSessionTags" => %{
+      kind: :struct,
+      deny_unknown_fields: true,
+      fields: [
+        %{name: "id", required: true, type: %{kind: :string}},
+        %{name: "tags", required: true, type: %{kind: :list, item: %{kind: :string}}}
       ]
     },
 
@@ -564,6 +578,7 @@ defmodule Styra.Protocol do
       fields: [
         %{name: "id", required: true, type: %{kind: :string}},
         %{name: "name", required: false, type: %{kind: :optional, inner: %{kind: :string}}},
+        %{name: "tags", required: false, type: %{kind: :list, item: %{kind: :string}}},
         %{name: "workspace_id", required: true, type: %{kind: :string}},
         %{name: "path", required: true, type: %{kind: :string, path: true}},
         %{name: "selection", required: true, type: %{kind: :ref, name: "Selection"}},
@@ -617,6 +632,7 @@ defmodule Styra.Protocol do
       fields: [
         %{name: "id", required: true, type: %{kind: :string}},
         %{name: "name", required: false, type: %{kind: :optional, inner: %{kind: :string}}},
+        %{name: "tags", required: false, type: %{kind: :list, item: %{kind: :string}}},
         %{name: "workspace_id", required: true, type: %{kind: :string}},
         %{name: "selection", required: true, type: %{kind: :ref, name: "Selection"}},
         %{name: "workspace", required: true, type: %{kind: :string, path: true}},
@@ -1194,6 +1210,8 @@ defmodule Styra.Protocol do
     "convert_session_provider",
     "branch_session",
     "rename_session",
+    "set_session_tags",
+    "list_tags",
     "change_workspace_launch",
     "send_message",
     "set_session_selection",
@@ -1858,6 +1876,28 @@ defmodule Styra.Protocol do
     def rename_session!(data), do: Styra.Protocol.build!("rename_session", data)
 
     @doc ~S"""
+    Replace a Session's tags. Tags live with the durable Session, so they
+    remain available after its live interaction stops or resumes.
+
+    Fields of `data`:
+
+      * `id  `  string
+      * `tags`  string[]
+    """
+    def set_session_tags(data), do: Styra.Protocol.build("set_session_tags", data)
+
+    @doc "`set_session_tags/1`, raising on a request the server would refuse."
+    def set_session_tags!(data), do: Styra.Protocol.build!("set_session_tags", data)
+
+    @doc ~S"""
+    All tags known to the server, alphabetically.
+    """
+    def list_tags, do: Styra.Protocol.build("list_tags")
+
+    @doc "`list_tags/0`, raising on a request the server would refuse."
+    def list_tags!, do: Styra.Protocol.build!("list_tags")
+
+    @doc ~S"""
     Apply one edit to the latest stored Workspace sandbox policy. Applies to
     launches made after it, not to interactions already running under the
     old one.
@@ -2142,6 +2182,8 @@ defmodule Styra.Protocol.Response do
     {:session_converted, "session_converted"},
     {:session_branched, "session_branched"},
     {:session_renamed, "session_renamed"},
+    {:session_tags_updated, "session_tags_updated"},
+    {:tags, "tags"},
     {:workspace_launch_updated, "workspace_launch_updated"},
     {:accepted, "accepted"},
     {:queued, "queued"},
@@ -2207,6 +2249,10 @@ defmodule Styra.Protocol.Response do
   def session_branched, do: "session_branched"
 
   def session_renamed, do: "session_renamed"
+
+  def session_tags_updated, do: "session_tags_updated"
+
+  def tags, do: "tags"
 
   def workspace_launch_updated, do: "workspace_launch_updated"
 

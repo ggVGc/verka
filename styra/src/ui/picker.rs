@@ -564,6 +564,7 @@ mod tests {
         SessionSummary {
             id: id.into(),
             name: None,
+            tags: Vec::new(),
             workspace_id: "w-1".into(),
             path: std::path::PathBuf::from(id),
             selection: styra_protocol::agent::Selection::parse(selection).unwrap(),
@@ -856,6 +857,7 @@ mod tests {
             auto_retry: false,
             id: id.into(),
             name: None,
+            tags: Vec::new(),
             workspace_id: "w-1".into(),
             selection: styra_protocol::agent::Selection::parse(selection).unwrap(),
             workspace: std::path::PathBuf::from("/home/op/project"),
