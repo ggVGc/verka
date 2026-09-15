@@ -343,3 +343,398 @@ Acceptance criteria:
   retry, or publication policy.
 - [x] Verify every statement in `linka/DESIGN.md` has a corresponding test or
   documented external responsibility.
+
+# Simplification backlog
+
+The following tasks are pending work from the simplification review. The
+completed checklist above is historical: where it conflicts with the current
+candidate/review/publication model, use `DESIGN.md` and the current callers as
+the baseline. In particular, task S7 deliberately revisits the capability-trait
+split from task 11; it does not move publication out of Linka.
+
+Preserve versioned definitions and results, dependency and lineage semantics,
+staleness, checked submissions, candidate verification and publication, and
+durable producer evidence. Preserve mutation locking, clean-store checks,
+exact input pins, artifact retention, and compare-and-swap publication.
+
+Suggested sequence: S1 and S3 first; S5 before S2; S3 before S4. S6 and S7
+can be implemented independently. Keep each task reviewable and distinguish
+actual code deletion from code moved between crates. Do not remove tests just
+to reduce line counts. Run formatting checks and the relevant crate tests and
+clippy checks; expand validation to consumers when changing their APIs.
+
+## S1. Make verification submission the sole candidate-decision writer
+
+Problem:
+
+`submit_verification` already writes the review result and matching candidate
+decision in one mutation. `CandidateStore::accept` and `reject` provide another
+write path with their own validation and retry rules. CLI/TUI and Orka callers
+can therefore repeat a decision that submission has already recorded.
+
+Primary code:
+
+- `src/ops/submit.rs`: verification submission and prepared candidate decisions.
+- `src/candidate/operations.rs`: `accept`, `reject`, `require_verification`.
+- `src/main.rs`, `../linka-tui/src/app.rs`: candidate decision commands/actions.
+- `../orka/src/review.rs`, `../orka/src/candidate.rs`, and Orka frontends.
+
+Implementation:
+
+- [ ] Inventory callers and distinguish initial review submission, retry after
+  successful submission, and attempts to decide manually edited/legacy records.
+- [ ] Make checked verification submission the only normal operation that
+  changes a candidate from pending to accepted or rejected.
+- [ ] Remove redundant follow-up mutations from Orka's review flow. Preserve
+  recovery when the store commit succeeded before Orka recorded completion.
+- [ ] Remove standalone decision APIs and UI actions where callers can migrate
+  together. If compatibility commands remain, make them read-only checks of
+  the recorded decision; document that they cannot change author or notes.
+- [ ] Define matching retry identity explicitly: candidate, verification, and
+  conclusion must agree. Preserve rejection-note requirements and refuse a
+  conflicting decision without writing anything.
+- [ ] Delete validation and decision-building code made unreachable by the
+  single writer. Retain integrity checking for hand edits and old records.
+- [ ] Keep publication separate and retain the accepted target's previous
+  commit. Update API docs, command help, and `DESIGN.md` where necessary.
+
+Acceptance criteria:
+
+- One successful accepted/rejected verification submission creates one store
+  commit containing both facts. Abandonment creates no candidate decision.
+- Retrying after that commit creates no additional decision commit and cannot
+  change the original deciding verification, author, notes, or target pin.
+- A stale review, wrong candidate pin, or conflicting decision is rejected.
+- All in-repository callers compile and the ordinary review-to-publication
+  workflow remains available without a second decision command.
+
+Validation:
+
+- [ ] Cover accepted, rejected, abandoned, stale, and wrong-artifact reviews.
+- [ ] Exercise recovery immediately after the verification store commit.
+- [ ] Verify repeated decisions and conflicting retries preserve stored bytes
+  and commit count. Run Linka, Linka TUI, Orka, and affected Orka frontend tests.
+
+Dependencies: none; keep the public submission changes compatible with S5.
+
+## S2. Submit result, candidate, attachments, and observed context together
+
+Problem:
+
+Orka currently submits a result and attachments, registers a candidate, and
+records context observations in separate Linka mutations. Recovery must finish
+these steps individually, and intermediate graph state lacks some facts.
+
+Primary code:
+
+- `src/ops/submit.rs`, `src/ops/mutate.rs`, `src/candidate/operations.rs`.
+- `src/model.rs`, `src/store.rs`, `src/ops/state.rs`, `src/ops/check.rs`.
+- `../orka/src/linka_work.rs`, `../orka/src/engine.rs`, `../orka/src/input.rs`.
+
+Implementation:
+
+- [ ] Extend the submission envelope from S5 with optional candidate details
+  and producer-neutral observed project paths. Keep Orka attempt interpretation
+  and access-journal parsing in Orka.
+- [ ] Resolve observed identities from the frozen project input revision,
+  validate normalized paths, and deduplicate them with declared context. Retain
+  the existing handling of node-output paths and absent observed paths unless
+  a separately documented correctness change is needed.
+- [ ] Keep discovered context distinct from the original frozen snapshot:
+  do not pretend these paths were declared before execution. Validate their
+  currency under the submission lock using an explicit comparison policy;
+  handle paths also modified by the submitted output deliberately.
+- [ ] Prepare and validate result, attachments, and candidate before the first
+  store write. Compute the candidate's exact result version from the same
+  serialized bytes that will be persisted, including optional notes.
+- [ ] Write all store facts under one mutation lock and commit once. Return
+  enough result/candidate identity for Orka to seal the attempt directly.
+- [ ] Simplify Orka recovery to look up and validate the committed submission
+  rather than separately registering candidates and adding observations.
+  Detect conflicting external identities rather than silently reusing them.
+- [ ] Audit whether any caller requires genuinely late context observations
+  or standalone registration. Remove those write paths only if all supported
+  use cases are covered; otherwise keep a narrowly scoped extension API.
+- [ ] Specify compatibility before changing storage. Folding historical
+  observation files into results changes result hashes and downstream pins:
+  do not rewrite them silently. Prefer a documented legacy-reader transition
+  or an explicit migration that accounts for every affected reference.
+- [ ] Update `DESIGN.md` and remove obsolete recovery branches, observation
+  storage code, and schemas only when compatibility permits.
+
+Acceptance criteria:
+
+- A project-producing successful submission exposes its result, attachments,
+  candidate, and observed-context facts in one committed store state.
+- Validation conflicts leave all store facts untouched. A write/commit failure
+  may leave a dirty store, which continues to block later mutations; do not
+  promise filesystem rollback that the current transaction model lacks.
+- Graph-only success, failure evidence, and verification still work without
+  candidate registration. Candidate registration requires a successful work
+  result with an exact output artifact.
+- Retrying after a successful store commit does not duplicate records or
+  re-run work. Existing durable evidence and historical pins remain readable
+  according to the documented compatibility policy.
+- Artifact capture/import and branch publication remain separate repository
+  operations. Their interruption and retention guarantees remain explicit.
+
+Validation:
+
+- [ ] Test graph-only, output-producing, failed, and verification submissions.
+- [ ] Test duplicate/invalid context, attachment conflicts, external-identity
+  conflicts, wrong repository artifacts, and stale snapshots before any writes.
+- [ ] Test interruption after artifact capture, during store writes, and after
+  the store commit but before Orka seals the attempt.
+- [ ] Test observed-input changes, output-overlapping reads, and legacy
+  observation records; verify no silent changes to historical result versions.
+- [ ] Run Linka and Orka integration/recovery tests and affected frontend tests.
+
+Dependencies: S5; S3 is recommended for exact record-version handling.
+
+## S3. Read parsed records and versions through one authoritative loader
+
+Problem:
+
+Pinning and evaluation combine `read_node`/`node_version` and
+`read_result`/`result_version`, rereading the same files. Optional result readers
+also disagree: `read_result` checks for orphaned notes, while
+`current_result_version` checks only metadata existence.
+
+Primary code: `src/store.rs`, `src/ops/mod.rs`, `src/ops/state.rs`,
+`src/ops/submit.rs`, and their library/frontend callers.
+
+Implementation:
+
+- [ ] Introduce small loaded-definition and loaded-result records containing
+  parsed metadata, prose, and the version hashes of the exact bytes read.
+- [ ] Hash original bytes rather than reserialized TOML. Preserve the version
+  distinction between missing notes and an existing empty notes file.
+- [ ] Centralize optional-result handling: absent metadata and absent notes
+  means no result; orphan notes, unsupported schema, parse failures, and I/O
+  failures produce contextual errors.
+- [ ] Replace separate reads and hashes in pinning, submission, evaluation,
+  and presentation. Retain thin compatibility methods only where useful.
+- [ ] Remove duplicate readers once consumers migrate. Keep paths and the
+  current on-disk schema unchanged.
+- [ ] Document that matching parsed content and hashes does not itself make
+  a multi-file read atomic against concurrent writers; preserve existing
+  mutation-lock boundaries and avoid claiming a stronger snapshot guarantee.
+
+Acceptance criteria:
+
+- Each loaded file is read once for both parsing and hashing.
+- Valid existing stores produce identical definition and result versions.
+- Every optional-result API agrees on absence and corruption.
+- Callers no longer need to coordinate separate metadata/prose/version reads.
+
+Validation:
+
+- [ ] Compare hashes for existing fixtures, including TOML comments/formatting,
+  empty notes, absent notes, and non-ASCII prose.
+- [ ] Cover orphan notes, malformed metadata, unsupported schemas, and read
+  errors. Verify these cannot become open/ready state.
+- [ ] Run Linka tests and compile/test consumers touched by return-type changes.
+
+Dependencies: none; provides the loading foundation for S4.
+
+## S4. Reuse an operation-scoped graph view and state evaluation
+
+Problem:
+
+Whole-graph queries evaluate nodes separately, recursively revisiting shared
+dependencies. Candidate lookup, reverse edges, and verification associations
+are repeatedly rebuilt, especially during Linka TUI refresh.
+
+Primary code: `src/ops/state.rs`, `src/ops/query.rs`,
+`src/candidate/storage.rs`, `src/main.rs`, `../linka-tui/src/app.rs`.
+
+Implementation:
+
+- [ ] Build an operation-scoped graph view from S3 loaded records, with maps
+  for nodes, candidates by source/result, reverse edges, and verifications.
+- [ ] Memoize derived node states within the view. Keep an active traversal
+  set separate from completed evaluations so cycles remain detectable.
+- [ ] Reuse candidate integration results and repeated backend lookups where
+  their comparison inputs are identical. Define whether relevant Git refs are
+  resolved once per view; do not claim filesystem/Git-wide atomic snapshots.
+- [ ] Route ready listings, settlement traversal, and frontend refresh through
+  one view. Preserve simple one-node query entry points as adapters.
+- [ ] Preserve current error scope deliberately: list commands must report
+  per-node failures, and an unrelated malformed record must not silently alter
+  the behavior of a query that previously did not read it.
+- [ ] Discard the view after the operation. Create a fresh view for mutation
+  revalidation under the lock; never reuse a frontend refresh as write authority.
+- [ ] Remove redundant scanning helpers after migration. Do not add a stored
+  index, daemon, or persistent cache invalidation mechanism.
+
+Acceptance criteria:
+
+- Each reachable node is evaluated at most once per view; shared dependencies
+  do not cause repeated recursive evaluations.
+- Queries preserve ordering, assignment filters, dependency/lineage semantics,
+  missing-node handling, and structured errors.
+- A subsequent operation sees edits, new results, and moved target refs.
+- Report both code-size changes and observed I/O/backend-call reductions;
+  this task may improve complexity without reducing total lines immediately.
+
+Validation:
+
+- [ ] Use diamond and layered shared-dependency graphs to verify evaluation
+  reuse; include cycles, missing nodes, malformed records, and candidate errors.
+- [ ] Verify ready/blocked/stale/settled results match existing fixtures.
+- [ ] Change a result and a target ref between views and verify fresh results.
+- [ ] Measure deterministic read/backend-call counts on a representative graph;
+  avoid flaky wall-clock performance assertions.
+
+Dependencies: S3. Coordinate candidate loading with S2 if both are in progress.
+
+## S5. Consolidate submission data and plumbing while preserving policies
+
+Problem:
+
+Public work and verification submissions and the internal recorded submission
+repeat the same fields. Capture, conversion, validation, and retention behavior
+are distributed across several entry points despite an existing shared writer.
+
+Primary code: `src/model.rs`, `src/ops/submit.rs`, `src/ops/mutate.rs`,
+`src/lib.rs`, and submission callers in Orka and the frontends.
+
+Implementation:
+
+- [ ] Document a behavior matrix for `complete`, `respond`, `fail`, checked
+  work submission, verification submission, and captured execution submission:
+  readiness, dirty-tree policy, snapshot origin, lock lifetime, artifact capture,
+  retention timing, attachments, and conflict/error reporting.
+- [ ] Introduce a common envelope for snapshot, notes, author, producer, and
+  attachments with a typed payload that distinguishes work from verification.
+  Verification payloads must not expose project-output fields.
+- [ ] Reuse the current checked writer instead of adding another submission
+  engine. Consolidate field conversion and common result preparation.
+- [ ] Extract shared capture/message/artifact preparation only where policies
+  agree. Keep explicit orchestration at entry points where lock or retention
+  timing differs; avoid a collection of loosely related boolean flags.
+- [ ] Keep short-lived completion locked from its clean-store precondition
+  through capture and result commit, including interrupted-completion checks.
+- [ ] Preserve `respond` on dirty projects and direct `fail` on non-ready work.
+  Frozen long-running submissions retain their existing conflict checks; do
+  not force direct failure recording through a ready-only snapshot operation.
+- [ ] Preserve artifact-retention behavior on acceptance, conflict, and capture
+  failure, and include created output IDs in existing error paths.
+- [ ] Migrate callers and remove redundant payloads/constructors. If serialized
+  public submissions change, provide an explicit compatibility policy without
+  accidentally changing stored result or snapshot formats.
+
+Acceptance criteria:
+
+- Shared fields and checked result-writing logic have one authoritative form.
+- Invalid work/review payload combinations remain unrepresentable or explicitly
+  rejected before writes. Ordinary nodes cannot receive review conclusions.
+- The entry-point behavior matrix is preserved, including deliberate differences
+  between short-lived failure recording and frozen worker submissions.
+- S2 can extend the common envelope without creating another submission family.
+
+Validation:
+
+- [ ] Exercise the behavior matrix, especially dirty-tree responses, blocked
+  direct failures, stale worker snapshots, graph-only success, and review output
+  rejection.
+- [ ] Preserve race/conflict, orphan-output, retention, and attachment-atomicity
+  regressions. Run Linka and Orka tests plus affected frontend checks.
+
+Dependencies: none; coordinate verification changes with S1. Implement before S2.
+
+## S6. Share frontend state classification and repeated CLI arguments
+
+Problem:
+
+The CLI's `state_summary` and TUI's `state_label` independently interpret outcome,
+currency, and integration. Repeated Clap definitions also duplicate notes,
+author, and description argument rules.
+
+Primary code: `src/model.rs`, `src/main.rs`, `../linka-tui/src/app.rs`,
+and any Orka frontend that independently interprets Linka state.
+
+Implementation:
+
+- [ ] Add a derived workability/classification method on `NodeState` that
+  centralizes presentation precedence. Keep outcome, currency, integration,
+  reasons, and blockers accessible as independent information.
+- [ ] Reconcile any disagreement among current helpers, displays, and the
+  design truth table before adopting it. Document any necessary correctness
+  fix separately from formatting changes, especially stale pending candidates
+  and terminal rejected/abandoned verifications.
+- [ ] Reuse the classification in frontends while allowing concise TUI labels,
+  detailed CLI explanations, different colors, and first-reason formatting.
+- [ ] Do not persist the derived classification or introduce a second source
+  of graph state. Do not put terminal styling in the graph model.
+- [ ] Extract `clap::Args` groups for repeated notes/notes-file, author, and
+  description/file inputs where their rules actually match. Preserve defaults,
+  mutual exclusions, requiredness, flags, and command-specific exceptions.
+- [ ] Remove duplicate semantic branches and argument definitions; update help
+  text only where needed to explain existing behavior.
+
+Acceptance criteria:
+
+- Frontends agree on complete, ready, blocked, and awaiting integration while
+  retaining review conclusions and stale/failed history in their presentation.
+- Human wording can differ without duplicating graph decision rules.
+- Existing valid CLI invocations remain valid and invalid combinations remain
+  rejected. No stored schema or result-version changes occur.
+
+Validation:
+
+- [ ] Use a table of meaningful states: current/stale success, failure, pending
+  and accepted candidates, published/rejected candidates, blockers, and every
+  verification conclusion. Confirm the chosen precedence and frontend agreement.
+- [ ] Test representative argument combinations and existing parser regressions;
+  avoid brittle tests of every help-text line or cosmetic label.
+- [ ] Run Linka and Linka TUI tests and checks for other touched frontends.
+
+Dependencies: none; consume S4's view when available without requiring it.
+
+## S7. Replace unused capability-trait layering with one VCS seam
+
+Problem:
+
+`Vcs` combines `StoreHistory`, `ArtifactStore`, `ContextIdentity`,
+`RepositoryIdentity`, and `BranchStore`, while current graph operations consume
+the combined trait. The split adds public names, imports, implementation blocks,
+and a blanket implementation without currently narrowing operation requirements.
+
+Primary code: `src/vcs.rs`, `src/git.rs`, `src/lib.rs`, and trait imports in
+Linka, Orka, and their tests/frontends.
+
+Implementation:
+
+- [ ] Confirm all trait bounds, trait-object uses, implementations, and method
+  imports across the workspace; include generic bounds, not only `dyn` uses.
+- [ ] Move the existing method contracts onto one object-safe `Vcs` trait.
+  Retain documentation grouped by responsibility within that trait.
+- [ ] Implement it directly for `GitVcs` and `FakeVcs`, removing the marker
+  trait, capability traits, blanket implementation, and obsolete re-exports.
+- [ ] Migrate caller imports and any test adapters. Document this as a Rust API
+  change; keep compatibility aliases only if an actual supported caller needs
+  them, with an explicit removal plan.
+- [ ] Preserve all method behavior, the project/workbench repository split,
+  execution-context wiring, and fake-backend error injection.
+- [ ] Update architecture documentation to explain the single injectable seam.
+  Do not remove Git publication behavior or add speculative backend support.
+
+Acceptance criteria:
+
+- There is one public VCS trait and one implementation per backend, with no
+  capability composition layer or replacement hierarchy.
+- Graph operations remain testable without invoking Git through the fake.
+- Git command behavior, disk formats, locking, and publication semantics are
+  unchanged. Report this as a small abstraction cleanup, not a major size cut.
+
+Validation:
+
+- [ ] Compile and test the workspace consumers to catch trait-method resolution
+  changes; run Linka and Orka tests and relevant clippy checks.
+- [ ] Reuse existing fake-backend and real-Git tests for capture, drift, retention,
+  store history, context identity, and compare-and-swap publication. Add tests
+  only if migration exposes an uncovered behavior; do not mirror trait layout.
+
+Dependencies: none. Avoid overlapping edits to the same submission imports
+while S5 is being implemented.
