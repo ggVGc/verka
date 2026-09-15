@@ -19,7 +19,11 @@ use std::time::Duration;
 use styra_protocol::event::{AgentEvent, DetailBlock, PresentationMode, Protocol};
 
 pub(crate) fn render_list(frame: &mut Frame, app: &App, area: Rect) {
-    let area = if app.preview.open && app.view == View::Events {
+    // When the entry-log pane is open, [`super::render_events`] owns the
+    // outer split: the main list and its scoped log share the interaction-log
+    // pane on the left, while the preview occupies the full height on the
+    // right. In every other Events layout the list still owns this split.
+    let area = if app.preview.open && app.view == View::Events && !app.entry_log_open {
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
@@ -349,7 +353,7 @@ fn running_tail(progress: &Progress) -> String {
 /// making room — one over-long message would blank the whole list rather than
 /// merely overflow it. The clipped tail is not lost; the preview panel (`p`)
 /// shows the entry in full and scrolls.
-fn entry_item(
+pub(crate) fn entry_item(
     entry: &Entry,
     expanded: bool,
     width: usize,

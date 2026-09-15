@@ -8,6 +8,7 @@
 mod answer;
 mod branch;
 mod driva;
+mod entry_log;
 mod files;
 mod footer;
 mod help;
@@ -34,6 +35,7 @@ mod code;
 
 use answer::render_answer;
 use driva::render_driva;
+use entry_log::render_entry_log;
 use files::render_files;
 use footer::render_footer;
 pub(crate) use footer::{message_text_color, tag_color};
@@ -303,6 +305,50 @@ fn session_title(app: &App) -> Option<Line<'static>> {
     )
 }
 
+/// The event list remains the active pane when the entry log is open. The log
+/// is a follower below it, not a separate view: it receives the list's
+/// selection each frame and therefore never changes how list navigation works.
+fn render_events(frame: &mut Frame, app: &App, area: Rect) {
+    // The preview is a peer of the whole interaction-log pane, rather than a
+    // peer of the main list inside it. That keeps the preview full-height when
+    // the scoped entry log is open below the list.
+    let interaction_area = if app.preview.open && app.entry_log_open {
+        let panes = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+            .split(area);
+        render_preview(frame, app, panes[1]);
+        panes[0]
+    } else {
+        area
+    };
+
+    let event_area = if app.interactions.open {
+        let panes = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(interactions::height(app, interaction_area.height)),
+                Constraint::Min(1),
+            ])
+            .split(interaction_area);
+        interactions::render(frame, app, panes[0]);
+        panes[1]
+    } else {
+        interaction_area
+    };
+
+    if app.entry_log_open {
+        let panes = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+            .split(event_area);
+        render_list(frame, app, panes[0]);
+        render_entry_log(frame, app, panes[1]);
+    } else {
+        render_list(frame, app, event_area);
+    }
+}
+
 pub fn render(frame: &mut Frame, app: &App) {
     if app.help.is_open() {
         render_keybinds(frame, frame.area(), &app.help);
@@ -358,18 +404,7 @@ pub fn render(frame: &mut Frame, app: &App) {
         .split(frame.area());
 
     match app.view {
-        View::Events if app.interactions.open => {
-            let panes = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Length(interactions::height(app, chunks[0].height)),
-                    Constraint::Min(1),
-                ])
-                .split(chunks[0]);
-            interactions::render(frame, app, panes[0]);
-            render_list(frame, app, panes[1]);
-        }
-        View::Events => render_list(frame, app, chunks[0]),
+        View::Events => render_events(frame, app, chunks[0]),
         View::Raw => render_raw(frame, app, chunks[0]),
         View::Log => render_log(frame, app, chunks[0]),
         View::Quota => render_quota(frame, app, chunks[0]),

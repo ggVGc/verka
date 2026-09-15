@@ -287,6 +287,38 @@ impl Timeline {
         self.entries.get(self.selected)
     }
 
+    /// The stretch of the interaction log the selected entry stands for: that
+    /// entry's own conversation message and everything the agent did under it,
+    /// up to the next message.
+    ///
+    /// This is what the conversation-only filter hides. With it on, the list
+    /// shows one row per message and the tool calls between two of them are off
+    /// screen entirely; this says which entries those are, so a view can show
+    /// the work behind the message being read without the operator having to
+    /// turn the filter off and find the place again.
+    ///
+    /// A selection that is not itself a message — reachable with the filter off
+    /// — belongs to the message it came after, so the span is the same one
+    /// whichever of its rows the cursor happens to sit on. Before the session's
+    /// first message there is none to anchor to, so the span opens at the start
+    /// of the log.
+    ///
+    /// Empty only when the log itself is.
+    pub fn conversation_span(&self) -> std::ops::Range<usize> {
+        if self.entries.is_empty() {
+            return 0..0;
+        }
+        let selected = self.selected.min(self.entries.len() - 1);
+        let start = (0..=selected)
+            .rev()
+            .find(|&idx| self.entries[idx].event.is_conversation())
+            .unwrap_or(0);
+        let end = (start + 1..self.entries.len())
+            .find(|&idx| self.entries[idx].event.is_conversation())
+            .unwrap_or(self.entries.len());
+        start..end
+    }
+
     /// The newest entry standing for a shell command, which is what the
     /// preview panel follows in [`crate::app::PreviewTarget::Command`].
     pub fn newest_command(&self) -> Option<&Entry> {
@@ -339,6 +371,65 @@ mod tests {
         // Leaving the tail pins the view whether or not the move landed.
         assert!(!list.follow);
         assert!(!list.select_backward(Step::Line));
+    }
+
+    fn shell(command: &str) -> AgentEvent {
+        AgentEvent::CommandStarted {
+            command: command.to_owned(),
+        }
+    }
+
+    fn user(text: &str) -> AgentEvent {
+        AgentEvent::UserMessage {
+            text: text.to_owned(),
+        }
+    }
+
+    /// The span is the message and the work under it, which is exactly what
+    /// the conversation-only filter leaves out of the list.
+    #[test]
+    fn a_conversation_entrys_span_runs_up_to_the_next_message() {
+        let mut list = timeline(vec![
+            user("ask"),
+            shell("one"),
+            shell("two"),
+            message("answer"),
+            shell("three"),
+        ]);
+
+        list.selected = 0;
+        assert_eq!(list.conversation_span(), 0..3);
+
+        // The next message opens its own span, which runs to the end of the
+        // log while the turn is still going.
+        list.selected = 3;
+        assert_eq!(list.conversation_span(), 3..5);
+    }
+
+    /// With the filter off the cursor can rest on a tool row. It belongs to
+    /// the message it came after, so it names that message's span rather than
+    /// one starting at itself.
+    #[test]
+    fn a_selection_between_messages_names_the_span_it_sits_in() {
+        let mut list = timeline(vec![user("ask"), shell("one"), shell("two")]);
+        list.selected = 2;
+        assert_eq!(list.conversation_span(), 0..3);
+    }
+
+    /// An agent that works before saying anything leaves entries with no
+    /// message to anchor to; they are still part of the log, so the span opens
+    /// at its start rather than coming back empty.
+    #[test]
+    fn work_before_the_first_message_belongs_to_the_start_of_the_log() {
+        let mut list = timeline(vec![shell("one"), shell("two"), message("hello")]);
+        list.selected = 1;
+        assert_eq!(list.conversation_span(), 0..2);
+
+        assert_eq!(
+            timeline(Vec::new()).conversation_span(),
+            0..0,
+            "empty only when the log is"
+        );
     }
 
     /// A filter that hides the selected row has to pull the selection onto one

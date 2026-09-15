@@ -263,6 +263,12 @@ pub struct App {
     /// Unlike the raw/log views, the transcript reads as a document from the
     /// beginning rather than anchoring to the tail.
     pub transcript: Scroll,
+    /// Whether the entry-log pane is open below the event list, and how far
+    /// through the selected entry's log it is scrolled. It is deliberately a
+    /// pane state, not a [`View`]: the event list remains the active window
+    /// while this follows its selection.
+    pub entry_log_open: bool,
+    pub entry_log: Scroll,
     /// Selected file in the Files view and whether it aggregates the session;
     /// see [`FilesView`].
     pub files: FilesView,
@@ -431,6 +437,8 @@ impl App {
             quota: Tail::default(),
             auto_retry: false,
             transcript: Scroll::default(),
+            entry_log_open: false,
+            entry_log: Scroll::default(),
             files: FilesView::default(),
             answer: AnswerView::default(),
             references: None,
@@ -707,6 +715,15 @@ impl App {
         };
     }
 
+    /// Toggle the entry-log pane below the event list. Opening it returns to
+    /// the event list because that is the pane's control surface; it follows
+    /// the list selection rather than taking a selection of its own.
+    pub fn toggle_entry_log(&mut self) {
+        self.view = View::Events;
+        self.entry_log_open = !self.entry_log_open;
+        self.entry_log.reset();
+    }
+
     /// True when the operator can still send messages.
     pub fn can_send(&self) -> bool {
         self.activity.status.is_active()
@@ -733,17 +750,19 @@ impl App {
     pub(crate) fn select_tail(&mut self) {
         self.timeline.select_tail();
         self.preview.scroll.reset();
+        self.entry_log.reset();
     }
 
     // --- List navigation ----------------------------------------------------
     //
-    // Where the selection lands is [`Timeline`]'s; the preview scroll it
-    // invalidates is this struct's, so each of these is one of its moves plus
-    // that. See [`Timeline::select_forward`] for what "moved" means.
+    // Where the selection lands is [`Timeline`]'s; the preview and entry-log
+    // pane both follow it, so a move resets their scroll positions. See
+    // [`Timeline::select_forward`] for what "moved" means.
 
     fn moved(&mut self, moved: bool) {
         if moved {
             self.preview.scroll.reset();
+            self.entry_log.reset();
         }
     }
 
@@ -2347,6 +2366,32 @@ mod tests {
         assert_eq!(app.log.scroll_back(), 2, "scrolled-up view stays put");
         app.log.scroll_to_bottom();
         assert_eq!(app.log.scroll_back(), 0);
+    }
+
+    /// The entry-log pane lives alongside the event list, so opening it keeps
+    /// that list active and every list move updates the log it follows.
+    #[test]
+    fn the_entry_log_pane_follows_list_selection() {
+        let mut app = app();
+        app.push_event(AgentEvent::UserMessage {
+            text: "first".into(),
+        });
+        app.push_event(AgentEvent::AgentMessage {
+            text: "second".into(),
+        });
+        app.select_first();
+        app.toggle_entry_log();
+        assert_eq!(app.view, View::Events);
+        assert!(app.entry_log_open);
+
+        app.entry_log.note_limit(10);
+        app.entry_log.line_down();
+        app.select_next_line();
+        assert_eq!(app.timeline.selected, 1);
+        assert_eq!(app.entry_log.clamped(), 0, "a new selected entry");
+
+        app.toggle_entry_log();
+        assert!(!app.entry_log_open);
     }
 
     #[test]

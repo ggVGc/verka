@@ -81,6 +81,10 @@ pub(crate) const REFERENCE: &[ReferenceRow] = &[
         action: "raw / log / transcript / details; press again for events",
     },
     ReferenceRow::Binding {
+        keys: "E",
+        action: "toggle the entry log below the event list",
+    },
+    ReferenceRow::Binding {
         keys: "Q",
         action: "plan quota readings, refreshed from the server",
     },

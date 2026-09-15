@@ -175,6 +175,9 @@ pub fn handle_list_key(
             return app.ask(Request::Quota);
         }
         KeyCode::Char('t') => return app.toggle_view(View::Transcript),
+        // `E` toggles the pane below the event list. Uppercase leaves
+        // lowercase `e` to open the editor in the files and answer views.
+        KeyCode::Char('E') => return app.toggle_entry_log(),
         KeyCode::Char('d') => return app.toggle_view(View::Driva),
         KeyCode::Char('f') => return app.toggle_files(),
         KeyCode::Char('X') => return app.toggle_answer(),
@@ -207,6 +210,8 @@ pub fn handle_list_key(
             KeyCode::Char('C') if app.preview.open => app.preview.toggle_target(),
             KeyCode::PageDown if app.preview.open => app.preview.scroll.page_down(),
             KeyCode::PageUp if app.preview.open => app.preview.scroll.page_up(),
+            KeyCode::PageDown if app.entry_log_open => app.entry_log.page_down(),
+            KeyCode::PageUp if app.entry_log_open => app.entry_log.page_up(),
             KeyCode::Char('J') | KeyCode::Down => app.select_next(),
             KeyCode::Char('K') | KeyCode::Up => app.select_prev(),
             KeyCode::Char('j') => app.select_next_line(),
