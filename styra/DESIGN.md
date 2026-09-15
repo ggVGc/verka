@@ -735,6 +735,7 @@ current focus is shown in the status line and by which region draws the cursor.
 | `D`             | In the Interaction navigator, delete the selected stopped Interaction |
 | `ctrl-j` / `ctrl-k` | In the Interaction navigator's All-Workspaces mode, jump to the first Interaction of the next / previous Workspace |
 | `A`             | Browse Sessions in the current Workspace with a preview     |
+| `/`             | In the Session picker, filter by Session name or first prompt (`Esc` abandons) |
 | `S`             | Stop the Interaction and return to a blank Session screen   |
 | `V`             | Choose a Workspace, then browse its Sessions                |
 | `q`             | Quit (prompts if the session is still running)              |

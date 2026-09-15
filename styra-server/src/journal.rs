@@ -359,6 +359,7 @@ pub fn session_summary_at(path: &Path, workspace_id: &str) -> Result<SessionSumm
     Ok(SessionSummary {
         id,
         name: meta.name,
+        first_prompt: first_prompt_at(path)?,
         tags: meta.tags,
         workspace_id: workspace_id.to_owned(),
         path: path.to_path_buf(),
@@ -369,6 +370,25 @@ pub fn session_summary_at(path: &Path, workspace_id: &str) -> Result<SessionSumm
         last_event_age: humanize_age(now_ms(), last_event_at_ms),
         origin: meta.origin,
     })
+}
+
+/// Read only as far as the first operator record: list filtering needs the
+/// conversation's subject, but listing every Session must not replay its full
+/// journal or decode provider traffic.
+fn first_prompt_at(path: &Path) -> Result<Option<String>> {
+    let journal = path.join(JOURNAL_FILE);
+    let file = match File::open(&journal) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error).with_context(|| format!("opening {}", journal.display())),
+    };
+    for line in BufReader::new(file).lines() {
+        let line = line.context("reading journal line")?;
+        if let Ok(Record::User { text, .. }) = serde_json::from_str(&line) {
+            return Ok(Some(text));
+        }
+    }
+    Ok(None)
 }
 
 /// Summarize `session_id` in `workspace_id`, or `None` when that Workspace
@@ -1317,6 +1337,7 @@ mod tests {
         let summary = |created_at_ms: Option<u64>| SessionSummary {
             id: format!("{created_at_ms:?}"),
             name: None,
+            first_prompt: None,
             tags: Vec::new(),
             workspace_id: "w-1".into(),
             path: PathBuf::new(),
@@ -1362,6 +1383,21 @@ mod tests {
         let derived = name_from_message(Some(&long)).unwrap();
         assert_eq!(derived.chars().count(), 61);
         assert!(derived.ends_with('…'));
+    }
+
+    #[test]
+    fn first_prompt_reads_the_opening_operator_message_without_replaying_the_journal() {
+        let directory = temp_dir("first-prompt");
+        let mut journal = Journal::create(&directory).unwrap();
+        journal.record_agent_line("provider prelude").unwrap();
+        journal.record_user_message("Find the flaky checkout test").unwrap();
+        journal.record_user_message("Then fix it").unwrap();
+
+        assert_eq!(
+            first_prompt_at(&directory).unwrap().as_deref(),
+            Some("Find the flaky checkout test")
+        );
+        std::fs::remove_dir_all(directory).ok();
     }
 
     #[test]

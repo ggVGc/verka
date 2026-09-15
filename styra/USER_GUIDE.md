@@ -93,6 +93,9 @@ client's screen, and has not been focused since, is marked `NEWLY IDLE`; the
 footer counts those rows until they are focused. Finishing a turn while a client
 is showing it is not one of them — you watched it happen.
 
+`A` opens the full Session list. In that list, `/` starts a case-insensitive
+filter over the Session name and first prompt; `Esc` abandons the filter.
+
 `Ctrl+A` goes straight to the next such interaction, wherever it is: with the
 list open it moves the cursor there (revealing all Workspaces if it lives in
 another one), and with the list closed it makes that interaction current and

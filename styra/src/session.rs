@@ -679,6 +679,7 @@ mod tests {
         SessionSummary {
             id: id.into(),
             name: None,
+            first_prompt: None,
             tags: Vec::new(),
             workspace_id: "w-1".into(),
             path: PathBuf::from(id),

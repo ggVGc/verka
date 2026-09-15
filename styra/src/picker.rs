@@ -34,7 +34,8 @@ pub enum WorkspaceChoice {
 
 /// The session picker loop: j/k or arrows to move, Enter to choose a
 /// session, `s` to switch between ordering by last activity and by creation,
-/// and `a` to toggle history older than a week. Esc or q backs out. When
+/// `a` to toggle history older than a week, and `/` to filter by name or first
+/// prompt. Esc abandons an active search, then backs out. When
 /// `current_id` is in the list, it opens selected even if another root or
 /// branch sorts above it.
 pub fn run_session_picker(
@@ -47,7 +48,9 @@ pub fn run_session_picker(
     let mut all_sessions = sessions.to_vec();
     let now_ms = unix_now_ms();
     let mut showing_all = false;
-    let mut sessions = picker_sessions(&all_sessions, showing_all, now_ms, order);
+    let mut filter: Option<String> = None;
+    let mut searching = false;
+    let mut sessions = picker_sessions(&all_sessions, showing_all, now_ms, order, None);
     let mut selected = initial_session_selection(&sessions, current_id);
     let mut preview_id = String::new();
     let mut preview_cursor = 0u64;
@@ -124,7 +127,9 @@ pub fn run_session_picker(
         } else {
             ui::Preview::Ready(&preview_updates)
         };
-        terminal.draw(|frame| ui::render_picker(frame, &sessions, selected, order, preview))?;
+        terminal.draw(|frame| {
+            ui::render_picker(frame, &sessions, selected, order, preview, filter.as_deref(), searching)
+        })?;
 
         if !event::poll(Duration::from_millis(100))? {
             continue;
@@ -135,8 +140,41 @@ pub fn run_session_picker(
         if key.kind != KeyEventKind::Press {
             continue;
         }
+        if searching {
+            match key.code {
+                KeyCode::Esc => {
+                    filter = None;
+                    searching = false;
+                }
+                KeyCode::Enter => searching = false,
+                KeyCode::Backspace => {
+                    if let Some(filter) = &mut filter {
+                        filter.pop();
+                    }
+                }
+                KeyCode::Char(character) if !character.is_control() => {
+                    filter.get_or_insert_with(String::new).push(character);
+                }
+                _ => continue,
+            }
+            let cursor_id = sessions.get(selected).map(|session| session.id.clone());
+            sessions = picker_sessions(&all_sessions, showing_all, now_ms, order, filter.as_deref());
+            selected = cursor_id
+                .and_then(|id| sessions.iter().position(|session| session.id == id))
+                .unwrap_or_else(|| initial_session_selection(&sessions, current_id));
+            continue;
+        }
         match key.code {
+            KeyCode::Esc if filter.is_some() => {
+                filter = None;
+                sessions = picker_sessions(&all_sessions, showing_all, now_ms, order, None);
+                selected = initial_session_selection(&sessions, current_id);
+            }
             KeyCode::Char('q') | KeyCode::Esc => return Ok(None),
+            KeyCode::Char('/') => {
+                filter = Some(String::new());
+                searching = true;
+            }
             KeyCode::Char('j') | KeyCode::Down => {
                 selected = (selected + 1).min(sessions.len().saturating_sub(1));
             }
@@ -163,7 +201,7 @@ pub fn run_session_picker(
             KeyCode::Char('a') => {
                 let cursor_id = sessions.get(selected).map(|session| session.id.clone());
                 showing_all = !showing_all;
-                sessions = picker_sessions(&all_sessions, showing_all, now_ms, order);
+                sessions = picker_sessions(&all_sessions, showing_all, now_ms, order, filter.as_deref());
                 selected = cursor_id
                     .and_then(|id| sessions.iter().position(|session| session.id == id))
                     .unwrap_or_else(|| initial_session_selection(&sessions, current_id));
@@ -215,10 +253,22 @@ fn picker_sessions(
     showing_all: bool,
     now_ms: u64,
     order: SessionOrder,
+    filter: Option<&str>,
 ) -> Vec<styra_protocol::SessionSummary> {
+    let filter = filter.map(str::to_lowercase).filter(|filter| !filter.is_empty());
     let mut displayed = sessions
         .iter()
-        .filter(|session| showing_all || is_recent_session(session, now_ms))
+        .filter(|session| {
+            (showing_all || is_recent_session(session, now_ms))
+                && filter.as_ref().is_none_or(|filter| {
+                    session
+                        .name
+                        .as_deref()
+                        .into_iter()
+                        .chain(session.first_prompt.as_deref())
+                        .any(|text| text.to_lowercase().contains(filter))
+                })
+        })
         .cloned()
         .collect::<Vec<_>>();
     sort_sessions_tree(&mut displayed, order);
@@ -280,7 +330,7 @@ fn show_message(
 ) -> Result<()> {
     loop {
         terminal.draw(|frame| {
-            ui::render_picker(frame, sessions, selected, order, ui::Preview::Ready(&[]));
+            ui::render_picker(frame, sessions, selected, order, ui::Preview::Ready(&[]), None, false);
             ui::render_message_popup(frame, title, message);
         })?;
         if let Event::Key(key) = event::read()? {
@@ -301,7 +351,7 @@ fn read_session_name(
     let mut value = initial.to_owned();
     loop {
         terminal.draw(|frame| {
-            ui::render_picker(frame, sessions, selected, order, ui::Preview::Ready(&[]));
+            ui::render_picker(frame, sessions, selected, order, ui::Preview::Ready(&[]), None, false);
             ui::render_name_prompt(frame, &value);
         })?;
         let Event::Key(key) = event::read()? else {
@@ -524,6 +574,7 @@ mod tests {
         SessionSummary {
             id: id.into(),
             name: None,
+            first_prompt: None,
             tags: Vec::new(),
             workspace_id: "workspace".into(),
             path: PathBuf::from(id),
@@ -644,7 +695,7 @@ mod tests {
         let unknown_age = session("unknown-age");
         let sessions = vec![old, unknown_age, fresh];
 
-        let recent = picker_sessions(&sessions, false, now_ms, SessionOrder::LastActivity);
+        let recent = picker_sessions(&sessions, false, now_ms, SessionOrder::LastActivity, None);
         assert_eq!(
             recent
                 .iter()
@@ -652,10 +703,32 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["fresh", "unknown-age"]
         );
-        let all = picker_sessions(&sessions, true, now_ms, SessionOrder::LastActivity);
+        let all = picker_sessions(&sessions, true, now_ms, SessionOrder::LastActivity, None);
         assert_eq!(all.len(), 3);
-        let recent_again = picker_sessions(&sessions, false, now_ms, SessionOrder::LastActivity);
+        let recent_again = picker_sessions(&sessions, false, now_ms, SessionOrder::LastActivity, None);
         assert_eq!(recent_again, recent);
+    }
+
+    #[test]
+    fn session_picker_filter_matches_name_or_first_prompt_case_insensitively() {
+        let mut named = session("named");
+        named.name = Some("Payments migration".into());
+        let mut prompted = session("prompted");
+        prompted.first_prompt = Some("Investigate checkout timeout".into());
+        let sessions = vec![named, prompted];
+
+        let matches = picker_sessions(
+            &sessions,
+            true,
+            unix_now_ms(),
+            SessionOrder::LastActivity,
+            Some("TIMEOUT"),
+        );
+
+        assert_eq!(
+            matches.iter().map(|session| session.id.as_str()).collect::<Vec<_>>(),
+            ["prompted"]
+        );
     }
 
     #[test]

@@ -638,6 +638,10 @@ pub struct SessionSummary {
     /// Optional operator-facing name; the stable id remains the identity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// The first prompt sent in this Session, retained so the session picker
+    /// can find a conversation even after it has been renamed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_prompt: Option<String>,
     /// Operator-assigned labels retained when an interaction stops.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,

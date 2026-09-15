@@ -578,6 +578,7 @@ defmodule Styra.Protocol do
       fields: [
         %{name: "id", required: true, type: %{kind: :string}},
         %{name: "name", required: false, type: %{kind: :optional, inner: %{kind: :string}}},
+        %{name: "first_prompt", required: false, type: %{kind: :optional, inner: %{kind: :string}}},
         %{name: "tags", required: false, type: %{kind: :list, item: %{kind: :string}}},
         %{name: "workspace_id", required: true, type: %{kind: :string}},
         %{name: "path", required: true, type: %{kind: :string, path: true}},

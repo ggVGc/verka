@@ -32,6 +32,8 @@ pub fn render_picker(
     selected: usize,
     order: SessionOrder,
     preview: Preview<'_>,
+    filter: Option<&str>,
+    searching: bool,
 ) {
     let area = frame.area();
     let panes = Layout::default()
@@ -41,10 +43,7 @@ pub fn render_picker(
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(palette::ACCENT))
-        .title(format!(
-            " styra · choose a session · j/k move · J/K roots · g/G ends · Enter open · r rename · x convert provider · s sort: {} · a history · q cancel ",
-            order.label(),
-        ));
+        .title(session_picker_title(order, filter, searching));
 
     if sessions.is_empty() {
         render_placeholder(frame, block, panes[0], "  no sessions found");
@@ -70,6 +69,18 @@ pub fn render_picker(
     frame.render_stateful_widget(list, panes[0], &mut state);
     let session = sessions.get(selected);
     render_session_preview(frame, session, preview, panes[1]);
+}
+
+fn session_picker_title(order: SessionOrder, filter: Option<&str>, searching: bool) -> String {
+    let filter = filter
+        .filter(|filter| !filter.is_empty())
+        .map(|filter| format!(" · filter: {filter}"))
+        .unwrap_or_default();
+    let searching = searching.then_some(" · searching").unwrap_or("");
+    format!(
+        " styra · choose a session{filter}{searching} · / filter · j/k move · J/K roots · g/G ends · Enter open · r rename · x convert provider · s sort: {} · a history · q cancel ",
+        order.label(),
+    )
 }
 
 fn render_session_preview(
@@ -564,6 +575,7 @@ mod tests {
         SessionSummary {
             id: id.into(),
             name: None,
+            first_prompt: None,
             tags: Vec::new(),
             workspace_id: "w-1".into(),
             path: std::path::PathBuf::from(id),
@@ -586,6 +598,8 @@ mod tests {
                     selected,
                     SessionOrder::LastActivity,
                     Preview::Ready(&[]),
+                    None,
+                    false,
                 )
             })
             .unwrap();
@@ -701,6 +715,8 @@ mod tests {
                     0,
                     SessionOrder::LastActivity,
                     Preview::Ready(&updates),
+                    None,
+                    false,
                 )
             })
             .unwrap();
@@ -894,6 +910,8 @@ mod tests {
                     1,
                     SessionOrder::LastActivity,
                     Preview::Ready(&[]),
+                    None,
+                    false,
                 )
             })
             .unwrap();
