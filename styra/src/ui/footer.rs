@@ -136,7 +136,7 @@ pub(crate) fn tag_color(tag: &str) -> Color {
         "shell" => palette::SHELL_TAG,
         "tool" => palette::SPECIAL,
         "plan" | "files" => palette::INFO,
-        // A branch marker is a link the operator can act on (`b`), so it is
+        // A branch marker is a link the operator can open with Enter, so it is
         // colored as an accent rather than as passing information.
         "branch" => palette::ACCENT,
         "error" | "malformed" => palette::ERROR,

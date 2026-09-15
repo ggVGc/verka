@@ -41,10 +41,6 @@ pub(crate) const REFERENCE: &[ReferenceRow] = &[
         action: "branch from history through, or only, the selected entry",
     },
     ReferenceRow::Binding {
-        keys: "b",
-        action: "follow the selected branch marker to the Session it names",
-    },
-    ReferenceRow::Binding {
         keys: "n / N",
         action: "new session / stop and start new session",
     },
@@ -109,6 +105,10 @@ pub(crate) const REFERENCE: &[ReferenceRow] = &[
     ReferenceRow::Binding {
         keys: "g/G",
         action: "first/last entry",
+    },
+    ReferenceRow::Binding {
+        keys: "Enter (branch marker), b",
+        action: "follow the linked Session",
     },
     ReferenceRow::Binding {
         keys: "Space, Enter, o",

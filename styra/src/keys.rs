@@ -216,7 +216,19 @@ pub fn handle_list_key(
             KeyCode::Char('K') | KeyCode::Up => app.select_prev(),
             KeyCode::Char('j') => app.select_next_line(),
             KeyCode::Char('k') => app.select_prev_line(),
-            KeyCode::Char(' ') | KeyCode::Enter => app.timeline.toggle_expand(),
+            // Branch markers are reciprocal links between the source and its
+            // child Session. Enter follows either direction; all other
+            // entries retain Enter's usual fold/unfold behavior.
+            KeyCode::Enter
+                if app
+                    .timeline
+                    .selected_entry()
+                    .is_some_and(|entry| entry.event.branch_target().is_some()) =>
+            {
+                session::follow_branch(app)
+            }
+            KeyCode::Char(' ') => app.timeline.toggle_expand(),
+            KeyCode::Enter => app.timeline.toggle_expand(),
             KeyCode::Char('o') => app.timeline.toggle_expand(),
             KeyCode::Char('O') => app.timeline.expand_only_selected(),
             KeyCode::Char('g') => app.select_first(),
@@ -788,6 +800,95 @@ mod tests {
         press(&mut app, KeyModifiers::NONE);
         assert_eq!(app.take_request(), Some(Request::Interactions));
 
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn enter_on_a_branch_marker_opens_the_linked_interaction() {
+        let root = tree("follow-branch-enter");
+        let mut app = app(&root);
+        app.enter_list();
+        app.push_event(styra_protocol::event::AgentEvent::Branched {
+            direction: styra_protocol::event::BranchDirection::To,
+            session: "branch-2".into(),
+            name: None,
+        });
+        app.select_last();
+        let client = Client::new(root.join("missing.sock"));
+        let mut live = Attachment::Detached;
+        let mut pending_fold = false;
+
+        handle_list_key(
+            &mut app,
+            &client,
+            &mut live,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            &mut pending_fold,
+            &root.join("preferences.toml"),
+        );
+
+        assert_eq!(
+            app.take_request(),
+            Some(Request::OpenSession("branch-2".into()))
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn enter_on_a_from_branch_marker_opens_the_linked_interaction() {
+        let root = tree("follow-branch-enter-source");
+        let mut app = app(&root);
+        app.enter_list();
+        app.push_event(styra_protocol::event::AgentEvent::Branched {
+            direction: styra_protocol::event::BranchDirection::From,
+            session: "source-1".into(),
+            name: None,
+        });
+        app.select_last();
+        let client = Client::new(root.join("missing.sock"));
+        let mut live = Attachment::Detached;
+        let mut pending_fold = false;
+
+        handle_list_key(
+            &mut app,
+            &client,
+            &mut live,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            &mut pending_fold,
+            &root.join("preferences.toml"),
+        );
+
+        assert_eq!(
+            app.take_request(),
+            Some(Request::OpenSession("source-1".into()))
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn enter_on_a_regular_event_still_toggles_its_expansion() {
+        let root = tree("regular-enter");
+        let mut app = app(&root);
+        app.enter_list();
+        app.push_event(styra_protocol::event::AgentEvent::AgentMessage {
+            text: "ordinary reply".into(),
+        });
+        app.select_last();
+        let client = Client::new(root.join("missing.sock"));
+        let mut live = Attachment::Detached;
+        let mut pending_fold = false;
+
+        handle_list_key(
+            &mut app,
+            &client,
+            &mut live,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            &mut pending_fold,
+            &root.join("preferences.toml"),
+        );
+
+        assert!(app.timeline.selected_entry().unwrap().expanded);
+        assert!(app.take_request().is_none());
         let _ = std::fs::remove_dir_all(root);
     }
 

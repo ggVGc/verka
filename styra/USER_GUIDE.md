@@ -74,7 +74,7 @@ live interactions.
 | `s` / `S` | interrupt the active turn / stop its interaction |
 | `n` / `N` | new session / stop then start a new session |
 | `B` | branch from history through, or only, the selected entry; opens the branch and leaves the source running |
-| `b` | follow the selected `branch` marker to the Session it names |
+| `Enter` / `b` | follow the selected `branch` marker to the Session it names |
 | `!` | open this live session's sandbox shell in the configured terminal |
 | `a` / `A` / `V` | live interactions / sessions in this Workspace / Workspaces |
 | `Ctrl+A` | go to the next interaction that went idle unseen |
@@ -113,9 +113,11 @@ interaction and wraps back to the first.
 | `c` | show conversation events only (events and transcript) |
 
 In the event list: `j`/`k` moves by line, `J`/`K` (or arrows) moves by event,
-`g`/`G` jumps first/last, `Space`/`Enter`/`o` folds the selected event, `O`
-expands only it, `z R` expands all, `z M` collapses all, and `m` hides/shows
-minor events. `PgUp`/`PgDn` scrolls a preview. Raw, log, quota, and transcript
+`g`/`G` jumps first/last, and `Enter` on a `branch` marker opens the linked
+interaction (from either side of a branch). Otherwise, `Space`/`Enter`/`o`
+folds the selected event; `O` expands only it, `z R` expands all, `z M`
+collapses all, and `m` hides/shows minor events. `PgUp`/`PgDn` scrolls a
+preview. Raw, log, quota, and transcript
 use `j`/`k` plus `g`/`G` to navigate. In the raw view, `v` switches between
 Styra's captured app-server wire traffic and the provider's native persisted
 session JSONL (when the provider still has it).

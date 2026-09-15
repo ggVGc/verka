@@ -897,9 +897,10 @@ Two client-facing shortcuts:
   branching through one's own turn must not branch through the previous one.
   Confirming the chooser opens the branch on that key rather than leaving the
   switch behind the operator's next keypress.
-- `b` on a branch marker in the event list opens the Session that marker
-  names, which is how an operator walks between a source and its branches. On
-  any other entry it says so and does nothing.
+- `Enter` on a branch marker in the event list opens the Session that marker
+  names, which is how an operator walks between a source and its branches.
+  `b` remains a shortcut for that action. On any other entry, `Enter` keeps
+  its normal fold/unfold behavior.
 
 ### Current Interactions
 
