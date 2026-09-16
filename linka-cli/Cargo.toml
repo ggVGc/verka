@@ -1,0 +1,14 @@
+[package]
+name = "linka-cli"
+version.workspace = true
+edition.workspace = true
+description = "Command-line interface to a linka node graph"
+
+[[bin]]
+name = "linka"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap = { workspace = true, features = ["env"] }
+linka.workspace = true

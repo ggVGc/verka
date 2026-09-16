@@ -5,7 +5,7 @@
 //! DESIGN.md for the model and the reasoning behind it.
 
 use anyhow::{Context, Result};
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::io::{self, Write};
 use std::path::PathBuf;
 
@@ -30,6 +30,53 @@ struct Cli {
     cmd: Cmd,
 }
 
+/// The command-line spellings of the library's closed enums. The library owns
+/// the graph, not the argument vocabulary, so these mirrors keep `clap` out of
+/// it; their variants must keep parsing to the same words as before.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum AuthorArg {
+    Human,
+    Machine,
+}
+impl From<AuthorArg> for Author {
+    fn from(author: AuthorArg) -> Self {
+        match author {
+            AuthorArg::Human => Author::Human,
+            AuthorArg::Machine => Author::Machine,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum DepKindArg {
+    DependsOn,
+    DerivedFrom,
+}
+impl From<DepKindArg> for DepKind {
+    fn from(kind: DepKindArg) -> Self {
+        match kind {
+            DepKindArg::DependsOn => DepKind::DependsOn,
+            DepKindArg::DerivedFrom => DepKind::DerivedFrom,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum VerificationOutcomeArg {
+    Accepted,
+    Rejected,
+    Abandoned,
+}
+impl From<VerificationOutcomeArg> for VerificationOutcome {
+    fn from(outcome: VerificationOutcomeArg) -> Self {
+        match outcome {
+            VerificationOutcomeArg::Accepted => VerificationOutcome::Accepted,
+            VerificationOutcomeArg::Rejected => VerificationOutcome::Rejected,
+            VerificationOutcomeArg::Abandoned => VerificationOutcome::Abandoned,
+        }
+    }
+}
+
 /// The result narrative is deliberately shared by every result-producing
 /// command: inline and file input remain exclusive and authorship defaults to
 /// the same value everywhere.
@@ -42,7 +89,7 @@ struct ResultDetails {
     #[arg(long, conflicts_with = "notes")]
     notes_file: Option<PathBuf>,
     #[arg(long, value_enum, default_value = "human")]
-    author: Author,
+    author: AuthorArg,
 }
 
 #[derive(Subcommand)]
@@ -64,11 +111,11 @@ enum Cmd {
         #[arg(long, conflicts_with = "description")]
         file: Option<PathBuf>,
         #[arg(long, value_enum, default_value = "human")]
-        author: Author,
+        author: AuthorArg,
         /// Who the work is for (e.g. `human` for a question node). Unset means
         /// anyone may work it.
         #[arg(long, value_enum)]
-        assignee: Option<Author>,
+        assignee: Option<AuthorArg>,
         /// Another node this one depends on (repeatable), by id.
         #[arg(long = "depends-on")]
         depends_on: Vec<NodeId>,
@@ -88,10 +135,10 @@ enum Cmd {
         #[arg(long)]
         file: Option<PathBuf>,
         #[arg(long, value_enum, default_value = "human")]
-        author: Author,
+        author: AuthorArg,
         /// Who should perform the verification. Unset means anyone may work it.
         #[arg(long, value_enum)]
-        assignee: Option<Author>,
+        assignee: Option<AuthorArg>,
     },
 
     /// Add <to> to one of <from>'s dependency lists (a definition change).
@@ -101,7 +148,7 @@ enum Cmd {
         /// Target node.
         to: NodeId,
         #[arg(long, value_enum, default_value = "depends-on")]
-        rel: DepKind,
+        rel: DepKindArg,
     },
 
     /// Edit a node's description (a definition change: reopens a done node
@@ -146,7 +193,7 @@ enum Cmd {
     Verify {
         id: NodeId,
         #[arg(long, value_enum)]
-        outcome: VerificationOutcome,
+        outcome: VerificationOutcomeArg,
         #[command(flatten)]
         result: ResultDetails,
     },
@@ -173,7 +220,7 @@ enum Cmd {
         notes: String,
         /// Deprecated compatibility input; the recorded decision is unchanged.
         #[arg(long, value_enum, default_value = "human")]
-        author: Author,
+        author: AuthorArg,
     },
 
     /// Verify that a rejected verification already decided this candidate.
@@ -186,7 +233,7 @@ enum Cmd {
         notes: String,
         /// Deprecated compatibility input; the recorded decision is unchanged.
         #[arg(long, value_enum, default_value = "human")]
-        author: Author,
+        author: AuthorArg,
     },
 
     /// Publish an accepted candidate by idempotent fast-forward.
@@ -229,7 +276,7 @@ enum Cmd {
         /// Only nodes assigned to this worker kind (e.g. `human`: the inbox of
         /// pending questions). Unassigned nodes match either.
         #[arg(long = "for", value_enum)]
-        assignee: Option<Author>,
+        assignee: Option<AuthorArg>,
     },
 
     /// List nodes blocked by an unsatisfied dependency, with reasons.
@@ -337,8 +384,8 @@ fn main() -> Result<()> {
                 &vcs,
                 NewNode {
                     description: read_description(description, file)?,
-                    author,
-                    assignee,
+                    author: author.into(),
+                    assignee: assignee.map(Author::from),
                     depends_on,
                     derived_from,
                 },
@@ -364,8 +411,8 @@ fn main() -> Result<()> {
                 &candidate,
                 NewNode {
                     description,
-                    author,
-                    assignee,
+                    author: author.into(),
+                    assignee: assignee.map(Author::from),
                     depends_on: vec![],
                     derived_from: vec![],
                 },
@@ -379,6 +426,7 @@ fn main() -> Result<()> {
             result,
         } => {
             let (store, vcs) = open_store(store)?;
+            let outcome = VerificationOutcome::from(outcome);
             let snapshot = ops::snapshot_work(&store, &vcs, &id, &[])?;
             let notes = resolve_notes(
                 result.notes,
@@ -394,7 +442,7 @@ fn main() -> Result<()> {
                     snapshot,
                     outcome,
                     notes,
-                    author: result.author,
+                    author: result.author.into(),
                     producer: None,
                 },
             )
@@ -404,6 +452,7 @@ fn main() -> Result<()> {
 
         Cmd::Link { from, to, rel } => {
             let (store, vcs) = open_store(store)?;
+            let rel = DepKind::from(rel);
             ops::link(&store, &vcs, &from, &to, rel)?;
             println!("{from}  +{} -> {to}", rel.as_str());
         }
@@ -445,7 +494,7 @@ fn main() -> Result<()> {
                 &to_strings(&context),
                 message,
                 &notes,
-                result.author,
+                result.author.into(),
             )?;
             match commit {
                 Some(c) => println!("{id}  done  (output {})", ops::short(&c)),
@@ -462,7 +511,7 @@ fn main() -> Result<()> {
                 &id,
                 "what went wrong?",
             )?;
-            ops::fail(&store, &vcs, &id, &notes, result.author)?;
+            ops::fail(&store, &vcs, &id, &notes, result.author.into())?;
             println!("{id}  failed");
         }
 
@@ -558,7 +607,7 @@ fn main() -> Result<()> {
             author,
         } => {
             let (store, vcs) = open_store(store)?;
-            CandidateStore::new(&store).accept(&vcs, &id, &verification, author, notes)?;
+            CandidateStore::new(&store).accept(&vcs, &id, &verification, author.into(), notes)?;
             println!("accepted {id}");
         }
 
@@ -569,7 +618,7 @@ fn main() -> Result<()> {
             author,
         } => {
             let (store, vcs) = open_store(store)?;
-            CandidateStore::new(&store).reject(&vcs, &id, &verification, author, notes)?;
+            CandidateStore::new(&store).reject(&vcs, &id, &verification, author.into(), notes)?;
             println!("rejected {id}");
         }
 
@@ -685,6 +734,7 @@ fn main() -> Result<()> {
 
         Cmd::Ready { assignee } => {
             let (store, vcs) = open_store(store)?;
+            let assignee = assignee.map(Author::from);
             for_each_node(&store, |id| {
                 let (meta, description) = store.read_node(id)?;
                 let state = ops::node_state(&store, &vcs, id)?;

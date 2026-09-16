@@ -85,7 +85,7 @@ enum ReviewCommand {
     Start {
         candidate: CandidateId,
         #[arg(long, value_enum, default_value = "human")]
-        assignee: Author,
+        assignee: AuthorArg,
         /// Prepare the managed review worktree and print its path.
         #[arg(long)]
         enter: bool,
@@ -120,7 +120,7 @@ enum ReviewCommand {
         #[arg(long)]
         summary: Option<String>,
         #[arg(long, value_enum, default_value = "human")]
-        author: Author,
+        author: AuthorArg,
     },
     /// Stop a review and record an abandoned verification result.
     Abandon {
@@ -128,8 +128,23 @@ enum ReviewCommand {
         #[arg(long)]
         notes: Option<String>,
         #[arg(long, value_enum, default_value = "human")]
-        author: Author,
+        author: AuthorArg,
     },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum AuthorArg {
+    Human,
+    Machine,
+}
+
+impl From<AuthorArg> for Author {
+    fn from(value: AuthorArg) -> Self {
+        match value {
+            AuthorArg::Human => Self::Human,
+            AuthorArg::Machine => Self::Machine,
+        }
+    }
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -406,7 +421,7 @@ fn run(cli: Cli) -> Result<()> {
                     assignee,
                     enter,
                 } => {
-                    let started = reviews.start(&candidate, assignee)?;
+                    let started = reviews.start(&candidate, assignee.into())?;
                     print_started_review(&started);
                     if enter {
                         let worktree = workbench
@@ -518,7 +533,7 @@ fn run(cli: Cli) -> Result<()> {
                         &verification,
                         outcome.into(),
                         summary.as_deref(),
-                        author,
+                        author.into(),
                     )? {
                         FinishOutcome::Submitted => println!("completed {verification}"),
                         FinishOutcome::AlreadySubmitted => {
@@ -535,7 +550,7 @@ fn run(cli: Cli) -> Result<()> {
                     author,
                 } => {
                     let verification = parse_node(verification)?;
-                    match reviews.abandon(&verification, notes.as_deref(), author)? {
+                    match reviews.abandon(&verification, notes.as_deref(), author.into())? {
                         AbandonOutcome::Abandoned => println!("abandoned {verification}"),
                         AbandonOutcome::AlreadyAbandoned => {
                             println!("abandoned {verification} (already submitted)")

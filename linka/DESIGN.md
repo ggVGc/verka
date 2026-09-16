@@ -144,8 +144,8 @@ the project root.
 
 ## Interfaces
 
-The Rust library is the reference interface. The `linka` CLI exposes the same
-operations to people and scripts. An agent-facing protocol may adapt those
+The Rust library is the reference interface. The `linka` CLI — a separate
+crate, `linka-cli` — exposes the same operations to people and scripts. An agent-facing protocol may adapt those
 operations, but protocol-specific concepts do not enter the graph model.
 
 Orka consumes a narrow graph interface for reading ready work, freezing

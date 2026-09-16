@@ -9,8 +9,9 @@ dependencies rather than a single framework.
 
 - `linka/` — a git-versioned node graph. Definitions and results are plain
   TOML/Markdown files; status, readiness, and staleness are derived rather than
-  stored. Linka is usable as a library or CLI and has no dependency on the
-  other applications.
+  stored. Linka is a library and has no dependency on the other applications.
+- `linka-cli/` — the `linka` command-line interface over that library: argument
+  parsing and human-readable output, with no graph logic of its own.
 - `linka-tui/` — a terminal interface over the Linka library. It presents
   nodes, candidates, verifications, derived queues, associations, and the full
   set of graph and candidate actions without adding UI concerns to Linka.

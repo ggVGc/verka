@@ -114,7 +114,8 @@ references are stable opaque identifiers or version pins.
 ## Repository layout
 
 ```text
-linka/       graph library and CLI
+linka/       graph library
+linka-cli/   `linka` command-line interface over the graph library
 driva/       standalone isolated command runner
 orka/        Linka + Driva orchestration
 orka-web/    local web interface for an Orka workbench
