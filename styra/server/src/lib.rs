@@ -115,8 +115,12 @@ pub use spawn::ensure_server;
 // the `styra-server` binary can drive these; not part of the interface a
 // client depends on.
 pub mod broker;
+// A cheap one-shot question Styra asks an agent for its own purposes, as
+// opposed to an `interaction`, which is the operator's own session.
+pub mod errand;
 pub mod interaction;
 pub mod journal;
+pub mod naming;
 pub mod quota;
 pub mod server;
 pub mod tooling;

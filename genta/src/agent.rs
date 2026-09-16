@@ -102,7 +102,7 @@ impl Provider {
     }
 
     /// The agent's own executable name, as located on the host's `PATH`.
-    fn executable(&self) -> &'static str {
+    pub fn executable(&self) -> &'static str {
         match self {
             Provider::Codex | Provider::CodexExec => "codex",
             Provider::Claude => "claude",
@@ -128,9 +128,12 @@ impl Provider {
     /// session ran on even after an alias moves to a newer release.
     pub fn models(&self) -> &'static [&'static str] {
         match self {
-            Provider::Codex | Provider::CodexExec => {
-                &["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-astra"]
-            }
+            Provider::Codex | Provider::CodexExec => &[
+                "gpt-5.6-sol",
+                "gpt-5.6-terra",
+                "gpt-5.6-luna",
+                "gpt-6-astra",
+            ],
             Provider::Claude => &[
                 "claude-fable-5",
                 "claude-opus-5",
@@ -210,6 +213,32 @@ impl Provider {
             Provider::Codex => Effort::Medium,
             Provider::CodexExec | Provider::Claude => Effort::High,
         }
+    }
+
+    /// The least expensive model this agent runs, for the incidental one-shot
+    /// errands a host does around a session rather than for the session's own
+    /// work — naming a branch from its first prompt, say.
+    ///
+    /// Such an errand is a sentence of text in and a few words out, so the
+    /// small tier does it as well as the large one and at a fraction of the
+    /// price. It is deliberately a separate question from
+    /// [`Provider::default_model`]: an operator's unpinned *launch* should
+    /// still get a capable model.
+    pub fn cheapest_model(&self) -> &'static str {
+        match self {
+            Provider::Codex | Provider::CodexExec => "gpt-5.6-luna",
+            Provider::Claude => "claude-haiku-4-5-20251001",
+        }
+    }
+
+    /// The lowest reasoning effort this agent accepts, which is what those
+    /// same errands ask for. [`Provider::efforts`] is ordered lowest first, so
+    /// a ladder that gains a rung below the current floor moves this with it.
+    pub fn cheapest_effort(&self) -> Effort {
+        self.efforts()
+            .first()
+            .copied()
+            .unwrap_or(Provider::default_effort(self))
     }
 }
 
@@ -1214,6 +1243,35 @@ mod tests {
             Provider::Claude.default_model(),
             Provider::Claude.models()[0]
         );
+    }
+
+    /// The errand tier is launchable too, and is never the tier a session
+    /// itself would get — an errand that cost what the session does would not
+    /// be worth routing away from it.
+    #[test]
+    fn the_cheapest_model_is_offered_by_its_provider_and_is_not_the_default() {
+        for provider in Provider::ALL {
+            assert!(
+                provider.models().contains(&provider.cheapest_model()),
+                "{provider:?} cheapest model is outside its own catalog"
+            );
+            assert!(
+                provider.efforts().contains(&provider.cheapest_effort()),
+                "{provider:?} cannot run its own cheapest effort"
+            );
+            assert_ne!(
+                provider.cheapest_model(),
+                provider.default_model(),
+                "{provider:?} routes errands to the model its sessions run on"
+            );
+        }
+        assert_eq!(
+            Provider::Claude.cheapest_model(),
+            "claude-haiku-4-5-20251001"
+        );
+        assert_eq!(Provider::Codex.cheapest_model(), "gpt-5.6-luna");
+        assert_eq!(Provider::Codex.cheapest_effort(), Effort::Minimal);
+        assert_eq!(Provider::Claude.cheapest_effort(), Effort::Low);
     }
 
     #[test]

@@ -756,9 +756,16 @@ impl ServerState {
             .join("diagnostics.log");
         // The directory this interaction will actually work in, ready before
         // the agent is: its own checkout when the Workspace makes worktrees,
-        // the Workspace directory itself otherwise.
+        // the Workspace directory itself otherwise. A checkout is named after
+        // the work its first prompt describes, so the branch it leaves behind
+        // is recognisable in the operator's own `git branch`; the naming
+        // errand only runs for a Workspace that makes worktrees, since it is
+        // the only one that gets a branch out of it.
         let checkout = match &worktrees {
-            Some(worktrees) => worktrees.checkout(&id)?,
+            Some(worktrees) => {
+                let topic = crate::naming::topic_for_prompt(&selection, request.message.as_deref());
+                worktrees.checkout(&id, topic.as_deref())?
+            }
             None => workspace.clone(),
         };
         let spec = InteractionSpec {
@@ -1156,7 +1163,7 @@ impl ServerState {
         // Workspace was opted in after this Session last ran, in which case
         // this is where it starts having one.
         let checkout = match &worktrees {
-            Some(worktrees) => worktrees.checkout(&request.id)?,
+            Some(worktrees) => worktrees.checkout(&request.id, None)?,
             None => workspace.clone(),
         };
         let launch = LaunchPolicy::merge(&owning_workspace.launch, &request.launch);
@@ -2513,7 +2520,10 @@ fn workspace_layout(workspace: &Path) -> SandboxLayout {
 /// and provider session state stable for that project. A worktree cannot: it
 /// lives under the store, at a path that names one interaction and means
 /// nothing to the agent working there, so it takes the fixed layout instead.
-fn launch_layout(worktrees: Option<&crate::worktree::Worktrees>, workspace: &Path) -> SandboxLayout {
+fn launch_layout(
+    worktrees: Option<&crate::worktree::Worktrees>,
+    workspace: &Path,
+) -> SandboxLayout {
     match worktrees {
         Some(_) => SandboxLayout::default(),
         None => workspace_layout(workspace),
@@ -2662,8 +2672,8 @@ fn serve_connection(mut stream: UnixStream, state: &ServerState) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::{AttributedMount, MountOrigin};
     use crate::client::Client;
+    use crate::protocol::{AttributedMount, MountOrigin};
     use driva::{Mount, MountAccess};
 
     fn temp_path(tag: &str) -> PathBuf {

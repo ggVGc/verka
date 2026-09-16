@@ -227,9 +227,17 @@ effect when that directory is inside a Git working tree. `W` affects future
 launches only and does not delete existing worktrees.
 
 There is nothing to ask the agent for: before an interaction starts, Styra
-creates a branch named after its Session (`styra/<SESSION-ID>`), checks it out
-under the Workspace's store directory, and gives the agent that checkout as its
-workspace. The agent simply works where it is put and can commit freely; your
+creates a branch named after the work and its Session
+(`styra/fix-flaky-checkout-test-<SESSION-ID>`), checks it out under the
+Workspace's store directory, and gives the agent that checkout as its
+workspace. The readable half comes from your first prompt, summarised by the
+agent you selected running on its cheapest model, in a throwaway sandbox that
+holds nothing but that agent — so your own `git branch` says what each branch
+is for, at a fraction of a cent. If the agent cannot be reached, or does not
+answer within twenty seconds, the first prompt's own words are used instead,
+and a launch you started without a prompt keeps the bare Session id; naming
+never fails a launch. The agent simply works where it is put and can commit
+freely; your
 own checkout is not mounted, so nothing it does reaches the files or the branch
 you have open. Resuming the Session comes back to the same checkout with its
 uncommitted work intact, and the details view (`d`) names it as the

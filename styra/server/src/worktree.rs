@@ -7,9 +7,12 @@
 //! works in it, unaware that it is a worktree, and the operator's own checkout
 //! — its index, its branch, its uncommitted files — is never mounted writable.
 //!
-//! The checkout is named after the interaction, which makes it durable in the
+//! The checkout carries the interaction's id, which makes it durable in the
 //! same sense the Session is: resuming that interaction returns to the same
-//! branch, with whatever it had not committed still there.
+//! branch, with whatever it had not committed still there. In front of the id
+//! it carries the interaction's topic, so that the branch an operator later
+//! finds in their own `git branch` says what is on it; [`crate::naming`]
+//! writes that half.
 
 use crate::agent::MountSpec;
 use crate::git::{self, Repository};
@@ -45,22 +48,55 @@ impl Worktrees {
     /// The checkout interaction `id` works in, created with its branch the
     /// first time it is asked for.
     ///
-    /// A resumed interaction asks for the same id and so returns to the
-    /// checkout it left, which is the point: a provider can restore a
-    /// conversation but nothing restores uncommitted files.
-    pub fn checkout(&self, id: &str) -> Result<PathBuf> {
-        let path = self.path(id);
-        if !path.exists() {
-            git::create_worktree(&self.repository.root, &format!("{BRANCH_PREFIX}/{id}"), &path)?;
+    /// `topic` is what the work is about — see [`crate::naming`] — and is used
+    /// only when the checkout is created; it is the readable half of the name,
+    /// the id the unique half. A resumed interaction asks for the same id and
+    /// so returns to the checkout it left, which is the point: a provider can
+    /// restore a conversation but nothing restores uncommitted files. It
+    /// passes no topic and needs none, because the name is on disk already.
+    pub fn checkout(&self, id: &str, topic: Option<&str>) -> Result<PathBuf> {
+        if let Some(existing) = self.existing(id) {
+            return Ok(existing);
         }
+        let path = self.host_root.join(named(id, topic));
+        git::create_worktree(
+            &self.repository.root,
+            &format!("{BRANCH_PREFIX}/{}", named(id, topic)),
+            &path,
+        )?;
         Ok(path)
     }
 
     /// Where interaction `id` would work, without creating anything. Planning
     /// describes a launch before there is an interaction to create a checkout
-    /// for.
+    /// for — and so before there is a prompt to name one after, which is why
+    /// this is the unnamed form.
     pub fn path(&self, id: &str) -> PathBuf {
-        self.host_root.join(id)
+        self.existing(id).unwrap_or_else(|| self.host_root.join(id))
+    }
+
+    /// The checkout already made for interaction `id`, whatever it ended up
+    /// being called.
+    ///
+    /// The id is the last component of every name this module writes, so a
+    /// Session finds its own checkout without anything having to store the
+    /// mapping — including a Session created before naming existed, whose
+    /// checkout is the bare id.
+    fn existing(&self, id: &str) -> Option<PathBuf> {
+        let bare = self.host_root.join(id);
+        if bare.exists() {
+            return Some(bare);
+        }
+        let suffix = format!("-{id}");
+        std::fs::read_dir(&self.host_root)
+            .ok()?
+            .flatten()
+            .map(|entry| entry.path())
+            .find(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.ends_with(&suffix))
+            })
     }
 
     /// The repository's shared Git metadata, writable at its host path.
@@ -75,6 +111,17 @@ impl Worktrees {
             destination: self.repository.common_dir.clone(),
             writable: true,
         }
+    }
+}
+
+/// What the branch and the checkout are both called: the topic, then the
+/// interaction it belongs to. Either half alone would be worse — a topic
+/// without the id could collide between two Sessions given the same task, and
+/// an id without the topic is what `git branch` showed before.
+fn named(id: &str, topic: Option<&str>) -> String {
+    match topic {
+        Some(topic) => format!("{topic}-{id}"),
+        None => id.to_owned(),
     }
 }
 
@@ -107,7 +154,7 @@ mod tests {
         let host_root = root.join("state/worktrees");
         let worktrees = Worktrees::prepare(repository.clone(), host_root.clone()).unwrap();
 
-        let checkout = worktrees.checkout("1757000000000-1-0").unwrap();
+        let checkout = worktrees.checkout("1757000000000-1-0", None).unwrap();
 
         assert_eq!(checkout, host_root.join("1757000000000-1-0"));
         assert_eq!(
@@ -130,9 +177,12 @@ mod tests {
         let (root, repository) = repository("resume");
         let worktrees = Worktrees::prepare(repository, root.join("state/worktrees")).unwrap();
 
-        let first = worktrees.checkout("1757000000000-1-1").unwrap();
+        let first = worktrees
+            .checkout("1757000000000-1-1", Some("teach-the-picker-to-filter"))
+            .unwrap();
         std::fs::write(first.join("in-progress.txt"), "half-done").unwrap();
-        let second = worktrees.checkout("1757000000000-1-1").unwrap();
+        // A resume knows only the id, and the topic is not repeated to it.
+        let second = worktrees.checkout("1757000000000-1-1", None).unwrap();
 
         assert_eq!(first, second);
         assert_eq!(
@@ -150,14 +200,47 @@ mod tests {
         let (root, repository) = repository("parallel");
         let worktrees = Worktrees::prepare(repository, root.join("state/worktrees")).unwrap();
 
-        let one = worktrees.checkout("1757000000000-1-2").unwrap();
-        let two = worktrees.checkout("1757000000000-1-3").unwrap();
+        // Two Sessions given the same task are named the same thing, and the
+        // id each carries is what keeps their branches apart.
+        let one = worktrees
+            .checkout("1757000000000-1-2", Some("fix-the-flaky-test"))
+            .unwrap();
+        let two = worktrees
+            .checkout("1757000000000-1-3", Some("fix-the-flaky-test"))
+            .unwrap();
 
         assert_ne!(one, two);
         assert_ne!(
             git::current_branch(&one).unwrap(),
             git::current_branch(&two).unwrap()
         );
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// What the operator sees in `git branch` and in their worktree directory
+    /// is the work, with the interaction it belongs to after it.
+    #[test]
+    fn a_named_interaction_gets_a_branch_that_says_what_it_is_for() {
+        let (root, repository) = repository("named");
+        let host_root = root.join("state/worktrees");
+        let worktrees = Worktrees::prepare(repository, host_root.clone()).unwrap();
+
+        let checkout = worktrees
+            .checkout("1757000000000-1-4", Some("fix-flaky-checkout-test"))
+            .unwrap();
+
+        assert_eq!(
+            checkout,
+            host_root.join("fix-flaky-checkout-test-1757000000000-1-4")
+        );
+        assert_eq!(
+            git::current_branch(&checkout).unwrap().as_deref(),
+            Some("styra/fix-flaky-checkout-test-1757000000000-1-4")
+        );
+        // And the Session finds it again from the id alone, which is all a
+        // resume or a plan has.
+        assert_eq!(worktrees.path("1757000000000-1-4"), checkout);
 
         std::fs::remove_dir_all(root).unwrap();
     }

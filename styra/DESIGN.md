@@ -429,17 +429,24 @@ If the host directory is nested anywhere inside a Git working tree, the server
 discovers the checkout and its common metadata before launch. Each such
 Workspace owns a durable `worktrees/` parent in its state directory holding one
 checkout per interaction. Before the agent starts, Styra runs `git worktree add
--b styra/<session-id>` from the discovered repository on the host, and Driva
-binds the result read-write as the interaction's workspace. The only other
+-b styra/<name>-<session-id>` from the discovered repository on the host, and
+Driva binds the result read-write as the interaction's workspace. The only other
 thing it binds is the common Git directory, read-write at the absolute path the
 checkout's `.git` file names — a linked checkout carries no history of its own,
 so without it Git cannot read the very tree it is looking at. Non-Git
 Workspaces receive neither.
 
-The branch is named for the Session because that is the one identifier both
+The branch carries the Session id because that is the one identifier both
 halves already share, and it makes the worktree durable in the same sense the
-Session is: a resume asks for the same name and finds the same checkout, with
-the uncommitted work a replayed transcript could never restore. Creating it
+Session is: a resume asks for the same id and finds the same checkout, with
+the uncommitted work a replayed transcript could never restore. In front of
+the id goes the interaction's **topic** — what the work is about, as a few
+hyphenated words — so `git branch` in the operator's own checkout reads as a
+list of tasks rather than a list of timestamps. The topic comes from the
+launch's first prompt, summarised by an **errand** (below). Naming can neither
+fail nor delay a launch — an errand that cannot run, or does not answer in
+time, leaves the prompt's own leading words as the topic — and a launch with no
+first prompt keeps the bare id. Creating it
 before launch rather than offering the agent a tool is what removes the
 question of whether the agent used it: an interaction in an enabled Workspace
 is in its own checkout whether or not it knows what a worktree is, and the
@@ -448,6 +455,44 @@ operator's own tree is never mounted writable for it to wander into.
 Styra does not merge, delete, or prune these checkouts. What an interaction
 committed outlives it on a branch, which is the point; reclaiming the space is
 an operator's decision, taken with Git.
+
+### Errands: what Styra asks an agent for itself
+
+Some of Styra's own work needs a sentence of natural language turned into a few
+words. Branch naming is the first case; anything of that shape — summarising,
+labelling, classifying — is the same kind of run. An **errand** is that run, as
+a type (`errand.rs`), and it is not a small interaction: it has no Session, no
+journal, no resume, no update stream, and nothing a client can attach to. It is
+a function from a prompt to one string, and it either answers or fails.
+
+Three things define it, and each is a deliberate contrast with an interaction:
+
+- **The cheap tier of the operator's own provider.** An errand runs the agent
+  the operator selected, with their credentials, but on that provider's
+  `cheapest_model` at its lowest effort — `claude-haiku-4-5-20251001`,
+  `gpt-5.6-luna` — and in its one-shot form (an errand for interactive `codex`
+  is a `codex-exec` run). Genta declares the cheap tier separately from
+  `default_model` precisely so that routing errands down cannot drag unpinned
+  *launches* down with them.
+- **Bounded.** Styra runs errands in front of something an operator is waiting
+  for, so an errand is killed at twenty seconds through the same cooperative
+  Driva termination an operator's stop uses. Every caller must have an answer
+  that does not need the errand — for naming, the prompt's own words.
+- **The narrowest sandbox Styra builds.** An errand holds nothing of the
+  operator's: no workspace, no checkout, no Git metadata, no template, no
+  operator mounts, no broker, no tmux. Its policy is three lines — an empty
+  tmpfs to stand in (`/tmp/styra/errand`, also its working directory), the
+  agent executable, and the provider profile's own credential and state mounts,
+  without which the agent cannot authenticate at all. The prompt arrives on
+  stdin in the agent's own input format, never as an argument.
+
+That last point is what makes the rest safe. An errand summarises text the
+operator pasted, and prompt text is not trustworthy input; the agent's own
+launch-time guard rails are off inside a Styra sandbox, as they are for an
+interaction, because Styra provides isolation from outside. For an errand that
+isolation is total: there is nothing in reach to act on, so the only thing it
+can do with a prompt that tries to redirect it is answer badly — and a bad
+answer is cut down to a branch topic or discarded.
 
 Alongside `journal.jsonl`, one `session.json` is written at session creation:
 the owning Workspace plus genta's `SessionMeta` (the structured selection and
@@ -1147,6 +1192,8 @@ styra/server/            # the server application + its client interface library
     workspace.rs         # Workspace metadata and hierarchy
     git.rs               # host-side enclosing-repository discovery
     worktree.rs          # the linked checkout an interaction works in
+    errand.rs            # one cheap, bounded, bare-sandbox question Styra asks for itself
+    naming.rs            # an interaction's topic: what its branch is about, from the first prompt
 
 styra/tui/               # the terminal client application
   Cargo.toml             # package tui: [[bin]] styra; depends on server (path)
