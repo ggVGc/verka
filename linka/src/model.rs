@@ -445,6 +445,43 @@ pub enum StalenessReason {
     OutputDrifted { artifact: String, detail: String },
 }
 
+/// The wording of a staleness reason is part of the graph vocabulary, not of
+/// any one interface: every reader — CLI, web, TUI — says the same thing about
+/// the same fact. `OutputDrifted` embeds a multi-line detail verbatim; a caller
+/// that indents its output re-indents the rendered lines itself.
+impl std::fmt::Display for StalenessReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DefinitionChanged {
+                metadata,
+                description,
+            } => {
+                let mut files = Vec::new();
+                if *metadata {
+                    files.push("node.toml");
+                }
+                if *description {
+                    files.push("description.md");
+                }
+                write!(f, "definition changed since the work ({})", files.join(", "))
+            }
+            Self::ConsumedDefinitionChanged { id } => {
+                write!(f, "dependency {id}: definition moved")
+            }
+            Self::ConsumedNodeMissing { id } => write!(f, "dependency {id}: missing"),
+            Self::ConsumedResultChanged { id } => {
+                write!(f, "dependency {id}: result changed since it was consumed")
+            }
+            Self::ConsumedOutputChanged { id } => write!(f, "dependency {id}: output changed"),
+            Self::ContextChanged { path } => write!(f, "context {path}: content changed"),
+            Self::ContextMissing { path } => write!(f, "context {path}: missing"),
+            Self::OutputDrifted { artifact, detail } => {
+                write!(f, "output changed since {artifact}:\n{detail}")
+            }
+        }
+    }
+}
+
 /// Why one required dependency does not satisfy a node.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -458,10 +495,30 @@ pub enum BlockerReason {
     AwaitingIntegration,
 }
 
+impl BlockerReason {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Missing => "missing",
+            Self::Open => "not complete (open)",
+            Self::Failed => "not complete (failed)",
+            Self::Rejected => "review rejected",
+            Self::Abandoned => "review abandoned",
+            Self::Stale => "not complete (stale)",
+            Self::AwaitingIntegration => "awaiting candidate integration",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Blocker {
     pub id: NodeId,
     pub reason: BlockerReason,
+}
+
+impl std::fmt::Display for Blocker {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.id, self.reason.as_str())
+    }
 }
 
 /// The complete derived state of one node at a point in time.
@@ -663,6 +720,49 @@ mod tests {
         assert_eq!(title_of("one-liner"), "one-liner");
         assert_eq!(title_of(""), "(no description)");
         assert_eq!(title_of("  \n\t\n"), "(no description)");
+    }
+
+    #[test]
+    fn derived_reasons_render_the_same_words_for_every_reader() {
+        assert_eq!(
+            StalenessReason::ContextChanged {
+                path: "src/lib.rs".parse().unwrap(),
+            }
+            .to_string(),
+            "context src/lib.rs: content changed"
+        );
+        assert_eq!(
+            StalenessReason::DefinitionChanged {
+                metadata: true,
+                description: true,
+            }
+            .to_string(),
+            "definition changed since the work (node.toml, description.md)"
+        );
+        assert_eq!(
+            StalenessReason::OutputDrifted {
+                artifact: "artifact-1".into(),
+                detail: "first\nsecond".into(),
+            }
+            .to_string(),
+            "output changed since artifact-1:\nfirst\nsecond"
+        );
+        assert_eq!(
+            Blocker {
+                id: "node-dependency".parse().unwrap(),
+                reason: BlockerReason::Stale,
+            }
+            .to_string(),
+            "node-dependency: not complete (stale)"
+        );
+        assert_eq!(
+            Blocker {
+                id: "node-candidate".parse().unwrap(),
+                reason: BlockerReason::AwaitingIntegration,
+            }
+            .to_string(),
+            "node-candidate: awaiting candidate integration"
+        );
     }
 
     #[test]

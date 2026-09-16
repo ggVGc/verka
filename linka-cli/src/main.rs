@@ -9,7 +9,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::io::{self, Write};
 use std::path::PathBuf;
 
-use linka::model::{Blocker, BlockerReason, NodeState, StalenessReason};
+use linka::model::{NodeState, StalenessReason};
 use linka::ops::{self, NewNode};
 use linka::{
     Author, CandidateId, CandidateState, CandidateStore, DepKind, GitVcs, NewNodeAttachment,
@@ -762,7 +762,7 @@ fn main() -> Result<()> {
                 }
                 println!("{id}:");
                 for b in &blockers {
-                    println!("  blocked by {}", format_blocker(b));
+                    println!("  blocked by {b}");
                 }
                 Ok(true)
             })?;
@@ -931,54 +931,15 @@ fn state_summary(state: &NodeState) -> String {
         linka::StateClass::Blocked => {}
     }
     match state.blockers.first() {
-        Some(blocker) => format!("blocked by {}", format_blocker(blocker)),
+        Some(blocker) => format!("blocked by {blocker}"),
         None => "blocked".into(),
     }
 }
 
-fn format_blocker(blocker: &Blocker) -> String {
-    let reason = match blocker.reason {
-        BlockerReason::Missing => "missing",
-        BlockerReason::Open => "not complete (open)",
-        BlockerReason::Failed => "not complete (failed)",
-        BlockerReason::Rejected => "review rejected",
-        BlockerReason::Abandoned => "review abandoned",
-        BlockerReason::Stale => "not complete (stale)",
-        BlockerReason::AwaitingIntegration => "awaiting candidate integration",
-    };
-    format!("{}: {reason}", blocker.id)
-}
-
+/// Staleness reasons are rendered by the library; the CLI only re-indents a
+/// multi-line reason under the two-space bullet its listings print.
 fn format_staleness(reason: &StalenessReason) -> String {
-    match reason {
-        StalenessReason::DefinitionChanged {
-            metadata,
-            description,
-        } => {
-            let mut files = Vec::new();
-            if *metadata {
-                files.push("node.toml");
-            }
-            if *description {
-                files.push("description.md");
-            }
-            format!("definition changed since the work ({})", files.join(", "))
-        }
-        StalenessReason::ConsumedDefinitionChanged { id } => {
-            format!("dependency {id}: definition moved")
-        }
-        StalenessReason::ConsumedNodeMissing { id } => format!("dependency {id}: missing"),
-        StalenessReason::ConsumedResultChanged { id } => {
-            format!("dependency {id}: result changed since it was consumed")
-        }
-        StalenessReason::ConsumedOutputChanged { id } => format!("dependency {id}: output changed"),
-        StalenessReason::ContextChanged { path } => format!("context {path}: content changed"),
-        StalenessReason::ContextMissing { path } => format!("context {path}: missing"),
-        StalenessReason::OutputDrifted { artifact, detail } => format!(
-            "output changed since {artifact}:\n      {}",
-            detail.replace('\n', "\n      ")
-        ),
-    }
+    reason.to_string().replace('\n', "\n      ")
 }
 
 /// The `show` view.

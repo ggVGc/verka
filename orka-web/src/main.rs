@@ -19,8 +19,7 @@ use std::process::Command;
 use std::sync::Arc;
 
 use linka::{
-    ops, title_of, Author, Blocker, BlockerReason, CandidateStore, GitVcs, NodeId, ResultMeta,
-    StalenessReason, Store, Vcs,
+    ops, title_of, Author, CandidateStore, GitVcs, NodeId, ResultMeta, Store, Vcs,
 };
 use orka::agent::OutputFormat;
 use orka::attempt::{AttemptId, AttemptPhase, FsAttemptStore, SealedState};
@@ -308,8 +307,8 @@ fn state_json(app: &App) -> Result<Value> {
             "currency": state.currency,
             "integration": state.integration,
             "candidate": candidate,
-            "stale": state.staleness.iter().map(format_staleness).collect::<Vec<_>>(),
-            "blockers": state.blockers.iter().map(format_blocker).collect::<Vec<_>>(),
+            "stale": state.staleness.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            "blockers": state.blockers.iter().map(ToString::to_string).collect::<Vec<_>>(),
             "result": result,
             "attempts": attempts.iter()
                 .filter(|attempt| attempt["node"].as_str() == Some(id.as_str()))
@@ -621,56 +620,10 @@ fn current_candidate_json(
     })))
 }
 
-fn format_blocker(blocker: &Blocker) -> String {
-    let reason = match blocker.reason {
-        BlockerReason::Missing => "missing",
-        BlockerReason::Open => "not complete (open)",
-        BlockerReason::Failed => "not complete (failed)",
-        BlockerReason::Rejected => "review rejected",
-        BlockerReason::Abandoned => "review abandoned",
-        BlockerReason::AwaitingIntegration => "awaiting candidate integration",
-        BlockerReason::Stale => "not complete (stale)",
-    };
-    format!("{}: {reason}", blocker.id)
-}
-
-fn format_staleness(reason: &StalenessReason) -> String {
-    match reason {
-        StalenessReason::DefinitionChanged {
-            metadata,
-            description,
-        } => {
-            let mut files = Vec::new();
-            if *metadata {
-                files.push("node.toml");
-            }
-            if *description {
-                files.push("description.md");
-            }
-            format!("definition changed since the work ({})", files.join(", "))
-        }
-        StalenessReason::ConsumedDefinitionChanged { id } => {
-            format!("dependency {id}: definition moved")
-        }
-        StalenessReason::ConsumedNodeMissing { id } => format!("dependency {id}: missing"),
-        StalenessReason::ConsumedResultChanged { id } => {
-            format!("dependency {id}: result changed since it was consumed")
-        }
-        StalenessReason::ConsumedOutputChanged { id } => {
-            format!("dependency {id}: output changed")
-        }
-        StalenessReason::ContextChanged { path } => format!("context {path}: content changed"),
-        StalenessReason::ContextMissing { path } => format!("context {path}: missing"),
-        StalenessReason::OutputDrifted { artifact, detail } => {
-            format!("output changed since {artifact}:\n{detail}")
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use linka::{Currency, IntegrationStatus, NodeState, RecordedOutcome};
+    use linka::{Blocker, BlockerReason, Currency, IntegrationStatus, NodeState, RecordedOutcome};
 
     fn state(integration: IntegrationStatus, blockers: Vec<Blocker>) -> NodeState {
         NodeState {
@@ -699,29 +652,5 @@ mod tests {
 
         let complete = state(IntegrationStatus::Published, Vec::new());
         assert_eq!(workability(&complete), "complete");
-    }
-
-    #[test]
-    fn formats_structured_reasons_for_the_page() {
-        assert_eq!(
-            format_staleness(&StalenessReason::ContextChanged {
-                path: "src/lib.rs".parse().unwrap(),
-            }),
-            "context src/lib.rs: content changed"
-        );
-        assert_eq!(
-            format_blocker(&Blocker {
-                id: "node-dependency".parse().unwrap(),
-                reason: BlockerReason::Stale,
-            }),
-            "node-dependency: not complete (stale)"
-        );
-        assert_eq!(
-            format_blocker(&Blocker {
-                id: "node-candidate".parse().unwrap(),
-                reason: BlockerReason::AwaitingIntegration,
-            }),
-            "node-candidate: awaiting candidate integration"
-        );
     }
 }
