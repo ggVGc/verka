@@ -147,7 +147,7 @@ pub fn submit_verification(
 }
 
 pub(super) struct RecordedSubmission {
-    pub(super) envelope: crate::SubmissionEnvelope,
+    pub(super) envelope: crate::model::SubmissionEnvelope,
     pub(super) outcome: ResultOutcome,
     pub(super) output: Option<ArtifactRef>,
 }

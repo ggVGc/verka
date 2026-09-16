@@ -210,7 +210,7 @@ pub fn complete(
         store,
         vcs,
         RecordedSubmission {
-            envelope: crate::SubmissionEnvelope {
+            envelope: crate::model::SubmissionEnvelope {
                 snapshot,
                 notes: notes.into(),
                 author,
