@@ -64,22 +64,6 @@ enum Command {
     Candidates,
     /// Show a Linka candidate (candidate id or producing attempt id).
     Candidate { candidate: String },
-    /// Apply an accepted verification to an exact Linka candidate.
-    Accept {
-        candidate: String,
-        /// Verification node whose current outcome is accepted.
-        verification: String,
-        #[arg(long, default_value = "")]
-        notes: String,
-    },
-    /// Apply a rejected verification and make the source node retryable.
-    Reject {
-        candidate: String,
-        /// Verification node whose current outcome is rejected.
-        verification: String,
-        #[arg(long)]
-        notes: String,
-    },
     /// Publish an accepted candidate by recoverable fast-forward.
     Publish { candidate: String },
     /// Coordinate Git-native Nota reviews with Linka verification nodes.
@@ -395,26 +379,6 @@ fn run(cli: Cli) -> Result<()> {
             } else {
                 println!("\n{patch}");
             }
-        }
-        Command::Accept {
-            candidate,
-            verification,
-            notes,
-        } => {
-            let store = workbench.linka_store()?;
-            let verification = parse_node(verification)?;
-            let accepted = Candidates::new(&store).accept(&candidate, &verification, notes)?;
-            println!("accepted {} for {}", accepted.id, accepted.target);
-        }
-        Command::Reject {
-            candidate,
-            verification,
-            notes,
-        } => {
-            let store = workbench.linka_store()?;
-            let verification = parse_node(verification)?;
-            let rejected = Candidates::new(&store).reject(&candidate, &verification, notes)?;
-            println!("rejected {}", rejected.id);
         }
         Command::Publish { candidate } => {
             let store = workbench.linka_store()?;

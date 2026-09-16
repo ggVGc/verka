@@ -127,8 +127,6 @@ pub enum Action {
     Fail,
     Verify,
     RegisterCandidate,
-    AcceptCandidate,
-    RejectCandidate,
     PublishCandidate,
     Attach,
     ReadAttachment,
@@ -154,8 +152,6 @@ impl Action {
             Self::Fail => "Fail node",
             Self::Verify => "Submit verification",
             Self::RegisterCandidate => "Register candidate",
-            Self::AcceptCandidate => "Accept candidate",
-            Self::RejectCandidate => "Reject candidate",
             Self::PublishCandidate => "Publish candidate",
             Self::Attach => "Attach file",
             Self::ReadAttachment => "View attachment",
@@ -171,7 +167,7 @@ impl Action {
     }
 }
 
-pub const ACTIONS: [Action; 22] = [
+pub const ACTIONS: [Action; 20] = [
     Action::AddNode,
     Action::AddVerification,
     Action::EditNode,
@@ -181,8 +177,6 @@ pub const ACTIONS: [Action; 22] = [
     Action::Fail,
     Action::Verify,
     Action::RegisterCandidate,
-    Action::AcceptCandidate,
-    Action::RejectCandidate,
     Action::PublishCandidate,
     Action::Attach,
     Action::ReadAttachment,
@@ -695,12 +689,6 @@ impl App {
                 ),
                 field("External id", "", "optional; use both external fields"),
             ],
-            Action::AcceptCandidate | Action::RejectCandidate => vec![
-                field("Candidate", &candidate, "candidate id"),
-                field("Verification", "", "deciding verification node"),
-                field("Notes", "", "required for rejection"),
-                field("Author", "human", "human | machine"),
-            ],
             Action::PublishCandidate => {
                 vec![field("Candidate", &candidate, "accepted candidate id")]
             }
@@ -868,26 +856,6 @@ impl App {
                     },
                 )?;
                 format!("Registered {}", record.id)
-            }
-            Action::AcceptCandidate => {
-                CandidateStore::new(&self.store).accept(
-                    &self.vcs,
-                    &value(0).parse().map_err(anyhow::Error::msg)?,
-                    &value(1).parse().map_err(anyhow::Error::msg)?,
-                    author(value(3))?,
-                    value(2).into(),
-                )?;
-                format!("Accepted {}", value(0))
-            }
-            Action::RejectCandidate => {
-                CandidateStore::new(&self.store).reject(
-                    &self.vcs,
-                    &value(0).parse().map_err(anyhow::Error::msg)?,
-                    &value(1).parse().map_err(anyhow::Error::msg)?,
-                    author(value(3))?,
-                    value(2).into(),
-                )?;
-                format!("Rejected {}", value(0))
             }
             Action::PublishCandidate => {
                 CandidateStore::new(&self.store)
@@ -1219,30 +1187,22 @@ impl App {
 }
 
 pub fn state_label(state: &NodeState) -> String {
-    if state.currency == Currency::Current {
-        match state.outcome {
-            RecordedOutcome::Accepted => return "accepted".into(),
-            RecordedOutcome::Rejected => return "rejected".into(),
-            RecordedOutcome::Abandoned => return "abandoned".into(),
-            _ => {}
-        }
-    }
-    if state.is_complete() {
-        "complete".into()
-    } else if state.is_awaiting_integration() {
-        match state.integration {
+    match state.classification() {
+        linka::StateClass::Accepted => "accepted".into(),
+        linka::StateClass::Rejected => "rejected".into(),
+        linka::StateClass::Abandoned => "abandoned".into(),
+        linka::StateClass::Complete => "complete".into(),
+        linka::StateClass::AwaitingIntegration => match state.integration {
             IntegrationStatus::Pending => "awaiting decision".into(),
             IntegrationStatus::Accepted => "awaiting publish".into(),
             _ => "awaiting integration".into(),
-        }
-    } else if state.is_ready() {
-        match (state.currency, state.outcome) {
+        },
+        linka::StateClass::Ready => match (state.currency, state.outcome) {
             (Currency::Stale, _) => "ready · stale".into(),
             (_, RecordedOutcome::Failed) => "ready · retry".into(),
             _ => "ready".into(),
-        }
-    } else {
-        "blocked".into()
+        },
+        linka::StateClass::Blocked => "blocked".into(),
     }
 }
 

@@ -5,7 +5,7 @@
 //! DESIGN.md for the model and the reasoning behind it.
 
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use std::io::{self, Write};
 use std::path::PathBuf;
 
@@ -28,6 +28,21 @@ struct Cli {
     store: PathBuf,
     #[command(subcommand)]
     cmd: Cmd,
+}
+
+/// The result narrative is deliberately shared by every result-producing
+/// command: inline and file input remain exclusive and authorship defaults to
+/// the same value everywhere.
+#[derive(Args)]
+struct ResultDetails {
+    /// Narrative of what happened during the work (written to result.md).
+    #[arg(long)]
+    notes: Option<String>,
+    /// Read the notes from a file instead.
+    #[arg(long, conflicts_with = "notes")]
+    notes_file: Option<PathBuf>,
+    #[arg(long, value_enum, default_value = "human")]
+    author: Author,
 }
 
 #[derive(Subcommand)]
@@ -116,26 +131,15 @@ enum Cmd {
         /// node's description).
         #[arg(long, short = 'm')]
         message: Option<String>,
-        /// Narrative of what happened during the work (written to result.md).
-        #[arg(long)]
-        notes: Option<String>,
-        /// Read the notes from a file instead.
-        #[arg(long, conflicts_with = "notes")]
-        notes_file: Option<PathBuf>,
-        #[arg(long, value_enum, default_value = "human")]
-        author: Author,
+        #[command(flatten)]
+        result: ResultDetails,
     },
 
     /// Record a node's work as failed, with notes on what went wrong.
     Fail {
         id: NodeId,
-        #[arg(long)]
-        notes: Option<String>,
-        /// Read the notes from a file instead.
-        #[arg(long, conflicts_with = "notes")]
-        notes_file: Option<PathBuf>,
-        #[arg(long, value_enum, default_value = "human")]
-        author: Author,
+        #[command(flatten)]
+        result: ResultDetails,
     },
 
     /// Record an accepted, rejected, or abandoned result for a verification node.
@@ -143,12 +147,8 @@ enum Cmd {
         id: NodeId,
         #[arg(long, value_enum)]
         outcome: VerificationOutcome,
-        #[arg(long)]
-        notes: Option<String>,
-        #[arg(long, conflicts_with = "notes")]
-        notes_file: Option<PathBuf>,
-        #[arg(long, value_enum, default_value = "human")]
-        author: Author,
+        #[command(flatten)]
+        result: ResultDetails,
     },
 
     /// Show a node: definition, derived status, result, and staleness reasons.
@@ -163,24 +163,28 @@ enum Cmd {
     /// List the nodes that verify an exact candidate.
     Verifications { candidate: CandidateId },
 
-    /// Accept an exact candidate for its recorded target branch.
+    /// Verify that an accepted verification already decided this candidate.
     Accept {
         id: CandidateId,
         /// Accepted verification authorizing this exact candidate.
         verification: NodeId,
+        /// Deprecated compatibility input; the recorded decision is unchanged.
         #[arg(long, default_value = "")]
         notes: String,
+        /// Deprecated compatibility input; the recorded decision is unchanged.
         #[arg(long, value_enum, default_value = "human")]
         author: Author,
     },
 
-    /// Reject a candidate; rejection notes are required.
+    /// Verify that a rejected verification already decided this candidate.
     Reject {
         id: CandidateId,
         /// Rejected verification deciding this exact candidate.
         verification: NodeId,
+        /// Must match the immutable notes recorded by verification submission.
         #[arg(long)]
         notes: String,
+        /// Deprecated compatibility input; the recorded decision is unchanged.
         #[arg(long, value_enum, default_value = "human")]
         author: Author,
     },
@@ -372,15 +376,13 @@ fn main() -> Result<()> {
         Cmd::Verify {
             id,
             outcome,
-            notes,
-            notes_file,
-            author,
+            result,
         } => {
             let (store, vcs) = open_store(store)?;
             let snapshot = ops::snapshot_work(&store, &vcs, &id, &[])?;
             let notes = resolve_notes(
-                notes,
-                notes_file,
+                result.notes,
+                result.notes_file,
                 &store,
                 &id,
                 "what did the review conclude?",
@@ -392,7 +394,7 @@ fn main() -> Result<()> {
                     snapshot,
                     outcome,
                     notes,
-                    author,
+                    author: result.author,
                     producer: None,
                 },
             )
@@ -425,12 +427,16 @@ fn main() -> Result<()> {
             outputs,
             context,
             message,
-            notes,
-            notes_file,
-            author,
+            result,
         } => {
             let (store, vcs) = open_store(store)?;
-            let notes = resolve_notes(notes, notes_file, &store, &id, "what happened?")?;
+            let notes = resolve_notes(
+                result.notes,
+                result.notes_file,
+                &store,
+                &id,
+                "what happened?",
+            )?;
             let commit = ops::complete(
                 &store,
                 &vcs,
@@ -439,7 +445,7 @@ fn main() -> Result<()> {
                 &to_strings(&context),
                 message,
                 &notes,
-                author,
+                result.author,
             )?;
             match commit {
                 Some(c) => println!("{id}  done  (output {})", ops::short(&c)),
@@ -447,15 +453,16 @@ fn main() -> Result<()> {
             }
         }
 
-        Cmd::Fail {
-            id,
-            notes,
-            notes_file,
-            author,
-        } => {
+        Cmd::Fail { id, result } => {
             let (store, vcs) = open_store(store)?;
-            let notes = resolve_notes(notes, notes_file, &store, &id, "what went wrong?")?;
-            ops::fail(&store, &vcs, &id, &notes, author)?;
+            let notes = resolve_notes(
+                result.notes,
+                result.notes_file,
+                &store,
+                &id,
+                "what went wrong?",
+            )?;
+            ops::fail(&store, &vcs, &id, &notes, result.author)?;
             println!("{id}  failed");
         }
 
@@ -843,37 +850,35 @@ fn for_each_node(store: &Store, mut visit: impl FnMut(&NodeId) -> Result<bool>) 
 }
 
 fn state_summary(state: &NodeState) -> String {
-    if state.currency == linka::Currency::Current {
-        match state.outcome {
-            linka::RecordedOutcome::Accepted => return "review accepted".into(),
-            linka::RecordedOutcome::Rejected => return "review rejected".into(),
-            linka::RecordedOutcome::Abandoned => return "review abandoned".into(),
-            _ => {}
+    match state.classification() {
+        linka::StateClass::Accepted => return "review accepted".into(),
+        linka::StateClass::Rejected => return "review rejected".into(),
+        linka::StateClass::Abandoned => return "review abandoned".into(),
+        linka::StateClass::Complete => {
+            return "complete".into();
         }
-    }
-    if state.is_complete() {
-        return "complete".into();
-    }
-    if state.is_awaiting_integration() {
-        return match state.integration {
-            linka::IntegrationStatus::Pending => "awaiting candidate acceptance".into(),
-            linka::IntegrationStatus::Accepted => "accepted; awaiting publication".into(),
-            _ => unreachable!(),
-        };
-    }
-    if state.is_ready() {
-        if state.currency == linka::Currency::Stale {
-            let reason = state
-                .staleness
-                .first()
-                .map(format_staleness)
-                .unwrap_or_else(|| "recorded evidence changed".into());
-            return format!("ready (previous result stale: {reason})");
+        linka::StateClass::AwaitingIntegration => {
+            return match state.integration {
+                linka::IntegrationStatus::Pending => "awaiting candidate acceptance".into(),
+                linka::IntegrationStatus::Accepted => "accepted; awaiting publication".into(),
+                _ => unreachable!(),
+            };
         }
-        if state.outcome == linka::RecordedOutcome::Failed {
-            return "ready (previous attempt failed)".into();
+        linka::StateClass::Ready => {
+            if state.currency == linka::Currency::Stale {
+                let reason = state
+                    .staleness
+                    .first()
+                    .map(format_staleness)
+                    .unwrap_or_else(|| "recorded evidence changed".into());
+                return format!("ready (previous result stale: {reason})");
+            }
+            if state.outcome == linka::RecordedOutcome::Failed {
+                return "ready (previous attempt failed)".into();
+            }
+            return "ready".into();
         }
-        return "ready".into();
+        linka::StateClass::Blocked => {}
     }
     match state.blockers.first() {
         Some(blocker) => format!("blocked by {}", format_blocker(blocker)),

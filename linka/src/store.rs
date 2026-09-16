@@ -61,6 +61,26 @@ pub struct Store {
     root: PathBuf,
 }
 
+/// A definition read once from disk, together with versions of those exact
+/// bytes. Callers that need both content and pins should use this rather than
+/// coordinating `read_node` and `node_version`.
+#[derive(Debug, Clone)]
+pub struct LoadedDefinition {
+    pub meta: NodeMeta,
+    pub description: String,
+    pub version: DefinitionVersion,
+}
+
+/// A result read once from disk, together with versions of those exact bytes.
+/// `None` means both result files are absent; all partial or malformed records
+/// are errors.
+#[derive(Debug, Clone)]
+pub struct LoadedResult {
+    pub meta: ResultMeta,
+    pub notes: String,
+    pub version: ResultVersion,
+}
+
 pub struct MutationLock {
     _file: fs::File,
     path: String,
@@ -193,29 +213,37 @@ impl Store {
         Ok(())
     }
 
-    pub fn read_node(&self, id: &NodeId) -> Result<(NodeMeta, String)> {
-        let data = fs::read_to_string(self.node_path(id))
-            .with_context(|| format!("unknown node `{id}`"))?;
+    pub fn load_definition(&self, id: &NodeId) -> Result<LoadedDefinition> {
+        let data = fs::read(self.node_path(id)).with_context(|| format!("unknown node `{id}`"))?;
+        let text =
+            std::str::from_utf8(&data).with_context(|| format!("reading node.toml for `{id}`"))?;
         let meta: NodeMeta =
-            toml::from_str(&data).with_context(|| format!("parsing node.toml for `{id}`"))?;
+            toml::from_str(text).with_context(|| format!("parsing node.toml for `{id}`"))?;
         if meta.schema != DEFINITION_SCHEMA {
             bail!("node `{id}` uses unsupported schema {}", meta.schema);
         }
-        let description = fs::read_to_string(self.description_path(id))
+        let description_bytes = fs::read(self.description_path(id))
             .with_context(|| format!("reading description.md for `{id}`"))?;
-        Ok((meta, description))
+        let description = String::from_utf8(description_bytes.clone())
+            .with_context(|| format!("reading description.md for `{id}`"))?;
+        Ok(LoadedDefinition {
+            meta,
+            description,
+            version: DefinitionVersion {
+                metadata: blob_id(&data),
+                description: blob_id(&description_bytes),
+            },
+        })
+    }
+
+    pub fn read_node(&self, id: &NodeId) -> Result<(NodeMeta, String)> {
+        let loaded = self.load_definition(id)?;
+        Ok((loaded.meta, loaded.description))
     }
 
     /// The node's version: Git blob ids of its structured metadata and prose.
     pub fn node_version(&self, id: &NodeId) -> Result<DefinitionVersion> {
-        let metadata =
-            fs::read(self.node_path(id)).with_context(|| format!("unknown node `{id}`"))?;
-        let description = fs::read(self.description_path(id))
-            .with_context(|| format!("reading description.md for `{id}`"))?;
-        Ok(DefinitionVersion {
-            metadata: blob_id(&metadata),
-            description: blob_id(&description),
-        })
+        Ok(self.load_definition(id)?.version)
     }
 
     // --- result (structured record plus optional prose) -------------------------
@@ -247,52 +275,64 @@ impl Store {
     }
 
     /// The node's completion record, or `None` if it has not been worked yet.
-    pub fn read_result(&self, id: &NodeId) -> Result<Option<(ResultMeta, String)>> {
-        let data = match fs::read_to_string(self.result_meta_path(id)) {
+    pub fn load_result(&self, id: &NodeId) -> Result<Option<LoadedResult>> {
+        let data = match fs::read(self.result_meta_path(id)) {
             Ok(t) => t,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                if self.result_path(id).exists() {
-                    bail!("result.md exists without result.toml for `{id}`");
+                match fs::read(self.result_path(id)) {
+                    Ok(_) => bail!("result.md exists without result.toml for `{id}`"),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                    Err(e) => {
+                        return Err(e).with_context(|| format!("reading result.md for `{id}`"))
+                    }
                 }
-                return Ok(None);
             }
             Err(e) => return Err(e).with_context(|| format!("reading result for `{id}`")),
         };
+        let text = std::str::from_utf8(&data)
+            .with_context(|| format!("reading result.toml for `{id}`"))?;
         let meta: ResultMeta =
-            toml::from_str(&data).with_context(|| format!("parsing result.toml for `{id}`"))?;
+            toml::from_str(text).with_context(|| format!("parsing result.toml for `{id}`"))?;
         if meta.schema != RESULT_SCHEMA {
             bail!("result for `{id}` uses unsupported schema {}", meta.schema);
         }
-        let notes = match fs::read_to_string(self.result_path(id)) {
-            Ok(notes) => notes,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        let notes_bytes = match fs::read(self.result_path(id)) {
+            Ok(notes) => Some(notes),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
             Err(e) => return Err(e).with_context(|| format!("reading result.md for `{id}`")),
         };
-        Ok(Some((meta, notes)))
+        let notes = match &notes_bytes {
+            Some(bytes) => String::from_utf8(bytes.clone())
+                .with_context(|| format!("reading result.md for `{id}`"))?,
+            None => String::new(),
+        };
+        Ok(Some(LoadedResult {
+            meta,
+            notes,
+            version: ResultVersion {
+                metadata: blob_id(&data),
+                notes: notes_bytes.as_deref().map(blob_id),
+            },
+        }))
+    }
+
+    pub fn read_result(&self, id: &NodeId) -> Result<Option<(ResultMeta, String)>> {
+        Ok(self
+            .load_result(id)?
+            .map(|loaded| (loaded.meta, loaded.notes)))
     }
 
     /// The node's result version, or `None` if it has no result — the pairing
     /// of [`Self::read_result`] and [`Self::result_version`] that pinning and
     /// version checks need, in one pass over the files.
     pub fn current_result_version(&self, id: &NodeId) -> Result<Option<ResultVersion>> {
-        if !self.result_meta_path(id).exists() {
-            return Ok(None);
-        }
-        self.result_version(id).map(Some)
+        Ok(self.load_result(id)?.map(|loaded| loaded.version))
     }
 
     pub fn result_version(&self, id: &NodeId) -> Result<ResultVersion> {
-        let metadata = fs::read(self.result_meta_path(id))
-            .with_context(|| format!("node `{id}` has no result"))?;
-        let notes = match fs::read(self.result_path(id)) {
-            Ok(bytes) => Some(blob_id(&bytes)),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-            Err(e) => return Err(e).with_context(|| format!("reading result.md for `{id}`")),
-        };
-        Ok(ResultVersion {
-            metadata: blob_id(&metadata),
-            notes,
-        })
+        self.load_result(id)?
+            .map(|loaded| loaded.version)
+            .with_context(|| format!("node `{id}` has no result"))
     }
 
     // --- opaque attachments -------------------------------------------------------
@@ -630,6 +670,65 @@ mod tests {
         assert_eq!(notes, "did the thing");
         assert_eq!(store.node_version(&node).unwrap(), v2);
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn loaded_records_hash_exact_bytes_and_reject_partial_results() {
+        let dir = std::env::temp_dir().join(format!("linka-loader-test-{}", ulid::Ulid::new()));
+        let store = Store::init(dir.join(".linka")).unwrap();
+        let node: NodeId = "node-1".parse().unwrap();
+        let meta = NodeMeta {
+            schema: DEFINITION_SCHEMA,
+            author: Author::Human,
+            assignee: None,
+            depends_on: vec![],
+            derived_from: vec![],
+            verifies: None,
+            extensions: Default::default(),
+        };
+        store.write_node(&node, &meta, "naïve 🧪\n").unwrap();
+        let node_path = store.node_path(&node);
+        let mut definition_bytes = b"# formatting is versioned\n".to_vec();
+        definition_bytes.extend(std::fs::read(&node_path).unwrap());
+        std::fs::write(&node_path, &definition_bytes).unwrap();
+        let loaded = store.load_definition(&node).unwrap();
+        assert_eq!(loaded.version.metadata, blob_id(&definition_bytes));
+        assert_eq!(loaded.version.description, blob_id("naïve 🧪\n".as_bytes()));
+
+        let result = ResultMeta {
+            schema: RESULT_SCHEMA,
+            at: 0,
+            author: Author::Machine,
+            definition: loaded.version,
+            outcome: Outcome::Failed.into(),
+            project: crate::ProjectSnapshot {
+                scheme: "git".into(),
+                repository: String::new(),
+                revision: String::new(),
+                tree: String::new(),
+            },
+            consumed: vec![],
+            context: vec![],
+            output: None,
+            producer: None,
+        };
+        store.write_result(&node, &result, "").unwrap();
+        assert_eq!(
+            store.load_result(&node).unwrap().unwrap().version.notes,
+            None
+        );
+        std::fs::write(store.result_path(&node), b"").unwrap();
+        assert_eq!(
+            store.load_result(&node).unwrap().unwrap().version.notes,
+            Some(blob_id(b""))
+        );
+        std::fs::remove_file(store.result_meta_path(&node)).unwrap();
+        assert!(store
+            .load_result(&node)
+            .unwrap_err()
+            .to_string()
+            .contains("without"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

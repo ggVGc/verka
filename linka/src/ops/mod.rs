@@ -125,15 +125,15 @@ fn pin_node_list(store: &Store, nodes: &[crate::model::NodeId]) -> Result<Vec<Co
         .iter()
         .map(|dep| {
             let definition = store
-                .node_version(dep)
+                .load_definition(dep)
                 .with_context(|| format!("cannot pin unknown dependency `{dep}`"))?;
-            let current = store.read_result(dep)?;
+            let current = store.load_result(dep)?;
             Ok(ConsumedNode {
                 id: dep.clone(),
-                definition,
-                result: store.current_result_version(dep)?,
-                outcome: current.as_ref().map(|(result, _)| result.outcome),
-                output: current.and_then(|(result, _)| result.output),
+                definition: definition.version,
+                result: current.as_ref().map(|result| result.version.clone()),
+                outcome: current.as_ref().map(|result| result.meta.outcome),
+                output: current.and_then(|result| result.meta.output),
             })
         })
         .collect()

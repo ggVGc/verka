@@ -28,10 +28,10 @@ pub use model::{
     ContextObservation, ContextPin, Currency, DefinitionVersion, DepKind, IntegrationStatus,
     NewNodeAttachment, NodeAttachment, NodeId, NodeMeta, NodeState, Outcome, ProducerEvidence,
     ProjectPath, ProjectSnapshot, RecordedOutcome, ResultMeta, ResultOutcome, ResultSubmission,
-    ResultVersion, StalenessReason, SubmissionConflict, VerificationOutcome,
-    VerificationSubmission, WorkSnapshot, ATTACHMENT_SCHEMA, DEFINITION_SCHEMA, OBSERVATION_SCHEMA,
-    RESULT_SCHEMA, SNAPSHOT_SCHEMA,
+    ResultVersion, StalenessReason, StateClass, SubmissionConflict, SubmissionEnvelope,
+    VerificationOutcome, VerificationSubmission, WorkSnapshot, ATTACHMENT_SCHEMA,
+    DEFINITION_SCHEMA, OBSERVATION_SCHEMA, RESULT_SCHEMA, SNAPSHOT_SCHEMA,
 };
 pub use pairing::Pairing;
-pub use store::Store;
-pub use vcs::{ArtifactStore, BranchStore, ContextIdentity, RepositoryIdentity, StoreHistory, Vcs};
+pub use store::{LoadedDefinition, LoadedResult, Store};
+pub use vcs::Vcs;

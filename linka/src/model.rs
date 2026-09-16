@@ -487,6 +487,19 @@ pub enum IntegrationStatus {
     Rejected,
 }
 
+/// Presentation-neutral precedence for the current derived node state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StateClass {
+    Complete,
+    Ready,
+    Blocked,
+    AwaitingIntegration,
+    Accepted,
+    Rejected,
+    Abandoned,
+}
+
 impl IntegrationStatus {
     pub fn is_done(self) -> bool {
         match self {
@@ -519,6 +532,16 @@ pub struct WorkSnapshot {
     pub previous_result: Option<ResultVersion>,
 }
 
+/// Shared, producer-neutral fields of every checked submission. The payload
+/// remains separate so verification submissions cannot carry work outputs.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SubmissionEnvelope {
+    pub snapshot: WorkSnapshot,
+    pub notes: String,
+    pub author: Author,
+    pub producer: Option<ProducerEvidence>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ResultSubmission {
     pub snapshot: WorkSnapshot,
@@ -538,6 +561,28 @@ pub struct VerificationSubmission {
     pub producer: Option<ProducerEvidence>,
 }
 
+impl ResultSubmission {
+    pub fn envelope(&self) -> SubmissionEnvelope {
+        SubmissionEnvelope {
+            snapshot: self.snapshot.clone(),
+            notes: self.notes.clone(),
+            author: self.author,
+            producer: self.producer.clone(),
+        }
+    }
+}
+
+impl VerificationSubmission {
+    pub fn envelope(&self) -> SubmissionEnvelope {
+        SubmissionEnvelope {
+            snapshot: self.snapshot.clone(),
+            notes: self.notes.clone(),
+            author: self.author,
+            producer: self.producer.clone(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SubmissionConflict {
@@ -551,6 +596,25 @@ pub enum SubmissionConflict {
 }
 
 impl NodeState {
+    pub fn classification(&self) -> StateClass {
+        if self.currency == Currency::Current {
+            match self.outcome {
+                RecordedOutcome::Accepted => return StateClass::Accepted,
+                RecordedOutcome::Rejected => return StateClass::Rejected,
+                RecordedOutcome::Abandoned => return StateClass::Abandoned,
+                _ => {}
+            }
+        }
+        if self.is_complete() {
+            StateClass::Complete
+        } else if self.is_awaiting_integration() {
+            StateClass::AwaitingIntegration
+        } else if self.is_ready() {
+            StateClass::Ready
+        } else {
+            StateClass::Blocked
+        }
+    }
     pub fn is_complete(&self) -> bool {
         self.currency == Currency::Current
             && match self.outcome {
@@ -608,6 +672,53 @@ mod tests {
         assert!(!IntegrationStatus::Accepted.is_done());
         assert!(IntegrationStatus::Published.is_done());
         assert!(IntegrationStatus::Rejected.is_done());
+    }
+
+    #[test]
+    fn state_classification_has_one_frontend_precedence() {
+        let state = |outcome, currency, integration, blocked: bool| NodeState {
+            outcome,
+            currency,
+            integration,
+            staleness: Vec::new(),
+            blockers: blocked
+                .then(|| Blocker {
+                    id: "dependency".parse().unwrap(),
+                    reason: BlockerReason::Open,
+                })
+                .into_iter()
+                .collect(),
+        };
+        use IntegrationStatus as I;
+        use RecordedOutcome as O;
+        assert_eq!(
+            state(O::Succeeded, Currency::Current, I::Published, false).classification(),
+            StateClass::Complete
+        );
+        assert_eq!(
+            state(O::Succeeded, Currency::Current, I::Pending, false).classification(),
+            StateClass::AwaitingIntegration
+        );
+        assert_eq!(
+            state(O::Succeeded, Currency::Stale, I::Rejected, false).classification(),
+            StateClass::Ready
+        );
+        assert_eq!(
+            state(O::Failed, Currency::Current, I::NotRequired, true).classification(),
+            StateClass::Blocked
+        );
+        assert_eq!(
+            state(O::Accepted, Currency::Current, I::NotRequired, false).classification(),
+            StateClass::Accepted
+        );
+        assert_eq!(
+            state(O::Rejected, Currency::Current, I::NotRequired, false).classification(),
+            StateClass::Rejected
+        );
+        assert_eq!(
+            state(O::Abandoned, Currency::Current, I::NotRequired, false).classification(),
+            StateClass::Abandoned
+        );
     }
 
     #[test]

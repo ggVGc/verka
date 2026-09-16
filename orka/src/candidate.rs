@@ -91,40 +91,6 @@ impl<'a> Candidates<'a> {
         )
     }
 
-    pub fn accept(
-        &self,
-        reference: &str,
-        verification: &linka::NodeId,
-        notes: String,
-    ) -> Result<Candidate> {
-        let candidate = self.get(reference)?;
-        CandidateStore::new(self.store).accept(
-            &GitVcs::for_store(self.store),
-            &candidate.id,
-            verification,
-            Author::Human,
-            notes,
-        )?;
-        self.get(candidate.id.as_str())
-    }
-
-    pub fn reject(
-        &self,
-        reference: &str,
-        verification: &linka::NodeId,
-        notes: String,
-    ) -> Result<Candidate> {
-        let candidate = self.get(reference)?;
-        CandidateStore::new(self.store).reject(
-            &GitVcs::for_store(self.store),
-            &candidate.id,
-            verification,
-            Author::Human,
-            notes,
-        )?;
-        self.get(candidate.id.as_str())
-    }
-
     pub fn publish(&self, reference: &str) -> Result<Candidate> {
         let candidate = self.get(reference)?;
         CandidateStore::new(self.store).publish(&GitVcs::for_store(self.store), &candidate.id)?;

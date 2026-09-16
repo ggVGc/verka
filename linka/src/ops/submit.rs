@@ -4,8 +4,11 @@
 //! `capture_*` entry points revalidate every frozen field before recording
 //! anything, reporting graph conflicts as [`SubmissionConflict`] values.
 
-use super::mutate::{prepare_node_attachments, write_node_attachments};
+use super::mutate::{
+    prepare_node_attachments, record_context_observation_locked, write_node_attachments,
+};
 use super::*;
+use crate::candidate::NewCandidate;
 
 /// Freeze the exact graph, context, and project inputs for ready work.
 pub fn snapshot_work(
@@ -18,9 +21,9 @@ pub fn snapshot_work(
     if !state.is_ready() {
         bail!("node `{id}` is not ready");
     }
-    let (meta, _) = store.read_node(id)?;
-    let dependencies = pin_node_list(store, &meta.depends_on)?;
-    let lineage = pin_node_list(store, &meta.derived_from)?;
+    let definition = store.load_definition(id)?;
+    let dependencies = pin_node_list(store, &definition.meta.depends_on)?;
+    let lineage = pin_node_list(store, &definition.meta.derived_from)?;
     let project = current_project_snapshot(store, vcs)?;
     let context = pin_context(
         store,
@@ -31,7 +34,7 @@ pub fn snapshot_work(
     Ok(WorkSnapshot {
         schema: SNAPSHOT_SCHEMA,
         node: id.clone(),
-        definition: store.node_version(id)?,
+        definition: definition.version,
         dependencies,
         lineage,
         context,
@@ -83,14 +86,40 @@ pub fn submit_result_with_attachments(
         store,
         vcs,
         RecordedSubmission {
-            snapshot: submission.snapshot,
+            envelope: submission.envelope(),
             outcome: submission.outcome.into(),
             output: submission.output,
-            notes: submission.notes,
-            author: submission.author,
-            producer: submission.producer,
         },
         attachments,
+        None,
+        &[],
+        mutation,
+    )
+}
+
+/// Submit an output-producing result and register its candidate in the same
+/// store mutation. The candidate is derived from the exact result bytes just
+/// written, so no recoverable intermediate state is exposed.
+pub fn submit_result_with_candidate(
+    store: &Store,
+    vcs: &dyn Vcs,
+    submission: ResultSubmission,
+    candidate: NewCandidate,
+    attachments: Vec<NewNodeAttachment>,
+    observed_paths: &[String],
+) -> std::result::Result<(), SubmissionError> {
+    let mutation = store.mutation_lock(vcs)?;
+    submit_result_locked(
+        store,
+        vcs,
+        RecordedSubmission {
+            envelope: submission.envelope(),
+            outcome: submission.outcome.into(),
+            output: submission.output,
+        },
+        attachments,
+        Some(candidate),
+        observed_paths,
         mutation,
     )
 }
@@ -106,25 +135,21 @@ pub fn submit_verification(
         store,
         vcs,
         RecordedSubmission {
-            snapshot: submission.snapshot,
+            envelope: submission.envelope(),
             outcome: submission.outcome.into(),
             output: None,
-            notes: submission.notes,
-            author: submission.author,
-            producer: submission.producer,
         },
         Vec::new(),
+        None,
+        &[],
         mutation,
     )
 }
 
 pub(super) struct RecordedSubmission {
-    pub(super) snapshot: WorkSnapshot,
+    pub(super) envelope: crate::SubmissionEnvelope,
     pub(super) outcome: ResultOutcome,
     pub(super) output: Option<ArtifactRef>,
-    pub(super) notes: String,
-    pub(super) author: Author,
-    pub(super) producer: Option<ProducerEvidence>,
 }
 
 pub(super) fn submit_result_locked(
@@ -132,9 +157,11 @@ pub(super) fn submit_result_locked(
     vcs: &dyn Vcs,
     submission: RecordedSubmission,
     attachments: Vec<NewNodeAttachment>,
+    candidate: Option<NewCandidate>,
+    observed_paths: &[String],
     mutation: MutationLock,
 ) -> std::result::Result<(), SubmissionError> {
-    let snapshot = &submission.snapshot;
+    let snapshot = &submission.envelope.snapshot;
     let id = &snapshot.node;
     if snapshot.schema != SNAPSHOT_SCHEMA {
         return Err(SubmissionError::Evaluation(anyhow::anyhow!(
@@ -150,7 +177,8 @@ pub(super) fn submit_result_locked(
             )));
         }
     }
-    let (meta, _) = store.read_node(id)?;
+    let definition = store.load_definition(id)?;
+    let meta = definition.meta;
     if !outcome_kind_matches(meta.verifies.is_some(), submission.outcome) {
         let message = if meta.verifies.is_some() {
             verification_requires_review_result(id)
@@ -159,7 +187,7 @@ pub(super) fn submit_result_locked(
         };
         return Err(SubmissionError::Evaluation(anyhow::anyhow!(message)));
     }
-    if store.node_version(id)? != snapshot.definition {
+    if definition.version != snapshot.definition {
         conflicts.push(SubmissionConflict::DefinitionChanged);
     }
     if pin_node_list(store, &meta.depends_on)? != snapshot.dependencies {
@@ -221,14 +249,14 @@ pub(super) fn submit_result_locked(
     let result = ResultMeta {
         schema: RESULT_SCHEMA,
         at: now_millis(),
-        author: submission.author,
+        author: submission.envelope.author,
         definition: snapshot.definition.clone(),
         outcome: submission.outcome,
         project: snapshot.project.clone(),
         consumed,
         context: snapshot.context.clone(),
         output: submission.output,
-        producer: submission.producer,
+        producer: submission.envelope.producer,
     };
     let candidate_decision = match result.outcome {
         ResultOutcome::Verification(
@@ -243,8 +271,8 @@ pub(super) fn submit_result_locked(
                 candidate,
                 &snapshot.node,
                 &result,
-                submission.author,
-                submission.notes.clone(),
+                submission.envelope.author,
+                submission.envelope.notes.clone(),
             )?)
         }
         ResultOutcome::Verification(VerificationOutcome::Abandoned) | ResultOutcome::Work(_) => {
@@ -253,9 +281,16 @@ pub(super) fn submit_result_locked(
     };
     let (_, pending_attachments) = prepare_node_attachments(store, id, attachments)?;
     write_node_attachments(store, id, &pending_attachments)?;
-    store.write_result(id, &result, &submission.notes)?;
+    store.write_result(id, &result, &submission.envelope.notes)?;
+    if let Some(candidate) = candidate {
+        CandidateStore::new(store).register_locked(candidate)?;
+    }
     if let Some(candidate) = &candidate_decision {
         CandidateStore::new(store).write_prepared_decision(candidate)?;
+    }
+    if !observed_paths.is_empty() {
+        let version = store.result_version(id)?;
+        record_context_observation_locked(store, vcs, id, &version, observed_paths)?;
     }
     mutation.commit(vcs, &format!("linka: result {id}"))?;
     Ok(())
@@ -386,5 +421,46 @@ pub fn submit_captured_execution_with_attachments(
     if let Some(commit) = output_commit {
         vcs.retain_output(&id, commit)?;
     }
+    Ok(())
+}
+
+/// As [`submit_captured_execution_with_attachments`], but atomically records
+/// the candidate that names the captured project output as well.
+#[allow(clippy::too_many_arguments)]
+pub fn submit_captured_execution_with_candidate(
+    store: &Store,
+    vcs: &dyn Vcs,
+    snapshot: WorkSnapshot,
+    output_commit: &str,
+    notes: String,
+    author: Author,
+    producer: Option<ProducerEvidence>,
+    attachments: Vec<NewNodeAttachment>,
+    candidate: NewCandidate,
+    observed_paths: &[String],
+) -> std::result::Result<(), SubmissionError> {
+    let id = snapshot.node.clone();
+    let output = git_artifact(store, output_commit)?;
+    if !vcs.commit_exists(output_commit)? {
+        return Err(SubmissionError::Evaluation(anyhow::anyhow!(
+            "promoted execution output `{output_commit}` is missing from the project repository"
+        )));
+    }
+    submit_result_with_candidate(
+        store,
+        vcs,
+        ResultSubmission {
+            snapshot,
+            outcome: Outcome::Done,
+            output: Some(output),
+            notes,
+            author,
+            producer,
+        },
+        candidate,
+        attachments,
+        observed_paths,
+    )?;
+    vcs.retain_output(&id, output_commit)?;
     Ok(())
 }

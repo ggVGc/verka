@@ -5,41 +5,69 @@
 
 use super::*;
 
-/// Derive all graph state through one fallible evaluation.
-pub fn node_state(store: &Store, vcs: &dyn Vcs, id: &NodeId) -> Result<NodeState> {
-    let mut visiting = std::collections::HashSet::new();
-    node_state_inner(store, vcs, id, &mut visiting)
+/// Per-operation derived-state cache. A view is discarded after each query and
+/// is never used as authority for a mutation.
+pub struct GraphView<'a> {
+    store: &'a Store,
+    vcs: &'a dyn Vcs,
+    cached: std::cell::RefCell<std::collections::HashMap<NodeId, NodeState>>,
+    visiting: std::cell::RefCell<std::collections::HashSet<NodeId>>,
 }
 
-fn node_state_inner(
-    store: &Store,
-    vcs: &dyn Vcs,
-    id: &NodeId,
-    visiting: &mut std::collections::HashSet<NodeId>,
-) -> Result<NodeState> {
-    let (meta, _) = store
-        .read_node(id)
-        .with_context(|| format!("reading definition for `{id}`"))?;
-    if !visiting.insert(id.clone()) {
-        bail!("dependency cycle while deriving state at `{id}`");
+impl<'a> GraphView<'a> {
+    pub fn new(store: &'a Store, vcs: &'a dyn Vcs) -> Self {
+        Self {
+            store,
+            vcs,
+            cached: Default::default(),
+            visiting: Default::default(),
+        }
     }
+    pub fn node_state(&self, id: &NodeId) -> Result<NodeState> {
+        if let Some(state) = self.cached.borrow().get(id).cloned() {
+            return Ok(state);
+        }
+        if !self.visiting.borrow_mut().insert(id.clone()) {
+            bail!("dependency cycle while deriving state at `{id}");
+        }
+        let result = node_state_inner(self, id);
+        self.visiting.borrow_mut().remove(id);
+        if let Ok(state) = &result {
+            self.cached.borrow_mut().insert(id.clone(), state.clone());
+        }
+        result
+    }
+}
+
+/// Derive all graph state through one fallible evaluation.
+pub fn node_state(store: &Store, vcs: &dyn Vcs, id: &NodeId) -> Result<NodeState> {
+    GraphView::new(store, vcs).node_state(id)
+}
+
+fn node_state_inner(view: &GraphView<'_>, id: &NodeId) -> Result<NodeState> {
+    let store = view.store;
+    let vcs = view.vcs;
+    let definition = store
+        .load_definition(id)
+        .with_context(|| format!("reading definition for `{id}`"))?;
+    let meta = definition.meta;
     let result = (|| {
-        let result = store.read_result(id)?;
+        let result = store.load_result(id)?;
         let (outcome, integration, staleness) = match result.as_ref() {
             None => (
                 RecordedOutcome::Open,
                 IntegrationStatus::NotRequired,
                 Vec::new(),
             ),
-            Some((result, _)) => {
-                if !outcome_kind_matches(meta.verifies.is_some(), result.outcome) {
+            Some(result) => {
+                if !outcome_kind_matches(meta.verifies.is_some(), result.meta.outcome) {
                     if meta.verifies.is_some() {
                         bail!("verification node `{id}` has a work outcome");
                     }
                     bail!("ordinary node `{id}` has a verification outcome");
                 }
-                let outcome = RecordedOutcome::from(result.outcome);
-                let candidate = candidate_for_result(store, id, result)?;
+                let outcome = RecordedOutcome::from(result.meta.outcome);
+                let candidate = candidate_for_result(store, id, &result.meta, &result.version)?;
                 (
                     outcome,
                     candidate
@@ -47,7 +75,14 @@ fn node_state_inner(
                         .map(|candidate| candidate.integration(vcs))
                         .transpose()?
                         .unwrap_or(IntegrationStatus::NotRequired),
-                    staleness_for_result(store, vcs, id, result, candidate.as_ref())?,
+                    staleness_for_result(
+                        store,
+                        vcs,
+                        id,
+                        &result.meta,
+                        &result.version,
+                        candidate.as_ref(),
+                    )?,
                 )
             }
         };
@@ -65,7 +100,7 @@ fn node_state_inner(
                 });
                 continue;
             }
-            let dependency_state = node_state_inner(store, vcs, dependency, visiting)?;
+            let dependency_state = view.node_state(dependency)?;
             if !dependency_state.is_complete()
                 || matches!(
                     dependency_state.outcome,
@@ -98,7 +133,6 @@ fn node_state_inner(
             blockers,
         })
     })();
-    visiting.remove(id);
     result
 }
 
@@ -107,10 +141,11 @@ fn staleness_for_result(
     vcs: &dyn Vcs,
     id: &NodeId,
     result: &ResultMeta,
+    result_version: &ResultVersion,
     candidate: Option<&CandidateRecord>,
 ) -> Result<Vec<StalenessReason>> {
     let mut reasons = Vec::new();
-    let current = store.node_version(id)?;
+    let current = store.load_definition(id)?.version;
     if current != result.definition {
         reasons.push(StalenessReason::DefinitionChanged {
             metadata: current.metadata != result.definition.metadata,
@@ -124,22 +159,19 @@ fn staleness_for_result(
             });
             continue;
         }
-        if store.node_version(&consumed.id)? != consumed.definition {
+        if store.load_definition(&consumed.id)?.version != consumed.definition {
             reasons.push(StalenessReason::ConsumedDefinitionChanged {
                 id: consumed.id.clone(),
             });
         }
-        let current_result = store.read_result(&consumed.id)?;
-        let current_version = current_result
-            .is_some()
-            .then(|| store.result_version(&consumed.id))
-            .transpose()?;
+        let current_result = store.load_result(&consumed.id)?;
+        let current_version = current_result.as_ref().map(|loaded| loaded.version.clone());
         if current_version != consumed.result {
             reasons.push(StalenessReason::ConsumedResultChanged {
                 id: consumed.id.clone(),
             });
         }
-        let current_output = current_result.and_then(|(r, _)| r.output);
+        let current_output = current_result.and_then(|loaded| loaded.meta.output);
         if current_output != consumed.output {
             reasons.push(StalenessReason::ConsumedOutputChanged {
                 id: consumed.id.clone(),
@@ -147,11 +179,10 @@ fn staleness_for_result(
         }
     }
     let root = store.project_root();
-    let result_version = store.result_version(id)?;
     let observations = store.read_context_observations(id)?;
     let observed_context = observations
         .iter()
-        .filter(|observation| observation.result == result_version)
+        .filter(|observation| observation.result == *result_version)
         .flat_map(|observation| observation.context.iter());
     for pin in result.context.iter().chain(observed_context) {
         let current = project_file_blob(&root, &pin.path)?;
@@ -193,12 +224,12 @@ fn candidate_for_result(
     store: &Store,
     id: &NodeId,
     result: &ResultMeta,
+    version: &ResultVersion,
 ) -> Result<Option<CandidateRecord>> {
     let Some(artifact) = &result.output else {
         return Ok(None);
     };
-    let version = store.result_version(id)?;
-    CandidateStore::new(store).for_result(id, &version, artifact)
+    CandidateStore::new(store).for_result(id, version, artifact)
 }
 
 pub fn staleness(store: &Store, vcs: &dyn Vcs, id: &NodeId) -> Result<Vec<StalenessReason>> {
@@ -214,9 +245,10 @@ pub fn is_ready(store: &Store, vcs: &dyn Vcs, id: &NodeId) -> Result<bool> {
 }
 
 pub fn ready_nodes(store: &Store, vcs: &dyn Vcs, worker: Option<Author>) -> Result<Vec<NodeId>> {
+    let view = GraphView::new(store, vcs);
     let mut ready = Vec::new();
     for id in store.list_ids()? {
-        if !node_state(store, vcs, &id)?.is_ready() {
+        if !view.node_state(&id)?.is_ready() {
             continue;
         }
         let (meta, _) = store.read_node(&id)?;

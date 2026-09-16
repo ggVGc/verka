@@ -42,10 +42,19 @@ impl CandidateStore<'_> {
     }
 
     pub fn register(&self, vcs: &dyn Vcs, new: NewCandidate) -> Result<CandidateRecord> {
+        let mutation = self.store.mutation_lock(vcs)?;
+        let candidate = self.register_locked(new)?;
+        mutation.commit(vcs, &format!("linka: register candidate {}", candidate.id))?;
+        Ok(candidate)
+    }
+
+    /// Register a candidate while a caller already owns the store mutation
+    /// lock. Used by the checked result writer to keep both facts in one
+    /// commit.
+    pub(crate) fn register_locked(&self, new: NewCandidate) -> Result<CandidateRecord> {
         validate_external(new.external.as_ref())?;
         validate_branch_name(&new.branch)?;
         validate_branch_name(&new.target)?;
-        let mutation = self.store.mutation_lock(vcs)?;
         if let Some(external) = &new.external {
             if let Some(existing) = self.by_external(external)? {
                 if existing.node != new.node
@@ -62,18 +71,19 @@ impl CandidateStore<'_> {
             }
         }
 
-        let (result, _) = self
+        let result = self
             .store
-            .read_result(&new.node)?
+            .load_result(&new.node)?
             .with_context(|| format!("node `{}` has no successful result to register", new.node))?;
-        if result.outcome != crate::ResultOutcome::Work(crate::Outcome::Done) {
+        if result.meta.outcome != crate::ResultOutcome::Work(crate::Outcome::Done) {
             bail!("node `{}` does not have a successful result", new.node);
         }
         let artifact = result
+            .meta
             .output
             .clone()
             .with_context(|| format!("node `{}` result has no project output", new.node))?;
-        let result_version = self.store.result_version(&new.node)?;
+        let result_version = result.version;
         if let Some(existing) = self.for_result(&new.node, &result_version, &artifact)? {
             if existing.branch == new.branch
                 && existing.target == new.target
@@ -99,64 +109,45 @@ impl CandidateStore<'_> {
             state: CandidateState::Pending,
         };
         storage::write_toml(&self.record_path(&candidate.id), &candidate)?;
-        mutation.commit(vcs, &format!("linka: register candidate {}", candidate.id))?;
         Ok(candidate)
     }
 
     pub fn accept(
         &self,
-        vcs: &dyn Vcs,
+        _vcs: &dyn Vcs,
         id: &CandidateId,
         verification: &crate::NodeId,
-        author: Author,
-        notes: String,
+        _author: Author,
+        _notes: String,
     ) -> Result<CandidateRecord> {
-        let mutation = self.store.mutation_lock(vcs)?;
-        let mut candidate = self.load(id)?;
+        let candidate = self.load(id)?;
         match &candidate.state {
             CandidateState::Accepted {
                 verification: existing,
                 ..
-            } if existing == verification => return Ok(candidate),
+            } if existing == verification => Ok(candidate),
             CandidateState::Accepted { .. } => {
                 bail!("candidate `{id}` was accepted by a different verification")
             }
             CandidateState::Rejected { .. } => bail!("candidate `{id}` was already rejected"),
-            CandidateState::Pending => {}
+            CandidateState::Pending => {
+                bail!("candidate `{id}` is pending; submit an accepted verification to decide it")
+            }
         }
-        self.require_current(vcs, &candidate, IntegrationStatus::Pending)?;
-        self.require_verification(
-            vcs,
-            &candidate,
-            verification,
-            crate::VerificationOutcome::Accepted,
-        )?;
-        candidate.state = decided_state(
-            vcs,
-            &candidate,
-            verification,
-            crate::VerificationOutcome::Accepted,
-            author,
-            notes,
-        )?;
-        storage::write_toml(&self.record_path(id), &candidate)?;
-        mutation.commit(vcs, &format!("linka: accept candidate {id}"))?;
-        Ok(candidate)
     }
 
     pub fn reject(
         &self,
-        vcs: &dyn Vcs,
+        _vcs: &dyn Vcs,
         id: &CandidateId,
         verification: &crate::NodeId,
-        author: Author,
+        _author: Author,
         notes: String,
     ) -> Result<CandidateRecord> {
         if notes.trim().is_empty() {
             bail!("rejection requires notes");
         }
-        let mutation = self.store.mutation_lock(vcs)?;
-        let mut candidate = self.load(id)?;
+        let candidate = self.load(id)?;
         match &candidate.state {
             CandidateState::Rejected {
                 notes: existing, ..
@@ -169,29 +160,13 @@ impl CandidateStore<'_> {
                     } if existing == verification
                 ) =>
             {
-                return Ok(candidate)
+                Ok(candidate)
             }
-            CandidateState::Pending => {}
+            CandidateState::Pending => {
+                bail!("candidate `{id}` is pending; submit a rejected verification to decide it")
+            }
             _ => bail!("candidate `{id}` already has a different decision"),
         }
-        self.require_current(vcs, &candidate, IntegrationStatus::Pending)?;
-        self.require_verification(
-            vcs,
-            &candidate,
-            verification,
-            crate::VerificationOutcome::Rejected,
-        )?;
-        candidate.state = decided_state(
-            vcs,
-            &candidate,
-            verification,
-            crate::VerificationOutcome::Rejected,
-            author,
-            notes,
-        )?;
-        storage::write_toml(&self.record_path(id), &candidate)?;
-        mutation.commit(vcs, &format!("linka: reject candidate {id}"))?;
-        Ok(candidate)
     }
 
     /// Fast-forward the accepted target. Git history is the publication record,
@@ -247,43 +222,11 @@ impl CandidateStore<'_> {
         }
         Ok(())
     }
-
-    fn require_verification(
-        &self,
-        vcs: &dyn Vcs,
-        candidate: &CandidateRecord,
-        verification: &crate::NodeId,
-        expected: crate::VerificationOutcome,
-    ) -> Result<()> {
-        let (meta, _) = self.store.read_node(verification)?;
-        if meta.verifies.as_ref() != Some(&candidate.id) {
-            bail!(
-                "verification `{verification}` does not verify candidate `{}`",
-                candidate.id
-            );
-        }
-        let (result, _) = self
-            .store
-            .read_result(verification)?
-            .with_context(|| format!("verification `{verification}` has no result"))?;
-        // `require_exact_candidate_pin` checks the outcome itself.
-        require_exact_candidate_pin(candidate, verification, &result, expected)?;
-        let state = crate::ops::node_state(self.store, vcs, verification)?;
-        if state.currency != crate::Currency::Current {
-            bail!("verification `{verification}` is stale");
-        }
-        Ok(())
-    }
 }
 
 /// The state a candidate takes once `verification` decides it. Both routes to
-/// a decision build it here — the submission path, which holds the deciding
-/// result in hand before it is written, and the standalone accept/reject entry
-/// points, which read a recorded result back — so one place owns the rule that
-/// an acceptance freezes the target's pre-publication commit.
-///
-/// Entry conditions (idempotency, staleness, pin and notes requirements) stay
-/// with the callers: they differ per route.
+/// a decision build it here. Verification submission is the sole caller and
+/// holds the deciding result in hand before either fact is written.
 fn decided_state(
     vcs: &dyn Vcs,
     candidate: &CandidateRecord,

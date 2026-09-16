@@ -210,17 +210,21 @@ pub fn complete(
         store,
         vcs,
         RecordedSubmission {
-            snapshot,
+            envelope: crate::SubmissionEnvelope {
+                snapshot,
+                notes: notes.into(),
+                author,
+                producer: None,
+            },
             outcome: Outcome::Done.into(),
             output: output_commit
                 .as_deref()
                 .map(|commit| git_artifact(store, commit))
                 .transpose()?,
-            notes: notes.into(),
-            author,
-            producer: None,
         },
         Vec::new(),
+        None,
+        &[],
         mutation,
     );
     if let Err(error) = submitted {
@@ -350,6 +354,20 @@ pub fn record_context_observation(
     paths: &[String],
 ) -> Result<usize> {
     let mutation = store.mutation_lock(vcs)?;
+    let added = record_context_observation_locked(store, vcs, id, expected_result, paths)?;
+    if added > 0 {
+        mutation.commit(vcs, &format!("linka: context observation {id}"))?;
+    }
+    Ok(added)
+}
+
+pub(crate) fn record_context_observation_locked(
+    store: &Store,
+    vcs: &dyn Vcs,
+    id: &NodeId,
+    expected_result: &ResultVersion,
+    paths: &[String],
+) -> Result<usize> {
     let Some((result, _)) = store.read_result(id)? else {
         bail!("node `{id}` has no result");
     };
@@ -415,7 +433,6 @@ pub fn record_context_observation(
             context,
         },
     )?;
-    mutation.commit(vcs, &format!("linka: context observation {id}"))?;
     Ok(added)
 }
 

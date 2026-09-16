@@ -15,7 +15,7 @@ use orka::engine::{Engine, ExecutionPolicy, RunProgress};
 use orka::executor::{ExecutionReport, ExecutionSpec};
 use orka::fakes::FakeExecutor;
 use orka::linka_work::LinkaWork;
-use orka::workspace::{CleanupOutcome, GitWorkspaces};
+use orka::workspace::{CleanupOutcome, GitWorkspaces, WorkspaceManager};
 use std::path::Path;
 
 /// Locate a writable mount by its destination inside the environment.
@@ -236,9 +236,7 @@ fn a_full_attempt_lands_a_version_checked_result_from_an_isolated_worktree() {
         },
     )
     .unwrap();
-    let accepted = candidates
-        .accept(listed[0].id.as_str(), &verification, "looks good".into())
-        .unwrap();
+    let accepted = candidates.get(listed[0].id.as_str()).unwrap();
     assert_eq!(accepted.integration, linka::IntegrationStatus::Accepted);
     let error = candidates.publish(listed[0].id.as_str()).unwrap_err();
     assert!(error.to_string().contains("checkout is dirty"), "{error:#}");
@@ -889,8 +887,8 @@ fn recovery_settles_an_executed_attempt_and_a_second_pass_duplicates_nothing() {
 #[test]
 fn recovery_after_linka_accepted_but_before_seal_recognizes_its_own_result() {
     // The crash window: Linka accepted the result but Orka never sealed. The
-    // A naive resubmit would conflict. Recovery must recognize its own result
-    // and finish the missing Linka candidate registration before sealing.
+    // A naive resubmit would conflict. Recovery must recognize the atomic
+    // result/candidate mutation and seal without writing another Linka fact.
     let (_temp, root) = workbench();
     let project = root.join("project");
     std::fs::write(project.join("input.txt"), "input\n").unwrap();
@@ -933,16 +931,20 @@ fn recovery_after_linka_accepted_but_before_seal_recognizes_its_own_result() {
     )
     .unwrap();
 
-    // Linka accepts and captures the result, attributed to this attempt — then
-    // "the crash" happens before candidate registration and Orka sealing.
+    // Linka accepts and captures the result and candidate, attributed to this
+    // attempt — then "the crash" happens before Orka sealing.
+    let validated = workspaces.validate(&ws).unwrap();
     linka
-        .submit_success(
+        .submit_candidate_success(
             &input,
-            &ws.path,
-            &["out.txt".parse().unwrap()],
+            &validated,
+            &workspaces,
+            &id,
             None,
             "done".into(),
             orka::linka_work::producer_evidence(&id, &evidence),
+            Vec::new(),
+            &["input.txt".into()],
         )
         .unwrap();
     assert!(attempts.load(&id).unwrap().seal.is_none(), "not yet sealed");

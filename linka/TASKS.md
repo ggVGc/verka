@@ -381,21 +381,21 @@ Primary code:
 
 Implementation:
 
-- [ ] Inventory callers and distinguish initial review submission, retry after
+- [x] Inventory callers and distinguish initial review submission, retry after
   successful submission, and attempts to decide manually edited/legacy records.
-- [ ] Make checked verification submission the only normal operation that
+- [x] Make checked verification submission the only normal operation that
   changes a candidate from pending to accepted or rejected.
-- [ ] Remove redundant follow-up mutations from Orka's review flow. Preserve
+- [x] Remove redundant follow-up mutations from Orka's review flow. Preserve
   recovery when the store commit succeeded before Orka recorded completion.
-- [ ] Remove standalone decision APIs and UI actions where callers can migrate
+- [x] Remove standalone decision APIs and UI actions where callers can migrate
   together. If compatibility commands remain, make them read-only checks of
   the recorded decision; document that they cannot change author or notes.
-- [ ] Define matching retry identity explicitly: candidate, verification, and
+- [x] Define matching retry identity explicitly: candidate, verification, and
   conclusion must agree. Preserve rejection-note requirements and refuse a
   conflicting decision without writing anything.
-- [ ] Delete validation and decision-building code made unreachable by the
+- [x] Delete validation and decision-building code made unreachable by the
   single writer. Retain integrity checking for hand edits and old records.
-- [ ] Keep publication separate and retain the accepted target's previous
+- [x] Keep publication separate and retain the accepted target's previous
   commit. Update API docs, command help, and `DESIGN.md` where necessary.
 
 Acceptance criteria:
@@ -410,9 +410,9 @@ Acceptance criteria:
 
 Validation:
 
-- [ ] Cover accepted, rejected, abandoned, stale, and wrong-artifact reviews.
-- [ ] Exercise recovery immediately after the verification store commit.
-- [ ] Verify repeated decisions and conflicting retries preserve stored bytes
+- [x] Cover accepted, rejected, abandoned, stale, and wrong-artifact reviews.
+- [x] Exercise recovery immediately after the verification store commit.
+- [x] Verify repeated decisions and conflicting retries preserve stored bytes
   and commit count. Run Linka, Linka TUI, Orka, and affected Orka frontend tests.
 
 Dependencies: none; keep the public submission changes compatible with S5.
@@ -433,33 +433,33 @@ Primary code:
 
 Implementation:
 
-- [ ] Extend the submission envelope from S5 with optional candidate details
+- [x] Extend the submission envelope from S5 with optional candidate details
   and producer-neutral observed project paths. Keep Orka attempt interpretation
   and access-journal parsing in Orka.
-- [ ] Resolve observed identities from the frozen project input revision,
+- [x] Resolve observed identities from the frozen project input revision,
   validate normalized paths, and deduplicate them with declared context. Retain
   the existing handling of node-output paths and absent observed paths unless
   a separately documented correctness change is needed.
-- [ ] Keep discovered context distinct from the original frozen snapshot:
+- [x] Keep discovered context distinct from the original frozen snapshot:
   do not pretend these paths were declared before execution. Validate their
   currency under the submission lock using an explicit comparison policy;
   handle paths also modified by the submitted output deliberately.
-- [ ] Prepare and validate result, attachments, and candidate before the first
+- [x] Prepare and validate result, attachments, and candidate before the first
   store write. Compute the candidate's exact result version from the same
   serialized bytes that will be persisted, including optional notes.
-- [ ] Write all store facts under one mutation lock and commit once. Return
+- [x] Write all store facts under one mutation lock and commit once. Return
   enough result/candidate identity for Orka to seal the attempt directly.
-- [ ] Simplify Orka recovery to look up and validate the committed submission
+- [x] Simplify Orka recovery to look up and validate the committed submission
   rather than separately registering candidates and adding observations.
   Detect conflicting external identities rather than silently reusing them.
-- [ ] Audit whether any caller requires genuinely late context observations
+- [x] Audit whether any caller requires genuinely late context observations
   or standalone registration. Remove those write paths only if all supported
   use cases are covered; otherwise keep a narrowly scoped extension API.
-- [ ] Specify compatibility before changing storage. Folding historical
+- [x] Specify compatibility before changing storage. Folding historical
   observation files into results changes result hashes and downstream pins:
   do not rewrite them silently. Prefer a documented legacy-reader transition
   or an explicit migration that accounts for every affected reference.
-- [ ] Update `DESIGN.md` and remove obsolete recovery branches, observation
+- [x] Update `DESIGN.md` and remove obsolete recovery branches, observation
   storage code, and schemas only when compatibility permits.
 
 Acceptance criteria:
@@ -480,14 +480,14 @@ Acceptance criteria:
 
 Validation:
 
-- [ ] Test graph-only, output-producing, failed, and verification submissions.
-- [ ] Test duplicate/invalid context, attachment conflicts, external-identity
+- [x] Test graph-only, output-producing, failed, and verification submissions.
+- [x] Test duplicate/invalid context, attachment conflicts, external-identity
   conflicts, wrong repository artifacts, and stale snapshots before any writes.
-- [ ] Test interruption after artifact capture, during store writes, and after
+- [x] Test interruption after artifact capture, during store writes, and after
   the store commit but before Orka seals the attempt.
-- [ ] Test observed-input changes, output-overlapping reads, and legacy
+- [x] Test observed-input changes, output-overlapping reads, and legacy
   observation records; verify no silent changes to historical result versions.
-- [ ] Run Linka and Orka integration/recovery tests and affected frontend tests.
+- [x] Run Linka and Orka integration/recovery tests and affected frontend tests.
 
 Dependencies: S5; S3 is recommended for exact record-version handling.
 
@@ -505,18 +505,18 @@ Primary code: `src/store.rs`, `src/ops/mod.rs`, `src/ops/state.rs`,
 
 Implementation:
 
-- [ ] Introduce small loaded-definition and loaded-result records containing
+- [x] Introduce small loaded-definition and loaded-result records containing
   parsed metadata, prose, and the version hashes of the exact bytes read.
-- [ ] Hash original bytes rather than reserialized TOML. Preserve the version
+- [x] Hash original bytes rather than reserialized TOML. Preserve the version
   distinction between missing notes and an existing empty notes file.
-- [ ] Centralize optional-result handling: absent metadata and absent notes
+- [x] Centralize optional-result handling: absent metadata and absent notes
   means no result; orphan notes, unsupported schema, parse failures, and I/O
   failures produce contextual errors.
-- [ ] Replace separate reads and hashes in pinning, submission, evaluation,
+- [x] Replace separate reads and hashes in pinning, submission, evaluation,
   and presentation. Retain thin compatibility methods only where useful.
-- [ ] Remove duplicate readers once consumers migrate. Keep paths and the
+- [x] Remove duplicate readers once consumers migrate. Keep paths and the
   current on-disk schema unchanged.
-- [ ] Document that matching parsed content and hashes does not itself make
+- [x] Document that matching parsed content and hashes does not itself make
   a multi-file read atomic against concurrent writers; preserve existing
   mutation-lock boundaries and avoid claiming a stronger snapshot guarantee.
 
@@ -529,11 +529,11 @@ Acceptance criteria:
 
 Validation:
 
-- [ ] Compare hashes for existing fixtures, including TOML comments/formatting,
+- [x] Compare hashes for existing fixtures, including TOML comments/formatting,
   empty notes, absent notes, and non-ASCII prose.
-- [ ] Cover orphan notes, malformed metadata, unsupported schemas, and read
+- [x] Cover orphan notes, malformed metadata, unsupported schemas, and read
   errors. Verify these cannot become open/ready state.
-- [ ] Run Linka tests and compile/test consumers touched by return-type changes.
+- [x] Run Linka tests and compile/test consumers touched by return-type changes.
 
 Dependencies: none; provides the loading foundation for S4.
 
@@ -550,21 +550,21 @@ Primary code: `src/ops/state.rs`, `src/ops/query.rs`,
 
 Implementation:
 
-- [ ] Build an operation-scoped graph view from S3 loaded records, with maps
+- [x] Build an operation-scoped graph view from S3 loaded records, with maps
   for nodes, candidates by source/result, reverse edges, and verifications.
-- [ ] Memoize derived node states within the view. Keep an active traversal
+- [x] Memoize derived node states within the view. Keep an active traversal
   set separate from completed evaluations so cycles remain detectable.
-- [ ] Reuse candidate integration results and repeated backend lookups where
+- [x] Reuse candidate integration results and repeated backend lookups where
   their comparison inputs are identical. Define whether relevant Git refs are
   resolved once per view; do not claim filesystem/Git-wide atomic snapshots.
-- [ ] Route ready listings, settlement traversal, and frontend refresh through
+- [x] Route ready listings, settlement traversal, and frontend refresh through
   one view. Preserve simple one-node query entry points as adapters.
-- [ ] Preserve current error scope deliberately: list commands must report
+- [x] Preserve current error scope deliberately: list commands must report
   per-node failures, and an unrelated malformed record must not silently alter
   the behavior of a query that previously did not read it.
-- [ ] Discard the view after the operation. Create a fresh view for mutation
+- [x] Discard the view after the operation. Create a fresh view for mutation
   revalidation under the lock; never reuse a frontend refresh as write authority.
-- [ ] Remove redundant scanning helpers after migration. Do not add a stored
+- [x] Remove redundant scanning helpers after migration. Do not add a stored
   index, daemon, or persistent cache invalidation mechanism.
 
 Acceptance criteria:
@@ -579,11 +579,11 @@ Acceptance criteria:
 
 Validation:
 
-- [ ] Use diamond and layered shared-dependency graphs to verify evaluation
+- [x] Use diamond and layered shared-dependency graphs to verify evaluation
   reuse; include cycles, missing nodes, malformed records, and candidate errors.
-- [ ] Verify ready/blocked/stale/settled results match existing fixtures.
-- [ ] Change a result and a target ref between views and verify fresh results.
-- [ ] Measure deterministic read/backend-call counts on a representative graph;
+- [x] Verify ready/blocked/stale/settled results match existing fixtures.
+- [x] Change a result and a target ref between views and verify fresh results.
+- [x] Measure deterministic read/backend-call counts on a representative graph;
   avoid flaky wall-clock performance assertions.
 
 Dependencies: S3. Coordinate candidate loading with S2 if both are in progress.
@@ -601,26 +601,26 @@ Primary code: `src/model.rs`, `src/ops/submit.rs`, `src/ops/mutate.rs`,
 
 Implementation:
 
-- [ ] Document a behavior matrix for `complete`, `respond`, `fail`, checked
+- [x] Document a behavior matrix for `complete`, `respond`, `fail`, checked
   work submission, verification submission, and captured execution submission:
   readiness, dirty-tree policy, snapshot origin, lock lifetime, artifact capture,
   retention timing, attachments, and conflict/error reporting.
-- [ ] Introduce a common envelope for snapshot, notes, author, producer, and
+- [x] Introduce a common envelope for snapshot, notes, author, producer, and
   attachments with a typed payload that distinguishes work from verification.
   Verification payloads must not expose project-output fields.
-- [ ] Reuse the current checked writer instead of adding another submission
+- [x] Reuse the current checked writer instead of adding another submission
   engine. Consolidate field conversion and common result preparation.
-- [ ] Extract shared capture/message/artifact preparation only where policies
+- [x] Extract shared capture/message/artifact preparation only where policies
   agree. Keep explicit orchestration at entry points where lock or retention
   timing differs; avoid a collection of loosely related boolean flags.
-- [ ] Keep short-lived completion locked from its clean-store precondition
+- [x] Keep short-lived completion locked from its clean-store precondition
   through capture and result commit, including interrupted-completion checks.
-- [ ] Preserve `respond` on dirty projects and direct `fail` on non-ready work.
+- [x] Preserve `respond` on dirty projects and direct `fail` on non-ready work.
   Frozen long-running submissions retain their existing conflict checks; do
   not force direct failure recording through a ready-only snapshot operation.
-- [ ] Preserve artifact-retention behavior on acceptance, conflict, and capture
+- [x] Preserve artifact-retention behavior on acceptance, conflict, and capture
   failure, and include created output IDs in existing error paths.
-- [ ] Migrate callers and remove redundant payloads/constructors. If serialized
+- [x] Migrate callers and remove redundant payloads/constructors. If serialized
   public submissions change, provide an explicit compatibility policy without
   accidentally changing stored result or snapshot formats.
 
@@ -635,10 +635,10 @@ Acceptance criteria:
 
 Validation:
 
-- [ ] Exercise the behavior matrix, especially dirty-tree responses, blocked
+- [x] Exercise the behavior matrix, especially dirty-tree responses, blocked
   direct failures, stale worker snapshots, graph-only success, and review output
   rejection.
-- [ ] Preserve race/conflict, orphan-output, retention, and attachment-atomicity
+- [x] Preserve race/conflict, orphan-output, retention, and attachment-atomicity
   regressions. Run Linka and Orka tests plus affected frontend checks.
 
 Dependencies: none; coordinate verification changes with S1. Implement before S2.
@@ -656,21 +656,21 @@ and any Orka frontend that independently interprets Linka state.
 
 Implementation:
 
-- [ ] Add a derived workability/classification method on `NodeState` that
+- [x] Add a derived workability/classification method on `NodeState` that
   centralizes presentation precedence. Keep outcome, currency, integration,
   reasons, and blockers accessible as independent information.
-- [ ] Reconcile any disagreement among current helpers, displays, and the
+- [x] Reconcile any disagreement among current helpers, displays, and the
   design truth table before adopting it. Document any necessary correctness
   fix separately from formatting changes, especially stale pending candidates
   and terminal rejected/abandoned verifications.
-- [ ] Reuse the classification in frontends while allowing concise TUI labels,
+- [x] Reuse the classification in frontends while allowing concise TUI labels,
   detailed CLI explanations, different colors, and first-reason formatting.
-- [ ] Do not persist the derived classification or introduce a second source
+- [x] Do not persist the derived classification or introduce a second source
   of graph state. Do not put terminal styling in the graph model.
-- [ ] Extract `clap::Args` groups for repeated notes/notes-file, author, and
+- [x] Extract `clap::Args` groups for repeated notes/notes-file, author, and
   description/file inputs where their rules actually match. Preserve defaults,
   mutual exclusions, requiredness, flags, and command-specific exceptions.
-- [ ] Remove duplicate semantic branches and argument definitions; update help
+- [x] Remove duplicate semantic branches and argument definitions; update help
   text only where needed to explain existing behavior.
 
 Acceptance criteria:
@@ -683,12 +683,12 @@ Acceptance criteria:
 
 Validation:
 
-- [ ] Use a table of meaningful states: current/stale success, failure, pending
+- [x] Use a table of meaningful states: current/stale success, failure, pending
   and accepted candidates, published/rejected candidates, blockers, and every
   verification conclusion. Confirm the chosen precedence and frontend agreement.
-- [ ] Test representative argument combinations and existing parser regressions;
+- [x] Test representative argument combinations and existing parser regressions;
   avoid brittle tests of every help-text line or cosmetic label.
-- [ ] Run Linka and Linka TUI tests and checks for other touched frontends.
+- [x] Run Linka and Linka TUI tests and checks for other touched frontends.
 
 Dependencies: none; consume S4's view when available without requiring it.
 
@@ -706,18 +706,18 @@ Linka, Orka, and their tests/frontends.
 
 Implementation:
 
-- [ ] Confirm all trait bounds, trait-object uses, implementations, and method
+- [x] Confirm all trait bounds, trait-object uses, implementations, and method
   imports across the workspace; include generic bounds, not only `dyn` uses.
-- [ ] Move the existing method contracts onto one object-safe `Vcs` trait.
+- [x] Move the existing method contracts onto one object-safe `Vcs` trait.
   Retain documentation grouped by responsibility within that trait.
-- [ ] Implement it directly for `GitVcs` and `FakeVcs`, removing the marker
+- [x] Implement it directly for `GitVcs` and `FakeVcs`, removing the marker
   trait, capability traits, blanket implementation, and obsolete re-exports.
-- [ ] Migrate caller imports and any test adapters. Document this as a Rust API
+- [x] Migrate caller imports and any test adapters. Document this as a Rust API
   change; keep compatibility aliases only if an actual supported caller needs
   them, with an explicit removal plan.
-- [ ] Preserve all method behavior, the project/workbench repository split,
+- [x] Preserve all method behavior, the project/workbench repository split,
   execution-context wiring, and fake-backend error injection.
-- [ ] Update architecture documentation to explain the single injectable seam.
+- [x] Update architecture documentation to explain the single injectable seam.
   Do not remove Git publication behavior or add speculative backend support.
 
 Acceptance criteria:
@@ -730,9 +730,9 @@ Acceptance criteria:
 
 Validation:
 
-- [ ] Compile and test the workspace consumers to catch trait-method resolution
+- [x] Compile and test the workspace consumers to catch trait-method resolution
   changes; run Linka and Orka tests and relevant clippy checks.
-- [ ] Reuse existing fake-backend and real-Git tests for capture, drift, retention,
+- [x] Reuse existing fake-backend and real-Git tests for capture, drift, retention,
   store history, context identity, and compare-and-swap publication. Add tests
   only if migration exposes an uncovered behavior; do not mirror trait layout.
 

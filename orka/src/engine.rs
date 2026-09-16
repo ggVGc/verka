@@ -463,10 +463,15 @@ impl Engine<'_> {
                 // stale-looking) node.
                 if let Some(recorded) = self.linka.result_by_attempt(input.node(), &attempt.0)? {
                     let candidate = match (&recorded.outcome, &recorded.output_commit) {
-                        (linka::Outcome::Done, Some(output)) => Some(
-                            self.linka
-                                .register_candidate(input, workspace, attempt, output)?,
-                        ),
+                        (linka::Outcome::Done, Some(output)) => {
+                            Some(self.linka.recover_candidate(
+                                input,
+                                workspace,
+                                attempt,
+                                output,
+                                &recorded.version,
+                            )?)
+                        }
                         _ => None,
                     };
                     let sealed = match recorded.outcome {
@@ -475,12 +480,14 @@ impl Engine<'_> {
                         },
                         linka::Outcome::Failed => SealedState::FailureRecorded,
                     };
-                    self.record_observed_context(
-                        input,
-                        workspace,
-                        &recorded.version,
-                        &access_summary,
-                    )?;
+                    if recorded.outcome == linka::Outcome::Failed {
+                        self.record_observed_context(
+                            input,
+                            workspace,
+                            &recorded.version,
+                            &access_summary,
+                        )?;
+                    }
                     self.attempts.seal(attempt, sealed.clone())?;
                     return Ok((sealed, backend_failed, candidate));
                 }
@@ -509,6 +516,7 @@ impl Engine<'_> {
                             notes,
                             producer,
                             evidence,
+                            &access_summary.distinct_paths(),
                         )?;
                         (settled, true, candidate)
                     }
@@ -532,7 +540,10 @@ impl Engine<'_> {
                     Settled::Accepted { .. } => SealedState::FailureRecorded,
                     Settled::Conflict(conflicts) => SealedState::StaleAtSubmit { conflicts },
                 };
-                if accepted {
+                // Successful output submissions carry observations in their
+                // single Linka mutation. Failed evidence has no candidate
+                // submission envelope, so it retains the explicit follow-up.
+                if accepted && !succeeded {
                     let recorded = self
                         .linka
                         .result_by_attempt(input.node(), &attempt.0)?

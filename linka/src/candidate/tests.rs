@@ -227,7 +227,9 @@ fn abandoned_verification_is_terminal_but_cannot_decide_the_candidate() {
         )
         .unwrap_err();
     assert!(
-        accept_error.to_string().contains("abandoned, not accepted"),
+        accept_error
+            .to_string()
+            .contains("submit an accepted verification"),
         "{accept_error:#}"
     );
     let reject_error = candidates
@@ -240,7 +242,9 @@ fn abandoned_verification_is_terminal_but_cannot_decide_the_candidate() {
         )
         .unwrap_err();
     assert!(
-        reject_error.to_string().contains("abandoned, not rejected"),
+        reject_error
+            .to_string()
+            .contains("submit a rejected verification"),
         "{reject_error:#}"
     );
     assert_eq!(
@@ -313,6 +317,10 @@ fn candidate_branch_is_informational_after_registration() {
         crate::VerificationOutcome::Accepted,
     );
 
+    let record_path = CandidateStore::new(&store).record_path(&candidate.id);
+    let before = fs::read(&record_path).unwrap();
+    let commits = *vcs.store_commits.borrow();
+
     CandidateStore::new(&store)
         .accept(
             &vcs,
@@ -322,6 +330,8 @@ fn candidate_branch_is_informational_after_registration() {
             String::new(),
         )
         .unwrap();
+    assert_eq!(fs::read(record_path).unwrap(), before);
+    assert_eq!(*vcs.store_commits.borrow(), commits);
 }
 
 #[test]

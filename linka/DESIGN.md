@@ -149,10 +149,26 @@ operations to people and scripts. An agent-facing protocol may adapt those
 operations, but protocol-specific concepts do not enter the graph model.
 
 Orka consumes a narrow graph interface for reading ready work, freezing
-versioned input, submitting version-checked work and verification results, and
-registering candidate outputs. Nota may use an optional adapter to fill
+versioned input, and submitting version-checked work and verification results.
+An output-producing submission may register its candidate, attachments, and
+observed context in that same store mutation; it never needs a second decision
+write after a verification submission succeeds. Nota may use an optional adapter to fill
 verification descriptions and evidence; Linka interprets only the
 accepted/rejected/abandoned conclusion, never Nota's own schema.
+
+The library has one injectable `Vcs` seam. Its methods are grouped in the API
+documentation by store history, artifacts, context identity, repository
+identity, and named references, but applications and tests provide one backend
+for an operation. `GitVcs` is the production backend and the in-memory fake is
+used by graph tests; this is an abstraction boundary, not a promise of a
+multi-backend capability hierarchy.
+
+Definition and result loaders parse a record and calculate its version from the
+same bytes. An absent pair of result files is an absent result; a partial pair
+or malformed record is an error. This makes a single record read internally
+self-consistent, but it is not a filesystem-wide snapshot: concurrent external
+writers may still change another record between reads. Mutation revalidation
+therefore always creates a fresh view under the store lock.
 
 Long-running workers must call `snapshot_work` before starting and
 `submit_result` when finished. Submission compares the frozen definition,
@@ -160,6 +176,30 @@ dependency, lineage, context, readiness, and previous-result versions under the
 store mutation lock. `complete` is only a short-lived convenience that performs
 that snapshot/capture/submission sequence without handing control back to a
 caller between its steps.
+
+Submission entry points intentionally retain these policy differences:
+
+| entry point | input snapshot | readiness | project-tree policy | output/retention |
+|---|---|---|---|---|
+| `complete` | captured while locked | required | clean except declared outputs | captures and retains after acceptance |
+| `respond` | captured while locked | required | dirty tree allowed | no output |
+| `fail` | current pins while locked | may record blocked work | dirty tree allowed | no output |
+| checked work submission | caller-frozen | revalidated | caller owns execution tree | supplied artifact retained after acceptance |
+| verification submission | caller-frozen | revalidated | no project output | atomically records decision |
+| captured execution submission | caller-frozen | revalidated | execution tree is checked before capture | capture precedes validation; retention follows acceptance |
+
+Attachments, an optional candidate, and discovered context are prepared as one
+checked submission and committed with its result. Discovered paths describe
+what execution actually read; they do not retroactively become declared inputs
+of the frozen snapshot. They are identified at the frozen revision and checked
+under the mutation lock. Candidate publication and artifact capture/import are
+separate project-repository operations.
+
+Historical `observations/*.toml` files remain a supported read format. They are
+not folded into old `result.toml` files because doing so would change result
+versions and invalidate downstream pins. The narrow late-observation writer is
+retained for result-only and failed legacy producers; new output-producing Orka
+submissions write observations in their single atomic store commit.
 
 ## Non-goals
 

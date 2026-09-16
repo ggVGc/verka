@@ -269,11 +269,10 @@ impl<'a> Reviews<'a> {
             .map(|entry| entry.commit.as_str())
             .unwrap_or(&review.marker)
             .to_string();
-        if let Some((result, notes)) = self.linka.read_result(verification)? {
+        if let Some((result, _)) = self.linka.read_result(verification)? {
             if result.outcome == linka::ResultOutcome::Verification(outcome)
                 && matching_result(&result.producer, &record, outcome, &head)
             {
-                self.apply_candidate_decision(&record, outcome, result.author, Some(&notes))?;
                 return Ok(FinishOutcome::AlreadySubmitted);
             }
             bail!("verification `{verification}` already has a different result");
@@ -346,35 +345,6 @@ impl<'a> Reviews<'a> {
         let provider = GitProvider::new(self.linka.project_root());
         let review = nota::start_review(&provider, &record.subject, Some(&record.branch))?;
         Ok(Started { record, review })
-    }
-
-    fn apply_candidate_decision(
-        &self,
-        record: &ReviewRecord,
-        outcome: VerificationOutcome,
-        author: Author,
-        notes: Option<&str>,
-    ) -> Result<()> {
-        let notes = notes.unwrap_or_default().to_string();
-        let candidates = CandidateStore::new(self.linka);
-        let vcs = GitVcs::for_store(self.linka);
-        match outcome {
-            VerificationOutcome::Accepted => {
-                candidates.accept(&vcs, &record.candidate, &record.verification, author, notes)?;
-            }
-            VerificationOutcome::Rejected => {
-                let notes = if notes.trim().is_empty() {
-                    "Review rejected the candidate.".into()
-                } else {
-                    notes
-                };
-                candidates.reject(&vcs, &record.candidate, &record.verification, author, notes)?;
-            }
-            VerificationOutcome::Abandoned => {
-                bail!("an abandoned verification cannot decide a candidate")
-            }
-        }
-        Ok(())
     }
 
     fn validate_binding(&self, record: &ReviewRecord) -> Result<()> {

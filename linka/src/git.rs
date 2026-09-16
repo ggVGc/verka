@@ -10,9 +10,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::store::Store;
-use crate::vcs::{ArtifactStore, BranchStore, ContextIdentity, RepositoryIdentity, StoreHistory};
+use crate::vcs::Vcs;
 
-/// Git-backed implementations of Linka's narrow graph capabilities.
+/// Git-backed implementation of Linka's graph VCS seam.
 pub struct GitVcs {
     /// The project repository (`<workbench>/project`): output commits.
     project: PathBuf,
@@ -38,7 +38,7 @@ impl GitVcs {
     }
 }
 
-impl ArtifactStore for GitVcs {
+impl Vcs for GitVcs {
     fn capture(&self, paths: &[String], message: &str) -> Result<String> {
         commit_paths(&self.project, paths, message)
     }
@@ -89,9 +89,7 @@ impl ArtifactStore for GitVcs {
             .status
             .success())
     }
-}
 
-impl ContextIdentity for GitVcs {
     fn head_commit(&self) -> Result<Option<String>> {
         optional(&self.project, &["rev-parse", "--verify", "--quiet", "HEAD"])
     }
@@ -122,9 +120,7 @@ impl ContextIdentity for GitVcs {
             &["rev-parse", "--verify", &format!("{revision}:{path}")],
         )
     }
-}
 
-impl StoreHistory for GitVcs {
     fn require_clean_store(&self, path: &str) -> Result<()> {
         // The store is entirely Linka-owned, so surrounding repository ignore
         // rules must not hide store state from the transaction boundary.
@@ -167,9 +163,7 @@ impl StoreHistory for GitVcs {
         )?;
         Ok(!out.is_empty())
     }
-}
 
-impl RepositoryIdentity for GitVcs {
     fn root_commit(&self) -> Result<Option<String>> {
         root_commit(&self.project)
     }
@@ -177,9 +171,7 @@ impl RepositoryIdentity for GitVcs {
         // Non-zero means "no such remote" — an answer, not an error.
         optional(&self.project, &["remote", "get-url", "origin"])
     }
-}
 
-impl BranchStore for GitVcs {
     fn current_branch(&self) -> Result<Option<String>> {
         optional(
             &self.project,

@@ -85,6 +85,7 @@ pub fn unsettled(store: &Store, vcs: &dyn Vcs, id: &NodeId) -> Result<Vec<String
         }
     }
 
+    let view = GraphView::new(store, vcs);
     let mut reasons = Vec::new();
     let mut seen = std::collections::HashSet::new();
     let mut queue = std::collections::VecDeque::from([id.clone()]);
@@ -92,7 +93,7 @@ pub fn unsettled(store: &Store, vcs: &dyn Vcs, id: &NodeId) -> Result<Vec<String
         if !seen.insert(node.clone()) {
             continue;
         }
-        let state = node_state(store, vcs, &node)?;
+        let state = view.node_state(&node)?;
         if !state.is_complete() {
             if state.is_awaiting_integration() {
                 reasons.push(format!("{node}: awaiting candidate integration"));

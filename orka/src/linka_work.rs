@@ -17,9 +17,9 @@ use crate::input::{AttemptInput, DependencyContext};
 use anyhow::{bail, Context, Result};
 use linka::ops::{self, SubmissionError};
 use linka::{
-    ArtifactStore, Author, BranchStore, CandidateId, CandidateStore, ConsumedNode,
-    ExternalIdentity, GitVcs, NewCandidate, NewNodeAttachment, NodeId, Outcome, ProducerEvidence,
-    ProjectPath, ResultVersion, Store, SubmissionConflict,
+    Author, CandidateId, CandidateStore, ConsumedNode, ExternalIdentity, GitVcs, NewCandidate,
+    NewNodeAttachment, NodeId, Outcome, ProducerEvidence, ProjectPath, ResultVersion, Store,
+    SubmissionConflict, Vcs,
 };
 use std::path::{Path, PathBuf};
 
@@ -340,6 +340,7 @@ impl<'a> LinkaWork<'a> {
         notes: String,
         producer: ProducerEvidence,
         evidence: Vec<AttemptEvidencePart>,
+        observed_paths: &[String],
     ) -> Result<(Settled, Option<CandidateId>)> {
         let private_vcs = self.vcs_at(&workspace.workspace.path);
         let title = message.unwrap_or_else(|| linka::title_of(&input.description).to_string());
@@ -363,26 +364,57 @@ impl<'a> LinkaWork<'a> {
         }
 
         let project_vcs = self.vcs();
-        let settled = classify(
-            ops::submit_captured_execution_with_attachments(
-                self.store,
-                &project_vcs,
-                input.snapshot.clone(),
-                output_commit.as_deref(),
-                notes,
-                Author::Machine,
-                Some(producer.clone()),
-                Self::evidence_attachments(attempt, evidence),
-            )
-            .map(|_| output_commit.clone()),
-        )?;
+        let settled = if let Some(output) = output_commit.as_deref() {
+            classify(
+                ops::submit_captured_execution_with_candidate(
+                    self.store,
+                    &project_vcs,
+                    input.snapshot.clone(),
+                    output,
+                    notes,
+                    Author::Machine,
+                    Some(producer.clone()),
+                    Self::evidence_attachments(attempt, evidence),
+                    NewCandidate {
+                        node: input.node().clone(),
+                        branch: workspace.workspace.branch.clone(),
+                        target: input.target_branch.clone(),
+                        external: Some(ExternalIdentity {
+                            namespace: "orka".into(),
+                            id: attempt.0.clone(),
+                        }),
+                    },
+                    observed_paths,
+                )
+                .map(|_| output_commit.clone()),
+            )?
+        } else {
+            classify(
+                ops::submit_captured_execution_with_attachments(
+                    self.store,
+                    &project_vcs,
+                    input.snapshot.clone(),
+                    None,
+                    notes,
+                    Author::Machine,
+                    Some(producer.clone()),
+                    Self::evidence_attachments(attempt, evidence),
+                )
+                .map(|_| None),
+            )?
+        };
         match settled {
             Settled::Accepted {
                 output_commit: Some(output_commit),
                 ..
             } => {
-                let candidate =
-                    self.register_candidate(input, &workspace.workspace, attempt, &output_commit)?;
+                let candidate = CandidateStore::new(self.store)
+                    .by_external(&ExternalIdentity {
+                        namespace: "orka".into(),
+                        id: attempt.0.clone(),
+                    })?
+                    .context("atomic candidate submission did not create its candidate")?
+                    .id;
                 Ok((
                     Settled::Accepted {
                         output_commit: Some(output_commit),
@@ -420,34 +452,35 @@ impl<'a> LinkaWork<'a> {
         ))
     }
 
-    /// Idempotently attach an accepted project output to Linka's candidate
-    /// protocol. The Orka attempt is an opaque external identity; Linka never
-    /// interprets it.
-    pub fn register_candidate(
+    /// Recover the candidate written by the atomic result submission and
+    /// verify that its immutable identity still matches the attempt being
+    /// sealed. Recovery is deliberately read-only: a missing or conflicting
+    /// candidate is store damage, not permission to synthesize another fact.
+    pub fn recover_candidate(
         &self,
         input: &AttemptInput,
         workspace: &crate::workspace::PreparedWorkspace,
         attempt: &AttemptId,
         output_commit: &str,
+        result: &linka::ResultVersion,
     ) -> Result<CandidateId> {
-        let candidate = CandidateStore::new(self.store).register(
-            &self.vcs(),
-            NewCandidate {
-                node: input.node().clone(),
-                branch: workspace.branch.clone(),
-                target: input.target_branch.clone(),
-                external: Some(ExternalIdentity {
-                    namespace: "orka".into(),
-                    id: attempt.0.clone(),
-                }),
-            },
-        )?;
-        if candidate.artifact.id != output_commit {
+        let external = ExternalIdentity {
+            namespace: "orka".into(),
+            id: attempt.0.clone(),
+        };
+        let candidate = CandidateStore::new(self.store)
+            .by_external(&external)?
+            .with_context(|| format!("attempt {attempt} has no committed Linka candidate"))?;
+        if candidate.node != *input.node()
+            || candidate.branch != workspace.branch
+            || candidate.target != input.target_branch
+            || candidate.result != *result
+            || candidate.artifact.id != output_commit
+        {
             anyhow::bail!(
-                "Linka candidate {} records {}, expected {}",
+                "Linka candidate {} conflicts with the committed facts for attempt {}",
                 candidate.id,
-                candidate.artifact.id,
-                output_commit
+                attempt
             );
         }
         Ok(candidate.id)

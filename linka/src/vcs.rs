@@ -8,7 +8,14 @@
 //! be unit-tested with no git binary, no repository, and no configured identity.
 
 use anyhow::Result;
-pub trait StoreHistory {
+/// Linka's single injectable version-control seam.
+///
+/// Methods are grouped by the graph responsibility they serve. Keeping them
+/// together reflects the actual operation boundary: every current graph
+/// operation needs the same project and store backend, while tests can replace
+/// the whole seam with [`FakeVcs`].
+pub trait Vcs {
+    // Store history
     /// Require the Linka store path to have no uncommitted changes. The error
     /// identifies the dirty store content so callers can report what must be
     /// resolved.
@@ -18,9 +25,8 @@ pub trait StoreHistory {
 
     /// Whether store history ever recorded `commit` as `node`'s output.
     fn output_was_recorded(&self, path: &str, node: &str, commit: &str) -> Result<bool>;
-}
 
-pub trait ArtifactStore {
+    // Project artifacts
     /// Capture (commit) exactly `paths` in the project repository, returning an
     /// opaque output id — for git, the commit hash, which is itself a content
     /// hash of the change.
@@ -57,24 +63,20 @@ pub trait ArtifactStore {
     /// Used by the deep pairing check to find recorded output commits that a
     /// history rewrite has orphaned.
     fn commit_exists(&self, hash: &str) -> Result<bool>;
-}
 
-pub trait ContextIdentity {
+    // Context identity
     fn head_commit(&self) -> Result<Option<String>>;
     /// The node named by a `Linka-Node` trailer on `commit`, if present.
     fn linka_node(&self, commit: &str) -> Result<Option<String>>;
     fn tree_id(&self, commit: &str) -> Result<String>;
     fn file_blob(&self, path: &str) -> Result<Option<String>>;
     fn file_blob_at(&self, revision: &str, path: &str) -> Result<Option<String>>;
-}
 
-pub trait RepositoryIdentity {
+    // Repository identity
     fn root_commit(&self) -> Result<Option<String>>;
     fn remote_url(&self) -> Result<Option<String>>;
-}
 
-/// Named project-reference operations used by Linka candidates.
-pub trait BranchStore {
+    // Named project references used by candidates.
     fn current_branch(&self) -> Result<Option<String>>;
     fn ref_commit(&self, reference: &str) -> Result<Option<String>>;
     /// Whether `ancestor` is contained in `descendant`'s history.
@@ -87,16 +89,6 @@ pub trait BranchStore {
         expected_previous: &str,
         candidate: &str,
     ) -> Result<bool>;
-}
-
-pub trait Vcs:
-    StoreHistory + ArtifactStore + ContextIdentity + RepositoryIdentity + BranchStore
-{
-}
-impl<
-        T: StoreHistory + ArtifactStore + ContextIdentity + RepositoryIdentity + BranchStore + ?Sized,
-    > Vcs for T
-{
 }
 
 /// In-memory [`Vcs`] for tests. `capture` records the paths and returns `next_id`;
@@ -126,7 +118,7 @@ pub struct FakeVcs {
 }
 
 #[cfg(test)]
-impl ArtifactStore for FakeVcs {
+impl Vcs for FakeVcs {
     fn capture(&self, paths: &[String], _message: &str) -> Result<String> {
         self.captured.borrow_mut().push(paths.to_vec());
         self.files_for
@@ -179,10 +171,7 @@ impl ArtifactStore for FakeVcs {
     fn commit_exists(&self, hash: &str) -> Result<bool> {
         Ok(self.commits.borrow().contains(hash))
     }
-}
 
-#[cfg(test)]
-impl StoreHistory for FakeVcs {
     fn require_clean_store(&self, _path: &str) -> Result<()> {
         let dirty = self.dirty_store.borrow();
         if !dirty.is_empty() {
@@ -202,10 +191,7 @@ impl StoreHistory for FakeVcs {
             .recorded_outputs
             .contains(&(node.to_string(), commit.to_string())))
     }
-}
 
-#[cfg(test)]
-impl ContextIdentity for FakeVcs {
     fn head_commit(&self) -> Result<Option<String>> {
         Ok(self.root.clone())
     }
@@ -224,20 +210,14 @@ impl ContextIdentity for FakeVcs {
             .get(&(revision.into(), path.into()))
             .cloned())
     }
-}
 
-#[cfg(test)]
-impl RepositoryIdentity for FakeVcs {
     fn root_commit(&self) -> Result<Option<String>> {
         Ok(self.root.clone())
     }
     fn remote_url(&self) -> Result<Option<String>> {
         Ok(self.remote.clone())
     }
-}
 
-#[cfg(test)]
-impl BranchStore for FakeVcs {
     fn current_branch(&self) -> Result<Option<String>> {
         Ok(self.branch.clone())
     }
