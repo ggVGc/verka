@@ -1130,8 +1130,8 @@ or Session only changes the client view. Native provider resume attaches a new
 Interaction to an existing stopped Session.
 
 ```text
-styra-server/            # the server application + its client interface library
-  Cargo.toml             # [lib] styra_server  +  [[bin]] styra-server
+styra/server/            # the server application + its client interface library
+  Cargo.toml             # package server: [lib] styra_server + [[bin]] styra-server
   src/
     lib.rs               # curated interface; server modules are pub for the binary
     main.rs              # server binary: a thin CLI shim over daemon::run
@@ -1148,8 +1148,8 @@ styra-server/            # the server application + its client interface library
     git.rs               # host-side enclosing-repository discovery
     worktree.rs          # the linked checkout an interaction works in
 
-styra/                   # the terminal client application
-  Cargo.toml             # [[bin]] styra; depends on styra-server (path)
+styra/tui/               # the terminal client application
+  Cargo.toml             # package tui: [[bin]] styra; depends on server (path)
   src/
     main.rs              # CLI entry, terminal setup/teardown, event loop wiring
     app.rs               # the App struct: what is left when each field below has a module
@@ -1195,19 +1195,19 @@ asks it which entry the panel is pointed at.
 The agent knowledge (`agent`), event decoding (`event`), app-server handshake
 (`appserver`), and rendering (`render`) live in the `genta` library; the server
 crate re-exports them, and the client crate reaches the event vocabulary,
-`render`, and `agent::SandboxLayout` through `styra-server`'s interface rather
+`render`, and `agent::SandboxLayout` through the `server` crate's interface rather
 than depending on `genta` or `driva` directly.
 
-The `styra-server` library deliberately exposes only what a client needs to
+The `server` library deliberately exposes only what a client needs to
 speak the API — `api`, `Client`, the `types` vocabulary, `paths`, and the
 re-exported event/render surface. Its session-runner modules (`server`,
 `interaction`, `journal`) are `pub` because the `styra-server` binary drives them,
 but they are not part of the interface the client depends on. A headless client
-example lives under `styra-server/examples/`.
+example lives under `styra/server/examples/`.
 
-Dependencies: `styra-server` depends on `driva` and `genta` (path),
-`serde` / `serde_json`, `clap`, and `anyhow`; `styra` depends on
-`styra-server` (path), `ratatui` with a `crossterm` backend, `clap`, and
+Dependencies: the `server` crate depends on `driva` and `genta` (path),
+`serde` / `serde_json`, `clap`, and `anyhow`; the `tui` crate depends on
+`server` (path), `ratatui` with a `crossterm` backend, `clap`, and
 `anyhow` — matching the suite's existing choices.
 
 ## Command-line surface

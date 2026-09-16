@@ -1,5 +1,5 @@
 [package]
-name = "styra"
+name = "tui"
 version.workspace = true
 edition.workspace = true
 description = "A terminal interface for interactive, isolated agent sessions"
@@ -19,6 +19,6 @@ crossterm.workspace = true
 libc.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-styra-server.workspace = true
-styra-protocol.workspace = true
+server.workspace = true
+protocol.workspace = true
 unicode-width.workspace = true

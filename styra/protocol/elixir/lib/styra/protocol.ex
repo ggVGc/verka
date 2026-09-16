@@ -1,11 +1,11 @@
 # The Styra client/server wire vocabulary, as an Elixir module.
 #
-# Generated from the Serde type definitions in `styra-protocol`; every
+# Generated from the Serde type definitions in `styra/protocol`; every
 # operation, field name, and enum spelling here is read out of the Rust that
 # defines the protocol, so this file cannot describe a protocol the server
 # does not speak. Do not edit it by hand.
 #
-#   cargo run -p styra-protocol --bin styra-codegen -- elixir
+#   cargo run -p protocol --bin styra-codegen -- elixir
 #
 # It carries no transport and no JSON codec, exactly as the Rust crate does
 # not: a request is a plain map for your own encoder to serialise and your
@@ -22,7 +22,7 @@ defmodule Styra.Protocol do
   @moduledoc ~S"""
   The Styra client/server wire vocabulary.
  
-  Generated from the Serde type definitions in `styra-protocol`, so every
+  Generated from the Serde type definitions in `styra/protocol`, so every
   operation, field name, and enum spelling is the one the server speaks.
  
   A request is a plain map; carrying it is the caller's business — one JSON

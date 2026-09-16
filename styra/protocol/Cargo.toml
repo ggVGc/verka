@@ -1,5 +1,5 @@
 [package]
-name = "styra-protocol"
+name = "protocol"
 version.workspace = true
 edition.workspace = true
 description = "Serializable types for the styra-server JSON protocol"
@@ -11,6 +11,10 @@ description = "Serializable types for the styra-server JSON protocol"
 # the `syn` dependency.
 default = ["codegen"]
 codegen = ["dep:syn"]
+
+[lib]
+name = "styra_protocol"
+path = "src/lib.rs"
 
 [[bin]]
 name = "styra-codegen"

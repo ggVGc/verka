@@ -27,7 +27,7 @@ defmodule Styra.MixProject do
   # still only this client and the protocol under it.
   defp deps do
     [
-      {:styra_protocol, path: "../styra-protocol/elixir"},
+      {:styra_protocol, path: "../styra/protocol/elixir"},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false}
     ]
   end

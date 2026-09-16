@@ -65,6 +65,7 @@ presentation layers over that composition; they read Orka's public records and
 services and Linka's public graph API rather than either application's on-disk
 representation directly.
 
-The `styra/` and `styra-server/` pair is a separate application with its own
-[README](styra/README.md); it shares the Driva and Genta leaves but has no
-relationship to Linka, Orka, or Nota. `linka-viz/` depends on nothing here.
+The `styra/` directory (the `tui`, `server`, `cli`, and `protocol` crates) is a
+separate application with its own [README](styra/README.md); it shares the Driva
+and Genta leaves but has no relationship to Linka, Orka, or Nota. `linka-viz/`
+depends on nothing here.

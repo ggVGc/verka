@@ -126,7 +126,7 @@ beside them, so that the protocol has exactly one home — a second copy is the
 drift the generator exists to prevent, whether or not a test would catch it.
 What the clients contribute is a socket and a codec, and each reaches the
 vocabulary the way its language reaches anything: `styra-elixir` declares a
-path dependency on `elixir/`, and `styra-lua`, having no manifest to declare
+path dependency on `elixir/`, and `svara`, having no manifest to declare
 anything in, puts `lua/` on its search path.
 
 Reading the protocol and writing a module are separate halves, so a third

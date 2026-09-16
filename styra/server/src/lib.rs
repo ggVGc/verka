@@ -94,7 +94,7 @@ pub mod protocol;
 pub mod spawn;
 // The JSONL framing both peers carry protocol values over. It belongs to the
 // transport, not to the vocabulary, so it lives here rather than in
-// `styra-protocol`.
+// `styra/protocol`.
 pub mod transport;
 
 pub use client::{Client, InProcessServer};

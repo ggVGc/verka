@@ -77,12 +77,12 @@ fn header(out: &mut String) {
     out.push_str(
         "# The Styra client/server wire vocabulary, as an Elixir module.\n\
          #\n\
-         # Generated from the Serde type definitions in `styra-protocol`; every\n\
+         # Generated from the Serde type definitions in `styra/protocol`; every\n\
          # operation, field name, and enum spelling here is read out of the Rust that\n\
          # defines the protocol, so this file cannot describe a protocol the server\n\
          # does not speak. Do not edit it by hand.\n\
          #\n\
-         #   cargo run -p styra-protocol --bin styra-codegen -- elixir\n\
+         #   cargo run -p protocol --bin styra-codegen -- elixir\n\
          #\n\
          # It carries no transport and no JSON codec, exactly as the Rust crate does\n\
          # not: a request is a plain map for your own encoder to serialise and your\n\
@@ -103,7 +103,7 @@ fn moduledoc(out: &mut String) -> Result<()> {
         "  @moduledoc ~S\"\"\"\n\
          \x20 The Styra client/server wire vocabulary.\n\
          \x20\n\
-         \x20 Generated from the Serde type definitions in `styra-protocol`, so every\n\
+         \x20 Generated from the Serde type definitions in `styra/protocol`, so every\n\
          \x20 operation, field name, and enum spelling is the one the server speaks.\n\
          \x20\n\
          \x20 A request is a plain map; carrying it is the caller's business — one JSON\n\
@@ -578,7 +578,7 @@ mod tests {
     /// Where the Elixir half of the repository lives, found from this crate
     /// rather than from the working directory the test was started in.
     fn styra_elixir() -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../styra-elixir")
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../styra-elixir")
     }
 
     fn generated() -> String {
@@ -594,7 +594,7 @@ mod tests {
             generated(),
             Elixir.generated(),
             "{} is stale; regenerate it with \
-             `cargo run -p styra-protocol --bin styra-codegen -- elixir`",
+             `cargo run -p protocol --bin styra-codegen -- elixir`",
             Elixir.generated_path()
         );
     }

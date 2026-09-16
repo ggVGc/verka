@@ -7,7 +7,7 @@ above this directory by its generator (`../src/codegen`).
 `lib/styra/protocol.ex` is generated. Do not edit it by hand — regenerate it:
 
 ```sh
-cargo run -p styra-protocol --bin styra-codegen -- elixir
+cargo run -p protocol --bin styra-codegen -- elixir
 ```
 
 A test in the crate fails the moment the checked-in file stops matching the
@@ -20,7 +20,7 @@ It lives here, beside the definitions it is generated from, rather than in
 depends on this package:
 
 ```elixir
-{:styra_protocol, path: "../styra-protocol/elixir"}
+{:styra_protocol, path: "../styra/protocol/elixir"}
 ```
 
 and adds the two things this deliberately does not have — a JSON codec and a

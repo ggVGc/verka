@@ -10,10 +10,10 @@ members = [
     "orka",
     "orka-tui",
     "orka-web",
-    "styra",
-    "styra-cli",
-    "styra-protocol",
-    "styra-server",
+    "styra/cli",
+    "styra/protocol",
+    "styra/server",
+    "styra/tui",
 ]
 
 [workspace.package]
@@ -48,5 +48,5 @@ linka-cli = { path = "linka-cli" }
 linka-tui = { path = "linka-tui" }
 orka = { path = "orka" }
 nota = { path = "nota" }
-styra-server = { path = "styra-server" }
-styra-protocol = { path = "styra-protocol" }
+server = { path = "styra/server" }
+protocol = { path = "styra/protocol" }

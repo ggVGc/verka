@@ -4,7 +4,7 @@ defmodule Styra.Protocol.MixProject do
   # The generated protocol library, packaged so it can be depended on rather
   # than copied. Everything under `lib` is written by
   #
-  #   cargo run -p styra-protocol --bin styra-codegen -- elixir
+  #   cargo run -p protocol --bin styra-codegen -- elixir
   #
   # and a test in the crate fails the moment it stops matching the Rust type
   # definitions it is read out of. This file and the README beside it are the

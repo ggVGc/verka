@@ -11,17 +11,17 @@ the command-line program are both written against it.
 | `lua/svara/nvim.lua` | Neovim, as the six fields the API asks a *host* for. |
 | `lua/svara/protocol.lua` | Where the generated `styra.protocol` is found. |
 | `lua/svara/core.lua` | The one-shot `send_message` this plugin began as. |
-| `../styra-protocol/lua/styra/protocol.lua` | **The vocabulary**, generated, living where it is generated from. |
+| `../styra/protocol/lua/styra/protocol.lua` | **The vocabulary**, generated, living where it is generated from. |
 
 ## The vocabulary, which is not here
 
 `styra.protocol` is generated from the Serde type definitions in Rust and lives
-beside them, in `../styra-protocol/lua`. A copy vendored here would be a second
+beside them, in `../styra/protocol/lua`. A copy vendored here would be a second
 home for the protocol, and a second home is where drift starts. Regenerate it
 with
 
 ```sh
-cargo run -p styra-protocol --bin styra-codegen -- lua
+cargo run -p protocol --bin styra-codegen -- lua
 ```
 
 Lua has no manifest to declare that dependency in, so the dependency is a

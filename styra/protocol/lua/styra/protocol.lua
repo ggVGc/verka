@@ -1,11 +1,11 @@
 -- The Styra client/server wire vocabulary, as a Lua module.
 --
--- Generated from the Serde type definitions in `styra-protocol`; every
+-- Generated from the Serde type definitions in `styra/protocol`; every
 -- operation, field name, and enum spelling here is read out of the Rust that
 -- defines the protocol, so this file cannot describe a protocol the server
 -- does not speak. Do not edit it by hand.
 --
---   cargo run -p styra-protocol --bin styra-codegen -- lua
+--   cargo run -p protocol --bin styra-codegen -- lua
 --
 -- It carries no transport and no JSON codec, exactly as the Rust crate does
 -- not: a request is a plain Lua table for your own encoder to serialise and

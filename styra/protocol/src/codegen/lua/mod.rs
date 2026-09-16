@@ -29,8 +29,8 @@ impl Language for Lua {
         "lua"
     }
 
-    /// Inside this crate, not in `styra-lua`, so the protocol has one home.
-    /// Lua has no dependency to declare, so what `styra-lua` points at it with
+    /// Inside this crate, not in `svara`, so the protocol has one home.
+    /// Lua has no dependency to declare, so what `svara` points at it with
     /// is a search path rather than a manifest entry — but it points, and does
     /// not copy.
     fn generated_path(&self) -> &'static str {
@@ -65,12 +65,12 @@ fn header(out: &mut String) {
     out.push_str(
         "-- The Styra client/server wire vocabulary, as a Lua module.\n\
          --\n\
-         -- Generated from the Serde type definitions in `styra-protocol`; every\n\
+         -- Generated from the Serde type definitions in `styra/protocol`; every\n\
          -- operation, field name, and enum spelling here is read out of the Rust that\n\
          -- defines the protocol, so this file cannot describe a protocol the server\n\
          -- does not speak. Do not edit it by hand.\n\
          --\n\
-         --   cargo run -p styra-protocol --bin styra-codegen -- lua\n\
+         --   cargo run -p protocol --bin styra-codegen -- lua\n\
          --\n\
          -- It carries no transport and no JSON codec, exactly as the Rust crate does\n\
          -- not: a request is a plain Lua table for your own encoder to serialise and\n\
@@ -381,10 +381,11 @@ mod tests {
     use crate::protocol::{Contract, Request};
     use std::process::Command;
 
-    /// Where the Lua half of the repository lives, found from this crate
-    /// rather than from the working directory the test was started in.
-    fn styra_lua() -> std::path::PathBuf {
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../styra-lua")
+    /// Where the Lua half of the repository lives — the Svara checkout, found
+    /// from this crate rather than from the working directory the test was
+    /// started in.
+    fn svara() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../svara")
     }
 
     fn generated() -> String {
@@ -400,7 +401,7 @@ mod tests {
             generated(),
             Lua.generated(),
             "{} is stale; regenerate it with \
-             `cargo run -p styra-protocol --bin styra-codegen -- lua`",
+             `cargo run -p protocol --bin styra-codegen -- lua`",
             Lua.generated_path()
         );
     }
@@ -497,20 +498,23 @@ mod tests {
         );
     }
 
-    /// The hand-written half of `styra-lua` — the client helpers and the
-    /// example built on them — is the library's documentation as much as its
-    /// README is, and one that no longer loads documents nothing.
+    /// The hand-written half of Svara — the client helpers and the command
+    /// built on them — is the library's documentation as much as its README
+    /// is, and one that no longer loads documents nothing.
     #[test]
     fn the_lua_client_and_example_load() {
         let Some(lua) = interpreter() else {
             eprintln!("no lua interpreter on PATH; skipping the example");
             return;
         };
-        let root = styra_lua();
+        let root = svara();
         for file in [
-            "styra/client.lua",
-            "styra/json.lua",
-            "examples/styra-ask.lua",
+            "lua/svara/init.lua",
+            "lua/svara/api.lua",
+            "lua/svara/core.lua",
+            "lua/svara/nvim.lua",
+            "lua/svara/protocol.lua",
+            "bin/svara",
         ] {
             let output = Command::new(&lua)
                 .arg("-e")
@@ -526,14 +530,10 @@ mod tests {
         }
     }
 
-    /// The generated library is not in `styra-lua`; it is in this crate, and
-    /// what reaches it is a search path. `loadfile` above only parses, so it
-    /// would not notice a path that no longer resolves — this runs the example
-    /// for real.
-    ///
-    /// With no arguments it prints its usage and exits 2, which it can only do
-    /// after requiring both halves. A broken path is a Lua error and some
-    /// other status entirely.
+    /// The generated library is not in Svara; it is in this crate, and what
+    /// reaches it is a search path. `loadfile` above only parses, so it would
+    /// not notice a path that no longer resolves — this requires the module
+    /// for real, the way `svara.protocol` does when the plugin runs.
     #[test]
     fn the_example_finds_the_protocol_where_it_now_lives() {
         let Some(lua) = interpreter() else {
@@ -541,19 +541,18 @@ mod tests {
             return;
         };
         let output = Command::new(&lua)
-            .arg("examples/styra-ask.lua")
-            .current_dir(styra_lua())
+            .arg("-e")
+            .arg(
+                "package.path = \"lua/?.lua;lua/?/init.lua;\" .. package.path\n\
+                 assert(type(require(\"svara.protocol\")) == \"table\")",
+            )
+            .current_dir(svara())
             .output()
             .expect("the interpreter must run");
-        let complaint = String::from_utf8_lossy(&output.stderr);
-        assert_eq!(
-            output.status.code(),
-            Some(2),
-            "the example did not reach its own usage:\n{complaint}"
-        );
         assert!(
-            complaint.contains("usage: styra-ask.lua"),
-            "expected the usage, got:\n{complaint}"
+            output.status.success(),
+            "svara.protocol does not resolve from the Svara checkout:\n{}",
+            String::from_utf8_lossy(&output.stderr)
         );
     }
 

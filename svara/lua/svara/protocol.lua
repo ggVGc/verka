@@ -1,6 +1,6 @@
 -- Where Svara finds the generated wire vocabulary.
 --
--- `styra.protocol` is generated from the Serde definitions in `styra-protocol`
+-- `styra.protocol` is generated from the Serde definitions in `styra/protocol`
 -- and lives beside them, which is the whole point of generating it: a copy
 -- vendored here would be a second home for the protocol, and a second home is
 -- where drift starts. Lua has no manifest to declare that dependency in, so
@@ -40,7 +40,7 @@ if not protocol then
 end
 
 if not protocol then
-  search(root .. "/../styra-protocol/lua")
+  search(root .. "/../styra/protocol/lua")
   protocol = loaded()
 end
 
@@ -48,8 +48,8 @@ if not protocol then
   error(
     "svara: cannot find the generated styra.protocol module. Put its directory "
       .. "on package.path or Neovim's runtimepath, or set STYRA_PROTOCOL_LUA to "
-      .. "the `lua` directory of the styra-protocol crate (it holds "
-      .. "styra/protocol.lua, and `cargo run -p styra-protocol --bin "
+      .. "the `lua` directory of the styra/protocol crate (it holds "
+      .. "styra/protocol.lua, and `cargo run -p protocol --bin "
       .. "styra-codegen -- lua` regenerates it)."
   )
 end

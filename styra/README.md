@@ -195,8 +195,9 @@ printf '%s\n' '{"operation":"health"}' \
   | socat - UNIX-CONNECT:"$XDG_RUNTIME_DIR/styra/styra.sock"
 ```
 
-The server and its client interface are the `styra-server` crate (library
-`styra_server`); the `styra` TUI is a separate crate depending on it. The Rust
+The server and its client interface are the `server` crate in `styra/server`
+(library `styra_server`, binary `styra-server`); the `styra` TUI is the `tui`
+crate in `styra/tui`, a separate crate depending on it. The Rust
 wire types are in `styra_server::api`, and the blocking client used by the TUI
 is `styra_server::Client`.
 

@@ -8,7 +8,7 @@ actually here is a socket, a codec, and an example.
 |---|---|
 | `lib/styra/client.ex` | The JSON codec and the Unix socket the protocol leaves to its callers. |
 | `examples/styra_ask.exs` | A small client built on both halves. |
-| `{:styra_protocol, path: "../styra-protocol/elixir"}` | **The vocabulary**, generated, living where it is generated from. |
+| `{:styra_protocol, path: "../styra/protocol/elixir"}` | **The vocabulary**, generated, living where it is generated from. |
 
 No dependency needs installing for the client itself: Elixir has carried a
 `JSON` module since 1.18, and OTP speaks Unix sockets natively. `ex_doc` is
@@ -17,17 +17,17 @@ dev-only, for `mix docs`.
 ## The vocabulary, which is not here
 
 `Styra.Protocol` is generated from the Serde type definitions in Rust, and it
-lives beside them — in `../styra-protocol/elixir`, as a package this one
+lives beside them — in `../styra/protocol/elixir`, as a package this one
 depends on. That is the whole point of generating it: a copy checked in here
 would be a second home for the protocol, and a second home is where drift
 starts. Regenerate it with
 
 ```sh
-cargo run -p styra-protocol --bin styra-codegen -- elixir
+cargo run -p protocol --bin styra-codegen -- elixir
 ```
 
 and a test in the crate fails the moment the checked-in package stops matching
-the definitions. See `../styra-protocol/elixir/README.md`.
+the definitions. See `../styra/protocol/elixir/README.md`.
 
 It owns no transport and no JSON codec, exactly as the Rust crate owns neither.
 A request is a plain map; carrying it is somebody's business, and the next
@@ -60,7 +60,7 @@ nullable-but-required field needs no sentinel, unlike the Lua library: a key
 set to `nil` is present, and a key left out is not.
 
 Every `@doc` in the generated module is the doc comment the protocol author
-wrote in Rust, field tables and all. `mix docs` in `../styra-protocol/elixir`
+wrote in Rust, field tables and all. `mix docs` in `../styra/protocol/elixir`
 renders the protocol's own explanation of each of its forty-odd operations;
 `mix docs` here renders this client, since each package documents what it owns.
 
@@ -113,6 +113,6 @@ Nothing in it restates the wire format, and nothing in it opens a socket
 either: it is only the commands, which is what an example should be left as
 once the two halves above exist.
 
-See `../styra-protocol/src/protocol/README.md` for what the operations mean and
-how the transport behaves, and `../styra-lua/` for the same three pieces in
+See `../styra/protocol/src/protocol/README.md` for what the operations mean and
+how the transport behaves, and `../svara/` for the same three pieces in
 Lua.

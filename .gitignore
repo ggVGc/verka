@@ -6,6 +6,6 @@ target/
 .worktrees
 
 # styra runtime session store and stray temp files
-styra/.styra/
-styra-server/.styra/
+styra/tui/.styra/
+styra/server/.styra/
 *.tmp.*

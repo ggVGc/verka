@@ -1,7 +1,7 @@
 //! A deliberately small, script-friendly client for `styra-server`.
 //!
 //! It owns only the Unix-socket JSONL transport; the request and response
-//! vocabulary comes from `styra-protocol`, so this binary stays compatible
+//! vocabulary comes from `styra/protocol`, so this binary stays compatible
 //! with the server without depending on its implementation crate.
 
 use anyhow::{bail, Context, Result};

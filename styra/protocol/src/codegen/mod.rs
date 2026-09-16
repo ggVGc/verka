@@ -38,24 +38,24 @@ use anyhow::{bail, Result};
 /// the loudest and cheapest moment to find out.
 pub const SOURCES: &[(&str, &str)] = &[
     (
-        "styra-protocol/src/protocol/mod.rs",
+        "styra/protocol/src/protocol/mod.rs",
         include_str!("../protocol/mod.rs"),
     ),
     (
-        "styra-protocol/src/protocol/types.rs",
+        "styra/protocol/src/protocol/types.rs",
         include_str!("../protocol/types.rs"),
     ),
     (
         "genta/src/agent.rs",
-        include_str!("../../../genta/src/agent.rs"),
+        include_str!("../../../../genta/src/agent.rs"),
     ),
     (
         "genta/src/event.rs",
-        include_str!("../../../genta/src/event.rs"),
+        include_str!("../../../../genta/src/event.rs"),
     ),
     (
         "driva/src/lib.rs",
-        include_str!("../../../driva/src/lib.rs"),
+        include_str!("../../../../driva/src/lib.rs"),
     ),
 ];
 
