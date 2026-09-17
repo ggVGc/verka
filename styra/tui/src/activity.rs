@@ -23,7 +23,164 @@ fn unix_now_ms() -> u64 {
         .unwrap_or_default()
 }
 
-/// The session's lifecycle as the operator sees it.
+/// The plan window that refused an interaction's work, as much of it as an
+/// operator needs to read off a status line: which window, and when it is
+/// expected back.
+///
+/// A trimmed [`styra_protocol::QuotaEvent`] rather than the reading itself.
+/// The reading is a measurement taken at a moment — utilization, the session
+/// that saw it, when it was seen — and none of that is what a status means by
+/// "rate limited": that is the window and the wait.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RateLimit {
+    /// The window as the provider names it (`five_hour`) or as its length
+    /// (`1h`, `7d`).
+    pub window: String,
+    /// When the window is expected to allow work again, in epoch
+    /// milliseconds. `None` when the provider refused without saying — a wait
+    /// with no end to name.
+    pub resets_at_ms: Option<u64>,
+}
+
+impl From<&styra_protocol::QuotaEvent> for RateLimit {
+    fn from(reading: &styra_protocol::QuotaEvent) -> Self {
+        Self {
+            window: reading.window.clone(),
+            resets_at_ms: reading.resets_at_ms,
+        }
+    }
+}
+
+/// Why a live agent is sitting idle rather than working.
+///
+/// Every one of these leaves the same screen — an agent that takes messages
+/// and is not using one — but they are not the same situation to be in, and
+/// the difference is exactly what the operator would otherwise have to
+/// reconstruct from the log: a turn that finished said what it found, a turn
+/// they interrupted stopped halfway through it, and a turn a plan window
+/// refused never ran at all.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum IdleReason {
+    /// The agent finished its turn and is waiting for the next message. This
+    /// is also how an agent that ended its turn with a question for the
+    /// operator arrives here: asking and finishing are one event on the wire,
+    /// so the distinction is in what the last message says, not in the state.
+    TurnComplete,
+    /// The operator interrupted the running turn (`s`). The agent stopped
+    /// where it had got to and still takes messages.
+    Interrupted,
+    /// The turn ended in an error the agent itself survived — distinct from
+    /// [`Status::Ended`], where the process is gone.
+    Failed { message: String },
+    /// A plan window refused the work. The agent is alive, but nothing this
+    /// interaction sends will run until the window turns over.
+    RateLimited(RateLimit),
+    /// The background work this interaction was waiting on finished, leaving
+    /// nothing running behind it. Reached from [`Status::Background`] rather
+    /// than from a turn.
+    BackgroundFinished,
+    /// The server reported the interaction as idle without saying why — what a
+    /// client adopts when it attaches to an interaction someone else started.
+    Reported,
+}
+
+impl IdleReason {
+    /// The reason as a status-line fragment, or `None` where naming it would
+    /// add nothing: the ordinary end of a turn is what "idle" already means,
+    /// and a reason the server never sent cannot be stated.
+    pub fn label(&self) -> Option<String> {
+        match self {
+            IdleReason::TurnComplete | IdleReason::Reported => None,
+            IdleReason::Interrupted => Some("interrupted".into()),
+            IdleReason::Failed { .. } => Some("after an error".into()),
+            IdleReason::RateLimited(limit) => Some(format!("rate limited ({})", limit.window)),
+            IdleReason::BackgroundFinished => Some("background work finished".into()),
+        }
+    }
+}
+
+/// Why an interaction is stopped: no agent behind it that takes messages,
+/// though the Session it served can be resumed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StopReason {
+    /// The operator paused the interaction (`S`): the agent was told to stop
+    /// and the queued messages were cleared.
+    Paused,
+    /// A plan window refused the work and the Session is not waiting it out,
+    /// so the interaction was stopped rather than left holding a process that
+    /// cannot run anything.
+    RateLimited(RateLimit),
+    /// The server still lists the interaction, but its agent no longer accepts
+    /// messages — a stale record a client must treat as stopped rather than
+    /// queue against.
+    NotAccepting,
+}
+
+impl StopReason {
+    /// The reason as a status-line fragment. Always worth naming — unlike
+    /// idling, stopping is never just what a session does next.
+    pub fn label(&self) -> String {
+        match self {
+            StopReason::Paused => "you paused it".into(),
+            StopReason::RateLimited(limit) => format!("rate limited ({})", limit.window),
+            StopReason::NotAccepting => "no longer accepting messages".into(),
+        }
+    }
+}
+
+/// Why the agent process is gone.
+///
+/// The exit code and error text on [`Status::Ended`] say what the process
+/// reported; this says what happened to it, which the two numbers cannot: a
+/// process the operator stopped and a process that exited on its own both
+/// leave `Some(0)` behind.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EndReason {
+    /// The agent exited on its own, having been asked for nothing more.
+    Completed,
+    /// It exited non-zero, or the server reported an error with it.
+    Failed,
+    /// It ended because the operator stopped the interaction.
+    Stopped,
+    /// It ended and the server did not say why.
+    Unknown,
+}
+
+impl EndReason {
+    /// What an [`InteractionEnd`](styra_protocol::InteractionEnd) alone
+    /// implies, for the endings nobody attributed: an error or a non-zero exit
+    /// is a failure, a clean exit is a completion.
+    ///
+    /// A caller that knows better — the operator's own stop, which the ending
+    /// only carries out — names its reason rather than going through here.
+    pub fn infer(exit_code: Option<i32>, error: Option<&str>) -> Self {
+        match (exit_code, error) {
+            (_, Some(_)) => EndReason::Failed,
+            (Some(0), None) => EndReason::Completed,
+            (Some(_), None) => EndReason::Failed,
+            (None, None) => EndReason::Unknown,
+        }
+    }
+
+    pub fn label(&self) -> Option<String> {
+        match self {
+            EndReason::Completed | EndReason::Unknown => None,
+            EndReason::Failed => Some("failed".into()),
+            EndReason::Stopped => Some("you stopped it".into()),
+        }
+    }
+}
+
+/// The session's lifecycle as the operator sees it, and how it got there.
+///
+/// The states an interaction rests in carry the reason it came to rest: those
+/// are the ones an operator walks up to and has to make sense of, and "idle"
+/// or "stopped" on its own does not distinguish a finished turn from an
+/// interrupted one, or a pause from a spent plan window. The states it passes
+/// through do not: [`Status::Pending`] has one cause (nothing has been
+/// launched yet), [`Status::Running`] has one (a message is being worked on),
+/// and [`Status::Background`] states its own reason — the background work is
+/// why it is not plain idle.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Status {
     /// No agent process has been launched yet; it starts on the operator's
@@ -31,28 +188,67 @@ pub enum Status {
     Pending,
     /// The agent is working.
     Running,
-    /// A turn completed; the agent is idle, awaiting input.
-    Idle,
+    /// The agent takes messages and is not using one; the reason says what
+    /// left it there.
+    Idle(IdleReason),
     /// The agent is idle, but a Claude background task is still running.
     Background,
-    /// The operator stopped the session; the process may still be winding down.
-    Stopped,
+    /// No agent behind this interaction that takes messages; the process may
+    /// still be winding down, and the Session can be resumed.
+    Stopped(StopReason),
     /// The agent process ended.
     Ended {
         exit_code: Option<i32>,
         error: Option<String>,
+        reason: EndReason,
     },
 }
 
 impl Status {
+    /// The terminal status an [`InteractionEnd`](styra_protocol::InteractionEnd)
+    /// describes, with its reason read off the ending itself.
+    pub fn ended(exit_code: Option<i32>, error: Option<String>) -> Self {
+        let reason = EndReason::infer(exit_code, error.as_deref());
+        Status::Ended {
+            exit_code,
+            error,
+            reason,
+        }
+    }
+
+    pub fn is_idle(&self) -> bool {
+        matches!(self, Status::Idle(_))
+    }
+
+    /// Why the session is in this state, as a fragment to hang off the label,
+    /// or `None` where the state is its own explanation.
+    pub fn reason_label(&self) -> Option<String> {
+        match self {
+            Status::Pending | Status::Running | Status::Background => None,
+            Status::Idle(reason) => reason.label(),
+            Status::Stopped(reason) => Some(reason.label()),
+            Status::Ended { reason, .. } => reason.label(),
+        }
+    }
+
     pub fn label(&self) -> String {
         match self {
             Status::Pending => "not started".into(),
             Status::Running => "running".into(),
-            Status::Idle => "idle".into(),
+            Status::Idle(reason) => match reason.label() {
+                Some(why) => format!("idle · {why}"),
+                None => "idle".into(),
+            },
             Status::Background => "idle · background work running".into(),
-            Status::Stopped => "stopped".into(),
+            Status::Stopped(reason) => format!("stopped · {}", reason.label()),
             Status::Ended { error: Some(_), .. } => "failed".into(),
+            // An ending the operator asked for is named as such rather than by
+            // its exit code: they know the agent exited, and `ended (0)` only
+            // invites them to wonder what happened to it.
+            Status::Ended {
+                reason: EndReason::Stopped,
+                ..
+            } => "ended · you stopped it".into(),
             Status::Ended {
                 exit_code: Some(code),
                 ..
@@ -72,9 +268,9 @@ impl Status {
         match self {
             Status::Pending => '.',
             Status::Running => '>',
-            Status::Idle => 'o',
+            Status::Idle(_) => 'o',
             Status::Background => '*',
-            Status::Stopped => '#',
+            Status::Stopped(_) => '#',
             Status::Ended { error: Some(_), .. } => '!',
             Status::Ended { .. } => 'x',
         }
@@ -83,15 +279,23 @@ impl Status {
     pub fn is_active(&self) -> bool {
         matches!(
             self,
-            Status::Pending | Status::Running | Status::Idle | Status::Background | Status::Stopped
+            Status::Pending
+                | Status::Running
+                | Status::Idle(_)
+                | Status::Background
+                | Status::Stopped(_)
         )
     }
 }
 
 impl From<styra_protocol::InteractionActivity> for Status {
+    /// The wire says what a live interaction is doing, not how it came to be
+    /// doing it: the server's own activity has no reason on it yet, so an
+    /// adopted idle is [`IdleReason::Reported`] rather than a guess at which
+    /// of the reasons applied.
     fn from(activity: styra_protocol::InteractionActivity) -> Self {
         match activity {
-            styra_protocol::InteractionActivity::Pending => Self::Idle,
+            styra_protocol::InteractionActivity::Pending => Self::Idle(IdleReason::Reported),
             styra_protocol::InteractionActivity::Running => Self::Running,
             styra_protocol::InteractionActivity::Background => Self::Background,
         }
@@ -135,6 +339,22 @@ pub struct Activity {
     /// How many events have arrived from the agent, for the spinner's phase.
     events: usize,
     background_work: bool,
+    /// Set when the operator asks the running turn to stop, and cleared by the
+    /// turn ending. The wire has no way to say that a turn ended early: the
+    /// agent reports the same `TurnCompleted` whether it finished or was cut
+    /// off, so the only thing that knows the difference is the client that
+    /// asked, and it has to remember until the ending arrives.
+    interrupt_requested: bool,
+    /// The window that refused this interaction's work, from the moment the
+    /// provider said so until the state that refusal explains has been
+    /// written. A rejection arrives on its own line, before the turn it killed
+    /// reports itself over — so like the interrupt above, it has to be held
+    /// until there is a status to hang it on.
+    refused_by: Option<RateLimit>,
+    /// The error the running turn reported, if it reported one. Agents
+    /// announce an error and then end the turn as usual, so this is what tells
+    /// the ending apart from an ordinary one.
+    turn_error: Option<String>,
     /// Set once the provider has reported its background-task set. From then
     /// on that count is the only thing that moves `background_work`; the
     /// tool-call heuristics are a fallback for providers that stay silent.
@@ -151,6 +371,9 @@ impl Default for Activity {
             last_event_at: None,
             events: 0,
             background_work: false,
+            interrupt_requested: false,
+            refused_by: None,
+            turn_error: None,
             background_count_known: false,
         }
     }
@@ -215,11 +438,55 @@ impl Activity {
 
     /// Where a completed turn leaves the session: still working on something in
     /// the background, or genuinely waiting for the operator.
-    pub fn idle_or_background(&self) -> Status {
+    ///
+    /// `reason` is what stopped the turn, and is carried only into the idle
+    /// case: [`Status::Background`] is already the statement of why this
+    /// session is not working, and how its last turn ended does not change it.
+    pub fn idle_or_background(&self, reason: IdleReason) -> Status {
         if self.background_work {
             Status::Background
         } else {
-            Status::Idle
+            Status::Idle(reason)
+        }
+    }
+
+    /// Note that the operator asked the running turn to stop, so the ending
+    /// that follows is read as an interruption rather than as a turn that ran
+    /// its course.
+    pub fn note_interrupt_requested(&mut self) {
+        self.interrupt_requested = true;
+    }
+
+    /// Note that a plan window refused this interaction's work.
+    pub fn note_refused(&mut self, limit: RateLimit) {
+        self.refused_by = Some(limit);
+    }
+
+    /// Note that the running turn reported an error.
+    pub fn note_turn_error(&mut self, message: impl Into<String>) {
+        self.turn_error = Some(message.into());
+    }
+
+    /// The refusal this interaction is under, taken rather than read: it
+    /// explains one state, and the state it explains has just been reached.
+    pub fn take_refusal(&mut self) -> Option<RateLimit> {
+        self.refused_by.take()
+    }
+
+    /// Why the turn that just ended stopped, most specific answer first: a
+    /// refused window is why it ran nothing at all, an interrupt is why it
+    /// stopped short, an error is why it gave up, and otherwise it finished.
+    ///
+    /// Everything it consults goes with it. Each of those facts was about the
+    /// one turn that just ended, and a later turn ending normally must not
+    /// inherit any of them.
+    pub fn take_turn_end_reason(&mut self) -> IdleReason {
+        let interrupted = std::mem::take(&mut self.interrupt_requested);
+        match (self.refused_by.take(), interrupted, self.turn_error.take()) {
+            (Some(limit), _, _) => IdleReason::RateLimited(limit),
+            (None, true, _) => IdleReason::Interrupted,
+            (None, false, Some(message)) => IdleReason::Failed { message },
+            (None, false, None) => IdleReason::TurnComplete,
         }
     }
 
@@ -229,7 +496,7 @@ impl Activity {
         self.background_count_known = true;
         self.background_work = running > 0;
         if !self.background_work && self.status == Status::Background {
-            self.status = Status::Idle;
+            self.status = Status::Idle(IdleReason::BackgroundFinished);
         }
     }
 
@@ -244,7 +511,7 @@ impl Activity {
     pub fn note_background_finished(&mut self) {
         if !self.background_count_known {
             self.background_work = false;
-            self.status = Status::Idle;
+            self.status = Status::Idle(IdleReason::BackgroundFinished);
         }
     }
 }
@@ -266,13 +533,16 @@ mod tests {
     fn a_reported_count_takes_over_from_the_tool_call_heuristic() {
         let mut activity = Activity::default();
         activity.note_background_started();
-        assert_eq!(activity.idle_or_background(), Status::Background);
+        assert_eq!(
+            activity.idle_or_background(IdleReason::TurnComplete),
+            Status::Background
+        );
 
         activity.note_background_count(2);
         activity.note_background_finished();
 
         assert_eq!(
-            activity.idle_or_background(),
+            activity.idle_or_background(IdleReason::TurnComplete),
             Status::Background,
             "one finished tool call does not clear a reported set of two"
         );
@@ -286,8 +556,14 @@ mod tests {
 
         activity.note_background_count(0);
 
-        assert_eq!(activity.status, Status::Idle);
-        assert_eq!(activity.idle_or_background(), Status::Idle);
+        assert_eq!(
+            activity.status,
+            Status::Idle(IdleReason::BackgroundFinished)
+        );
+        assert_eq!(
+            activity.idle_or_background(IdleReason::TurnComplete),
+            Status::Idle(IdleReason::TurnComplete)
+        );
     }
 
     /// Only a Background status is displaced by the count reaching zero; an
@@ -309,7 +585,10 @@ mod tests {
 
         activity.note_background_finished();
 
-        assert_eq!(activity.status, Status::Idle);
+        assert_eq!(
+            activity.status,
+            Status::Idle(IdleReason::BackgroundFinished)
+        );
     }
 
     /// Attaching to an interaction that has been working for a while shows how
@@ -351,11 +630,17 @@ mod tests {
 
         activity.adopt_server_status_at(Status::Background, 0, 0);
 
-        assert_eq!(activity.idle_or_background(), Status::Background);
+        assert_eq!(
+            activity.idle_or_background(IdleReason::TurnComplete),
+            Status::Background
+        );
 
-        activity.adopt_server_status_at(Status::Idle, 0, 0);
+        activity.adopt_server_status_at(Status::Idle(IdleReason::Reported), 0, 0);
 
-        assert_eq!(activity.idle_or_background(), Status::Idle);
+        assert_eq!(
+            activity.idle_or_background(IdleReason::TurnComplete),
+            Status::Idle(IdleReason::TurnComplete)
+        );
     }
 
     #[test]
@@ -375,7 +660,7 @@ mod tests {
     /// that changed nothing does not read as a fresh transition.
     #[test]
     fn the_status_clock_restarts_only_on_a_real_change() {
-        let mut activity = in_status(Status::Idle);
+        let mut activity = in_status(Status::Idle(IdleReason::TurnComplete));
         activity.note_progress();
         let first = activity.progress().in_status;
 
@@ -385,5 +670,108 @@ mod tests {
             activity.progress().in_status >= first,
             "same status, same clock"
         );
+    }
+
+    /// Two sessions both sitting idle are not in the same situation, and the
+    /// status has to be able to say so — that is the whole point of carrying
+    /// the reason.
+    #[test]
+    fn two_idle_statuses_with_different_reasons_are_different_statuses() {
+        assert_ne!(
+            Status::Idle(IdleReason::TurnComplete),
+            Status::Idle(IdleReason::Interrupted)
+        );
+        assert_ne!(
+            Status::Stopped(StopReason::Paused),
+            Status::Stopped(StopReason::NotAccepting)
+        );
+        // Both are still idle, though, for every caller that only asks that.
+        assert!(Status::Idle(IdleReason::Interrupted).is_idle());
+    }
+
+    /// The reason joins the word the operator already reads, and the ordinary
+    /// cases stay the bare word they have always been.
+    #[test]
+    fn a_reason_worth_naming_reaches_the_label() {
+        assert_eq!(Status::Idle(IdleReason::TurnComplete).label(), "idle");
+        assert_eq!(
+            Status::Idle(IdleReason::Interrupted).label(),
+            "idle · interrupted"
+        );
+        assert_eq!(
+            Status::Idle(IdleReason::RateLimited(RateLimit {
+                window: "five_hour".into(),
+                resets_at_ms: None,
+            }))
+            .label(),
+            "idle · rate limited (five_hour)"
+        );
+        assert_eq!(
+            Status::Stopped(StopReason::Paused).label(),
+            "stopped · you paused it"
+        );
+    }
+
+    fn limit() -> RateLimit {
+        RateLimit {
+            window: "five_hour".into(),
+            resets_at_ms: Some(1_000),
+        }
+    }
+
+    /// The agent reports the same ending whichever of these happened, so what
+    /// the client noticed on the way there is the only thing that can tell
+    /// them apart — and it has to survive until the ending arrives.
+    #[test]
+    fn a_turns_ending_is_read_from_what_happened_during_it() {
+        let mut activity = Activity::default();
+        assert_eq!(activity.take_turn_end_reason(), IdleReason::TurnComplete);
+
+        activity.note_interrupt_requested();
+        assert_eq!(activity.take_turn_end_reason(), IdleReason::Interrupted);
+
+        activity.note_turn_error("context window exceeded");
+        assert_eq!(
+            activity.take_turn_end_reason(),
+            IdleReason::Failed {
+                message: "context window exceeded".into()
+            }
+        );
+
+        // A refused window outranks both: nothing ran to be interrupted or to
+        // fail.
+        activity.note_interrupt_requested();
+        activity.note_turn_error("refused");
+        activity.note_refused(limit());
+        assert_eq!(
+            activity.take_turn_end_reason(),
+            IdleReason::RateLimited(limit())
+        );
+    }
+
+    /// Each of those facts was about the turn that just ended. The next turn
+    /// ending normally has to read as one.
+    #[test]
+    fn a_turns_ending_does_not_carry_over_to_the_next_one() {
+        let mut activity = Activity::default();
+        activity.note_interrupt_requested();
+        activity.note_turn_error("broken");
+        activity.note_refused(limit());
+
+        activity.take_turn_end_reason();
+
+        assert_eq!(activity.take_turn_end_reason(), IdleReason::TurnComplete);
+    }
+
+    /// An ending nobody attributed still says as much as the exit code allows.
+    #[test]
+    fn an_ending_reads_its_reason_off_the_exit() {
+        assert_eq!(EndReason::infer(Some(0), None), EndReason::Completed);
+        assert_eq!(EndReason::infer(Some(1), None), EndReason::Failed);
+        assert_eq!(
+            EndReason::infer(Some(0), Some("broken pipe")),
+            EndReason::Failed
+        );
+        assert_eq!(EndReason::infer(None, None), EndReason::Unknown);
     }
 }

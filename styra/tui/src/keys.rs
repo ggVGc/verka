@@ -628,7 +628,7 @@ pub fn handle_input_key(
                         }
                     }
                     Attachment::Attached { .. }
-                        if matches!(app.activity.status, Status::Idle | Status::Background) =>
+                        if matches!(app.activity.status, Status::Idle(_) | Status::Background) =>
                     {
                         let turn = session::turn(&message, &app.selection, contract);
                         match client.send_turn(&app.session_id, turn) {

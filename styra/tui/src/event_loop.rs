@@ -480,7 +480,7 @@ pub fn run(
         }
 
         if let Attachment::Attached { .. } = live {
-            if app.activity.status == Status::Idle && app.outbox.queued_count() > 0 {
+            if app.activity.status.is_idle() && app.outbox.queued_count() > 0 {
                 match client.send_queued_message(&app.session_id) {
                     Ok((Some(_), queued)) => {
                         app.outbox.replace_queued(queued);

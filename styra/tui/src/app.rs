@@ -21,7 +21,7 @@ use styra_protocol::event::{AgentEvent, DetailBlock};
 use styra_protocol::Contract;
 use styra_protocol::{InteractionEnd, LogEntry, QuotaEvent, QuotaStatus};
 
-use crate::activity::{Activity, Status};
+use crate::activity::{Activity, RateLimit, Status};
 use crate::answer::AnswerView;
 use crate::branch::BranchPrompt;
 use crate::composer::Composer;
@@ -529,7 +529,7 @@ impl App {
     /// accepts an effort change).
     pub fn can_configure_launch(&self) -> bool {
         self.can_edit_launch()
-            || (self.activity.status == Status::Idle
+            || (self.activity.status.is_idle()
                 && matches!(self.selection.provider, Provider::Codex | Provider::Claude))
     }
 
@@ -677,6 +677,12 @@ impl App {
             _ => LogEntry::warn(reading.describe()),
         });
         self.show_action_message(reading.describe());
+        // A spent window is not just news about the plan: it is why this
+        // interaction is about to stop working, and the status that follows
+        // has to be able to say so.
+        if reading.status == QuotaStatus::Exhausted {
+            self.activity.note_refused(RateLimit::from(&reading));
+        }
         // The view is otherwise filled wholesale by asking the server; an
         // announced reading is appended so it shows without a round trip.
         self.quota.push(reading);
@@ -1116,6 +1122,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::activity::{EndReason, IdleReason, StopReason};
     use crate::launcher::LaunchColumn;
     use styra_protocol::agent::{Effort, PROVIDERS};
     use styra_protocol::event::TokenUsage;
@@ -1439,7 +1446,7 @@ mod tests {
                 ..Default::default()
             },
         });
-        assert_eq!(app.activity.status, Status::Idle);
+        assert_eq!(app.activity.status, Status::Idle(IdleReason::TurnComplete));
         assert_eq!(app.activity.latest_usage.as_ref().unwrap().input_tokens, 7);
 
         app.push_event(AgentEvent::UserMessage {
@@ -1508,7 +1515,10 @@ mod tests {
             status: "completed".into(),
             output: "Task completed successfully".into(),
         });
-        assert_eq!(app.activity.status, Status::Idle);
+        assert_eq!(
+            app.activity.status,
+            Status::Idle(IdleReason::BackgroundFinished)
+        );
     }
 
     #[test]
@@ -1528,11 +1538,14 @@ mod tests {
         // The agent never polls the task; it reads the output file directly
         // and the provider reports the set is empty. That must clear.
         app.push_event(AgentEvent::BackgroundTasks { running: 0 });
-        assert_eq!(app.activity.status, Status::Idle);
+        assert_eq!(
+            app.activity.status,
+            Status::Idle(IdleReason::BackgroundFinished)
+        );
         app.push_event(AgentEvent::TurnCompleted {
             usage: TokenUsage::default(),
         });
-        assert_eq!(app.activity.status, Status::Idle);
+        assert_eq!(app.activity.status, Status::Idle(IdleReason::TurnComplete));
     }
 
     #[test]
@@ -1600,7 +1613,7 @@ mod tests {
         app.push_event(AgentEvent::TurnCompleted {
             usage: TokenUsage::default(),
         });
-        assert_eq!(app.activity.status, Status::Idle);
+        assert_eq!(app.activity.status, Status::Idle(IdleReason::TurnComplete));
         assert_eq!(app.activity.latest_usage.as_ref().unwrap().input_tokens, 20);
     }
 
@@ -1700,13 +1713,7 @@ mod tests {
             exit_code: Some(0),
             error: None,
         });
-        assert_eq!(
-            app.activity.status,
-            Status::Ended {
-                exit_code: Some(0),
-                error: None
-            }
-        );
+        assert_eq!(app.activity.status, Status::ended(Some(0), None));
         // `can_send` only flags the input box's title; the event loop still
         // lets a new message resume an ended Session through its provider.
         assert!(!app.can_send());
@@ -1715,6 +1722,59 @@ mod tests {
             text: "late".into(),
         });
         assert!(matches!(app.activity.status, Status::Ended { .. }));
+    }
+
+    /// The process going after the operator stopped the interaction is the
+    /// stop finishing, not an agent that quit on its own — and a clean exit
+    /// code cannot tell those apart, which is why the ending reads the status
+    /// it displaces.
+    #[test]
+    fn a_process_that_goes_after_a_pause_ended_because_of_the_pause() {
+        let mut app = app();
+        app.activity.status = Status::Stopped(StopReason::Paused);
+
+        app.on_ended(InteractionEnd {
+            exit_code: Some(0),
+            error: None,
+        });
+
+        assert_eq!(
+            app.activity.status,
+            Status::Ended {
+                exit_code: Some(0),
+                error: None,
+                reason: EndReason::Stopped,
+            }
+        );
+    }
+
+    /// A spent window is why the work stopped, so the reading that announces
+    /// it has to reach the status and not just the quota view.
+    #[test]
+    fn a_refused_window_becomes_the_reason_the_turn_ended() {
+        let mut app = app();
+        app.note_quota(QuotaEvent {
+            at_ms: 1,
+            session_id: "session-1".into(),
+            provider: Provider::Claude,
+            window: "five_hour".into(),
+            status: QuotaStatus::Exhausted,
+            utilization: Some(1.0),
+            resets_at_ms: Some(2_000),
+            detail: None,
+        });
+
+        app.push_event(AgentEvent::TurnCompleted {
+            usage: TokenUsage::default(),
+        });
+
+        assert_eq!(
+            app.activity.status,
+            Status::Idle(IdleReason::RateLimited(RateLimit {
+                window: "five_hour".into(),
+                resets_at_ms: Some(2_000),
+            }))
+        );
     }
 
     #[test]
@@ -1884,11 +1944,8 @@ mod tests {
     #[test]
     fn a_stopped_interaction_can_be_configured_again() {
         for status in [
-            Status::Stopped,
-            Status::Ended {
-                exit_code: Some(0),
-                error: None,
-            },
+            Status::Stopped(StopReason::Paused),
+            Status::ended(Some(0), None),
         ] {
             let mut app = app();
             app.activity.status = status.clone();
@@ -1906,7 +1963,7 @@ mod tests {
     #[test]
     fn a_stopped_interactions_model_change_waits_for_the_resume() {
         let mut app = app();
-        app.activity.status = Status::Stopped;
+        app.activity.status = Status::Stopped(StopReason::Paused);
         app.open_launcher();
         let launcher = app.launcher.as_mut().unwrap();
         launcher.next_column();
@@ -1925,7 +1982,7 @@ mod tests {
     #[test]
     fn choosing_another_agent_for_a_stopped_session_converts_it() {
         let mut app = app();
-        app.activity.status = Status::Stopped;
+        app.activity.status = Status::Stopped(StopReason::Paused);
         assert_eq!(app.selection.provider, Provider::Codex);
         app.open_launcher();
         let launcher = app.launcher.as_mut().unwrap();
@@ -1964,7 +2021,7 @@ mod tests {
     #[test]
     fn a_live_interaction_still_cannot_change_agent() {
         let mut app = app();
-        app.activity.status = Status::Idle;
+        app.activity.status = Status::Idle(IdleReason::TurnComplete);
         app.open_launcher();
         let launcher = app.launcher.as_mut().unwrap();
         assert!(launcher.provider_locked);
@@ -1981,7 +2038,7 @@ mod tests {
     #[test]
     fn an_idle_codex_thread_can_change_its_next_turn_model() {
         let mut app = App::new(Selection::new(Provider::Codex), "session-1");
-        app.activity.status = Status::Idle;
+        app.activity.status = Status::Idle(IdleReason::TurnComplete);
         assert!(app.can_configure_launch());
         app.open_launcher();
         assert!(app.launcher.is_some());
@@ -1991,7 +2048,7 @@ mod tests {
     fn an_idle_claude_thread_can_change_model_but_not_effort() {
         let original = Selection::parse("claude:claude-sonnet-5/high").unwrap();
         let mut app = App::new(original.clone(), "session-1");
-        app.activity.status = Status::Idle;
+        app.activity.status = Status::Idle(IdleReason::TurnComplete);
         app.open_launcher();
         let launcher = app.launcher.as_mut().unwrap();
         while launcher.selection().model == original.model {
@@ -2011,7 +2068,7 @@ mod tests {
     #[test]
     fn switching_a_live_sessions_model_asks_the_server_to_apply_it_now() {
         let mut app = App::new(Selection::new(Provider::Codex), "session-1");
-        app.activity.status = Status::Idle;
+        app.activity.status = Status::Idle(IdleReason::TurnComplete);
         app.open_launcher();
         let launcher = app.launcher.as_mut().unwrap();
         launcher.next_column();
@@ -2024,7 +2081,7 @@ mod tests {
     #[test]
     fn confirming_the_same_selection_asks_the_server_for_nothing() {
         let mut app = App::new(Selection::new(Provider::Codex), "session-1");
-        app.activity.status = Status::Idle;
+        app.activity.status = Status::Idle(IdleReason::TurnComplete);
         app.open_launcher();
         app.confirm_launcher();
 
@@ -2169,7 +2226,7 @@ mod tests {
             styra_protocol::agent::Selection::parse("claude:claude-sonnet-5/high").unwrap(),
             "s-1",
         );
-        app.activity.status = Status::Idle;
+        app.activity.status = Status::Idle(IdleReason::TurnComplete);
         app.push_event(AgentEvent::ThreadStarted {
             thread_id: "s-1".into(),
             model: Some("claude-opus-4-8".into()),
@@ -2202,7 +2259,7 @@ mod tests {
             model: None,
             effort: Some("low".into()),
         });
-        app.activity.status = Status::Idle;
+        app.activity.status = Status::Idle(IdleReason::TurnComplete);
         app.open_launcher();
         assert_eq!(
             app.launcher.as_ref().unwrap().selection(),
@@ -2234,7 +2291,7 @@ mod tests {
         });
         assert_eq!(app.selection, converted);
 
-        app.activity.status = Status::Idle;
+        app.activity.status = Status::Idle(IdleReason::TurnComplete);
         app.open_launcher();
         let launcher = app.launcher.as_ref().unwrap();
         assert_eq!(launcher.provider(), Provider::Claude);

@@ -307,6 +307,14 @@ const QUIET_THRESHOLD: Duration = Duration::from_secs(3);
 fn status_tail(app: &App) -> Line<'static> {
     let progress = app.activity.progress();
     let elapsed = format_duration(progress.in_status);
+    // What put the session where it is, where that is worth saying — an
+    // interrupted turn and a finished one leave the same screen otherwise.
+    let why = app
+        .activity
+        .status
+        .reason_label()
+        .map(|why| format!("{why} · "))
+        .unwrap_or_default();
     let (text, color) = match app.activity.status {
         Status::Pending => (
             "  … waiting for your first message".to_string(),
@@ -315,16 +323,16 @@ fn status_tail(app: &App) -> Line<'static> {
         Status::Running => (running_tail(&progress), palette::WARNING),
         // Idle carries no elapsed figure: nothing is happening, so a
         // climbing counter only draws the eye to a number that means nothing.
-        Status::Idle => (
-            "  ── idle · waiting for your message ──".to_string(),
+        Status::Idle(_) => (
+            format!("  ── idle · {why}waiting for your message ──"),
             palette::SUCCESS,
         ),
         Status::Background => (
             format!("  ── idle {elapsed} · background work still running ──"),
             palette::WARNING,
         ),
-        Status::Stopped => (
-            format!("  ── paused {elapsed} · waiting for your next message ──"),
+        Status::Stopped(_) => (
+            format!("  ── paused {elapsed} · {why}waiting for your next message ──"),
             palette::INACTIVE,
         ),
         _ => return Line::default(),

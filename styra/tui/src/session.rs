@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crate::activity::Status;
+use crate::activity::{Status, StopReason};
 use crate::app::{App, LaunchPolicy};
 use crate::launch;
 use styra_protocol::agent::Selection;
@@ -403,7 +403,7 @@ pub fn attach_live_interaction(client: &Client, interaction_id: &str) -> Result<
         // another interaction replaces them. Treat that stale record like a
         // stored journal, otherwise input can be queued against a process that
         // cannot receive it instead of taking the native-resume path.
-        app.activity.status = Status::Stopped;
+        app.activity.status = Status::Stopped(StopReason::NotAccepting);
     }
     Ok((app, live))
 }
@@ -573,7 +573,7 @@ pub fn pause_interaction(app: &mut App, client: &Client, live: &mut Attachment) 
                     "interaction paused; cleared {cleared} queued message(s); send a new message to start again"
                 )
             }));
-            mark_stopped(app, live);
+            mark_stopped(app, live, StopReason::Paused);
         }
     } else {
         app.enter_list();
@@ -649,7 +649,12 @@ pub fn interrupt_interaction(app: &mut App, client: &Client, live: &Attachment) 
         return app.push_log(LogEntry::warn("no live interaction to interrupt"));
     };
     match client.interrupt_interaction(&app.session_id) {
-        Ok(()) => app.push_log(LogEntry::info("interrupt requested")),
+        Ok(()) => {
+            // Noted before the turn ends, because the ending that comes back
+            // says nothing about having been asked for.
+            app.activity.note_interrupt_requested();
+            app.push_log(LogEntry::info("interrupt requested"));
+        }
         Err(error) => app.push_log(LogEntry::error(format!("interrupt failed: {error:#}"))),
     }
 }
@@ -685,14 +690,22 @@ pub fn apply_update(app: &mut App, update: InteractionUpdate) {
     }
 }
 
-fn mark_stopped(app: &mut App, live: &mut Attachment) {
-    app.activity.status = Status::Stopped;
+fn mark_stopped(app: &mut App, live: &mut Attachment, reason: StopReason) {
+    // A refusal outranks whatever the caller had in mind: an operator who
+    // pauses an interaction a spent window has already halted is finishing
+    // what the window started, and the window is the part they cannot see.
+    let reason = match app.activity.take_refusal() {
+        Some(limit) => StopReason::RateLimited(limit),
+        None => reason,
+    };
+    app.activity.status = Status::Stopped(reason);
     *live = Attachment::Detached;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::activity::RateLimit;
     use styra_protocol::agent::{Provider, Selection};
     use styra_protocol::{Direction, RawLine};
 
@@ -1018,11 +1031,34 @@ mod tests {
         let mut app = app();
         let mut live = Attachment::Attached { cursor: 7 };
 
-        mark_stopped(&mut app, &mut live);
+        mark_stopped(&mut app, &mut live, StopReason::Paused);
 
         assert_eq!(app.session_id, "session-1");
-        assert_eq!(app.activity.status, Status::Stopped);
+        assert_eq!(app.activity.status, Status::Stopped(StopReason::Paused));
         assert_eq!(live, Attachment::Detached);
+    }
+
+    /// Pausing an interaction a spent window has already halted is finishing
+    /// what the window started. The window is the part the operator cannot
+    /// see, so it is what the stopped status says.
+    #[test]
+    fn a_stop_under_a_spent_window_names_the_window_rather_than_the_key() {
+        let mut app = app();
+        let mut live = Attachment::Attached { cursor: 7 };
+        app.activity.note_refused(RateLimit {
+            window: "five_hour".into(),
+            resets_at_ms: Some(2_000),
+        });
+
+        mark_stopped(&mut app, &mut live, StopReason::Paused);
+
+        assert_eq!(
+            app.activity.status,
+            Status::Stopped(StopReason::RateLimited(RateLimit {
+                window: "five_hour".into(),
+                resets_at_ms: Some(2_000),
+            }))
+        );
     }
 
     #[test]

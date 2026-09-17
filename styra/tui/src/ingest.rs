@@ -6,7 +6,7 @@
 //! about whether the session is still working. [`App`] carries the state; this
 //! module is the only place that decides how an [`AgentEvent`] changes it.
 
-use crate::activity::Status;
+use crate::activity::{EndReason, Status, StopReason};
 use crate::app::App;
 use crate::timeline::{Entry, Step};
 use styra_protocol::agent::Effort;
@@ -122,11 +122,23 @@ pub fn push_event(app: &mut App, event: AgentEvent) {
                 app.activity.latest_usage = Some(usage.clone());
             }
             if app.activity.status.is_active() {
-                app.activity.status = app.activity.idle_or_background();
+                // Why this turn ended is the client's own knowledge: the agent
+                // reports one `TurnCompleted` whether it finished or the
+                // operator cut it off.
+                let reason = app.activity.take_turn_end_reason();
+                app.activity.status = app.activity.idle_or_background(reason);
             }
         }
         AgentEvent::UsageUpdated { usage } => {
             app.activity.latest_usage = Some(usage.clone());
+        }
+        // An error does not end the turn on the wire — the agent reports it
+        // and then completes as usual — so it is held here and read when that
+        // completion arrives. Only while a turn is in flight: an error
+        // reported to a session that is not working belongs to whatever failed
+        // then, not to the next turn it sends.
+        AgentEvent::Error { message } if app.activity.status == Status::Running => {
+            app.activity.note_turn_error(message.clone());
         }
         // The agent naming its own model settles the interaction's selection.
         // Keep it in the one selection that also opens the launcher, rather
@@ -336,8 +348,16 @@ fn follow_visible_tail(app: &mut App) {
 
 /// Record that the session ended. This is terminal regardless of `Stopped`.
 pub fn on_ended(app: &mut App, end: InteractionEnd) {
+    // A process that goes while the interaction is stopped is the stop
+    // finishing, whatever exit code it leaves: the operator asked for this
+    // ending, so it is not news about the agent.
+    let reason = match &app.activity.status {
+        Status::Stopped(StopReason::Paused) => EndReason::Stopped,
+        _ => EndReason::infer(end.exit_code, end.error.as_deref()),
+    };
     app.activity.status = Status::Ended {
         exit_code: end.exit_code,
         error: end.error,
+        reason,
     };
 }

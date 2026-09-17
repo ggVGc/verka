@@ -215,10 +215,9 @@ fn status(interaction: &InteractionSummary) -> Status {
     if interaction.accepting {
         Status::from(interaction.activity)
     } else {
-        Status::Ended {
-            exit_code: None,
-            error: None,
-        }
+        // The listing says only that it no longer accepts messages; why it
+        // ended is not on the wire, so nothing more is claimed here.
+        Status::ended(None, None)
     }
 }
 

@@ -674,13 +674,14 @@ pub fn wants_plan(app: &App) -> bool {
 pub fn editable(status: &Status) -> bool {
     matches!(
         status,
-        Status::Pending | Status::Stopped | Status::Ended { .. }
+        Status::Pending | Status::Stopped(_) | Status::Ended { .. }
     )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::activity::StopReason;
     use std::path::PathBuf;
 
     fn workspace_policy() -> LaunchPolicy {
@@ -1159,11 +1160,8 @@ mod tests {
     #[test]
     fn a_stopped_or_ended_session_re_plans_its_policy_before_the_resume() {
         for status in [
-            Status::Stopped,
-            Status::Ended {
-                exit_code: Some(0),
-                error: None,
-            },
+            Status::Stopped(StopReason::Paused),
+            Status::ended(Some(0), None),
         ] {
             let mut app = running();
             app.launch.record(options("live"));

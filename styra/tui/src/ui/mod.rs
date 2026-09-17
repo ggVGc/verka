@@ -126,11 +126,11 @@ fn status_color(status: &Status) -> Color {
     match status {
         Status::Pending => palette::INFO,
         Status::Running => palette::WARNING,
-        Status::Idle => palette::SUCCESS,
+        Status::Idle(_) => palette::SUCCESS,
         // Idle, but with work still running behind it: closer to idle than to
         // a turn in flight, and distinct from both.
         Status::Background => palette::MUTED_WARNING,
-        Status::Stopped => palette::INACTIVE,
+        Status::Stopped(_) => palette::INACTIVE,
         Status::Ended { error: Some(_), .. } => palette::ERROR,
         Status::Ended { .. } => palette::INACTIVE,
     }
@@ -228,10 +228,10 @@ fn title_line(
 /// is waiting out, so how long it has held is not worth counting.
 fn status_elapsed(app: &App) -> Option<String> {
     match app.activity.status {
-        Status::Running | Status::Background | Status::Stopped => {
+        Status::Running | Status::Background | Status::Stopped(_) => {
             Some(format_duration(app.activity.progress().in_status))
         }
-        Status::Pending | Status::Idle | Status::Ended { .. } => None,
+        Status::Pending | Status::Idle(_) | Status::Ended { .. } => None,
     }
 }
 

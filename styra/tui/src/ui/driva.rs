@@ -736,7 +736,7 @@ fn interaction_lines(app: &App) -> Vec<Line<'static>> {
             if matches!(
                 app.activity.status,
                 crate::activity::Status::Running
-                    | crate::activity::Status::Idle
+                    | crate::activity::Status::Idle(_)
                     | crate::activity::Status::Background
             ) {
                 "yes"
@@ -1541,7 +1541,7 @@ mod tests {
     /// rather than ending silently halfway.
     #[test]
     fn a_sandbox_too_long_for_the_terminal_is_scrolled_rather_than_cut_off() {
-        use crate::activity::Status;
+        use crate::activity::{Status, StopReason};
         use styra_protocol::{AttributedVariable, BaseCapability};
 
         let mut app = testing::app("s1");
@@ -1565,7 +1565,7 @@ mod tests {
             }],
             ..Default::default()
         });
-        app.activity.status = Status::Stopped;
+        app.activity.status = Status::Stopped(StopReason::Paused);
 
         let screen = tall(&app);
         assert!(screen.contains("more line(s) · PgDn/PgUp"), "{screen}");
@@ -1983,7 +1983,7 @@ mod tests {
     /// reopens exactly as if the interaction had never started.
     #[test]
     fn a_stopped_interactions_launch_policy_can_be_edited_again() {
-        use crate::activity::Status;
+        use crate::activity::{Status, StopReason};
         use styra_protocol::DrivaOptions;
 
         let mut app = testing::app("s1");
@@ -1997,7 +1997,7 @@ mod tests {
             mounts: Vec::new(),
             ..Default::default()
         });
-        app.activity.status = Status::Stopped;
+        app.activity.status = Status::Stopped(StopReason::Paused);
         assert!(app.can_edit_launch());
         let screen = tall(&app);
         assert!(screen.contains("m mount"), "{screen}");
@@ -2005,7 +2005,7 @@ mod tests {
 
     #[test]
     fn editable_details_wrap_the_private_root_into_a_second_column() {
-        use crate::activity::Status;
+        use crate::activity::{Status, StopReason};
         use styra_protocol::{BaseCapability, DrivaOptions};
 
         let mut app = testing::app("s1");
@@ -2026,7 +2026,7 @@ mod tests {
                 .collect(),
             ..Default::default()
         });
-        app.activity.status = Status::Stopped;
+        app.activity.status = Status::Stopped(StopReason::Paused);
 
         let screen = testing::screen_sized(&app, 100, 50);
         assert!(screen.all().contains("capability-12"), "{}", screen.all());
