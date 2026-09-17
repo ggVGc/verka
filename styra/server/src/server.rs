@@ -730,10 +730,11 @@ impl ServerState {
         let requested_name = journal::normalize_session_name(request.name.as_deref())?;
         // What this launch is about, in one errand: the readable half of the
         // branch name and, unless the client named the Session itself, the
-        // Session's own name. Skipped when it would be read by nobody — a named
-        // launch in a Workspace that makes no branch — so an operator only
-        // waits on a naming run whose answer they are going to see.
-        let topic = (worktrees.is_some() || requested_name.is_none())
+        // Session's own name. Skipped when it would be read by nobody — a
+        // Workspace that makes no branch has no use for the branch half, and a
+        // named launch has no use for the Session-name half — so an operator
+        // only waits on a naming run whose answer they are going to see.
+        let topic = (worktrees.is_some() && requested_name.is_none())
             .then(|| crate::naming::topic_for_prompt(&selection, request.message.as_deref()))
             .flatten();
         let name = requested_name
