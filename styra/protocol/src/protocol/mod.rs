@@ -15,9 +15,9 @@ mod types;
 pub use types::{
     Answer, AnswerValue, AttributedMount, AttributedVariable, BaseCapability, BaseEntry,
     BranchHistory, Contract, Direction, DrivaOptions, FileLocation, InteractionActivity,
-    InteractionEnd, InteractionSummary, InteractionUpdate, LaunchMount, LaunchPolicy, LogEntry,
-    LogLevel, MountOrigin, QueuedMessage, QuotaEvent, QuotaStatus, RawLine, SessionOrigin,
-    SessionSummary, TemplateSummary, VariableOrigin, WorkspaceSummary,
+    InteractionActivityReason, InteractionEnd, InteractionSummary, InteractionUpdate, LaunchMount,
+    LaunchPolicy, LogEntry, LogLevel, MountOrigin, QueuedMessage, QuotaEvent, QuotaStatus, RawLine,
+    SessionOrigin, SessionSummary, TemplateSummary, VariableOrigin, WorkspaceSummary,
 };
 
 // These external vocabularies are serialized inside protocol payloads. Re-export

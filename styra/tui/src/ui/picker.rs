@@ -888,6 +888,7 @@ mod tests {
             },
             accepting,
             activity: styra_protocol::InteractionActivity::Pending,
+            activity_reason: None,
             activity_since_ms: 0,
             idle_unseen: false,
             last_message: None,

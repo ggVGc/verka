@@ -12,6 +12,7 @@
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use styra_protocol::event::TokenUsage;
+use styra_protocol::{InteractionActivity, InteractionActivityReason, InteractionSummary};
 
 /// The wall clock in the epoch milliseconds the server dates an interaction's
 /// activity in. Only the difference between the two readings is used, so the
@@ -79,12 +80,37 @@ pub enum IdleReason {
     /// nothing running behind it. Reached from [`Status::Background`] rather
     /// than from a turn.
     BackgroundFinished,
-    /// The server reported the interaction as idle without saying why — what a
-    /// client adopts when it attaches to an interaction someone else started.
+    /// The server said nothing about why — an older server, or a reason that
+    /// describes a stop rather than an idle turn.
     Reported,
 }
 
 impl IdleReason {
+    /// The server's reason, read as this client's.
+    ///
+    /// [`InteractionActivityReason::Paused`] is deliberately not one of these.
+    /// It describes an interaction that stopped, and an interaction still
+    /// taking messages has not: reading it as an idle reason would put "you
+    /// paused it" on a session the operator can type into.
+    pub fn reported(reason: Option<&InteractionActivityReason>) -> Self {
+        match reason {
+            Some(InteractionActivityReason::TurnCompleted) => IdleReason::TurnComplete,
+            Some(InteractionActivityReason::Interrupted) => IdleReason::Interrupted,
+            Some(InteractionActivityReason::Failed { message }) => IdleReason::Failed {
+                message: message.clone(),
+            },
+            Some(InteractionActivityReason::RateLimited {
+                window,
+                resets_at_ms,
+            }) => IdleReason::RateLimited(RateLimit {
+                window: window.clone(),
+                resets_at_ms: *resets_at_ms,
+            }),
+            Some(InteractionActivityReason::BackgroundFinished) => IdleReason::BackgroundFinished,
+            Some(InteractionActivityReason::Paused) | None => IdleReason::Reported,
+        }
+    }
+
     /// The reason as a status-line fragment, or `None` where naming it would
     /// add nothing: the ordinary end of a turn is what "idle" already means,
     /// and a reason the server never sent cannot be stated.
@@ -110,19 +136,44 @@ pub enum StopReason {
     /// so the interaction was stopped rather than left holding a process that
     /// cannot run anything.
     RateLimited(RateLimit),
+    /// The interaction's last turn failed, and it stopped there.
+    Failed { message: String },
     /// The server still lists the interaction, but its agent no longer accepts
-    /// messages — a stale record a client must treat as stopped rather than
-    /// queue against.
+    /// messages and said nothing about why — a stale record a client must
+    /// treat as stopped rather than queue against.
     NotAccepting,
 }
 
 impl StopReason {
+    /// The server's reason for an interaction that takes no more messages.
+    ///
+    /// The reasons that describe a turn ending — completed, interrupted,
+    /// background work running out — say nothing about why the interaction
+    /// then stopped, so they come through as the bare fact that it has.
+    pub fn reported(reason: Option<&InteractionActivityReason>) -> Self {
+        match reason {
+            Some(InteractionActivityReason::Paused) => StopReason::Paused,
+            Some(InteractionActivityReason::Failed { message }) => StopReason::Failed {
+                message: message.clone(),
+            },
+            Some(InteractionActivityReason::RateLimited {
+                window,
+                resets_at_ms,
+            }) => StopReason::RateLimited(RateLimit {
+                window: window.clone(),
+                resets_at_ms: *resets_at_ms,
+            }),
+            _ => StopReason::NotAccepting,
+        }
+    }
+
     /// The reason as a status-line fragment. Always worth naming — unlike
     /// idling, stopping is never just what a session does next.
     pub fn label(&self) -> String {
         match self {
             StopReason::Paused => "you paused it".into(),
             StopReason::RateLimited(limit) => format!("rate limited ({})", limit.window),
+            StopReason::Failed { message } => format!("failed: {message}"),
             StopReason::NotAccepting => "no longer accepting messages".into(),
         }
     }
@@ -288,16 +339,25 @@ impl Status {
     }
 }
 
-impl From<styra_protocol::InteractionActivity> for Status {
-    /// The wire says what a live interaction is doing, not how it came to be
-    /// doing it: the server's own activity has no reason on it yet, so an
-    /// adopted idle is [`IdleReason::Reported`] rather than a guess at which
-    /// of the reasons applied.
-    fn from(activity: styra_protocol::InteractionActivity) -> Self {
-        match activity {
-            styra_protocol::InteractionActivity::Pending => Self::Idle(IdleReason::Reported),
-            styra_protocol::InteractionActivity::Running => Self::Running,
-            styra_protocol::InteractionActivity::Background => Self::Background,
+impl Status {
+    /// What the server says about a live interaction: what it is doing, and —
+    /// when the server has something to say about it — how it came to be doing
+    /// it. This is what a client attaching to work someone else started reads
+    /// instead of its own history, which begins at the attachment.
+    ///
+    /// An interaction that no longer accepts messages is stopped whatever its
+    /// last activity was. The wire reports the two separately, and a client
+    /// that read the activity alone would offer to send into a process that
+    /// cannot take it.
+    pub fn reported(interaction: &InteractionSummary) -> Self {
+        let reason = interaction.activity_reason.as_ref();
+        if !interaction.accepting {
+            return Status::Stopped(StopReason::reported(reason));
+        }
+        match interaction.activity {
+            InteractionActivity::Pending => Status::Idle(IdleReason::reported(reason)),
+            InteractionActivity::Running => Status::Running,
+            InteractionActivity::Background => Status::Background,
         }
     }
 }
@@ -709,6 +769,104 @@ mod tests {
         assert_eq!(
             Status::Stopped(StopReason::Paused).label(),
             "stopped · you paused it"
+        );
+    }
+
+    fn reported(
+        accepting: bool,
+        activity: InteractionActivity,
+        reason: Option<InteractionActivityReason>,
+    ) -> InteractionSummary {
+        InteractionSummary {
+            id: "s1".into(),
+            name: None,
+            tags: Vec::new(),
+            workspace_id: "w1".into(),
+            selection: styra_protocol::agent::Selection::parse("codex").unwrap(),
+            workspace: std::path::PathBuf::from("/workspace"),
+            driva: Default::default(),
+            accepting,
+            activity,
+            activity_reason: reason,
+            activity_since_ms: 0,
+            idle_unseen: false,
+            last_message: None,
+            auto_retry: false,
+            events: 0,
+        }
+    }
+
+    /// The reason the server reports is the one the operator reads. Without it
+    /// a client that attached after the fact could only say "idle", which is
+    /// the state it can already see.
+    #[test]
+    fn a_reported_reason_is_adopted_as_this_clients_own() {
+        assert_eq!(
+            Status::reported(&reported(
+                true,
+                InteractionActivity::Pending,
+                Some(InteractionActivityReason::Interrupted),
+            )),
+            Status::Idle(IdleReason::Interrupted)
+        );
+        assert_eq!(
+            Status::reported(&reported(
+                true,
+                InteractionActivity::Pending,
+                Some(InteractionActivityReason::RateLimited {
+                    window: "five_hour".into(),
+                    resets_at_ms: Some(1_000),
+                }),
+            )),
+            Status::Idle(IdleReason::RateLimited(limit()))
+        );
+    }
+
+    /// A server that says nothing about why is not made to say something: the
+    /// client states the state it was told and no more.
+    #[test]
+    fn a_server_that_reports_no_reason_leaves_the_status_unexplained() {
+        assert_eq!(
+            Status::reported(&reported(true, InteractionActivity::Pending, None)),
+            Status::Idle(IdleReason::Reported)
+        );
+        assert_eq!(
+            Status::reported(&reported(false, InteractionActivity::Pending, None)),
+            Status::Stopped(StopReason::NotAccepting)
+        );
+    }
+
+    /// Accepting messages and being idle are reported separately, and the
+    /// first is what decides which kind of status this is: an interaction that
+    /// takes nothing more is stopped, whatever its last turn was doing.
+    #[test]
+    fn an_interaction_that_takes_no_messages_is_stopped_not_idle() {
+        assert_eq!(
+            Status::reported(&reported(
+                false,
+                InteractionActivity::Pending,
+                Some(InteractionActivityReason::Paused),
+            )),
+            Status::Stopped(StopReason::Paused)
+        );
+        // A turn that merely finished says nothing about why the interaction
+        // then stopped, so it is not repeated as if it did.
+        assert_eq!(
+            Status::reported(&reported(
+                false,
+                InteractionActivity::Running,
+                Some(InteractionActivityReason::TurnCompleted),
+            )),
+            Status::Stopped(StopReason::NotAccepting)
+        );
+        // And the reverse: a stop that did not take is not a reason to idle.
+        assert_eq!(
+            Status::reported(&reported(
+                true,
+                InteractionActivity::Pending,
+                Some(InteractionActivityReason::Paused),
+            )),
+            Status::Idle(IdleReason::Reported)
         );
     }
 

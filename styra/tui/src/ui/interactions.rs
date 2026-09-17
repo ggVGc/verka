@@ -139,7 +139,7 @@ fn item(
     loading: bool,
     width: u16,
 ) -> ListItem<'static> {
-    let status = status(interaction);
+    let status = Status::reported(interaction);
     let color = status_color(&status);
     let name = interaction
         .name
@@ -211,16 +211,6 @@ fn item(
     ListItem::new(lines)
 }
 
-fn status(interaction: &InteractionSummary) -> Status {
-    if interaction.accepting {
-        Status::from(interaction.activity)
-    } else {
-        // The listing says only that it no longer accepts messages; why it
-        // ended is not on the wire, so nothing more is claimed here.
-        Status::ended(None, None)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -249,6 +239,7 @@ mod tests {
             },
             accepting: true,
             activity: InteractionActivity::Pending,
+            activity_reason: None,
             activity_since_ms: 0,
             idle_unseen: false,
             last_message: None,

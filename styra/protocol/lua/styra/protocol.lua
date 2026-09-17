@@ -635,6 +635,7 @@ M.types.InteractionSummary = {
     { name = "driva", required = true, type = { kind = "ref", name = "DrivaOptions" } },
     { name = "accepting", required = true, type = { kind = "boolean" } },
     { name = "activity", required = false, type = { kind = "ref", name = "InteractionActivity" } },
+    { name = "activity_reason", required = false, type = { kind = "optional", inner = { kind = "ref", name = "InteractionActivityReason" } } },
     { name = "activity_since_ms", required = false, type = { kind = "number", integer = true } },
     { name = "idle_unseen", required = false, type = { kind = "boolean" } },
     { name = "last_message", required = false, type = { kind = "optional", inner = { kind = "string" } } },
@@ -845,6 +846,45 @@ M.types.InteractionActivity = {
     { name = "pending", payload = { kind = "unit" } },
     { name = "running", payload = { kind = "unit" } },
     { name = "background", payload = { kind = "unit" } },
+  },
+}
+
+--- How an interaction came to be where it is: what ended the turn it is not
+--- working on, or what stopped it taking messages.
+---
+--- `InteractionActivity` and `InteractionSummary::accepting` between them
+--- say what an interaction is doing; neither says why, and the two questions
+--- have different answers. An interaction that finished its turn, one the
+--- operator interrupted, one whose turn failed, and one a plan window refused
+--- are all `Pending` and all accepting — the same two words for four
+--- situations an operator would act on differently.
+---
+--- Only the server can answer it. The reason is a fact about a moment that has
+--- passed by the time anyone asks: the agent reports the same `turn/completed`
+--- whether it ran its course or was cut off a second earlier, so a client that
+--- was not watching when the interrupt went out has no way to reconstruct it —
+--- and none of Styra's clients are watching all of the time.
+M.types.InteractionActivityReason = {
+  kind = "enum",
+  tagging = { style = "adjacent", tag = "reason", content = "detail" },
+  variants = {
+    { name = "turn_completed", payload = { kind = "unit" } },
+    { name = "interrupted", payload = { kind = "unit" } },
+    { name = "failed", payload = {
+      kind = "struct",
+      fields = {
+        { name = "message", required = true, type = { kind = "string" } },
+      },
+    } },
+    { name = "rate_limited", payload = {
+      kind = "struct",
+      fields = {
+        { name = "window", required = true, type = { kind = "string" } },
+        { name = "resets_at_ms", required = false, type = { kind = "optional", inner = { kind = "number", integer = true } } },
+      },
+    } },
+    { name = "background_finished", payload = { kind = "unit" } },
+    { name = "paused", payload = { kind = "unit" } },
   },
 }
 
@@ -1401,6 +1441,17 @@ M.InteractionActivity = {
   PENDING = "pending",
   RUNNING = "running",
   BACKGROUND = "background",
+}
+
+M.enums.InteractionActivityReason = { "turn_completed", "interrupted", "failed", "rate_limited", "background_finished", "paused" }
+--- Wire spellings of `InteractionActivityReason`.
+M.InteractionActivityReason = {
+  TURN_COMPLETED = "turn_completed",
+  INTERRUPTED = "interrupted",
+  FAILED = "failed",
+  RATE_LIMITED = "rate_limited",
+  BACKGROUND_FINISHED = "background_finished",
+  PAUSED = "paused",
 }
 
 M.enums.AgentEvent = { "user_message", "thread_started", "turn_started", "turn_completed", "usage_updated", "command_started", "command_completed", "file_changed", "diff_updated", "tool_started", "tool_completed", "plan_updated", "agent_message", "thinking", "error", "model_changed", "branched", "task_started", "task_progress", "task_completed", "background_tasks", "unknown", "malformed" }

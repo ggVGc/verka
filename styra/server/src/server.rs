@@ -8,9 +8,9 @@ use crate::journal::{self, Journal};
 use crate::naming::Topic;
 use crate::protocol::WorkspaceSummary;
 use crate::protocol::{
-    Answer, Contract, DrivaOptions, InteractionActivity, InteractionSummary, InteractionUpdate,
-    LaunchMount, LaunchPolicy, LogEntry, QueuedMessage, SendMessage, SessionOrigin, SessionSummary,
-    TemplateSummary,
+    Answer, Contract, DrivaOptions, InteractionActivity, InteractionActivityReason,
+    InteractionSummary, InteractionUpdate, LaunchMount, LaunchPolicy, LogEntry, QueuedMessage,
+    SendMessage, SessionOrigin, SessionSummary, TemplateSummary,
 };
 use crate::protocol::{
     CreateSession, CreateWorkspace, Health, LoadedInteraction, Request, Response, ResumeSession,
@@ -158,64 +158,101 @@ impl IdleNotice {
     }
 }
 
-/// What an interaction is doing, and the moment it started doing it. The two
-/// are held together because the second is only ever read as the first's
-/// clock, and a transition that set one without the other would leave a turn
-/// dated by the one before it.
+/// What an interaction is doing, how it came to be doing it, and the moment it
+/// started. The three are held together because the last two are only ever
+/// read as the first's clock and the first's explanation, and a transition
+/// that set one without the others would leave a turn dated by the one before
+/// it, or described by it.
 ///
 /// The moment is the server's own, in epoch milliseconds, because the work
 /// began when the server saw it begin: a client attaching mid-turn has to
 /// report how long the agent has been at it, and its first sight of the turn
-/// is no answer to that.
+/// is no answer to that. The reason is the server's for the same kind of
+/// reason: it is a fact about a moment that has passed, and only the process
+/// that was there when it passed can state it.
+#[derive(Clone, Default)]
+struct ActivityState {
+    activity: InteractionActivity,
+    reason: Option<InteractionActivityReason>,
+    since_ms: u64,
+}
+
+/// One interaction's [`ActivityState`], shared between the threads that move
+/// it: the request handlers, and the collector reading the agent's output.
 #[derive(Default)]
 struct CurrentActivity {
-    state: Mutex<(InteractionActivity, u64)>,
+    state: Mutex<ActivityState>,
 }
 
 impl CurrentActivity {
     fn new() -> Self {
         Self {
-            state: Mutex::new((InteractionActivity::Pending, journal::now_ms())),
+            state: Mutex::new(ActivityState {
+                activity: InteractionActivity::Pending,
+                reason: None,
+                since_ms: journal::now_ms(),
+            }),
         }
     }
 
-    fn get(&self) -> (InteractionActivity, u64) {
-        *self
-            .state
+    fn get(&self) -> ActivityState {
+        self.state
             .lock()
             .expect("interaction activity lock poisoned")
+            .clone()
     }
 
     fn activity(&self) -> InteractionActivity {
-        self.get().0
+        self.get().activity
     }
 
-    /// Move to `next`. The clock restarts only on a real change, so a turn
-    /// that reasserts what it is already doing keeps the moment it started.
-    fn set(&self, next: InteractionActivity) {
+    /// Move to `next`, for the reason that took it there. The clock restarts
+    /// only on a real change, so a turn that reasserts what it is already
+    /// doing keeps the moment it started — but the reason is adopted either
+    /// way, since a new one is news about now whether or not the state moved.
+    fn set(&self, next: InteractionActivity, reason: Option<InteractionActivityReason>) {
         let mut state = self
             .state
             .lock()
             .expect("interaction activity lock poisoned");
-        if state.0 != next {
-            *state = (next, journal::now_ms());
+        if state.activity != next {
+            state.since_ms = journal::now_ms();
+            state.activity = next;
         }
+        state.reason = reason;
+    }
+
+    /// Record why the interaction is where it is without claiming it has moved
+    /// — a stop stops it taking messages, which is not the agent doing
+    /// something else.
+    fn note_reason(&self, reason: InteractionActivityReason) {
+        self.state
+            .lock()
+            .expect("interaction activity lock poisoned")
+            .reason = Some(reason);
     }
 
     /// Move to `next` only if the interaction is still doing `when`, so the
     /// answer to a stale question cannot displace a newer state — a background
     /// set reported empty says nothing about a turn that has since started.
-    fn replace_if(&self, when: InteractionActivity, next: InteractionActivity) -> bool {
+    fn replace_if(
+        &self,
+        when: InteractionActivity,
+        next: InteractionActivity,
+        reason: Option<InteractionActivityReason>,
+    ) -> bool {
         let mut state = self
             .state
             .lock()
             .expect("interaction activity lock poisoned");
-        if state.0 != when {
+        if state.activity != when {
             return false;
         }
-        if state.0 != next {
-            *state = (next, journal::now_ms());
+        if state.activity != next {
+            state.since_ms = journal::now_ms();
+            state.activity = next;
         }
+        state.reason = reason;
         true
     }
 }
@@ -256,6 +293,12 @@ struct ManagedInteraction {
     /// reason it stopped, as opposed to a figure about how full it was. What
     /// makes this interaction one a reset should come back to.
     refused_by: Arc<Mutex<Option<crate::protocol::QuotaEvent>>>,
+    /// Whether the operator has asked the running turn to stop, until the turn
+    /// ends and it is read. An interrupted turn reports the same ending as one
+    /// that ran its course, so nothing downstream can tell them apart; only
+    /// the request itself can, and it is made on another thread than the one
+    /// that sees the ending.
+    interrupt_requested: Arc<AtomicBool>,
     /// This interaction's own half of the launch policy, as the client asked
     /// for it. Kept so a retry can resume the Session under the policy the
     /// operator actually granted — the mounts and templates they added for
@@ -293,6 +336,27 @@ fn reset_releases(
     refused_by.provider == reset.provider && refused_by.window == reset.window
 }
 
+/// Why the turn that just ended stopped, most specific answer first: a refused
+/// window is why it ran nothing at all, an interrupt is why it stopped short,
+/// an error is why it gave up, and otherwise it finished.
+///
+/// None of this is on the wire the agent ends its turn on — it reports the same
+/// completion however the turn went — so each of these was noticed earlier and
+/// held for this moment. They are taken rather than read, because each was
+/// about the one turn that has just ended.
+fn turn_end_reason(
+    refused: Option<InteractionActivityReason>,
+    interrupted: bool,
+    failed: Option<String>,
+) -> InteractionActivityReason {
+    match (refused, interrupted, failed) {
+        (Some(refusal), _, _) => refusal,
+        (None, true, _) => InteractionActivityReason::Interrupted,
+        (None, false, Some(message)) => InteractionActivityReason::Failed { message },
+        (None, false, None) => InteractionActivityReason::TurnCompleted,
+    }
+}
+
 fn update_finishes_background(update: &InteractionUpdate) -> bool {
     matches!(update, InteractionUpdate::Event(event) if event.finishes_background_task())
 }
@@ -322,7 +386,8 @@ impl ManagedInteraction {
     }
 
     fn summary(&self) -> InteractionSummary {
-        let (activity, activity_since_ms) = self.activity.get();
+        let state = self.activity.get();
+        let activity = state.activity;
         InteractionSummary {
             id: self.interaction.session_id().to_owned(),
             name: self
@@ -340,11 +405,18 @@ impl ManagedInteraction {
             accepting: self.accepting_messages.load(Ordering::Acquire),
             idle_unseen: activity == InteractionActivity::Pending && self.idle.unseen(),
             activity,
-            activity_since_ms,
+            activity_reason: state.reason,
+            activity_since_ms: state.since_ms,
             last_message: self.last_message(),
             auto_retry: self.auto_retry.load(Ordering::Acquire),
             events: self.events.load(Ordering::Acquire),
         }
+    }
+
+    /// Note that the operator has asked the running turn to stop, for the
+    /// collector thread to read when that turn reports itself over.
+    fn note_interrupt_requested(&self) {
+        self.interrupt_requested.store(true, Ordering::Release);
     }
 
     fn mark_idle_seen(&self) {
@@ -555,12 +627,17 @@ impl ManagedInteraction {
         // The server accepts the turn before the provider echoes its
         // UserMessage event. Date it here so a client that attaches in that
         // interval still sees when this work actually started.
-        self.activity.set(InteractionActivity::Running);
+        // Working needs no reason beyond the message that started it, and
+        // whatever ended the last turn is now answered.
+        self.activity.set(InteractionActivity::Running, None);
         Ok(())
     }
 
     fn stop(&self) {
         self.accepting_messages.store(false, Ordering::Release);
+        // What the agent was doing is not changed by being stopped; why it
+        // takes no more messages is, and that is what a client reads next.
+        self.activity.note_reason(InteractionActivityReason::Paused);
         self.interaction.stop();
     }
 
@@ -831,6 +908,7 @@ impl ServerState {
         let idle = Arc::new(IdleNotice::new(true));
         let events = Arc::new(AtomicUsize::new(0));
         let background_work = Arc::new(AtomicBool::new(false));
+        let interrupt_requested = Arc::new(AtomicBool::new(false));
         let managed = Arc::new(ManagedInteraction {
             interaction,
             updates: Arc::clone(&updates),
@@ -847,6 +925,7 @@ impl ServerState {
             queue: Mutex::new(std::collections::VecDeque::new()),
             auto_retry: Arc::new(AtomicBool::new(false)),
             refused_by: Arc::new(Mutex::new(None)),
+            interrupt_requested: Arc::clone(&interrupt_requested),
             launch: request.launch.clone(),
             session_path: journal_path
                 .parent()
@@ -855,6 +934,7 @@ impl ServerState {
         });
         let reported_selection = Arc::downgrade(&managed);
         let refused = Arc::downgrade(&managed);
+        let interrupted = Arc::clone(&interrupt_requested);
         let quota = Arc::clone(&self.inner.quota);
         let idle = Arc::clone(&idle);
         let quota_session = id.clone();
@@ -867,6 +947,11 @@ impl ServerState {
                 // heuristics below are a fallback for quieter providers.
                 let mut background_count_known = false;
                 let mut background_polls = HashSet::new();
+                // What the running turn has already told this thread about how
+                // it is going to end. Neither reaches the agent's own ending
+                // report, so both are held here until one arrives.
+                let mut refused_window: Option<InteractionActivityReason> = None;
+                let mut turn_error: Option<String> = None;
                 while let Ok(update) = receiver.recv() {
                     match &update {
                         InteractionUpdate::Event(crate::event::AgentEvent::ThreadStarted {
@@ -890,6 +975,7 @@ impl ServerState {
                                 && activity.replace_if(
                                     InteractionActivity::Background,
                                     InteractionActivity::Pending,
+                                    Some(InteractionActivityReason::BackgroundFinished),
                                 )
                             {
                                 idle.became_idle();
@@ -897,7 +983,7 @@ impl ServerState {
                         }
                         InteractionUpdate::Event(event) if event.starts_background_task() => {
                             background_work.store(true, Ordering::Release);
-                            activity.set(InteractionActivity::Running);
+                            activity.set(InteractionActivity::Running, None);
                         }
                         InteractionUpdate::Event(crate::event::AgentEvent::ToolStarted {
                             id,
@@ -913,7 +999,11 @@ impl ServerState {
                         InteractionUpdate::Event(crate::event::AgentEvent::UserMessage {
                             ..
                         }) => {
-                            activity.set(InteractionActivity::Running);
+                            // A turn under way answers for itself, and the last
+                            // one's ending is no longer what this interaction is.
+                            refused_window = None;
+                            turn_error = None;
+                            activity.set(InteractionActivity::Running, None);
                         }
                         InteractionUpdate::Event(crate::event::AgentEvent::TurnCompleted {
                             ..
@@ -923,10 +1013,28 @@ impl ServerState {
                             } else {
                                 InteractionActivity::Pending
                             };
-                            activity.set(next);
+                            // Each of these is taken with the turn it was
+                            // about, so the next one starts clean.
+                            let reason = turn_end_reason(
+                                refused_window.take(),
+                                interrupted.swap(false, Ordering::AcqRel),
+                                turn_error.take(),
+                            );
+                            activity.set(next, Some(reason));
                             if next == InteractionActivity::Pending {
                                 idle.became_idle();
                             }
+                        }
+                        // An error does not end the turn on the wire — the
+                        // agent reports it and then completes as usual — so it
+                        // is held until that completion says where it left the
+                        // interaction. Only while a turn is running: an error
+                        // reported to an idle interaction belongs to whatever
+                        // failed then, not to the next turn it is sent.
+                        InteractionUpdate::Event(crate::event::AgentEvent::Error { message })
+                            if activity.activity() == InteractionActivity::Running =>
+                        {
+                            turn_error = Some(message.clone());
                         }
                         InteractionUpdate::Event(crate::event::AgentEvent::ToolCompleted {
                             id,
@@ -934,7 +1042,10 @@ impl ServerState {
                         }) if background_polls.remove(id) => {
                             if !background_count_known && update_finishes_background(&update) {
                                 background_work.store(false, Ordering::Release);
-                                activity.set(InteractionActivity::Pending);
+                                activity.set(
+                                    InteractionActivity::Pending,
+                                    Some(InteractionActivityReason::BackgroundFinished),
+                                );
                                 idle.became_idle();
                             }
                         }
@@ -956,6 +1067,16 @@ impl ServerState {
                     // business, unlike the figures: it is why this one is about
                     // to stop, and what a later reset comes back to.
                     if let Some(refusal) = observed.rejected {
+                        let reason = InteractionActivityReason::RateLimited {
+                            window: refusal.window.clone(),
+                            resets_at_ms: refusal.resets_at_ms,
+                        };
+                        // Recorded now as well as kept for the turn's ending: a
+                        // refused agent often ends instead of completing a
+                        // turn, and a client looking at a stopped interaction
+                        // has to be told what stopped it either way.
+                        activity.note_reason(reason.clone());
+                        refused_window = Some(reason);
                         if let Some(managed) = refused.upgrade() {
                             managed.note_refused(refusal);
                         }
@@ -1267,6 +1388,7 @@ impl ServerState {
         // idle enough to send them), so reload them rather than starting empty.
         let queued = journal::read_queued_messages(&summary.path)?;
         let auto_retry = journal::read_session_auto_retry(&summary.path)?;
+        let interrupt_requested = Arc::new(AtomicBool::new(false));
         let managed = Arc::new(ManagedInteraction {
             interaction,
             updates: Arc::clone(&updates),
@@ -1286,11 +1408,13 @@ impl ServerState {
             // and a Session that keeps hitting the window has to keep it.
             auto_retry: Arc::new(AtomicBool::new(auto_retry)),
             refused_by: Arc::new(Mutex::new(None)),
+            interrupt_requested: Arc::clone(&interrupt_requested),
             launch: request.launch.clone(),
             session_path: summary.path.clone(),
         });
         let reported_selection = Arc::downgrade(&managed);
         let refused = Arc::downgrade(&managed);
+        let interrupted = Arc::clone(&interrupt_requested);
         let id = request.id.clone();
         let quota = Arc::clone(&self.inner.quota);
         let idle = Arc::clone(&idle);
@@ -1304,6 +1428,11 @@ impl ServerState {
                 // heuristics below are a fallback for quieter providers.
                 let mut background_count_known = false;
                 let mut background_polls = HashSet::new();
+                // What the running turn has already told this thread about how
+                // it is going to end. Neither reaches the agent's own ending
+                // report, so both are held here until one arrives.
+                let mut refused_window: Option<InteractionActivityReason> = None;
+                let mut turn_error: Option<String> = None;
                 while let Ok(update) = receiver.recv() {
                     match &update {
                         InteractionUpdate::Event(crate::event::AgentEvent::ThreadStarted {
@@ -1327,6 +1456,7 @@ impl ServerState {
                                 && activity.replace_if(
                                     InteractionActivity::Background,
                                     InteractionActivity::Pending,
+                                    Some(InteractionActivityReason::BackgroundFinished),
                                 )
                             {
                                 idle.became_idle();
@@ -1334,7 +1464,7 @@ impl ServerState {
                         }
                         InteractionUpdate::Event(event) if event.starts_background_task() => {
                             background_work.store(true, Ordering::Release);
-                            activity.set(InteractionActivity::Running);
+                            activity.set(InteractionActivity::Running, None);
                         }
                         InteractionUpdate::Event(crate::event::AgentEvent::ToolStarted {
                             id,
@@ -1350,7 +1480,11 @@ impl ServerState {
                         InteractionUpdate::Event(crate::event::AgentEvent::UserMessage {
                             ..
                         }) => {
-                            activity.set(InteractionActivity::Running);
+                            // A turn under way answers for itself, and the last
+                            // one's ending is no longer what this interaction is.
+                            refused_window = None;
+                            turn_error = None;
+                            activity.set(InteractionActivity::Running, None);
                         }
                         InteractionUpdate::Event(crate::event::AgentEvent::TurnCompleted {
                             ..
@@ -1360,10 +1494,28 @@ impl ServerState {
                             } else {
                                 InteractionActivity::Pending
                             };
-                            activity.set(next);
+                            // Each of these is taken with the turn it was
+                            // about, so the next one starts clean.
+                            let reason = turn_end_reason(
+                                refused_window.take(),
+                                interrupted.swap(false, Ordering::AcqRel),
+                                turn_error.take(),
+                            );
+                            activity.set(next, Some(reason));
                             if next == InteractionActivity::Pending {
                                 idle.became_idle();
                             }
+                        }
+                        // An error does not end the turn on the wire — the
+                        // agent reports it and then completes as usual — so it
+                        // is held until that completion says where it left the
+                        // interaction. Only while a turn is running: an error
+                        // reported to an idle interaction belongs to whatever
+                        // failed then, not to the next turn it is sent.
+                        InteractionUpdate::Event(crate::event::AgentEvent::Error { message })
+                            if activity.activity() == InteractionActivity::Running =>
+                        {
+                            turn_error = Some(message.clone());
                         }
                         InteractionUpdate::Event(crate::event::AgentEvent::ToolCompleted {
                             id,
@@ -1371,7 +1523,10 @@ impl ServerState {
                         }) if background_polls.remove(id) => {
                             if !background_count_known && update_finishes_background(&update) {
                                 background_work.store(false, Ordering::Release);
-                                activity.set(InteractionActivity::Pending);
+                                activity.set(
+                                    InteractionActivity::Pending,
+                                    Some(InteractionActivityReason::BackgroundFinished),
+                                );
                                 idle.became_idle();
                             }
                         }
@@ -1393,6 +1548,16 @@ impl ServerState {
                     // business, unlike the figures: it is why this one is about
                     // to stop, and what a later reset comes back to.
                     if let Some(refusal) = observed.rejected {
+                        let reason = InteractionActivityReason::RateLimited {
+                            window: refusal.window.clone(),
+                            resets_at_ms: refusal.resets_at_ms,
+                        };
+                        // Recorded now as well as kept for the turn's ending: a
+                        // refused agent often ends instead of completing a
+                        // turn, and a client looking at a stopped interaction
+                        // has to be told what stopped it either way.
+                        activity.note_reason(reason.clone());
+                        refused_window = Some(reason);
                         if let Some(managed) = refused.upgrade() {
                             managed.note_refused(refusal);
                         }
@@ -2062,7 +2227,11 @@ impl ServerState {
                 Ok(Response::Queued(self.interaction(&id)?.clear_queue()?))
             }
             Request::InterruptInteraction { id } => {
-                self.interaction(&id)?.interaction.interrupt()?;
+                let interaction = self.interaction(&id)?;
+                interaction.interaction.interrupt()?;
+                // Only once the interrupt has actually gone out: a turn that
+                // ends after a refused request ended on its own.
+                interaction.note_interrupt_requested();
                 Ok(Response::Accepted)
             }
             Request::StopInteraction { id } => {
@@ -2695,18 +2864,23 @@ mod tests {
     #[test]
     fn the_activity_clock_restarts_only_when_the_activity_actually_changes() {
         let activity = CurrentActivity::new();
-        activity.set(InteractionActivity::Running);
-        let (_, started) = activity.get();
+        activity.set(InteractionActivity::Running, None);
+        let started = activity.get().since_ms;
 
         std::thread::sleep(Duration::from_millis(2));
-        activity.set(InteractionActivity::Running);
-        assert_eq!(activity.get(), (InteractionActivity::Running, started));
+        activity.set(InteractionActivity::Running, None);
+        let restated = activity.get();
+        assert_eq!(restated.activity, InteractionActivity::Running);
+        assert_eq!(restated.since_ms, started);
 
         std::thread::sleep(Duration::from_millis(2));
-        activity.set(InteractionActivity::Pending);
-        let (current, went_idle) = activity.get();
-        assert_eq!(current, InteractionActivity::Pending);
-        assert!(went_idle > started, "a real change dates itself");
+        activity.set(
+            InteractionActivity::Pending,
+            Some(InteractionActivityReason::TurnCompleted),
+        );
+        let idle = activity.get();
+        assert_eq!(idle.activity, InteractionActivity::Pending);
+        assert!(idle.since_ms > started, "a real change dates itself");
     }
 
     /// A background set reported empty answers for the state it was asked
@@ -2715,20 +2889,79 @@ mod tests {
     #[test]
     fn an_empty_background_set_does_not_displace_a_turn_that_has_since_started() {
         let activity = CurrentActivity::new();
-        activity.set(InteractionActivity::Running);
+        activity.set(InteractionActivity::Running, None);
 
         assert!(!activity.replace_if(
             InteractionActivity::Background,
-            InteractionActivity::Pending
+            InteractionActivity::Pending,
+            Some(InteractionActivityReason::BackgroundFinished),
         ));
         assert_eq!(activity.activity(), InteractionActivity::Running);
+        assert_eq!(
+            activity.get().reason,
+            None,
+            "a refused transition states nothing about why"
+        );
 
-        activity.set(InteractionActivity::Background);
+        activity.set(InteractionActivity::Background, None);
         assert!(activity.replace_if(
             InteractionActivity::Background,
-            InteractionActivity::Pending
+            InteractionActivity::Pending,
+            Some(InteractionActivityReason::BackgroundFinished),
         ));
         assert_eq!(activity.activity(), InteractionActivity::Pending);
+        assert_eq!(
+            activity.get().reason,
+            Some(InteractionActivityReason::BackgroundFinished)
+        );
+    }
+
+    /// The agent reports one ending for all of these, so the answer comes from
+    /// what the server noticed on the way to it — and the more specific
+    /// noticing wins: a turn a window refused never ran to be interrupted.
+    #[test]
+    fn a_turns_ending_is_read_from_what_the_server_noticed_during_it() {
+        let refusal = InteractionActivityReason::RateLimited {
+            window: "five_hour".into(),
+            resets_at_ms: None,
+        };
+
+        assert_eq!(
+            turn_end_reason(None, false, None),
+            InteractionActivityReason::TurnCompleted
+        );
+        assert_eq!(
+            turn_end_reason(None, true, None),
+            InteractionActivityReason::Interrupted
+        );
+        assert_eq!(
+            turn_end_reason(None, false, Some("context window exceeded".into())),
+            InteractionActivityReason::Failed {
+                message: "context window exceeded".into()
+            }
+        );
+        assert_eq!(
+            turn_end_reason(Some(refusal.clone()), true, Some("refused".into())),
+            refusal
+        );
+    }
+
+    /// Stopping an interaction is not the agent doing something else, so it
+    /// says why without claiming the turn moved — and without restarting the
+    /// clock that says how long it has been where it is.
+    #[test]
+    fn a_stop_states_its_reason_without_moving_the_activity() {
+        let activity = CurrentActivity::new();
+        activity.set(InteractionActivity::Running, None);
+        let started = activity.get().since_ms;
+
+        std::thread::sleep(Duration::from_millis(2));
+        activity.note_reason(InteractionActivityReason::Paused);
+
+        let state = activity.get();
+        assert_eq!(state.activity, InteractionActivity::Running);
+        assert_eq!(state.reason, Some(InteractionActivityReason::Paused));
+        assert_eq!(state.since_ms, started);
     }
 
     /// The notification exists to send an operator somewhere they are not. An

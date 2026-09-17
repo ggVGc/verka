@@ -391,19 +391,22 @@ pub fn attach_live_interaction(client: &Client, interaction_id: &str) -> Result<
     } else {
         Attachment::Detached
     };
-    if accepting {
-        // The server is the authority on what a live interaction is doing and
-        // since when. The replayed journal ends where this one began, but its
-        // clock would start here, dating a turn already an hour old from the
-        // moment this client looked at it.
-        app.activity
-            .adopt_server_status(interaction.activity.into(), interaction.activity_since_ms);
-    } else if app.activity.status.is_active() {
-        // Stopped interactions remain in the server's interaction list until
-        // another interaction replaces them. Treat that stale record like a
-        // stored journal, otherwise input can be queued against a process that
-        // cannot receive it instead of taking the native-resume path.
-        app.activity.status = Status::Stopped(StopReason::NotAccepting);
+    if accepting || app.activity.status.is_active() {
+        // The server is the authority on what a live interaction is doing,
+        // since when, and why. The replayed journal ends where this one began,
+        // but its clock would start here, dating a turn already an hour old
+        // from the moment this client looked at it — and its account of why
+        // that turn ended is whatever this client happened to witness, which
+        // for an interaction it has just met is nothing.
+        //
+        // A record that no longer accepts messages is adopted too, as the stop
+        // it is: such interactions remain listed until another replaces them,
+        // and input queued against one would wait for a process that cannot
+        // receive it instead of taking the native-resume path.
+        app.activity.adopt_server_status(
+            Status::reported(&interaction),
+            interaction.activity_since_ms,
+        );
     }
     Ok((app, live))
 }

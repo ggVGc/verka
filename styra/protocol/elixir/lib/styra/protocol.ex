@@ -645,6 +645,7 @@ defmodule Styra.Protocol do
         %{name: "driva", required: true, type: %{kind: :ref, name: "DrivaOptions"}},
         %{name: "accepting", required: true, type: %{kind: :boolean}},
         %{name: "activity", required: false, type: %{kind: :ref, name: "InteractionActivity"}},
+        %{name: "activity_reason", required: false, type: %{kind: :optional, inner: %{kind: :ref, name: "InteractionActivityReason"}}},
         %{name: "activity_since_ms", required: false, type: %{kind: :number, integer: true}},
         %{name: "idle_unseen", required: false, type: %{kind: :boolean}},
         %{name: "last_message", required: false, type: %{kind: :optional, inner: %{kind: :string}}},
@@ -855,6 +856,45 @@ defmodule Styra.Protocol do
         %{name: "pending", payload: %{kind: :unit}},
         %{name: "running", payload: %{kind: :unit}},
         %{name: "background", payload: %{kind: :unit}}
+      ]
+    },
+
+    # How an interaction came to be where it is: what ended the turn it is not
+    # working on, or what stopped it taking messages.
+    #
+    # `InteractionActivity` and `InteractionSummary::accepting` between them
+    # say what an interaction is doing; neither says why, and the two questions
+    # have different answers. An interaction that finished its turn, one the
+    # operator interrupted, one whose turn failed, and one a plan window refused
+    # are all `Pending` and all accepting — the same two words for four
+    # situations an operator would act on differently.
+    #
+    # Only the server can answer it. The reason is a fact about a moment that has
+    # passed by the time anyone asks: the agent reports the same `turn/completed`
+    # whether it ran its course or was cut off a second earlier, so a client that
+    # was not watching when the interrupt went out has no way to reconstruct it —
+    # and none of Styra's clients are watching all of the time.
+    "InteractionActivityReason" => %{
+      kind: :enum,
+      tagging: %{style: :adjacent, tag: "reason", content: "detail"},
+      variants: [
+        %{name: "turn_completed", payload: %{kind: :unit}},
+        %{name: "interrupted", payload: %{kind: :unit}},
+        %{name: "failed", payload: %{
+          kind: :struct,
+          fields: [
+            %{name: "message", required: true, type: %{kind: :string}}
+          ]
+        }},
+        %{name: "rate_limited", payload: %{
+          kind: :struct,
+          fields: [
+            %{name: "window", required: true, type: %{kind: :string}},
+            %{name: "resets_at_ms", required: false, type: %{kind: :optional, inner: %{kind: :number, integer: true}}}
+          ]
+        }},
+        %{name: "background_finished", payload: %{kind: :unit}},
+        %{name: "paused", payload: %{kind: :unit}}
       ]
     },
 
@@ -2757,6 +2797,99 @@ defmodule Styra.Protocol.InteractionActivity do
   The agent is waiting for input while a background task is active.
   """
   def background, do: "background"
+end
+
+defmodule Styra.Protocol.InteractionActivityReason do
+  @moduledoc ~S"""
+  Wire spellings of `InteractionActivityReason`.
+
+  How an interaction came to be where it is: what ended the turn it is not
+  working on, or what stopped it taking messages.
+
+  `InteractionActivity` and `InteractionSummary::accepting` between them
+  say what an interaction is doing; neither says why, and the two questions
+  have different answers. An interaction that finished its turn, one the
+  operator interrupted, one whose turn failed, and one a plan window refused
+  are all `Pending` and all accepting — the same two words for four
+  situations an operator would act on differently.
+
+  Only the server can answer it. The reason is a fact about a moment that has
+  passed by the time anyone asks: the agent reports the same `turn/completed`
+  whether it ran its course or was cut off a second earlier, so a client that
+  was not watching when the interrupt went out has no way to reconstruct it —
+  and none of Styra's clients are watching all of the time.
+  """
+
+  @spellings [
+    {:turn_completed, "turn_completed"},
+    {:interrupted, "interrupted"},
+    {:failed, "failed"},
+    {:rate_limited, "rate_limited"},
+    {:background_finished, "background_finished"},
+    {:paused, "paused"}
+  ]
+
+  @doc "Every spelling as `{atom, wire}`, in declaration order."
+  def spellings, do: @spellings
+
+  @doc "Every wire spelling, in declaration order."
+  def values, do: Enum.map(@spellings, &elem(&1, 1))
+
+  @doc "The wire spelling of an atom, or nil."
+  def spelling(atom) do
+    case List.keyfind(@spellings, atom, 0) do
+      {_atom, wire} -> wire
+      nil -> nil
+    end
+  end
+
+  @doc "The atom for a wire spelling: `{:ok, atom}` or `:error`."
+  def parse(wire) do
+    case List.keyfind(@spellings, wire, 1) do
+      {atom, _wire} -> {:ok, atom}
+      nil -> :error
+    end
+  end
+
+  @doc ~S"""
+  The agent finished the turn it was working on and asked for nothing
+  more. The ordinary way to arrive at `InteractionActivity::Pending`.
+  """
+  def turn_completed, do: "turn_completed"
+
+  @doc ~S"""
+  The operator interrupted the turn (see
+  `crate::protocol::Request::InterruptInteraction`); the agent stopped
+  where it had got to.
+  """
+  def interrupted, do: "interrupted"
+
+  @doc ~S"""
+  The turn reported an error and ended. The agent itself survived it —
+  an interaction whose process is gone is not live enough to be listed.
+  """
+  def failed, do: "failed"
+
+  @doc ~S"""
+  A plan window refused this interaction's work. Whether the agent is
+  still accepting messages says how far the refusal got: nothing it is
+  sent will run either way until the window turns over.
+  """
+  def rate_limited, do: "rate_limited"
+
+  @doc ~S"""
+  The background work the interaction was waiting on finished, leaving
+  nothing running behind it: how an interaction leaves
+  `InteractionActivity::Background` without a turn ending.
+  """
+  def background_finished, do: "background_finished"
+
+  @doc ~S"""
+  The operator stopped the interaction (see
+  `crate::protocol::Request::StopInteraction`). It takes no further
+  messages; its Session can still be resumed.
+  """
+  def paused, do: "paused"
 end
 
 defmodule Styra.Protocol.AgentEvent do

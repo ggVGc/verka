@@ -103,10 +103,10 @@ pub use protocol::WorkspaceLaunchChange;
 pub use protocol::{
     Answer, AnswerValue, AttributedMount, AttributedVariable, BaseCapability, BaseEntry,
     BranchHistory, Contract, Direction, DrivaOptions, FileLocation, InteractionActivity,
-    InteractionEnd, InteractionSummary, InteractionUpdate, LaunchMount, LaunchPolicy,
-    LoadedInteraction, LogEntry, LogLevel, MountOrigin, ProviderRaw, QueuedMessage, QuotaEvent,
-    QuotaStatus, RawLine, SessionOrigin, SessionSummary, TemplateSummary, VariableOrigin,
-    WorkspaceSummary,
+    InteractionActivityReason, InteractionEnd, InteractionSummary, InteractionUpdate, LaunchMount,
+    LaunchPolicy, LoadedInteraction, LogEntry, LogLevel, MountOrigin, ProviderRaw, QueuedMessage,
+    QuotaEvent, QuotaStatus, RawLine, SessionOrigin, SessionSummary, TemplateSummary,
+    VariableOrigin, WorkspaceSummary,
 };
 pub use spawn::ensure_server;
 

@@ -606,6 +606,55 @@ pub enum InteractionActivity {
     Background,
 }
 
+/// How an interaction came to be where it is: what ended the turn it is not
+/// working on, or what stopped it taking messages.
+///
+/// [`InteractionActivity`] and [`InteractionSummary::accepting`] between them
+/// say what an interaction is doing; neither says why, and the two questions
+/// have different answers. An interaction that finished its turn, one the
+/// operator interrupted, one whose turn failed, and one a plan window refused
+/// are all `Pending` and all accepting — the same two words for four
+/// situations an operator would act on differently.
+///
+/// Only the server can answer it. The reason is a fact about a moment that has
+/// passed by the time anyone asks: the agent reports the same `turn/completed`
+/// whether it ran its course or was cut off a second earlier, so a client that
+/// was not watching when the interrupt went out has no way to reconstruct it —
+/// and none of Styra's clients are watching all of the time.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "reason", content = "detail", rename_all = "snake_case")]
+pub enum InteractionActivityReason {
+    /// The agent finished the turn it was working on and asked for nothing
+    /// more. The ordinary way to arrive at [`InteractionActivity::Pending`].
+    TurnCompleted,
+    /// The operator interrupted the turn (see
+    /// [`crate::protocol::Request::InterruptInteraction`]); the agent stopped
+    /// where it had got to.
+    Interrupted,
+    /// The turn reported an error and ended. The agent itself survived it —
+    /// an interaction whose process is gone is not live enough to be listed.
+    Failed { message: String },
+    /// A plan window refused this interaction's work. Whether the agent is
+    /// still accepting messages says how far the refusal got: nothing it is
+    /// sent will run either way until the window turns over.
+    RateLimited {
+        /// The window as the provider names it, matching [`QuotaEvent::window`].
+        window: String,
+        /// When it is expected to allow work again, in epoch milliseconds.
+        /// `None` when the provider refused without saying.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resets_at_ms: Option<u64>,
+    },
+    /// The background work the interaction was waiting on finished, leaving
+    /// nothing running behind it: how an interaction leaves
+    /// [`InteractionActivity::Background`] without a turn ending.
+    BackgroundFinished,
+    /// The operator stopped the interaction (see
+    /// [`crate::protocol::Request::StopInteraction`]). It takes no further
+    /// messages; its Session can still be resumed.
+    Paused,
+}
+
 /// An interaction the server is currently running (this process's live sessions),
 /// enough to list it and to reattach a client to it. Distinct from
 /// [`SessionSummary`], which describes a session persisted in the store
@@ -634,6 +683,12 @@ pub struct InteractionSummary {
     /// Whether the live interaction is working or waiting for user input.
     #[serde(default)]
     pub activity: InteractionActivity,
+    /// How it came to be doing that, when the server has something to say
+    /// about it — see [`InteractionActivityReason`]. `None` from a server too
+    /// old to report one, and while a turn is running: what a working
+    /// interaction is doing is the whole answer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity_reason: Option<InteractionActivityReason>,
     /// When the interaction entered [`Self::activity`], in epoch milliseconds
     /// on the server's clock. The server owns this because the work started
     /// when it started: a client that attaches mid-turn has to be able to say
@@ -911,6 +966,56 @@ impl Answer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A client built against a server that reports no reason has to keep
+    /// working, and read the summary as saying nothing about why rather than
+    /// failing to read it at all.
+    #[test]
+    fn a_summary_from_a_server_that_reports_no_reason_still_decodes() {
+        let summary: InteractionSummary = serde_json::from_str(
+            r#"{
+                "id": "s1",
+                "workspace_id": "w1",
+                "selection": {"provider": "claude", "model": "sonnet", "effort": "medium"},
+                "workspace": "/srv/work",
+                "driva": {
+                    "isolation_backend": "none",
+                    "command": [],
+                    "working_directory": "/srv/work",
+                    "network": false,
+                    "mounts": []
+                },
+                "accepting": true,
+                "activity": "pending"
+            }"#,
+        )
+        .expect("a summary without a reason is a summary");
+
+        assert_eq!(summary.activity, InteractionActivity::Pending);
+        assert_eq!(summary.activity_reason, None);
+    }
+
+    /// The reason travels as its own tagged object, so a variant that carries
+    /// detail (which window, which error) is one shape with the ones that
+    /// carry none.
+    #[test]
+    fn a_reason_carries_its_detail_across_the_wire() {
+        let reason = InteractionActivityReason::RateLimited {
+            window: "five_hour".into(),
+            resets_at_ms: Some(1_700_000_000_000),
+        };
+
+        let line = serde_json::to_string(&reason).expect("a reason serializes");
+
+        assert_eq!(
+            line,
+            r#"{"reason":"rate_limited","detail":{"window":"five_hour","resets_at_ms":1700000000000}}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<InteractionActivityReason>(&line).expect("and reads back"),
+            reason
+        );
+    }
 
     fn mount(source: &str, destination: Option<&str>, writable: bool) -> LaunchMount {
         LaunchMount {

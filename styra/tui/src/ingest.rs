@@ -351,13 +351,14 @@ pub fn on_ended(app: &mut App, end: InteractionEnd) {
     // A process that goes while the interaction is stopped is the stop
     // finishing, whatever exit code it leaves: the operator asked for this
     // ending, so it is not news about the agent.
-    let reason = match &app.activity.status {
-        Status::Stopped(StopReason::Paused) => EndReason::Stopped,
-        _ => EndReason::infer(end.exit_code, end.error.as_deref()),
-    };
-    app.activity.status = Status::Ended {
-        exit_code: end.exit_code,
-        error: end.error,
-        reason,
+    let asked_for = matches!(app.activity.status, Status::Stopped(StopReason::Paused));
+    app.activity.status = if asked_for {
+        Status::Ended {
+            exit_code: end.exit_code,
+            error: end.error,
+            reason: EndReason::Stopped,
+        }
+    } else {
+        Status::ended(end.exit_code, end.error)
     };
 }
