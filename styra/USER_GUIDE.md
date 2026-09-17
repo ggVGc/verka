@@ -97,6 +97,13 @@ is showing it is not one of them — you watched it happen.
 `A` opens the full Session list. In that list, `/` starts a case-insensitive
 filter over the Session name and first prompt; `Esc` abandons the filter.
 
+A Session you did not name yourself is named after what you asked for — a
+short phrase like `Fix flaky checkout test`, summarised from your first prompt
+by the agent you selected, running on its cheapest model in a throwaway sandbox
+(see [Git checkout association and linked
+worktrees](#git-checkout-association-and-linked-worktrees)). If that cannot be done,
+the opening words of the prompt name it instead, as before.
+
 `Ctrl+A` goes straight to the next such interaction, wherever it is: with the
 list open it moves the cursor there (revealing all Workspaces if it lives in
 another one), and with the list closed it makes that interaction current and
@@ -233,11 +240,14 @@ Workspace's store directory, and gives the agent that checkout as its
 workspace. The readable half comes from your first prompt, summarised by the
 agent you selected running on its cheapest model, in a throwaway sandbox that
 holds nothing but that agent — so your own `git branch` says what each branch
-is for, at a fraction of a cent. If the agent cannot be reached, or does not
-answer within twenty seconds, the first prompt's own words are used instead,
-and a launch you started without a prompt keeps the bare Session id; naming
-never fails a launch. The agent simply works where it is put and can commit
-freely; your
+is for, at a fraction of a cent. The same summary names the Session, so the
+picker reads `Fix flaky checkout test` where it used to show the opening
+sixty characters of your prompt — unless you named the launch yourself, in
+which case your name stands. If the agent cannot be reached, or does not
+answer within twenty seconds, the first prompt's own words are used for the
+branch and the prompt itself still names the Session, and a launch you started
+without a prompt keeps the bare Session id; naming never fails a launch. The
+agent simply works where it is put and can commit freely; your
 own checkout is not mounted, so nothing it does reaches the files or the branch
 you have open. Resuming the Session comes back to the same checkout with its
 uncommitted work intact, and the details view (`d`) names it as the

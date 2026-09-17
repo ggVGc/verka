@@ -443,10 +443,12 @@ the uncommitted work a replayed transcript could never restore. In front of
 the id goes the interaction's **topic** — what the work is about, as a few
 hyphenated words — so `git branch` in the operator's own checkout reads as a
 list of tasks rather than a list of timestamps. The topic comes from the
-launch's first prompt, summarised by an **errand** (below). Naming can neither
-fail nor delay a launch — an errand that cannot run, or does not answer in
-time, leaves the prompt's own leading words as the topic — and a launch with no
-first prompt keeps the bare id. Creating it
+launch's first prompt, summarised by an **errand** (below), and the same answer
+also names the Session (see below), so the picker and `git branch` say the same
+thing about the same work. Naming can neither fail nor delay a launch — an
+errand that cannot run, or does not answer in time, leaves the prompt's own
+leading words as the topic — and a launch with no first prompt keeps the bare
+id. Creating it
 before launch rather than offering the agent a tool is what removes the
 question of whether the agent used it: an interaction in an enabled Workspace
 is in its own checkout whether or not it knows what a worktree is, and the
@@ -493,6 +495,27 @@ interaction, because Styra provides isolation from outside. For an errand that
 isolation is total: there is nothing in reach to act on, so the only thing it
 can do with a prompt that tries to redirect it is answer badly — and a bad
 answer is cut down to a branch topic or discarded.
+
+### Naming the Session itself
+
+A launch that does not carry a name of its own used to be listed by the first
+sixty characters of its first prompt, cut mid-sentence with an ellipsis. Since
+the topic errand has already read that prompt and said what it is about, the
+Session takes the same answer as its name, read as a phrase rather than as a
+branch fragment: `Fix flaky checkout test` in the picker beside
+`styra/fix-flaky-checkout-test-<id>` in `git branch`. Both come from one
+errand, and a Topic is the two renderings of its single answer — which is why
+the name is built from the hyphenated fragment rather than from the model's raw
+reply: a Session and its branch cannot then drift apart, and nothing unbounded
+or unstripped reaches an operator's list.
+
+Precedence keeps the errand from being spent where it would not be read. A name
+the client sent wins over the topic, the topic over the prompt's leading words,
+and the errand runs only when one of its two readers exists: a Workspace that
+makes branches, or a launch with no name of its own. A *fallback* topic — the
+prompt's words hyphenated, because the errand could not answer — names the
+branch but never the Session, since the prompt as the operator wrote it, with
+its capitals and punctuation, is the better of the two to read in a list.
 
 Alongside `journal.jsonl`, one `session.json` is written at session creation:
 the owning Workspace plus genta's `SessionMeta` (the structured selection and
@@ -1193,7 +1216,7 @@ styra/server/            # the server application + its client interface library
     git.rs               # host-side enclosing-repository discovery
     worktree.rs          # the linked checkout an interaction works in
     errand.rs            # one cheap, bounded, bare-sandbox question Styra asks for itself
-    naming.rs            # an interaction's topic: what its branch is about, from the first prompt
+    naming.rs            # an interaction's topic: what its branch and its Session are called
 
 styra/tui/               # the terminal client application
   Cargo.toml             # package tui: [[bin]] styra; depends on server (path)

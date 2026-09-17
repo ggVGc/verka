@@ -5,6 +5,7 @@ use crate::interaction::{
     capture_driva_options, Interaction, InteractionSpec, ResolvedTemplate, SandboxBroker,
 };
 use crate::journal::{self, Journal};
+use crate::naming::Topic;
 use crate::protocol::WorkspaceSummary;
 use crate::protocol::{
     Answer, Contract, DrivaOptions, InteractionActivity, InteractionSummary, InteractionUpdate,
@@ -726,7 +727,17 @@ impl ServerState {
         let workspace = owning_workspace.host_path;
         let layout = launch_layout(worktrees.as_ref(), &workspace);
         let selection = request.selection;
-        let name = journal::normalize_session_name(request.name.as_deref())?
+        let requested_name = journal::normalize_session_name(request.name.as_deref())?;
+        // What this launch is about, in one errand: the readable half of the
+        // branch name and, unless the client named the Session itself, the
+        // Session's own name. Skipped when it would be read by nobody — a named
+        // launch in a Workspace that makes no branch — so an operator only
+        // waits on a naming run whose answer they are going to see.
+        let topic = (worktrees.is_some() || requested_name.is_none())
+            .then(|| crate::naming::topic_for_prompt(&selection, request.message.as_deref()))
+            .flatten();
+        let name = requested_name
+            .or_else(|| topic.as_ref().and_then(Topic::title).map(str::to_owned))
             .or_else(|| journal::name_from_message(request.message.as_deref()));
         // The Workspace's standing policy with this launch's own over it. Done
         // here rather than in the client so every launch path resolves the same
@@ -757,15 +768,11 @@ impl ServerState {
         // The directory this interaction will actually work in, ready before
         // the agent is: its own checkout when the Workspace makes worktrees,
         // the Workspace directory itself otherwise. A checkout is named after
-        // the work its first prompt describes, so the branch it leaves behind
-        // is recognisable in the operator's own `git branch`; the naming
-        // errand only runs for a Workspace that makes worktrees, since it is
-        // the only one that gets a branch out of it.
+        // the work its first prompt describes — the topic resolved above — so
+        // the branch it leaves behind is recognisable in the operator's own
+        // `git branch`.
         let checkout = match &worktrees {
-            Some(worktrees) => {
-                let topic = crate::naming::topic_for_prompt(&selection, request.message.as_deref());
-                worktrees.checkout(&id, topic.as_deref())?
-            }
+            Some(worktrees) => worktrees.checkout(&id, topic.as_ref().map(Topic::branch))?,
             None => workspace.clone(),
         };
         let spec = InteractionSpec {

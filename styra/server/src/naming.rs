@@ -1,4 +1,4 @@
-//! What an interaction's branch and checkout are called.
+//! What an interaction is called: its branch, its checkout, and itself.
 //!
 //! A Workspace that makes worktrees creates one branch per interaction (see
 //! [`crate::worktree`]), and a branch named only after the interaction id says
@@ -7,14 +7,20 @@
 //! named after the work instead — `styra/fix-flaky-checkout-test-<id>`.
 //!
 //! The words in front of the id are the interaction's **topic**: what the work
-//! is about, as a Git-safe fragment. Deriving one from a prompt is a question
-//! for a model, and the cheapest kind of question there is, so it goes out as
-//! an [`Errand`]: the operator's own provider, on its small tier, in a sandbox
-//! holding nothing but the agent and its credentials. Naming is never allowed
-//! to be the reason a launch fails or hangs — the agent may be uninstalled,
-//! logged out, out of quota, or slow — so every failure falls back to a topic
-//! cut from the prompt's own words, and the id it is joined to keeps the branch
-//! unique either way.
+//! is about. Deriving one from a prompt is a question for a model, and the
+//! cheapest kind of question there is, so it goes out as an [`Errand`]: the
+//! operator's own provider, on its small tier, in a sandbox holding nothing but
+//! the agent and its credentials. Having asked, Styra spends the answer twice:
+//! a [`Topic`] is both the Git-safe fragment the branch carries and the phrase
+//! the Session is named with, so an operator reading the picker and an operator
+//! reading `git branch` are told the same thing about the same work.
+//!
+//! Naming is never allowed to be the reason a launch fails or hangs — the agent
+//! may be uninstalled, logged out, out of quota, or slow. Every failure falls
+//! back to the prompt's own leading words: as a branch topic here, and as a
+//! Session name through [`crate::journal::name_from_message`], which shows the
+//! prompt as the operator wrote it and is the better of the two to read. So a
+//! fallback topic names a branch but never a Session.
 
 use crate::agent::Selection;
 use crate::errand::Errand;
@@ -27,16 +33,44 @@ const PROMPT_LIMIT: usize = 2000;
 /// read as a phrase, short enough that the id it is joined to stays visible.
 const TOPIC_LIMIT: usize = 48;
 
+/// What an interaction is about, in the two forms Styra needs it in.
+pub struct Topic {
+    branch: String,
+    title: Option<String>,
+}
+
+impl Topic {
+    /// The Git-safe fragment the branch and checkout carry in front of the id.
+    pub fn branch(&self) -> &str {
+        &self.branch
+    }
+
+    /// The phrase to name the Session with, or `None` when no model wrote this
+    /// topic — the prompt's own words read better as a name than a hyphenated
+    /// fallback cut from them does.
+    pub fn title(&self) -> Option<&str> {
+        self.title.as_deref()
+    }
+}
+
 /// What the interaction whose first prompt is `prompt` is about, or `None`
 /// when it was launched without one.
 ///
 /// Never fails: an agent that cannot be run, refuses, or answers with
 /// something unusable leaves the prompt's own leading words as the topic.
-pub fn topic_for_prompt(selection: &Selection, prompt: Option<&str>) -> Option<String> {
+pub fn topic_for_prompt(selection: &Selection, prompt: Option<&str>) -> Option<Topic> {
     let prompt = prompt.map(str::trim).filter(|prompt| !prompt.is_empty())?;
-    named_by_agent(selection, prompt)
-        .and_then(|topic| branch_fragment(&topic))
-        .or_else(|| branch_fragment(prompt))
+    let summarised = named_by_agent(selection, prompt).and_then(|topic| branch_fragment(&topic));
+    match summarised {
+        Some(branch) => {
+            let title = Some(title(&branch));
+            Some(Topic { branch, title })
+        }
+        None => Some(Topic {
+            branch: branch_fragment(prompt)?,
+            title: None,
+        }),
+    }
 }
 
 /// Ask the operator's provider for a topic, or `None` if anything at all goes
@@ -89,6 +123,21 @@ fn branch_fragment(text: &str) -> Option<String> {
     Some(fragment).filter(|fragment| !fragment.is_empty())
 }
 
+/// A branch fragment read back as a phrase: the hyphens are word breaks, and a
+/// name in a list of names starts with a capital.
+///
+/// Built from the fragment rather than from the model's raw answer so that the
+/// Session and its branch cannot end up saying different things, and so that
+/// whatever the model returned has already been bounded and stripped of
+/// punctuation before an operator sees it.
+fn title(fragment: &str) -> String {
+    let mut title = fragment.replace('-', " ");
+    if let Some(initial) = title.get_mut(..1) {
+        initial.make_ascii_uppercase();
+    }
+    title
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -119,14 +168,22 @@ mod tests {
         assert!(topic.starts_with("word-word"));
     }
 
+    /// The one topic is read twice: hyphenated on the branch, and as a phrase
+    /// in the Session picker.
+    #[test]
+    fn a_topic_reads_as_a_branch_and_as_a_name() {
+        assert_eq!(title("fix-flaky-checkout-test"), "Fix flaky checkout test");
+        assert_eq!(title("rende-42"), "Rende 42");
+    }
+
     /// An interaction launched with no prompt has no topic and keeps the id
     /// alone. Checked before anything is run, so a launch without a prompt
     /// does not pay for an errand to tell it so.
     #[test]
     fn a_launch_without_a_prompt_has_no_topic() {
         let selection = Selection::new(Provider::Claude);
-        assert_eq!(topic_for_prompt(&selection, None), None);
-        assert_eq!(topic_for_prompt(&selection, Some("   \n ")), None);
+        assert!(topic_for_prompt(&selection, None).is_none());
+        assert!(topic_for_prompt(&selection, Some("   \n ")).is_none());
     }
 
     /// The prompt is shown to the model as text under a heading, bounded, and
