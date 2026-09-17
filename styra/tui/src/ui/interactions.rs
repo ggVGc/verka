@@ -180,8 +180,7 @@ fn item(
             Style::default().fg(palette::INACTIVE),
         ));
     }
-    if interaction.accepting
-        && interaction.activity == styra_protocol::InteractionActivity::Pending
+    if interaction.activity == styra_protocol::InteractionActivity::Pending
         && interaction.idle_unseen
     {
         main.push(Span::styled(
@@ -237,7 +236,6 @@ mod tests {
                 mounts: vec![],
                 ..Default::default()
             },
-            accepting: true,
             activity: InteractionActivity::Pending,
             activity_reason: None,
             activity_since_ms: 0,

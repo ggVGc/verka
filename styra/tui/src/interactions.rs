@@ -373,7 +373,9 @@ pub fn first_live_in_workspace(
 ) -> Option<InteractionSummary> {
     let mut live = interactions
         .iter()
-        .filter(|interaction| interaction.accepting && interaction.workspace_id == workspace_id)
+        .filter(|interaction| {
+            interaction.activity.accepting() && interaction.workspace_id == workspace_id
+        })
         .cloned()
         .collect::<Vec<_>>();
     sort_interactions(&mut live);
@@ -402,23 +404,18 @@ fn grouped_by_workspace(interactions: &[InteractionSummary], visible: Vec<usize>
 }
 
 fn sort_interactions(interactions: &mut [InteractionSummary]) {
-    interactions.sort_by_key(|interaction| {
-        if !interaction.accepting {
-            2
-        } else {
-            match interaction.activity {
-                styra_protocol::InteractionActivity::Pending => 0,
-                styra_protocol::InteractionActivity::Running
-                | styra_protocol::InteractionActivity::Background => 1,
-            }
-        }
+    interactions.sort_by_key(|interaction| match interaction.activity {
+        styra_protocol::InteractionActivity::Pending => 0,
+        styra_protocol::InteractionActivity::Running
+        | styra_protocol::InteractionActivity::Background => 1,
+        styra_protocol::InteractionActivity::Stopped => 2,
     });
 }
 
 /// `Pending` is the server summary's name for a live interaction waiting for
 /// input (the TUI calls that state `Idle`).
 fn is_idle(interaction: &InteractionSummary) -> bool {
-    interaction.accepting && interaction.activity == styra_protocol::InteractionActivity::Pending
+    interaction.activity == styra_protocol::InteractionActivity::Pending
 }
 
 #[cfg(test)]
@@ -427,7 +424,7 @@ mod tests {
     use std::path::PathBuf;
     use styra_protocol::{DrivaOptions, InteractionActivity};
 
-    fn interaction(id: &str, accepting: bool, activity: InteractionActivity) -> InteractionSummary {
+    fn interaction(id: &str, activity: InteractionActivity) -> InteractionSummary {
         InteractionSummary {
             auto_retry: false,
             id: id.into(),
@@ -445,7 +442,6 @@ mod tests {
                 mounts: vec![],
                 ..Default::default()
             },
-            accepting,
             activity,
             activity_reason: None,
             activity_since_ms: 0,
@@ -460,9 +456,9 @@ mod tests {
         let mut live = LiveInteractions::default();
         live.open(
             vec![
-                interaction("stopped", false, InteractionActivity::Running),
-                interaction("running", true, InteractionActivity::Running),
-                interaction("idle", true, InteractionActivity::Pending),
+                interaction("stopped", InteractionActivity::Stopped),
+                interaction("running", InteractionActivity::Running),
+                interaction("idle", InteractionActivity::Pending),
             ],
             vec![],
         );
@@ -483,18 +479,18 @@ mod tests {
         let mut live = LiveInteractions::default();
         live.open(
             vec![
-                interaction("one", true, InteractionActivity::Pending),
-                interaction("two", true, InteractionActivity::Running),
+                interaction("one", InteractionActivity::Pending),
+                interaction("two", InteractionActivity::Running),
             ],
             vec![],
         );
         let next = live.next("one", Some("workspace")).unwrap();
         assert_eq!(next.id, "two");
-        let mut refreshed_two = interaction("two", true, InteractionActivity::Pending);
+        let mut refreshed_two = interaction("two", InteractionActivity::Pending);
         refreshed_two.last_message = Some("new response".into());
         live.refresh(vec![
             refreshed_two,
-            interaction("one", true, InteractionActivity::Running),
+            interaction("one", InteractionActivity::Running),
         ]);
 
         assert_eq!(live.current("two").unwrap().id, "two");
@@ -507,7 +503,7 @@ mod tests {
     #[test]
     fn refresh_keeps_the_servers_unseen_idle_notification() {
         let mut live = LiveInteractions::default();
-        let mut other = interaction("other", true, InteractionActivity::Pending);
+        let mut other = interaction("other", InteractionActivity::Pending);
         other.idle_unseen = true;
         live.refresh(vec![other]);
 
@@ -521,16 +517,16 @@ mod tests {
     /// rather than stopping at the last of them.
     #[test]
     fn the_idle_jump_walks_every_unseen_interaction_and_wraps() {
-        let mut unseen = interaction("unseen", true, InteractionActivity::Pending);
+        let mut unseen = interaction("unseen", InteractionActivity::Pending);
         unseen.idle_unseen = true;
-        let mut later = interaction("later", true, InteractionActivity::Pending);
+        let mut later = interaction("later", InteractionActivity::Pending);
         later.idle_unseen = true;
         let mut live = LiveInteractions::default();
         live.open(
             vec![
-                interaction("current", true, InteractionActivity::Running),
+                interaction("current", InteractionActivity::Running),
                 unseen,
-                interaction("busy", true, InteractionActivity::Running),
+                interaction("busy", InteractionActivity::Running),
                 later,
             ],
             vec![],
@@ -545,13 +541,13 @@ mod tests {
     /// jump is for, and neither is one that stopped rather than went idle.
     #[test]
     fn the_idle_jump_has_nowhere_to_go_without_an_unseen_interaction() {
-        let mut stopped = interaction("stopped", false, InteractionActivity::Pending);
+        let mut stopped = interaction("stopped", InteractionActivity::Stopped);
         stopped.idle_unseen = true;
         let mut live = LiveInteractions::default();
         live.open(
             vec![
-                interaction("current", true, InteractionActivity::Running),
-                interaction("seen", true, InteractionActivity::Pending),
+                interaction("current", InteractionActivity::Running),
+                interaction("seen", InteractionActivity::Pending),
                 stopped,
             ],
             vec![],
@@ -565,13 +561,13 @@ mod tests {
     /// the jump reveals All rather than refusing to move.
     #[test]
     fn the_idle_jump_reveals_all_workspaces_to_reach_an_unseen_interaction() {
-        let mut elsewhere = interaction("elsewhere", true, InteractionActivity::Pending);
+        let mut elsewhere = interaction("elsewhere", InteractionActivity::Pending);
         elsewhere.workspace_id = "other-workspace".into();
         elsewhere.idle_unseen = true;
         let mut live = LiveInteractions::default();
         live.open(
             vec![
-                interaction("current", true, InteractionActivity::Running),
+                interaction("current", InteractionActivity::Running),
                 elsewhere,
             ],
             vec![],
@@ -601,9 +597,9 @@ mod tests {
         let mut live = LiveInteractions::default();
         live.open(
             vec![
-                interaction("one", true, InteractionActivity::Pending),
-                interaction("two", true, InteractionActivity::Pending),
-                interaction("three", true, InteractionActivity::Pending),
+                interaction("one", InteractionActivity::Pending),
+                interaction("two", InteractionActivity::Pending),
+                interaction("three", InteractionActivity::Pending),
             ],
             vec![],
         );
@@ -639,8 +635,8 @@ mod tests {
         let mut live = LiveInteractions::default();
         live.open(
             vec![
-                interaction("one", true, InteractionActivity::Pending),
-                interaction("two", true, InteractionActivity::Pending),
+                interaction("one", InteractionActivity::Pending),
+                interaction("two", InteractionActivity::Pending),
             ],
             vec![],
         );
@@ -658,14 +654,14 @@ mod tests {
         let mut live = LiveInteractions::default();
         live.open(
             vec![
-                interaction("one", true, InteractionActivity::Pending),
-                interaction("two", true, InteractionActivity::Pending),
+                interaction("one", InteractionActivity::Pending),
+                interaction("two", InteractionActivity::Pending),
             ],
             vec![],
         );
         live.cursor_next("one", Some("workspace"));
 
-        live.refresh(vec![interaction("one", true, InteractionActivity::Pending)]);
+        live.refresh(vec![interaction("one", InteractionActivity::Pending)]);
 
         assert_eq!(live.cursor("one"), "one");
         assert!(live.pending("one").is_none());
@@ -673,14 +669,14 @@ mod tests {
 
     #[test]
     fn workspace_scope_filters_navigation_and_can_return_to_all() {
-        let mut other = interaction("other", true, InteractionActivity::Pending);
+        let mut other = interaction("other", InteractionActivity::Pending);
         other.workspace_id = "other-workspace".into();
         let mut live = LiveInteractions::default();
         live.open(
             vec![
-                interaction("current", true, InteractionActivity::Pending),
+                interaction("current", InteractionActivity::Pending),
                 other,
-                interaction("next", true, InteractionActivity::Running),
+                interaction("next", InteractionActivity::Running),
             ],
             vec![],
         );
@@ -699,16 +695,16 @@ mod tests {
     fn navigation_follows_the_workspace_grouped_display_order() {
         // Sorting by activity interleaves the two Workspaces, so raw item
         // order and the grouped order the navigator draws disagree.
-        let mut other_pending = interaction("other-pending", true, InteractionActivity::Pending);
+        let mut other_pending = interaction("other-pending", InteractionActivity::Pending);
         other_pending.workspace_id = "other-workspace".into();
-        let mut other_running = interaction("other-running", true, InteractionActivity::Running);
+        let mut other_running = interaction("other-running", InteractionActivity::Running);
         other_running.workspace_id = "other-workspace".into();
         let mut live = LiveInteractions::default();
         live.open(
             vec![
-                interaction("pending", true, InteractionActivity::Pending),
+                interaction("pending", InteractionActivity::Pending),
                 other_pending,
-                interaction("running", true, InteractionActivity::Running),
+                interaction("running", InteractionActivity::Running),
                 other_running,
             ],
             vec![],
@@ -748,18 +744,18 @@ mod tests {
 
     #[test]
     fn workspace_jumps_walk_the_first_entry_of_each_group() {
-        let mut other_pending = interaction("other-pending", true, InteractionActivity::Pending);
+        let mut other_pending = interaction("other-pending", InteractionActivity::Pending);
         other_pending.workspace_id = "other-workspace".into();
-        let mut other_running = interaction("other-running", true, InteractionActivity::Running);
+        let mut other_running = interaction("other-running", InteractionActivity::Running);
         other_running.workspace_id = "other-workspace".into();
-        let mut third = interaction("third", true, InteractionActivity::Running);
+        let mut third = interaction("third", InteractionActivity::Running);
         third.workspace_id = "third-workspace".into();
         let mut live = LiveInteractions::default();
         live.open(
             vec![
-                interaction("pending", true, InteractionActivity::Pending),
+                interaction("pending", InteractionActivity::Pending),
                 other_pending,
-                interaction("running", true, InteractionActivity::Running),
+                interaction("running", InteractionActivity::Running),
                 other_running,
                 third,
             ],
@@ -807,14 +803,14 @@ mod tests {
     /// all the more reason to load only where the cursor stops.
     #[test]
     fn workspace_jumps_defer_their_load_like_the_row_moves_do() {
-        let mut other = interaction("other-pending", true, InteractionActivity::Pending);
+        let mut other = interaction("other-pending", InteractionActivity::Pending);
         other.workspace_id = "other-workspace".into();
-        let mut third = interaction("third", true, InteractionActivity::Pending);
+        let mut third = interaction("third", InteractionActivity::Pending);
         third.workspace_id = "third-workspace".into();
         let mut live = LiveInteractions::default();
         live.open(
             vec![
-                interaction("pending", true, InteractionActivity::Pending),
+                interaction("pending", InteractionActivity::Pending),
                 other,
                 third,
             ],
@@ -838,14 +834,14 @@ mod tests {
 
     #[test]
     fn workspace_jumps_do_nothing_in_workspace_scope() {
-        let mut other = interaction("other", true, InteractionActivity::Pending);
+        let mut other = interaction("other", InteractionActivity::Pending);
         other.workspace_id = "other-workspace".into();
         let mut live = LiveInteractions::default();
         live.open(
             vec![
-                interaction("current", true, InteractionActivity::Pending),
+                interaction("current", InteractionActivity::Pending),
                 other,
-                interaction("next", true, InteractionActivity::Running),
+                interaction("next", InteractionActivity::Running),
             ],
             vec![],
         );
@@ -857,13 +853,13 @@ mod tests {
 
     #[test]
     fn first_live_in_workspace_prefers_the_one_waiting_on_the_operator() {
-        let mut other = interaction("other", true, InteractionActivity::Pending);
+        let mut other = interaction("other", InteractionActivity::Pending);
         other.workspace_id = "other-workspace".into();
         let interactions = vec![
             other,
-            interaction("stopped", false, InteractionActivity::Pending),
-            interaction("running", true, InteractionActivity::Running),
-            interaction("idle", true, InteractionActivity::Pending),
+            interaction("stopped", InteractionActivity::Stopped),
+            interaction("running", InteractionActivity::Running),
+            interaction("idle", InteractionActivity::Pending),
         ];
 
         assert_eq!(
@@ -883,8 +879,8 @@ mod tests {
     #[test]
     fn a_workspace_whose_interactions_all_stopped_has_no_live_entry() {
         let interactions = vec![
-            interaction("stopped", false, InteractionActivity::Pending),
-            interaction("also-stopped", false, InteractionActivity::Running),
+            interaction("stopped", InteractionActivity::Stopped),
+            interaction("also-stopped", InteractionActivity::Stopped),
         ];
 
         assert!(first_live_in_workspace(&interactions, "workspace").is_none());
@@ -896,9 +892,9 @@ mod tests {
         let mut live = LiveInteractions::default();
         live.open(
             vec![
-                interaction("one", true, InteractionActivity::Pending),
-                interaction("two", true, InteractionActivity::Running),
-                interaction("stopped", false, InteractionActivity::Running),
+                interaction("one", InteractionActivity::Pending),
+                interaction("two", InteractionActivity::Running),
+                interaction("stopped", InteractionActivity::Stopped),
             ],
             vec![],
         );
@@ -913,14 +909,11 @@ mod tests {
 
     #[test]
     fn deleting_the_last_scoped_interaction_falls_back_to_all() {
-        let mut other = interaction("other", true, InteractionActivity::Pending);
+        let mut other = interaction("other", InteractionActivity::Pending);
         other.workspace_id = "other-workspace".into();
         let mut live = LiveInteractions::default();
         live.open(
-            vec![
-                interaction("current", false, InteractionActivity::Running),
-                other,
-            ],
+            vec![interaction("current", InteractionActivity::Stopped), other],
             vec![],
         );
         live.toggle_workspace_scope();

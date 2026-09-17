@@ -385,7 +385,7 @@ pub fn attach_live_interaction(client: &Client, interaction_id: &str) -> Result<
     }
     app.select_last();
     app.outbox.replace_queued(loaded.queued);
-    let accepting = interaction.accepting;
+    let accepting = interaction.activity.accepting();
     let live = if accepting {
         Attachment::Attached { cursor }
     } else {

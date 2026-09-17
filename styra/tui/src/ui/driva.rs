@@ -733,12 +733,7 @@ fn interaction_lines(app: &App) -> Vec<Line<'static>> {
         detail_field_line("status", &app.activity.status.label()),
         detail_field_line(
             "accepting",
-            if matches!(
-                app.activity.status,
-                crate::activity::Status::Running
-                    | crate::activity::Status::Idle(_)
-                    | crate::activity::Status::Background
-            ) {
+            if app.activity.status.accepts_messages() {
                 "yes"
             } else {
                 "no"

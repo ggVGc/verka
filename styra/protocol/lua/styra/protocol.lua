@@ -633,7 +633,6 @@ M.types.InteractionSummary = {
     { name = "selection", required = true, type = { kind = "ref", name = "Selection" } },
     { name = "workspace", required = true, type = { kind = "string", path = true } },
     { name = "driva", required = true, type = { kind = "ref", name = "DrivaOptions" } },
-    { name = "accepting", required = true, type = { kind = "boolean" } },
     { name = "activity", required = false, type = { kind = "ref", name = "InteractionActivity" } },
     { name = "activity_reason", required = false, type = { kind = "optional", inner = { kind = "ref", name = "InteractionActivityReason" } } },
     { name = "activity_since_ms", required = false, type = { kind = "number", integer = true } },
@@ -837,7 +836,14 @@ M.types.SequencedUpdate = {
   },
 }
 
---- What a live interaction is currently waiting on.
+--- Where an interaction is in its life: what its agent is doing, or that it is
+--- doing nothing further.
+---
+--- One state rather than a state and a liveness flag beside it. Whether an
+--- interaction still takes messages is not a second fact about it — it is the
+--- difference between the first three of these and the last — and a client
+--- that had to consult two fields to find out could be handed the pair that
+--- says a stopped agent is waiting for input.
 M.types.InteractionActivity = {
   kind = "enum",
   tagging = { style = "external" },
@@ -846,18 +852,19 @@ M.types.InteractionActivity = {
     { name = "pending", payload = { kind = "unit" } },
     { name = "running", payload = { kind = "unit" } },
     { name = "background", payload = { kind = "unit" } },
+    { name = "stopped", payload = { kind = "unit" } },
   },
 }
 
 --- How an interaction came to be where it is: what ended the turn it is not
 --- working on, or what stopped it taking messages.
 ---
---- `InteractionActivity` and `InteractionSummary::accepting` between them
---- say what an interaction is doing; neither says why, and the two questions
---- have different answers. An interaction that finished its turn, one the
---- operator interrupted, one whose turn failed, and one a plan window refused
---- are all `Pending` and all accepting — the same two words for four
---- situations an operator would act on differently.
+--- `InteractionActivity` says what an interaction is doing; it does not say
+--- why, and the two questions have different answers. An interaction that
+--- finished its turn, one the operator interrupted, one whose turn failed, and
+--- one a plan window refused are all `Pending` — one word for four situations
+--- an operator would act on differently — and every way of arriving at
+--- `Stopped` looks alike from the outside.
 ---
 --- Only the server can answer it. The reason is a fact about a moment that has
 --- passed by the time anyone asks: the agent reports the same `turn/completed`
@@ -885,6 +892,12 @@ M.types.InteractionActivityReason = {
     } },
     { name = "background_finished", payload = { kind = "unit" } },
     { name = "paused", payload = { kind = "unit" } },
+    { name = "exited", payload = {
+      kind = "struct",
+      fields = {
+        { name = "exit_code", required = false, type = { kind = "optional", inner = { kind = "number", integer = true } } },
+      },
+    } },
   },
 }
 
@@ -1435,15 +1448,16 @@ M.WritableMountMode = {
   OVERLAY = "overlay",
 }
 
-M.enums.InteractionActivity = { "pending", "running", "background" }
+M.enums.InteractionActivity = { "pending", "running", "background", "stopped" }
 --- Wire spellings of `InteractionActivity`.
 M.InteractionActivity = {
   PENDING = "pending",
   RUNNING = "running",
   BACKGROUND = "background",
+  STOPPED = "stopped",
 }
 
-M.enums.InteractionActivityReason = { "turn_completed", "interrupted", "failed", "rate_limited", "background_finished", "paused" }
+M.enums.InteractionActivityReason = { "turn_completed", "interrupted", "failed", "rate_limited", "background_finished", "paused", "exited" }
 --- Wire spellings of `InteractionActivityReason`.
 M.InteractionActivityReason = {
   TURN_COMPLETED = "turn_completed",
@@ -1452,6 +1466,7 @@ M.InteractionActivityReason = {
   RATE_LIMITED = "rate_limited",
   BACKGROUND_FINISHED = "background_finished",
   PAUSED = "paused",
+  EXITED = "exited",
 }
 
 M.enums.AgentEvent = { "user_message", "thread_started", "turn_started", "turn_completed", "usage_updated", "command_started", "command_completed", "file_changed", "diff_updated", "tool_started", "tool_completed", "plan_updated", "agent_message", "thinking", "error", "model_changed", "branched", "task_started", "task_progress", "task_completed", "background_tasks", "unknown", "malformed" }

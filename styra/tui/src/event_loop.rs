@@ -733,7 +733,7 @@ pub fn run(
                     else {
                         continue;
                     };
-                    if interaction.accepting {
+                    if interaction.activity.accepting() {
                         app.show_action_message("only stopped interactions can be deleted");
                         continue;
                     }

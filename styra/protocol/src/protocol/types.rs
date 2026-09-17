@@ -593,7 +593,14 @@ pub struct TemplateSummary {
     pub description: String,
 }
 
-/// What a live interaction is currently waiting on.
+/// Where an interaction is in its life: what its agent is doing, or that it is
+/// doing nothing further.
+///
+/// One state rather than a state and a liveness flag beside it. Whether an
+/// interaction still takes messages is not a second fact about it — it is the
+/// difference between the first three of these and the last — and a client
+/// that had to consult two fields to find out could be handed the pair that
+/// says a stopped agent is waiting for input.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InteractionActivity {
@@ -604,17 +611,38 @@ pub enum InteractionActivity {
     Running,
     /// The agent is waiting for input while a background task is active.
     Background,
+    /// The agent takes no further messages: the operator stopped it, or its
+    /// process is gone. The interaction stays listed until another replaces
+    /// it, and its Session can still be resumed — as a new interaction.
+    /// [`InteractionSummary::activity_reason`] says which of those happened.
+    Stopped,
+}
+
+impl InteractionActivity {
+    /// Whether the agent behind the interaction can still be handed a turn.
+    ///
+    /// The one question every caller was asking of the `accepting` flag this
+    /// replaces, and the reason the stopped state is part of this enum rather
+    /// than beside it: there is now one place that answers it.
+    pub fn accepting(&self) -> bool {
+        match self {
+            InteractionActivity::Pending
+            | InteractionActivity::Running
+            | InteractionActivity::Background => true,
+            InteractionActivity::Stopped => false,
+        }
+    }
 }
 
 /// How an interaction came to be where it is: what ended the turn it is not
 /// working on, or what stopped it taking messages.
 ///
-/// [`InteractionActivity`] and [`InteractionSummary::accepting`] between them
-/// say what an interaction is doing; neither says why, and the two questions
-/// have different answers. An interaction that finished its turn, one the
-/// operator interrupted, one whose turn failed, and one a plan window refused
-/// are all `Pending` and all accepting — the same two words for four
-/// situations an operator would act on differently.
+/// [`InteractionActivity`] says what an interaction is doing; it does not say
+/// why, and the two questions have different answers. An interaction that
+/// finished its turn, one the operator interrupted, one whose turn failed, and
+/// one a plan window refused are all `Pending` — one word for four situations
+/// an operator would act on differently — and every way of arriving at
+/// `Stopped` looks alike from the outside.
 ///
 /// Only the server can answer it. The reason is a fact about a moment that has
 /// passed by the time anyone asks: the agent reports the same `turn/completed`
@@ -631,12 +659,13 @@ pub enum InteractionActivityReason {
     /// [`crate::protocol::Request::InterruptInteraction`]); the agent stopped
     /// where it had got to.
     Interrupted,
-    /// The turn reported an error and ended. The agent itself survived it —
-    /// an interaction whose process is gone is not live enough to be listed.
+    /// Something failed: the turn reported an error, or the agent's own
+    /// process ended reporting one. Whether it survived is
+    /// [`InteractionActivity`]'s to say.
     Failed { message: String },
-    /// A plan window refused this interaction's work. Whether the agent is
-    /// still accepting messages says how far the refusal got: nothing it is
-    /// sent will run either way until the window turns over.
+    /// A plan window refused this interaction's work. Whether the agent still
+    /// takes messages says how far the refusal got: nothing it is sent will
+    /// run either way until the window turns over.
     RateLimited {
         /// The window as the provider names it, matching [`QuotaEvent::window`].
         window: String,
@@ -650,9 +679,30 @@ pub enum InteractionActivityReason {
     /// [`InteractionActivity::Background`] without a turn ending.
     BackgroundFinished,
     /// The operator stopped the interaction (see
-    /// [`crate::protocol::Request::StopInteraction`]). It takes no further
-    /// messages; its Session can still be resumed.
+    /// [`crate::protocol::Request::StopInteraction`]).
     Paused,
+    /// The agent's process ended of its own accord. `exit_code` is `None` when
+    /// it did not exit normally — killed, or ended before it ran at all.
+    Exited {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exit_code: Option<i32>,
+    },
+}
+
+impl InteractionActivityReason {
+    /// Whether this is itself why the interaction is going away, rather than
+    /// how its last turn went.
+    ///
+    /// An agent a window refused, and one the operator paused, both exit as a
+    /// consequence — so when the ending arrives there is already a better
+    /// answer on record than the ending itself, and it is kept. See
+    /// [`InteractionActivity::Stopped`].
+    pub fn explains_stopping(&self) -> bool {
+        matches!(
+            self,
+            InteractionActivityReason::Paused | InteractionActivityReason::RateLimited { .. }
+        )
+    }
 }
 
 /// An interaction the server is currently running (this process's live sessions),
@@ -678,15 +728,14 @@ pub struct InteractionSummary {
     pub workspace: PathBuf,
     /// The Driva policy the interaction was launched under, for the driva view.
     pub driva: DrivaOptions,
-    /// Whether the interaction's agent process is alive and still takes messages.
-    pub accepting: bool,
-    /// Whether the live interaction is working or waiting for user input.
+    /// Where the interaction is in its life: working, waiting for input, or
+    /// taking no more messages. Whether its agent is still there to be sent
+    /// one is [`InteractionActivity::accepting`].
     #[serde(default)]
     pub activity: InteractionActivity,
-    /// How it came to be doing that, when the server has something to say
-    /// about it — see [`InteractionActivityReason`]. `None` from a server too
-    /// old to report one, and while a turn is running: what a working
-    /// interaction is doing is the whole answer.
+    /// How it came to be doing that, when there is something to say about it
+    /// — see [`InteractionActivityReason`]. `None` while a turn is running:
+    /// what a working interaction is doing is the whole answer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub activity_reason: Option<InteractionActivityReason>,
     /// When the interaction entered [`Self::activity`], in epoch milliseconds
@@ -967,11 +1016,11 @@ impl Answer {
 mod tests {
     use super::*;
 
-    /// A client built against a server that reports no reason has to keep
-    /// working, and read the summary as saying nothing about why rather than
-    /// failing to read it at all.
+    /// Not every state has a reason to report — a running turn is its own
+    /// explanation — so a summary without one has to read as saying nothing
+    /// about why rather than failing to read at all.
     #[test]
-    fn a_summary_from_a_server_that_reports_no_reason_still_decodes() {
+    fn a_summary_that_states_no_reason_still_decodes() {
         let summary: InteractionSummary = serde_json::from_str(
             r#"{
                 "id": "s1",
@@ -985,7 +1034,6 @@ mod tests {
                     "network": false,
                     "mounts": []
                 },
-                "accepting": true,
                 "activity": "pending"
             }"#,
         )
@@ -993,6 +1041,20 @@ mod tests {
 
         assert_eq!(summary.activity, InteractionActivity::Pending);
         assert_eq!(summary.activity_reason, None);
+    }
+
+    /// The question every reader of a summary asks, answered in one place
+    /// rather than by pairing a state with a flag beside it.
+    #[test]
+    fn only_a_stopped_interaction_takes_no_messages() {
+        for activity in [
+            InteractionActivity::Pending,
+            InteractionActivity::Running,
+            InteractionActivity::Background,
+        ] {
+            assert!(activity.accepting(), "{activity:?}");
+        }
+        assert!(!InteractionActivity::Stopped.accepting());
     }
 
     /// The reason travels as its own tagged object, so a variant that carries

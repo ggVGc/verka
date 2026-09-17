@@ -334,7 +334,9 @@ fn live_label(live: usize) -> String {
 fn live_interactions(workspace_id: &str, interactions: &[InteractionSummary]) -> usize {
     interactions
         .iter()
-        .filter(|interaction| interaction.accepting && interaction.workspace_id == workspace_id)
+        .filter(|interaction| {
+            interaction.activity.accepting() && interaction.workspace_id == workspace_id
+        })
         .count()
 }
 
@@ -372,9 +374,9 @@ fn render_sessions_preview(
     let items: Vec<ListItem> = sessions
         .iter()
         .map(|session| {
-            let live = interactions
-                .iter()
-                .any(|interaction| interaction.accepting && interaction.id == session.id);
+            let live = interactions.iter().any(|interaction| {
+                interaction.activity.accepting() && interaction.id == session.id
+            });
             preview_session_item(session, live)
         })
         .collect();
@@ -801,13 +803,17 @@ mod tests {
             workspace_summary("w-2", "quiet", 1),
         ];
         let interactions = vec![
-            interaction_summary("s-1", "codex", true),
-            interaction_summary("s-2", "claude", true),
+            interaction_summary("s-1", "codex", styra_protocol::InteractionActivity::Pending),
+            interaction_summary(
+                "s-2",
+                "claude",
+                styra_protocol::InteractionActivity::Pending,
+            ),
             // Stopped: the server no longer accepts input, so it is not work
             // in flight and must not mark the Workspace.
             InteractionSummary {
                 workspace_id: "w-2".into(),
-                ..interaction_summary("s-3", "codex", false)
+                ..interaction_summary("s-3", "codex", styra_protocol::InteractionActivity::Stopped)
             },
         ];
 
@@ -841,7 +847,11 @@ mod tests {
         let screen = rendered_workspace_picker(
             &workspaces,
             0,
-            &[interaction_summary("s-1", "codex", true)],
+            &[interaction_summary(
+                "s-1",
+                "codex",
+                styra_protocol::InteractionActivity::Pending,
+            )],
             SessionsPreview::Ready(&sessions),
         );
 
@@ -868,7 +878,11 @@ mod tests {
         assert!(empty.contains("no sessions yet"), "{empty}");
     }
 
-    fn interaction_summary(id: &str, selection: &str, accepting: bool) -> InteractionSummary {
+    fn interaction_summary(
+        id: &str,
+        selection: &str,
+        activity: styra_protocol::InteractionActivity,
+    ) -> InteractionSummary {
         InteractionSummary {
             auto_retry: false,
             id: id.into(),
@@ -886,8 +900,7 @@ mod tests {
                 mounts: Vec::new(),
                 ..Default::default()
             },
-            accepting,
-            activity: styra_protocol::InteractionActivity::Pending,
+            activity,
             activity_reason: None,
             activity_since_ms: 0,
             idle_unseen: false,

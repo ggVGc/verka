@@ -183,7 +183,6 @@ mod tests {
                 mounts: vec![],
                 ..Default::default()
             },
-            accepting: true,
             activity,
             activity_reason: None,
             activity_since_ms: 0,

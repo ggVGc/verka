@@ -643,7 +643,6 @@ defmodule Styra.Protocol do
         %{name: "selection", required: true, type: %{kind: :ref, name: "Selection"}},
         %{name: "workspace", required: true, type: %{kind: :string, path: true}},
         %{name: "driva", required: true, type: %{kind: :ref, name: "DrivaOptions"}},
-        %{name: "accepting", required: true, type: %{kind: :boolean}},
         %{name: "activity", required: false, type: %{kind: :ref, name: "InteractionActivity"}},
         %{name: "activity_reason", required: false, type: %{kind: :optional, inner: %{kind: :ref, name: "InteractionActivityReason"}}},
         %{name: "activity_since_ms", required: false, type: %{kind: :number, integer: true}},
@@ -847,7 +846,14 @@ defmodule Styra.Protocol do
       ]
     },
 
-    # What a live interaction is currently waiting on.
+    # Where an interaction is in its life: what its agent is doing, or that it is
+    # doing nothing further.
+    #
+    # One state rather than a state and a liveness flag beside it. Whether an
+    # interaction still takes messages is not a second fact about it — it is the
+    # difference between the first three of these and the last — and a client
+    # that had to consult two fields to find out could be handed the pair that
+    # says a stopped agent is waiting for input.
     "InteractionActivity" => %{
       kind: :enum,
       tagging: %{style: :external},
@@ -855,19 +861,20 @@ defmodule Styra.Protocol do
       variants: [
         %{name: "pending", payload: %{kind: :unit}},
         %{name: "running", payload: %{kind: :unit}},
-        %{name: "background", payload: %{kind: :unit}}
+        %{name: "background", payload: %{kind: :unit}},
+        %{name: "stopped", payload: %{kind: :unit}}
       ]
     },
 
     # How an interaction came to be where it is: what ended the turn it is not
     # working on, or what stopped it taking messages.
     #
-    # `InteractionActivity` and `InteractionSummary::accepting` between them
-    # say what an interaction is doing; neither says why, and the two questions
-    # have different answers. An interaction that finished its turn, one the
-    # operator interrupted, one whose turn failed, and one a plan window refused
-    # are all `Pending` and all accepting — the same two words for four
-    # situations an operator would act on differently.
+    # `InteractionActivity` says what an interaction is doing; it does not say
+    # why, and the two questions have different answers. An interaction that
+    # finished its turn, one the operator interrupted, one whose turn failed, and
+    # one a plan window refused are all `Pending` — one word for four situations
+    # an operator would act on differently — and every way of arriving at
+    # `Stopped` looks alike from the outside.
     #
     # Only the server can answer it. The reason is a fact about a moment that has
     # passed by the time anyone asks: the agent reports the same `turn/completed`
@@ -894,7 +901,13 @@ defmodule Styra.Protocol do
           ]
         }},
         %{name: "background_finished", payload: %{kind: :unit}},
-        %{name: "paused", payload: %{kind: :unit}}
+        %{name: "paused", payload: %{kind: :unit}},
+        %{name: "exited", payload: %{
+          kind: :struct,
+          fields: [
+            %{name: "exit_code", required: false, type: %{kind: :optional, inner: %{kind: :number, integer: true}}}
+          ]
+        }}
       ]
     },
 
@@ -2752,13 +2765,21 @@ defmodule Styra.Protocol.InteractionActivity do
   @moduledoc ~S"""
   Wire spellings of `InteractionActivity`.
 
-  What a live interaction is currently waiting on.
+  Where an interaction is in its life: what its agent is doing, or that it is
+  doing nothing further.
+
+  One state rather than a state and a liveness flag beside it. Whether an
+  interaction still takes messages is not a second fact about it — it is the
+  difference between the first three of these and the last — and a client
+  that had to consult two fields to find out could be handed the pair that
+  says a stopped agent is waiting for input.
   """
 
   @spellings [
     {:pending, "pending"},
     {:running, "running"},
-    {:background, "background"}
+    {:background, "background"},
+    {:stopped, "stopped"}
   ]
 
   @doc "Every spelling as `{atom, wire}`, in declaration order."
@@ -2797,6 +2818,14 @@ defmodule Styra.Protocol.InteractionActivity do
   The agent is waiting for input while a background task is active.
   """
   def background, do: "background"
+
+  @doc ~S"""
+  The agent takes no further messages: the operator stopped it, or its
+  process is gone. The interaction stays listed until another replaces
+  it, and its Session can still be resumed — as a new interaction.
+  `InteractionSummary::activity_reason` says which of those happened.
+  """
+  def stopped, do: "stopped"
 end
 
 defmodule Styra.Protocol.InteractionActivityReason do
@@ -2806,12 +2835,12 @@ defmodule Styra.Protocol.InteractionActivityReason do
   How an interaction came to be where it is: what ended the turn it is not
   working on, or what stopped it taking messages.
 
-  `InteractionActivity` and `InteractionSummary::accepting` between them
-  say what an interaction is doing; neither says why, and the two questions
-  have different answers. An interaction that finished its turn, one the
-  operator interrupted, one whose turn failed, and one a plan window refused
-  are all `Pending` and all accepting — the same two words for four
-  situations an operator would act on differently.
+  `InteractionActivity` says what an interaction is doing; it does not say
+  why, and the two questions have different answers. An interaction that
+  finished its turn, one the operator interrupted, one whose turn failed, and
+  one a plan window refused are all `Pending` — one word for four situations
+  an operator would act on differently — and every way of arriving at
+  `Stopped` looks alike from the outside.
 
   Only the server can answer it. The reason is a fact about a moment that has
   passed by the time anyone asks: the agent reports the same `turn/completed`
@@ -2826,7 +2855,8 @@ defmodule Styra.Protocol.InteractionActivityReason do
     {:failed, "failed"},
     {:rate_limited, "rate_limited"},
     {:background_finished, "background_finished"},
-    {:paused, "paused"}
+    {:paused, "paused"},
+    {:exited, "exited"}
   ]
 
   @doc "Every spelling as `{atom, wire}`, in declaration order."
@@ -2865,15 +2895,16 @@ defmodule Styra.Protocol.InteractionActivityReason do
   def interrupted, do: "interrupted"
 
   @doc ~S"""
-  The turn reported an error and ended. The agent itself survived it —
-  an interaction whose process is gone is not live enough to be listed.
+  Something failed: the turn reported an error, or the agent's own
+  process ended reporting one. Whether it survived is
+  `InteractionActivity`'s to say.
   """
   def failed, do: "failed"
 
   @doc ~S"""
-  A plan window refused this interaction's work. Whether the agent is
-  still accepting messages says how far the refusal got: nothing it is
-  sent will run either way until the window turns over.
+  A plan window refused this interaction's work. Whether the agent still
+  takes messages says how far the refusal got: nothing it is sent will
+  run either way until the window turns over.
   """
   def rate_limited, do: "rate_limited"
 
@@ -2886,10 +2917,15 @@ defmodule Styra.Protocol.InteractionActivityReason do
 
   @doc ~S"""
   The operator stopped the interaction (see
-  `crate::protocol::Request::StopInteraction`). It takes no further
-  messages; its Session can still be resumed.
+  `crate::protocol::Request::StopInteraction`).
   """
   def paused, do: "paused"
+
+  @doc ~S"""
+  The agent's process ended of its own accord. `exit_code` is `None` when
+  it did not exit normally — killed, or ended before it ran at all.
+  """
+  def exited, do: "exited"
 end
 
 defmodule Styra.Protocol.AgentEvent do

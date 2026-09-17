@@ -107,7 +107,9 @@ impl IdleReason {
                 resets_at_ms: *resets_at_ms,
             }),
             Some(InteractionActivityReason::BackgroundFinished) => IdleReason::BackgroundFinished,
-            Some(InteractionActivityReason::Paused) | None => IdleReason::Reported,
+            Some(InteractionActivityReason::Paused)
+            | Some(InteractionActivityReason::Exited { .. })
+            | None => IdleReason::Reported,
         }
     }
 
@@ -138,6 +140,8 @@ pub enum StopReason {
     RateLimited(RateLimit),
     /// The interaction's last turn failed, and it stopped there.
     Failed { message: String },
+    /// The agent's process ended of its own accord.
+    Exited { exit_code: Option<i32> },
     /// The server still lists the interaction, but its agent no longer accepts
     /// messages and said nothing about why — a stale record a client must
     /// treat as stopped rather than queue against.
@@ -153,6 +157,9 @@ impl StopReason {
     pub fn reported(reason: Option<&InteractionActivityReason>) -> Self {
         match reason {
             Some(InteractionActivityReason::Paused) => StopReason::Paused,
+            Some(InteractionActivityReason::Exited { exit_code }) => StopReason::Exited {
+                exit_code: *exit_code,
+            },
             Some(InteractionActivityReason::Failed { message }) => StopReason::Failed {
                 message: message.clone(),
             },
@@ -174,6 +181,10 @@ impl StopReason {
             StopReason::Paused => "you paused it".into(),
             StopReason::RateLimited(limit) => format!("rate limited ({})", limit.window),
             StopReason::Failed { message } => format!("failed: {message}"),
+            StopReason::Exited {
+                exit_code: Some(code),
+            } => format!("the agent exited ({code})"),
+            StopReason::Exited { exit_code: None } => "the agent exited".into(),
             StopReason::NotAccepting => "no longer accepting messages".into(),
         }
     }
@@ -345,20 +356,25 @@ impl Status {
     /// it. This is what a client attaching to work someone else started reads
     /// instead of its own history, which begins at the attachment.
     ///
-    /// An interaction that no longer accepts messages is stopped whatever its
-    /// last activity was. The wire reports the two separately, and a client
-    /// that read the activity alone would offer to send into a process that
-    /// cannot take it.
+    /// [`Status::Ended`] is not among the answers: the wire says an
+    /// interaction takes no more messages, not what became of the process, and
+    /// the exit code that would distinguish the two travels in the update
+    /// stream rather than in a summary.
     pub fn reported(interaction: &InteractionSummary) -> Self {
         let reason = interaction.activity_reason.as_ref();
-        if !interaction.accepting {
-            return Status::Stopped(StopReason::reported(reason));
-        }
         match interaction.activity {
             InteractionActivity::Pending => Status::Idle(IdleReason::reported(reason)),
             InteractionActivity::Running => Status::Running,
             InteractionActivity::Background => Status::Background,
+            InteractionActivity::Stopped => Status::Stopped(StopReason::reported(reason)),
         }
+    }
+
+    /// Whether the operator can send a message into this session as it
+    /// stands. A stopped or ended one takes a resume first — which the next
+    /// message triggers, but which is not the same as being sent.
+    pub fn accepts_messages(&self) -> bool {
+        matches!(self, Status::Running | Status::Idle(_) | Status::Background)
     }
 }
 /// How long the session has been in its current state, and how long since
@@ -773,7 +789,6 @@ mod tests {
     }
 
     fn reported(
-        accepting: bool,
         activity: InteractionActivity,
         reason: Option<InteractionActivityReason>,
     ) -> InteractionSummary {
@@ -785,7 +800,6 @@ mod tests {
             selection: styra_protocol::agent::Selection::parse("codex").unwrap(),
             workspace: std::path::PathBuf::from("/workspace"),
             driva: Default::default(),
-            accepting,
             activity,
             activity_reason: reason,
             activity_since_ms: 0,
@@ -803,7 +817,6 @@ mod tests {
     fn a_reported_reason_is_adopted_as_this_clients_own() {
         assert_eq!(
             Status::reported(&reported(
-                true,
                 InteractionActivity::Pending,
                 Some(InteractionActivityReason::Interrupted),
             )),
@@ -811,7 +824,6 @@ mod tests {
         );
         assert_eq!(
             Status::reported(&reported(
-                true,
                 InteractionActivity::Pending,
                 Some(InteractionActivityReason::RateLimited {
                     window: "five_hour".into(),
@@ -827,42 +839,37 @@ mod tests {
     #[test]
     fn a_server_that_reports_no_reason_leaves_the_status_unexplained() {
         assert_eq!(
-            Status::reported(&reported(true, InteractionActivity::Pending, None)),
+            Status::reported(&reported(InteractionActivity::Pending, None)),
             Status::Idle(IdleReason::Reported)
         );
         assert_eq!(
-            Status::reported(&reported(false, InteractionActivity::Pending, None)),
+            Status::reported(&reported(InteractionActivity::Stopped, None)),
             Status::Stopped(StopReason::NotAccepting)
         );
     }
 
-    /// Accepting messages and being idle are reported separately, and the
-    /// first is what decides which kind of status this is: an interaction that
-    /// takes nothing more is stopped, whatever its last turn was doing.
+    /// The reasons are a vocabulary for the whole of an interaction's life, so
+    /// each state takes only the ones that can explain *it*: how a turn ended
+    /// says nothing about why the interaction then stopped, and a stop is no
+    /// reason to be waiting for input.
     #[test]
-    fn an_interaction_that_takes_no_messages_is_stopped_not_idle() {
+    fn a_state_takes_only_the_reasons_that_can_explain_it() {
         assert_eq!(
             Status::reported(&reported(
-                false,
-                InteractionActivity::Pending,
+                InteractionActivity::Stopped,
                 Some(InteractionActivityReason::Paused),
             )),
             Status::Stopped(StopReason::Paused)
         );
-        // A turn that merely finished says nothing about why the interaction
-        // then stopped, so it is not repeated as if it did.
         assert_eq!(
             Status::reported(&reported(
-                false,
-                InteractionActivity::Running,
+                InteractionActivity::Stopped,
                 Some(InteractionActivityReason::TurnCompleted),
             )),
             Status::Stopped(StopReason::NotAccepting)
         );
-        // And the reverse: a stop that did not take is not a reason to idle.
         assert_eq!(
             Status::reported(&reported(
-                true,
                 InteractionActivity::Pending,
                 Some(InteractionActivityReason::Paused),
             )),

@@ -561,7 +561,9 @@ fn sort_workspaces(workspaces: &mut [WorkspaceSummary], interactions: &[Interact
 fn has_live_interaction(workspace: &WorkspaceSummary, interactions: &[InteractionSummary]) -> bool {
     interactions
         .iter()
-        .any(|interaction| interaction.accepting && interaction.workspace_id == workspace.id)
+        .any(|interaction| {
+            interaction.activity.accepting() && interaction.workspace_id == workspace.id
+        })
 }
 
 #[cfg(test)]
@@ -587,7 +589,7 @@ mod tests {
         }
     }
 
-    fn interaction(id: &str, accepting: bool, activity: InteractionActivity) -> InteractionSummary {
+    fn interaction(id: &str, activity: InteractionActivity) -> InteractionSummary {
         InteractionSummary {
             auto_retry: false,
             id: id.into(),
@@ -605,7 +607,6 @@ mod tests {
                 mounts: vec![],
                 ..Default::default()
             },
-            accepting,
             activity,
             activity_reason: None,
             activity_since_ms: 0,
@@ -618,12 +619,11 @@ mod tests {
     fn interaction_in(
         id: &str,
         workspace_id: &str,
-        accepting: bool,
         activity: InteractionActivity,
     ) -> InteractionSummary {
         InteractionSummary {
             workspace_id: workspace_id.into(),
-            ..interaction(id, accepting, activity)
+            ..interaction(id, activity)
         }
     }
 
@@ -780,9 +780,9 @@ mod tests {
             workspace("idle", 20),
         ];
         let interactions = vec![
-            interaction_in("a", "running", true, InteractionActivity::Running),
-            interaction_in("b", "stopped", false, InteractionActivity::Pending),
-            interaction_in("c", "idle", true, InteractionActivity::Pending),
+            interaction_in("a", "running", InteractionActivity::Running),
+            interaction_in("b", "stopped", InteractionActivity::Stopped),
+            interaction_in("c", "idle", InteractionActivity::Pending),
         ];
 
         sort_workspaces(&mut workspaces, &interactions);

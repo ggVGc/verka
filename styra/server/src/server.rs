@@ -223,13 +223,38 @@ impl CurrentActivity {
     }
 
     /// Record why the interaction is where it is without claiming it has moved
-    /// — a stop stops it taking messages, which is not the agent doing
-    /// something else.
+    /// — a plan window refusing its work is news before it is a transition,
+    /// and an agent that has not yet ended is still doing whatever it was.
     fn note_reason(&self, reason: InteractionActivityReason) {
         self.state
             .lock()
             .expect("interaction activity lock poisoned")
             .reason = Some(reason);
+    }
+
+    /// Move to [`InteractionActivity::Stopped`]: the agent takes no more
+    /// messages, for `ending`.
+    ///
+    /// A reason already on record that explains the stop outranks `ending`. An
+    /// agent a plan window refused, or one the operator paused, exits as a
+    /// consequence a moment later, and "the process exited" is not the news —
+    /// the window is, and it is what a reset comes back to.
+    fn stopped(&self, ending: InteractionActivityReason) {
+        let mut state = self
+            .state
+            .lock()
+            .expect("interaction activity lock poisoned");
+        if state.activity != InteractionActivity::Stopped {
+            state.since_ms = journal::now_ms();
+            state.activity = InteractionActivity::Stopped;
+        }
+        if !state
+            .reason
+            .as_ref()
+            .is_some_and(InteractionActivityReason::explains_stopping)
+        {
+            state.reason = Some(ending);
+        }
     }
 
     /// Move to `next` only if the interaction is still doing `when`, so the
@@ -260,7 +285,6 @@ impl CurrentActivity {
 struct ManagedInteraction {
     interaction: Interaction,
     updates: Arc<Mutex<Vec<SequencedUpdate>>>,
-    accepting_messages: Arc<AtomicBool>,
     activity: Arc<CurrentActivity>,
     /// Whether this interaction going idle is still news, and what makes it
     /// news at all: see [`IdleNotice`].
@@ -402,7 +426,6 @@ impl ManagedInteraction {
             selection: self.selection(),
             workspace: self.workspace.clone(),
             driva: self.driva.clone(),
-            accepting: self.accepting_messages.load(Ordering::Acquire),
             idle_unseen: activity == InteractionActivity::Pending && self.idle.unseen(),
             activity,
             activity_reason: state.reason,
@@ -497,7 +520,7 @@ impl ManagedInteraction {
         }
         // A refused interaction that is somehow still taking messages has not
         // been stopped by the refusal, so there is nothing to resume.
-        if self.accepting_messages.load(Ordering::Acquire) {
+        if self.activity.activity().accepting() {
             return None;
         }
         self.refused_by
@@ -595,7 +618,7 @@ impl ManagedInteraction {
     }
 
     fn send(&self, text: &str) -> Result<()> {
-        if !self.accepting_messages.load(Ordering::Acquire) {
+        if !self.activity.activity().accepting() {
             anyhow::bail!(
                 "session {} is not accepting messages",
                 self.interaction.session_id()
@@ -609,7 +632,7 @@ impl ManagedInteraction {
         if let Some(selection) = message.selection {
             self.set_selection(selection)?;
         }
-        if !self.accepting_messages.load(Ordering::Acquire) {
+        if !self.activity.activity().accepting() {
             anyhow::bail!(
                 "session {} is not accepting messages",
                 self.interaction.session_id()
@@ -634,10 +657,7 @@ impl ManagedInteraction {
     }
 
     fn stop(&self) {
-        self.accepting_messages.store(false, Ordering::Release);
-        // What the agent was doing is not changed by being stopped; why it
-        // takes no more messages is, and that is what a client reads next.
-        self.activity.note_reason(InteractionActivityReason::Paused);
+        self.activity.stopped(InteractionActivityReason::Paused);
         self.interaction.stop();
     }
 
@@ -903,7 +923,6 @@ impl ServerState {
                 }
             };
         let updates = Arc::new(Mutex::new(Vec::new()));
-        let accepting_messages = Arc::new(AtomicBool::new(true));
         let activity = Arc::new(CurrentActivity::new());
         let idle = Arc::new(IdleNotice::new(true));
         let events = Arc::new(AtomicUsize::new(0));
@@ -912,7 +931,6 @@ impl ServerState {
         let managed = Arc::new(ManagedInteraction {
             interaction,
             updates: Arc::clone(&updates),
-            accepting_messages: Arc::clone(&accepting_messages),
             activity: Arc::clone(&activity),
             idle: Arc::clone(&idle),
             events: Arc::clone(&events),
@@ -1082,8 +1100,17 @@ impl ServerState {
                         }
                     }
                     let announcements = observed.announce;
-                    if matches!(update, InteractionUpdate::Ended(_)) {
-                        accepting_messages.store(false, Ordering::Release);
+                    if let InteractionUpdate::Ended(end) = &update {
+                        // The agent is gone: nothing more can be sent to it,
+                        // whatever it was doing a moment ago.
+                        activity.stopped(match &end.error {
+                            Some(message) => InteractionActivityReason::Failed {
+                                message: message.clone(),
+                            },
+                            None => InteractionActivityReason::Exited {
+                                exit_code: end.exit_code,
+                            },
+                        });
                     }
                     // Counted here, beside the history it is a count of, so a
                     // listing client's running indicator steps once per event
@@ -1240,7 +1267,7 @@ impl ServerState {
             .lock()
             .expect("server interaction lock poisoned")
             .get(&request.id)
-            .is_some_and(|managed| managed.accepting_messages.load(Ordering::Acquire))
+            .is_some_and(|managed| managed.activity.activity().accepting())
         {
             anyhow::bail!("session {:?} already has a live interaction", request.id);
         }
@@ -1378,7 +1405,6 @@ impl ServerState {
             .filter(|sequenced| matches!(sequenced.update, InteractionUpdate::Event(_)))
             .count();
         let updates = Arc::new(Mutex::new(seeded_updates));
-        let accepting_messages = Arc::new(AtomicBool::new(true));
         let activity = Arc::new(CurrentActivity::new());
         let idle = Arc::new(IdleNotice::new(true));
         let events = Arc::new(AtomicUsize::new(replayed_events));
@@ -1392,7 +1418,6 @@ impl ServerState {
         let managed = Arc::new(ManagedInteraction {
             interaction,
             updates: Arc::clone(&updates),
-            accepting_messages: Arc::clone(&accepting_messages),
             activity: Arc::clone(&activity),
             idle: Arc::clone(&idle),
             events: Arc::clone(&events),
@@ -1563,8 +1588,17 @@ impl ServerState {
                         }
                     }
                     let announcements = observed.announce;
-                    if matches!(update, InteractionUpdate::Ended(_)) {
-                        accepting_messages.store(false, Ordering::Release);
+                    if let InteractionUpdate::Ended(end) = &update {
+                        // The agent is gone: nothing more can be sent to it,
+                        // whatever it was doing a moment ago.
+                        activity.stopped(match &end.error {
+                            Some(message) => InteractionActivityReason::Failed {
+                                message: message.clone(),
+                            },
+                            None => InteractionActivityReason::Exited {
+                                exit_code: end.exit_code,
+                            },
+                        });
                     }
                     // Counted here, beside the history it is a count of, so a
                     // listing client's running indicator steps once per event
@@ -1982,7 +2016,7 @@ impl ServerState {
             if interaction.shell.socket.exists() {
                 return Ok(interaction.shell.clone());
             }
-            if !interaction.accepting_messages.load(Ordering::Acquire) {
+            if !interaction.activity.activity().accepting() {
                 anyhow::bail!("session {id:?} has ended; its sandbox shell is no longer running");
             }
             if Instant::now() >= deadline {
@@ -2962,6 +2996,64 @@ mod tests {
         assert_eq!(state.activity, InteractionActivity::Running);
         assert_eq!(state.reason, Some(InteractionActivityReason::Paused));
         assert_eq!(state.since_ms, started);
+    }
+
+    /// An agent that a window refused, or that the operator stopped, exits as
+    /// a consequence a moment later. The exit is not the news — the window is,
+    /// and a reset comes back to it — so the reason on record survives the
+    /// ending that carries it out.
+    #[test]
+    fn an_ending_does_not_displace_the_reason_that_caused_it() {
+        let refusal = InteractionActivityReason::RateLimited {
+            window: "five_hour".into(),
+            resets_at_ms: None,
+        };
+        let activity = CurrentActivity::new();
+        activity.set(InteractionActivity::Running, None);
+        activity.note_reason(refusal.clone());
+
+        activity.stopped(InteractionActivityReason::Exited { exit_code: Some(1) });
+
+        let state = activity.get();
+        assert_eq!(state.activity, InteractionActivity::Stopped);
+        assert_eq!(state.reason, Some(refusal));
+    }
+
+    /// With nothing better on record, the ending speaks for itself — and a
+    /// turn that merely finished is not an explanation for the interaction
+    /// going away.
+    #[test]
+    fn an_ending_explains_itself_when_nothing_else_does() {
+        let activity = CurrentActivity::new();
+        activity.set(
+            InteractionActivity::Pending,
+            Some(InteractionActivityReason::TurnCompleted),
+        );
+
+        activity.stopped(InteractionActivityReason::Exited { exit_code: Some(0) });
+
+        assert_eq!(
+            activity.get().reason,
+            Some(InteractionActivityReason::Exited { exit_code: Some(0) })
+        );
+    }
+
+    /// Stopping is a transition like any other, so it is dated — how long an
+    /// interaction has been stopped is as much a question as how long a turn
+    /// has been running — and it is the one state that takes no messages.
+    #[test]
+    fn stopping_dates_itself_and_closes_the_interaction_to_messages() {
+        let activity = CurrentActivity::new();
+        activity.set(InteractionActivity::Running, None);
+        let running_since = activity.get().since_ms;
+        assert!(activity.activity().accepting());
+
+        std::thread::sleep(Duration::from_millis(2));
+        activity.stopped(InteractionActivityReason::Paused);
+
+        let state = activity.get();
+        assert!(state.since_ms > running_since);
+        assert!(!state.activity.accepting());
     }
 
     /// The notification exists to send an operator somewhere they are not. An
