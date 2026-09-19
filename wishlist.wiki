@@ -1,3 +1,4 @@
+- Tool execution should run in a sandbox which does not have any knowledge of agent directories, e.g ~/.claude and ~/.codex
 - Simple "goal oriented":
   - Use the structured response to run a prompt, until the agent responds with "yes"
   - Example: "Is X done? Answer with yes/no". If not, run a static user-defined prompt, like, "Continue with work on X".
